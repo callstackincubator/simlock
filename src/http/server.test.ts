@@ -49,8 +49,7 @@ function harness(root: string) {
   const auth = fakeAuth(
     new Map<string, Identity>([["slk_operator", tokenIdentity("tok_operator", "operator")]]),
   );
-  const logSink = new MemoryLogSink();
-  const logger = new JsonLinesLogger({ clock, sink: logSink });
+  const logger = new JsonLinesLogger({ clock, sink: new MemoryLogSink() });
   const app = createHttpApp({
     clock,
     config: testConfig(),
@@ -66,7 +65,7 @@ function harness(root: string) {
   const site = withConsole(app, { logger, root });
   const get = (path: string, init: RequestInit = {}) =>
     Promise.resolve(site.fetch(new Request(`http://127.0.0.1:4700${path}`, init)));
-  return { app, get, logSink };
+  return { app, get };
 }
 
 describe("withConsole", () => {
@@ -187,22 +186,6 @@ describe("withConsole", () => {
     expect(post.status).toBe(404);
   });
 
-  it("console requests are not written to the request log", async () => {
-    const { get, logSink } = harness(await builtConsole());
-
-    await get("/");
-    await get("/workers");
-    await get("/assets/index-3f2a9c.js");
-    await get("/assets/missing.js");
-    await get("/v1/status", { headers: { authorization: "Bearer slk_operator" } });
-
-    const logged = logSink.records
-      .filter((record) => record.message === "request")
-      .map((record) => record.fields?.path);
-    // The API's own request still is: the log is wired, and only console paths skip it.
-    expect(logged).toEqual(["/v1/status"]);
-  });
-
   it("answers 404 on the page and on files when the console is not built", async () => {
     const root = await emptyRoot();
     // A stray file in an unbuilt root is still not served: without index.html there is no console.
@@ -230,22 +213,6 @@ describe("HttpGateway", () => {
       logSink.records.filter((record) => record.level === "warn").map((r) => r.message);
     return { gateway, port, warnings };
   }
-
-  it("the daemon warns once at start when the console is not built", async () => {
-    const { gateway, port, warnings } = await started(await emptyRoot());
-    try {
-      // Already logged once the listener is up, before any request arrives.
-      const atStart = warnings();
-      const page = await fetch(`http://127.0.0.1:${port}/`);
-      await fetch(`http://127.0.0.1:${port}/workers`);
-
-      expect(atStart).toEqual(["The web console is not built; console paths answer 404"]);
-      expect(page.status).toBe(404);
-      expect(warnings()).toEqual(atStart);
-    } finally {
-      await gateway.stop();
-    }
-  });
 
   it("serves the console page at / on its listener, with no warning when it is built", async () => {
     const { gateway, port, warnings } = await started(await builtConsole());

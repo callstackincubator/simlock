@@ -104,8 +104,13 @@ export interface ErrorDetailsMap {
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
   NUKE_UNAVAILABLE: Record<string, never>;
+  DAEMON_UPDATING: Record<string, never>;
+  UPDATE_UNSUPPORTED_INSTALL: Record<string, never>;
+  UPDATE_RESOLVE_FAILED: Record<string, never>;
+  UPDATE_SHARED_INSTALL: Record<string, never>;
   INTERNAL: Record<string, never>;
-
+  GATEWAY_NOT_PRESENT: Record<string, never>;
+  SERVICE_FAILED: Record<string, never>;
   UNSUPPORTED_IN_GATEWAY_MODE: { readonly operation: string };
   /**
    * ADR 0012 §2: the mirror of `UNSUPPORTED_IN_GATEWAY_MODE`. The operation exists, this daemon
@@ -121,6 +126,8 @@ export interface ErrorDetailsMap {
    * answers `{removed: false}` instead: forgetting something already forgotten is done, not an
    * error.) */
   UNKNOWN_WORKER: { readonly workerId: string };
+  // why: ADR 0042 §2: `worker.update` names a worker the gateway knows but has no open uplink to.
+  WORKER_NOT_CONNECTED: { readonly workerId: string };
   /**
    * ADR 0005 §28: the worker that owns this lease (or would serve this request) has no open
    * uplink. `kind: "transport"`, because it says the same thing `DAEMON_CONNECTION_LOST` says
@@ -129,6 +136,20 @@ export interface ErrorDetailsMap {
    * throws it, once there is a lease to forward.
    */
   WORKER_UNREACHABLE: { readonly workerId: string };
+
+  /** why: `alerts.test` naming a destination the gateway's config does not list, or a gateway with none. */
+  UNKNOWN_ALERT_DESTINATION: { readonly destination: string };
+
+  /**
+   * why: `alerts.test`: the receiver did not take the sample. `status` is a non-2xx answer; `error` is
+   * `timeout`, a network code such as `ECONNREFUSED`, or `network-error`. Never the error's own
+   * message, which can hold the destination's URL.
+   */
+  ALERT_SEND_FAILED: {
+    readonly destination: string;
+    readonly status?: number;
+    readonly error?: string;
+  };
 
   /** ADR §7's forward-compatibility escape hatch: a code the client does not know (a newer
    * daemon) wraps as this instead of throwing a parse failure. Never sent by a daemon this
@@ -181,13 +202,19 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNSUPPORTED_IN_WORKER_MODE: true,
   WORKER_CONNECTED: true,
   UNKNOWN_WORKER: true,
+  WORKER_NOT_CONNECTED: true,
   WORKER_UNREACHABLE: true,
+  ALERT_SEND_FAILED: true,
+  UNKNOWN_ALERT_DESTINATION: true,
   UNKNOWN_DAEMON_ERROR: true,
 };
 
 export const CODES_WITH_DECLARED_DETAILS: ReadonlySet<SimlockErrorCode> = new Set(
   Object.keys(CODES_WITH_DECLARED_DETAILS_BY_CODE) as CodeWithDeclaredDetails[],
 );
+
+/** why: the CLI exit code of a background `simlock lease` whose lease Simlock took back; it is no error code, so it has no row in `ERROR_TABLE`. */
+export const LEASE_LOST_EXIT_CODE = 14;
 
 export interface ErrorTableEntry<Code extends SimlockErrorCode = SimlockErrorCode> {
   readonly code: Code;
@@ -354,6 +381,25 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 503,
   },
   NUKE_UNAVAILABLE: { code: "NUKE_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
+  DAEMON_UPDATING: { code: "DAEMON_UPDATING", kind: "domain", cliExitCode: 1, httpStatus: 503 },
+  UPDATE_UNSUPPORTED_INSTALL: {
+    code: "UPDATE_UNSUPPORTED_INSTALL",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
+  UPDATE_RESOLVE_FAILED: {
+    code: "UPDATE_RESOLVE_FAILED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 502,
+  },
+  UPDATE_SHARED_INSTALL: {
+    code: "UPDATE_SHARED_INSTALL",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
   HISTORY_NOT_KEPT: { code: "HISTORY_NOT_KEPT", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   HISTORY_UNAVAILABLE: {
     code: "HISTORY_UNAVAILABLE",
@@ -362,6 +408,15 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 503,
   },
   INTERNAL: { code: "INTERNAL", kind: "domain", cliExitCode: 1, httpStatus: 500 },
+  // why: never sent over HTTP (the CLI and MCP raise it before they connect); the table needs a value.
+  GATEWAY_NOT_PRESENT: {
+    code: "GATEWAY_NOT_PRESENT",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 404,
+  },
+  // why: never sent over HTTP (the CLI raises it when a service manager call fails); the table needs a value.
+  SERVICE_FAILED: { code: "SERVICE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
   // 501, not 400/503: the request was well-formed and the daemon is healthy -- this endpoint
   // simply does not implement that operation, which is exactly what "Not Implemented" says.
   // `cliExitCode: 2` puts it with the other "you asked the wrong thing" outcomes.
@@ -387,11 +442,31 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // Exit 12, beside `UNKNOWN_MODEL`: the "what you named does not exist" class, which a script
   // branches on differently from "the fleet is busy" or "that cannot apply here".
   UNKNOWN_WORKER: { code: "UNKNOWN_WORKER", kind: "domain", cliExitCode: 12, httpStatus: 404 },
+  WORKER_NOT_CONNECTED: {
+    code: "WORKER_NOT_CONNECTED",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 409,
+  },
   WORKER_UNREACHABLE: {
     code: "WORKER_UNREACHABLE",
     kind: "transport",
     cliExitCode: 1,
     httpStatus: 503,
+  },
+  // why: exit 12 beside `UNKNOWN_WORKER`: what you named does not exist.
+  UNKNOWN_ALERT_DESTINATION: {
+    code: "UNKNOWN_ALERT_DESTINATION",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 404,
+  },
+  // why: 502, the gateway worked and the receiver it called did not take the sample.
+  ALERT_SEND_FAILED: {
+    code: "ALERT_SEND_FAILED",
+    kind: "transport",
+    cliExitCode: 1,
+    httpStatus: 502,
   },
   UNKNOWN_DAEMON_ERROR: {
     code: "UNKNOWN_DAEMON_ERROR",
@@ -456,6 +531,16 @@ export type AnySimlockError = { [Code in SimlockErrorCode]: SimlockError<Code> }
 
 export function isSimlockError(error: unknown): error is AnySimlockError {
   return error instanceof SimlockError;
+}
+
+/** why: the CLI and MCP raise this one error from two places, so the wording lives once. */
+export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
+  return new SimlockError(
+    "GATEWAY_NOT_PRESENT",
+    "domain",
+    "No gateway on this machine. Start one with: simlock --gateway daemon start",
+    {},
+  );
 }
 
 /**

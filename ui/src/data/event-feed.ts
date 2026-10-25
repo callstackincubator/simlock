@@ -1,4 +1,4 @@
-import type { ApiPath } from "./api";
+import { ApiError, type ApiPath } from "./api";
 import {
   type Clock,
   isRefusal,
@@ -8,8 +8,12 @@ import {
 } from "./live/connection";
 import {
   type ConsoleEvent,
+  type HistoryState,
+  MAX_EVENTS,
   mergeEvents,
+  OLDER_PAGE as PAGE,
   readEvent,
+  readOlder,
   readReplay,
   RECENT,
   sinceFor,
@@ -17,6 +21,13 @@ import {
 
 const RETRY_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const RETRY_INTERVAL_MS = 10_000;
+
+// why: a feed of one worker's events asks the daemon for that worker alone in every read, and keeps of
+// the stream only the events that belong to it.
+interface FeedScope {
+  readonly workerId: string;
+  readonly keeps: (event: ConsoleEvent) => boolean;
+}
 
 export class EventFeed {
   readonly #get: (path: ApiPath) => Promise<unknown>;
@@ -28,15 +39,35 @@ export class EventFeed {
   #needRecent = true;
   #gapFrom: number | undefined;
   #loading = false;
+  #loadingOlder = false;
+  #history: HistoryState = "more";
   // why: counts the stream's opens, so a load knows whether one happened while it was out.
   #opens = 0;
   #retryTimer: unknown;
   #retryAttempt = 0;
   #active = false;
 
-  constructor(get: (path: ApiPath) => Promise<unknown>, clock: Clock) {
+  readonly #showsHistory: boolean;
+  readonly #scope: FeedScope | undefined;
+
+  // why: only a screen that scrolls back through the history asks for it; the others read the last
+  // hour and nothing older, so a quiet hour does not fill their lists with older events.
+  constructor(
+    get: (path: ApiPath) => Promise<unknown>,
+    clock: Clock,
+    showsHistory = false,
+    scope?: FeedScope,
+  ) {
     this.#get = get;
     this.#clock = clock;
+    this.#showsHistory = showsHistory;
+    this.#scope = scope;
+  }
+
+  #read(query: string): Promise<unknown> {
+    const worker =
+      this.#scope === undefined ? "" : `&worker=${encodeURIComponent(this.#scope.workerId)}`;
+    return this.#get(`/v1/events?${query}${worker}`);
   }
 
   start(): () => void {
@@ -50,7 +81,7 @@ export class EventFeed {
   readonly streamEvent = (message: StreamEvent): void => {
     if (!this.#active) return;
     const event = readEvent(message.data);
-    if (event !== undefined) this.#add([event]);
+    if (event !== undefined && this.#scope?.keeps(event) !== false) this.#add([event]);
   };
 
   readonly streamOpened = (opened: StreamOpened): void => {
@@ -86,7 +117,7 @@ export class EventFeed {
     this.#retryTimer = undefined;
     this.#loading = true;
     const opens = this.#opens;
-    this.#get(`/v1/events?since=${since}`)
+    this.#read(`since=${since}`)
       .then(readReplay)
       .then(
         (events) => {
@@ -101,6 +132,8 @@ export class EventFeed {
           this.#events = mergeEvents(this.#events, events);
           this.#publish({ data: this.#events });
           this.#loadMissing();
+          // why: a quiet last hour still shows the older history, so the newest page is asked for at once.
+          if (this.#showsHistory && this.#events.length === 0) this.loadOlder();
         },
         (error: unknown) => {
           this.#loading = false;
@@ -111,8 +144,46 @@ export class EventFeed {
           }
           this.#settled = true;
           this.#publish({ data: this.#events, error });
+          // why: a refused last hour still leaves the older history to show, so it is asked for as for an empty one.
+          if (this.#showsHistory && this.#events.length === 0) this.loadOlder();
         },
       );
+  }
+
+  readonly history = (): HistoryState => this.#history;
+
+  // why: one page at a time, none once the history has ended, and none at the cap: a second signal
+  // before the answer is dropped.
+  readonly loadOlder = (): void => {
+    if (!this.#active || this.#loadingOlder || this.#events.length >= MAX_EVENTS) return;
+    if (this.#history !== "more" && this.#history !== "failed") return;
+    const oldest = this.#events.at(-1);
+    const query =
+      oldest === undefined
+        ? `limit=${PAGE}`
+        : `before=${encodeURIComponent(oldest.id)}&limit=${PAGE}`;
+    this.#loadingOlder = true;
+    this.#read(query)
+      .then(readOlder)
+      .then(
+        (page) => {
+          this.#loadingOlder = false;
+          if (!this.#active) return;
+          const current = this.#events;
+          this.#events = mergeEvents(current, page.events);
+          this.#setHistory(page.full && this.#events !== current ? "more" : "start");
+        },
+        (error: unknown) => {
+          this.#loadingOlder = false;
+          if (!this.#active) return;
+          this.#setHistory(error instanceof ApiError && error.status === 422 ? "gone" : "failed");
+        },
+      );
+  };
+
+  #setHistory(history: HistoryState): void {
+    this.#history = history;
+    this.#publish({ ...this.#state, data: this.#events });
   }
 
   #retryLater(): void {

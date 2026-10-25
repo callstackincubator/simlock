@@ -26,9 +26,12 @@ export class ApiError extends Error {
 
 interface SendOptions {
   readonly fetch: Fetch;
+  readonly method?: "DELETE" | "POST";
   readonly token?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  readonly body?: string;
+  readonly ifNoneMatch?: string;
 }
 
 export async function send<T>(
@@ -53,7 +56,13 @@ export async function send<T>(
     const response = await options.fetch(path, {
       cache: "no-store",
       credentials: "same-origin",
-      headers: options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` },
+      headers: {
+        ...(options.token === undefined ? {} : { Authorization: `Bearer ${options.token}` }),
+        ...(options.ifNoneMatch === undefined ? {} : { "If-None-Match": options.ifNoneMatch }),
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(options.body === undefined ? {} : { body: options.body }),
+      ...(options.method === undefined ? {} : { method: options.method }),
       signal: controller.signal,
     });
     return await read(response);
@@ -72,9 +81,19 @@ export interface ApiResponse<T> {
   readonly date: string | null;
 }
 
+export interface ReadOptions {
+  // why: the ETag of the last answer to this route; `undefined` asks for the whole answer.
+  readonly tag: string | undefined;
+}
+
+export type ConditionalResponse<T> =
+  | { readonly notModified: true; readonly date: string | null }
+  | (ApiResponse<T> & { readonly notModified?: false; readonly tag: string | null });
+
 export interface ApiClient {
   getJson<T>(path: ApiPath): Promise<T>;
   get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  get<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalResponse<T>>;
   // why: a stream's bound, 10 seconds unless `headTimeoutMs` says otherwise, covers its headers
   // only; the body stays open until it ends or `signal` aborts it.
   stream(
@@ -83,6 +102,13 @@ export interface ApiClient {
     headTimeoutMs?: number,
   ): Promise<ApiResponse<ReadableStream<Uint8Array>>>;
   healthz(): Promise<ApiResponse<boolean>>;
+  // why: the answer is the parsed JSON body, `undefined` when the daemon sent none.
+  write(method: "DELETE" | "POST", path: ApiPath, options?: WriteOptions): Promise<unknown>;
+}
+
+export interface WriteOptions {
+  readonly body?: unknown;
+  readonly timeoutMs?: number;
 }
 
 export type ApiFailure = "unauthorized" | "not-simlock";
@@ -117,21 +143,42 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   ): Promise<T> => {
     try {
       return await send(path, sendOptions, async (response) => {
-        await refuseError(response, refuse);
+        // why: a 304 answers the tag this read sent, so it is not a refusal.
+        if (response.status !== 304 || sendOptions.ifNoneMatch === undefined) {
+          await refuseError(response, refuse);
+        }
         return read(response);
       });
     } catch (error: unknown) {
+      // why: a write that got no answer is the action's own failure, shown as a toast; it never
+      // asks whether the session ended, as a read does.
+      if (sendOptions.method !== undefined) throw error;
       // why: a request that never got an answer (a redirect `fetch` cannot follow, a dropped
       // connection) may be the sign-in proxy's session ending; a timeout or an abort is not.
       if (isNetworkError(error, sendOptions.signal)) refuse("not-simlock");
       throw error;
     }
   };
-  const get = <T>(path: ApiPath) =>
-    watched(path, authorized(), async (response) => ({
-      body: (await response.json()) as T,
-      date: response.headers.get("Date"),
-    }));
+  function get<T>(path: ApiPath): Promise<ApiResponse<T>>;
+  function get<T>(path: ApiPath, readOptions: ReadOptions): Promise<ConditionalResponse<T>>;
+  function get<T>(
+    path: ApiPath,
+    readOptions?: ReadOptions,
+  ): Promise<ApiResponse<T> | ConditionalResponse<T>> {
+    const tag = readOptions?.tag;
+    return watched(
+      path,
+      { ...authorized(), ...(tag === undefined ? {} : { ifNoneMatch: tag }) },
+      async (response) => {
+        const date = response.headers.get("Date");
+        if (response.status === 304) return { date, notModified: true as const };
+        const body = (await response.json()) as T;
+        return readOptions === undefined
+          ? { body, date }
+          : { body, date, tag: response.headers.get("ETag") };
+      },
+    );
+  }
   return {
     get,
     getJson: async <T>(path: ApiPath) => (await get<T>(path)).body,
@@ -140,6 +187,19 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         if (response.body === null) throw new ApiError(response.status, undefined, "No body");
         return { body: response.body, date: response.headers.get("Date") };
       }),
+    write: (method, path, writeOptions) =>
+      watched(
+        path,
+        {
+          ...authorized(undefined, writeOptions?.timeoutMs),
+          method,
+          ...(writeOptions?.body === undefined ? {} : { body: JSON.stringify(writeOptions.body) }),
+        },
+        async (response) => {
+          const text = await response.text();
+          return text === "" ? undefined : (JSON.parse(text) as unknown);
+        },
+      ),
     healthz: () =>
       send("/v1/healthz", { fetch: options.fetch }, async (response) => ({
         body: response.ok,

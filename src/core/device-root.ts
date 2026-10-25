@@ -49,6 +49,8 @@ export interface EnsureOwnedRootOptions {
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly path: string;
+  /** why: staging directories carry the writer's pid so startup can tell a dead writer's leftover from a live one's. */
+  readonly pid?: number;
   readonly platform: Platform;
   /** `process.getuid?.()`; `undefined` skips the ownership check on platforms without uids. */
   readonly uid?: number;
@@ -125,7 +127,7 @@ async function createRoot(context: RootContext): Promise<boolean> {
     filesystem.mkdirp(dirname(root)),
   );
 
-  const staging = stagingPath(root, context.idGenerator);
+  const staging = stagingPath(root, context.idGenerator, context.pid);
   try {
     await filesystem.mkdir(staging, { mode: ROOT_MODE });
     // `mkdir`'s mode is a request the process umask can only subtract from: under a
@@ -314,8 +316,9 @@ function markerPath(root: string): string {
  * mid-flight. The uniqueness comes from the injected generator rather than an ambient
  * `randomUUID`, because this is core code and rule 9 admits no exception for entropy.
  */
-function stagingPath(root: string, idGenerator: IdGenerator): string {
-  return join(dirname(root), `.${basename(root)}.${idGenerator.generate()}.staging`);
+function stagingPath(root: string, idGenerator: IdGenerator, pid: number | undefined): string {
+  const writer = pid === undefined ? "" : `${pid}.`;
+  return join(dirname(root), `.${basename(root)}.${writer}${idGenerator.generate()}.staging`);
 }
 
 /** Best effort: the failure that brought us here is the one worth reporting. */
@@ -323,9 +326,9 @@ async function discard(filesystem: Filesystem, path: string): Promise<void> {
   try {
     await filesystem.rm(path);
   } catch {
-    // A staging directory left behind is untidy and harmless -- it is not the root, and
-    // its name says what it is. Reporting the cleanup's failure instead of the one that
-    // caused it would hide the thing worth fixing.
+    // why: a staging directory left behind is untidy and harmless -- it is not the root, its
+    // name says what it is, and startup removes it once its writer's pid is dead. Reporting
+    // the cleanup's failure instead of the one that caused it would hide the thing worth fixing.
   }
 }
 

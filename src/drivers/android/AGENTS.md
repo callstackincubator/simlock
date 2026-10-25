@@ -7,20 +7,21 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                       | Role                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `index.ts`                 | `AndroidDriver`: every `Driver` verb, console-port allocator, passthrough rules |
-| `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                  |
-| `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)               |
-| `screen/`                  | Screen capture: scrcpy client ([screen](screen/AGENTS.md))                      |
-| `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers   |
-| `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                    |
-| `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones      |
-| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                    |
-| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                             |
-| `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                      |
-| `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`            |
-| `data.ts`                  | `AndroidDriverData`: `avdName`, `configHash`, `imageIdentity`, `port`, `serial` |
+| File                       | Role                                                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                 | `AndroidDriver`: every `Driver` verb, console-port allocator, passthrough rules                                                                                       |
+| `device-data.ts`           | `androidDeviceDataTable`: owner `android-device-data` version 1, table `android_device_data` (`avd_name`, `config_hash`, nullable `image_identity`, `port`, `serial`) |
+| `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                                                                                                        |
+| `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)                                                                                                     |
+| `screen/`                  | Screen capture: scrcpy client ([screen](screen/AGENTS.md))                                                                                                            |
+| `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers                                                                                         |
+| `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
+| `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
+| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                                                                                                          |
+| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                                                                                                                   |
+| `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                                                                                                            |
+| `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`                                                                                                  |
+| `data.ts`                  | `AndroidDriverData`: `avdName`, `configHash`, `imageIdentity`, `port`, `serial`                                                                                       |
 
 ## How it works
 
@@ -76,8 +77,8 @@ Reclaim — `reclaim`:
 
 Ownership gate: before any `emu kill` or snapshot load, `adb emu avd path` (5 s timeout, asked every time, never cached) must name this device's own AVD directory; unreachable, timed out or another path → nothing is sent (a snapshot reclaim then shuts down and wipes).
 
-`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills only an emulator this process
-started, then `avdmanager delete avd`, frees the port.
+`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills the emulator this process started, or after a restart each attached
+emulator whose bounded `emu avd path` names this AVD (any serial that cannot answer → refuse), then `avdmanager delete avd`, frees the port.
 `listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
@@ -100,49 +101,48 @@ the 5037 server's protocol must equal Simlock's `adb version`; nothing listening
 Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol reads model,
 `ro.build.version.sdk`, current user, `pm list packages -3`. Class is always `phone`.
 
-Passthrough — virtual: `adb -P <port> …`. Refused: `kill-server` anywhere, `emu kill`,
-`emu avd stop`, `emu avd snapshot delete`, any global but `-s`/`-t`/`-d`/`-e` (or a lone
-`--version`/`--help`), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
+Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`) `-s <serial>` goes
+first unless the subcommand is on the no-device list (ADR 0047). Refused: another `-s`, `-e`, `-d`, `-t`,
+`adb` on a non-Android lease, `kill-server`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
+globals (a lone `--version`/`--help` passes), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.
 
-Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical
-`ANDROID_ADB_SERVER_PORT=5037`, `ANDROID_SERIAL=<serial>`.
+Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical `ANDROID_ADB_SERVER_PORT=5037`, `ANDROID_SERIAL=<serial>`.
 
 No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's.
 
 Screen — `screenCapture`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md).
 
-Plain facts: `avdmanager list device` runs on every `listCatalog`, every resolve of a model the library
-lacks, and every library provision (seed); nothing is cached. The sdkmanager catalog is never read.
-Existing devices are not re-checked against the fit rule.
+Plain facts: `avdmanager list device` runs on every `listCatalog`, resolve of a model the library lacks,
+and library provision (seed); nothing is cached. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 
 ## State and timers
 
-| What                           | Default                                 | Key                                                             |
-| ------------------------------ | --------------------------------------- | --------------------------------------------------------------- |
-| Device root                    | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
-| adb server port                | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
-| Emulator flags                 | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout              | 180 s, poll 2 s                         | none                                                            |
-| adb server start / stop        | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
-| `adb devices` in `listManaged` | 30 s                                    | none                                                            |
-| Physical read / uninstall      | 30 s / 60 s                             | none                                                            |
+| What                            | Default                                 | Key                                                             |
+| ------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
+| adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
+| Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
+| adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
+| `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
+| AVD path query (listing / boot) | 5 s                                     | none                                                            |
+| Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (`config.ini`, `boot.prop`, snapshots,
-`simlock-clean-baseline.json`), `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
 Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 
-- Ownership is root membership, proven again at boot by `emu avd path`. An AVD name proves nothing.
+- Ownership is root membership, proven at boot and in running observations by `emu avd path`, never a name.
 - The 5037 server is never started, stopped or adopted on purpose; physical commands pass the gate first.
 - A recovery boot never wipes and never captures a baseline.
 - A stored port is not trusted after a restart (#52); pinned by `two-instances.test.ts`.
 
 ## Known gaps
 
-- **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`. A
-  server with no record is `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
+- **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`.
+  No record → `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
 - **Port checks are partial.** A port handed out but not yet booted reads free to another instance.

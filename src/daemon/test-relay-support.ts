@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { expect, vi } from "vitest";
 
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayRelay } from "../gateway/index.js";
 import { MemoryFilesystem, NoopLogger, SystemClock, type Logger } from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
@@ -166,7 +166,13 @@ export async function startWorker(
   directories.push(directory);
   const logger = new RecordingLogger();
   const options: StartDaemonOptions = {
+    // why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a relay test asks for neither.
+    configOverrides: {
+      capabilities: { "agent-device": { enabled: false } },
+      http: { enabled: false },
+    },
     dataDirectory: directory,
+    deviceDataTables: fakeDeviceDataTables,
     drivers: [
       new FakeDriver({
         availableOsVersions: ["18.0"],
@@ -178,7 +184,6 @@ export async function startWorker(
     filesystem: new MemoryFilesystem(),
     logger,
     relayTargets,
-    statePath: join(directory, "state.json"),
     version: "1.0.0-e2e",
     ...extra,
   };
@@ -331,7 +336,8 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
   const gateway = await startDaemon({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    role: "gateway",
     dataDirectory: gatewayDirectory,
     filesystem: new MemoryFilesystem(),
     gatewayRelay: (given) => {
@@ -350,7 +356,6 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
         });
     },
     logger: new NoopLogger(),
-    statePath: join(gatewayDirectory, "state.json"),
     version: "1.0.0-e2e",
   });
   daemons.push(gateway);

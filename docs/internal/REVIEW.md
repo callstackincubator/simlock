@@ -4,9 +4,12 @@ Delivery rule 14 delegates its review procedure to this document. Review
 one immutable PR snapshot. Use `.agents/scripts/review-inputs.sh <PR>` for
 round 1, and add the previous report's full commit SHA for later checks.
 The inputs record `base` (base tip), `merge-base`, `commit` and `previous`.
-Never substitute `origin/main` for a stacked PR's base. Missing or
-non-ancestor previous commits make assessment incomplete: reconcile the
-history and rebuild inputs, do not silently perform a full review.
+Never substitute `origin/main` for a stacked PR's base. A missing previous
+commit makes assessment incomplete. After a rebase or stack sync the
+previous commit is no ancestor of the head: give the script that round's
+base as well, and it maps the commit to its rebased equivalent when every
+commit's patch-id matches; otherwise assessment is incomplete, and nobody
+silently performs a full review in its place.
 Rules, briefs and this protocol come from the pinned PR base, not a moving
 `main`. No reviewer sees author narration (PR body, commit messages) or
 another lens's findings before synthesis.
@@ -19,8 +22,13 @@ requires an explicit maintainer-authorized amendment to the affected rule
 or ADR. Review such amendments as changes, not as automatic self-exemptions.
 Accepted future-state ADRs remain targets until implemented.
 
-Round 1 covers the whole PR diff. Inspect surrounding code, module manuals,
-callers and shared state as needed. Claims review blocks changed claims and
+Round 1 covers the whole PR diff, and reports every site of each defect
+class it confirms: a lens that finds one STRICT INTEGER column refused a
+fractional value searches the diff for every other such column before it
+reports. The targeted round verifies fixes and looks for what the fixes
+changed; a sibling it finds is round 1's miss, and counts as one in the
+ledger (`round: 2` on a finding whose class round 1 already had). Inspect
+surrounding code, module manuals, callers and shared state as needed. Claims review blocks changed claims and
 claims the PR makes false, including affected untouched documentation. Read
 manuals and flows for context, not as a request to repair unrelated debt.
 Unchanged lines can contain PR regressions; demonstrate the causal link.
@@ -60,7 +68,12 @@ separate worktrees for probes; do not share findings until synthesis.
 Assign stable PR-local IDs (R1, R2, ...) by defect class, affected contract
 and failure mechanism, not line number. Deduplicate across lenses before
 verification. Verify each distinct defect once with source evidence or a
-focused reproducer. Consolidate fixes by class. Keep a resolution ledger:
+focused reproducer. A candidate in a safety class (data a user owns
+deleted or overwritten, files Simlock did not write touched, a credential
+exposed, ownership or liveness assumed) is never downgraded to a note or
+dismissed at synthesis on reasoning alone: the coordinator runs, or has a
+lens run, the one probe that shows the input cannot occur, and records it
+in the ledger; without that evidence the candidate blocks. Consolidate fixes by class. Keep a resolution ledger:
 ID, originating roles, evidence, impact, outcome, reason, fix commit and
 verification commit. Outcomes: open, fixed, duplicate (points to canonical
 ID), incorrect, intentional, nonblocking. Only incorrect findings are
@@ -82,6 +95,12 @@ a focused claims check; unchanged claims need no repeat review. Use actual
 hunks, not the intended fix label, to choose follow-up. A lens whose input
 `fix.patch` does not touch does not run: claims needs a changed doc,
 comment, test title or printed string; code a changed code or test line.
+A fix-check whose every hunk is mechanical (a merge that keeps both sides
+unchanged, a timeout or retry constant, a doc line, a renamed symbol with
+no call changed) spawns no lens: the coordinator reads the exact diff,
+records `verified by: coordinator` with the hunks in the ledger, and
+reports. One semantic hunk among them sends only the lens that hunk
+reaches.
 
 There is one full round, one targeted round 2, and one final targeted
 fix-check. Count every invocation, including that fix-check. After the cap,
@@ -107,9 +126,13 @@ transcripts. Unknown values print as unknown, never zero.
 The coordinator keeps one findings file per PR, `{"findings": [...]}`, one
 entry per canonical finding: `id`, `role`, `class` (the `[class]` the lens
 gave, a rule like `testing 2` or at most 8 words), `outcome`, `path`,
-`fix` (the fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate, post one PR comment headed
-`## Review ledger`: the output of `review-metrics.mjs --pr <M> --issue <N>
---findings <file>`, then the findings file in a `json` code block. The
+`round` (the check that raised it: `1`, `2` or `fix-check`), `fix` (the
+fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate,
+post one PR comment headed `## Review ledger`: one line `Round <r>:
+<full commit>` per check in order, the output of `review-metrics.mjs --pr
+<M> --issue <N> --findings <file>`, then the findings file in a `json`
+code block. The round lines are what lets a check be frozen and replayed
+later (`replay-freeze.mjs`). The
 weekly `recurring-findings` routine reads these comments. Record escaped
 defects after merge. Do not call raised-minus-fixed a false-positive rate.
 
@@ -132,7 +155,13 @@ and at least 20% lower median total cost with no increase in median review
 wall time. Unknown cost/quality data cannot establish promotion. High-risk
 work stays Opus. Roll back the routine downgrade on any critical escape or
 a weekly increase in weighted misses/false positives versus the baseline.
-No pilot has been completed by adding this protocol.
+No pilot has been completed by adding this protocol. The replay harness
+runs it: `replay-freeze.mjs` pins a round's head and base and the ledger
+as `refs/replay/<PR>/...` on origin, `review-replay.sh` builds the blind
+inputs for that snapshot and prints the reviewer's prompt (tagged
+`stage=replay`, or one lens with `--lens`), and `review-score.mjs` scores
+the findings against the ledger and appends to `.agents/replay/results.jsonl`.
+`PROCESS-REVIEW-2026-10-21.md` section 4 says how a change is judged.
 
 The design follows [Anthropic's review convergence findings](https://claude.dev/blog/solving-code-review-at-anthropic/),
 [Addy Osmani's risk-focused review](https://addyosmani.com/blog/agentic-code-review/),

@@ -39,7 +39,10 @@ export interface AuthorizeContext {
    * Returns `undefined` for a `requesterId` with no pending request, which `lease.cancel`'s
    * `authorize` hook treats as authorized on purpose -- same convention as `ownsLease` -- so
    * the handler's own `not-found` surfaces instead of a misleading `FORBIDDEN`. */
-  readonly pendingRequestOwner: (requesterId: string) => string | undefined;
+  readonly pendingRequestOwner: (
+    requesterId: string,
+    platform?: "ios" | "android",
+  ) => string | undefined;
 }
 
 /**

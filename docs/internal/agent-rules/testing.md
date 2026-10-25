@@ -36,11 +36,14 @@ prove the behaviour, each at the cheapest level that can prove it
    thing: otherwise it stays green when the input is refused for another
    reason.
 
-3. **What a caller can see is tested; in a strict area, every path is.**
-   Every behaviour a caller, a user, a stored record or an event can see
-   has a test that goes red when its code is deleted, error paths and
-   fallbacks included. A branch whose deletion nobody can see needs no test:
-   it is a candidate for deletion. In the strict areas
+3. **What a caller can see is tested, once, at the invoker's seam; in a
+   strict area, every path is.** Every behaviour a caller, a user, a
+   stored record or an event can see has a test that goes red when its
+   code is deleted, error paths and fallbacks included: one scenario test
+   at the highest seam that can see it (a command, a route, a tool call,
+   a module's `index.ts`), with the platform faked, its cases as a table.
+   Branch coverage below that seam is not a goal, and a branch whose
+   deletion nobody can see needs no test: it is a candidate for deletion. In the strict areas
    [toolchain.md](toolchain.md) names, which guard safety rules or state
    that runs under concurrency, production code that can be deleted with a
    green suite is untested, whether anyone can see the difference or not;
@@ -65,6 +68,11 @@ prove the behaviour, each at the cheapest level that can prove it
    decide; a failure that reproduces there is not yours to fix in this
    change, and one that does not reproduce is yours. Never skip, disable, or
    quarantine a test to get to green.
+   Most flakes are written, not found: an assertion on a deadline, a
+   duration, a throughput or a frame time without a fake clock passes on
+   an idle machine and fails on a loaded runner. A bound on real time
+   belongs in a `*.timing.test.ts` file or the slow lane, never in a unit
+   or e2e assertion.
    Once a failure has reproduced on a base commit, it is recorded so nobody
    proves it again: an open issue labelled `flaky-test` names the test by
    file and title. A failure that matches an open `flaky-test` issue skips

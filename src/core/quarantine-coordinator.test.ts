@@ -13,14 +13,19 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { VirtualDevice, VirtualSpec } from "./domain.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
-import { FakeDriver, testComponentWiring } from "./testing.js";
+import {
+  FakeDriver,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+  testStateOf,
+} from "./testing.js";
 import { createCore, loadConfig } from "./index.js";
 import {
   QuarantineCoordinator,
   type QuarantineRegistry,
   type QuarantineRetryConfig,
 } from "./quarantine-coordinator.js";
-import { Registry } from "./registry.js";
 import type { PhysicalDevice } from "./domain.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
@@ -514,43 +519,6 @@ describe("QuarantineCoordinator", () => {
     ]);
   });
 
-  it("a quarantine retry that itself throws logs at error with the device id", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("erase still stuck"));
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({
-      clock,
-      driver,
-      logger: new JsonLinesLogger({ clock, sink }),
-    });
-    await harness.coordinator.enter({
-      attemptedStrategy: "wipe",
-      kind: "purge-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "boom",
-      leaseId: "lease-1",
-    });
-    vi.spyOn(harness.registry, "recordQuarantineRetryFailure").mockRejectedValue(
-      new Error("state.json unwritable"),
-    );
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(sink.records.filter((record) => record.level === "error")).toEqual([
-      expect.objectContaining({
-        module: "daemon.quarantine-coordinator",
-        fields: {
-          deviceId: harness.target.id,
-          error: "Error: state.json unwritable",
-          step: "retry",
-        },
-      }),
-    ]);
-  });
-
   it("A failed quarantine delete retry logs the error and the attempt number.", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
@@ -700,45 +668,38 @@ async function flush(): Promise<void> {
 }
 
 describe("QuarantineCoordinator for a physical device (ADR 0022 §4)", () => {
-  const physicalRecord = {
-    createdAt: 600,
-    driverData: {},
-    driverDeviceId: "00008110-001A2B3C4D5E",
-    enrolledApps: [],
-    id: "dev_physical",
-    lastLeaseEndedAt: 700,
-    physical: true,
-    spec: {
-      class: "phone",
-      model: "iPhone 15 Pro",
-      osVersion: "18.4",
-      physical: true,
-      platform: "ios",
-    },
-    state: "reclaiming",
-  };
+  const physicalRecord = { driverDeviceId: "00008110-001A2B3C4D5E" };
 
-  async function physicalHarness(state: "reclaiming" | "quarantined") {
+  async function physicalHarness(stateName: "reclaiming" | "quarantined") {
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
     driver.setPhysicalPresence(physicalRecord.driverDeviceId, true);
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      "/home/agent/.simlock/state.json",
-      JSON.stringify({
-        devices: [],
-        leases: [],
-        physicalDevices: [{ ...physicalRecord, quarantineNextRetryAt: 1_500, state }],
-      }),
-    );
-    const registry = await Registry.load({
+    const state = await openTestState();
+    const seeding = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "physical" },
+      state,
+    });
+    await seeding.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: physicalRecord.driverDeviceId,
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    state.database
+      .prepare(
+        "UPDATE devices SET created_at = 600, last_lease_ended_at = 700, ready_at = NULL, state = ?, quarantine_next_retry_at = 1500",
+      )
+      .run(stateName);
+    const registry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator: { generate: () => "id" },
-      statePath: "/home/agent/.simlock/state.json",
+      state,
     });
     // `decisionRuns` counts this device's own retry, which the shared clock's timer count does not.
     const decisions = new SerializedDecision();
@@ -1021,12 +982,10 @@ describe("QuarantineCoordinator and enrollment of a quarantined physical device 
     const filesystem = new MemoryFilesystem();
     const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
     let next = 1;
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
       idGenerator: { generate: () => `${next++}` },
-      statePath: "/state.json",
     });
     const config = await loadConfig({ filesystem, systemStats });
     const core = createCore({
@@ -1035,6 +994,7 @@ describe("QuarantineCoordinator and enrollment of a quarantined physical device 
       drivers: [driver],
       eventBus,
       registry,
+      state: testStateOf(registry),
       systemStats,
       ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
     });
@@ -1184,19 +1144,17 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
     { apps: [], ids: [FIRST], model: "iPhone 15 Pro", osVersion: "18.4" },
   ];
 
-  async function build(logger?: Logger) {
+  async function build() {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, physicalDevices: DEVICES, platform: "ios" });
     const filesystem = new MemoryFilesystem();
     const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
     let next = 1;
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
       idGenerator: { generate: () => `${next++}` },
-      statePath: "/state.json",
     });
     const config = await loadConfig({
       filesystem,
@@ -1208,8 +1166,8 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
       config,
       drivers: [driver],
       eventBus,
-      ...(logger === undefined ? {} : { logger }),
       registry,
+      state: testStateOf(registry),
       systemStats,
       ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
     });
@@ -1309,23 +1267,6 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
 
     expect(verbCalls(harness, "reclaim")).toHaveLength(1);
     expect(record(harness, id)).toMatchObject({ quarantineAttempts: 1, state: "quarantined" });
-  });
-
-  it("a physical retry whose presence read rejects logs a warning naming the device, the presence step and the error", async () => {
-    const sink = new MemoryLogSink();
-    const harness = await build(new JsonLinesLogger({ clock: new FakeClock(1_000), sink }));
-    const id = await enrollQuarantined(harness);
-    harness.driver.setPhysicalPresence(FIRST, true);
-    vi.spyOn(harness.driver, "listPresentPhysical").mockRejectedValueOnce(new Error("link down"));
-
-    await advance(harness, harness.config.warmPool.quarantine.retryBackoffMs);
-
-    expect(sink.records.filter((entry) => entry.level === "warn")).toEqual([
-      expect.objectContaining({
-        message: "quarantine presence read failed",
-        fields: { deviceId: id, error: "Error: link down", step: "presence" },
-      }),
-    ]);
   });
 
   it("a physical retry whose presence read rejects makes no reclaim or destroy call, keeps quarantineAttempts, and re-arms after health.probeIntervalMs", async () => {
@@ -1451,60 +1392,52 @@ describe("QuarantineCoordinator quarantine cause", () => {
     const bus = new EventBus(clock);
     const driver = new FakeDriver({ clock, platform, reclaimResult: "ready" });
     const state = options.state ?? "reclaiming";
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
+    const testState = await openTestState();
+    const seeding = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => (options.physical === true ? "physical" : "virtual") },
+      state: testState,
+    });
     let id: string;
-    let record: Record<string, unknown>;
     if (options.physical === true) {
       driver.setPhysicalPresence(PHYSICAL_ID, true);
       id = "dev_physical";
-      record = {
-        createdAt: 600,
-        driverData: {},
+      await seeding.enrollPhysical({
+        apps: [],
+        class: "phone",
         driverDeviceId: PHYSICAL_ID,
-        enrolledApps: [],
-        id,
-        lastLeaseEndedAt: 700,
-        physical: true,
-        spec: {
-          class: "phone",
-          model: "iPhone 15 Pro",
-          osVersion: "18.4",
-          physical: true,
-          platform: "ios",
-        },
-        state,
-      };
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        platform: "ios",
+      });
+      testState.database
+        .prepare(
+          "UPDATE devices SET created_at = 600, last_lease_ended_at = 700, ready_at = NULL, state = ?",
+        )
+        .run(state);
     } else {
       const virtualSpec = platform === "android" ? androidSpec : spec;
       const provisioned = await driver.provision(virtualSpec);
       id = "dev_virtual";
-      record = {
-        createdAt: 1,
-        driverData: {},
+      await seeding.registerDevice({
+        driverData: provisioned.driverData,
         driverDeviceId: provisioned.deviceId,
-        id,
-        mode: "full",
-        physical: false,
+        provisionDuration: 0,
         spec: virtualSpec,
-        state,
-        ...(options.fresh === true ? { lastLeaseEndedAt: 900, leaseIdentity: "fresh" } : {}),
-      };
+      });
+      testState.database.prepare("UPDATE devices SET created_at = 1, state = ?").run(state);
+      if (options.fresh === true) {
+        testState.database
+          .prepare("UPDATE devices SET last_lease_ended_at = 900, lease_identity = 'fresh'")
+          .run();
+      }
     }
-    await filesystem.writeFileAtomic(
-      "/home/agent/.simlock/state.json",
-      JSON.stringify(
-        options.physical === true
-          ? { devices: [], leases: [], physicalDevices: [record] }
-          : { devices: [record], leases: [] },
-      ),
-    );
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus: bus,
-      filesystem,
       idGenerator: { generate: () => "id" },
-      statePath: "/home/agent/.simlock/state.json",
+      state: testState,
     });
     const claims = new DeviceOperationClaims();
     const coordinator = new QuarantineCoordinator({

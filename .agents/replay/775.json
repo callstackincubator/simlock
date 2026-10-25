@@ -1,0 +1,39 @@
+{
+  "pr": 775,
+  "issue": 761,
+  "rounds": {
+    "1": {
+      "head": "551e6ec6f369a99d58c11d67fb0bf820621ad735",
+      "base": "f0eec44111297d0b7451181058b33384f8fa5fcf",
+      "frozenAt": "2026-10-21T07:37:20.878Z",
+      "baseline": {
+        "runs": 5,
+        "seconds": 1907,
+        "costUsd": 6.6301000000000005,
+        "lenses": [
+          "reviewer/-:claude-sonnet-5-5",
+          "spec/-:claude-sonnet-5-5",
+          "code/behaviour:claude-opus-5-5",
+          "code/tests:claude-opus-5-5",
+          "claims/-:claude-sonnet-5-5"
+        ]
+      }
+    },
+    "2": {
+      "head": "6ae6e9932e97cdcc89bfdd296b149e49df8d1c06",
+      "base": "f0eec44111297d0b7451181058b33384f8fa5fcf",
+      "previous": "551e6ec6f369a99d58c11d67fb0bf820621ad735",
+      "frozenAt": "2026-10-21T07:37:41.502Z",
+      "baseline": {
+        "runs": 3,
+        "seconds": 803,
+        "costUsd": 1.7179,
+        "lenses": [
+          "reviewer/-:claude-sonnet-5-5",
+          "code/both:claude-opus-5-5",
+          "claims/-:claude-sonnet-5-5"
+        ]
+      }
+    }
+  }
+}

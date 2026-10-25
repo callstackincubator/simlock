@@ -6,12 +6,25 @@ export {
 } from "./filesystem.js";
 export type { PathDetails } from "./filesystem.js";
 export { readPackageVersion } from "./package-version.js";
-export { resolveDaemonSocketPath, resolveSimlockHome, SocketPathTooLongError } from "./paths.js";
+export {
+  daemonDataDirectory,
+  type DaemonRole,
+  type DaemonFlag,
+  type DaemonHome,
+  resolveDaemonHome,
+  resolveDaemonSocketPath,
+  resolveSimlockHome,
+  SocketPathTooLongError,
+} from "./paths.js";
 export {
   DAEMON_STARTUP_TIMEOUT_MS,
+  type DaemonExit,
   type DaemonLauncher,
   FakeDaemonLauncher,
+  type LaunchedDaemon,
   NodeDaemonLauncher,
+  startErrorFrom,
+  startTimeoutMessage,
 } from "./daemon-launcher.js";
 export {
   type IpcConnection,
@@ -25,6 +38,18 @@ export {
 export type { IpcErrorCode } from "./ipc.js";
 // fallow-ignore-next-line unused-type -- public listener lifecycle contract.
 export type { IpcListener } from "./ipc.js";
+export { launcherFor } from "./service-launcher.js";
+export {
+  FakeServiceManager,
+  LaunchdServiceManager,
+  productionServiceManager,
+  ServiceFailedError,
+  type ServiceDefinition,
+  type ServiceManager,
+  serviceDefinition,
+  type ServiceManagerName,
+  type ServiceState,
+} from "./service-manager.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
@@ -121,7 +146,24 @@ export {
 } from "./host-load.js";
 export {
   filterSqliteExperimentalWarning,
+  inTransaction,
+  isLockError,
   NodeSqliteOpener,
+  passesQuickCheck,
   SqliteUnavailableError,
 } from "./sqlite.js";
-export type { SqliteDatabase, SqliteOpener, SqliteStatement } from "./sqlite.js";
+export type {
+  SqliteDatabase,
+  SqliteOpener,
+  SqliteSchemaOwner,
+  SqliteStatement,
+  SqliteValue,
+} from "./sqlite.js";
+export { FetchWebhookPoster, type WebhookPoster } from "./webhook-poster.js";
+export { FakeNpmCli, NodeNpmCli, type NpmCli, type NpmOutcome } from "./npm-cli.js";
+export {
+  FakeUpdaterLauncher,
+  type LaunchedUpdater,
+  NodeUpdaterLauncher,
+  type UpdaterLauncher,
+} from "./updater-launcher.js";

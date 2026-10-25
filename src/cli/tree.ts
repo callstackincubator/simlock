@@ -2,12 +2,14 @@
 // its module and nothing else; a parent whose children share one implementation points them at
 // one `load` (the ESM cache makes the repeat free) and hands the consumed words down as `path`,
 // so a parent branches without its module ever being imported by the router.
+import type { DaemonFlag } from "../ports/index.js";
 import type { CliEnvironment } from "./types.js";
 
 export interface CommandContext {
   readonly path: readonly string[];
   readonly environment: CliEnvironment;
   readonly token: string | undefined;
+  readonly daemonFlag: DaemonFlag;
 }
 
 export interface CommandModule {
@@ -52,11 +54,13 @@ const leaseModule = () => import("./commands/lease.js");
 const tokenModule = () => import("./commands/token.js");
 const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
+const alertsModule = () => import("./commands/alerts.js");
 
 export const COMMANDS: readonly CommandNode[] = [
   { name: "lease", load: leaseModule, children: [{ name: "renew", load: leaseModule }] },
   { name: "release", load: () => import("./commands/release.js") },
   { name: "status", load: () => import("./commands/status.js") },
+  { name: "update", load: () => import("./commands/update.js") },
   { name: "list", load: () => import("./commands/list.js") },
   { name: "catalog", load: () => import("./commands/catalog.js") },
   { name: "cleanup", load: () => import("./commands/cleanup.js") },
@@ -72,6 +76,8 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "stop", load: daemonModule },
       { name: "status", load: daemonModule },
       { name: "logs", load: daemonModule },
+      { name: "install", load: daemonModule },
+      { name: "uninstall", load: daemonModule },
     ],
   },
   {
@@ -102,6 +108,7 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "remove", load: workerModule },
     ],
   },
+  { name: "alerts", load: alertsModule, children: [{ name: "test", load: alertsModule }] },
   {
     name: "component",
     load: componentModule,
@@ -122,4 +129,6 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "simctl", load: () => import("./commands/passthrough.js") },
   { name: "adb", load: () => import("./commands/passthrough.js") },
   { name: "mcp", load: () => import("./commands/mcp.js") },
+  { name: "instructions", load: () => import("./commands/instructions.js") },
+  { name: "setup", load: () => import("./commands/setup.js") },
 ];

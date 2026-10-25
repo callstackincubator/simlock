@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
 import { promiseState } from "../test-support/promise-state.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import {
@@ -14,10 +14,9 @@ import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { Registry } from "./registry.js";
+import type { Registry } from "./registry.js";
+import { loadTestRegistry, openTestState } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
-
-const statePath = "/home/agent/.simlock/state.json";
 
 /** The registry's transition, narrowed to the virtual device every test here acts on. */
 async function transitionVirtual(
@@ -35,12 +34,10 @@ async function createHarness() {
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({ clock, platform: "ios" });
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const claims = new DeviceOperationClaims();
   const lifecycle = new ManagedDeviceLifecycle(
@@ -486,12 +483,10 @@ describe("ManagedDeviceLifecycle", () => {
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ clock, mode: "slim", platform: "ios" });
     let nextId = 0;
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: { generate: () => `${nextId++}` },
-      statePath,
     });
     const claims = new DeviceOperationClaims();
     const lifecycle = new ManagedDeviceLifecycle(
@@ -555,8 +550,8 @@ describe("ManagedDeviceLifecycle", () => {
   });
 
   it("readyProvisionedForLease stores full, replacing a stored slim, when the driver reports no mode (#makeReadyForLease, provisioning path)", async () => {
-    // A device can't naturally re-enter "provisioning" once it leaves, so the persisted state is
-    // seeded directly (as a restarted daemon would load it from disk) to exercise the same
+    // why: a device can't naturally re-enter "provisioning" once it leaves, so the persisted state is
+    // seeded directly in the database (as a restarted daemon would load it) to exercise the same
     // provisioning-branch code path the "shutdown" test above covers for the other branch.
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
@@ -567,32 +562,25 @@ describe("ManagedDeviceLifecycle", () => {
       osVersion: "26.5",
       platform: "ios",
     });
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      statePath,
-      JSON.stringify({
-        devices: [
-          {
-            physical: false,
-            createdAt: 0,
-            driverData: driverDevice.driverData,
-            driverDeviceId: driverDevice.deviceId,
-            mode: "slim",
-            id: "dev_stale_2",
-            spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
-            state: "provisioning",
-          },
-        ],
-        leases: [],
-      }),
-    );
-    const registry = await Registry.load({
+    const state = await openTestState();
+    const seeding = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
+      idGenerator: { generate: () => "stale_2" },
+      state,
+    });
+    await seeding.registerDevice({
+      driverData: driverDevice.driverData,
+      driverDeviceId: driverDevice.deviceId,
+      provisionDuration: 0,
+      spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+    });
+    state.database.prepare("UPDATE devices SET mode = 'slim'").run();
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus,
       idGenerator: { generate: () => "unused" },
-      statePath,
+      state,
     });
     const lifecycle = new ManagedDeviceLifecycle(
       new DriverCatalog([driver]),
@@ -624,12 +612,10 @@ describe("ManagedDeviceLifecycle", () => {
       const eventBus = new EventBus(clock);
       const driver = new FakeDriver({ clock, platform: "ios", slimmableOsVersions: ["26.5"] });
       let nextId = 0;
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: { generate: () => `${nextId++}` },
-        statePath,
       });
       const claims = new DeviceOperationClaims();
       const lifecycle = new ManagedDeviceLifecycle(

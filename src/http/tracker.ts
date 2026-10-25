@@ -30,6 +30,8 @@ export interface LeasePayload {
   readonly device: string;
   readonly os: string;
   readonly udid: string;
+  // why: the serial the platform's tools take (`adb -s <address>`); absent while the device has none (not ready, or shut down).
+  readonly address?: string;
   readonly deviceId: string;
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -69,6 +71,7 @@ export function buildLeasePayload(
     device: device.spec.model,
     os: device.spec.osVersion,
     udid: device.driverDeviceId,
+    ...(device.address === undefined ? {} : { address: device.address }),
     deviceId: device.id,
     createdAt: new Date(lease.grantedAt).toISOString(),
     expiresAt: new Date(lease.ttlDeadline).toISOString(),
@@ -126,6 +129,7 @@ export function isTerminalStage(state: RequestSnapshot): boolean {
 export interface TrackedRequestView {
   readonly id: string;
   readonly requesterId: string;
+  readonly platform: "ios" | "android";
   /** The principal that sent the request -- what reading or cancelling it is authorized on. */
   readonly ownerId: string;
   readonly createdAt: string;
@@ -224,6 +228,7 @@ export class LeaseRequestTracker {
           createdAt: new Date(this.options.clock.now()).toISOString(),
           id: requestId,
           ownerId: identity.principal,
+          platform: body.platform,
           requesterId: identity.principal,
           state,
         };
@@ -333,7 +338,7 @@ export class LeaseRequestTracker {
     const session = buildHttpSession(identity);
     const { result } = await this.options.dispatch(
       "lease.cancel",
-      { requesterId: before.requesterId },
+      { platform: before.platform, requesterId: before.requesterId },
       session,
     );
     if (result === "cancelled") return { kind: "cancelled" };
@@ -376,6 +381,7 @@ type HttpLeaseProgress =
 export interface HttpLeaseDevice {
   readonly id: string;
   readonly driverDeviceId: string;
+  readonly address?: string | undefined;
   readonly spec: {
     readonly platform: string;
     readonly model: string;
@@ -405,6 +411,7 @@ function toView(
     createdAt: new Date(record.createdAt).toISOString(),
     id: record.id,
     ownerId: record.ownerId,
+    platform: record.request.platform,
     requesterId: record.requesterId,
     state: toSnapshot(record, progress),
   };

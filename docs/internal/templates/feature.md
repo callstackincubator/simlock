@@ -85,6 +85,22 @@ a row. "none" for a one-task feature. -->
 | -------------- | ---- | ---------- | ------- | ------ |
 | ...            | ...  | ...        | ...     | ...    |
 
+## Behaviours
+
+<!-- Written before any task, from the interview. One row per thing an
+invoker does and what it then sees: a caller, a user at the CLI or the
+console, a stored record, an event. The seam is the highest existing entry
+point that can see it (a command, a route, a tool call, a module's
+index.ts), with the platform faked, never a real device. Cases are the
+inputs that differ in outcome, listed in the row; they become one table in
+one test. Every task's Tests lines are copied from this table, one line
+per row, so no behaviour gets a test twice and none gets a test from a
+sentence in prose. -->
+
+| Behaviour (invoker, action, what it sees) | Seam | Cases | Task |
+| ----------------------------------------- | ---- | ----- | ---- |
+| ...                                       | ...  | ...   | ...  |
+
 ## Tasks
 
 <!-- First a Mermaid flowchart of the tasks in the order they depend on

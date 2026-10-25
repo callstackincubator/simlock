@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   OPERATIONS,
@@ -8,7 +9,6 @@ import {
   requestedDevice,
 } from "./operations.js";
 import { PUSH_SCHEMAS } from "./pushes.js";
-import { relayChannelSchema } from "./relay.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
@@ -29,6 +29,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "lease.renew", input: { leaseId: "lease_1" }, role: "agent" },
   { name: "lease.release", input: { leaseId: "lease_1" }, role: "agent" },
   { name: "lease.list", input: {}, role: "agent" },
+  { name: "lease.get", input: { leaseId: "lse_1" }, role: "agent" },
   { name: "doctor.run", input: { fix: false }, role: "agent" },
   { name: "doctor.run", input: {}, role: "agent" },
   { name: "doctor.run", input: { fix: true }, role: "admin" },
@@ -39,10 +40,12 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "nuke.run", input: {}, role: "admin" },
   { name: "config.get", input: {}, role: "admin" },
   { name: "daemon.stop", input: {}, role: "admin" },
+  { name: "daemon.update", input: {}, role: "admin" },
   { name: "events.replay", input: {}, role: "admin" },
   { name: "events.subscribe", input: {}, role: "admin" },
   { name: "events.unsubscribe", input: {}, role: "admin" },
   { name: "usage.get", input: { from: 0, to: 60_000 }, role: "admin" },
+  { name: "inbox.get", input: {}, role: "admin" },
   { name: "token.create", input: { role: "agent" }, role: "admin" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, role: "agent" },
   {
@@ -57,6 +60,7 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
   // ADR 0010 §6: an operator's consent to a download.
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
@@ -84,6 +88,7 @@ const ROLE_MATRIX: ReadonlyArray<{
     role: "admin",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, role: "admin" },
+  { name: "alerts.test", input: { destination: "ops" }, role: "admin" },
 ];
 
 describe("operation role matrix", () => {
@@ -113,6 +118,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "lease.renew", input: { leaseId: "lease_1" }, effect: "write" },
   { name: "lease.release", input: { leaseId: "lease_1" }, effect: "write" },
   { name: "lease.list", input: {}, effect: "read" },
+  { name: "lease.get", input: { leaseId: "lse_1" }, effect: "read" },
   { name: "doctor.run", input: {}, effect: "read" },
   { name: "doctor.run", input: { fix: false }, effect: "read" },
   { name: "doctor.run", input: { fix: true }, effect: "write" },
@@ -125,10 +131,12 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "nuke.run", input: {}, effect: "write" },
   { name: "config.get", input: {}, effect: "read" },
   { name: "daemon.stop", input: {}, effect: "write" },
+  { name: "daemon.update", input: {}, effect: "write" },
   { name: "events.replay", input: {}, effect: "read" },
   { name: "events.subscribe", input: {}, effect: "read" },
   { name: "events.unsubscribe", input: {}, effect: "read" },
   { name: "usage.get", input: { from: 0, to: 60_000 }, effect: "read" },
+  { name: "inbox.get", input: {}, effect: "read" },
   { name: "token.create", input: { role: "agent" }, effect: "write" },
   { name: "driver.passthrough", input: { args: ["devices"], tool: "adb" }, effect: "read" },
   {
@@ -143,6 +151,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "worker.drain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.undrain", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, effect: "write" },
+  { name: "worker.update", input: { workerId: "wrk_1" }, effect: "write" },
   { name: "component.install", input: { platform: "ios", version: "26.4" }, effect: "write" },
   { name: "component.list", input: {}, effect: "read" },
   {
@@ -167,6 +176,7 @@ const EFFECT_MATRIX: ReadonlyArray<{
     effect: "write",
   },
   { name: "relay.cancel", input: { relayId: "r-1" }, effect: "write" },
+  { name: "alerts.test", input: { destination: "ops" }, effect: "write" },
 ];
 
 function resolvedEffect(name: OperationName, input: unknown): unknown {
@@ -425,6 +435,17 @@ describe("operation input/output round trips", () => {
     expect(() => OPERATIONS["lease.renew"].input.parse({ leaseId: "lse_1", ttlMs: -1 })).toThrow();
   });
 
+  it("lease.cancel: keeps a platform of ios or android and refuses any other", () => {
+    const input = OPERATIONS["lease.cancel"].input;
+
+    expect(input.parse({ platform: "android", requesterId: "agent" })).toEqual({
+      platform: "android",
+      requesterId: "agent",
+    });
+    expect(input.parse({ platform: "ios" })).toEqual({ platform: "ios" });
+    expect(input.safeParse({ platform: "tvos" }).success).toBe(false);
+  });
+
   it("lease.request: round-trips a representative output grant", () => {
     const grant = {
       device: {
@@ -485,6 +506,27 @@ describe("operation input/output round trips", () => {
     expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
   });
 
+  it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list or a missing name, remedy or unknown manager", () => {
+    const finding = {
+      kind: "service-broken",
+      manager: "launchd",
+      name: "com.callstack.simlock.worker",
+      missing: ["/Users/me/.nvm/versions/node/v22.13.0/bin/node"],
+      remedy: "Run `simlock daemon install` again.",
+    };
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+      findings: [finding],
+    });
+    expect(() =>
+      OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, missing: [] }] }),
+    ).toThrow();
+    for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
+      expect(() =>
+        OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, ...broken }] }),
+      ).toThrow();
+    }
+  });
+
   it("status.get: round-trips a representative status snapshot", () => {
     const status = {
       devices: [],
@@ -512,7 +554,14 @@ describe("operation input/output round trips", () => {
         },
         global: { running: 0, maxRunning: 2, reserved: 0, overLimit: false, warm: 0 },
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: {
         os: "macOS",
         osVersion: "15.5",
@@ -536,6 +585,7 @@ describe("operation input/output round trips", () => {
           count: 2,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "26.0",
           platform: "ios",
           ready: 1,
@@ -545,6 +595,7 @@ describe("operation input/output round trips", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "learned",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -568,7 +619,14 @@ describe("operation input/output round trips", () => {
         global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -587,13 +645,30 @@ describe("operation input/output round trips", () => {
       ).toBeDefined();
       expect(
         OPERATIONS["status.get"].output.parse({
-          daemon: { health: "starting", mode: "worker" },
+          daemon: {
+            health: "starting",
+            mode: "worker",
+            version: "0.0.0-test",
+            update: null,
+            lastUpdateFailure: null,
+            latestVersion: null,
+          },
           host,
         }),
-      ).toEqual({ daemon: { health: "starting", mode: "worker" }, host });
+      ).toEqual({
+        daemon: {
+          health: "starting",
+          mode: "worker",
+          version: "0.0.0-test",
+          update: null,
+          lastUpdateFailure: null,
+          latestVersion: null,
+        },
+        host,
+      });
     });
 
-    it("rejects a short outside the ten reasons, and a target list longer than 256", () => {
+    it("rejects a short outside the ten reasons, and a target list longer than 320", () => {
       const target = warmPool.targets[0];
       expect(() =>
         OPERATIONS["status.get"].output.parse({
@@ -604,7 +679,7 @@ describe("operation input/output round trips", () => {
       expect(() =>
         OPERATIONS["status.get"].output.parse({
           ...running,
-          warmPool: { ...warmPool, targets: Array.from({ length: 257 }, () => target) },
+          warmPool: { ...warmPool, targets: Array.from({ length: 321 }, () => target) },
         }),
       ).toThrow();
     });
@@ -627,12 +702,20 @@ describe("operation input/output round trips", () => {
       count: 1,
       mode: "full",
       model: "iPhone 17",
+      origin: "configured",
       platform: "ios",
       ready: 0,
       short,
     };
     const status = {
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
       warmPool: { enabled: true, reserveRunning: { android: 0, ios: 0 }, targets: [target] },
     };
@@ -699,7 +782,14 @@ describe("operation input/output round trips", () => {
         global: { running: 0, maxRunning: 1, reserved: 0, overLimit: false, warm: 0 },
         ios: capacityEntry,
       },
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       installs,
@@ -765,7 +855,14 @@ describe("operation input/output round trips", () => {
       ],
       leases: [lease],
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       host: { os: "Linux", osVersion: "6.8.0", arch: "x64", tools: [] },
       queueDepth: 0,
       workers: [
@@ -1082,10 +1179,12 @@ describe("operation input/output round trips", () => {
         execTimeoutMs: 660_000,
         leaseRequestTimeoutMs: 300_000,
         routing: "warm-then-free",
+        alerts: { destinations: [] },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_000 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       warmPool: {
         enabled: true,
         maxConcurrentBoots: 1,
@@ -1128,6 +1227,13 @@ describe("operation input/output round trips", () => {
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
+      const parsed = OPERATIONS["config.get"].output.parse({
+        ...config,
+        lease: { ...config.lease, maxPerRequester },
+      });
+      expect(parsed.lease.maxPerRequester).toEqual(maxPerRequester);
+    }
   });
 
   it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
@@ -1151,10 +1257,12 @@ describe("operation input/output round trips", () => {
         execTimeoutMs: 1,
         leaseRequestTimeoutMs: 1,
         routing: "warm-then-free",
+        alerts: { destinations: [] },
       },
       capacity: { strategy: "fixed", config: { maxRunning: 4 } },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1 },
       idle: { shutdownAfterMs: 1, deleteAfterMs: 2 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 1,
         maxTtlMs: 1,
@@ -1377,7 +1485,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a status carries the physical line's depth beside the virtual one", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "worker" },
+      daemon: {
+        health: "running",
+        mode: "worker",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -1392,7 +1507,14 @@ describe("status.get physicalQueueDepth (ADR 0022)", () => {
   it("a worker's entry in a gateway's status carries it too", () => {
     const parsed = output.parse({
       capacity,
-      daemon: { health: "running", mode: "gateway" },
+      daemon: {
+        health: "running",
+        mode: "gateway",
+        version: "0.0.0-test",
+        update: null,
+        lastUpdateFailure: null,
+        latestVersion: null,
+      },
       devices: [],
       host,
       leases: [],
@@ -1583,13 +1705,6 @@ describe("relay.request on a byte channel", () => {
     expect(parse(request)).toBe(false);
   });
 
-  it("relayChannelSchema holds the same bound the operation uses", () => {
-    expect(relayChannelSchema.safeParse("a".repeat(32)).success).toBe(true);
-    expect(relayChannelSchema.safeParse("a".repeat(33)).success).toBe(false);
-    expect(relayChannelSchema.safeParse("").success).toBe(false);
-    expect(relayChannelSchema.safeParse("a b").success).toBe(false);
-  });
-
   it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
     expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
     expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
@@ -1625,5 +1740,114 @@ describe("usage.get input", () => {
     expect(parse({ from: 8.64e15, to: 8.64e15 + 2 }).success).toBe(false);
     expect(parse({ from: "0", to: 10 }).success).toBe(false);
     expect(parse({ from: 0 }).success).toBe(false);
+  });
+});
+
+describe("events.replay input", () => {
+  const parse = (input: unknown) => OPERATIONS["events.replay"].input.safeParse(input);
+
+  it("accepts beforeId and limit in bounds, and refuses limit 0, 501 and 1.5, a beforeId of evt_ or abc, and beforeId or limit with sinceTs; accepts a workerId of 1 to 128 characters with any of them, and refuses an empty one or 129", () => {
+    expect(parse({ beforeId: "evt_abc", limit: 1 }).success).toBe(true);
+    expect(parse({ limit: 500 }).success).toBe(true);
+    expect(parse({ sinceTs: 5 }).success).toBe(true);
+    for (const workerId of ["w", "w".repeat(128)]) {
+      expect(parse({ workerId }).success).toBe(true);
+      expect(parse({ limit: 5, workerId }).success).toBe(true);
+      expect(parse({ sinceTs: 5, workerId }).success).toBe(true);
+    }
+    for (const workerId of ["", "w".repeat(129)]) expect(parse({ workerId }).success).toBe(false);
+
+    for (const limit of [0, 501, 1.5]) expect(parse({ limit }).success).toBe(false);
+    for (const beforeId of ["evt_", "abc"]) expect(parse({ beforeId }).success).toBe(false);
+    expect(parse({ beforeId: "evt_abc", sinceTs: 5 }).success).toBe(false);
+    expect(parse({ limit: 5, sinceTs: 5 }).success).toBe(false);
+  });
+});
+
+describe("daemon.update", () => {
+  const SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+  const exactVersion = {
+    type: "string",
+    maxLength: 64,
+    pattern: "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$",
+  };
+  const version = { type: "string", maxLength: 64 };
+  const stateBase = {
+    from: version,
+    to: version,
+    forced: { type: "boolean" },
+    startedAt: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+  };
+  const state = (stage: string, extra: Record<string, unknown> = {}) => ({
+    type: "object",
+    properties: { stage: { type: "string", const: stage }, ...extra, ...stateBase },
+    required: ["stage", ...Object.keys(extra), "from", "to", "forced", "startedAt"],
+    additionalProperties: false,
+  });
+
+  it("keeps the input and the answer the shapes every daemon version accepts, because it is a frozen call", () => {
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].input, { io: "input" })).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        version: exactVersion,
+        force: { type: "boolean" },
+        query: { type: "boolean" },
+      },
+    });
+    expect(z.toJSONSchema(OPERATIONS["daemon.update"].output)).toEqual({
+      $schema: SCHEMA,
+      type: "object",
+      properties: {
+        started: { type: "boolean" },
+        upToDate: { type: "boolean" },
+        resolved: { anyOf: [exactVersion, { type: "null" }] },
+        version,
+        health: { type: "string", enum: ["starting", "running", "failed"] },
+        update: {
+          anyOf: [
+            {
+              oneOf: [
+                state("waiting", {
+                  leases: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+                }),
+                state("installing"),
+                state("restarting"),
+              ],
+            },
+            { type: "null" },
+          ],
+        },
+        lastUpdateFailure: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                stage: { type: "string", enum: ["installing", "restarting"] },
+                from: version,
+                to: version,
+                message: { type: "string", maxLength: 2000 },
+                at: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+              },
+              required: ["stage", "from", "to", "message", "at"],
+              additionalProperties: false,
+            },
+            { type: "null" },
+          ],
+        },
+        latestVersion: { anyOf: [version, { type: "null" }] },
+      },
+      required: [
+        "started",
+        "upToDate",
+        "resolved",
+        "version",
+        "health",
+        "update",
+        "lastUpdateFailure",
+        "latestVersion",
+      ],
+      additionalProperties: false,
+    });
   });
 });

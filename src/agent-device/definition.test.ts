@@ -7,14 +7,27 @@ import { agentDeviceModule } from "./definition.js";
 
 const configPath = "/home/agent/.simlock/config.json";
 
-async function loadWith(contents: unknown, warn?: (message: string) => void): Promise<Config> {
+async function loadWith(
+  contents: unknown,
+  warn?: (message: string) => void,
+  role?: "gateway",
+): Promise<Config> {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp("/home/agent/.simlock");
   await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
   return loadConfig({
     configPath,
     filesystem,
-    modules: [{ ...agentDeviceModule.config, name: agentDeviceModule.name }],
+    modules: [
+      {
+        ...agentDeviceModule.config,
+        ...(agentDeviceModule.enabledByDefault === undefined
+          ? {}
+          : { enabledByDefault: agentDeviceModule.enabledByDefault }),
+        name: agentDeviceModule.name,
+      },
+    ],
+    ...(role === undefined ? {} : { role }),
     systemStats: new FakeSystemStats({ cpuCount: 4, totalRamBytes: 16 * 1024 ** 3 }),
     ...(warn === undefined ? {} : { warn }),
   });
@@ -27,14 +40,18 @@ function section(config: Config): Record<string, unknown> | undefined {
 }
 
 describe("agent-device's definition: capabilities.agent-device config", () => {
-  it("is named agent-device", () => {
-    expect(agentDeviceModule.name).toBe("agent-device");
-  });
+  it("defaults capabilities.agent-device.enabled to true on a standalone worker and false on a joined worker and a gateway, with command agent-device and leaseTtlCapMs unset", async () => {
+    const joined = { gateway: { token: "join-secret", url: "wss://fleet.example" } };
 
-  it("defaults capabilities.agent-device.enabled to false and command to agent-device, with leaseTtlCapMs unset", async () => {
-    const config = await loadWith({});
-
-    expect(section(config)).toEqual({ command: "agent-device", enabled: false });
+    expect(section(await loadWith({}))).toEqual({ command: "agent-device", enabled: true });
+    expect(
+      section(await loadWith({ capabilities: { "agent-device": { enabled: false } } })),
+    ).toEqual({ command: "agent-device", enabled: false });
+    expect(section(await loadWith(joined))).toEqual({ command: "agent-device", enabled: false });
+    expect(section(await loadWith({}, undefined, "gateway"))).toEqual({
+      command: "agent-device",
+      enabled: false,
+    });
   });
 
   it("keeps an explicit capabilities.agent-device section", async () => {
@@ -115,17 +132,14 @@ describe("agent-device's definition: capabilities.agent-device config", () => {
     const config = await loadWith(
       {
         capabilities: { "agent-device": { enabled: true, leaseTtlCapMs: 10_000 } },
-        mode: "gateway",
       },
       warn,
+      "gateway",
     );
     expect(section(config)).toMatchObject({ enabled: true, leaseTtlCapMs: 10_000 });
     expect(warn).not.toHaveBeenCalled();
 
-    await loadWith(
-      { capabilities: { "agent-device": { command: "elsewhere" } }, mode: "gateway" },
-      warn,
-    );
+    await loadWith({ capabilities: { "agent-device": { command: "elsewhere" } } }, warn, "gateway");
     expect(warn).toHaveBeenCalledWith(
       'Ignoring "capabilities.agent-device.command": it configures a worker, and this daemon runs in gateway mode.',
     );
@@ -134,12 +148,12 @@ describe("agent-device's definition: capabilities.agent-device config", () => {
     );
   });
 
-  it("refuses the old top-level agentDevice key as unknown, and leaves agent-device off", async () => {
+  it("refuses the old top-level agentDevice key as unknown, and leaves agent-device at its default", async () => {
     const warn = vi.fn();
 
     const config = await loadWith({ agentDevice: { enabled: true } }, warn);
 
     expect(warn).toHaveBeenCalledWith('Unknown config key: "agentDevice"');
-    expect(section(config)?.["enabled"]).toBe(false);
+    expect(section(config)?.["enabled"]).toBe(true);
   });
 });

@@ -16,7 +16,9 @@
 //                 group is killed.
 //
 // Run time counts only active time: a gap of more than 30 minutes between two tool calls (a
-// session waiting overnight for a person) is not counted.
+// session waiting overnight for a person) is not counted, and neither is time the computer
+// slept, measured on the same monotonic clock clock.mjs uses (a laptop with its lid closed
+// wakes for seconds at a time, so wall-clock gaps stay short while hours pass).
 //
 // Limits come from the environment (set them in settings.local.json "env"):
 //   CLAUDE_BUDGET_AGENT_TOKENS  default 15000000   (0 disables the agent token limit)
@@ -27,6 +29,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { awakeMs } from "./awake.mjs";
 import { emptyState, scan, sessionFiles } from "./usage.mjs";
 
 const LIMIT_AGENT_TOKENS = Number(process.env.CLAUDE_BUDGET_AGENT_TOKENS ?? 15_000_000);
@@ -44,7 +47,7 @@ if (!input.transcript_path || !input.session_id) process.exit(0);
 const { main, subDir, files } = sessionFiles(input.transcript_path);
 
 const stateFile = path.join(os.tmpdir(), `claude-budget-${input.session_id}.json`);
-let state = { activeMs: 0, lastSeen: null, files: {} };
+let state = { activeMs: 0, lastSeen: null, lastAwake: null, files: {} };
 try {
   state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
 } catch {}
@@ -55,9 +58,16 @@ for (const file of files) {
   scan(file, s);
 }
 const now = Date.now();
-const gap = typeof state.lastSeen === "number" ? now - state.lastSeen : 0;
+const awake = awakeMs();
+const wallGap = typeof state.lastSeen === "number" ? now - state.lastSeen : 0;
+// why: the awake gap excludes sleep; the wall gap is the fallback when python3 is missing.
+const gap =
+  awake !== null && typeof state.lastAwake === "number"
+    ? Math.max(0, awake - state.lastAwake)
+    : wallGap;
 if (gap > 0 && gap <= IDLE_GAP_MS) state.activeMs = (state.activeMs ?? 0) + gap;
 state.lastSeen = now;
+state.lastAwake = awake;
 fs.writeFileSync(stateFile, JSON.stringify(state));
 
 const fmt = (n) => `${(n / 1e6).toFixed(1)}M`;

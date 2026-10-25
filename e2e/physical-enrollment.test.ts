@@ -1,6 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { PROTOCOL_VERSION_RANGE } from "../src/contract/index.js";
@@ -8,6 +5,7 @@ import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire, WireCallError } from "../src/simlock-client/wire.js";
 import type { FakeDriverRefusalReason, ScriptedPhysicalDevice } from "./fake-driver/types.js";
 import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import { readEnrolledApps } from "./helpers/state-db.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -484,16 +482,6 @@ describe("simlock device remove", () => {
     }
   });
 
-  it("from a non-interactive shell, with no --yes, unenrols the device", async () => {
-    const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
-    const enrolled = await add(env, "ios", UDID);
-
-    const result = await env.cli(["device", "remove", UDID]);
-
-    expect(result.code, result.stderr).toBe(0);
-    expect((await rows(env)).find((row) => row.id === enrolled.id)?.state).toBe("deleted");
-  });
-
   it("then device add writes a new record with a new registry ID and reenrolled false, and the old record stays deleted", async () => {
     const env = await startDaemon({ ios: { physicalDevices: [IPHONE] } });
     const first = await add(env, "ios", UDID);
@@ -598,7 +586,8 @@ describe("device add over HTTP", () => {
 describe("device add through a gateway", () => {
   async function fleet(): Promise<{ gateway: TestEnv; worker: TestEnv; workerId: string }> {
     const { env: gateway, port } = await withHttpDaemon((port) => ({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       driver: "none",
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
@@ -665,11 +654,6 @@ describe("android enrolment", () => {
     expect(result.stdout).toBe(
       "Enrolled Pixel 9 (Android 15) as R58M123ABC, 1 user app recorded.\n",
     );
-    const state = JSON.parse(await readFile(join(env.home, "state.json"), "utf8")) as {
-      physicalDevices: { driverDeviceId: string; enrolledApps: string[] }[];
-    };
-    expect(state.physicalDevices.map((record) => record.enrolledApps)).toEqual([
-      ["com.example.mail"],
-    ]);
+    expect(readEnrolledApps(env)).toEqual([["com.example.mail"]]);
   });
 });

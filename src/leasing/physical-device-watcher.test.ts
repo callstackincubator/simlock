@@ -7,15 +7,22 @@ import {
   type PhysicalDevice,
   Registry,
 } from "../core/index.js";
-import { FakeDriver, testComponentWiring } from "../core/testing.js";
+import {
+  FakeDriver,
+  loadTestRegistry,
+  openTestState,
+  testComponentWiring,
+  testStateOf,
+} from "../core/testing.js";
+import type { StateDatabase } from "../state/index.js";
 import { EventBus } from "../bus/index.js";
 import {
   FakeClock,
   FakeSystemStats,
   JsonLinesLogger,
   type Logger,
-  MemoryFilesystem,
   MemoryLogSink,
+  type SqliteDatabase,
 } from "../ports/index.js";
 import { createTestEngine, type TestEngine } from "./testing.js";
 
@@ -25,7 +32,6 @@ const latestPresence = (driverDeviceId: string): unknown =>
   );
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const PROBE_MS = 30_000;
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -54,6 +60,7 @@ function config(options: HarnessOptions): Config {
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
@@ -75,6 +82,7 @@ function config(options: HarnessOptions): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,
@@ -122,15 +130,15 @@ interface Harness {
   readonly clock: FakeClock;
   readonly driver: FakeDriver;
   readonly engine: TestEngine;
-  readonly filesystem: MemoryFilesystem;
   readonly registry: Registry;
+  readonly state: StateDatabase;
 }
 
 const harnesses: Harness[] = [];
 
 async function createHarness(
   options: HarnessOptions = {},
-  filesystem: MemoryFilesystem = new MemoryFilesystem(),
+  state?: StateDatabase,
 ): Promise<Harness> {
   const clock = new FakeClock(1_000);
   const bus = new EventBus(clock);
@@ -142,12 +150,12 @@ async function createHarness(
   });
   const drivers = options.android === true ? [driver, androidDriver] : [driver];
   let nextId = 1;
-  const registry = await Registry.load({
+  const stateDatabase = state ?? (await openTestState());
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem,
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
+    state: stateDatabase,
   });
   const wiring = testComponentWiring({ clock, drivers, eventBus: bus, registry });
   const engine = createTestEngine({
@@ -159,9 +167,18 @@ async function createHarness(
     idGenerator: { generate: () => `request-${nextId++}` },
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
-  const harness = { androidDriver, bus, clock, driver, engine, filesystem, registry };
+  const harness = {
+    androidDriver,
+    bus,
+    clock,
+    driver,
+    engine,
+    registry,
+    state: stateDatabase,
+  };
   harnesses.push(harness);
   return harness;
 }
@@ -189,27 +206,19 @@ function startWatcher(harness: Harness): void {
 
 async function reopen(
   first: Harness,
-  patch: (records: Record<string, unknown>[]) => void,
+  patch: (database: SqliteDatabase) => void,
   options: HarnessOptions = {},
 ): Promise<Harness> {
-  const raw = JSON.parse(await first.filesystem.readFile(statePath)) as {
-    physicalDevices: Record<string, unknown>[];
-  };
-  patch(raw.physicalDevices);
-  await first.filesystem.writeFileAtomic(statePath, JSON.stringify(raw));
+  patch(first.state.database);
   first.engine.dispose();
-  return createHarness(options, first.filesystem);
+  return createHarness(options, first.state);
 }
 
-function markAbsent(
-  records: Record<string, unknown>[],
-  driverDeviceId: string,
-  absentReason: string,
-): void {
-  const record = records.find((candidate) => candidate.driverDeviceId === driverDeviceId);
-  if (record === undefined) throw new Error(`no record for ${driverDeviceId}`);
-  record.state = "absent";
-  record.absentReason = absentReason;
+function markAbsent(database: SqliteDatabase, driverDeviceId: string, absentReason: string): void {
+  const { changes } = database
+    .prepare("UPDATE devices SET state = 'absent', absent_reason = ? WHERE driver_device_id = ?")
+    .run(absentReason, driverDeviceId);
+  if (changes === 0) throw new Error(`no record for ${driverDeviceId}`);
 }
 
 async function enrollIphone(harness: Harness, driverDeviceId: string): Promise<PhysicalDevice> {
@@ -231,7 +240,11 @@ async function absentHarness(
 ): Promise<{ readonly device: PhysicalDevice; readonly harness: Harness }> {
   const first = await createHarness(options);
   const device = await enrollIphone(first, "UDID-A");
-  const harness = await reopen(first, (records) => markAbsent(records, "UDID-A", reason), options);
+  const harness = await reopen(
+    first,
+    (database) => markAbsent(database, "UDID-A", reason),
+    options,
+  );
   return { device, harness };
 }
 
@@ -332,24 +345,22 @@ interface RecordedWrite {
 
 function recordStateWrites(harness: Harness): RecordedWrite[] {
   const writes: RecordedWrite[] = [];
-  const original = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
-  vi.spyOn(harness.filesystem, "writeFileAtomic").mockImplementation(
-    async (path, contents, options) => {
-      if (path === statePath) {
-        const parsed = JSON.parse(contents) as {
-          devices?: { id: string; state: string }[];
-          physicalDevices?: { id: string; state: string }[];
-        };
-        const records = [...(parsed.devices ?? []), ...(parsed.physicalDevices ?? [])];
-        writes.push({
-          claims: Object.fromEntries(
-            records.map((record) => [record.id, harness.engine.core.claims.claim(record.id)?.kind]),
-          ),
-          states: Object.fromEntries(records.map((record) => [record.id, record.state])),
-        });
-      }
-      return original(path, contents, options);
-    },
+  const original = harness.state.transaction.bind(harness.state);
+  vi.spyOn(harness.state, "transaction").mockImplementation((work) =>
+    original(() => {
+      const result = work();
+      const records = harness.state.database.prepare("SELECT id, state FROM devices").all() as {
+        id: string;
+        state: string;
+      }[];
+      writes.push({
+        claims: Object.fromEntries(
+          records.map((record) => [record.id, harness.engine.core.claims.claim(record.id)?.kind]),
+        ),
+        states: Object.fromEntries(records.map((record) => [record.id, record.state])),
+      });
+      return result;
+    }),
   );
   return writes;
 }
@@ -819,7 +830,7 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
     gone(harness, "UDID-B");
     startWatcher(harness);
     await tick(harness);
-    vi.spyOn(harness.filesystem, "writeFileAtomic").mockImplementationOnce(async () => {
+    vi.spyOn(harness.state, "transaction").mockImplementationOnce(() => {
       throw new Error("disk full");
     });
     const problems = () =>
@@ -1055,18 +1066,16 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
     const returned = await enrollIphone(first, "UDID-B");
     const harness = await reopen(
       first,
-      (records) => markAbsent(records, "UDID-B", "not-present"),
+      (database) => markAbsent(database, "UDID-B", "not-present"),
       options,
     );
     gone(harness, "UDID-A");
     back(harness, "UDID-B");
-    const original = harness.filesystem.writeFileAtomic.bind(harness.filesystem);
-    vi.spyOn(harness.filesystem, "writeFileAtomic").mockImplementationOnce(
-      async (path, contents, writeOptions) => {
-        watcherOf(harness)?.dispose();
-        return original(path, contents, writeOptions);
-      },
-    );
+    const original = harness.state.transaction.bind(harness.state);
+    vi.spyOn(harness.state, "transaction").mockImplementationOnce((work) => {
+      watcherOf(harness)?.dispose();
+      return original(work);
+    });
     startWatcher(harness);
 
     await tick(harness);
@@ -1088,13 +1097,11 @@ describe("PhysicalDeviceWatcher acting on a device", () => {
     startWatcher(first);
     await tick(first);
     back(first, "UDID-B");
-    const original = first.filesystem.writeFileAtomic.bind(first.filesystem);
-    vi.spyOn(first.filesystem, "writeFileAtomic").mockImplementationOnce(
-      async (path, contents, writeOptions) => {
-        watcherOf(first)?.dispose();
-        return original(path, contents, writeOptions);
-      },
-    );
+    const original = first.state.transaction.bind(first.state);
+    vi.spyOn(first.state, "transaction").mockImplementationOnce((work) => {
+      watcherOf(first)?.dispose();
+      return original(work);
+    });
 
     await tick(first);
 
@@ -1208,8 +1215,8 @@ describe("PhysicalDeviceWatcher around restarts and doctor", () => {
     await first.registry.transitionDevice(device.id, "reclaiming");
     const harness = await reopen(
       first,
-      (records) => {
-        for (const record of records) record.lastLeaseEndedAt = 1;
+      (database) => {
+        database.exec("UPDATE devices SET last_lease_ended_at = 1");
       },
       options,
     );
@@ -1261,9 +1268,9 @@ describe("PhysicalDeviceWatcher and nuke maintenance", () => {
     const returned = await enrollIphone(first, "UDID-Y");
     const harness = await reopen(
       first,
-      (records) => {
-        markAbsent(records, "UDID-X", "locked");
-        markAbsent(records, "UDID-Y", "locked");
+      (database) => {
+        markAbsent(database, "UDID-X", "locked");
+        markAbsent(database, "UDID-Y", "locked");
       },
       options,
     );

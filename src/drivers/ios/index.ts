@@ -55,6 +55,7 @@ import type {
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
+import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
@@ -131,11 +132,13 @@ const IOS_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]
  * reads as tampering on the next reconcile. Injecting `--set` for them would hand back
  * exactly the capability the device set exists to take away (ADR 0001, decision 7).
  */
-const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
+export const REFUSED_SIMCTL_VERBS = new Set(["create", "erase", "delete"]);
 
-const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
+export const CALLER_SUPPLIED_SCOPE_FLAGS = new Set(["set", "profiles"]);
 
-const SHUTDOWN_ALL_TARGET = "all";
+export const SHUTDOWN_ALL_TARGET = "all";
+
+export const REFUSED_RUNTIME_OPERATION = "delete";
 
 const RECLAIM_INSTEAD =
   "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
@@ -202,6 +205,8 @@ export interface IosSimctlDriverOptions {
   readonly processRunner: ProcessRunner;
   readonly simlockHome: string;
   readonly uid?: number;
+  /** why: the daemon's pid is named in the staging directory of a new root. */
+  readonly pid?: number;
   readonly coreSimulatorRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
@@ -361,6 +366,7 @@ export class IosSimctlDriver implements Driver {
       path: configuredDeviceRoot(options),
       platform: "ios",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
+      ...(options.pid === undefined ? {} : { pid: options.pid }),
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
 
@@ -1324,6 +1330,12 @@ export class IosSimctlDriver implements Driver {
         `Refusing \`${tool}\`: the iOS driver does not wrap it.`,
       );
     }
+    if (context?.platform !== undefined && context.platform !== this.platform) {
+      throw new PassthroughRefusedError(
+        tool,
+        `Refusing \`simctl\`: it only serves an iOS simulator, and this lease is on the ${context.platform} platform.`,
+      );
+    }
     if (device !== undefined && isPhysicalDriverDevice(device)) {
       throw new PassthroughRefusedError(
         tool,
@@ -1331,9 +1343,10 @@ export class IosSimctlDriver implements Driver {
       );
     }
     this.#assertProxyable(args);
+    const scopedArgs = device === undefined ? args : fillSimctlDevice(args, device.deviceId);
     // why: No environment: simctl ignores every variable that could carry the device set.
     return await Promise.resolve({
-      args: ["simctl", "--set", this.#deviceRoot, ...args],
+      args: ["simctl", "--set", this.#deviceRoot, ...scopedArgs],
       command: "xcrun",
       env: {},
     });
@@ -1384,9 +1397,12 @@ export class IosSimctlDriver implements Driver {
     // why: A bare `simctl` reaches this too, so refusing it takes no capability away. The
     // wrapper is advertised as the safe path, and being the convenient route to a
     // multi-gigabyte deletion of a runtime Xcode shares is not that.
-    if (verb === "runtime" && operands.find((operand) => !operand.startsWith("-")) === "delete") {
+    if (
+      verb === "runtime" &&
+      operands.find((operand) => !operand.startsWith("-")) === REFUSED_RUNTIME_OPERATION
+    ) {
       this.#refuse(
-        "runtime delete",
+        `runtime ${REFUSED_RUNTIME_OPERATION}`,
         "it deletes a runtime shared with Xcode and other tools. To remove a runtime Simlock added, use `simlock component remove ios <version>`; delete any other through Xcode.",
       );
     }
@@ -1708,7 +1724,7 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
     // which costs iOS and nothing else -- the same as every other refusal here. It is not
     // a daemon-fatal error: `"deviceRoot": true` and `"deviceRoot": "devices/ios"` are one
     // keystroke apart, and killing the process over the first would take Android down with
-    // it and leave the reason unreachable, since `doctor` -- where `docs/CLI.md` promises
+    // it and leave the reason unreachable, since `doctor` -- where the CLI reference promises
     // it appears -- needs a daemon to answer. `not-absolute` is the vocabulary term the
     // docs already publish for "this names no usable directory"; nothing new is invented.
     throw new OwnedRootError(
@@ -2131,10 +2147,8 @@ function iosDriverData(device: DriverDevice): IosDriverData {
     name: value.name,
     runtimeId: value.runtimeId,
     udid: value.udid,
-    // why: Both are optional and post-date `state.json` registries written before slim mode
-    // shipped -- absent or wrong-typed is tolerated (ignored) rather than rejected, so an old
-    // registry keeps loading (compatibility requirement). A `full` key an older daemon stamped
-    // here is not read: the spec's mode is the only record of it (ADR 0007 §7).
+    // why: Both are optional: absent or wrong-typed is ignored rather than rejected. A `full` key
+    // an older daemon stamped here is not read: the spec's mode is the only record of it (ADR 0007 §7).
     ...(typeof value.slimSignature === "string" ? { slimSignature: value.slimSignature } : {}),
     ...(typeof value.slimMarkToken === "string" ? { slimMarkToken: value.slimMarkToken } : {}),
   };
@@ -2239,5 +2253,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+export { iosDeviceDataTable } from "./device-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
 export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";

@@ -21,6 +21,8 @@
  * so it can flake under CPU contention alongside an unrelated file's own suite -- re-run this
  * file alone before treating a failure here as a real regression.
  */
+import { createHmac } from "node:crypto";
+import { createServer as createHttpServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -28,18 +30,24 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { PassthroughCommand } from "../core/index.js";
-import { FakeDriver } from "../core/testing.js";
-import type { Filesystem, IpcConnector, IpcListenerFactory } from "../ports/index.js";
+import type { ProtocolRange } from "../contract/index.js";
+import type { AlertDestination, PassthroughCommand } from "../core/index.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
+import type { Filesystem, IpcConnector, IpcListenerFactory, NpmCli } from "../ports/index.js";
 import {
   FakeHostInfo,
+  FakeNpmCli,
+  FakeUpdaterLauncher,
   MemoryFilesystem,
   NodeIpcTransport,
   NoopLogger,
+  resolveDaemonSocketPath,
   SystemClock,
 } from "../ports/index.js";
+import { FakeWebhookPoster } from "../ports/testing.js";
+import { connectSimlockAdmin } from "../admin/index.js";
 import type { DispatchSession } from "./dispatch.js";
-import { startDaemon } from "./main.js";
+import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 
 function passthroughOptions(command: PassthroughCommand): object {
@@ -127,30 +135,37 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     );
   });
 
-  async function startGateway(): Promise<DaemonServer> {
+  async function startGateway(
+    alerts: { destinations?: readonly AlertDestination[]; poster?: FakeWebhookPoster } = {},
+    extra: Partial<StartDaemonOptions> = {},
+  ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
     gatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
+        ...(alerts.destinations === undefined
+          ? {}
+          : { gateway: { alerts: { destinations: alerts.destinations } } }),
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo(GATEWAY_HOST),
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
+      ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
+      ...extra,
     });
     daemons.push(daemon);
     return daemon;
   }
 
   /**
-   * #119: a gateway that can be stopped and started again *as the same gateway* -- the same
+   * why: #119: a gateway that can be stopped and started again *as the same gateway* -- the same
    * `SIMLOCK_HOME` directory and the same `Filesystem` instance backing it, which is what
-   * `instance.json`/`tokens.json`/`workers.json` actually persisting across the restart depends
+   * `instance.json` and the `tokens` and `drained_workers` tables of `state.db` actually persisting across the restart depends
    * on (ADR §30, §8a). `startGateway` above deliberately hands each call a fresh
    * `MemoryFilesystem`, which is right for a test that starts one gateway once; this one needs
    * the state to survive the restart it is about to perform.
@@ -166,19 +181,19 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     restartGatewayPort = await freeLoopbackPort();
     const daemon = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(daemon);
     return { daemon, filesystem, directory };
   }
 
+  // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to the daemon.
   async function startWorker(options: {
     readonly label: string;
     readonly model: string;
@@ -195,49 +210,137 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     readonly existing?: { readonly filesystem: Filesystem; readonly directory: string };
     /** The worker's own socket transport; omitted, the real one. */
     readonly ipc?: IpcConnector & IpcListenerFactory;
+    readonly alerts?: { destinations: readonly AlertDestination[]; poster: FakeWebhookPoster };
+    readonly onDriver?: (driver: FakeDriver) => void;
+    /** why: a worker on another protocol range is the gateway's `incompatible` worker. */
+    readonly protocolVersion?: ProtocolRange;
+    readonly npm?: NpmCli;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
       (await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`)));
     if (options.existing === undefined) directories.push(directory);
     const filesystem = options.existing?.filesystem ?? new MemoryFilesystem();
+    const driver = new FakeDriver({
+      availableOsVersions: ["18.0"],
+      // why: a real command, so `device.exec` proves a real child process actually ran on
+      // *this* worker: it prints which worker answered and exits with a distinguishing
+      // code, both asserted below.
+      ...passthroughOptions({
+        args: ["-e", `process.stdout.write(${JSON.stringify(options.stdout)}); process.exit(7);`],
+        command: process.execPath,
+        env: {},
+      }),
+      clock: new SystemClock(),
+      knownModels: [options.model],
+      platform: "android",
+    });
+    options.onDriver?.(driver);
     const daemon = await startDaemon({
       configOverrides: {
         gateway: {
           url: options.gatewayUrl ?? gatewayUrl(),
           token: options.token,
           label: options.label,
+          ...(options.alerts === undefined
+            ? {}
+            : { alerts: { destinations: options.alerts.destinations } }),
         },
       },
       dataDirectory: directory,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          // A real command, so `device.exec` proves a real child process actually ran on
-          // *this* worker: it prints which worker answered and exits with a distinguishing
-          // code, both asserted below.
-          ...passthroughOptions({
-            args: [
-              "-e",
-              `process.stdout.write(${JSON.stringify(options.stdout)}); process.exit(7);`,
-            ],
-            command: process.execPath,
-            env: {},
-          }),
-          clock: new SystemClock(),
-          knownModels: [options.model],
-          platform: "android",
-        }),
-      ],
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [driver],
       filesystem,
       ...(options.ipc === undefined ? {} : { ipc: options.ipc }),
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
+      ...(options.npm === undefined ? {} : { npm: options.npm }),
+      ...(options.protocolVersion === undefined
+        ? {}
+        : { protocolVersion: options.protocolVersion }),
       version: "1.0.0-e2e",
+      ...(options.alerts === undefined ? {} : { webhookPoster: options.alerts.poster }),
     });
     daemons.push(daemon);
     return { daemon, directory, filesystem };
   }
+
+  it("worker.update reaches an incompatible worker with the frozen daemon.update and shows its answer", async () => {
+    const gateway = await startGateway();
+    const { secret: token } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label: "old-worker" },
+      adminSession(),
+    );
+    await startWorker({
+      label: "old-worker",
+      model: "Pixel-A",
+      // why: a version already on npm's latest answers `upToDate`, so no install runs in this test.
+      npm: new FakeNpmCli({ view: [{ ok: true, output: "0.4.0" }] }),
+      protocolVersion: { max: 55, min: 55 },
+      stdout: "old",
+      token,
+    });
+    const incompatible = await vi.waitFor(async () => {
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      const found = workers.find((worker) => worker.connection === "incompatible");
+      if (found === undefined) throw new Error("the old worker never showed incompatible");
+      return found;
+    });
+
+    const answer = await gateway.dispatch(
+      "worker.update",
+      { workerId: incompatible.id },
+      adminSession(),
+    );
+
+    expect(answer).toMatchObject({ started: false, upToDate: true, workerId: incompatible.id });
+    const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+    expect(workers.find((worker) => worker.id === incompatible.id)).toMatchObject({
+      connection: "incompatible",
+      latestVersion: "0.4.0",
+      update: null,
+    });
+  });
+
+  it("daemon.update on a gateway goes straight to installing with fleet leases held, and its status.get shows it", async () => {
+    const launcher = new FakeUpdaterLauncher();
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/opt/simlock");
+    const gateway = await startGateway(
+      {},
+      {
+        filesystem,
+        npm: new FakeNpmCli({
+          globalRoot: [{ ok: true, output: "/opt" }],
+          view: [{ ok: true, output: "2.0.0" }],
+        }),
+        updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+      },
+    );
+    const { secret: token } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label: "worker-a" },
+      adminSession(),
+    );
+    await startWorker({ label: "worker-a", model: "Pixel-A", stdout: "a", token });
+    await vi.waitFor(async () => {
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      expect(workerServes(workers, "Pixel-A")).toBe(true);
+    });
+    await gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", noWait: true, platform: "android" },
+      agentSession(),
+    );
+
+    const answer = await gateway.dispatch("daemon.update", {}, adminSession());
+
+    const installing = { forced: false, from: "1.0.0-e2e", stage: "installing", to: "2.0.0" };
+    expect(answer).toMatchObject({ resolved: "2.0.0", started: true, update: installing });
+    expect(launcher.launches).toMatchObject([{ from: "1.0.0-e2e", role: "gateway", to: "2.0.0" }]);
+    const status = await gateway.dispatch("status.get", {}, adminSession());
+    expect(status.daemon.update).toMatchObject(installing);
+  });
 
   it("emits queue.changed once when the gateway has started, with depth 0, and no capacity.changed of its own", async () => {
     const gateway = await startGateway();
@@ -383,12 +486,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   }, 30_000);
 
   /**
-   * #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
+   * why: #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
    * rebuild, proved together over real processes and a real WebSocket restart -- not the
    * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
    * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
    * this shape of test can catch: the gateway's own persisted state (`instance.json`,
-   * `tokens.json`, `workers.json`) actually surviving a real `stop()`/`startDaemon()` cycle, and
+   * the drained workers and join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
    * a real worker's own `GatewayUplink` actually redialling and reconnecting on its own backoff
    * once the new process is listening again.
    */
@@ -486,13 +589,12 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     daemons.splice(daemons.indexOf(firstGateway), 1);
     const restartedGateway = await startDaemon({
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
       },
+      role: "gateway",
       dataDirectory: directory,
       filesystem,
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(restartedGateway);
@@ -511,8 +613,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       { timeout: 15_000 },
     );
 
-    // C1 (round 1 review, #119): this is the assertion this test's own header comment promises
-    // and never made -- that `workers.json` actually survived the restart. A drained-but-absent
+    // why: C1 (round 1 review, #119): this is the assertion this test's own header comment promises
+    // and never made -- that the drain actually survived the restart. A drained-but-absent
     // worker has no `WorkerView` at all (a view is only ever built by `connected()`/`refresh()`,
     // never synthesized from the persisted drain set on its own), so the only way to observe the
     // restarted gateway's own on-disk state through the same `worker.list` the rest of this test
@@ -521,7 +623,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     // had before (so its `instance.json`, and therefore its `workerId`, survives too), exactly as
     // `restartedGateway` reuses the gateway's own. Its view is built from nothing but this fresh
     // process's own `connected()` call plus whatever `restartedGateway` loaded from
-    // `workers.json` at startup -- there is no other way `drained` could come back `true` here.
+    // `state.db` at startup -- there is no other way `drained` could come back `true` here.
     const restartedWorkerB = await startWorker({
       label: "worker-b",
       model: "Pixel-B",
@@ -539,6 +641,14 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       },
       { timeout: 15_000 },
     );
+    // why: `drained: true` is the flag; this proves the restarted gateway also keeps routing off the worker.
+    await expect(
+      restartedGateway.dispatch(
+        "lease.request",
+        { model: "Pixel-B", platform: "android", noWait: true },
+        agentSession({ principal: "someone-else" }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
     await restartedWorkerB.daemon.stop("test");
     daemons.splice(daemons.indexOf(restartedWorkerB.daemon), 1);
 
@@ -573,4 +683,205 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       agentSession({ principal: "fleet-owner" }),
     );
   }, 55_000);
+
+  const destinationFor = (overrides: Partial<AlertDestination>): AlertDestination => ({
+    name: "audit",
+    format: "generic",
+    url: "https://alerts.example.com/hook",
+    events: ["component.install-failed"],
+    secret: "e2e-secret",
+    ...overrides,
+  });
+
+  async function workerToken(gateway: DaemonServer, label: string): Promise<string> {
+    const { secret } = await gateway.dispatch(
+      "token.create",
+      { role: "worker", label },
+      adminSession(),
+    );
+    return secret;
+  }
+
+  it("a worker with a destination posts nothing, while its gateway posts the relayed event", async () => {
+    const gatewayPoster = new FakeWebhookPoster();
+    const workerPoster = new FakeWebhookPoster();
+    const destinations = [destinationFor({})];
+    const gateway = await startGateway({ destinations, poster: gatewayPoster });
+    let driver: FakeDriver | undefined;
+    const worker = await startWorker({
+      label: "worker-a",
+      model: "Pixel-A",
+      token: await workerToken(gateway, "worker-a"),
+      stdout: "a",
+      alerts: { destinations, poster: workerPoster },
+      onDriver: (created) => {
+        driver = created;
+      },
+    });
+
+    await vi.waitFor(async () => {
+      const events = (await gateway.dispatch("events.replay", {}, adminSession())) as Array<{
+        readonly event: string;
+      }>;
+      expect(events.some((entry) => entry.event === "worker.connected")).toBe(true);
+    });
+    driver?.failOn("installComponent", 1, new Error("installer exited 1"));
+    await expect(
+      worker.daemon.dispatch(
+        "component.install",
+        { platform: "android", version: "35" },
+        adminSession(),
+      ),
+    ).rejects.toThrow();
+
+    await vi.waitFor(() => expect(gatewayPoster.requests).toHaveLength(1));
+    const body = JSON.parse(gatewayPoster.requests[0]?.body ?? "");
+    expect(body.event).toBe("component.install-failed");
+    expect(body.payload.workerId).toEqual(expect.any(String));
+    expect(workerPoster.requests).toEqual([]);
+  }, 30_000);
+
+  it("stopping a gateway sends no worker.disconnected and aborts a try in flight", async () => {
+    const poster = new FakeWebhookPoster();
+    poster.respond = (request) =>
+      request.url.includes("stuck") ? new Promise(() => {}) : Promise.resolve({ status: 200 });
+    const gateway = await startGateway({
+      destinations: [
+        destinationFor({
+          name: "quick",
+          url: "https://quick.example.com/x",
+          events: ["worker.disconnected"],
+        }),
+        destinationFor({
+          name: "stuck",
+          url: "https://stuck.example.com/x",
+          events: ["worker.connected"],
+        }),
+      ],
+      poster,
+    });
+    await startWorker({
+      label: "worker-a",
+      model: "Pixel-A",
+      token: await workerToken(gateway, "worker-a"),
+      stdout: "a",
+    });
+    await vi.waitFor(() => expect(poster.requests).toHaveLength(1));
+    const stuck = poster.requests[0];
+    expect(stuck?.url).toBe("https://stuck.example.com/x");
+
+    await gateway.stop("test");
+
+    expect(stuck?.signal.aborted).toBe(true);
+    expect(poster.requests.filter((request) => request.url.includes("quick"))).toEqual([]);
+  }, 30_000);
+
+  it("a worker joining a gateway with a generic destination makes a loopback receiver get one signed worker.connected naming that worker, and with a slack destination one message naming the worker's label", async () => {
+    const received: Array<{ url: string; headers: Record<string, unknown>; body: string }> = [];
+    const receiver: Server = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          url: request.url ?? "",
+          headers: request.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        response.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (receiver.address() as { port: number }).port;
+      const gateway = await startGateway({
+        destinations: [
+          destinationFor({ url: `http://127.0.0.1:${port}/hook`, events: ["worker.connected"] }),
+          {
+            name: "chat",
+            format: "slack",
+            url: `http://127.0.0.1:${port}/slack`,
+            events: ["worker.connected"],
+          },
+        ],
+      });
+      await startWorker({
+        label: "worker-a",
+        model: "Pixel-A",
+        token: await workerToken(gateway, "worker-a"),
+        stdout: "a",
+      });
+
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+      const message = received.find((each) => each.url === "/hook");
+      const chat = received.find((each) => each.url === "/slack");
+      expect(message?.headers["x-simlock-signature"]).toBe(
+        `sha256=${createHmac("sha256", "e2e-secret")
+          .update(message?.body ?? "")
+          .digest("hex")}`,
+      );
+      expect(message?.headers["x-simlock-event"]).toBe("worker.connected");
+      const body = JSON.parse(message?.body ?? "");
+      const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
+      expect(body.payload.workerId).toBe(workers[0]?.id);
+      expect(body.payload.label).toBe("worker-a");
+      expect(JSON.parse(chat?.body ?? "")).toEqual({
+        text: "🟢 Worker worker-a connected (simlock 1.0.0-e2e).",
+      });
+    } finally {
+      receiver.closeAllConnections();
+      await new Promise<void>((resolve) => receiver.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it("alerts.test over the gateway's real unix socket reaches a loopback receiver with the signed sample", async () => {
+    const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+    const receiver: Server = createHttpServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({ headers: request.headers, body: Buffer.concat(chunks).toString("utf8") });
+        response.writeHead(200).end();
+      });
+    });
+    await new Promise<void>((resolve) => receiver.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (receiver.address() as { port: number }).port;
+      const gateway = await startGateway({
+        destinations: [destinationFor({ name: "ops", url: `http://127.0.0.1:${port}/hook` })],
+      });
+      const { secret } = await gateway.dispatch(
+        "token.create",
+        { role: "operator", label: "alerts-test" },
+        adminSession(),
+      );
+      const client = await connectSimlockAdmin({
+        endpoint: resolveDaemonSocketPath(directories.at(-1) as string),
+        credential: secret,
+      });
+      try {
+        await expect(client.testAlertDestination({ destination: "ops" })).resolves.toEqual({
+          destination: "ops",
+          status: 200,
+        });
+      } finally {
+        await client.close();
+      }
+
+      expect(received).toHaveLength(1);
+      const body = received[0]?.body ?? "";
+      expect(JSON.parse(body)).toMatchObject({
+        seq: 0,
+        event: "alerts.test-sent",
+        payload: { destination: "ops" },
+        module: "alerts",
+      });
+      expect(received[0]?.headers["x-simlock-event"]).toBe("alerts.test-sent");
+      expect(received[0]?.headers["x-simlock-signature"]).toBe(
+        `sha256=${createHmac("sha256", "e2e-secret").update(body).digest("hex")}`,
+      );
+    } finally {
+      receiver.closeAllConnections();
+      await new Promise<void>((resolve) => receiver.close(() => resolve()));
+    }
+  }, 30_000);
 });

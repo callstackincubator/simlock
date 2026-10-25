@@ -1,4 +1,5 @@
-import type { Driver, PrerequisiteCheck } from "../../dist/core/index.js";
+import type { DeviceDataTable, Driver, PrerequisiteCheck } from "../../dist/core/index.js";
+import { e2eFakeDeviceDataTable } from "./device-data.js";
 import { OutOfProcessFakeDriver, readPlatformScript, type FakeDriverClock } from "./fake-driver.js";
 import { DEFAULT_LOG_ENV, DEFAULT_PLATFORMS_ENV, DEFAULT_SCRIPT_ENV } from "./types.js";
 
@@ -36,3 +37,8 @@ export const prerequisiteChecks: readonly PrerequisiteCheck[] = (["ios", "androi
     platform,
   }),
 );
+
+export const deviceDataTables: ReadonlyMap<"ios" | "android", DeviceDataTable> = new Map([
+  ["ios", e2eFakeDeviceDataTable],
+  ["android", e2eFakeDeviceDataTable],
+]);

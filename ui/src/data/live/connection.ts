@@ -1,8 +1,15 @@
-import { ApiError, type ApiClient, type ApiPath, RequestTimeoutError } from "../api";
+import {
+  ApiError,
+  type ApiClient,
+  type ApiPath,
+  type ConditionalResponse,
+  type ReadOptions,
+  RequestTimeoutError,
+} from "../api";
 import { createSseParser, type SseMessage } from "./sse";
 import { clockOffset } from "./clock";
 
-const POLL_INTERVAL_MS = 1_000;
+const STREAM_RETRY_MS = 1_000;
 // why: more than two of the daemon's 15-second keepalives, so one lost keepalive never marks a live
 // stream dead.
 const STREAM_SILENCE_MS = 40_000;
@@ -47,11 +54,13 @@ export interface StreamOpened {
   readonly closedForMs?: number;
 }
 
-interface Resource {
-  state: ResourceState<unknown>;
-  readonly listeners: Set<() => void>;
-  inFlight: boolean;
-  again: boolean;
+// why: a read lost to the network is not a fact about its route; the connection takes it as its
+// own loss, and a page never shows it as an error.
+export class ConnectionLost extends Error {
+  constructor() {
+    super("The connection to the daemon was lost");
+    this.name = "ConnectionLost";
+  }
 }
 
 // why: in a proxy session a loss may be the proxy's own session ending, which only the session can
@@ -70,12 +79,21 @@ export function isRefusal(error: unknown): boolean {
   return error instanceof ApiError || error instanceof SyntaxError;
 }
 
+export type ConditionalRead<T> =
+  | { readonly notModified: true }
+  | { readonly notModified?: false; readonly body: T; readonly tag: string | null };
+
+function conditional<T>(response: ConditionalResponse<T>): ConditionalRead<T> {
+  return response.notModified === true
+    ? { notModified: true }
+    : { body: response.body, tag: response.tag };
+}
+
 export class LiveConnection {
   readonly #api: LiveApi;
   readonly #clock: Clock;
   readonly #visibility: Visibility;
   readonly #whenLost: (() => Promise<LostAnswer>) | undefined;
-  readonly #resources = new Map<ApiPath, Resource>();
   readonly #stateListeners = new Set<() => void>();
   readonly #eventListeners = new Set<(event: StreamEvent) => void>();
   readonly #openListeners = new Set<(opened: StreamOpened) => void>();
@@ -84,7 +102,7 @@ export class LiveConnection {
   #answeredAt: number | undefined;
   #offset = 0;
   #disposed = false;
-  #pollTimer: unknown;
+  #streamRetryTimer: unknown;
   #healthTimer: unknown;
   #healthAttempt = 0;
   #silenceTimer: unknown;
@@ -101,22 +119,39 @@ export class LiveConnection {
     this.#stopWatchingVisibility = this.#visibility.subscribe(() => this.#visibilityChanged());
     if (!this.#visibility.hidden()) {
       this.#openStream();
-      this.#schedulePoll();
     }
   }
 
-  watch(path: ApiPath, listener: () => void): () => void {
-    const resource = this.#resource(path);
-    const first = resource.listeners.size === 0;
-    resource.listeners.add(listener);
-    if (first && this.#reading()) this.#fetch(path, resource);
-    return () => {
-      resource.listeners.delete(listener);
-    };
-  }
-
-  resource<T>(path: ApiPath): ResourceState<T> {
-    return this.#resource(path).state as ResourceState<T>;
+  // why: one GET with the classification every read gets: a refusal is the route's own answer and
+  // the daemon is there; a timeout while the daemon starts is asked again; anything else is the
+  // connection lost.
+  async read<T>(path: ApiPath, options: ReadOptions): Promise<ConditionalRead<T>> {
+    for (;;) {
+      let response;
+      try {
+        response = await this.#api.get<T>(path, options);
+      } catch (error: unknown) {
+        if (this.#disposed) throw error;
+        switch (this.#classify(error)) {
+          case "refused":
+            this.#daemonAnswered();
+            throw error;
+          case "retry":
+            if (this.#reading()) continue;
+            // why: a read that gave up while the tab is hidden is a read lost, not the route's answer.
+            throw new ConnectionLost();
+          case "lost":
+            this.#lose();
+            throw new ConnectionLost();
+        }
+      }
+      if (!this.#disposed) {
+        this.#observe(response.date);
+        this.#answeredAt = this.#clock.now();
+        this.#daemonAnswered();
+      }
+      return conditional(response);
+    }
   }
 
   state(): ConnectionState {
@@ -151,7 +186,7 @@ export class LiveConnection {
   dispose(): void {
     this.#disposed = true;
     this.#stopWatchingVisibility();
-    this.#stopPoll();
+    this.#stopStreamRetry();
     this.#closeStream();
     this.#clock.clearTimeout(this.#healthTimer);
     this.#stateListeners.clear();
@@ -159,71 +194,8 @@ export class LiveConnection {
     this.#openListeners.clear();
   }
 
-  #resource(path: ApiPath): Resource {
-    let resource = this.#resources.get(path);
-    if (resource === undefined) {
-      resource = { again: false, inFlight: false, listeners: new Set(), state: {} };
-      this.#resources.set(path, resource);
-    }
-    return resource;
-  }
-
   #reading(): boolean {
     return !this.#disposed && !this.#visibility.hidden() && this.#state.phase !== "disconnected";
-  }
-
-  #refetchScreen(): void {
-    for (const [path, resource] of this.#resources) {
-      if (resource.listeners.size > 0) this.#fetch(path, resource);
-    }
-  }
-
-  #fetch(path: ApiPath, resource: Resource): void {
-    if (resource.inFlight) {
-      resource.again = true;
-      return;
-    }
-    resource.inFlight = true;
-    this.#api.get(path).then(
-      (response) => {
-        resource.inFlight = false;
-        if (this.#disposed) return;
-        this.#observe(response.date);
-        this.#answeredAt = this.#clock.now();
-        this.#daemonAnswered();
-        this.#update(resource, { data: response.body });
-        this.#again(path, resource);
-      },
-      (error: unknown) => {
-        resource.inFlight = false;
-        if (this.#disposed) return;
-        this.#failed(resource, error);
-        this.#again(path, resource);
-      },
-    );
-  }
-
-  #again(path: ApiPath, resource: Resource): void {
-    if (!resource.again) return;
-    resource.again = false;
-    if (this.#reading() && resource.listeners.size > 0) this.#fetch(path, resource);
-  }
-
-  #failed(resource: Resource, error: unknown): void {
-    switch (this.#classify(error)) {
-      case "refused": {
-        // why: a fact about this route, not about the connection.
-        this.#daemonAnswered();
-        const { data } = resource.state;
-        this.#update(resource, data === undefined ? { error } : { data, error });
-        return;
-      }
-      case "retry":
-        resource.again = true;
-        return;
-      case "lost":
-        this.#lose();
-    }
   }
 
   // why: a starting daemon holds every request until it is ready, so a request that gave up waiting
@@ -234,11 +206,6 @@ export class LiveConnection {
     return "lost";
   }
 
-  #update(resource: Resource, state: ResourceState<unknown>): void {
-    resource.state = state;
-    for (const listener of resource.listeners) listener();
-  }
-
   #observe(date: string | null): void {
     const offset = clockOffset(date, this.#clock.now());
     if (offset !== undefined) this.#offset = offset;
@@ -247,7 +214,6 @@ export class LiveConnection {
   #daemonAnswered(): void {
     if (this.#state.phase !== "starting") return;
     this.#setState("connected");
-    this.#schedulePoll();
   }
 
   #setState(phase: ConnectionPhase): void {
@@ -257,20 +223,9 @@ export class LiveConnection {
     for (const listener of this.#stateListeners) listener();
   }
 
-  #schedulePoll(): void {
-    if (this.#pollTimer !== undefined) return;
-    this.#pollTimer = this.#clock.setTimeout(() => {
-      this.#pollTimer = undefined;
-      if (!this.#reading() || this.#state.phase !== "connected") return;
-      this.#refetchScreen();
-      if (this.#stream === undefined) this.#openStream();
-      this.#schedulePoll();
-    }, POLL_INTERVAL_MS);
-  }
-
-  #stopPoll(): void {
-    this.#clock.clearTimeout(this.#pollTimer);
-    this.#pollTimer = undefined;
+  #stopStreamRetry(): void {
+    this.#clock.clearTimeout(this.#streamRetryTimer);
+    this.#streamRetryTimer = undefined;
   }
 
   #openStream(): void {
@@ -321,13 +276,22 @@ export class LiveConnection {
       if (outcome === "retry") this.#openStream();
       else if (outcome === "lost") this.#lose();
       else {
-        // why: refused means the daemon is there: no stream for now, and the next poll asks for one
-        // again.
+        // why: refused means the daemon is there: no stream for now, and one is asked for again a
+        // second later.
         this.#stream = undefined;
         this.#daemonAnswered();
+        this.#retryStreamLater();
       }
       return undefined;
     }
+  }
+
+  #retryStreamLater(): void {
+    this.#stopStreamRetry();
+    this.#streamRetryTimer = this.#clock.setTimeout(() => {
+      this.#streamRetryTimer = undefined;
+      if (this.#reading() && this.#stream === undefined) this.#openStream();
+    }, STREAM_RETRY_MS);
   }
 
   async #follow(controller: AbortController, body: ReadableStream<Uint8Array>): Promise<boolean> {
@@ -373,12 +337,11 @@ export class LiveConnection {
       data = undefined;
     }
     for (const listener of this.#eventListeners) listener({ data, event: message.event });
-    if (this.#reading()) this.#refetchScreen();
   }
 
   #lose(): void {
     if (this.#disposed || this.#state.phase === "disconnected") return;
-    this.#stopPoll();
+    this.#stopStreamRetry();
     this.#closeStream();
     this.#setState("disconnected");
     this.#healthAttempt = 0;
@@ -402,7 +365,6 @@ export class LiveConnection {
 
   #reconnect(): void {
     this.#setState("starting");
-    this.#refetchScreen();
     this.#openStream();
   }
 
@@ -436,7 +398,7 @@ export class LiveConnection {
   #visibilityChanged(): void {
     if (this.#disposed) return;
     if (this.#visibility.hidden()) {
-      this.#stopPoll();
+      this.#stopStreamRetry();
       this.#closeStream();
       this.#clock.clearTimeout(this.#healthTimer);
       this.#healthTimer = undefined;
@@ -447,8 +409,6 @@ export class LiveConnection {
       void this.#checkHealth();
       return;
     }
-    this.#refetchScreen();
     this.#openStream();
-    if (this.#state.phase === "connected") this.#schedulePoll();
   }
 }

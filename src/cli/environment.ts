@@ -8,9 +8,11 @@ import type { SimlockAdminClient } from "../admin/index.js";
 import type { ConfigOverrides, ModuleConfigEntry } from "../core/index.js";
 import type {
   Clock,
+  DaemonExit,
   DaemonLauncher,
   Filesystem,
   IpcConnector,
+  LaunchedDaemon,
   ParentWatch,
   ParentWatchHandle,
 } from "../ports/index.js";
@@ -33,12 +35,16 @@ class AutoLaunchAdminConnector {
 
   async connect(resolveCredential: () => Promise<string | undefined>): Promise<SimlockAdminClient> {
     try {
-      return await this.finishConnection(await this.connectClient(resolveCredential));
+      return await this.finishConnection(this.connectClient(resolveCredential));
     } catch (error: unknown) {
       if (!(await isUnavailable(error))) throw error;
     }
     await this.checkConfig();
-    await this.launcher.launch();
+    const launched = await this.launcher.launch();
+    let exit: DaemonExit | undefined;
+    void launched.exited.then((value) => {
+      exit = value;
+    });
     // why: the constant lives behind the ports barrel, which loads on the first connection that needs it.
     const { DAEMON_STARTUP_TIMEOUT_MS } = await import("../ports/index.js");
     const deadline = this.clock.now() + DAEMON_STARTUP_TIMEOUT_MS;
@@ -46,51 +52,79 @@ class AutoLaunchAdminConnector {
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.finishConnection(await this.connectClient(resolveCredential));
+        return await this.finishConnection(this.connectClient(resolveCredential));
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
+        if (exit !== undefined)
+          return await this.connectAfterExit(launched, exit, resolveCredential);
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
       }
     }
+    const output = await launched.readOutput().catch(() => "");
     const { SimlockError } = await import("../contract/index.js");
+    const { startTimeoutMessage } = await import("../ports/index.js");
     throw new SimlockError(
       "DAEMON_STARTUP_FAILED",
       "transport",
-      `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+      startTimeoutMessage(errorMessage(lastError), output),
       {},
     );
   }
 
-  private async finishConnection(client: SimlockAdminClient): Promise<SimlockAdminClient> {
-    if (this.startupDeadline === undefined) return client;
+  private async connectAfterExit(
+    launched: LaunchedDaemon,
+    exit: DaemonExit,
+    resolveCredential: () => Promise<string | undefined>,
+  ): Promise<SimlockAdminClient> {
+    const output = await launched.readOutput().catch(() => "");
+    try {
+      return await this.finishConnection(this.connectClient(resolveCredential));
+    } catch (error: unknown) {
+      if (!(await isUnavailable(error))) throw error;
+    }
+    const { SimlockError } = await import("../contract/index.js");
+    const { startErrorFrom } = await import("../ports/index.js");
+    throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
+  }
+
+  private async finishConnection(
+    connecting: Promise<SimlockAdminClient>,
+  ): Promise<SimlockAdminClient> {
     const { isSimlockError, SimlockError } = await import("../contract/index.js");
-    const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
+    let client: SimlockAdminClient | undefined;
     let timer: ReturnType<Clock["setTimer"]> | undefined;
     let timedOut = false;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = this.clock.setTimer(remainingMs, () => {
-        timedOut = true;
-        reject(
-          new SimlockError(
-            "DAEMON_STARTUP_FAILED",
-            "transport",
-            "Timed out starting simlock daemon: the startup status probe was not answered",
-            {},
-          ),
-        );
-      });
-    });
     try {
+      client = await connecting;
+      if (this.startupDeadline === undefined) return client;
+      const remainingMs = Math.max(0, this.startupDeadline - this.clock.now());
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = this.clock.setTimer(remainingMs, () => {
+          timedOut = true;
+          reject(
+            new SimlockError(
+              "DAEMON_STARTUP_FAILED",
+              "transport",
+              "Timed out starting simlock daemon: the startup status probe was not answered",
+              {},
+            ),
+          );
+        });
+      });
       await Promise.race([client.getStatus(), timeout]);
       this.startupDeadline = undefined;
       return client;
     } catch (error: unknown) {
       // why: a daemon that went silent after `hello` never ends its side, so awaiting the close
       // would hang the start this deadline bounds; other failures close against a live peer.
-      if (timedOut) void client.close().catch(() => undefined);
-      else await client.close();
-      if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+      if (timedOut) void client?.close().catch(() => undefined);
+      else await client?.close();
+      if (
+        this.startupDeadline !== undefined &&
+        isSimlockError(error) &&
+        error.code === "DAEMON_CONNECTION_LOST"
+      ) {
         throw new SimlockError(
           "DAEMON_STARTUP_FAILED",
           "transport",
@@ -118,7 +152,11 @@ async function isUnavailable(error: unknown): Promise<boolean> {
 
 async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
   const { optionalModules } = await import("../module-registry/index.js");
-  return optionalModules.map(({ config, name }) => ({ name, ...config }));
+  return optionalModules.map(({ config, enabledByDefault, name }) => ({
+    name,
+    ...config,
+    ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
+  }));
 }
 
 async function readAdminTokenFile(
@@ -173,7 +211,8 @@ export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
 ): CliEnvironment {
-  const { clock, dataDirectory, filesystem, ipc, launcher, systemStats } = ports;
+  const { clock, daemonHome, filesystem, ipc, launcher, systemStats } = ports;
+  const { dataDirectory } = daemonHome;
   const configPath = join(dataDirectory, "config.json");
   const logPath = join(dataDirectory, "daemon.log");
   const adminTokenPath = join(dataDirectory, "admin.token");
@@ -186,6 +225,7 @@ export function buildCliEnvironment(
       configPath,
       filesystem,
       modules: await moduleConfigEntries(),
+      role: daemonHome.role,
       systemStats,
     });
   };
@@ -201,7 +241,7 @@ export function buildCliEnvironment(
     // why: Resolved here rather than once during construction, because it can throw: a
     // `SIMLOCK_HOME` whose socket path exceeds the platform limit is a `SocketPathTooLongError`.
     // Every consumer of this path is behind a command already inside `runCli`'s own try, where
-    // that throw becomes the single structured error line `docs/CLI.md` promises instead of a
+    // that throw becomes the single structured error line the CLI reference promises instead of a
     // raw stack trace, and `simlock --help` (which needs no socket at all) never resolves it.
     const connection = await connector.connect(resolveDaemonSocketPath(dataDirectory));
     const credential = await resolveCredential();
@@ -219,12 +259,45 @@ export function buildCliEnvironment(
     checkConfig,
   );
 
+  const service = ports.service;
   return {
     clock,
     configPath,
+    daemonHome,
+    ...(service === undefined
+      ? {}
+      : {
+          service: {
+            manager: service.manager,
+            platform: service.platform,
+            user: service.user,
+            definition: async () => {
+              const { serviceDefinition } = await import("../ports/index.js");
+              return serviceDefinition({
+                ...(service.manager === undefined ? {} : { manager: service.manager.manager }),
+                role: daemonHome.role,
+                root: service.root,
+                dataDirectory,
+                home: service.home,
+                nodePath: service.nodePath,
+                mainPath: service.mainPath,
+                env,
+              });
+            },
+          },
+        }),
     requesterId,
+    homeDirectory: ports.homeDirectory,
+    workingDirectory: ports.workingDirectory,
+    codexHome: ports.codexHome,
+    runTool: ports.runTool,
+    filesystem,
     connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
+    daemonEndpointPresent: async () => {
+      const { resolveDaemonSocketPath } = await import("../ports/index.js");
+      return filesystem.exists(resolveDaemonSocketPath(dataDirectory));
+    },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
       : { adminTokenFromEnv: env.SIMLOCK_ADMIN_TOKEN }),
@@ -260,6 +333,7 @@ export function buildCliEnvironment(
         filesystem: new MemoryFilesystem(),
         modules: await moduleConfigEntries(),
         overrides: merged as ConfigOverrides,
+        role: daemonHome.role,
         systemStats,
         warn: (message) => {
           if (message.startsWith("Unknown config key:")) unknownKeyWarnings.push(message);

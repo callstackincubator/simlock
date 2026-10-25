@@ -4,7 +4,7 @@ import {
   startLeaseRenewal,
   type LeaseRenewal,
 } from "../../lease-policy/index.js";
-import { ERROR_TABLE } from "../../contract/index.js";
+import { ERROR_TABLE, LEASE_LOST_EXIT_CODE } from "../../contract/index.js";
 import type { LeaseGrant } from "../../admin/index.js";
 import type { DeviceClass, Role } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
@@ -13,8 +13,6 @@ import { parseDuration } from "../duration.js";
 import { writeError } from "../errors.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
-
-const LEASE_LOST_EXIT_CODE = 14;
 
 /**
  * why: A key that is safe to the left of `=` in a shell `export`. Anything else is a command

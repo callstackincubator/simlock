@@ -1,3 +1,4 @@
+import { otherDeviceRefusal } from "../other-device-refusal.js";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
@@ -104,6 +105,7 @@ const PORT_POLL_INTERVAL_MS = 2_000;
  * first and the read reports the platform's failure rather than its own timeout.
  */
 const ADB_DEVICES_TIMEOUT_MS = 30_000;
+const AVD_PATH_TIMEOUT_MS = 5_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
@@ -198,6 +200,8 @@ export interface AndroidDriverOptions {
   readonly scrcpyServerPath?: string | undefined;
   readonly tcpStreamConnector?: TcpStreamConnector | undefined;
   readonly uid?: number;
+  /** why: the daemon's pid is named in the staging directory of a new root. */
+  readonly pid?: number;
   readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
 }
 
@@ -236,6 +240,11 @@ interface DeviceState {
    */
   port: number | undefined;
   snapshotExpected: boolean;
+  /**
+   * why: Set for a device this process never provisioned: after a restart an emulator it never
+   * started may still run the AVD, so `destroy` looks for one.
+   */
+  restored?: boolean;
 }
 
 interface SystemImage {
@@ -278,7 +287,7 @@ const RECLAIM_INSTEAD =
  * positional scan is the only rule that catches every spelling without this module having
  * to parse adb's own option grammar.
  */
-const REFUSED_ADB_VERB = "kill-server";
+export const REFUSED_ADB_VERB = "kill-server";
 
 /**
  * why: Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
@@ -380,12 +389,66 @@ function walkGlobals(args: readonly string[]): GlobalsWalkResult {
   return { kind: "none" };
 }
 
+/**
+ * why: ADR 0047 §1. `adb help` (platform-tools 37.0.0): these subcommands act on no device, so
+ * a `-s` in front of them would be noise. `forward --list` and `reconnect offline` are the
+ * two that depend on their operand and are matched in `actsOnNoDevice`.
+ */
+const NO_DEVICE_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "devices",
+  "help",
+  "version",
+  "connect",
+  "disconnect",
+  "pair",
+  "mdns",
+  "keygen",
+  "start-server",
+  "kill-server",
+  "--version",
+  "--help",
+]);
+
+function actsOnNoDevice(args: readonly string[], index: number): boolean {
+  const subcommand = args[index] as string;
+  if (NO_DEVICE_SUBCOMMANDS.has(subcommand)) return true;
+  if (subcommand === "forward") return args[index + 1] === "--list";
+  return subcommand === "reconnect" && args[index + 1] === "offline";
+}
+
+/** why: Whether the globals before `end` already name `serial` with `-s`; `-t`, `-e`, `-d` and any other serial are refused. */
+function namesOwnSerial(args: readonly string[], end: number, serial: string): boolean {
+  let named = false;
+  for (let index = 0; index < end; index += 1) {
+    const flag = args[index] as string;
+    const value = flag === "-s" || flag === "-t" ? args[index + 1] : undefined;
+    if (flag !== "-s" || value !== serial) {
+      throw otherDeviceRefusal(
+        "adb",
+        args,
+        value === undefined ? flag : `${flag} ${value}`,
+        serial,
+      );
+    }
+    named = true;
+    index += 1;
+  }
+  return named;
+}
+
+/** why: Puts `-s <serial>` in front of the globals unless the subcommand needs no device or the caller already named this one. */
+function fillAdbDevice(args: readonly string[], serial: string): readonly string[] {
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || actsOnNoDevice(args, walked.index)) return args;
+  return namesOwnSerial(args, walked.index, serial) ? args : ["-s", serial, ...args];
+}
+
 function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
   const walked = walkGlobals(args);
   return walked.kind === "refused" ? walked.argument : undefined;
 }
 
-const REFUSED_ADB_SEQUENCES: readonly {
+export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
   readonly reason: string;
 }[] = [
@@ -567,6 +630,7 @@ export class AndroidDriver implements Driver {
       path: configuredDeviceRoot(options),
       platform: "android",
       ...(options.uid === undefined ? {} : { uid: options.uid }),
+      ...(options.pid === undefined ? {} : { pid: options.pid }),
     };
     const deviceRoot = await ensureOwnedRoot(rootOptions);
     const adbServer = new AdbServerSupervisor({
@@ -678,12 +742,20 @@ export class AndroidDriver implements Driver {
     args: readonly string[],
     context?: PassthroughContext,
   ): Promise<PassthroughCommand> {
+    if (context?.platform !== undefined && context.platform !== this.platform) {
+      throw new PassthroughRefusedError(
+        "adb",
+        `Refusing \`adb\`: it only serves an Android device, and this lease is on the ${context.platform} platform.`,
+      );
+    }
     if (device !== undefined && isPhysicalDriverDevice(device)) {
       return this.#physical.passthrough(device, args, context);
     }
     this.#assertProxyable(args, context);
+    const scopedArgs =
+      device === undefined || device.address === "" ? args : fillAdbDevice(args, device.address);
     return await Promise.resolve({
-      args: ["-P", String(this.#adbServerPort), ...args],
+      args: ["-P", String(this.#adbServerPort), ...scopedArgs],
       command: this.#sdk.adb,
       env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
     });
@@ -1061,10 +1133,12 @@ export class AndroidDriver implements Driver {
     const data = this.#dataFor(device);
     await this.#withDeviceLock(data.avdName, async () => {
       const state = this.#stateFor(data);
-      // why: After a restart a stopped device's recorded port may be another device's (#52), so only
-      // an emulator this driver started is sent a kill.
+      // why: After a restart a stopped device's recorded port may be another device's (#52), so a
+      // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
       if (state.handle !== undefined) {
         await this.#shutdown(this.#onReservedPort(data, state), state);
+      } else if (state.restored === true) {
+        await this.#stopUnownedEmulator(data);
       }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
       this.#devices.delete(data.avdName);
@@ -1072,6 +1146,59 @@ export class AndroidDriver implements Driver {
         this.#portAllocator.release(state.port);
       }
     });
+  }
+
+  /**
+   * why: An orphan found after a restart has no handle and no usable serial, so the emulator
+   * running its AVD is found by asking each attached one which AVD folder it runs. Deletion is
+   * refused when that emulator does not exit in time, never done under a live process.
+   */
+  async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
+    const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
+    const { settledSerials } = await this.#scanAdbSerials();
+    const serials: string[] = [];
+    for (const serial of settledSerials) {
+      const answered = await this.#answeredAvdPathOf(serial);
+      if (answered === undefined || answered === "") {
+        throw new DriverCrashError(
+          `Refusing to delete ${data.avdName}: could not tell which AVD the emulator on ${serial} runs`,
+        );
+      }
+      if (await this.#isOwnAvdPath(answered, expected)) serials.push(serial);
+    }
+    for (const serial of serials) {
+      await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
+        env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
+      });
+    }
+    const startedAt = this.#clock.now();
+    let remaining = serials;
+    while (remaining.length > 0) {
+      const attached = (await this.#scanAdbSerials()).settledSerials;
+      remaining = remaining.filter((serial) => attached.includes(serial));
+      if (remaining.length === 0) return;
+      if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
+        throw new DriverCrashError(
+          `Refusing to delete ${data.avdName}: its emulator on ${remaining.join(", ")} did not exit`,
+        );
+      }
+      await this.#delay(PORT_POLL_INTERVAL_MS);
+    }
+  }
+
+  /** why: Bounded like the ownership gate; undefined means the emulator did not say. */
+  async #answeredAvdPathOf(serial: string): Promise<string | undefined> {
+    try {
+      const answer = await this.#processRunner.run(
+        this.#sdk.adb,
+        ["-s", serial, "emu", "avd", "path"],
+        { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+      );
+      return answer.code === 0 ? answeredAvdPath(answer.stdout) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
@@ -1144,12 +1271,6 @@ export class AndroidDriver implements Driver {
     return avdNames;
   }
 
-  /**
-   * why: Serials attached in a settled `device` state can answer `getprop`, so they can be
-   * attributed to an AVD by name. A serial in any other adb state (offline, unauthorized,
-   * booting, ...) cannot answer `getprop` yet, so it cannot be attributed to an AVD name --
-   * `unattributableTransitionalSerial` records that this tick saw at least one such serial.
-   */
   async #scanAdbSerials(): Promise<{
     readonly settledSerials: readonly string[];
     readonly unattributableTransitionalSerial: boolean;
@@ -1205,11 +1326,17 @@ export class AndroidDriver implements Driver {
       }
       const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
       const avdName = nameLine.trim();
-      // why: Root membership, never the name and never "our server can see it". `ADB_EMU=0`
-      // should mean this server only holds transports Simlock registered itself, but a
-      // device is Simlock's because of where its AVD lives -- ownership is proven, not
-      // inferred from who happens to be looking at it (safety rule 8).
       if (!avdNamesInRoot.has(avdName)) continue;
+      let answered: string;
+      try {
+        answered = await this.#readAvdPath(candidate);
+      } catch {
+        // why: A serial can disappear after its shell answered; keep the observation
+        // inconclusive just as when it disappears before that shell call.
+        unreadableSerial = true;
+        continue;
+      }
+      if (!(await this.#sameDirectory(answered, `${this.#deviceRoot}/${avdName}.avd`))) continue;
       runningByAvdName.add(avdName);
       erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
@@ -1280,12 +1407,18 @@ export class AndroidDriver implements Driver {
     };
   }
 
-  estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+  estimate(
+    estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },
+    spec: DeviceSpec,
+  ): Promise<number>;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
+  estimate(estimate: DriverEstimate, spec: DeviceSpec): number | Promise<number> {
     switch (estimate.operation) {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        return COLD_BOOT_ESTIMATE_MS;
+        if (estimate.device === undefined) return COLD_BOOT_ESTIMATE_MS;
+        return this.#bootEstimate(estimate.device, estimate.purpose, spec);
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
         // why: `standard` can still fall back to the wipe branch (about five times longer); `Doctor`
@@ -1870,14 +2003,20 @@ export class AndroidDriver implements Driver {
    */
   async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
     const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
-    const result = await this.#runOrThrow(this.#sdk.adb, ["-s", data.serial, "emu", "avd", "path"]);
-    const answered = answeredAvdPath(result.stdout);
+    const answered = await this.#readAvdPath(data.serial);
     if (await this.#isOwnAvdPath(answered, expected)) {
       return;
     }
     throw new DriverCrashError(
       `Refusing to ready ${data.avdName}: the emulator answering on ${data.serial} runs ${JSON.stringify(answered)}, not ${expected} -- another emulator holds its console port`,
     );
+  }
+
+  async #readAvdPath(serial: string): Promise<string> {
+    const result = await this.#runOrThrow(this.#sdk.adb, ["-s", serial, "emu", "avd", "path"], {
+      timeoutMs: AVD_PATH_TIMEOUT_MS,
+    });
+    return answeredAvdPath(result.stdout);
   }
 
   /**
@@ -1908,6 +2047,7 @@ export class AndroidDriver implements Driver {
   }
 
   async #sameDirectory(left: string, right: string): Promise<boolean> {
+    if (left === right) return true;
     if (!isAbsolute(left)) return false;
     try {
       const [realLeft, realRight] = await Promise.all([
@@ -1969,13 +2109,43 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
+  /**
+   * why: The one decision both `makeReady` (through `#reconcileBaseline`) and the boot estimate read,
+   * so the figure quoted is the boot `makeReady` then takes: `load` where the baseline is recorded
+   * and matches the current emulator and image, `stale` where it is recorded but no longer matches,
+   * and `none` where a wipe is pending or no baseline is recorded. It changes nothing.
+   */
+  async #baselineVerdict(
+    data: AndroidDriverData,
+    needsWipe: boolean,
+    imageIdentity: string,
+  ): Promise<"load" | "stale" | "none"> {
     const baselineHash = await this.#baselineHash(data.avdName);
-    if (state.needsWipe || baselineHash === undefined) {
-      return;
-    }
-    const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
-    if (baselineHash === currentHash) {
+    if (needsWipe || baselineHash === undefined) return "none";
+    const currentHash = await this.#currentConfigHash(data.avdName, imageIdentity);
+    return baselineHash === currentHash ? "load" : "stale";
+  }
+
+  async #bootEstimate(
+    device: DriverDevice,
+    purpose: "prepare" | "recover" | undefined,
+    spec: DeviceSpec,
+  ): Promise<number> {
+    if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
+    const data = this.#dataFor(device);
+    const state = this.#devices.get(data.avdName);
+    const verdict = await this.#baselineVerdict(
+      data,
+      state?.needsWipe === true,
+      state?.imageIdentity ?? data.imageIdentity ?? "",
+    );
+    return verdict === "load" ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
+  }
+
+  async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
+    const verdict = await this.#baselineVerdict(data, state.needsWipe, state.imageIdentity);
+    if (verdict === "none") return;
+    if (verdict === "load") {
       state.baselineCaptured = true;
       state.snapshotExpected = true;
       return;
@@ -2114,6 +2284,7 @@ export class AndroidDriver implements Driver {
       imageIdentity: data.imageIdentity ?? "",
       needsWipe: false,
       port: undefined,
+      restored: true,
       snapshotExpected: false,
     };
     this.#devices.set(data.avdName, restored);
@@ -2625,6 +2796,7 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   allocationsByRunner.set(processRunner, allocator);
   return allocator;
 }
+export { androidDeviceDataTable } from "./device-data.js";
 export { androidPrerequisites } from "./prerequisites.js";
 
 function virtualReclaimStrategy(clean: "standard" | "full"): "snapshot" | "wipe" {

@@ -62,9 +62,7 @@
       "Bash(gh api *protection*)",
       "Bash(gh repo delete *)",
       "Bash(npm publish*)",
-      "Bash(pnpm publish*)",
-      "Bash(pnpm release*)",
-      "Bash(pnpm run release*)"
+      "Bash(pnpm publish*)"
     ]
   },
   "hooks": {

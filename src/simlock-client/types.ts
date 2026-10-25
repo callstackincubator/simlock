@@ -53,6 +53,8 @@ export type NukeRunInput = OpInput<"nuke.run">;
 export type NukeReport = OpOutput<"nuke.run">;
 export type SimlockConfig = OpOutput<"config.get">;
 export type DaemonStopOutput = OpOutput<"daemon.stop">;
+export type DaemonUpdateInput = OpInput<"daemon.update">;
+export type DaemonUpdateOutput = OpOutput<"daemon.update">;
 export type EventsReplayInput = OpInput<"events.replay">;
 export type EventsReplayOutput = OpOutput<"events.replay">;
 export type UsageGetInput = OpInput<"usage.get">;
@@ -81,6 +83,11 @@ export type WorkerDrainInput = OpInput<"worker.drain">;
 export type WorkerDrainOutput = OpOutput<"worker.drain">;
 export type WorkerUndrainOutput = OpOutput<"worker.undrain">;
 export type WorkerRemoveOutput = OpOutput<"worker.remove">;
+export type WorkerUpdateInput = OpInput<"worker.update">;
+export type WorkerUpdateOutput = OpOutput<"worker.update">;
+
+export type AlertsTestInput = OpInput<"alerts.test">;
+export type AlertsTestOutput = OpOutput<"alerts.test">;
 
 export type ComponentInstallInput = OpInput<"component.install">;
 export type ComponentInstallOutput = OpOutput<"component.install">;

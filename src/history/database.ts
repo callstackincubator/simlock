@@ -4,14 +4,46 @@ import type { SqliteDatabase } from "../ports/index.js";
 
 export const BUSY_TIMEOUT_MS = 5_000;
 
-const SQLITE_BUSY = 5;
-const SQLITE_LOCKED = 6;
-
 export const INSERT_EVENT_SQL =
   "INSERT OR IGNORE INTO events (id, timestamp, seq, size, envelope) VALUES (?, ?, ?, ?, ?)";
 
-const SELECT_SINCE_SQL =
-  "SELECT envelope FROM events WHERE timestamp > ? ORDER BY timestamp, seq, rowid";
+// why: a row of bad JSON must index as no worker; a bare json_extract on it throws "malformed JSON" and fails the index build
+const ENVELOPE_FIELD = (path: string) =>
+  `(CASE WHEN json_valid(envelope) THEN json_extract(envelope, '${path}') END)`;
+const WORKER_ID_SQL = ENVELOPE_FIELD("$.payload.workerId");
+
+// why: a refused dial's workerId is only what the connection claimed, so worker.rejected never belongs to a worker
+const WORKER_FILTER_SQL = `${WORKER_ID_SQL} = ? AND ${ENVELOPE_FIELD("$.event")} <> 'worker.rejected'`;
+
+const WORKER_INDEX_SQL = `CREATE INDEX IF NOT EXISTS events_worker ON events (${WORKER_ID_SQL}, timestamp, seq)`;
+
+function filtered(workerId: string | undefined): string {
+  return workerId === undefined ? "" : ` AND ${WORKER_FILTER_SQL}`;
+}
+
+function selectSinceSql(workerId: string | undefined): string {
+  return `SELECT envelope FROM events WHERE timestamp > ?${filtered(workerId)} ORDER BY timestamp, seq, rowid`;
+}
+
+const SELECT_CURSOR_SQL = "SELECT timestamp, seq, rowid AS position FROM events WHERE id = ?";
+
+function selectBeforeSql(workerId: string | undefined): string {
+  return `SELECT envelope FROM events WHERE (timestamp, seq, rowid) < (?, ?, ?)${filtered(workerId)} ORDER BY timestamp DESC, seq DESC, rowid DESC LIMIT ?`;
+}
+
+function selectNewestSql(workerId: string | undefined): string {
+  return `SELECT envelope FROM events ${workerId === undefined ? "" : `WHERE ${WORKER_FILTER_SQL} `}ORDER BY timestamp DESC, seq DESC, rowid DESC LIMIT ?`;
+}
+
+function withWorker(
+  workerId: string | undefined,
+  before: readonly (string | number)[],
+  after: readonly number[] = [],
+): (string | number)[] {
+  return [...before, ...(workerId === undefined ? [] : [workerId]), ...after];
+}
+
+const SELECT_OLDEST_SQL = "SELECT timestamp FROM events ORDER BY timestamp, seq, rowid LIMIT 1";
 
 export function configureDatabase(database: SqliteDatabase): void {
   database.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
@@ -37,6 +69,11 @@ export function configureDatabase(database: SqliteDatabase): void {
   );
 }
 
+// why: run after the file has opened, never inside `configureDatabase`, whose throws count as damage
+export function createWorkerIndex(database: SqliteDatabase): void {
+  database.exec(WORKER_INDEX_SQL);
+}
+
 export function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
   database.exec("BEGIN");
   try {
@@ -53,32 +90,70 @@ export function inTransaction<T>(database: SqliteDatabase, work: () => T): T {
   }
 }
 
-export function passesQuickCheck(database: SqliteDatabase): boolean {
-  const rows = database.prepare("PRAGMA quick_check").all();
-  return rows.length === 1 && Object.values(rows[0] ?? {})[0] === "ok";
-}
-
-export function isLockError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const { errcode, message } = error as { errcode?: unknown; message?: unknown };
-  if (typeof errcode === "number") {
-    const primary = errcode & 0xff;
-    return primary === SQLITE_BUSY || primary === SQLITE_LOCKED;
-  }
-  return typeof message === "string" && /database (table )?is locked|busy/i.test(message);
-}
-
 export function envelopeSize(json: string): number {
   return Buffer.byteLength(json, "utf8");
 }
 
-export function selectEventsSince(database: SqliteDatabase, sinceTs: number): EventEnvelope[] {
+export function selectEventsSince(
+  database: SqliteDatabase,
+  sinceTs: number,
+  workerId?: string,
+): EventEnvelope[] {
+  return parseEnvelopes(
+    database.prepare(selectSinceSql(workerId)).all(...withWorker(workerId, [sinceTs])),
+  );
+}
+
+function parseEnvelopes(rows: readonly Record<string, unknown>[]): EventEnvelope[] {
   const events: EventEnvelope[] = [];
-  for (const row of database.prepare(SELECT_SINCE_SQL).all(sinceTs)) {
+  for (const row of rows) {
     const envelope = parseEnvelope(row.envelope);
     if (envelope !== undefined) events.push(envelope);
   }
   return events;
+}
+
+export function selectEventsBefore(
+  database: SqliteDatabase,
+  beforeId: string,
+  limit: number,
+  workerId?: string,
+): EventEnvelope[] | undefined {
+  const cursor = database.prepare(SELECT_CURSOR_SQL).get(beforeId);
+  if (cursor === undefined) return undefined;
+  const rows = database
+    .prepare(selectBeforeSql(workerId))
+    .all(
+      ...withWorker(
+        workerId,
+        [Number(cursor.timestamp), Number(cursor.seq), Number(cursor.position)],
+        [limit],
+      ),
+    );
+  return parseEnvelopes(rows).reverse();
+}
+
+export function selectNewestEvents(
+  database: SqliteDatabase,
+  limit: number,
+  workerId?: string,
+): EventEnvelope[] {
+  return parseEnvelopes(
+    database.prepare(selectNewestSql(workerId)).all(...withWorker(workerId, [], [limit])),
+  ).reverse();
+}
+
+export function isWorkerEvent(envelope: EventEnvelope, workerId: string | undefined): boolean {
+  if (workerId === undefined) return true;
+  return (
+    envelope.event !== "worker.rejected" &&
+    (envelope.payload as { workerId?: unknown } | null)?.workerId === workerId
+  );
+}
+
+export function selectOldestTimestamp(database: SqliteDatabase): number | undefined {
+  const row = database.prepare(SELECT_OLDEST_SQL).get();
+  return row === undefined ? undefined : Number(row.timestamp);
 }
 
 export function parseEnvelope(stored: unknown): EventEnvelope | undefined {

@@ -1,29 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
 import { CleanupExecutor } from "./cleanup-executor.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
-import { Registry } from "./registry.js";
+import { loadTestRegistry } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
-const statePath = "/home/agent/.simlock/state.json";
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 async function createHarness() {
   const clock = new FakeClock(1_000);
-  const filesystem = new MemoryFilesystem();
   const eventBus = new EventBus(clock);
   const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => "1" },
-    statePath,
   });
   const claims = new DeviceOperationClaims();
   const decisions = new SerializedDecision();

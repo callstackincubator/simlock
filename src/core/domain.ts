@@ -22,9 +22,8 @@ export type DeviceClass = (typeof DEVICE_CLASSES)[number];
 export type DeviceMode = "slim" | "full";
 
 /**
- * A simulator's or emulator's spec. `physical` is always `false` here, in memory and on every
- * spec a driver resolves; a spec read from `devices` in `state.json` has none on disk and gains it
- * on load.
+ * why: A simulator's or emulator's spec. `physical` is always `false` here, in memory and on every
+ * spec a driver resolves; the `devices` row stores it as 0 for a virtual device.
  */
 export interface VirtualSpec {
   readonly physical: false;
@@ -137,6 +136,7 @@ export interface WaitingDemand {
   readonly platform: Platform;
   readonly requirement: DeviceRequirement;
   readonly mode: DeviceMode;
+  readonly spec: VirtualSpec;
   readonly classOf: (model: string) => DeviceClass | undefined;
 }
 
@@ -233,10 +233,9 @@ interface DeviceRecordFields {
   readonly quarantineNextRetryAt?: number;
   readonly quarantineCause?: QuarantineCause;
   /**
-   * The driver-reported address (see `DriverDevice.address`), current as of this device's
+   * why: The driver-reported address (see `DriverDevice.address`), current as of this device's
    * last `ready` transition. Undefined for a device still `provisioning` (never made ready
-   * yet) and, as an upgrade path, for a record written by a pre-address daemon -- `state.json`
-   * from before this field existed loads without one rather than failing to start. It becomes
+   * yet) and for a device that was shut down, which has no address to reach. It becomes
    * defined the next time the device is made ready (`bootForLease`/`readyProvisionedForLease`);
    * nothing here ever guesses at a value it wasn't told.
    */
@@ -298,20 +297,18 @@ export interface LeaseRecord {
   readonly deviceId: string;
   readonly requesterId: string;
   /**
-   * The session principal (ADR 0003 §4) that requested this lease -- the identity `renew`,
+   * why: The session principal (ADR 0003 §4) that requested this lease -- the identity `renew`,
    * `release`, and `list` compare against, not `requesterId` (which is attribution, defaults to
    * the principal, but a connection may set it to something else per request so one connection
-   * can hold many leases). A record written before this field existed loads with `ownerId` equal
-   * to `requesterId` -- see `parseLease` in `registry.ts`.
+   * can hold many leases). A request without a separate owner stores `requesterId` here.
    */
   readonly ownerId: string;
   readonly grantedAt: number;
   /**
-   * The width this lease was granted with, or last renewed with when a renew named one (ADR
+   * why: The width this lease was granted with, or last renewed with when a renew named one (ADR
    * 0004 §4). Stored, not derived: a `lease.renew` carrying no `ttlMs` re-applies exactly this,
    * rather than falling back to `lease.defaultTtlMs`, so a lease granted for four hours does
-   * not shrink to fifteen minutes the first time something renews it. A record written before
-   * ADR 0004 loads with `lease.defaultTtlMs` here -- see `parseLease` in `registry.ts`.
+   * not shrink to fifteen minutes the first time something renews it.
    */
   readonly ttlMs: number;
   readonly ttlDeadline: number;

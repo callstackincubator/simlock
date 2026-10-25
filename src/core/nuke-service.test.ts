@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
-import { Registry } from "./index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
+import { loadTestRegistry } from "./testing.js";
 import type { VirtualDevice, LeaseRecord } from "./domain.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -35,7 +35,7 @@ class MutableRegistry implements NukeRegistryView {
   }
 }
 
-function createHarness(devices: VirtualDevice[]) {
+function createHarness(devices: VirtualDevice[], onForget: () => void = () => undefined) {
   const registry = new MutableRegistry(devices);
   const calls: string[] = [];
   const lifecycle: NukeDeviceLifecycle = {
@@ -79,6 +79,7 @@ function createHarness(devices: VirtualDevice[]) {
       },
     },
     registry,
+    warmPool: { forget: onForget },
   });
   return { calls, lifecycle, registry, service };
 }
@@ -98,6 +99,32 @@ describe("NukeService", () => {
       "release-maintenance:end",
       "maintenance:end",
     ]);
+  });
+
+  it("clears the warm pool's record before it resets devices, and still resets them when forget throws", async () => {
+    const clearing = createHarness([device("ready", "ready")], () => {
+      clearing.calls.push("forget");
+    });
+    const throwing = createHarness([device("ready", "ready")], () => {
+      throwing.calls.push("forget");
+      throw new Error("disk I/O error");
+    });
+
+    await clearing.service.nuke(false);
+    await throwing.service.nuke(false);
+
+    for (const run of [clearing, throwing]) {
+      expect(run.calls).toEqual([
+        "maintenance:begin",
+        "release-maintenance:begin",
+        "release:killed",
+        "forget",
+        "shutdown:ready",
+        "release-maintenance:end",
+        "maintenance:end",
+      ]);
+      expect(run.registry.devices).toMatchObject([{ id: "ready", state: "shutdown" }]);
+    }
   });
 
   it("targets only non-deleted registry records and supports shutdown-only mode", async () => {
@@ -227,6 +254,8 @@ describe("NukeService", () => {
         },
       },
       registry: harness.registry,
+
+      warmPool: { forget() {} },
     });
 
     await expect(harness.service.nuke(false)).rejects.toThrow("release failed");
@@ -255,12 +284,10 @@ describe("NukeService", () => {
     const eventBus = new EventBus(clock);
     const driver = new FakeDriver({ availableOsVersions: ["1"], clock, platform: "ios" });
     let nextId = 1;
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: { generate: () => `${nextId++}` },
-      statePath: "/state.json",
     });
     const lifecycle = new ManagedDeviceLifecycle(
       new DriverCatalog([driver]),
@@ -283,6 +310,8 @@ describe("NukeService", () => {
         async endMaintenance() {},
       },
       registry,
+
+      warmPool: { forget() {} },
     });
 
     async function register(
@@ -310,14 +339,22 @@ describe("NukeService", () => {
     } as const;
     const ios = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
 
-    const ghostReady = await register(android, {}, "ghost-ready-android");
+    const ghostReady = await register(
+      android,
+      { fakeDeviceId: "ghost-ready-android" },
+      "ghost-ready-android",
+    );
     const provisionedReady = await driver.provision(ios);
     const healthyReady = await register(
       ios,
       provisionedReady.driverData,
       provisionedReady.deviceId,
     );
-    const ghostShutdown = await register(android, {}, "ghost-shutdown-android");
+    const ghostShutdown = await register(
+      android,
+      { fakeDeviceId: "ghost-shutdown-android" },
+      "ghost-shutdown-android",
+    );
     await registry.transitionDevice(ghostShutdown.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: ghostShutdown.id, initiator: "test" },
@@ -375,6 +412,8 @@ describe("NukeService", () => {
       },
       logger: new JsonLinesLogger({ clock: new FakeClock(1_000), sink }),
       registry: harness.registry,
+
+      warmPool: { forget() {} },
     });
 
     await service.nuke(false);

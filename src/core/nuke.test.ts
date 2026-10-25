@@ -1,24 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { testComponentWiring } from "./testing.js";
+import { loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { FakeDriver } from "./fake-driver.js";
 import { Nuke } from "./nuke.js";
-import { Registry } from "./registry.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 describe("Nuke", () => {
   it("destroys every registry device and never targets a foreign device", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
@@ -61,6 +58,7 @@ describe("Nuke", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * 1024 ** 3,
@@ -81,12 +79,10 @@ describe("Nuke", () => {
   it("waits for a blocked reclaim before deleting the registry-owned device", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const driver = new FakeDriver({
       availableOsVersions: ["1"],
@@ -107,6 +103,7 @@ describe("Nuke", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({
         cpuCount: 8,
         totalRamBytes: 32 * 1024 ** 3,
@@ -165,6 +162,7 @@ function config(): Config {
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     eventBuffer: { capacity: 10 },
@@ -185,6 +183,7 @@ function config(): Config {
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,

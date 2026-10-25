@@ -30,7 +30,7 @@ export type LeaseRequestOutcome<Grant> =
   | { readonly state: "cancelled" };
 
 /**
- * Where lease-request records live. The daemon's `Registry` keeps them in `state.json`; a
+ * why: Where lease-request records live. The daemon's `Registry` keeps them in `state.db`; a
  * gateway keeps them in memory (`InMemoryLeaseRequestStore`). Both apply retention, the record
  * cap, and settlement through the functions below, so the two cannot disagree about them.
  */

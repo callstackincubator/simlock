@@ -56,12 +56,15 @@ import {
   capabilityReason,
   type capabilitySchema,
   consoleUrlField,
+  EVENTS_PAGE_DEFAULT,
   fitPlatformCatalog,
+  inboxItems,
   OPERATIONS,
   requestedDevice,
   type ComponentProgress,
   type OperationName,
   type StatusLoad,
+  waitingRequestSchema,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
   workerViewFields,
@@ -72,11 +75,13 @@ import {
   DispatchError,
   identityGet,
   runDispatch,
+  eventsPageAnswer,
   usageAnswer,
   type DispatchSession,
   type ErasedHandler,
 } from "./dispatch.js";
 import type { RelayConnection } from "./relay.js";
+import type { UpdateCoordinator, UpdateProgress } from "./update-coordinator.js";
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
@@ -137,7 +142,7 @@ export interface DispatcherOptions {
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
@@ -178,8 +183,8 @@ export interface DispatcherOptions {
     readonly claims: NonNullable<StallInput["claims"]>;
   };
   /**
-   * ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
-   * owner of tokens.json." Optional so tests that don't exercise `token.*` (the overwhelming
+   * why: ADR 0003 §11: "token create|list|revoke become daemon operations. The daemon is the only
+   * owner of the tokens." Optional so tests that don't exercise `token.*` (the overwhelming
    * majority) don't need to fabricate one -- `#tokenCreate`/`#tokenList`/`#tokenRevoke` throw a
    * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
    */
@@ -201,6 +206,7 @@ export interface DispatcherOptions {
    * without it the kept catalog is only re-read on the interval.
    */
   readonly eventBus?: Pick<EventBus, "subscribe">;
+  readonly update?: UpdateCoordinator;
 }
 
 /**
@@ -251,11 +257,11 @@ export class Dispatcher {
    */
   readonly #handlers: Record<WorkerOperationName, ErasedHandler>;
   /**
-   * `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
+   * why: `worker.list`'s catalog: the last `catalog.get` answer and when it was read. Kept for
    * `WORKER_VIEW_REFRESH_INTERVAL_MS`, the rhythm a gateway re-reads a worker's catalog at, and
    * dropped on `WORKER_VIEW_CATALOG_EVENTS`, the events a gateway re-reads it on. Without it
    * every `worker.list` runs each driver's catalog read (`simctl list` on iOS), and the console
-   * polls that route every second. Holds the promise, so calls that arrive while a read runs
+   * polls that route. Holds the promise, so calls that arrive while a read runs
    * share it; a read that fails is dropped, so the next call reads again.
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
@@ -300,6 +306,7 @@ export class Dispatcher {
       "lease.renew": this.#leaseRenew,
       "lease.release": this.#leaseRelease,
       "lease.list": this.#leaseList,
+      "lease.get": this.#leaseGet,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
       "relay.request": this.#relayRequest,
@@ -316,6 +323,7 @@ export class Dispatcher {
       "events.unsubscribe": this.#eventsUnsubscribe,
       "identity.get": identityGet,
       "token.create": this.#tokenCreate,
+      "inbox.get": this.#inboxGet,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "component.install": this.#componentInstall,
@@ -323,13 +331,19 @@ export class Dispatcher {
       "component.remove": this.#componentRemove,
       "device.add": this.#deviceAdd,
       "device.remove": this.#deviceRemove,
+      "daemon.update": this.#daemonUpdate,
       "worker.list": this.#workerList,
       "worker.drain": unsupportedOnWorker("worker.drain"),
       "worker.undrain": unsupportedOnWorker("worker.undrain"),
       "worker.remove": unsupportedOnWorker("worker.remove"),
+      "worker.update": unsupportedOnWorker("worker.update"),
       "worker.install-component": unsupportedOnWorker(
         "worker.install-component",
         "worker.install-component installs on a gateway's workers, and this daemon is not a gateway; install on this host without naming workers",
+      ),
+      "alerts.test": unsupportedOnWorker(
+        "alerts.test",
+        "alerts.test sends to a gateway's alert destinations, and this daemon is not a gateway; run it against the gateway",
       ),
     };
   }
@@ -352,7 +366,8 @@ export class Dispatcher {
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.ownerId,
         leaseRequesterId: (leaseId) =>
           this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId)?.requesterId,
-        pendingRequestOwner: (requesterId) => this.options.queue.pendingRequestOwner(requesterId),
+        pendingRequestOwner: (requesterId, platform) =>
+          this.options.queue.pendingRequestOwner(requesterId, platform),
       },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
@@ -384,6 +399,8 @@ export class Dispatcher {
       health: this.options.health(),
       mode: this.options.config.mode,
       ...consoleUrlField(this.options.config.http),
+      version: this.options.version,
+      ...this.#updateFields(),
     };
     const host = this.options.hostFacts();
     const load = this.options.load?.();
@@ -410,6 +427,24 @@ export class Dispatcher {
       warmPool: this.options.warmPool.figures(),
     };
     return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
+  };
+
+  #updateFields(): UpdateProgress {
+    return (
+      this.options.update?.state() ?? { update: null, lastUpdateFailure: null, latestVersion: null }
+    );
+  }
+
+  #daemonUpdate: Handler<"daemon.update"> = async (input) => {
+    const update = this.options.update;
+    if (update === undefined) {
+      throw new DispatchError("UNKNOWN_REQUEST", "This daemon does not update itself");
+    }
+    return {
+      ...(await update.request(input)),
+      version: this.options.version,
+      health: this.options.health(),
+    };
   };
 
   // why: a module can never make status.get fail or hang, which would cut the worker off from its gateway.
@@ -545,7 +580,7 @@ export class Dispatcher {
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    const result = await this.options.queue.cancelPending(requesterId);
+    const result = await this.options.queue.cancelPending(requesterId, input.platform);
     return { result };
   };
 
@@ -592,6 +627,16 @@ export class Dispatcher {
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
     const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
+  };
+
+  #leaseGet: Handler<"lease.get"> = (input, session) => {
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined || (session.role !== "admin" && lease.ownerId !== session.principal)) {
+      throw new UnknownLeaseError(input.leaseId);
+    }
+    return { lease };
   };
 
   #leaseList: Handler<"lease.list"> = (_input, session) => {
@@ -658,10 +703,10 @@ export class Dispatcher {
    * `leaseId` is checked against the registry here so an id that names no lease answers
    * `UNKNOWN_LEASE` rather than running a command (`authorize`'s `ownsLease` deliberately lets
    * an unknown id through so this handler can say that -- see `roles.ts`). Which device the
-   * command touches is the driver's answer: `simctl` and `adb` take it from the command's own
-   * arguments, which this daemon does not parse, and `devicectl` gets the lease's `--device`
-   * added when the arguments name none (`devicectl-exec.ts`). That is the same accident
-   * boundary ADR 0001 draws for the local wrappers, reached over the wire.
+   * command touches is the driver's answer: it fills the lease's device in where the tool
+   * expects it and refuses a command that names another (ADR 0047 §1-2); this daemon parses
+   * none of the arguments. That is the same accident boundary ADR 0001 draws for the local
+   * wrappers, reached over the wire.
    *
    * Nothing is buffered: each chunk goes straight to `session.onOutput` as it arrives (§19e),
    * so a command that writes a gigabyte costs this process nothing, and a client sees the
@@ -807,8 +852,22 @@ export class Dispatcher {
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
-  #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+  #eventsReplay: Handler<"events.replay"> = (input) => {
+    // why: a worker's own events carry no workerId, so `worker` can only name this daemon or no one (ADR 0012 §1)
+    if (input.workerId !== undefined && input.workerId !== this.options.instanceId) {
+      return Promise.resolve([]);
+    }
+    return input.beforeId === undefined && input.limit === undefined
+      ? this.options.eventHistory.replay(
+          input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs },
+        )
+      : eventsPageAnswer(
+          this.options.eventHistory.replayPage({
+            ...(input.beforeId === undefined ? {} : { beforeId: input.beforeId }),
+            limit: input.limit ?? EVENTS_PAGE_DEFAULT,
+          }),
+        );
+  };
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);
@@ -1000,6 +1059,26 @@ export class Dispatcher {
   #tokenCreate: Handler<"token.create"> = async (input) => {
     const { record, secret } = await this.#requireTokens().create(input.role, input.label);
     return { secret, token: record };
+  };
+
+  // why: a worker answers as a fleet of one (ADR 0012): the rules read its own view, leases and queue.
+  #inboxGet: Handler<"inbox.get"> = async (_input, session) => {
+    const [listed, tokens] = await Promise.all([
+      this.#workerList({}, session),
+      Promise.resolve()
+        .then(() => this.#requireTokens().list())
+        .catch(() => []),
+    ]);
+    return {
+      items: [
+        ...inboxItems(OPERATIONS["worker.list"].output.parse(listed).workers, {
+          leases: OPERATIONS["lease.list"].output.parse(this.#leaseList({}, session)).leases,
+          now: this.options.clock.now(),
+          requests: z.array(waitingRequestSchema).parse(this.options.queue.waitingRequests()),
+          tokens: OPERATIONS["token.list"].output.parse({ tokens }).tokens,
+        }),
+      ],
+    };
   };
 
   #tokenList: Handler<"token.list"> = async () => ({ tokens: await this.#requireTokens().list() });

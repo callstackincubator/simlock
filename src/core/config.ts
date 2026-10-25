@@ -44,13 +44,7 @@ import {
 
 const DEFAULT_CONFIG_PATH = "~/.simlock/config.json";
 
-/**
- * `lease.defaultTtlMs`'s default (ADR 0004 §4): the width a request that names no `ttlMs` is
- * granted. Exported because `Registry` needs the same number to migrate a lease record written
- * before ADR 0004, which has no stored width of its own -- one definition, read from both
- * places, rather than the same fifteen minutes spelled twice.
- */
-export const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
+const DEFAULT_LEASE_TTL_MS = 15 * 60_000;
 
 /** `lease.maxTtlMs`'s default: the largest TTL any request or renew may ask for. */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
@@ -94,6 +88,139 @@ const DEFAULT_ROUTING_POLICY = "warm-then-free";
  * force. */
 type RoutingPolicyName = (typeof ROUTING_POLICIES)[number];
 
+export const ALERT_EVENTS = [
+  "worker.connected",
+  "worker.disconnected",
+  "worker.rejected",
+  "worker.drain-started",
+  "worker.drain-ended",
+  "device.quarantine-abandoned",
+  "device.quarantine-stranded",
+  "device.recovery-failed",
+  "device.stalled-transition-detected",
+  "disk.pressure-detected",
+  "component.install-failed",
+] as const;
+export type AlertEventName = (typeof ALERT_EVENTS)[number];
+
+/**
+ * why: re-declared in the contract's `configSchema`, which imports nothing from core; a test checks the two agree.
+ */
+export const ALERT_FORMATS = ["generic", "slack"] as const;
+export type AlertFormatName = (typeof ALERT_FORMATS)[number];
+
+/** why: checked at config load, which cannot import the alerts module. */
+const ALERT_FORMAT_SECRET: Record<AlertFormatName, "required" | "refused"> = {
+  generic: "required",
+  slack: "refused",
+};
+
+export interface AlertDestination {
+  readonly name: string;
+  readonly format: AlertFormatName;
+  readonly url: string;
+  readonly events: readonly AlertEventName[];
+  readonly secret?: string;
+}
+
+const MAX_ALERT_DESTINATIONS = 16;
+const ALERT_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+const ALERT_LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+const ALERT_URL_EXPECTED =
+  "an https:// URL, or an http:// URL to localhost, 127.0.0.1 or [::1], with no user name or password";
+
+function isAlertUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ALERT_LOCAL_HOSTS.includes(url.hostname);
+}
+
+const ALERT_KEYS = ["name", "format", "url", "events", "secret"];
+
+function checkAlertName(name: unknown, path: string, names: Set<string>): string {
+  if (typeof name !== "string" || !ALERT_NAME_PATTERN.test(name)) {
+    throw invalidValue(
+      `${path}.name`,
+      "a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters",
+    );
+  }
+  if (names.has(name)) throw invalidValue(`${path}.name`, "a name no other destination uses");
+  return name;
+}
+
+function checkAlertEvents(events: unknown, path: string): AlertEventName[] {
+  if (
+    !Array.isArray(events) ||
+    events.length === 0 ||
+    new Set(events).size !== events.length ||
+    !events.every((event) => (ALERT_EVENTS as readonly unknown[]).includes(event))
+  ) {
+    throw invalidValue(
+      `${path}.events`,
+      `a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`,
+    );
+  }
+  return events as AlertEventName[];
+}
+
+function checkAlertSecret(
+  format: AlertFormatName,
+  entry: Record<string, unknown>,
+  path: string,
+): string | undefined {
+  const { secret } = entry;
+  if (ALERT_FORMAT_SECRET[format] === "refused") {
+    if ("secret" in entry) {
+      throw invalidValue(`${path}.secret`, `no secret: a ${format} destination is not signed`);
+    }
+    return undefined;
+  }
+  if (typeof secret !== "string" || secret.length === 0) {
+    throw invalidValue(`${path}.secret`, `a non-empty secret for a ${format} destination`);
+  }
+  return secret;
+}
+
+function alertDestinationValidator(
+  names: Set<string>,
+): (value: unknown, path: string, warn: Warn) => AlertDestination {
+  return (value, path, warn) => {
+    const entry = requireObject(value, path);
+    for (const key of Object.keys(entry)) {
+      if (!ALERT_KEYS.includes(key)) warn(`Unknown config key: "${path}.${key}"`);
+    }
+    // why: the fields are checked in this order, so a destination with several bad ones reports the first.
+    const name = checkAlertName(entry.name, path, names);
+    const format = stringUnion(ALERT_FORMATS)(entry.format, `${path}.format`);
+    if (!isAlertUrl(entry.url)) throw invalidValue(`${path}.url`, ALERT_URL_EXPECTED);
+    const events = checkAlertEvents(entry.events, path);
+    const secret = checkAlertSecret(format, entry, path);
+    names.add(name);
+    return {
+      name,
+      format,
+      url: entry.url,
+      events,
+      ...(secret === undefined ? {} : { secret }),
+    };
+  };
+}
+
+function alertDestinationsValidator(value: unknown, path: string, warn: Warn): AlertDestination[] {
+  if (!Array.isArray(value) || value.length > MAX_ALERT_DESTINATIONS) {
+    throw invalidValue(path, `a list of at most ${MAX_ALERT_DESTINATIONS} destinations`);
+  }
+  const validate = alertDestinationValidator(new Set());
+  return value.map((entry, index) => validate(entry, `${path}[${index}]`, warn));
+}
+
 /**
  * `exec.timeoutMs`'s default (ADR 0005 §19e): how long a single `device.exec` command may run
  * on this worker before it is killed and the operation fails with `EXEC_TIMEOUT`. Ten minutes,
@@ -112,10 +239,16 @@ const DEFAULT_EXEC_TIMEOUT_MS = 10 * 60_000;
 export type DownloadPolicy = "never" | "on-request" | "always";
 
 /**
- * Which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine --
- * every daemon today -- and a `gateway` owns none and fronts the workers that joined it. One
- * daemon runs exactly one mode, and it is a config value rather than a flag because it decides
- * what the process *is*, not what one invocation does.
+ * why: one number counts a requester's leases across all platforms; the object counts per
+ * platform, and a platform it leaves out is 1.
+ */
+export type MaxPerRequester = number | { readonly ios?: number; readonly android?: number };
+
+/**
+ * why: which shape a daemon runs as (ADR 0005 §1): a `worker` owns the devices on its machine and a
+ * `gateway` owns none and fronts the workers that joined it. One daemon runs exactly one mode,
+ * and the folder it lives in decides it (ADR 0034): the daemon is told its role at start, and
+ * `loadConfig` takes it as an argument -- no config key names it.
  */
 export type DaemonMode = "worker" | "gateway";
 
@@ -147,6 +280,9 @@ export interface Config {
   readonly idle: {
     readonly shutdownAfterMs: number;
     readonly deleteAfterMs: number;
+  };
+  readonly update: {
+    readonly check: boolean;
   };
   readonly warmPool: WarmPoolConfig & {
     readonly quarantine: {
@@ -189,7 +325,7 @@ export interface Config {
      * an open record is never evicted.
      */
     readonly maxRequestRecords: number;
-    readonly maxPerRequester: number;
+    readonly maxPerRequester: MaxPerRequester;
     readonly endWaitMs: number;
   };
   /**
@@ -277,14 +413,14 @@ export interface Config {
   readonly gateway: {
     /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
     readonly url?: string;
-    /** A join token minted on the gateway with `simlock token create --role worker`.
+    /** why: A join token minted on the gateway with `simlock token create --role worker`.
      * Worker-side. It is a secret, and it sits in the daemon's config file like any other
      * value there: `config.get` is admin-role and returns the config as written, so this key
      * is exactly as sensitive as `config.json`'s file permissions make it. `simlock config
      * set` writes that file owner-only (0600) every time; a file written by hand, or before
      * that, keeps whatever mode it has until the next `config set`. Everywhere else the
      * config is written out -- the startup log line, `daemon.started` -- goes through
-     * `redactConfig`. See docs/CONFIGURATION.md. */
+     * `redactConfig`. */
     readonly token?: string;
     /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
@@ -323,6 +459,7 @@ export interface Config {
      * per-request choice. `"warm-then-free"` is the only value in v1 (`ROUTING_POLICIES` above).
      */
     readonly routing: RoutingPolicyName;
+    readonly alerts: { readonly destinations: readonly AlertDestination[] };
   };
   readonly stalledTransition: {
     /**
@@ -343,8 +480,23 @@ export const REDACTED_VALUE = "[redacted]";
 
 // why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
 export function redactConfig(config: Config): Config {
-  if (config.gateway.token === undefined) return config;
-  return { ...config, gateway: { ...config.gateway, token: REDACTED_VALUE } };
+  const { token, alerts } = config.gateway;
+  if (token === undefined && alerts.destinations.length === 0) return config;
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      ...(token === undefined ? {} : { token: REDACTED_VALUE }),
+      alerts: {
+        ...alerts,
+        destinations: alerts.destinations.map((destination) => ({
+          ...destination,
+          url: REDACTED_VALUE,
+          ...(destination.secret === undefined ? {} : { secret: REDACTED_VALUE }),
+        })),
+      },
+    },
+  };
 }
 
 /**
@@ -364,8 +516,12 @@ export interface ModuleConfigEntry {
   readonly validator: Validator;
   readonly defaults: unknown;
   readonly gatewayKeys: readonly string[];
+  readonly enabledByDefault?: "standalone-worker";
   readonly check?: (section: never, config: Config) => void;
 }
+
+const MODE_KEY_REMOVED =
+  '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.';
 
 export interface LoadConfigOptions {
   readonly authStrategies?: readonly AuthStrategyDefinition[];
@@ -374,20 +530,29 @@ export interface LoadConfigOptions {
   readonly systemStats: SystemStats;
   readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
+  readonly role?: DaemonMode;
   readonly warn?: Warn;
 }
 
 type Layer = Record<string, unknown>;
 
-export async function loadConfig({
+export async function loadConfig(options: LoadConfigOptions): Promise<Config> {
+  return (await loadConfigWithDefaults(options)).config;
+}
+
+export async function loadConfigWithDefaults({
   authStrategies = registeredAuthStrategies,
   configPath = DEFAULT_CONFIG_PATH,
   filesystem,
   modules = [],
   overrides,
+  role = "worker",
   systemStats,
   warn = () => {},
-}: LoadConfigOptions): Promise<Config> {
+}: LoadConfigOptions): Promise<{
+  readonly config: Config;
+  readonly defaulted: ReadonlySet<string>;
+}> {
   const fromFile = await readConfigFile(filesystem, configPath);
   const fromOverrides = overrides ?? {};
 
@@ -395,10 +560,12 @@ export async function loadConfig({
   // defaulted: it decides which options block `capacity.config` is, and which
   // defaults the merge starts from.
   const strategy = resolveStrategyName([fromFile, fromOverrides]);
-  // Same reason as the strategy above: `mode` decides which keys are read at all, and what
-  // `http.enabled` defaults to, so it has to be known before anything is defaulted or warned
-  // about.
-  const mode = resolveMode([fromFile, fromOverrides]);
+  // why: refused before any other validation, so a config that still sets `mode` fails on that alone.
+  for (const layer of [fromFile, fromOverrides]) {
+    if (Object.hasOwn(requireObject(layer, "config"), "mode")) {
+      throw new ConfigError(MODE_KEY_REMOVED);
+    }
+  }
   const validators = configValidators(strategy, modules, authStrategies);
 
   const fileConfig = normalizeLayer(
@@ -412,8 +579,27 @@ export async function loadConfig({
     warn,
   );
 
+  const layers = [fileConfig, overrideConfig];
+  const standalone =
+    role === "worker" && !layers.some((layer) => asObject(layer["gateway"])["url"] !== undefined);
+  const defaulted = new Set(
+    modules
+      .filter(
+        (entry) =>
+          entry.enabledByDefault === "standalone-worker" &&
+          standalone &&
+          !layers.some(
+            (layer) =>
+              asObject(asObject(layer["capabilities"])[entry.name])["enabled"] !== undefined,
+          ),
+      )
+      .map((entry) => entry.name),
+  );
   const mergedWithoutMetrics = mergeConfig(
-    mergeConfig(defaultConfig(systemStats, strategy, mode, modules, authStrategies), fileConfig),
+    mergeConfig(
+      defaultConfig(systemStats, strategy, role, modules, authStrategies, standalone, defaulted),
+      fileConfig,
+    ),
     overrideConfig,
   ) as unknown as Omit<Config, "metrics"> & { readonly metrics?: Config["metrics"] };
   const merged: Config = {
@@ -429,7 +615,7 @@ export async function loadConfig({
   validateMetricsRetention(merged);
   // why: a gateway reads a module's gateway keys, so a bad value stops it too.
   runModuleChecks(merged, modules);
-  if (mode === "gateway") {
+  if (role === "gateway") {
     warnWorkerOnlyKeys([fromFile, fromOverrides], warn, modules);
     requireGatewayHttp(merged);
   } else {
@@ -437,7 +623,7 @@ export async function loadConfig({
     // them there would fail a start over a value nothing reads.
     validateGatewayMembership(merged);
   }
-  return deepFreeze(merged);
+  return { config: deepFreeze(merged), defaulted };
 }
 
 /**
@@ -491,7 +677,6 @@ function validateMetricsRetention(config: Config): void {
  * decision -- adding a key to `Config` should not silently make it gateway-relevant.
  */
 const GATEWAY_CONFIG_KEYS: readonly string[] = [
-  "mode",
   "http",
   "log",
   "lease",
@@ -500,6 +685,7 @@ const GATEWAY_CONFIG_KEYS: readonly string[] = [
   "metrics",
   "gateway",
   "capabilities",
+  "update",
 ];
 
 /** The `gateway.*` sub-keys a *worker* reads. A gateway ignores these three (it dials nobody);
@@ -616,37 +802,36 @@ function requireGatewayHttp(config: Config): void {
  */
 function validateGatewayMembership(config: Config): void {
   const { token, url } = config.gateway;
-  if (url !== undefined) {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-      throw invalidValue("gateway.url", "a ws:// or wss:// URL");
-    }
-  }
+  if (url !== undefined) requireWebSocketUrl(url);
   if (url !== undefined && token === undefined) {
     throw invalidValue("gateway.token", "a join token, since gateway.url is set");
   }
   if (token !== undefined && url === undefined) {
     throw invalidValue("gateway.url", "a gateway URL, since gateway.token is set");
   }
+  requireJoinedWorkerHttpOff(config);
 }
 
-/** Last layer that names a mode wins; absent everywhere means `worker` (ADR 0005 §1). */
-function resolveMode(layers: readonly unknown[]): DaemonMode {
-  let resolved: DaemonMode = "worker";
-  for (const layer of layers) {
-    const candidate = requireObject(layer, "config")["mode"];
-    if (candidate === undefined) continue;
-    if (candidate !== "worker" && candidate !== "gateway") {
-      throw invalidValue("mode", 'one of "worker", "gateway"');
-    }
-    resolved = candidate;
+function requireWebSocketUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
   }
-  return resolved;
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    throw invalidValue("gateway.url", "a ws:// or wss:// URL");
+  }
+}
+
+// why: a joined worker is reached through the gateway; its own listener would be a second entrance.
+function requireJoinedWorkerHttpOff(config: Config): void {
+  if (config.gateway.url !== undefined && config.http.enabled) {
+    throw invalidValue(
+      "http.enabled",
+      "false when gateway.url is set (joined workers are reached through the gateway)",
+    );
+  }
 }
 
 /** Last layer that names a strategy wins; absent everywhere means the default. */
@@ -724,16 +909,18 @@ function asObject(value: unknown): Layer {
 function defaultConfig(
   systemStats: SystemStats,
   strategy: CapacityStrategyName,
-  mode: DaemonMode,
+  role: DaemonMode,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],
+  standalone: boolean,
+  defaulted: ReadonlySet<string>,
 ): Omit<Config, "metrics"> {
   return {
-    mode,
+    mode: role,
     capabilities: Object.fromEntries(
       modules.map((entry) => [
         entry.name,
-        { ...(entry.defaults as Record<string, unknown>), enabled: false },
+        { ...(entry.defaults as Record<string, unknown>), enabled: defaulted.has(entry.name) },
       ]),
     ) as Config["capabilities"],
     capacity: {
@@ -750,8 +937,9 @@ function defaultConfig(
       shutdownAfterMs: 10 * 60_000,
       deleteAfterMs: 60 * 60_000,
     },
+    update: { check: true },
     warmPool: {
-      ...defaultWarmPoolConfig,
+      ...defaultWarmPoolConfig(systemStats),
       quarantine: {
         maxRetries: 3,
         retryBackoffMs: 30_000,
@@ -776,13 +964,11 @@ function defaultConfig(
       retention: 7 * 24 * 60 * 60 * 1000,
       maxBytes: 256 * 1024 * 1024,
     },
-    // ADR 0005 §2: a gateway always listens on HTTP, so that is its default rather than
-    // something every operator has to remember to switch on; a worker's HTTP gateway stays
-    // opt-in exactly as before.
+    // why: ADR 0005 §2 and ADR 0046 §1: a gateway and a standalone worker listen on HTTP by default; a joined worker is reached through its gateway, so its default is off.
     http: {
-      enabled: mode === "gateway",
+      enabled: role === "gateway" || standalone,
       host: "127.0.0.1",
-      port: 4700,
+      port: role === "gateway" ? 4700 : 4701,
       ...Object.fromEntries(
         authStrategies.flatMap((definition) =>
           definition.config === undefined
@@ -820,6 +1006,7 @@ function defaultConfig(
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
       leaseRequestTimeoutMs: DEFAULT_LEASE_REQUEST_TIMEOUT_MS,
       routing: DEFAULT_ROUTING_POLICY,
+      alerts: { destinations: [] },
     },
     stalledTransition: {
       thresholdMultiplier: 3,
@@ -869,7 +1056,6 @@ function validateConfigLayer(
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
-const DAEMON_MODES: readonly DaemonMode[] = ["worker", "gateway"];
 const DOWNLOAD_POLICIES: readonly DownloadPolicy[] = ["never", "on-request", "always"];
 const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
 
@@ -884,7 +1070,6 @@ function configValidators(
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
-    mode: stringUnion(DAEMON_MODES),
     gateway: objectValidator({
       url: stringValue,
       token: stringValue,
@@ -893,6 +1078,7 @@ function configValidators(
       execTimeoutMs: positiveNumber,
       leaseRequestTimeoutMs: positiveNumber,
       routing: stringUnion(ROUTING_POLICIES),
+      alerts: objectValidator({ destinations: alertDestinationsValidator }),
     }),
     capacity: objectValidator({
       strategy: stringUnion(capacityStrategyNames),
@@ -908,6 +1094,7 @@ function configValidators(
       timeoutMs: positiveNumber,
     }),
     idle: objectValidator({ shutdownAfterMs: nonNegativeNumber, deleteAfterMs: nonNegativeNumber }),
+    update: objectValidator({ check: booleanValue }),
     warmPool: objectValidator({
       ...warmPoolConfigValidator,
       quarantine: objectValidator({
@@ -917,10 +1104,10 @@ function configValidators(
         maxRetryBackoffMs: nonNegativeNumber,
       }),
     }),
-    // The three pre-ADR-0004 keys (`lease.detachedTtlMs`, `lease.heldTtlBackstopMs`,
+    // why: The three pre-ADR-0004 keys (`lease.detachedTtlMs`, `lease.heldTtlBackstopMs`,
     // `lease.heartbeatIntervalMs`) are deliberately absent rather than aliased: `objectValidator`
     // warns about each as an unrecognized key and ignores it, so an old config still boots and
-    // gets the new key's default rather than the value it wrote. See docs/CONFIGURATION.md.
+    // gets the new key's default rather than the value it wrote.
     lease: objectValidator({
       defaultTtlMs: positiveNumber,
       maxTtlMs: positiveNumber,
@@ -930,7 +1117,7 @@ function configValidators(
       }),
       requestRetentionMs: positiveNumber,
       maxRequestRecords: positiveInteger,
-      maxPerRequester: positiveInteger,
+      maxPerRequester: maxPerRequesterValidator,
       endWaitMs: endWaitValidator,
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
@@ -1099,6 +1286,12 @@ function driverSettings(value: unknown, path: string): Record<string, string | n
   }
 
   return result;
+}
+
+function maxPerRequesterValidator(value: unknown, path: string, warn: Warn): unknown {
+  return typeof value === "object" && value !== null
+    ? objectValidator({ ios: positiveInteger, android: positiveInteger })(value, path, warn)
+    : positiveInteger(value, path);
 }
 
 function mergeConfig<Base extends object>(base: Base, overrides: object): Base {

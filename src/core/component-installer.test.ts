@@ -28,11 +28,11 @@ import {
 import { DriverCatalog } from "./driver-catalog.js";
 import { FakeDriver } from "./fake-driver.js";
 import type { DeviceRecord } from "./domain.js";
-import { Registry } from "./registry.js";
+import type { Registry } from "./registry.js";
+import { loadTestRegistry, openTestState } from "./testing.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 const timeoutMs = 60_000;
 
 /** A clock whose timers fire only when a test fires them, one at a time, by creation order. */
@@ -78,14 +78,13 @@ async function createHarness(
   const drivers = options.drivers?.(clock) ?? [
     new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
   ];
-  const stateFilesystem = new MemoryFilesystem();
+  const state = await openTestState();
   let nextId = 0;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem: stateFilesystem,
     idGenerator: { generate: () => `id${String((nextId += 1))}` },
-    statePath,
+    state,
   });
   // Every reservation the installer takes, and whether it gave it back.
   const guard = new DiskSpaceGuard();
@@ -121,7 +120,7 @@ async function createHarness(
     ios,
     registry,
     reservations,
-    stateFilesystem,
+    state,
   };
 }
 
@@ -412,32 +411,40 @@ describe("ComponentInstaller", () => {
       return heard;
     }
 
-    it("reports 100 before it settles as installed when the driver last reported 99.3", async () => {
-      await expect(heardUntilSettled("27.0", [12, 99.3])).resolves.toEqual([
-        { stage: "downloading" },
-        { percent: 12, stage: "downloading" },
-        { percent: 99.3, stage: "downloading" },
-        { percent: 100, stage: "downloading" },
-        "settled: installed",
-      ]);
-    });
-
-    it("reports 100 before it settles as installed when the driver reported nothing", async () => {
-      await expect(heardUntilSettled("27.0", [])).resolves.toEqual([
-        { stage: "downloading" },
-        { percent: 100, stage: "downloading" },
-        "settled: installed",
-      ]);
-    });
-
-    it("does not report 100 twice when the driver already reported 100", async () => {
-      await expect(heardUntilSettled("27.0", [50, 100])).resolves.toEqual([
-        { stage: "downloading" },
-        { percent: 50, stage: "downloading" },
-        { percent: 100, stage: "downloading" },
-        "settled: installed",
-      ]);
-    });
+    it.each([
+      {
+        reported: [12, 99.3],
+        heard: [
+          { stage: "downloading" },
+          { percent: 12, stage: "downloading" },
+          { percent: 99.3, stage: "downloading" },
+          { percent: 100, stage: "downloading" },
+          "settled: installed",
+        ],
+      },
+      {
+        reported: [],
+        heard: [
+          { stage: "downloading" },
+          { percent: 100, stage: "downloading" },
+          "settled: installed",
+        ],
+      },
+      {
+        reported: [50, 100],
+        heard: [
+          { stage: "downloading" },
+          { percent: 50, stage: "downloading" },
+          { percent: 100, stage: "downloading" },
+          "settled: installed",
+        ],
+      },
+    ])(
+      "ends with exactly one 100 before it settles as installed, whatever the driver reported ($reported)",
+      async ({ reported, heard }) => {
+        await expect(heardUntilSettled("27.0", reported)).resolves.toEqual(heard);
+      },
+    );
 
     it("reports no final 100 for a failed install", async () => {
       await expect(heardUntilSettled("27.0", [40], {}, true)).resolves.toEqual([
@@ -639,12 +646,11 @@ describe("ComponentInstaller", () => {
     harness.clock.advance(2_000);
 
     await harness.installer.install(ios("27.0"));
-    const reloaded = await Registry.load({
+    const reloaded = await loadTestRegistry({
       clock: harness.clock,
       eventBus: harness.bus,
-      filesystem: harness.stateFilesystem,
       idGenerator: { generate: () => "id" },
-      statePath,
+      state: harness.state,
     });
 
     const expected = [
@@ -1149,9 +1155,10 @@ async function addDevice(
   platform: "ios" | "android",
   osVersion: string,
 ): Promise<string> {
+  const driverDeviceId = `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`;
   const device = await registry.registerDevice({
-    driverData: {},
-    driverDeviceId: `${platform}-${osVersion}-${String(registry.snapshot.devices.length)}`,
+    driverData: { fakeDeviceId: driverDeviceId },
+    driverDeviceId,
     provisionDuration: 0,
     spec: { physical: false, model: "Phone", osVersion, platform },
   });
@@ -1477,22 +1484,6 @@ describe("ComponentInstaller.remove", () => {
     expect(await harness.installer.list()).toMatchObject([{ version: "26.5" }]);
   });
 
-  it("refuses a record whose receipt no longer matches what is installed with ComponentNotOwnedError and never calls removeComponent", async () => {
-    const harness = await createHarness();
-    await harness.registry.recordComponent({
-      installedAt: 1_000,
-      platform: "ios",
-      receipt: { install: "1", version: "26.5" },
-      version: "26.5",
-    });
-
-    await expect(harness.installer.remove(removeIos("26.5"))).rejects.toBeInstanceOf(
-      ComponentNotOwnedError,
-    );
-    expect(removals(harness.ios)).toEqual([]);
-    expect(harness.registry.snapshot.components).toHaveLength(1);
-  });
-
   it("refuses a record whose version is no longer installed saying none is installed, and a record whose version was installed again saying that one is not Simlock's, in a removal and a dry run alike", async () => {
     // 26.5 is on the machine with another receipt; 25.0 is not on the machine at all.
     const harness = await createHarness();
@@ -1517,6 +1508,9 @@ describe("ComponentInstaller.remove", () => {
       });
     }
     expect(removals(harness.ios)).toEqual([]);
+    expect(harness.registry.snapshot.components).toContainEqual(
+      expect.objectContaining({ platform: "ios", version: "26.5" }),
+    );
   });
 
   it("removes a component whose receipt matches the record even when the listing names its version differently", async () => {
@@ -1648,6 +1642,9 @@ describe("ComponentInstaller.remove", () => {
       devices: 1,
       foreignDevices: 0,
     });
+    await expect(
+      harness.installer.remove(removeIos("27.0", { dryRun: true })),
+    ).rejects.toMatchObject({ devices: 1, foreignDevices: 0, name: "ComponentInUseError" });
     expect(removals(harness.ios)).toEqual([]);
 
     release();
@@ -1860,15 +1857,6 @@ describe("ComponentInstaller.remove", () => {
     first();
 
     expect(await harness.installer.list()).toMatchObject([{ devices: 1, version: "27.0" }]);
-  });
-
-  it("refuses a dry run with ComponentInUseError when a Simlock device uses the component", async () => {
-    const harness = await withSimlockInstall();
-    harness.installer.claimProvision({ osVersion: "27.0", platform: "ios" });
-
-    await expect(
-      harness.installer.remove(removeIos("27.0", { dryRun: true })),
-    ).rejects.toMatchObject({ devices: 1, foreignDevices: 0, name: "ComponentInUseError" });
   });
 
   it("refuses with ComponentInstallerClosedError once the daemon has stopped, without reading the listing", async () => {

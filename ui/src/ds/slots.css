@@ -51,6 +51,18 @@
   background: var(--status-warn);
 }
 
+.slot-drained {
+  background: repeating-linear-gradient(135deg, var(--status-ok) 0 3px, var(--field) 3px 6px);
+}
+
+.slot-shutdown {
+  background: var(--border-strong);
+}
+
+.slot-offline {
+  background: repeating-linear-gradient(135deg, var(--border-strong) 0 3px, var(--field) 3px 6px);
+}
+
 .slot-free {
   border: 1px dashed var(--border-strong);
 }
@@ -79,12 +91,20 @@
 
 .share-bar {
   display: flex;
+  gap: 2px;
   height: 10px;
   background: var(--field);
 }
 
 .share {
   display: block;
+  flex: none;
   width: var(--share, 0%);
   transition: width var(--duration-move) var(--ease);
+}
+
+/* Free room is the bar's own field showing through, not a dashed box. */
+.share.slot-free {
+  border: 0;
+  background: transparent;
 }

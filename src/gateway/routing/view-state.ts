@@ -12,6 +12,7 @@ export function viewLoadKey(view: WorkerView): string {
     leases: (view.leases ?? []).map((lease) => lease.id),
     physicalQueueDepth: view.physicalQueueDepth,
     queueDepth: view.queueDepth,
+    ...(view.update == null ? {} : { updating: true }),
   });
 }
 

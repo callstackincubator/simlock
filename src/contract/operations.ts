@@ -10,6 +10,12 @@
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
+import {
+  EVENTS_PAGE_MAX,
+  EVENTS_WORKER_MAX,
+  EVENTS_PAGE_WITH_SINCE_MESSAGE,
+  eventsPageWithoutSince,
+} from "./events-page.js";
 import { parseOsConstraint } from "./os-range.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
@@ -19,11 +25,14 @@ import {
   configSchema,
   daemonHealthSchema,
   daemonModeSchema,
+  daemonUpdateFields,
   type DeviceClass,
   deviceClassSchema,
+  updateRequestedVersionSchema,
   deviceRecordSchema,
   doctorReportSchema,
   eventEnvelopeSchema,
+  EVENT_ID_PATTERN,
   hostFactsSchema,
   historyStatusSchema,
   hostLoadSchema,
@@ -44,6 +53,7 @@ import {
   tokenRoleSchema,
   usageOutputSchema,
   usageWindowSchema,
+  inboxItemSchema,
   waitingRequestSchema,
   capabilityListSchema,
   workerViewSchema,
@@ -53,8 +63,8 @@ export type Effect = "read" | "write";
 
 export interface OperationDefinition<
   Name extends string = string,
-  InputSchema extends z.ZodTypeAny = z.ZodTypeAny,
-  OutputSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  InputSchema extends z.ZodType = z.ZodType,
+  OutputSchema extends z.ZodType = z.ZodType,
 > {
   readonly name: Name;
   readonly role: Role | ((input: z.infer<InputSchema>) => Role);
@@ -72,8 +82,8 @@ export interface OperationDefinition<
 
 function defineOperation<
   Name extends string,
-  InputSchema extends z.ZodTypeAny,
-  OutputSchema extends z.ZodTypeAny,
+  InputSchema extends z.ZodType,
+  OutputSchema extends z.ZodType,
 >(
   definition: OperationDefinition<Name, InputSchema, OutputSchema>,
 ): OperationDefinition<Name, InputSchema, OutputSchema> {
@@ -117,6 +127,7 @@ export const statusGet = defineOperation({
       mode: daemonModeSchema,
       // Bounded: a gateway parses every worker's answer (safety rule 10).
       consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
+      ...daemonUpdateFields,
     }),
     host: hostFactsSchema,
     load: hostLoadSchema.optional(),
@@ -202,7 +213,7 @@ export function refuseModelWithClass(
   return (input, context) => {
     if (input.model !== undefined && input.class !== undefined) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `a request names a model or a class, not both: send only one of \`${modelField}\` and \`class\``,
         path: ["class"],
       });
@@ -232,7 +243,7 @@ function refusePhysicalWithImageFields(): <
     for (const field of refused) {
       if (field === undefined) continue;
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `\`${field}\` has no meaning for a physical device`,
         path: [field],
       });
@@ -250,7 +261,7 @@ function refuseRequiresWithIdempotencyKey(): <
   return (input, context) => {
     if (input.requires === undefined || input.idempotencyKey === undefined) return;
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "requires cannot be combined with idempotencyKey",
       path: ["requires"],
     });
@@ -266,7 +277,7 @@ function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefi
     const parsed = parseOsConstraint(input.osVersion);
     if (!parsed.ok) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: parsed.message,
         path: ["osVersion"],
       });
@@ -326,7 +337,7 @@ export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   effect: "write",
-  input: z.object({ requesterId: z.string().optional() }),
+  input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
    * ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
@@ -345,7 +356,10 @@ export const leaseCancel = defineOperation({
    */
   authorize: (input, context) => {
     if (context.role === "admin") return true;
-    const owner = context.pendingRequestOwner(input.requesterId ?? context.principal);
+    const owner = context.pendingRequestOwner(
+      input.requesterId ?? context.principal,
+      input.platform,
+    );
     return owner === undefined || owner === context.principal;
   },
 });
@@ -417,8 +431,9 @@ export const driverPassthrough = defineOperation({
  * unlike `driver.passthrough`, which only builds a string -- this one actually runs a command
  * against a machine, so it is gated on the caller being who the lease was granted to (see the
  * `authorize` hook below). `leaseId` is that proof: for `simctl` and `adb` the command's own
- * arguments still name the device (a udid, a serial) and the daemon parses none of them; for
- * `devicectl` the driver adds the lease's `--device` unless the arguments name one.
+ * arguments may leave the device out and the daemon parses none of them: the driver puts the
+ * lease's device where the tool expects it (ADR 0047 §1) and refuses a command that names
+ * another one.
  *
  * A bare `adb shell` (nothing to run) is refused by the driver on this path, because there is
  * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
@@ -524,6 +539,16 @@ export const leaseList = defineOperation({
   effect: "read",
   input: z.object({}),
   output: z.object({ leases: z.array(statusLeaseSchema) }),
+});
+
+// why: no `authorize` hook -- the handler answers `UNKNOWN_LEASE` for a lease the caller does not own, as `lease.list` hides it (ADR 0044 §3), so "not yours" and "not there" look the same.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const leaseGet = defineOperation({
+  name: "lease.get",
+  role: "agent",
+  effect: "read",
+  input: z.object({ leaseId: z.string() }),
+  output: z.object({ lease: statusLeaseSchema }),
 });
 
 // ---- doctor.run -------------------------------------------------------------------------------
@@ -638,6 +663,36 @@ export const daemonStop = defineOperation({
   output: z.object({ stopping: z.literal(true) }),
 });
 
+// why: `DaemonServer` dispatches it on a connection whose protocol range does not overlap (like `daemon.stop`), so its input and answer never change shape.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const daemonUpdate = defineOperation({
+  name: "daemon.update",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      version: updateRequestedVersionSchema.optional(),
+      force: z.boolean().optional(),
+      query: z.boolean().optional(),
+    })
+    .refine(
+      (input) => input.query !== true || (input.version === undefined && input.force === undefined),
+      {
+        message: "query takes no other field",
+      },
+    ),
+  output: z.object({
+    started: z.boolean(),
+    upToDate: z.boolean(),
+    resolved: updateRequestedVersionSchema.nullable(),
+    version: daemonUpdateFields.version,
+    health: daemonHealthSchema,
+    update: daemonUpdateFields.update,
+    lastUpdateFailure: daemonUpdateFields.lastUpdateFailure,
+    latestVersion: daemonUpdateFields.latestVersion,
+  }),
+});
+
 // ---- events.replay ------------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -645,7 +700,14 @@ export const eventsReplay = defineOperation({
   name: "events.replay",
   role: "admin",
   effect: "read",
-  input: z.object({ sinceTs: z.number().optional() }),
+  input: z
+    .object({
+      beforeId: z.string().regex(EVENT_ID_PATTERN).optional(),
+      limit: z.number().int().min(1).max(EVENTS_PAGE_MAX).optional(),
+      sinceTs: z.number().optional(),
+      workerId: z.string().min(1).max(EVENTS_WORKER_MAX).optional(),
+    })
+    .refine(eventsPageWithoutSince, { message: EVENTS_PAGE_WITH_SINCE_MESSAGE }),
   output: z.array(eventEnvelopeSchema),
 });
 
@@ -682,9 +744,9 @@ export const eventsUnsubscribe = defineOperation({
 
 // ---- token.create / token.list / token.revoke --------------------------------------------
 
-// why: ADR §11 makes the daemon the only owner of tokens.json, and that move has landed: both
+// why: ADR §11 makes the daemon the only owner of the tokens, and that move has landed: both
 // dispatchers handle these three, the CLI reaches them as admin round-trips from
-// `src/cli/commands/token.ts`, and no CLI code reads `tokens.json` itself. The declarations live
+// `src/cli/commands/token.ts`, and no CLI code reads the token store itself. The declarations live
 // here because the `OPERATIONS` map every dispatcher validates against is built from this file.
 
 // fallow-ignore-next-line unused-export -- reachable from outside this file only through OPERATIONS.
@@ -780,6 +842,20 @@ export const workerRemove = defineOperation({
   effect: "write",
   input: z.object({ workerId: z.string().min(1) }),
   output: z.object({ workerId: z.string(), removed: z.boolean() }),
+});
+
+// why: ADR 0042 §2: the gateway sends `daemon.update` over that worker's uplink and answers with the worker's own answer plus the id.
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const workerUpdate = defineOperation({
+  name: "worker.update",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    workerId: z.string().min(1),
+    version: updateRequestedVersionSchema.optional(),
+    force: z.boolean().optional(),
+  }),
+  output: daemonUpdate.output.extend({ workerId: z.string() }),
 });
 
 // ---- component.install (ADR 0010 §6) --------------------------------------------------------
@@ -1028,6 +1104,29 @@ export const relayCancel = defineOperation({
   output: z.object({}),
 });
 
+/**
+ * why: ADR 0035 §1: asks the gateway to post one sample message to one of its alert destinations,
+ * once, outside the destination's queue. `destination` is only looked up by name among the
+ * configured ones, never used in a URL.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const alertsTest = defineOperation({
+  name: "alerts.test",
+  role: "admin",
+  effect: "write",
+  input: z.object({ destination: z.string().min(1).max(32) }),
+  output: z.object({ destination: z.string(), status: z.number() }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const inboxGet = defineOperation({
+  name: "inbox.get",
+  role: "admin",
+  effect: "read",
+  input: z.object({}),
+  output: z.object({ items: z.array(inboxItemSchema) }),
+});
+
 const identityGet = defineOperation({
   name: "identity.get",
   role: "agent",
@@ -1051,6 +1150,7 @@ export const OPERATIONS = {
   "lease.renew": leaseRenew,
   "lease.release": leaseRelease,
   "lease.list": leaseList,
+  "lease.get": leaseGet,
   "driver.passthrough": driverPassthrough,
   "device.exec": deviceExec,
   "doctor.run": doctorRun,
@@ -1060,10 +1160,12 @@ export const OPERATIONS = {
   "nuke.run": nukeRun,
   "config.get": configGet,
   "daemon.stop": daemonStop,
+  "daemon.update": daemonUpdate,
   "events.replay": eventsReplay,
   "events.subscribe": eventsSubscribe,
   "events.unsubscribe": eventsUnsubscribe,
   "usage.get": usageGet,
+  "inbox.get": inboxGet,
   "token.create": tokenCreate,
   "token.list": tokenList,
   "token.revoke": tokenRevoke,
@@ -1071,6 +1173,7 @@ export const OPERATIONS = {
   "worker.drain": workerDrain,
   "worker.undrain": workerUndrain,
   "worker.remove": workerRemove,
+  "worker.update": workerUpdate,
   "component.install": componentInstall,
   "component.list": componentList,
   "worker.install-component": workerInstallComponent,
@@ -1079,6 +1182,7 @@ export const OPERATIONS = {
   "device.remove": deviceRemove,
   "relay.request": relayRequest,
   "relay.cancel": relayCancel,
+  "alerts.test": alertsTest,
 } as const;
 
 export type OperationName = keyof typeof OPERATIONS;

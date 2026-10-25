@@ -1,6 +1,6 @@
 # 0032. The event history is a SQLite database, with projections beside it
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — not yet implemented; §1's "the registry, tokens and worker list stay" superseded by [ADR 0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md)
 - **Date:** 2026-10-16
 - **Issue:** [#623](https://github.com/callstackincubator/simlock/issues/623)
 - **Supersedes:** [ADR

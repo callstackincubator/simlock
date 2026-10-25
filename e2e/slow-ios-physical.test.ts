@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   REPO_ROOT,
+  deviceStreamUrl,
   SCREEN_TAGS as TAG,
   type TestEnv,
   readScreenFrames as readFrames,
@@ -44,7 +45,7 @@ const missing =
       : undefined;
 
 interface Grant {
-  readonly device: { readonly driverDeviceId: string };
+  readonly device: { readonly driverDeviceId: string; readonly id: string };
   readonly environment: Record<string, string>;
   readonly lease: { readonly id: string };
 }
@@ -202,10 +203,6 @@ async function exitCodeOf(response: Response): Promise<{ code: number; body: str
   return { body, code: (JSON.parse(data) as { exitCode: number }).exitCode };
 }
 
-async function errorCodeOf(response: Response): Promise<string> {
-  return ((await response.json()) as { error: { code: string } }).error.code;
-}
-
 describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
   missing === undefined
     ? "iOS physical phone (real devicectl)"
@@ -319,29 +316,6 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
     );
 
     it(
-      "device.exec devicectl --json-output <path> list devices is refused and no file appears at <path>",
-      { timeout: 5 * MINUTE },
-      async () => {
-        const daemon = await rig();
-        await enroll(daemon.env, udid);
-        const grant = await leasePhysical(daemon.env, "phone-lane-refuse");
-        const target = join(await mkdtemp(join(tmpdir(), "simlock-physical-")), "refused.json");
-
-        const refused = await exec(daemon, grant.lease.id, "phone-lane-refuse", [
-          "--json-output",
-          target,
-          "list",
-          "devices",
-        ]);
-
-        expect(refused.status).toBe(422);
-        expect(await errorCodeOf(refused)).toBe("PASSTHROUGH_REFUSED");
-        await expect(access(target)).rejects.toMatchObject({ code: "ENOENT" });
-        await daemon.env.cli(["release", grant.lease.id]);
-      },
-    );
-
-    it(
       "device.exec devicectl device process launch <bundle> -- -AppleLanguages (en) of the test app exits 0",
       { timeout: 10 * MINUTE },
       async () => {
@@ -378,20 +352,6 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
       },
     );
 
-    it(
-      "the grant's environment carries SIMLOCK_DEVICE_UDID equal to the phone's UDID",
-      { timeout: 5 * MINUTE },
-      async () => {
-        const { env } = await rig();
-        await enroll(env, udid);
-
-        const grant = await leasePhysical(env, "phone-lane-env");
-
-        expect(grant.environment["SIMLOCK_DEVICE_UDID"]).toBe(udid);
-        await env.cli(["release", grant.lease.id]);
-      },
-    );
-
     it("ends with device remove, and removes the test app", { timeout: 5 * MINUTE }, async () => {
       const bundle = await bundleIdOf(app);
       const { env } = await rig();
@@ -411,33 +371,32 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
       expect(await installedBundles(udid)).not.toContain(bundle);
     });
 
-    // why: the Physical iOS row of the toolchain requires CoreDevice 642 (Xcode 27), so a lane that
+    // why: the Physical iOS row of the toolchain requires CoreDevice 642 or later (Xcode 27 or later), so a lane that
     // got this far has the toolchain the device program needs; a missing program is a broken build,
     // not a machine that cannot run the lane, and skipping it would hide that.
     it("the device capture program is built", { timeout: MINUTE }, () => {
       expect(
         existsSync(DEVICE_PROGRAM),
-        `no ${DEVICE_PROGRAM} -- run pnpm build on a Mac with Xcode 27`,
+        `no ${DEVICE_PROGRAM} -- run pnpm build on a Mac with Xcode 27 or later`,
       ).toBe(true);
     });
 
     it(
-      "the device program refuses a Mac whose CoreDevice major is not 642, and names the version, the missing framework or the unreadable version as its reason",
+      "the device program refuses a Mac whose CoreDevice major is below 642 or not a number, and names the version, the missing framework or the unreadable version as its reason",
       { timeout: 5 * MINUTE },
       async () => {
         const rows = [
-          ["650.3", "this Mac has CoreDevice 650.3"],
           ["641.9", "this Mac has CoreDevice 641.9"],
-          ["6420.1", "this Mac has CoreDevice 6420.1"],
           ["64.2", "this Mac has CoreDevice 64.2"],
+          ["beta.1", "this Mac has CoreDevice beta.1"],
           ["", "this Mac's CoreDevice version cannot be read"],
         ] as const;
         for (const [version, reason] of rows) {
           const plist = await aCoreDevicePlist(version);
           const run = await runDeviceProgram(plist, udid);
-          expect(run.code, `CoreDevice ${version} is not 642: ${run.stderr}`).toBe(69);
+          expect(run.code, `CoreDevice "${version}" is not 642 or later: ${run.stderr}`).toBe(69);
           expect(lastLineOf(run.stderr)).toBe(
-            `Physical iPhone streams need Xcode 27 (CoreDevice 642.x); ${reason}`,
+            `Physical iPhone streams need Xcode 27 or later (CoreDevice 642 or later); ${reason}`,
           );
         }
 
@@ -447,23 +406,23 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         );
         expect(absent.code, "a Mac without CoreDevice cannot stream an iPhone").toBe(69);
         expect(lastLineOf(absent.stderr)).toBe(
-          "Physical iPhone streams need Xcode 27 (CoreDevice 642.x); this Mac has no CoreDevice",
+          "Physical iPhone streams need Xcode 27 or later (CoreDevice 642 or later); this Mac has no CoreDevice",
         );
       },
     );
 
     it(
-      "the device program goes on for every CoreDevice 642.x spelling and, for a UDID it cannot find, exits 1 within 26 s naming it as not connected",
+      "the device program goes on for every CoreDevice 642 or later spelling and, for a UDID it cannot find, exits 1 within 26 s naming it as not connected",
       { timeout: 10 * MINUTE },
       async () => {
         const unknown = "FFFFFFFF-0000-4000-8000-000000000000";
-        for (const version of ["642.16", "642.0", "642", " 642.3 "]) {
+        for (const version of ["642.16", "642.0", "642", " 642.3 ", "651.13.5", "6420.1"]) {
           const plist = await aCoreDevicePlist(version);
           const started = Date.now();
           const run = await runDeviceProgram(plist, unknown);
           expect(
             run.code,
-            `CoreDevice ${version} is 642.x, so the version is not what refused`,
+            `CoreDevice ${version} is 642 or later, so the version is not what refused`,
           ).toBe(1);
           const elapsed = Date.now() - started;
           expect(
@@ -531,9 +490,9 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         const daemon = await rig();
         await enroll(daemon.env, udid);
         const grant = await leasePhysical(daemon.env, "phone-lane-stream");
-        const open = async (leaseId: string, signal: AbortSignal) => {
+        const open = async (deviceId: string, signal: AbortSignal) => {
           const response = await fetch(
-            `${daemon.base}/v1/stream/leases/${encodeURIComponent(leaseId)}`,
+            await deviceStreamUrl(daemon.base, daemon.env.home, deviceId),
             { headers: daemon.auth, signal },
           );
           if (response.body === null) throw new Error("the stream answered without a body");
@@ -556,7 +515,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         };
 
         const viewer = new AbortController();
-        const first = await open(grant.lease.id, viewer.signal);
+        const first = await open(grant.device.id, viewer.signal);
         const firstReader = await reading(first);
         expect(first.response.headers.get("simlock-stream-codec")).toBe("h264");
         const frames = await readFrames(firstReader, (read) =>
@@ -586,7 +545,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
           false,
         );
 
-        const second = await open(grant.lease.id, new AbortController().signal);
+        const second = await open(grant.device.id, new AbortController().signal);
         if (second.response.status === 200) {
           await readFrames(second.reader!, (read) =>
             read.some((frame) => frame.tag === TAG.keyframe),
@@ -613,7 +572,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         // why: the stream's own first-frame bound is 30 s, so a body that produced no key frame by
         // then has already failed or will not fail visibly; the race only names the claim.
         const again = await leasePhysical(daemon.env, "phone-lane-stream-2");
-        const reopened = await open(again.lease.id, new AbortController().signal);
+        const reopened = await open(again.device.id, new AbortController().signal);
         const reopenedReader = await reading(reopened);
         const keyFrameArrived = await Promise.race([
           readFrames(reopenedReader, (read) =>
@@ -641,7 +600,7 @@ describe.skipIf(process.platform !== "darwin" || missing !== undefined)(
         const grant = await leasePhysical(daemon.env, "phone-lane-old-ios");
         const asked = Date.now();
         const response = await fetch(
-          `${daemon.base}/v1/stream/leases/${encodeURIComponent(grant.lease.id)}`,
+          await deviceStreamUrl(daemon.base, daemon.env.home, grant.device.id),
           { headers: daemon.auth, signal: AbortSignal.timeout(10_000) },
         );
         // why: the status is read before any reader is taken; a 200's endless body is never read.

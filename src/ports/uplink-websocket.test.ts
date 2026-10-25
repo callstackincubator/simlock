@@ -14,17 +14,25 @@
  * fabricated request object.
  */
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
+
+import { FakeClock } from "./clock.js";
+import { GatewayUplink } from "../daemon/gateway-uplink.js";
 
 import type {
   ClaimedUplinkIdentity,
   UplinkAuthOutcome,
   UplinkTransportConnection,
 } from "./uplink.js";
-import { WebSocketUplinkConnector, WebSocketUplinkListenerFactory } from "./uplink-websocket.js";
+import { UplinkError } from "./uplink.js";
+import {
+  UPLINK_PING_INTERVAL_MS,
+  WebSocketUplinkConnector,
+  WebSocketUplinkListenerFactory,
+} from "./uplink-websocket.js";
 
 let server: Server | undefined;
 const openConnections: Array<{ close(): unknown }> = [];
@@ -217,5 +225,117 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await worker.write("hello");
 
     expect(onSent).toHaveBeenCalledTimes(1);
+  });
+});
+
+async function startGateway(answersPings: boolean): Promise<{
+  url: string;
+  peers: WebSocket[];
+  pings: () => number;
+}> {
+  const peers: WebSocket[] = [];
+  let pingCount = 0;
+  const wss = new WebSocketServer({ noServer: true, autoPong: answersPings });
+  server = createServer();
+  server.on("upgrade", (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (peer) => {
+      peers.push(peer);
+      openConnections.push({ close: () => peer.terminate() });
+      peer.on("ping", () => {
+        pingCount += 1;
+        peer.send("after-pong");
+      });
+    });
+  });
+  await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    peers,
+    pings: () => pingCount,
+  };
+}
+
+describe("WebSocketUplinkConnector liveness", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("terminates an uplink whose gateway stops answering pings within two intervals, and GatewayUplink redials", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const gateway = await startGateway(false);
+    const clock = new FakeClock();
+    let accepted = 0;
+    const uplink = new GatewayUplink({
+      clock,
+      connector: new WebSocketUplinkConnector(),
+      url: gateway.url,
+      token: "join",
+      workerId: "wrk_1",
+      accept: () => {
+        accepted += 1;
+      },
+      backoff: { initialMs: 1_000, maxMs: 1_000, multiplier: 1 },
+      random: () => 1,
+    });
+    uplink.start();
+    await vi.waitFor(() => expect(accepted).toBe(1));
+    const first = gateway.peers[0];
+    const firstClosed = new Promise<void>((resolve) => first?.on("close", () => resolve()));
+
+    await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+    await vi.waitFor(() => expect(gateway.pings()).toBe(1));
+    await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+    const firstOutcome = await Promise.race([
+      firstClosed.then(() => "closed"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still open"), 1_000)),
+    ]);
+    expect(firstOutcome).toBe("closed");
+
+    clock.advance(1_000);
+    await vi.waitFor(() => expect(accepted).toBe(2));
+    expect(gateway.peers).toHaveLength(2);
+    await uplink.stop();
+  });
+
+  it("keeps a healthy uplink open across several ping rounds", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const gateway = await startGateway(true);
+    const worker = await new WebSocketUplinkConnector().connect(dialOptions(gateway.url));
+    openConnections.push(worker);
+    let afterPongs = 0;
+    worker.onData(() => {
+      afterPongs += 1;
+    });
+
+    for (let round = 1; round <= 4; round += 1) {
+      await vi.advanceTimersByTimeAsync(UPLINK_PING_INTERVAL_MS);
+      await vi.waitFor(() => expect(afterPongs).toBe(round));
+    }
+
+    expect(gateway.pings()).toBe(4);
+    expect(worker.closed).toBe(false);
+  });
+});
+
+describe("WebSocketUplinkConnector handshake", () => {
+  it("fails the dial with an UplinkError when the server accepts TCP but never completes the handshake", async () => {
+    const sockets: Array<{ destroy(): unknown }> = [];
+    const silent = createTcpServer((socket) => sockets.push(socket));
+    await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+    const { port } = silent.address() as AddressInfo;
+    try {
+      const outcome = await Promise.race([
+        new WebSocketUplinkConnector({ handshakeTimeoutMs: 100 })
+          .connect(dialOptions(`ws://127.0.0.1:${port}`))
+          .catch((error: unknown) => error),
+        new Promise<string>((resolve) => setTimeout(() => resolve("still dialling"), 2_000)),
+      ]);
+
+      expect(outcome).toBeInstanceOf(UplinkError);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      silent.close();
+    }
   });
 });

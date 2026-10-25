@@ -205,9 +205,14 @@ is open, done means closed as completed.
     is the one place a delivery PR is merged from; agents may not run
     `gh pr merge` themselves. A feature's PRs (its open ADR PRs, then each
     task's PR in the order its review passed) form one GitHub stack: each
-    PR targets the branch of the one below, stays open once reviewed, and
-    the stack merges once every task has joined it, so `main` never holds
-    part of a feature. The gate then checks every PR in the stack and
+    PR targets the branch of the one below, is linked into the stack as
+    soon as its draft PR exists, stays open once reviewed, and the stack
+    merges once every task has joined it, so `main` never holds part of a
+    feature. A stack moves by merging forward, bottom to top, through
+    `.agents/scripts/stack-sync.sh`, never by rebasing: a merge is a
+    fast-forward push, a rebase a force push nobody may make. The ADR
+    branch is merged up to `main` and its PR reviewed before the first
+    task builds. The gate then checks every PR in the stack and
     merges them together, all or nothing. A task depending on a reviewed
     task of the same feature starts on top of it: the issue-state workflow
     counts it as done. The script merges only a ready PR with no

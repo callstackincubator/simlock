@@ -1,5 +1,5 @@
 import type { EventMap } from "../bus/index.js";
-import type { Filesystem } from "../ports/index.js";
+import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
 import type { ScreenCapture } from "./screen.js";
 import type {
@@ -15,6 +15,11 @@ import type {
   VirtualDevice,
   VirtualSpec,
 } from "./domain.js";
+
+export interface DeviceDataTable extends SqliteSchemaOwner {
+  write(database: SqliteDatabase, deviceId: string, driverData: unknown): void;
+  read(database: SqliteDatabase, deviceId: string): unknown;
+}
 
 export interface ExactDeviceRequest {
   readonly platform: Platform;
@@ -144,7 +149,12 @@ export type ReclaimStrategy = ReclaimResult["strategy"];
  */
 export type DriverEstimate =
   | { readonly operation: "provision" }
-  | { readonly operation: "boot" }
+  | {
+      readonly operation: "boot";
+      /** why: With a `device` a driver may quote that device's own boot path, which it reads asynchronously. */
+      readonly device?: DriverDevice;
+      readonly purpose?: "prepare" | "recover";
+    }
   | { readonly operation: "reclaim"; readonly clean: "standard" | "full" };
 
 export interface DriverCatalogEntry {
@@ -346,6 +356,10 @@ export interface Driver {
   listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]>;
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
+  estimate(
+    estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },
+    spec: DeviceSpec,
+  ): number | Promise<number>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
   leaseEnvironment(
     device: VirtualDriverDevice | PhysicalDriverDevice,

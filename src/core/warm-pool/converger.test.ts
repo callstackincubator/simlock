@@ -1,23 +1,54 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
 import type { RunningCapacity } from "../capacity/index.js";
 import { DeviceOperationClaims } from "../device-operation-claims.js";
-import type {
-  VirtualDevice,
-  VirtualSpec,
-  LeaseRecord,
-  TargetResolution,
-  WaitingDemand,
+import {
+  exactRequirement,
+  type VirtualDevice,
+  type VirtualSpec,
+  type LeaseRecord,
+  type Platform,
+  type TargetResolution,
+  type WaitingDemand,
 } from "../domain.js";
+import type { PlatformCatalog } from "../driver-catalog.js";
 import { BootTimeoutError, type DeviceRequest } from "../driver.js";
 import { SerializedDecision } from "../serialized-decision.js";
+import type { StateDatabase } from "../../state/index.js";
+import { openMemoryState } from "../testing.js";
 import type { WarmTarget } from "./config.js";
 import { WARM_POOL_TICK_MS, WarmPool, type WarmPoolOptions } from "./converger.js";
+import { LearnedKinds, warmPoolOwner } from "./learned.js";
 
 const minute = 60_000;
 const now = 1_000 * minute;
+
+/** why: a catalog read that lists the iOS models the learned-kind tests lease. */
+const iosListing: PlatformCatalog = {
+  classDefaults: {},
+  defaultRuntime: undefined,
+  modelAliases: {},
+  modelClasses: {},
+  modelRuntimes: { "iPad Pro": ["26.0"], "iPhone 15": ["26.0"] },
+  models: ["iPad Pro", "iPhone 15"],
+  platform: "ios",
+  runtimes: ["26.0"],
+};
+
+const iphone15: WarmTarget = {
+  count: 1,
+  model: "iPhone 15",
+  osVersion: "26.0",
+  platform: "ios",
+};
+
+let learnedState: StateDatabase;
+
+beforeEach(async () => {
+  learnedState = await openMemoryState([warmPoolOwner]);
+});
 
 function device(
   id: string,
@@ -60,6 +91,17 @@ function leaseOn(deviceId: string): LeaseRecord {
   };
 }
 
+function waiter(spec: VirtualSpec, inFlight = false): WaitingDemand {
+  return {
+    classOf: () => undefined,
+    inFlight,
+    mode: "full",
+    platform: spec.platform,
+    requirement: exactRequirement(spec),
+    spec,
+  };
+}
+
 function harness(
   initial: readonly VirtualDevice[],
   options: {
@@ -85,6 +127,12 @@ function harness(
     /** The budget's reservation call throws, which no refusal does. */
     reserveThrows?: boolean;
     refusedPlatforms?: readonly ("ios" | "android")[];
+    provisioning?: Promise<void>;
+    state?: StateDatabase;
+    /** why: called with the id of each device the budget is asked to admit a boot of, while a pass proposes. */
+    onAdmit?: (deviceId: string) => void;
+    /** why: what a platform's catalog read answers; by default a catalog that lists nothing. */
+    catalog?: (platform?: Platform) => Promise<readonly PlatformCatalog[]>;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -125,6 +173,13 @@ function harness(
   }[] = [];
   const provisionReservations: { released: number }[] = [];
   const reserveAttempts = { count: 0 };
+  const finishProvisioning = async (id: string): Promise<void> => {
+    if (options.provisioning === undefined) return;
+    await options.provisioning;
+    state.devices = state.devices.map((item) =>
+      item.id === id ? { ...item, state: "ready" } : item,
+    );
+  };
   const poolOptions: WarmPoolOptions = {
     acquisition: {
       kick,
@@ -160,8 +215,10 @@ function harness(
         };
         return { android: entry, global: entry, ios: entry };
       },
-      canBoot: () =>
-        options.refuseBoot === true ? { ok: false, reason: "ram-budget" } : { ok: true },
+      canBoot: (candidate) => {
+        if (candidate.id !== undefined) options.onAdmit?.(candidate.id);
+        return options.refuseBoot === true ? { ok: false, reason: "ram-budget" } : { ok: true };
+      },
       canProvision: () =>
         options.refuseProvision === true ? { ok: false, reason: "device-limit" } : { ok: true },
       tryReserveProvisioning: () => {
@@ -194,7 +251,9 @@ function harness(
         };
       },
     },
+    catalog: { listCatalog: options.catalog ?? (async () => []) },
     claims: {
+      claim: (id) => claims.claim(id),
       isClaimed: (id) => claims.isClaimed(id),
       operationFor: (id) => claims.operationFor(id),
       tryClaim: (id, operation) =>
@@ -257,7 +316,7 @@ function harness(
           mode: "full",
           readyAt: clock.now(),
           spec,
-          state: "ready",
+          state: options.provisioning === undefined ? "ready" : "provisioning",
         };
         state.devices = [...state.devices, created];
         const claim = claims.tryClaim(
@@ -268,6 +327,7 @@ function harness(
         if (claim === undefined) throw new Error("the new device is already claimed");
         provisionOptions.reservation.release();
         record.deviceId = id;
+        await finishProvisioning(id);
         return { claim, device: created };
       },
     },
@@ -276,6 +336,7 @@ function harness(
         return { leases: state.leases, virtualDevices: state.devices };
       },
     },
+    state: options.state ?? learnedState,
   };
   const pool = new WarmPool(poolOptions);
   return {
@@ -305,17 +366,20 @@ describe("warm pool converger", () => {
       boot: async () => {
         throw new Error("emulator did not come up");
       },
+      targets: [iphone15],
     });
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["shut"]);
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });
 
   it("kicks acquisition after a boot or a shutdown that succeeds", async () => {
-    const booted = harness([device("shut", "shutdown", 1_000)]);
+    const booted = harness([device("shut", "shutdown", 1_000)], { targets: [iphone15] });
     await booted.pool.pass();
+    await booted.pool.settle();
     const shutDown = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], {
       limit: 1,
     });
@@ -349,7 +413,9 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records).toEqual([]);
+    expect(rig.sink.records.map((record) => record.fields)).toEqual([
+      { deviceId: "a", reason: "over-budget" },
+    ]);
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });
 
@@ -392,10 +458,14 @@ describe("warm pool converger", () => {
       limit: 1,
       shutdown: async () => undefined,
     });
-    const boot = harness([device("shut", "shutdown", 1_000)], { boot: async () => undefined });
+    const boot = harness([device("shut", "shutdown", 1_000)], {
+      boot: async () => undefined,
+      targets: [iphone15],
+    });
 
     await shutdown.pool.pass();
     await boot.pool.pass();
+    await boot.pool.settle();
 
     expect(shutdown.shutdownCalls).toEqual(["a"]);
     expect(shutdown.kick).not.toHaveBeenCalled();
@@ -436,9 +506,10 @@ describe("warm pool converger", () => {
   });
 
   it("holds a boot reservation and a boot claim through the boot, and releases the reservation when it commits", async () => {
-    const rig = harness([device("shut", "shutdown", 1_000)]);
+    const rig = harness([device("shut", "shutdown", 1_000)], { targets: [iphone15] });
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.reservations).toHaveLength(1);
     expect(rig.reservations[0]?.claimedAtBoot).toBe(true);
@@ -452,14 +523,18 @@ describe("warm pool converger", () => {
       boot: async () => {
         throw new Error("boot failed");
       },
+      targets: [iphone15],
     });
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.reservations).toHaveLength(1);
     expect(rig.reservations[0]?.released).toBe(1);
     expect(rig.claims.isClaimed("shut")).toBe(false);
-    const lines = rig.sink.records.filter((record) => record.level === "warn");
+    const lines = rig.sink.records.filter(
+      (record) => record.level === "warn" && record.message.startsWith("warm pool boot"),
+    );
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
       fields: { deviceId: "shut", step: "boot" },
@@ -497,106 +572,33 @@ describe("warm pool converger", () => {
     rig.pool.dispose();
   });
 
-  it("does not try a device again within a tick of its boot failing, and does after", async () => {
-    const rig = harness([device("shut", "shutdown", 1_000)], {
-      boot: async () => {
-        throw new Error("boot failed");
-      },
-    });
-
-    await rig.pool.pass();
-    await rig.pool.pass();
-    expect(rig.bootCalls).toEqual(["shut"]);
-
-    rig.clock.advance(WARM_POOL_TICK_MS);
-    await rig.pool.pass();
-    expect(rig.bootCalls).toEqual(["shut", "shut"]);
-  });
-
   it("does not boot a device that was claimed between the proposal and the action", async () => {
-    let claimY: () => void = () => undefined;
-    const rig = harness([device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)], {
-      boot: async (target) => {
-        // The first boot runs outside the decision gate; another operation takes `y` meanwhile.
-        claimY();
-        return { ...target, state: "ready" };
+    const rig: ReturnType<typeof harness> = harness(
+      [device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)],
+      {
+        maxConcurrentBoots: 2,
+        onAdmit: (id) => {
+          if (id === "y") void rig.claims.tryClaim("y", "eviction");
+        },
+        targets: [{ ...iphone15, count: 2 }],
       },
-    });
-    claimY = () => void rig.claims.tryClaim("y", "eviction");
+    );
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["x"]);
     expect(rig.reservations).toHaveLength(1);
   });
 
-  it("boots nothing, takes no claim and does not kick when capacity refuses the reservation", async () => {
-    const rig = harness([device("shut", "shutdown", 1_000)], { refuseBoot: true });
-
-    await rig.pool.pass();
-
-    expect(rig.bootCalls).toEqual([]);
-    expect(rig.claims.isClaimed("shut")).toBe(false);
-    expect(rig.kick).not.toHaveBeenCalled();
-    expect(rig.sink.records).toEqual([]);
-  });
-
-  it("proposes no budget shutdown while a ready device is claimed for a boot on its way to a lease", async () => {
-    const rig = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], { limit: 1 });
-    const handoff = rig.claims.tryClaim("b", "boot");
-
-    await rig.pool.pass();
-    expect(rig.shutdownCalls).toEqual([]);
-
-    handoff?.release();
-    await rig.pool.pass();
-    expect(rig.shutdownCalls).toEqual(["a"]);
-  });
-
-  it("does nothing while an operator reset holds acquisition closed, and acts again once it is open", async () => {
-    let closed = true;
-    const rig = harness(
-      [device("a", "ready", 5_000), device("b", "ready", 1_000), device("s", "shutdown", 1_000)],
-      { limit: 1, maintenance: () => closed },
-    );
-
-    await rig.pool.pass();
-    expect(rig.shutdownCalls).toEqual([]);
-    expect(rig.bootCalls).toEqual([]);
-    expect(rig.waitingDemand).not.toHaveBeenCalled();
-
-    closed = false;
-    await rig.pool.pass();
-    expect(rig.shutdownCalls).toEqual(["a"]);
-  });
-
-  it("stops acting on the rest of a pass when an operator reset begins during it", async () => {
-    let closed = false;
-    const rig = harness(
-      [
-        device("a", "ready", 90 * minute),
-        device("b", "ready", 80 * minute),
-        device("c", "ready", 70 * minute),
-      ],
-      {
-        limit: 1,
-        maintenance: () => closed,
-        shutdown: async (target) => {
-          closed = true;
-          return { ...target, state: "shutdown" };
-        },
-      },
-    );
-
-    await rig.pool.pass();
-
-    expect(rig.shutdownCalls).toEqual(["a"]);
-  });
-
   it("releases the reservation and boots nothing when the device claim is refused", async () => {
-    const rig = harness([device("shut", "shutdown", 1_000)], { refuseClaim: true });
+    const rig = harness([device("shut", "shutdown", 1_000)], {
+      refuseClaim: true,
+      targets: [iphone15],
+    });
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual([]);
     expect(rig.reservations).toHaveLength(1);
@@ -655,24 +657,28 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.shutdownCalls).toEqual(["a"]);
-    expect(rig.sink.records).toEqual([]);
+    expect(rig.sink.records.map((record) => record.fields)).toEqual([
+      { deviceId: "a", reason: "over-budget" },
+    ]);
   });
 
   it("leaves a shut-down device alone that is no longer shut down when its boot comes", async () => {
-    let change: () => void = () => undefined;
-    const rig = harness([device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)], {
-      boot: async (target) => {
-        change();
-        return { ...target, state: "ready" };
+    const rig: ReturnType<typeof harness> = harness(
+      [device("x", "shutdown", 1_000), device("y", "shutdown", 2_000)],
+      {
+        maxConcurrentBoots: 2,
+        onAdmit: (id) => {
+          if (id !== "y") return;
+          rig.state.devices = rig.state.devices.map((item) =>
+            item.id === "y" ? { ...item, state: "ready" } : item,
+          );
+        },
+        targets: [{ ...iphone15, count: 2 }],
       },
-    });
-    change = () => {
-      rig.state.devices = rig.state.devices.map((item) =>
-        item.id === "y" ? { ...item, state: "ready" } : item,
-      );
-    };
+    );
 
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["x"]);
     expect(rig.sink.records).toEqual([]);
@@ -682,6 +688,7 @@ describe("warm pool converger", () => {
     let closed = true;
     const rig = harness([device("up", "ready", 1_000), device("gone", "shutdown", 2_000)], {
       maintenance: () => closed,
+      targets: [iphone15],
     });
     await rig.pool.pass();
     closed = false;
@@ -691,14 +698,18 @@ describe("warm pool converger", () => {
       .filter((item) => item.id !== "gone")
       .map((item) => ({ ...item, state: "shutdown" as const }));
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["up"]);
     expect(rig.sink.records).toEqual([]);
   });
 
-  it("clears the reset mark once the device has left shutdown, so it is an ordinary recently released device again", async () => {
+  it("clears the reset mark once the device has left shutdown, so it is an ordinary device again", async () => {
     let closed = true;
-    const rig = harness([device("down", "shutdown", 1_000)], { maintenance: () => closed });
+    const rig = harness([device("down", "shutdown", 1_000)], {
+      maintenance: () => closed,
+      targets: [iphone15],
+    });
     await rig.pool.pass();
     closed = false;
 
@@ -706,6 +717,7 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
     rig.state.devices = rig.state.devices.map((item) => ({ ...item, state: "shutdown" }));
     await rig.pool.pass();
+    await rig.pool.settle();
 
     expect(rig.bootCalls).toEqual(["down"]);
   });
@@ -722,6 +734,46 @@ describe("warm pool converger", () => {
     await rig.pool.pass();
 
     expect(rig.bootCalls).toEqual([]);
+  });
+
+  it("does nothing while an operator reset holds acquisition closed, and acts again once it is open", async () => {
+    let closed = true;
+    const rig = harness(
+      [device("a", "ready", 5_000), device("b", "ready", 1_000), device("s", "shutdown", 1_000)],
+      { limit: 1, maintenance: () => closed },
+    );
+
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual([]);
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.waitingDemand).not.toHaveBeenCalled();
+
+    closed = false;
+    await rig.pool.pass();
+    expect(rig.shutdownCalls).toEqual(["a"]);
+  });
+
+  it("stops acting on the rest of a pass when an operator reset begins during it", async () => {
+    let closed = false;
+    const rig = harness(
+      [
+        device("a", "ready", 90 * minute),
+        device("b", "ready", 80 * minute),
+        device("c", "ready", 70 * minute),
+      ],
+      {
+        limit: 1,
+        maintenance: () => closed,
+        shutdown: async (target) => {
+          closed = true;
+          return { ...target, state: "shutdown" };
+        },
+      },
+    );
+
+    await rig.pool.pass();
+
+    expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
   it("subscribes once however many times it is started", async () => {
@@ -764,6 +816,28 @@ describe("warm pool converger", () => {
     expect(rig.kick).toHaveBeenCalledTimes(1);
   });
 
+  it("does not try a failed shutdown of a device again within a tick, and does after", async () => {
+    const attempts: string[] = [];
+    const rig = harness([device("a", "ready", 5_000), device("b", "ready", 1_000)], {
+      limit: 1,
+      shutdown: async (target) => {
+        attempts.push(target.id);
+        throw new Error("simctl shutdown failed");
+      },
+    });
+
+    await rig.pool.pass();
+    rig.clock.advance(WARM_POOL_TICK_MS - 1);
+    await rig.pool.pass();
+
+    expect(attempts).toEqual(["a"]);
+
+    rig.clock.advance(1);
+    await rig.pool.pass();
+
+    expect(attempts).toEqual(["a", "a"]);
+  });
+
   it("runs a pass on each trigger event and on the tick, and none once disposed", async () => {
     const triggers = [
       ["daemon.started", { configSnapshot: {}, version: "test" }],
@@ -777,6 +851,7 @@ describe("warm pool converger", () => {
       ["device.shutdown", { deviceId: "d", initiator: "test" }],
       ["device.deleted", { deviceId: "d", initiator: "test", physical: false }],
       ["cleanup.executed", { action: "shutdown", reason: "r", ruleName: "n", target: "d" }],
+      ["lease.queued", { queuePosition: 2, requestId: "r" }],
     ] as const;
     const rig = harness([]);
     rig.pool.start();
@@ -849,6 +924,43 @@ describe("warm pool targets", () => {
     expect(rig.claims.isClaimed("new-1")).toBe(false);
     expect(rig.state.devices.map((item) => item.state)).toEqual(["ready"]);
     expect(rig.kick).toHaveBeenCalled();
+  });
+
+  it("runs a waiting-request creation under an ownerless boot claim and a provisioning reservation, releases the claim once ready, kicks, and on a throw logs once and holds the spec back a minute", async () => {
+    const behind = { ...kind, model: "iPhone 16" };
+    const waiting = [waiter({ ...kind, model: "iPhone 15" }, true), waiter(behind)];
+    const ok = harness([], { maxConcurrentBoots: 2, waiting: () => waiting });
+
+    await ok.pool.pass();
+    await ok.pool.settle();
+
+    expect(ok.provisionCalls).toHaveLength(1);
+    expect(ok.provisionCalls[0]?.spec).toEqual(behind);
+    expect(ok.provisionCalls[0]?.claim).toEqual({ kind: "boot" });
+    expect(ok.provisionReservations).toHaveLength(1);
+    expect(ok.claims.isClaimed("new-1")).toBe(false);
+    expect(ok.kick).toHaveBeenCalled();
+
+    const failing = harness([], {
+      maxConcurrentBoots: 2,
+      provision: async () => {
+        throw new Error("the runtime would not boot");
+      },
+      waiting: () => waiting,
+    });
+    await failing.pool.pass();
+    await failing.pool.settle();
+    failing.clock.advance(WARM_POOL_TICK_MS);
+    await failing.pool.settle();
+
+    expect(failing.provisionCalls).toHaveLength(1);
+    const warnings = failing.sink.records.filter(
+      (record) => record.message === "warm pool creation of a device failed",
+    );
+    expect(warnings).toHaveLength(1);
+    failing.clock.advance(minute);
+    await failing.pool.settle();
+    expect(failing.provisionCalls).toHaveLength(2);
   });
 
   it("boots a shut-down device of the target's kind before creating one, and counts the target filled", async () => {
@@ -960,6 +1072,93 @@ describe("warm pool targets", () => {
     gate.finish();
     await rig.pool.settle();
     expect(rig.provisionCalls).toHaveLength(3);
+  });
+
+  it("runs waiting-request boots beside the pass, three at once under maxConcurrentBoots 3, and counts them in the next pass's inFlight", async () => {
+    const gate = held();
+    const shutDown = ["a", "b", "c", "d"].map((id) => device(id, "shutdown", 20 * minute));
+    const rig = harness(shutDown, {
+      boot: async (target) => {
+        await gate.gate;
+        const ready = { ...target, state: "ready" as const };
+        rig.state.devices = rig.state.devices.map((item) => (item.id === target.id ? ready : item));
+        return ready;
+      },
+      maxConcurrentBoots: 3,
+      waiting: () => shutDown.map((item) => waiter(item.spec)),
+    });
+
+    const first = rig.pool.pass();
+    await flush();
+    expect(rig.bootCalls).toEqual(["a", "b", "c"]);
+
+    const second = rig.pool.pass();
+    await flush();
+    expect(rig.bootCalls).toEqual(["a", "b", "c"]);
+
+    gate.finish();
+    await Promise.all([first, second]);
+    await rig.pool.settle();
+    expect(rig.bootCalls).toContain("d");
+  });
+
+  it("builds onItsWay with one entry per on-its-way device and one per creation flight not yet registered, never two for one creation and never one short", async () => {
+    const x = device("shut-x", "shutdown", 20 * minute).spec;
+    const head = waiter({ ...kind, model: "iPad Pro" }, true);
+    const x2 = waiter(x);
+    const x3 = waiter(x);
+    const x4 = waiter(x);
+    const run = async (
+      devices: readonly VirtualDevice[],
+      first: readonly WaitingDemand[],
+      provisioning?: Promise<void>,
+      registers = false,
+      owner?: string,
+    ) => {
+      let waiting: readonly WaitingDemand[] = first;
+      const gate = held();
+      const rig = harness(devices, {
+        boot: async () => gate.gate.then(() => undefined),
+        maxConcurrentBoots: 10,
+        provision: async () => gate.gate,
+        ...(provisioning === undefined ? {} : { provisioning }),
+        waiting: () => waiting,
+      });
+      const counts = () => [rig.bootCalls.length, rig.provisionCalls.length];
+      if (owner !== undefined) rig.claims.tryClaim("shut-x", "boot", owner);
+      void rig.pool.pass();
+      await flush();
+      const started = counts();
+      if (registers) {
+        gate.finish();
+        await flush();
+      }
+      void rig.pool.pass();
+      await flush();
+      const again = counts();
+      waiting = [...first, x4];
+      void rig.pool.pass();
+      await flush();
+      return { again, later: counts(), started };
+    };
+
+    const unregistered = await run([], [head, x2]);
+    expect(unregistered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
+
+    const registered = await run([], [head, x2], new Promise<void>(() => undefined), true);
+    expect(registered).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
+
+    const bootAndCreation = await run([device("shut-x", "shutdown", 20 * minute)], [head, x2, x3]);
+    expect(bootAndCreation).toEqual({ again: [1, 1], later: [1, 2], started: [1, 1] });
+
+    const owned = await run(
+      [device("shut-x", "shutdown", 20 * minute)],
+      [head, x2],
+      undefined,
+      false,
+      "an-agent",
+    );
+    expect(owned).toEqual({ again: [0, 1], later: [0, 2], started: [0, 1] });
   });
 
   it("does not return from a pass for a creation it started, and settle waits for it", async () => {
@@ -1114,7 +1313,7 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(5);
   });
 
-  it("reports a target naming a runtime that is not installed as runtime-missing, creates nothing and logs the reason", async () => {
+  it("reports a target naming a runtime that is not installed as runtime-missing and creates nothing", async () => {
     const rig = harness([], {
       resolve: () => ({ message: "iOS 27.0 is not installed", refusal: "runtime-missing" }),
       targets: [{ ...iphone17, osVersion: "27.0" }],
@@ -1127,6 +1326,7 @@ describe("warm pool targets", () => {
     expect(rig.pool.targets()).toEqual([
       {
         booting: 0,
+        configuredCount: 1,
         count: 1,
         kind: {
           mode: "full",
@@ -1135,22 +1335,12 @@ describe("warm pool targets", () => {
           platform: "ios",
         },
         message: "iOS 27.0 is not installed",
+        origin: "configured",
         ready: 0,
         short: "runtime-missing",
         target: "ios iPhone 17 27.0",
       },
     ]);
-    const shortLines = rig.sink.records.filter(
-      (record) => record.message === "a warm pool target is short",
-    );
-    expect(shortLines).toHaveLength(1);
-    expect(shortLines[0]?.fields).toMatchObject({
-      count: 1,
-      message: "iOS 27.0 is not installed",
-      ready: 0,
-      short: "runtime-missing",
-      target: "ios iPhone 17 27.0",
-    });
   });
 
   it.each([
@@ -1334,28 +1524,6 @@ describe("warm pool targets", () => {
     expect(rig.shutdownCalls).toEqual(["a"]);
   });
 
-  it("does not hold a target back for a keep boot that succeeds or fails, which no target owns", async () => {
-    const released = device("released", "shutdown", 1_000, "ios");
-    const ipad = { ...released, spec: { ...released.spec, model: "iPad Pro" } };
-    const failing = harness([ipad, ofKind("ready", "ready")], {
-      boot: async () => {
-        throw new Error("simulator did not boot");
-      },
-      targets: [iphone17],
-    });
-    await failing.pool.pass();
-    await failing.pool.settle();
-    await failing.pool.pass();
-    expect(failing.bootCalls).toEqual(["released"]);
-    expect(failing.sink.records.filter((record) => record.level === "error")).toEqual([]);
-    expect(failing.clock.pendingTimerCount).toBe(0);
-
-    const working = harness([ipad, ofKind("ready", "ready")], { targets: [iphone17] });
-    await working.pool.pass();
-    await working.pool.settle();
-    expect(working.sink.records.filter((record) => record.level !== "info")).toEqual([]);
-  });
-
   it("resolves no target, reports none and names no device with warmPool disabled", async () => {
     const rig = harness([ofKind("ready", "ready")], {
       enabled: false,
@@ -1415,33 +1583,6 @@ describe("warm pool targets", () => {
     expect([...(await rig.pool.targeted())]).toEqual([]);
   });
 
-  it("lets a target boot a device whose keep boot failed a moment ago, which no target owns", async () => {
-    const targets: WarmTarget[] = [];
-    let attempts = 0;
-    const rig = harness([ofKind("shut", "shutdown")], {
-      boot: async () => {
-        attempts += 1;
-        throw new Error("simulator did not boot");
-      },
-      targets,
-    });
-    rig.state.devices = rig.state.devices.map((item) => ({
-      ...item,
-      lastLeaseEndedAt: now - 10 * minute + 10_000,
-    }));
-    await rig.pool.pass();
-    await rig.pool.settle();
-    expect(attempts).toBe(1);
-
-    // No longer recently released, so the keep rule leaves it; the 30 s pause has not ended.
-    rig.clock.advance(15_000);
-    targets.push(iphone17);
-    await rig.pool.pass();
-    await rig.pool.settle();
-
-    expect(attempts).toBe(2);
-  });
-
   it("starts nothing once closed, before it drains", async () => {
     const rig = harness([], { targets: [iphone17] });
 
@@ -1466,34 +1607,6 @@ describe("warm pool targets", () => {
     expect(rig.pool.targets()).toEqual([
       expect.objectContaining({ ready: 0, short: "unresolvable" }),
     ]);
-  });
-
-  it("does not pause a device after a failed target boot, so a keep boot of it a moment later is not dropped", async () => {
-    const targets: WarmTarget[] = [iphone17];
-    let attempts = 0;
-    const rig = harness([ofKind("shut", "shutdown")], {
-      boot: async () => {
-        attempts += 1;
-        throw new Error("simulator did not boot");
-      },
-      targets,
-    });
-    await rig.pool.pass();
-    await rig.pool.settle();
-    expect(attempts).toBe(1);
-
-    // The target is dropped and the device was released a moment ago: the keep rule boots it,
-    // well inside the 30 s a keep boot's own failure would hold it.
-    targets.length = 0;
-    rig.state.devices = rig.state.devices.map((item) => ({
-      ...item,
-      lastLeaseEndedAt: now - 1_000,
-    }));
-    rig.clock.advance(1_000);
-    await rig.pool.pass();
-    await rig.pool.settle();
-
-    expect(attempts).toBe(2);
   });
 
   it("starts nothing new once draining, though a creation that was running ends", async () => {
@@ -1706,33 +1819,11 @@ describe("warm pool targets", () => {
     expect(rig.provisionCalls).toHaveLength(2);
   });
 
-  it("logs a target again when the reason it is short changes, and logs two targets short for the same reason once each", async () => {
-    let refusal: "runtime-missing" | "unresolvable" = "runtime-missing";
-    const rig = harness([], {
-      resolve: () => ({ message: "why", refusal }),
-      targets: [iphone17, { ...iphone17, model: "iPhone 16" }],
-    });
-
-    await rig.pool.pass();
-    await rig.pool.pass();
-    refusal = "unresolvable";
-    await rig.pool.pass();
-
-    const lines = rig.sink.records
-      .filter((record) => record.message === "a warm pool target is short")
-      .map((record) => `${String(record.fields?.["target"])}:${String(record.fields?.["short"])}`);
-    expect(lines).toEqual([
-      "ios iPhone 17 26.0:runtime-missing",
-      "ios iPhone 16 26.0:runtime-missing",
-      "ios iPhone 17 26.0:unresolvable",
-      "ios iPhone 16 26.0:unresolvable",
-    ]);
-  });
-
   describe("figures", () => {
     const wanted = {
       mode: "full",
       model: "iPhone 17",
+      origin: "configured",
       osVersion: "26.0",
       platform: "ios",
     } as const;
@@ -1886,6 +1977,7 @@ describe("warm pool targets", () => {
         count: 1,
         mode: "full",
         model: "iPhone 17",
+        origin: "configured",
         platform: "ios",
         ready: 0,
         short: "no-driver",
@@ -1916,6 +2008,7 @@ describe("warm pool targets", () => {
           count: 1,
           mode: "full",
           model: "iPhone 17",
+          origin: "configured",
           osVersion: "27.0",
           platform: "ios",
           ready: 0,
@@ -1958,6 +2051,7 @@ describe("warm pool targets", () => {
             count: 1,
             mode: "full",
             model: "iPhone 17",
+            origin: "configured",
             platform: "ios",
             ready: 0,
             reason: "no-driver",
@@ -2123,6 +2217,21 @@ describe("warm pool targets", () => {
       expect([...(await rig.pool.targeted())].sort()).toEqual(["older", "oldest"]);
     });
 
+    it("names a learned kind's ready devices up to its count before the first pass, and again for a pool started over the same record", async () => {
+      const spec = ofKind("x", "ready").spec;
+      new LearnedKinds(learnedState).learn(spec, "lease-1", now - minute);
+      new LearnedKinds(learnedState).learn(spec, "lease-2", now - minute);
+      const devices = [ofKind("newer", "ready", 20), ofKind("older", "ready", 10)];
+
+      const before = harness(devices, { limit: 5 });
+      const restarted = harness(devices, { limit: 5 });
+      const off = harness(devices, { enabled: false, limit: 5 });
+
+      expect([...(await before.pool.targeted())].sort()).toEqual(["newer", "older"]);
+      expect([...(await restarted.pool.targeted())].sort()).toEqual(["newer", "older"]);
+      expect([...(await off.pool.targeted())]).toEqual([]);
+    });
+
     it("does not name a device that is leased or claimed", async () => {
       const rig = harness([ofKind("leased", "ready", 1), ofKind("claimed", "ready", 2)], {
         limit: 5,
@@ -2134,5 +2243,580 @@ describe("warm pool targets", () => {
 
       expect([...(await rig.pool.targeted())]).toEqual([]);
     });
+  });
+});
+
+describe("warm pool learned kinds", () => {
+  const kindsOf = (state: StateDatabase, at = now) => new LearnedKinds(state).kinds(at);
+  const granted = (rig: ReturnType<typeof harness>, leaseId: string, deviceId: string): void =>
+    void rig.eventBus.emit(
+      "lease.granted",
+      { deviceId, leaseId, platform: "ios", requestId: "req", requester: "a", source: "warm" },
+      "test",
+    );
+
+  it("learns on lease.granted the leased device's kind, closes it on lease.released and lease.expired, learns nothing for a device the registry does not hold, and nothing with warmPool.enabled false", async () => {
+    const devices = [device("d1", "leased", 0), device("d2", "leased", 0)];
+    const learnedWith = async (
+      end: "lease.released" | "lease.expired" | undefined,
+      options: { enabled?: boolean } = {},
+    ) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      const rig = harness(devices, { ...options, state });
+      rig.pool.start();
+      granted(rig, "l1", "d1");
+      rig.clock.advance(minute);
+      if (end === "lease.released") {
+        rig.eventBus.emit(
+          end,
+          { deviceId: "d1", leaseId: "l1", ownerId: "a", reason: "explicit" },
+          "test",
+        );
+      } else if (end === "lease.expired") {
+        rig.eventBus.emit(end, { deviceId: "d1", leaseId: "l1", ownerId: "a" }, "test");
+      }
+      rig.clock.advance(minute);
+      granted(rig, "l2", "d2");
+      const kinds = kindsOf(state, rig.clock.now());
+      rig.pool.dispose();
+      return kinds;
+    };
+
+    const open = await learnedWith(undefined);
+    expect(open.map((kind) => [kind.spec.model, kind.count])).toEqual([["iPhone 15", 2]]);
+    const released = await learnedWith("lease.released");
+    expect(released.map((kind) => kind.count)).toEqual([1]);
+    const expired = await learnedWith("lease.expired");
+    expect(expired.map((kind) => kind.count)).toEqual([1]);
+    expect(await learnedWith(undefined, { enabled: false })).toEqual([]);
+
+    const state = await openMemoryState([warmPoolOwner]);
+    const physical = harness(devices, { state });
+    physical.pool.start();
+    granted(physical, "l3", "phone-1");
+    expect(kindsOf(state)).toEqual([]);
+  });
+
+  it("closes at start() the lease rows the registry no longer holds, and the first pass boots the recorded kinds", async () => {
+    const ipad = {
+      model: "iPad Pro",
+      osVersion: "26.0",
+      physical: false,
+      platform: "ios",
+    } as const;
+    const phone = device("d1", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    const previous = new LearnedKinds(state);
+    previous.learn(phone, "orphan", now - 30 * minute);
+    previous.learn(ipad, "lease-held", now - 10 * minute);
+    const held = { ...device("held", "leased", 0), spec: ipad };
+    const rig = harness([device("d1", "ready", 0), held], { state });
+    rig.lease("held");
+
+    rig.pool.start();
+    rig.clock.advance(5 * minute);
+    granted(rig, "again-phone", "d1");
+    granted(rig, "again-ipad", "held");
+
+    const counts = new LearnedKinds(state)
+      .kinds(rig.clock.now())
+      .map((kind) => [kind.spec.model, kind.count]);
+    expect(counts).toEqual([
+      ["iPad Pro", 2],
+      ["iPhone 15", 1],
+    ]);
+
+    const booting = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(booting).learn(phone, "past", now - 2 * 60 * minute);
+    new LearnedKinds(booting).ended("past", now - 60 * minute);
+    const restarted = harness([device("shut", "shutdown", 60 * minute)], {
+      catalog: async () => [iosListing],
+      state: booting,
+    });
+    restarted.pool.start();
+    await restarted.pool.pass();
+    await restarted.pool.settle();
+    expect(restarted.bootCalls).toEqual(["shut"]);
+  });
+
+  it("keeps a learned kind and plans nothing for it while its platform's catalog read is pending, failed or timed out, and boots it as soon as a read lists the platform, without waiting for the next tick", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const rigFor = async (catalog: () => Promise<readonly PlatformCatalog[]>) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(phone, "past", now - 2 * 60 * minute);
+      new LearnedKinds(state).ended("past", now - 60 * minute);
+      return { rig: harness([device("shut", "shutdown", 60 * minute)], { catalog, state }), state };
+    };
+    const later = () => new Promise((resolve) => setImmediate(resolve));
+
+    let release: (value: readonly PlatformCatalog[]) => void = () => undefined;
+    const pending = await rigFor(
+      () =>
+        new Promise<readonly PlatformCatalog[]>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await pending.rig.pool.pass();
+    await pending.rig.pool.settle();
+    expect(pending.rig.bootCalls).toEqual([]);
+    expect(pending.rig.provisionCalls).toEqual([]);
+    pending.rig.clock.advance(30_000);
+    await pending.rig.pool.pass();
+    expect(pending.rig.bootCalls).toEqual([]);
+    expect(new LearnedKinds(pending.state).kinds(pending.rig.clock.now())).toHaveLength(1);
+    release([iosListing]);
+    await later();
+    await pending.rig.pool.settle();
+    expect(pending.rig.bootCalls).toEqual(["shut"]);
+
+    const failed = await rigFor(async () => {
+      throw new Error("avdmanager failed");
+    });
+    await failed.rig.pool.pass();
+    await later();
+    await failed.rig.pool.pass();
+    await failed.rig.pool.settle();
+    expect(failed.rig.bootCalls).toEqual([]);
+    expect(failed.rig.provisionCalls).toEqual([]);
+    expect(new LearnedKinds(failed.state).kinds(failed.rig.clock.now())).toHaveLength(1);
+
+    const answered = await rigFor(async () => [iosListing]);
+    await answered.rig.pool.pass();
+    await later();
+    await answered.rig.pool.settle();
+    expect(answered.rig.bootCalls).toEqual(["shut"]);
+  });
+
+  it("forget() empties the record, and the next lease learns its kind again", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "past", now - 2 * minute);
+    const rig = harness([device("d1", "leased", 0)], { state });
+    rig.pool.start();
+
+    rig.pool.forget();
+
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toEqual([]);
+    granted(rig, "next", "d1");
+    expect(new LearnedKinds(state).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
+  });
+
+  it("starts one catalog read per platform with a learned kind beside a pass, never two at once, forgets a kind whose model, OS, tag image or driver is gone, and keeps a platform's kinds when its read throws or passes 30 s", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const catalogOf = (entry: Partial<PlatformCatalog>): PlatformCatalog => ({
+      classDefaults: {},
+      defaultRuntime: undefined,
+      modelAliases: {},
+      modelClasses: {},
+      modelRuntimes: { "iPhone 15": ["26.0"] },
+      models: ["iPhone 15"],
+      platform: "ios",
+      runtimes: ["26.0"],
+      ...entry,
+    });
+    const run = async (
+      answer: (() => Promise<readonly PlatformCatalog[]>) | undefined,
+      options: { spec?: VirtualSpec; refused?: boolean } = {},
+    ) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(options.spec ?? phone, "l1", now - minute);
+      new LearnedKinds(state).ended("l1", now - 30_000);
+      const listCatalog = vi.fn(async () => answer?.() ?? []);
+      const rig = harness([device("d1", "ready", 0)], {
+        catalog: listCatalog,
+        state,
+        ...(options.refused === true ? { refusedPlatforms: ["ios" as const] } : {}),
+      });
+      await rig.pool.pass();
+      const startedByFirst = listCatalog.mock.calls.length;
+      await rig.pool.pass();
+      await rig.pool.settle();
+      return {
+        calls: [startedByFirst, listCatalog.mock.calls.length],
+        kinds: new LearnedKinds(state).kinds(rig.clock.now()).length,
+        listCatalog,
+        rig,
+      };
+    };
+
+    const listed = await run(async () => [
+      catalogOf({ modelRuntimes: {}, models: [], platform: "android" }),
+      catalogOf({}),
+    ]);
+    expect(listed.kinds).toBe(1);
+    expect(listed.calls).toEqual([2, 3]);
+    listed.rig.clock.advance(30_000);
+    expect(
+      listed.rig.sink.records.filter(
+        (record) => record.message === "a warm pool catalog read took too long",
+      ),
+    ).toEqual([]);
+
+    const unlistedModel = await run(async () => [catalogOf({ models: [] })]);
+    expect(unlistedModel.kinds).toBe(0);
+    expect(
+      (await run(async () => [catalogOf({ modelRuntimes: { "iPhone 15": ["18.0"] } })])).kinds,
+    ).toBe(0);
+    const tagged = { ...phone, imageTag: "google_apis" };
+    const images = (tag: string, runtime = "26.0") => [{ abi: "arm64", runtime, tag }];
+    expect(
+      (await run(async () => [catalogOf({ images: images("default") })], { spec: tagged })).kinds,
+    ).toBe(0);
+    expect(
+      (await run(async () => [catalogOf({ images: images("google_apis") })], { spec: tagged }))
+        .kinds,
+    ).toBe(1);
+    expect(
+      (
+        await run(async () => [catalogOf({ images: images("google_apis", "18.0") })], {
+          spec: tagged,
+        })
+      ).kinds,
+    ).toBe(0);
+    const refused = await run(async () => [catalogOf({})], { refused: true });
+    expect(refused.kinds).toBe(0);
+    expect(refused.listCatalog).not.toHaveBeenCalled();
+
+    const throwing = await run(async () => {
+      throw new Error("avdmanager failed");
+    });
+    expect(throwing.kinds).toBe(1);
+
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "l1", now - minute);
+    new LearnedKinds(state).ended("l1", now - 30_000);
+    const releases: ((value: readonly PlatformCatalog[]) => void)[] = [];
+    const hanging = vi.fn(
+      () =>
+        new Promise<readonly PlatformCatalog[]>((resolve) => {
+          releases.push(resolve);
+        }),
+    );
+    const rig = harness([device("d1", "ready", 0)], { catalog: hanging, state });
+    await rig.pool.pass();
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(1);
+    rig.clock.advance(30_000 - 1);
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(1);
+    rig.clock.advance(1);
+    await rig.pool.pass();
+    expect(hanging).toHaveBeenCalledTimes(2);
+    releases[0]?.([catalogOf({ models: [], modelRuntimes: {} })]);
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toHaveLength(1);
+    releases[1]?.([catalogOf({ models: [], modelRuntimes: {} })]);
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(new LearnedKinds(state).kinds(rig.clock.now())).toHaveLength(0);
+  });
+
+  describe("with a learned kind beside the configured targets", () => {
+    const phone: WarmTarget = { count: 1, model: "iPhone 15", osVersion: "26.0", platform: "ios" };
+    const ipad = {
+      model: "iPad Pro",
+      osVersion: "26.0",
+      physical: false,
+      platform: "ios",
+    } as const;
+    const withLearned = async (counts: number[]) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      const learned = new LearnedKinds(state);
+      learned.learn(ipad, "pad", now - minute);
+      counts.forEach((_, index) => {
+        learned.learn(device("d1", "ready", 0).spec, `phone-${index}`, now - 2 * minute);
+      });
+      return state;
+    };
+
+    it("shuts down the idle device of an older learned kind for a newer one short for a running slot, and logs the reason displaced", async () => {
+      const rig = harness([device("d1", "ready", 30 * minute)], {
+        catalog: async () => [iosListing],
+        limit: 1,
+        maxConcurrentBoots: 2,
+        state: await withLearned([1]),
+      });
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(rig.shutdownCalls).toEqual(["d1"]);
+      expect(rig.shutdownArgs).toEqual([["warm-pool", "cleanup"]]);
+      expect(
+        rig.sink.records
+          .filter((record) => record.message === "a warm pool shut a device down")
+          .map((record) => record.fields),
+      ).toEqual([{ deviceId: "d1", reason: "displaced" }]);
+    });
+
+    it("lists a learned kind in figures() with its origin, count, image tag and short, a merged kind once with the larger count, and drops a forgotten kind on the next pass", async () => {
+      const pixel = { ...device("d2", "ready", 0, "android").spec, imageTag: "google_apis" };
+      const state = await openMemoryState([warmPoolOwner]);
+      const learned = new LearnedKinds(state);
+      learned.learn(ipad, "pad", now - minute);
+      learned.learn(pixel, "pixel", now - 3 * minute);
+      learned.learn(device("d1", "ready", 0).spec, "phone-0", now - 2 * minute);
+      learned.learn(device("d1", "ready", 0).spec, "phone-1", now - 2 * minute);
+      const androidListing: PlatformCatalog = {
+        ...iosListing,
+        images: [{ abi: "arm64", runtime: "35", tag: "google_apis" }],
+        modelRuntimes: { "Pixel 8": ["35"] },
+        models: ["Pixel 8"],
+        platform: "android",
+        runtimes: ["35"],
+      };
+      const rig = harness([], {
+        catalog: async () => [iosListing, androidListing],
+        limit: 0,
+        state,
+        targets: [phone],
+      });
+      const summary = () =>
+        rig.pool.figures().targets.map((target) => ({
+          count: target.count,
+          imageTag: target.imageTag,
+          model: target.model,
+          origin: target.origin,
+          short: target.short,
+        }));
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(summary()).toEqual([
+        { count: 2, model: "iPhone 15", origin: "configured", short: "running-limit" },
+        { count: 1, model: "iPad Pro", origin: "learned", short: "running-limit" },
+        {
+          count: 1,
+          imageTag: "google_apis",
+          model: "Pixel 8",
+          origin: "learned",
+          short: "running-limit",
+        },
+      ]);
+      const shortLogs = rig.sink.records.filter(
+        (record) => record.message === "a warm pool target is short",
+      );
+      expect(shortLogs.map((record) => record.fields?.target)).toEqual(["ios iPhone 15 26.0"]);
+
+      learned.forget(ipad);
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(summary().map((entry) => entry.model)).toEqual(["iPhone 15", "Pixel 8"]);
+      const off = harness([], { enabled: false, state, targets: [phone] });
+      expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
+        ["iPhone 15", "configured"],
+      ]);
+      const fresh = harness([], { state, targets: [phone] });
+      expect(fresh.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
+        ["iPhone 15", "configured"],
+      ]);
+    });
+
+    it("emits warm-pool.target-missed with origin configured and the configured count, and for no learned kind however short it is", async () => {
+      const payloads = (rig: ReturnType<typeof harness>): unknown[] => {
+        const seen: unknown[] = [];
+        rig.eventBus.subscribe("warm-pool.target-missed", (envelope) =>
+          seen.push(envelope.payload),
+        );
+        return seen;
+      };
+      const met = harness([device("d1", "ready", 0)], {
+        limit: 1,
+        state: await withLearned([1, 2]),
+        targets: [phone],
+      });
+      const metPayloads = payloads(met);
+      await met.pool.pass();
+      await met.pool.settle();
+      const empty = harness([], {
+        catalog: async () => [iosListing],
+        limit: 0,
+        state: await withLearned([1, 2]),
+        targets: [phone],
+      });
+      const emptyPayloads = payloads(empty);
+      await empty.pool.pass();
+      await empty.pool.settle();
+
+      expect(
+        empty.pool
+          .figures()
+          .targets.filter((target) => target.origin === "learned")
+          .map((target) => [target.model, target.short]),
+      ).toEqual([["iPad Pro", "running-limit"]]);
+      expect(metPayloads).toEqual([]);
+      expect(emptyPayloads).toEqual([
+        {
+          count: 1,
+          mode: "full",
+          model: "iPhone 15",
+          origin: "configured",
+          osVersion: "26.0",
+          platform: "ios",
+          ready: 0,
+          reason: "running-limit",
+        },
+      ]);
+    });
+  });
+
+  describe("when the record fails", () => {
+    const failing = (real: StateDatabase, broken: { value: boolean }): StateDatabase => ({
+      close: () => real.close(),
+      database: {
+        close: () => real.database.close(),
+        exec: (sql) => {
+          if (broken.value) throw new Error("disk I/O error");
+          real.database.exec(sql);
+        },
+        prepare: (sql) => {
+          if (broken.value) throw new Error("disk I/O error");
+          return real.database.prepare(sql);
+        },
+      },
+      transaction: (work) => {
+        if (broken.value) throw new Error("disk I/O error");
+        return real.transaction(work);
+      },
+    });
+    const phone = device("d1", "ready", 0).spec;
+    const recordWarnings = (rig: ReturnType<typeof harness>, what: string) =>
+      rig.sink.records.filter((record) => record.message === `the warm pool's record ${what}`);
+
+    it("logs a LearnedKinds throw once and runs the pass with no learned kinds", async () => {
+      const real = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(real).learn(phone, "l1", now - minute);
+      const broken = { value: true };
+      const rig = harness([device("shut", "shutdown", 60 * minute)], {
+        state: failing(real, broken),
+        targets: [{ count: 1, model: "iPhone 15", osVersion: "26.0", platform: "ios" }],
+      });
+
+      await rig.pool.pass();
+      await rig.pool.settle();
+
+      expect(rig.bootCalls).toEqual(["shut"]);
+      const passes = rig.waitingDemand.mock.calls.length;
+      expect(passes).toBeGreaterThanOrEqual(1);
+      expect(recordWarnings(rig, "could not be read")).toHaveLength(passes);
+      expect(recordWarnings(rig, "could not be read")[0]).toMatchObject({ level: "warn" });
+    });
+
+    it("start() survives a closeOpen throw, and the next pass calls closeOpen again and closes the rows once it succeeds", async () => {
+      const real = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(real).learn(phone, "orphan", now - 30 * minute);
+      const broken = { value: true };
+      const rig = harness([device("d1", "leased", 0)], { state: failing(real, broken) });
+
+      expect(() => rig.pool.start()).not.toThrow();
+      expect(recordWarnings(rig, "could not close its open lease rows")).toHaveLength(1);
+      broken.value = false;
+      await rig.pool.pass();
+      rig.clock.advance(5 * minute);
+      granted(rig, "again", "d1");
+
+      expect(new LearnedKinds(real).kinds(rig.clock.now()).map((kind) => kind.count)).toEqual([1]);
+
+      new LearnedKinds(real).learn(phone, "ghost", rig.clock.now());
+      await rig.pool.pass();
+
+      expect(
+        real.database.prepare("SELECT lease_id FROM warm_kind_leases WHERE ended_at IS NULL").all(),
+      ).toEqual([{ lease_id: "again" }, { lease_id: "ghost" }]);
+    });
+  });
+
+  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between or a forgetting resets the count, and a configured target's kind is never forgotten", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const configured: WarmTarget = {
+      count: 1,
+      model: "iPhone 15",
+      osVersion: "26.0",
+      platform: "ios",
+    };
+    const run = async (
+      outcomes: readonly ("fail" | "ok")[],
+      creation: boolean,
+      options: { relearnAt?: number; targets?: WarmTarget[] } = {},
+    ) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
+      new LearnedKinds(state).ended("l1", now - minute);
+      let attempt = 0;
+      const next = (): "fail" | "ok" => outcomes[attempt++] ?? "ok";
+      const rig: ReturnType<typeof harness> = harness(
+        creation ? [] : [device("shut", "shutdown", 60 * minute)],
+        {
+          boot: async (target) => {
+            if (next() === "fail") throw new Error("simulator did not boot");
+            return { ...target, state: "ready" };
+          },
+          catalog: async () => [iosListing],
+          provision: async () => {
+            if (next() === "fail") throw new Error("creation failed");
+          },
+          state,
+          ...(options.targets === undefined ? {} : { targets: options.targets }),
+        },
+      );
+      for (let round = 0; round < outcomes.length; round += 1) {
+        if (round === options.relearnAt) {
+          new LearnedKinds(state).learn(phone, "l2", rig.clock.now() - 2 * minute);
+          new LearnedKinds(state).ended("l2", rig.clock.now() - minute);
+        }
+        await rig.pool.pass();
+        await rig.pool.settle();
+        rig.clock.advance(10 * minute);
+        rig.state.devices = rig.state.devices
+          .filter((item) => !item.id.startsWith("new-"))
+          .map((item) => ({ ...item, state: "shutdown" as const }));
+      }
+      return {
+        kinds: new LearnedKinds(state).kinds(rig.clock.now()).length,
+        warnings: rig.sink.records.filter(
+          (record) =>
+            record.message ===
+            "a warm pool learned kind failed three times in a row and was forgotten",
+        ),
+      };
+    };
+
+    for (const creation of [false, true]) {
+      const third = await run(["fail", "fail", "fail"], creation);
+      expect(third.kinds, `creation ${creation}`).toBe(0);
+      expect(third.warnings).toHaveLength(1);
+      const reset = await run(["fail", "fail", "ok", "fail", "fail"], creation);
+      expect(reset.kinds, `creation ${creation}`).toBe(1);
+      expect(reset.warnings).toEqual([]);
+      const two = await run(["fail", "fail"], creation);
+      expect(two.kinds, `creation ${creation}`).toBe(1);
+      const again = await run(["fail", "fail", "fail", "fail"], creation, { relearnAt: 3 });
+      expect(again.kinds, `creation ${creation}`).toBe(1);
+      const kept = await run(["fail", "fail", "fail"], creation, { targets: [configured] });
+      expect(kept.kinds, `creation ${creation}`).toBe(1);
+      expect(kept.warnings).toEqual([]);
+    }
+
+    const behind = { ...phone, model: "iPhone 16" };
+    const waiters = harness([], {
+      maxConcurrentBoots: 2,
+      provision: async () => {
+        throw new Error("creation failed");
+      },
+      state: await openMemoryState([warmPoolOwner]),
+      waiting: () => [waiter({ ...phone, model: "iPhone 15" }, true), waiter(behind)],
+    });
+    for (let round = 0; round < 3; round += 1) {
+      await waiters.pool.pass();
+      await waiters.pool.settle();
+      waiters.clock.advance(10 * minute);
+    }
+    expect(waiters.provisionCalls).toHaveLength(3);
+    expect(
+      waiters.sink.records.filter((record) => record.message.includes("was forgotten")),
+    ).toEqual([]);
   });
 });

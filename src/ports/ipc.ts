@@ -128,6 +128,8 @@ class NodeIpcConnection implements IpcConnection {
     if (this.closed) return Promise.resolve();
     return new Promise((resolve) => {
       this.socket.once("close", resolve);
+      // why: a connection nobody read from is paused, so it never sees the peer's end and never closes -- which would hang its listener's close.
+      this.socket.resume();
       this.socket.end();
     });
   }

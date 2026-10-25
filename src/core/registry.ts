@@ -1,16 +1,9 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import { quarantineCauseSchema } from "../contract/index.js";
-import type { Clock, Filesystem, IdGenerator } from "../ports/index.js";
-import {
-  DEFAULT_LEASE_MAX_REQUEST_RECORDS,
-  DEFAULT_LEASE_REQUEST_RETENTION_MS,
-  DEFAULT_LEASE_TTL_MS,
-} from "./config.js";
+import type { Clock, IdGenerator } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
+import { DEFAULT_LEASE_MAX_REQUEST_RECORDS, DEFAULT_LEASE_REQUEST_RETENTION_MS } from "./config.js";
 import {
   type AbsentReason,
-  DEVICE_CLASSES,
-  type DeviceClass,
-  type DeviceMode,
   type DeviceRecord,
   type QuarantineCause,
   type DeviceState,
@@ -22,18 +15,14 @@ import {
   type LeaseRecord,
   type LeaseRequestFailure,
   type LeaseRequestRecord,
-  type LeaseRequestState,
   type PhysicalClass,
   type PhysicalDevice,
-  type PhysicalSpec,
-  type PhysicalState,
   type Platform,
   transition,
   type VirtualDevice,
   type VirtualSpec,
-  type VirtualState,
 } from "./domain.js";
-import type { ComponentReceipt, DeviceRequest } from "./driver.js";
+import type { ComponentReceipt, DeviceDataTable } from "./driver.js";
 import {
   type LeaseRequestLimits,
   type LeaseRequestOutcome,
@@ -45,22 +34,23 @@ import {
   withNewLeaseRequest,
   withSettledLeaseRequest,
 } from "./lease-request-store.js";
-
-const DEFAULT_REGISTRY_PATH = "~/.simlock/state.json";
+import {
+  deleteComponentRows,
+  deleteLease,
+  deleteLeaseRequest,
+  loadRegistryRows,
+  writeComponent,
+  writeDevice,
+  writeLease,
+  writeLeaseRequest,
+} from "./registry-rows.js";
 
 export interface RegistryOptions {
-  readonly filesystem: Filesystem;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly eventBus: EventBus;
-  readonly statePath?: string;
-  /**
-   * The width a lease record written before ADR 0004 loads with, since it has none of its own
-   * (`lease.defaultTtlMs`; the daemon passes the configured value, and `DEFAULT_LEASE_TTL_MS`
-   * stands in for a caller that has no config to hand). Only ever read during that migration --
-   * a granted lease's width always comes from the grant itself.
-   */
-  readonly defaultTtlMs?: number;
+  readonly state: StateDatabase;
+  readonly deviceData: ReadonlyMap<Platform, DeviceDataTable>;
   /**
    * `lease.identity`: the policy a newly registered device is stamped with, looked up by its
    * spec's platform. Only registration reads it -- a loaded record keeps the policy it was
@@ -152,13 +142,6 @@ export type RegistryDeviceEvent =
       readonly payload: Omit<EventMap["device.deleted"], "physical">;
     };
 
-class RegistryLoadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RegistryLoadError";
-  }
-}
-
 export class UnknownDeviceError extends Error {
   constructor(readonly deviceId: string) {
     super(`Unknown device: ${deviceId}`);
@@ -191,29 +174,23 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   #leaseRequests: readonly LeaseRequestRecord[] = [];
   #components: readonly ComponentRecord[] = [];
   readonly #commitListeners: (() => void)[] = [];
-  #unknownState: Record<string, unknown> = {};
-  readonly #unknownDeviceFields = new Map<string, Record<string, unknown>>();
-  readonly #unknownLeaseFields = new Map<string, Record<string, unknown>>();
-  readonly #unknownLeaseRequestFields = new Map<string, Record<string, unknown>>();
 
   private constructor(private readonly options: Required<RegistryOptions>) {}
 
   static async load(options: RegistryOptions): Promise<Registry> {
     const registry = new Registry({
       ...options,
-      defaultTtlMs: options.defaultTtlMs ?? DEFAULT_LEASE_TTL_MS,
       leaseIdentity: options.leaseIdentity ?? { android: "reusable", ios: "reusable" },
       leaseRequestLimits: options.leaseRequestLimits ?? {
         maxRecords: DEFAULT_LEASE_MAX_REQUEST_RECORDS,
         retentionMs: DEFAULT_LEASE_REQUEST_RETENTION_MS,
       },
-      statePath: options.statePath ?? DEFAULT_REGISTRY_PATH,
     });
-
-    if (await registry.options.filesystem.exists(registry.options.statePath)) {
-      registry.#restore(await registry.options.filesystem.readFile(registry.options.statePath));
-    }
-
+    const loaded = loadRegistryRows(options.state.database, options.deviceData);
+    registry.#devices = loaded.devices;
+    registry.#leases = loaded.leases;
+    registry.#leaseRequests = loaded.leaseRequests;
+    registry.#components = loaded.components;
     return registry;
   }
 
@@ -242,7 +219,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       ),
       cloneComponent(record),
     ];
-    await this.#commit(this.#devices, this.#leases, this.#leaseRequests, components);
+    this.#commit(this.#devices, this.#leases, this.#leaseRequests, components);
   }
 
   /**
@@ -255,7 +232,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       (existing) => existing.platform !== platform || existing.version !== version,
     );
     if (components.length === this.#components.length) return;
-    await this.#commit(this.#devices, this.#leases, this.#leaseRequests, components);
+    this.#commit(this.#devices, this.#leases, this.#leaseRequests, components);
   }
 
   async registerDevice({
@@ -277,7 +254,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices, record];
 
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     this.options.eventBus.emit(
       "device.provisioned",
       {
@@ -308,7 +285,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated = this.#transitioned(device, to, update);
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
 
     if (event !== undefined) {
       this.#emitDeviceEvent(event, updated);
@@ -325,7 +302,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated = this.#transitioned(device, "shutdown");
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -361,7 +338,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -382,7 +359,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -413,7 +390,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     } = this.#transitioned(device, to);
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return this.#committed(deviceId);
   }
 
@@ -434,7 +411,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated: DeviceRecord = { ...rest, quarantineAttempts: attempts };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -451,7 +428,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     } = this.#transitioned(device, "deleted");
     const devices = [...this.#devices];
     devices[index] = updated as DeviceRecord;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     this.options.eventBus.emit(
       "device.deleted",
       { deviceId, initiator, physical: device.physical },
@@ -462,15 +439,15 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
 
   async markForeignStateDetected(deviceId: string, at: number): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
-    // Doctor re-reports persistent drift on every reaper tick; keep the first-detected
-    // timestamp and skip the commit so a flagged device stops rewriting state.json.
+    // why: Doctor re-reports persistent drift on every reaper tick; keep the first-detected
+    // timestamp and skip the commit so a flagged device stops rewriting its row.
     if (device.foreignStateDetectedAt !== undefined) {
       return cloneDevice(device);
     }
     const updated = { ...device, foreignStateDetectedAt: at };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -482,7 +459,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated = { ...device, foreignProvenanceDetectedAt: at };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -496,7 +473,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated = rest as DeviceRecord;
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -510,7 +487,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -528,7 +505,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated = rest as DeviceRecord;
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -540,7 +517,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     if (device.state === "deleted") {
       return cloneDevice(device);
     }
-    await this.#commitMissing(device, this.#leases);
+    this.#commitMissing(device, this.#leases);
     this.options.eventBus.emit(
       "device.deleted",
       { deviceId, initiator, physical: device.physical },
@@ -568,7 +545,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new UnknownLeaseError(leaseId);
     }
     const { device } = this.#requireDeviceRecord(lease.deviceId);
-    const deleted = await this.#commitMissing(
+    const deleted = this.#commitMissing(
       device,
       this.#leases.filter((candidate) => candidate.id !== leaseId),
     );
@@ -599,7 +576,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = absent;
-    await this.#commit(
+    this.#commit(
       devices,
       this.#leases.filter((candidate) => candidate.id !== leaseId),
     );
@@ -621,7 +598,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const updated: PhysicalDevice = { ...device, absentReason };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     return cloneDevice(updated);
   }
 
@@ -629,7 +606,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
    * The one place a device is written as missing. Recovery markers go with it: a deleted device
    * has no recovery to track, and a stale count would only mislead a reader of the record.
    */
-  async #commitMissing(device: DeviceRecord, leases: LeaseRecord[]): Promise<DeviceRecord> {
+  #commitMissing(device: DeviceRecord, leases: LeaseRecord[]): DeviceRecord {
     // A physical record is never written as missing: that would unenrol it (ADR 0022 §4).
     if (device.physical) {
       throw new RegistryEventError(`Cannot mark a physical device missing: ${device.id}`);
@@ -644,7 +621,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = this.#devices.map((candidate) =>
       candidate.id === device.id ? deleted : candidate,
     );
-    await this.#commit(devices, leases);
+    this.#commit(devices, leases);
     return deleted;
   }
 
@@ -667,7 +644,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       },
       state: "ready",
     };
-    await this.#commit([...this.#devices, record], this.#leases);
+    this.#commit([...this.#devices, record], this.#leases);
     this.#emitEnrolled(record, false);
     return cloneDevice(record) as PhysicalDevice;
   }
@@ -710,7 +687,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     };
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     this.#emitEnrolled(updated, true);
     return this.#committed(deviceId) as PhysicalDevice;
   }
@@ -735,7 +712,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     }
     const devices = [...this.#devices];
     devices[index] = updated;
-    await this.#commit(devices, this.#leases);
+    this.#commit(devices, this.#leases);
     this.options.eventBus.emit(
       "device.deleted",
       { deviceId, initiator: "operator", physical: true },
@@ -819,7 +796,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
             },
             grantedAt,
           ).records;
-    await this.#commit(devices, [...this.#leases, lease], leaseRequests);
+    this.#commit(devices, [...this.#leases, lease], leaseRequests);
 
     return cloneLease(lease);
   }
@@ -853,7 +830,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const devices = [...this.#devices];
     devices[deviceIndex] = reclaiming;
     const leases = this.#leases.filter((candidate) => candidate.id !== leaseId);
-    await this.#commit(devices, leases);
+    this.#commit(devices, leases);
 
     return { device: cloneDevice(reclaiming), lease: cloneLease(lease) };
   }
@@ -873,7 +850,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const renewed = { ...lease, lastRenewedAt: this.options.clock.now(), ttlDeadline, ttlMs };
     const leases = [...this.#leases];
     leases[index] = renewed;
-    await this.#commit(this.#devices, leases);
+    this.#commit(this.#devices, leases);
     return cloneLease(renewed);
   }
 
@@ -882,7 +859,18 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       this.#leaseRequests,
       this.options.clock.now(),
       this.options.leaseRequestLimits.retentionMs,
-    ).map(cloneLeaseRequest);
+    ).map((record) => this.#withCurrentDevice(record));
+  }
+
+  /** why: a granted request stores the lease, environment and timing as first answered, but names its device only by id (ADR 0036 §4). */
+  #withCurrentDevice(record: LeaseRequestRecord): LeaseRequestRecord {
+    const copy = cloneLeaseRequest(record);
+    if (copy.grant === undefined) return copy;
+    const { grant } = copy;
+    const device = this.#devices.find((candidate) => candidate.id === grant.device.id);
+    return device === undefined
+      ? copy
+      : { ...copy, grant: { ...grant, device: cloneDevice(device) } };
   }
 
   async createLeaseRequest(input: NewLeaseRequest): Promise<LeaseRequestRecord> {
@@ -898,7 +886,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       now,
       this.options.leaseRequestLimits,
     );
-    await this.#commit(this.#devices, this.#leases, leaseRequests);
+    this.#commit(this.#devices, this.#leases, leaseRequests);
     return cloneLeaseRequest(record);
   }
 
@@ -913,8 +901,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       this.options.clock.now(),
     );
     if (settled === undefined) return undefined;
-    await this.#commit(this.#devices, this.#leases, records);
-    return cloneLeaseRequest(settled);
+    this.#commit(this.#devices, this.#leases, records);
+    return this.#withCurrentDevice(settled);
   }
 
   /**
@@ -934,8 +922,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       records = result.records;
       if (result.settled !== undefined) settled.push(result.settled);
     }
-    if (settled.length > 0) await this.#commit(this.#devices, this.#leases, records);
-    return settled.map(cloneLeaseRequest);
+    if (settled.length > 0) this.#commit(this.#devices, this.#leases, records);
+    return settled.map((record) => this.#withCurrentDevice(record));
   }
 
   /** why: the exits return the committed record, which has dropped any cause. */
@@ -955,37 +943,31 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return { device, index };
   }
 
-  async #commit(
+  #commit(
     devices: DeviceRecord[],
     leases: LeaseRecord[],
     leaseRequests: readonly LeaseRequestRecord[] = this.#leaseRequests,
     components: readonly ComponentRecord[] = this.#components,
-  ): Promise<void> {
-    await this.options.filesystem.mkdirp(parentDirectory(this.options.statePath));
+  ): void {
     const committed = devices.map(withoutCauseUnlessQuarantined);
-    await this.options.filesystem.writeFileAtomic(
-      this.options.statePath,
-      JSON.stringify({
-        ...this.#unknownState,
-        devices: committed
-          .filter(isVirtual)
-          .map((device) => ({ ...this.#unknownDeviceFields.get(device.id), ...stored(device) })),
-        physicalDevices: committed.filter(isPhysical).map((device) => ({
-          ...this.#unknownDeviceFields.get(device.id),
-          ...device,
-        })),
-        leases: leases.map((lease) => ({
-          ...this.#unknownLeaseFields.get(lease.id),
-          ...lease,
-        })),
-        leaseRequests: leaseRequests.map((record) => ({
-          ...this.#unknownLeaseRequestFields.get(record.id),
-          ...record,
-        })),
-        components,
-      }),
-      { mode: 0o600 },
-    );
+    const { deviceData, state } = this.options;
+    state.transaction(() => {
+      const { database } = state;
+      const device = changes(this.#devices, committed, (record) => record.id);
+      const lease = changes(this.#leases, leases, (record) => record.id);
+      const request = changes(this.#leaseRequests, leaseRequests, (record) => record.id);
+      const component = changes(this.#components, components, componentKey);
+      for (const id of request.removed) deleteLeaseRequest(database, id);
+      for (const record of device.changed) writeDevice(database, record, deviceData);
+      for (const id of lease.removed) deleteLease(database, id);
+      for (const record of lease.changed) writeLease(database, record);
+      for (const record of request.changed) writeLeaseRequest(database, record);
+      for (const key of component.removed) {
+        const [platform, version] = key.split("\0") as [Platform, string];
+        deleteComponentRows(database, platform, version);
+      }
+      for (const record of component.changed) writeComponent(database, record);
+    });
     this.#devices = committed;
     this.#leases = leases;
     this.#leaseRequests = leaseRequests;
@@ -994,80 +976,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   /** Calls `listener` after every commit, once the new state is what `snapshot` reads. */
-  // fallow-ignore-next-line unused-class-member -- called by createCore, which holds the registry as a `Registry`; the audit does not follow it.
   onCommit(listener: () => void): void {
     this.#commitListeners.push(listener);
-  }
-
-  #restore(contents: string): void {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(contents) as unknown;
-    } catch {
-      throw new RegistryLoadError(`Invalid JSON in registry state: ${this.options.statePath}`);
-    }
-
-    if (!isObject(parsed) || !Array.isArray(parsed.devices) || !Array.isArray(parsed.leases)) {
-      throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
-    }
-
-    if (parsed.physicalDevices !== undefined && !Array.isArray(parsed.physicalDevices)) {
-      throw new RegistryLoadError(`Invalid registry state: ${this.options.statePath}`);
-    }
-
-    this.#unknownState = unknownFields(parsed, [
-      "devices",
-      "physicalDevices",
-      "leases",
-      "leaseRequests",
-      "components",
-    ]);
-    const restore = (device: unknown, physical: boolean): DeviceRecord => {
-      const record = parseDevice(device, physical);
-      this.#unknownDeviceFields.set(
-        record.id,
-        unknownFields(device as Record<string, unknown>, [
-          ...deviceRecordKeys,
-          ...retiredDeviceRecordKeys,
-        ]),
-      );
-      return record;
-    };
-    this.#devices = [
-      ...parsed.devices.map((device) => restore(device, false)),
-      ...((parsed.physicalDevices ?? []) as unknown[]).map((device) => restore(device, true)),
-    ];
-    this.#leases = parsed.leases.map((lease) => {
-      const record = parseLease(lease, this.options.defaultTtlMs);
-      this.#unknownLeaseFields.set(
-        record.id,
-        unknownFields(lease, [...leaseRecordKeys, ...retiredLeaseRecordKeys]),
-      );
-      return record;
-    });
-    this.#leaseRequests = this.#restoreLeaseRequests(parsed.leaseRequests);
-    this.#components = restoreComponents(parsed.components);
-  }
-
-  /**
-   * A state file written before lease requests were stored has no `leaseRequests` key and loads
-   * with none, and so does one whose key is not a list. A record that does not parse is dropped rather than failing the load: a request
-   * is not worth every device Simlock knows about, and a client repeating a dropped request
-   * simply starts a new one.
-   */
-  #restoreLeaseRequests(value: unknown): LeaseRequestRecord[] {
-    if (!Array.isArray(value)) return [];
-    const records: LeaseRequestRecord[] = [];
-    for (const candidate of value) {
-      const record = parseLeaseRequest(candidate);
-      if (record === undefined) continue;
-      this.#unknownLeaseRequestFields.set(
-        record.id,
-        unknownFields(candidate as Record<string, unknown>, leaseRequestRecordKeys),
-      );
-      records.push(record);
-    }
-    return records;
   }
 
   #emitDeviceEvent(event: RegistryDeviceEvent, device: DeviceRecord): void {
@@ -1101,66 +1011,23 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 }
 
-const deviceRecordKeys = [
-  "id",
-  "driverDeviceId",
-  "spec",
-  "state",
-  "driverData",
-  "createdAt",
-  "lastLeaseEndedAt",
-  "readyAt",
-  "shutdownAt",
-  "foreignStateDetectedAt",
-  "foreignProvenanceDetectedAt",
-  "recoveringSince",
-  "recoveryAttempts",
-  "deferredReclaimLeaseId",
-  "quarantinedAt",
-  "quarantineAttempts",
-  "quarantineNextRetryAt",
-  "quarantineCause",
-  "address",
-  "mode",
-  "leaseIdentity",
-  "physical",
-  "enrolledApps",
-  "reclaimingSince",
-  "absentReason",
-] as const;
-const retiredDeviceRecordKeys = ["featureProfile"] as const;
-const leaseRecordKeys = [
-  "id",
-  "deviceId",
-  "requesterId",
-  "ownerId",
-  "grantedAt",
-  "ttlMs",
-  "ttlDeadline",
-  "lastRenewedAt",
-  "idChosenByRequester",
-] as const;
-const leaseRequestRecordKeys = [
-  "id",
-  "requesterId",
-  "ownerId",
-  "idempotencyKey",
-  "leaseId",
-  "fleetRequestId",
-  "request",
-  "createdAt",
-  "state",
-  "settledAt",
-  "grant",
-  "failure",
-] as const;
-/**
- * Fields a lease record written before ADR 0004 carries that this daemon neither reads nor
- * keeps. Listed here so they are stripped on load rather than preserved through the
- * unknown-field forward-compatibility path -- `mode` is not a field from a *newer* schema this
- * daemon should hand back untouched, it is a concept that no longer exists.
- */
-const retiredLeaseRecordKeys = ["mode"] as const;
+function componentKey(record: ComponentRecord): string {
+  return `${record.platform}\0${record.version}`;
+}
+
+/** why: records are immutable, so a record that is not the committed object has changed and one that is not in `after` is gone. */
+function changes<T>(
+  before: readonly T[],
+  after: readonly T[],
+  keyOf: (record: T) => string,
+): { readonly changed: T[]; readonly removed: string[] } {
+  const committed = new Map(before.map((record) => [keyOf(record), record]));
+  const kept = new Set(after.map(keyOf));
+  return {
+    changed: after.filter((record) => committed.get(keyOf(record)) !== record),
+    removed: [...committed.keys()].filter((key) => !kept.has(key)),
+  };
+}
 
 function cloneDevice<T extends DeviceRecord>(device: T): T {
   return { ...device, spec: { ...device.spec } } as T;
@@ -1168,20 +1035,6 @@ function cloneDevice<T extends DeviceRecord>(device: T): T {
 
 function isVirtual(device: DeviceRecord): device is VirtualDevice {
   return !device.physical;
-}
-
-function isPhysical(device: DeviceRecord): device is PhysicalDevice {
-  return device.physical;
-}
-
-/**
- * A virtual record as `devices` holds it: with no `physical` key on the record or its spec, so
- * the file reads the same to an older Simlock as it did before physical devices existed.
- */
-function stored(device: VirtualDevice): Record<string, unknown> {
-  const { physical: _physical, spec, ...record } = device;
-  const { physical: _specPhysical, ...storedSpec } = spec;
-  return { ...record, spec: storedSpec };
 }
 
 /** why: the one place a cause goes when its device leaves quarantine, however it left. */
@@ -1199,46 +1052,8 @@ function cloneComponent(record: ComponentRecord): ComponentRecord {
   return { ...record, receipt: { ...record.receipt } };
 }
 
-/**
- * A state file written before components were recorded has no `components` key and loads with
- * none. A record that does not parse is dropped rather than failing the load, like a lease
- * request: losing it only means Simlock no longer claims that component, which errs towards
- * never removing it (safety rule 1).
- */
-function restoreComponents(value: unknown): ComponentRecord[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((candidate: unknown) => {
-    const record = parseComponent(candidate);
-    return record === undefined ? [] : [record];
-  });
-}
-
-function parseComponent(value: unknown): ComponentRecord | undefined {
-  if (
-    !isObject(value) ||
-    !isPlatform(value.platform) ||
-    typeof value.version !== "string" ||
-    typeof value.installedAt !== "number" ||
-    !isObject(value.receipt) ||
-    !Object.values(value.receipt).every((field) => typeof field === "string")
-  ) {
-    return undefined;
-  }
-  return {
-    installedAt: value.installedAt,
-    platform: value.platform,
-    receipt: { ...(value.receipt as Record<string, string>) },
-    version: value.version,
-  };
-}
-
 function cloneLeaseRequest(record: LeaseRequestRecord): LeaseRequestRecord {
   return { ...record, request: { ...record.request } };
-}
-
-function parentDirectory(path: string): string {
-  const separator = path.lastIndexOf("/");
-  return separator <= 0 ? "/" : path.slice(0, separator);
 }
 
 /** The one device event a transition carries must be the one its states call for, about this device. */
@@ -1281,523 +1096,4 @@ function eventForTransition(
     return "device.deleted";
   }
   return undefined;
-}
-
-/**
- * why: parsed as one group so `parseDevice`'s required-field check does not grow two branches per
- * field added.
- */
-const optionalDeviceNumberKeys = [
-  "lastLeaseEndedAt",
-  "readyAt",
-  "shutdownAt",
-  "foreignStateDetectedAt",
-  "foreignProvenanceDetectedAt",
-  "recoveringSince",
-  "recoveryAttempts",
-  "quarantinedAt",
-  "quarantineAttempts",
-  "quarantineNextRetryAt",
-] as const;
-
-type OptionalDeviceNumbers = Partial<Record<(typeof optionalDeviceNumberKeys)[number], number>>;
-
-function parseOptionalDeviceNumbers(value: Record<string, unknown>): OptionalDeviceNumbers {
-  const parsed: OptionalDeviceNumbers = {};
-  for (const key of optionalDeviceNumberKeys) {
-    const candidate = value[key];
-    if (candidate === undefined) continue;
-    if (typeof candidate !== "number") {
-      throw new RegistryLoadError("Invalid device record in registry state");
-    }
-    parsed[key] = candidate;
-  }
-  return parsed;
-}
-
-function parseDevice(value: unknown, physical: boolean): DeviceRecord {
-  if (!isObject(value)) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-
-  const { spec, state } = value;
-  if (!isObject(spec)) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  const shared = parseSharedDeviceFields(value);
-  const record = physical
-    ? parsePhysicalDevice(value, spec, state, shared)
-    : parseVirtualDevice(value, spec, state, shared);
-  // why: a cause is for a quarantined record alone; on any other it is dropped unchecked.
-  if (record.state !== "quarantined" || value.quarantineCause === undefined) return record;
-  const cause = quarantineCauseSchema.safeParse(value.quarantineCause);
-  if (!cause.success) throw new RegistryLoadError("Invalid device record in registry state");
-  return { ...record, quarantineCause: cause.data };
-}
-
-/** What a record in `devices` and one in `physicalDevices` both carry, checked once. */
-function parseSharedDeviceFields(value: Record<string, unknown>): SharedDeviceFields {
-  const { address, createdAt, deferredReclaimLeaseId, driverData, driverDeviceId, id } = value;
-  if (
-    typeof id !== "string" ||
-    typeof driverDeviceId !== "string" ||
-    typeof createdAt !== "number" ||
-    !("driverData" in value) ||
-    // Every other optional field is a number and is swept by
-    // `parseOptionalDeviceNumbers`, except `leaseIdentity`, which `parseLeaseIdentity` checks;
-    // `address` and `deferredReclaimLeaseId` are the strings checked here.
-    // Missing is expected of a record written by a daemon that predates the field;
-    // present-but-wrong-typed is corrupt.
-    !isOptionalString(address) ||
-    !isOptionalString(deferredReclaimLeaseId)
-  ) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return {
-    ...parseOptionalDeviceNumbers(value),
-    ...(address === undefined ? {} : { address }),
-    ...(deferredReclaimLeaseId === undefined ? {} : { deferredReclaimLeaseId }),
-    createdAt,
-    driverData,
-    driverDeviceId,
-    id,
-  };
-}
-
-type SharedDeviceFields = Omit<
-  VirtualDevice,
-  "leaseIdentity" | "mode" | "physical" | "spec" | "state"
->;
-
-/** A record in `devices` is virtual: `physical` and a class are for `physicalDevices` alone. */
-function parseVirtualDevice(
-  value: Record<string, unknown>,
-  spec: Record<string, unknown>,
-  state: unknown,
-  shared: SharedDeviceFields,
-): VirtualDevice {
-  const virtualState = state === "warm" ? "reclaiming" : state;
-  if (
-    !isVirtualState(virtualState) ||
-    (value.physical !== undefined && value.physical !== false) ||
-    (spec.physical !== undefined && spec.physical !== false) ||
-    "class" in spec
-  ) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return {
-    ...shared,
-    leaseIdentity: parseLeaseIdentity(value.leaseIdentity),
-    mode: parseDeviceMode(value.mode),
-    physical: false,
-    spec: parseVirtualSpec(spec),
-    state: virtualState,
-  };
-}
-
-/** A record in `physicalDevices` must be physical through and through (ADR 0022 §1). */
-function parsePhysicalDevice(
-  value: Record<string, unknown>,
-  spec: Record<string, unknown>,
-  state: unknown,
-  shared: SharedDeviceFields,
-): PhysicalDevice {
-  const { enrolledApps } = value;
-  if (
-    !isPhysicalState(state) ||
-    value.physical !== true ||
-    value.mode !== undefined ||
-    value.leaseIdentity !== undefined ||
-    !Array.isArray(enrolledApps) ||
-    !enrolledApps.every((app) => typeof app === "string")
-  ) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return {
-    ...shared,
-    enrolledApps: [...(enrolledApps as string[])],
-    physical: true,
-    ...parsePhysicalMarks(state, value),
-    spec: parsePhysicalSpec(spec),
-    state,
-  };
-}
-
-function parsePhysicalMarks(
-  state: PhysicalState,
-  value: Record<string, unknown>,
-): Pick<PhysicalDevice, "absentReason" | "reclaimingSince"> {
-  const { absentReason, reclaimingSince } = value;
-  const absent = state === "absent" ? isAbsentReason(absentReason) : absentReason === undefined;
-  if (!absent || !isOptionalNumber(reclaimingSince)) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return {
-    ...(reclaimingSince === undefined ? {} : { reclaimingSince }),
-    ...(absentReason === undefined ? {} : { absentReason: absentReason as AbsentReason }),
-  };
-}
-
-function parsePhysicalSpec(value: Record<string, unknown>): PhysicalSpec {
-  if (
-    value.physical !== true ||
-    !isPlatform(value.platform) ||
-    typeof value.model !== "string" ||
-    typeof value.osVersion !== "string" ||
-    !isPhysicalClass(value.class) ||
-    value.mode !== undefined ||
-    value.imageTag !== undefined
-  ) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return {
-    class: value.class,
-    model: value.model,
-    osVersion: value.osVersion,
-    physical: true,
-    platform: value.platform,
-  };
-}
-
-function isPhysicalClass(value: unknown): value is PhysicalClass {
-  return value === "phone" || value === "tablet";
-}
-
-/**
- * A record written before `leaseIdentity` existed was created under the only policy there was,
- * so it loads as `reusable`. A present-but-unknown value fails the load: guessing `reusable` for
- * it could hand a fresh identity out for a second lease.
- */
-function parseLeaseIdentity(value: unknown): LeaseIdentity {
-  if (value === undefined) return "reusable";
-  if (value === "reusable" || value === "fresh") return value;
-  throw new RegistryLoadError("Invalid device record in registry state");
-}
-
-/**
- * A record written before `mode` existed loads as `full` (ADR 0007 §11). A present-but-unknown
- * value fails the load rather than being guessed at: a wrong `full` would let a slimmed device
- * be granted as a full one.
- */
-function parseDeviceMode(value: unknown): DeviceMode {
-  if (value === undefined) return "full";
-  if (value === "slim" || value === "full") return value;
-  throw new RegistryLoadError("Invalid device record in registry state");
-}
-
-/**
- * A spec's planned mode (ADR 0007 §6, §11). A spec written before it existed has none and loads
- * as full; its retired `full` key is dropped, so it is not written back. A `mode` other than
- * `"slim"` fails the load: no other value can be planned, and guessing could pool a slim device
- * with full ones.
- */
-function parseVirtualSpec(value: Record<string, unknown>): VirtualSpec {
-  const { full: _retired, ...spec } = value;
-  if (!isVirtualSpecShape(spec) || (spec.mode !== undefined && spec.mode !== "slim")) {
-    throw new RegistryLoadError("Invalid device record in registry state");
-  }
-  return { ...spec, physical: false };
-}
-
-/**
- * ADR 0003 §4: a lease record written before `ownerId` existed loads with `ownerId` equal to
- * `requesterId`; present-but-wrong-typed is still corrupt, same treatment as every other
- * load-time migration in this module (see `address` on `parseDevice`). Split out of
- * `parseLease` purely to keep that function's own branch count down -- this check has no
- * meaning on its own outside a lease record's already-validated `requesterId`.
- */
-function isValidOwnerId(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
-}
-
-/** The required-string and timing fields every lease record has always had -- split out of
- * `parseLease` so that function's own branch count reflects only what changes per schema
- * version (the `ownerId` migration, and ADR 0004's `ttlMs`/`lastRenewedAt` one), not the whole
- * record shape at once. `mode` is deliberately not checked any more: a record written before
- * ADR 0004 still carries one, and it is simply dropped on load rather than being a reason to
- * refuse the whole registry. */
-function hasValidLeaseCore(value: Record<string, unknown>): value is Record<string, unknown> & {
-  id: string;
-  deviceId: string;
-  requesterId: string;
-  grantedAt: number;
-  ttlDeadline: number;
-} {
-  return (
-    typeof value.id === "string" &&
-    typeof value.deviceId === "string" &&
-    typeof value.requesterId === "string" &&
-    typeof value.grantedAt === "number" &&
-    typeof value.ttlDeadline === "number"
-  );
-}
-
-/**
- * ADR 0004's migration, for the two fields a lease written before it does not have. Neither
- * can be recovered from what is on disk (`ttlDeadline - grantedAt` is the grant-time width
- * only until the first renewal moves the deadline), so each takes its documented default
- * rather than a guess dressed up as arithmetic. A value that is present but unusable takes the
- * same default: it is one field of one record, and refusing to load the whole registry over it
- * would cost an operator every device Simlock knows about.
- *
- * They are validated separately because they are different kinds of number. A timestamp only
- * has to be a finite number -- any point on the clock is a legitimate answer to "when was this
- * last renewed", including zero. A duration additionally has to be positive: a `ttlMs` of `0`
- * or a negative one would make every renewal of that lease resolve to a deadline in the past,
- * which `LeaseExpiryScheduler` reads as "expire immediately".
- */
-function finiteTimestampOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function positiveDurationOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function parseLease(value: unknown, defaultTtlMs: number): LeaseRecord {
-  if (!isObject(value) || !hasValidLeaseCore(value) || !isValidOwnerId(value.ownerId)) {
-    throw new RegistryLoadError("Invalid lease record in registry state");
-  }
-
-  const { deviceId, grantedAt, id, lastRenewedAt, ownerId, requesterId, ttlDeadline, ttlMs } =
-    value;
-  return {
-    deviceId,
-    grantedAt,
-    id,
-    idChosenByRequester: value.idChosenByRequester === true,
-    lastRenewedAt: finiteTimestampOr(lastRenewedAt, grantedAt),
-    ownerId: ownerId ?? requesterId,
-    requesterId,
-    ttlDeadline,
-    ttlMs: positiveDurationOr(ttlMs, defaultTtlMs),
-  };
-}
-
-/**
- * `undefined` for anything that is not a whole, consistent record: every required field typed,
- * and the result its state promises present (see `parseLeaseRequestResult`).
- */
-function parseLeaseRequest(value: unknown): LeaseRequestRecord | undefined {
-  if (!hasLeaseRequestFields(value)) return undefined;
-  const {
-    createdAt,
-    fleetRequestId,
-    id,
-    idempotencyKey,
-    leaseId,
-    ownerId,
-    request,
-    requesterId,
-    state,
-  } = value;
-  const result = parseLeaseRequestResult(state, value);
-  if (result === undefined) return undefined;
-  return {
-    createdAt,
-    id,
-    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-    ...(leaseId === undefined ? {} : { leaseId }),
-    ...(fleetRequestId === undefined ? {} : { fleetRequestId }),
-    ownerId,
-    request: withoutRetiredRequestKeys(request),
-    requesterId,
-    state,
-    ...result,
-  };
-}
-
-/** The fields every lease-request record has, whatever its state. */
-// fallow-ignore-next-line complexity -- one type guard, one check per field of the record.
-function hasLeaseRequestFields(value: unknown): value is Record<string, unknown> & {
-  readonly createdAt: number;
-  readonly fleetRequestId?: string;
-  readonly id: string;
-  readonly idempotencyKey?: string;
-  readonly leaseId?: string;
-  readonly ownerId: string;
-  readonly request: DeviceRequest;
-  readonly requesterId: string;
-  readonly state: LeaseRequestState;
-} {
-  return (
-    isObject(value) &&
-    typeof value.id === "string" &&
-    typeof value.requesterId === "string" &&
-    typeof value.ownerId === "string" &&
-    isOptionalString(value.idempotencyKey) &&
-    isOptionalString(value.leaseId) &&
-    isOptionalString(value.fleetRequestId) &&
-    isDeviceRequest(value.request) &&
-    typeof value.createdAt === "number" &&
-    isLeaseRequestState(value.state)
-  );
-}
-
-/** A settled record's settlement time and the result its state promises: a `granted` record's
- * grant, a `failed` one's failure. An open record has none of them. */
-function parseLeaseRequestResult(
-  state: LeaseRequestState,
-  value: Record<string, unknown>,
-): Pick<LeaseRequestRecord, "failure" | "grant" | "settledAt"> | undefined {
-  if (state === "open") return {};
-  const { failure, grant, settledAt } = value;
-  if (typeof settledAt !== "number") return undefined;
-  if (state === "granted") {
-    const parsed = parseStoredGrant(grant);
-    return parsed === undefined ? undefined : { grant: parsed, settledAt };
-  }
-  if (state === "failed") {
-    return isLeaseRequestFailure(failure) ? { failure, settledAt } : undefined;
-  }
-  return { settledAt };
-}
-
-/**
- * A stored grant's device follows the device record's own load rule (ADR 0007 §11): no `mode`
- * loads as `full`, the retired keys (and the spec's `full`) are dropped, and an unknown `mode` makes the record
- * unusable, so it is skipped like any other inconsistent lease request. Its lease loads
- * `idChosenByRequester` as a lease record does (`parseLease`).
- */
-function parseStoredGrant(grant: unknown): LeaseGrant | undefined {
-  if (!isObject(grant) || !isObject(grant.device)) return undefined;
-  const device = storedGrantDevice(grant.device);
-  if (device === undefined) return undefined;
-  // A grant written before ADR 0020 names a lease whose ID simlock generated, as every ID then was.
-  const lease = isObject(grant.lease)
-    ? { ...grant.lease, idChosenByRequester: grant.lease.idChosenByRequester === true }
-    : grant.lease;
-  return { ...grant, device, lease } as unknown as LeaseGrant;
-}
-
-/**
- * The device of a stored grant as it loads: the retired keys dropped, a grant written before
- * physical devices existed naming a virtual device, and the mode rule of its type. `undefined`
- * for one that breaks it: a virtual device with a mode that is not `slim` or `full`, or a
- * physical device with any mode at all.
- */
-function storedGrantDevice(stored: Record<string, unknown>): Record<string, unknown> | undefined {
-  const device: Record<string, unknown> = { ...stored };
-  for (const key of retiredDeviceRecordKeys) delete device[key];
-  device.physical ??= false;
-  if (isObject(device.spec)) device.spec = storedGrantSpec(device.spec);
-  if (device.physical !== true) device.mode ??= "full";
-  return hasStoredGrantMode(device) ? device : undefined;
-}
-
-/** A stored grant's spec: the retired `full` key dropped, and `physical` false when it has none. */
-function storedGrantSpec(stored: Record<string, unknown>): Record<string, unknown> {
-  const { full: _retired, ...spec } = stored;
-  return { ...spec, physical: spec.physical ?? false };
-}
-
-/** A virtual device has a `slim` or `full` mode and a physical one has none. */
-function hasStoredGrantMode(device: Record<string, unknown>): boolean {
-  if (device.physical === true) return device.mode === undefined;
-  return device.mode === "slim" || device.mode === "full";
-}
-
-function isDeviceRequest(value: unknown): value is DeviceRequest {
-  return (
-    isObject(value) &&
-    isPlatform(value.platform) &&
-    isOptionalString(value.model) &&
-    (value.class === undefined || isDeviceClass(value.class)) &&
-    hasOptionalRequestFields(value)
-  );
-}
-
-function hasOptionalRequestFields(value: Record<string, unknown>): boolean {
-  return (
-    isOptionalString(value.osVersion) &&
-    (value.mode === undefined || value.mode === "slim" || value.mode === "full") &&
-    isOptionalString(value.imageTag)
-  );
-}
-
-function isOptionalNumber(value: unknown): value is number | undefined {
-  return value === undefined || typeof value === "number";
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
-}
-
-function withoutRetiredRequestKeys(request: DeviceRequest): DeviceRequest {
-  const {
-    full: _retired,
-    physical,
-    ...current
-  } = request as DeviceRequest & { readonly full?: unknown };
-  return physical === true ? { ...current, physical: true } : current;
-}
-
-function isLeaseRequestState(value: unknown): value is LeaseRequestState {
-  return value === "open" || value === "granted" || value === "failed" || value === "cancelled";
-}
-
-function isLeaseRequestFailure(value: unknown): value is LeaseRequestFailure {
-  return isObject(value) && typeof value.code === "string" && typeof value.message === "string";
-}
-
-function isVirtualSpecShape(value: unknown): value is VirtualSpec {
-  return (
-    isObject(value) &&
-    isPlatform(value.platform) &&
-    typeof value.model === "string" &&
-    typeof value.osVersion === "string" &&
-    isOptionalString(value.imageTag)
-  );
-}
-
-function isDeviceClass(value: unknown): value is DeviceClass {
-  return DEVICE_CLASSES.some((deviceClass) => deviceClass === value);
-}
-
-function isPlatform(value: unknown): value is Platform {
-  return value === "ios" || value === "android";
-}
-
-function isVirtualState(value: unknown): value is VirtualState {
-  return (
-    value === "provisioning" ||
-    value === "ready" ||
-    value === "leased" ||
-    value === "reclaiming" ||
-    value === "quarantined" ||
-    value === "shutdown" ||
-    value === "deleted"
-  );
-}
-
-function isAbsentReason(value: unknown): value is AbsentReason {
-  return value === "locked" || value === "untrusted" || value === "not-present";
-}
-
-function isPhysicalState(value: unknown): value is PhysicalState {
-  return (
-    value === "ready" ||
-    value === "absent" ||
-    value === "leased" ||
-    value === "reclaiming" ||
-    value === "quarantined" ||
-    value === "deleted"
-  );
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function unknownFields(
-  value: Record<string, unknown>,
-  knownKeys: readonly string[],
-): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (!knownKeys.includes(key)) {
-      fields[key] = child;
-    }
-  }
-  return fields;
 }

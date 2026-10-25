@@ -107,14 +107,15 @@ rule or section, a few quoted words of it, and how the task complies. -->
 ### Tests
 
 <!-- First, one line: the seam the tests drive (the highest existing entry
-point that can see the behaviour; one if possible) and an existing test
-file to model them on. Then one line per test title: a claim the body must
-prove. Every behaviour the body states has a line here: one line per
-behaviour, its cases listed in the line, not one line per case. What stays
-"as today" names the existing test that proves it, and gets a line only
-when no test does. A claim an existing test already proves names that test
-to extend instead (testing rule 7). Every Failure modes row has its line,
-or the row says why none is needed. -->
+point that can see the behaviour, with the platform faked; one if
+possible) and an existing test file to model them on. Then one line per
+row of the feature's Behaviours table this task delivers, in the row's
+words: what the invoker does and what it sees, its cases listed in the
+line as the one table the test will hold. About ten lines; never one line
+per case, never a line for a branch no invoker can see, never a line for
+"as today" (name the existing test in prose instead). A claim an existing
+test already proves names that test to extend (testing rule 7). A Failure
+modes row gets a line only when an invoker can see the failure. -->
 
 - ...
 

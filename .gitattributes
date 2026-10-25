@@ -1,0 +1,4 @@
+# why: every feature adds rows to the ADR index; two features merging add different rows, and
+# a union merge keeps both instead of stopping the stack sync on an add/add conflict. The
+# src/adr-index.test.ts check keeps the table complete and in order.
+docs/internal/adr/README.md merge=union

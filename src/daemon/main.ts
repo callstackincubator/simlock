@@ -2,8 +2,9 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { type Alerts, createAlerts } from "../alerts/index.js";
 import { EventBus, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts, fitHostLoad } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
 import {
   createEventHistory,
@@ -14,12 +15,16 @@ import {
 import {
   type Config,
   type ConfigOverrides,
+  type DaemonMode,
   type DeviceClass,
+  type DeviceDataTable,
   type DeviceMode,
   type Driver,
   type DriverRejection,
+  type Platform,
   type ModelPreferences,
   type PrerequisiteCheck,
+  type ServiceCheck,
   CleanupReaper,
   ComponentInstaller,
   DEVICE_CLASSES,
@@ -27,15 +32,19 @@ import {
   DriverCatalog,
   HostFactsReader,
   createCore,
-  loadConfig,
+  loadConfigWithDefaults,
   latestPresence,
   loadInstanceId,
   OwnedRootError,
   Registry,
+  registryOwner,
+  warmPoolOwner,
   Nuke,
   SerializedDecision,
+  sweepWriteLeftovers,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import {
   AdbServerUnavailableError,
   AndroidDriver,
@@ -44,15 +53,17 @@ import {
   SdkMissingError,
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
+  androidDeviceDataTable,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
   type SlimmedFact,
+  iosDeviceDataTable,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
-import { type Auth, createAuth } from "../auth/index.js";
+import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
@@ -63,6 +74,7 @@ import {
   LoggingProcessRunner,
   NodeFileLogSink,
   type Clock,
+  type DaemonRole,
   type Filesystem,
   type HostInfo,
   type HostLoadProbe,
@@ -79,11 +91,20 @@ import {
   NodeHostInfo,
   NodeIpcTransport,
   NodeProcessRunner,
+  productionServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
+  NodeNpmCli,
+  type NpmCli,
   NodeProcessSupervisor,
   NodeSystemStats,
+  NodeUpdaterLauncher,
+  type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
   NodeTcpStreamConnector,
+  daemonDataDirectory,
   resolveDaemonSocketPath,
   readPackageVersion,
   resolveSimlockHome,
@@ -93,10 +114,13 @@ import {
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
+  FetchWebhookPoster,
+  type WebhookPoster,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
-  FileDrainStore,
+  StateDrainStore,
+  drainedWorkersOwner,
   FleetLeaseCoordinator,
   FleetLeaseIndex,
   GatewayDispatcher,
@@ -113,7 +137,14 @@ import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
-import { DaemonEndpointHost } from "./connection-host.js";
+import { socketHeld } from "../updater/index.js";
+import { createUpdateCoordinator, type UpdateCoordinatorOptions } from "./update-coordinator.js";
+import { startVersionCheck, type VersionCheck } from "./version-check.js";
+import {
+  DaemonAlreadyRunningError,
+  DaemonEndpointHost,
+  refuseWhenDaemonAnswers,
+} from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { GatewayUplink } from "./gateway-uplink.js";
@@ -125,34 +156,118 @@ export interface StartDaemonOptions {
   readonly configPath?: string;
   readonly dataDirectory?: string;
   readonly defaultRequesterId?: string;
+  readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
   readonly drivers?: readonly Driver[];
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
+  /** why: the entry removes the credential when SIGTERM lands after it was written but before the daemon is up; called only once this daemon owns the file. */
+  readonly onAdminSecretWritten?: (remove: () => Promise<void>) => void;
   /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
+  readonly role?: DaemonMode;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
+  readonly serviceCheck?: ServiceCheck;
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
   readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
+  /** why: test-only, replaces the npm CLI the version check and the update coordinator run. */
+  readonly npm?: NpmCli;
   readonly processRunner?: ProcessRunner;
+  /** why: test-only, replaces the launcher, package root and shared-install check of the gateway's update coordinator. */
+  readonly updater?: {
+    readonly launcher: UpdaterLauncher;
+    readonly otherRoleRunning: () => Promise<boolean>;
+    readonly packageRoot: string;
+  };
+  /** why: test-only, the protocol range the worker daemon announces. */
+  readonly protocolVersion?: number | ProtocolRange;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
-  readonly statePath?: string;
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
+  /** why: test-only, replaces the poster a gateway's alerts send through. */
+  readonly webhookPoster?: WebhookPoster;
+}
+
+interface UpdateOptionsParts {
+  readonly clock: Clock;
+  readonly dataDirectory: string;
+  readonly eventBus: EventBus;
+  readonly filesystem: Filesystem;
+  readonly ipc: IpcConnector & IpcListenerFactory;
+  readonly npm: NpmCli;
+  readonly role: DaemonRole;
+  readonly version: string;
+  readonly versionCheck: VersionCheck;
+}
+
+// why: both roles share these; each adds what it holds leases with.
+function updateOptionsFor(
+  parts: UpdateOptionsParts,
+): Omit<UpdateCoordinatorOptions, "leasing" | "registry"> {
+  const { dataDirectory, ipc, role } = parts;
+  return {
+    clock: parts.clock,
+    dataDirectory,
+    eventBus: parts.eventBus,
+    filesystem: parts.filesystem,
+    latestVersion: () => parts.versionCheck.latest(),
+    launcher: new NodeUpdaterLauncher(),
+    logPath: join(dataDirectory, "daemon.log"),
+    npm: parts.npm,
+    otherRoleRunning: () =>
+      socketHeld(
+        ipc,
+        resolveDaemonSocketPath(
+          daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
+        ),
+      ),
+    packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    pid: process.pid,
+    role,
+    simlockHome: resolveSimlockHome(),
+    version: parts.version,
+  };
 }
 
 /** Constructs the daemon's real adapters once; all state remains in the daemon. */
-// fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
+  let opened: StateDatabase | undefined;
+  let check: VersionCheck | undefined;
+  try {
+    return await composeDaemon(
+      options,
+      (state) => {
+        opened = state;
+      },
+      (started) => {
+        check = started;
+      },
+    );
+  } catch (error: unknown) {
+    // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
+    check?.dispose();
+    // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
+    opened?.close();
+    throw error;
+  }
+}
+
+// fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
+async function composeDaemon(
+  options: StartDaemonOptions,
+  onStateOpened: (state: StateDatabase) => void,
+  onVersionCheck: (check: VersionCheck) => void,
+): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
-  const dataDirectory = options.dataDirectory ?? resolveSimlockHome();
+  const role = options.role ?? "worker";
+  const dataDirectory = options.dataDirectory ?? daemonDataDirectory(resolveSimlockHome(), role);
   const filesystem = options.filesystem ?? new NodeFilesystem();
   const clock = options.clock ?? new SystemClock();
   const systemStats = options.systemStats ?? new NodeSystemStats();
@@ -162,18 +277,19 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
-  const statePath = options.statePath ?? join(dataDirectory, "state.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
-  const config = await loadConfig({
+  const { config, defaulted } = await loadConfigWithDefaults({
     configPath,
     filesystem,
-    modules: moduleDefinitions.map(({ config: moduleConfig, name }) => ({
+    modules: moduleDefinitions.map(({ config: moduleConfig, enabledByDefault, name }) => ({
       name,
       ...moduleConfig,
+      ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
+    role,
     systemStats,
     warn: (message) => configWarnings.push(message),
   });
@@ -208,10 +324,27 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     eventBus,
     logger,
   });
+  const deviceDataTables = await resolveDeviceDataTables(options);
+  await refuseWhenDaemonAnswers({ connector: ipc, endpoint: socketPath });
+  const state = await openStateDatabase({
+    dataDirectory,
+    // why: node:sqlite writes the real disk, so the state never goes through a daemon's injected filesystem
+    filesystem: new NodeFilesystem(),
+    logger: logger.child("state"),
+    oldFiles: role === "gateway" ? ["tokens.json", "workers.json"] : ["state.json", "tokens.json"],
+    owners:
+      role === "gateway"
+        ? [tokensOwner, drainedWorkersOwner]
+        : [registryOwner, warmPoolOwner, tokensOwner, ...new Set(deviceDataTables.values())],
+    sqlite: new NodeSqliteOpener(),
+    upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
+  });
+  onStateOpened(state);
   // why: both modes check the same credentials, so the checks are built once, before the mode branch.
-  const auth = createAuth({
+  const created = createAuth({
     clock,
     config: config.http,
+    database: state.database,
     dataDirectory,
     filesystem,
     idGenerator,
@@ -219,11 +352,21 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     logger: logger.child("auth"),
     secrets: new CryptoTokenSecrets(),
   });
+  const auth = { ...created, adminSecret: reportingAdminSecret(created.adminSecret, options) };
   // ADR 0005 §1/§2: one process, one mode. A gateway starts no drivers, validates no device
   // roots, loads no registry, and runs no reaper, health monitor or capacity strategy -- so the
   // branch is here, before any of that is built, rather than as a set of conditionals threaded
   // through the worker's composition below.
-  if (config.mode === "gateway") {
+  const npm =
+    options.npm ?? new NodeNpmCli({ runner: baseProcessRunner, filesystem, dataDirectory });
+  const versionCheck = startVersionCheck({
+    npm,
+    clock,
+    logger: logger.child("version-check"),
+    enabled: config.update.check,
+  });
+  onVersionCheck(versionCheck);
+  if (role === "gateway") {
     return startGatewayDaemon({
       auth,
       clock,
@@ -239,26 +382,27 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       idGenerator,
       ipc,
       logger,
+      npm,
       optionalModules: moduleDefinitions,
       socketPath,
+      state,
+      ...(options.updater === undefined ? {} : { updater: options.updater }),
       version: version,
+      versionCheck,
+      ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
-  // `defaultTtlMs` is read on load only, and only by ADR 0004's record migration: a lease
-  // written before it has no stored width of its own, and takes the configured default rather
-  // than a guess derived from its deadline.
   const registry = await Registry.load({
     clock,
-    defaultTtlMs: config.lease.defaultTtlMs,
+    deviceData: deviceDataTables,
     eventBus,
-    filesystem,
     idGenerator,
     leaseIdentity: config.lease.identity,
     leaseRequestLimits: {
       maxRecords: config.lease.maxRequestRecords,
       retentionMs: config.lease.requestRetentionMs,
     },
-    statePath,
+    state,
   });
   // Before discovery, because every root a driver validates is checked against it, and it
   // is written exactly once per home and never regenerated (ADR 0001, decision 2).
@@ -338,7 +482,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     modelPreferences,
     optionalModules: () => moduleHost.findings(),
     prerequisiteChecks,
+    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
     registry,
+    state,
     systemStats,
   });
   const leaseEnvironment: Record<string, string> = Object.assign(
@@ -349,6 +495,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const moduleHost = await createModuleHost({
     config,
+    defaulted,
     context: {
       cancelPending: (requesterId) => {
         if (cancelPendingRequest === undefined) {
@@ -361,6 +508,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       environment: process.env,
       events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
       filesystem,
+      instanceId,
       leaseEnvironment,
       nodePath: process.execPath,
       nodeVersion: process.versions.node,
@@ -373,6 +521,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     definitions: moduleDefinitions,
     logger,
+    tokens: auth.tokens,
     role: "worker",
   });
   // Builds leasing on top of core (ADR 0018 §2).
@@ -460,6 +609,14 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   // on a daemon whose disposal has already run, and nothing would cancel them.
   let stopping = false;
   const convergeStartup = async (): Promise<void> => {
+    await sweepWriteLeftovers({
+      deviceRoots: deviceRoots(drivers),
+      directories: [dataDirectory],
+      filesystem,
+      logger,
+      processSupervisor,
+      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+    });
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
@@ -506,6 +663,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     }),
     leases: leasing,
     logger: logger.child("server"),
+    ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
     processRunner,
     execEnv: process.env,
@@ -523,6 +681,21 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
     tokens: auth.tokens,
+    update: createUpdateCoordinator({
+      ...updateOptionsFor({
+        clock,
+        dataDirectory,
+        eventBus,
+        filesystem,
+        ipc,
+        npm,
+        role,
+        version,
+        versionCheck,
+      }),
+      leasing,
+      registry,
+    }),
     version: version,
     converge: convergeStartup,
     settle: async () => {
@@ -532,6 +705,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     },
     // Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
+      versionCheck.dispose();
       core.dispose();
       leasing.dispose();
       // Before the drivers: a running install is ended through its signal while its driver
@@ -548,6 +722,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
         }
       }
       await eventHistory.stop();
+      state.close();
     },
     // Review finding S5: waits for the concurrently-started gateway to either finish binding
     // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
@@ -595,8 +770,9 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       if (gatewayUplink !== undefined) {
         void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
       }
+      const profilesPrepared = moduleHost.prepareLocalProfiles();
       if (!config.http.enabled) return;
-      void startHttpGateway().then(
+      void profilesPrepared.then(startHttpGateway).then(
         () => resolveGatewayStarted?.(),
         (error: unknown) => {
           logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
@@ -685,9 +861,14 @@ interface GatewayDaemonOptions {
   readonly idGenerator: IdGenerator;
   readonly ipc: IpcConnector & IpcListenerFactory;
   readonly logger: Logger;
+  readonly npm: NpmCli;
   readonly optionalModules: readonly OptionalModuleDefinition<unknown>[];
   readonly socketPath: string;
+  readonly state: StateDatabase;
+  readonly updater?: StartDaemonOptions["updater"];
   readonly version: string;
+  readonly versionCheck: VersionCheck;
+  readonly webhookPoster?: WebhookPoster;
 }
 
 /**
@@ -713,6 +894,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     filesystem,
     idGenerator,
     logger,
+    state,
   } = options;
   // The gateway's own identity, used to namespace the principal it announces to each worker
   // (ADR 0005 §27's shape) so a worker's logs attribute what the gateway did to the gateway.
@@ -739,11 +921,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
     authenticate: (credential) => auth.authenticateUplink(credential),
     clock,
-    drainStore: new FileDrainStore({
-      filesystem,
-      logger: logger.child("gateway"),
-      path: join(dataDirectory, "workers.json"),
-    }),
+    drainStore: new StateDrainStore({ database: state.database, logger: logger.child("gateway") }),
     eventBus,
     // ADR 0005 §15: this gateway's own cap, compared against every connected worker's own
     // reported one so the registry can warn when a worker's is lower.
@@ -823,6 +1001,25 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       ? undefined
       : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
 
+  let alerts: Alerts | undefined;
+
+  // why: a gateway holds no leases of its own and fleet admission is not changed (ADR 0042 §6), so an update never waits.
+  const update = createUpdateCoordinator({
+    ...updateOptionsFor({
+      clock,
+      dataDirectory,
+      eventBus,
+      filesystem,
+      ipc: options.ipc,
+      npm: options.npm,
+      role: "gateway",
+      version: options.version,
+      versionCheck: options.versionCheck,
+    }),
+    ...options.updater,
+    leasing: { holdForUpdate: async () => {}, releaseUpdateHold: async () => {} },
+    registry: { snapshot: { leases: [] } },
+  });
   const gatewayDispatcher = new GatewayDispatcher({
     awaitReady: () => Promise.resolve(),
     clock,
@@ -833,10 +1030,17 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     directory: gatewayService,
     eventHistory,
     health: () => daemon.health,
+    version: options.version,
     host: fitHostFacts({ ...options.hostSystem, tools: [] }),
     ...(hostLoad === undefined ? {} : { load: () => fitHostLoad(hostLoad.current()) }),
     leaseIndex,
+    latestVersion: () => options.versionCheck.latest(),
     logger: logger.child("gateway"),
+    update,
+    // why: `alerts` is built after this dispatcher but before start(), and only with destinations; without any, the option stays out.
+    ...(config.gateway.alerts.destinations.length === 0
+      ? {}
+      : { testDestination: (destination: string) => (alerts as Alerts).test(destination) }),
     tokens: auth.tokens,
     workers: gatewayService.workers,
     historyPath: join(dataDirectory, HISTORY_DB_NAME),
@@ -850,6 +1054,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     ...(hostLoad === undefined ? {} : { hostLoad }),
     // ADR 0005 §32: the contract's second implementation, serving the same transport.
     dispatcher: gatewayDispatcher,
+    update,
     eventBus,
     host: new DaemonEndpointHost({
       connector: options.ipc,
@@ -876,13 +1081,17 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       fleetCoordinator.start();
     },
     dispose: async () => {
+      options.versionCheck.dispose();
       gatewayDispatcher.dispose();
       fleetCoordinator.dispose();
       gatewayOwnerRoutedFacts.dispose();
       await gatewayService.stop();
       await eventHistory.stop();
+      state.close();
     },
     stopAuxiliary: async () => {
+      // why: before the HTTP gateway closes the worker uplinks, so this gateway's own stop sends no worker.disconnected (ADR 0035 §4).
+      alerts?.stop();
       await moduleHost.beforeDrain();
       await httpStarted.catch(() => undefined);
       await stopHttpGateway?.();
@@ -949,6 +1158,20 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       await gateway.stop();
       app.dispose();
     };
+  }
+
+  // why: built before start(), whose converge opens the uplink listener, so no worker joins before alerts subscribes.
+  if (config.gateway.alerts.destinations.length > 0) {
+    alerts = createAlerts({
+      clock,
+      destinations: config.gateway.alerts.destinations,
+      eventBus,
+      idGenerator,
+      logger: logger.child("alerts"),
+      poster: options.webhookPoster ?? new FetchWebhookPoster(),
+      version: options.version,
+      workerLabel: (workerId) => gatewayService.workers.view(workerId)?.label,
+    });
   }
 
   const daemonStarted = daemon.start().finally(() => {
@@ -1038,6 +1261,41 @@ export interface DriverDiscovery {
   readonly drivers: readonly Driver[];
   readonly prerequisiteChecks: readonly PrerequisiteCheck[];
   readonly rejections: readonly DriverRejection[];
+}
+
+const WORKER_UPGRADE_STEP =
+  "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.";
+const GATEWAY_UPGRADE_STEP =
+  "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.";
+
+/** why: both tables whatever the host's platform, so a device whose driver was refused still loads. */
+export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
+  return new Map([
+    ["android", androidDeviceDataTable],
+    ["ios", iosDeviceDataTable],
+  ]);
+}
+
+/**
+ * why: one function picks the map -- the option, else the `SIMLOCK_DRIVERS_MODULE` module's
+ * `deviceDataTables` export, else the production tables -- so the state open and `Registry.load`
+ * always see the same one.
+ */
+export async function resolveDeviceDataTables(
+  options: Pick<StartDaemonOptions, "deviceDataTables">,
+): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
+  if (options.deviceDataTables !== undefined) return options.deviceDataTables;
+  const modulePath = process.env.SIMLOCK_DRIVERS_MODULE;
+  if (modulePath === undefined) return productionDeviceDataTables();
+  const imported = (await import(pathToFileURL(resolve(modulePath)).href)) as {
+    deviceDataTables?: unknown;
+  };
+  if (!(imported.deviceDataTables instanceof Map)) {
+    throw new Error(
+      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+    );
+  }
+  return imported.deviceDataTables as ReadonlyMap<Platform, DeviceDataTable>;
 }
 
 export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {
@@ -1139,6 +1397,7 @@ async function discoverIosDriver(
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+      pid: process.pid,
     });
     logger.info("Discovered driver", { platform: "ios" });
     return { driver };
@@ -1203,6 +1462,7 @@ async function discoverAndroidDriver(
       // Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
+      pid: process.pid,
     });
     logger.info("Discovered driver", { platform: "android" });
     return { driver };
@@ -1433,32 +1693,170 @@ export function eventBusLogger(logger: Logger): EventBusLogger {
   };
 }
 
+export function parseDaemonArgv(argv: readonly string[]): DaemonMode | undefined {
+  if (argv.length === 0) return "worker";
+  if (argv.length === 1 && argv[0] === "--gateway") return "gateway";
+  return undefined;
+}
+
 /**
- * Best-effort logger for the fatal startup handler below. It cannot depend on the
+ * why: best-effort logger for the fatal startup handler below. It cannot depend on the
  * daemon's own `Config` — that is exactly what may have failed to load — so it always
- * writes to the default log location at a fixed level.
+ * writes to the daemon's own folder at a fixed level.
  */
-function createFatalLogger(): Logger {
+function createFatalLogger(
+  role: DaemonMode | undefined,
+  level: "error" | "info" = "error",
+): Logger {
   return new JsonLinesLogger({
     clock: new SystemClock(),
-    level: "error",
+    level,
     module: "daemon",
-    sink: new NodeFileLogSink({ path: join(resolveSimlockHome(), "daemon.log") }),
+    sink: new NodeFileLogSink({
+      path: join(daemonDataDirectory(resolveSimlockHome(), role ?? "worker"), "daemon.log"),
+    }),
   });
+}
+
+function logAlreadyRunning(role: DaemonMode, error: DaemonAlreadyRunningError): void {
+  try {
+    createFatalLogger(role, "info").info("Daemon already running", { socket: error.endpoint });
+  } catch {
+    // why: logging itself failed, so the line goes to the console rather than being swallowed.
+    console.error(error.message);
+  }
+}
+
+function logFatalStart(role: DaemonMode | undefined, message: string, extra: object): void {
+  try {
+    createFatalLogger(role).error("Daemon failed to start", { message, ...extra });
+  } catch {
+    // why: logging itself failed (e.g. an unwritable data directory), so the failure goes to the console rather than being swallowed.
+    console.error(message);
+  }
+  process.exitCode = 1;
+}
+
+/** why: only a worker has a service check; a gateway and an unsupported platform (no manager) have none. */
+export function serviceCheckFor(
+  role: DaemonMode,
+  manager: ServiceManager | undefined,
+  definition: () => ServiceDefinition,
+): { readonly serviceCheck?: ServiceCheck } {
+  if (manager === undefined || role !== "worker") return {};
+  const { name } = definition();
+  return {
+    serviceCheck: {
+      manager: manager.manager,
+      name,
+      check: async () => {
+        const state = await manager.state(definition());
+        return state.state === "broken" ? state.missing : [];
+      },
+    },
+  };
+}
+
+/** why: the process facts the production service check reads, injectable so a test can prove the definition it builds. */
+export interface ServiceCheckHost {
+  readonly manager: ServiceManager | undefined;
+  readonly root: string;
+  readonly home: string;
+  readonly nodePath: string;
+  readonly mainPath: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+function currentServiceCheckHost(): ServiceCheckHost {
+  return {
+    manager: productionServiceManager(process.platform, {
+      runner: new NodeProcessRunner(),
+      filesystem: new NodeFilesystem(),
+      uid: process.getuid?.() ?? 0,
+    }),
+    root: resolveSimlockHome(),
+    home: homedir(),
+    nodePath: process.execPath,
+    mainPath: fileURLToPath(import.meta.url),
+    env: process.env,
+  };
+}
+
+export function productionServiceCheck(
+  role: DaemonMode,
+  host: ServiceCheckHost = currentServiceCheckHost(),
+): { readonly serviceCheck?: ServiceCheck } {
+  return serviceCheckFor(role, host.manager, () =>
+    serviceDefinition({
+      ...(host.manager === undefined ? {} : { manager: host.manager.manager }),
+      role,
+      root: host.root,
+      dataDirectory: daemonDataDirectory(host.root, role),
+      home: host.home,
+      nodePath: host.nodePath,
+      mainPath: host.mainPath,
+      env: host.env,
+    }),
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   filterSqliteExperimentalWarning();
-  void startDaemon().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : undefined;
-    try {
-      createFatalLogger().error("Daemon failed to start", { message, stack });
-    } catch {
-      // Logging itself failed (e.g. an unwritable data directory) -- fall back to
-      // the original behavior so the failure is not silently swallowed.
-      console.error(error);
-    }
-    process.exitCode = 1;
-  });
+  const argv = process.argv.slice(2);
+  const role = parseDaemonArgv(argv);
+  if (role === undefined) {
+    logFatalStart(undefined, "Unknown daemon arguments", { argv });
+  } else {
+    // why: one SIGTERM handler for both phases: before the daemon is up there is nothing to stop, so it exits 0 at once; after, it stops with reason `signal` and exits 0.
+    let running: Awaited<ReturnType<typeof startDaemon>> | undefined;
+    let removeAdminSecret: (() => Promise<void>) | undefined;
+    void startDaemon({
+      role,
+      ...productionServiceCheck(role),
+      onAdminSecretWritten: (remove) => {
+        removeAdminSecret = remove;
+      },
+    })
+      .then((daemon) => {
+        running = daemon;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DaemonAlreadyRunningError) {
+          logAlreadyRunning(role, error);
+          return;
+        }
+        logFatalStart(role, error instanceof Error ? error.message : String(error), {
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      });
+    process.once("SIGTERM", () => {
+      if (running === undefined) {
+        // why: the credential is written before startup finishes; a daemon exiting now must not leave it behind.
+        void (removeAdminSecret?.() ?? Promise.resolve()).finally(() => process.exit(0));
+        return;
+      }
+      void running.stop("signal").finally(() => process.exit(0));
+    });
+  }
+}
+
+/** why: hands the entry a way to remove the credential only after this daemon wrote it, so a start that lost the race never removes the winner's file. */
+function reportingAdminSecret(
+  secret: Auth["adminSecret"],
+  options: StartDaemonOptions,
+): Auth["adminSecret"] {
+  return {
+    persist: async () => {
+      await secret.persist();
+      options.onAdminSecretWritten?.(() => secret.remove());
+    },
+    remove: () => secret.remove(),
+  };
+}
+
+/** why: a root's staging directory sits beside it, so the sweep looks there for leftovers. */
+function deviceRoots(drivers: readonly Driver[]): string[] {
+  return drivers.flatMap((driver) =>
+    "deviceRoot" in driver && typeof driver.deviceRoot === "string" ? [driver.deviceRoot] : [],
+  );
 }

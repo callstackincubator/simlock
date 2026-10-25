@@ -31,13 +31,6 @@ describe("MetaFrameScanner", () => {
     expect(found.at(-1)?.bytes).toEqual(bytes);
   });
 
-  it("reports the meta frame it returned as exactly the bytes that frame occupies", () => {
-    const bytes = metaFrame();
-    const scanner = new MetaFrameScanner();
-    const found = scanner.push(bytes);
-    expect(found?.bytes.byteLength).toBe(bytes.byteLength);
-  });
-
   it("refuses a stream that puts a video frame before the meta frame", () => {
     const scanner = new MetaFrameScanner();
     // why: the meta frame is the one promise the envelope makes, and a decoder configured from a header

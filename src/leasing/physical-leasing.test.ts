@@ -5,19 +5,18 @@ import {
   type LeaseProgress,
   NoDriverError,
   type Config,
+  type MaxPerRequester,
   type PhysicalDevice,
-  Registry,
   UnknownModelError,
 } from "../core/index.js";
-import { FakeDriver, testComponentWiring } from "../core/testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring, testStateOf } from "../core/testing.js";
 import { EventBus, type EventMap } from "../bus/index.js";
-import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock, FakeSystemStats } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
-const statePath = "/home/agent/.simlock/state.json";
 
 const physicalRequest = {
   model: "iPhone 15 Pro",
@@ -42,6 +41,7 @@ function config(leaseOverrides: object = {}): Config {
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
@@ -62,6 +62,7 @@ function config(leaseOverrides: object = {}): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,
@@ -107,7 +108,7 @@ function config(leaseOverrides: object = {}): Config {
 async function createHarness(
   options: {
     readonly reclaimEstimateMs?: number;
-    readonly lease?: { readonly maxPerRequester?: number };
+    readonly lease?: { readonly maxPerRequester?: MaxPerRequester };
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -121,12 +122,10 @@ async function createHarness(
     platform: "ios",
   });
   let nextId = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus: bus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: { generate: () => `${nextId++}` },
-    statePath,
   });
   const wiring = testComponentWiring({ clock, drivers: [driver], eventBus: bus, registry });
   const engine = createTestEngine({
@@ -137,6 +136,7 @@ async function createHarness(
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
     registry,
+    state: testStateOf(registry),
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
   });
   return { bus, clock, decisions: wiring.decisions, driver, engine, registry };
@@ -531,6 +531,19 @@ describe("createLeasing with physical devices", () => {
     const third = await outcome(harness.engine.request(virtualRequest, asking("agent-1")));
 
     expect(third).toMatchObject({ name: "RequesterAlreadyLeasedError" });
+  });
+
+  it("a physical iPhone lease counts against the iOS limit of a per-platform lease.maxPerRequester", async () => {
+    const harness = await createHarness({ lease: { maxPerRequester: { ios: 1, android: 1 } } });
+    await enrollIphone(harness, "UDID-A");
+    const phone = await harness.engine.request(physicalRequest, asking("agent-1"));
+
+    const simulator = await outcome(harness.engine.request(virtualRequest, asking("agent-1")));
+
+    expect(simulator).toMatchObject({
+      message: `Requester agent-1 already holds iOS lease ${phone.lease.id}; release it (\`simlock release ${phone.lease.id}\`) before requesting another iOS device`,
+      name: "RequesterAlreadyLeasedError",
+    });
   });
 
   it("declines a probe for a physical request nothing could match unresolvable-spec, and one whose matches are all leased no-wait", async () => {

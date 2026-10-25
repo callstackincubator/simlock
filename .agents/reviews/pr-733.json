@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "id": "R1",
+      "role": "code",
+      "class": "testing 2",
+      "outcome": "fixed",
+      "path": "src/drivers/android/index.test.ts:1587",
+      "fix": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    },
+    {
+      "id": "R2",
+      "role": "claims",
+      "class": "manual claims path proof for durable marks",
+      "outcome": "fixed",
+      "path": "src/drivers/android/AGENTS.md:79",
+      "fix": "9d1bc4ed77e549dcae9c87ee9042f09282d1331c"
+    },
+    {
+      "id": "R3",
+      "role": "code",
+      "class": "lease loss on failed AVD path query",
+      "outcome": "intentional",
+      "path": "src/drivers/android/index.ts"
+    },
+    {
+      "id": "R4",
+      "role": "code",
+      "class": "style long manual line",
+      "outcome": "nonblocking",
+      "path": "src/drivers/android/AGENTS.md:79"
+    }
+  ]
+}

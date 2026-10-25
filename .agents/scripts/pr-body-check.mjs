@@ -9,7 +9,9 @@
 //     (`skipped` in place of the counts for a review the diff's kind left out) (rule 14);
 //   - a line under `Rejected:` is not tagged `spec:`, `code:` or `claims:` (rule 14);
 //   - the body says "spec needs" anywhere outside a code block (rule 15);
-//   - on a <kind>/<n> branch, `### Status` or `## Assumptions` is missing (coding rule 2).
+//   - on a <kind>/<n> branch, `### Status` or `## Assumptions` is missing (coding rule 2);
+//   - on a <kind>/<n> branch, the Review counts line names a review that ran and the PR has no
+//     comment headed `## Review ledger` (REVIEW.md, "Measurement"); checked only with a PR number.
 //
 // It warns (exit 0) when the Review section has no `Rounds: <n>. Tokens: <n>M.` line, or the
 // prose runs over 200 words: everything outside code blocks, checklist lines and the Status,
@@ -28,6 +30,7 @@ const args = process.argv.slice(2);
 const draftOk = args.includes("--draft-ok");
 let body;
 let branch = "";
+let prNumber = null;
 const fileAt = args.indexOf("--body-file");
 if (fileAt !== -1) {
   body = readFileSync(args[fileAt + 1], "utf8");
@@ -49,6 +52,7 @@ if (fileAt !== -1) {
   );
   body = pull.body ?? "";
   branch = pull.head.ref;
+  prNumber = pr;
 }
 body = body.replace(/\r/g, "");
 
@@ -107,6 +111,41 @@ if (/^(bug|feature|task)\/\d+$/.test(branch)) {
   if (section(lines, /^### Status\s*$/) === null) failures.push("no `### Status` section");
   if (section(lines, /^## Assumptions\s*$/) === null) {
     failures.push("no `## Assumptions` section (coding rule 2)");
+  }
+}
+
+// why: only a delivery PR (<kind>/<n>) has a ledger; a routine's or a person's chore PR gets
+// the reviewer's findings comment instead.
+if (
+  prNumber !== null &&
+  /^(bug|feature|task)\/\d+$/.test(branch) &&
+  lines.some(
+    (l) =>
+      REVIEW_COUNTS.test(l) &&
+      !/^(Spec|Code|Claims) review: skipped\. (Code|Claims) review: skipped\. Claims review: skipped\.$/.test(
+        l,
+      ),
+  )
+) {
+  const comments = JSON.parse(
+    execFileSync(
+      "gh",
+      [
+        "api",
+        "-X",
+        "GET",
+        `repos/${repository()}/issues/${prNumber}/comments`,
+        "-f",
+        "per_page=100",
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ),
+  );
+  if (!comments.some((c) => /^## Review ledger\s*$/m.test(c.body ?? ""))) {
+    failures.push("no comment headed `## Review ledger` (REVIEW.md, Measurement)");
   }
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// `node .agents/scripts/ci-failures.mjs <pr>`: the tests that failed in the newest finished run
-// of each workflow on the PR's branch. A push cancels the run before it, so while pushes come
+// `node .agents/scripts/ci-failures.mjs <pr | --branch <name>>`: the tests that failed in the
+// newest finished run of each workflow on the PR's branch, or on the named branch. A push cancels the run before it, so while pushes come
 // faster than CI the head's own checks stay pending and only an older run shows a failure.
 //
 // Prints `none`, or for each workflow whose newest finished run failed: `<workflow> run <id> at
@@ -9,8 +9,8 @@
 import { execFileSync } from "node:child_process";
 
 const pr = process.argv[2];
-if (pr === undefined) {
-  console.error("usage: ci-failures.mjs <pr>");
+if (pr === undefined || (pr === "--branch" && process.argv[3] === undefined)) {
+  console.error("usage: ci-failures.mjs <pr | --branch <name>>");
   process.exit(2);
 }
 const gh = (...args) =>
@@ -22,7 +22,10 @@ const gh = (...args) =>
 // GitHub's stored logs spell the escape byte as the two characters `^[`.
 const ANSI = new RegExp(`(?:${String.fromCharCode(27)}|\\^\\[)\\[[0-9;]*m`, "g");
 
-const branch = JSON.parse(gh("pr", "view", pr, "--json", "headRefName")).headRefName;
+const branch =
+  pr === "--branch"
+    ? process.argv[3]
+    : JSON.parse(gh("pr", "view", pr, "--json", "headRefName")).headRefName;
 const runs = JSON.parse(
   gh(
     "run",

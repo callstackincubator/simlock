@@ -24,6 +24,7 @@
                   "LeaseRecord",
                   "LeaseRequestFailure",
                   "LeaseRequestLimits",
+                  "MaxPerRequester",
                   "SerializedDecision",
                   "UsageReader",
                   "createUsageReader",
@@ -40,6 +41,7 @@
               {
                 "group": ["**/leasing/index.js"],
                 "allowImportNames": [
+                  "HeldLease",
                   "IdempotencyConflictError",
                   "InMemoryLeaseRequestStore",
                   "LeaseRequestBook",
@@ -51,6 +53,7 @@
                   "ReplayedLeaseRequestError",
                   "RequestCancelledError",
                   "RequesterAlreadyLeasedError",
+                  "requesterLimitDecision",
                   "WaitQueue",
                   "WaiterState",
                   "WaitingRequest"

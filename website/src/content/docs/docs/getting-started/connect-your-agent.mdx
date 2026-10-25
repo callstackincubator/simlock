@@ -1,0 +1,125 @@
+---
+title: Connect your agent
+description: Tell a coding agent to lease devices through the simlock CLI, or give it Simlock's MCP server, and make sure each agent session gets its own identity.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+An agent can use Simlock in two ways on the machine where it runs: it runs `simlock` commands in its shell, or it calls tools on Simlock's MCP server. Both reach the same daemon and follow the same rules. Pick one per agent session.
+
+Agents on another machine use the HTTP API instead. See [Remote agents](/simlock/docs/using-devices/remote-agents).
+
+## Give each session its own identity
+
+Simlock counts leases per **requester**, the agent identity a lease belongs to. By default a requester holds one lease at a time. Each agent session needs its own requester, and that requester must stay the same for the whole session.
+
+| Agent tool | CLI | MCP server |
+| --- | --- | --- |
+| Claude Code | Automatic: `claude-code:<session id>` | Automatic: the same `claude-code:<session id>` |
+| Codex | Automatic: `codex:<session id>` | Automatic, but different from the CLI's: `mcp:<process id>` |
+| Any other tool | Set `SIMLOCK_AGENT_ID` | Automatic: `mcp:<process id>` |
+
+Under Claude Code and Codex, every `simlock` command in one session, including those its sub-agents run, uses the session's identity. So the session and its sub-agents share one lease. If your sub-agents need a device each, ask the operator to raise `lease.maxPerRequester`, as a number or per platform. See [Configuration](/simlock/docs/reference/configuration).
+
+Codex does not pass its session ID to MCP servers. Under Codex, the MCP server and the CLI are two different requesters in the same session, so the session could hold two leases. Use only one of them per session.
+
+With any other tool, export a different `SIMLOCK_AGENT_ID` in each agent session before it runs `simlock`:
+
+```sh
+export SIMLOCK_AGENT_ID="review-bot-7f3a"
+```
+
+Without it, every `simlock` command gets a new identity from its own process ID, so the one-lease limit does nothing and nobody can tell which agent holds which device.
+
+<Aside type="caution">
+Do not put a fixed `SIMLOCK_AGENT_ID` in a shared shell profile or a shared MCP config. Every session would then be the same requester: the second session to ask for a device is refused with `REQUESTER_ALREADY_LEASED` while the first holds one.
+</Aside>
+
+`SIMLOCK_AGENT_ID` wins over the session ID when both are set. `simlock lease --agent-id <id>` wins over both, for that one command.
+
+## Install the skill
+
+Run `simlock setup` once. It writes a small `simlock` skill into Claude Code and Codex, for every project of your user, or for the current project with `--project`. The skill tells the agent what Simlock is, to check its setup with `simlock whoami` and to read the rules with `simlock instructions`. It holds no rules itself, so it stays right after you update Simlock.
+
+```sh
+simlock setup
+```
+
+In a terminal, `setup` asks for the scope and, for each tool, whether to connect Simlock's MCP server too. Pass `--user` or `--project`, `--tool claude-code` or `--tool codex`, and `--mcp` or `--no-mcp` to answer for a script. See [`simlock setup`](/simlock/docs/reference/cli#simlock-setup) for the paths and the report.
+
+## Use the CLI
+
+Run `simlock instructions` and paste its output into your project's `AGENTS.md` or `CLAUDE.md`. It prints the current rules for using Simlock: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it again after you update Simlock, so your agents follow the rules your version has.
+
+```sh
+simlock instructions >> AGENTS.md
+```
+
+`simlock instructions --json` prints the same text as one JSON object. The command needs no running daemon.
+
+`--detach` makes `simlock lease` return as soon as it prints the lease, which suits agents that run one command per tool call. Without it, the command stays running, renews the lease and releases it when it exits. Use that form when the agent can run a command in the background.
+
+While the request waits in the queue or a device boots, `simlock lease` blocks and prints progress on stderr. A lease can take a minute or more when Simlock has to create a device, so give the command a long timeout in your agent tool.
+
+## Use the MCP server
+
+`simlock mcp` runs Simlock's MCP server over stdio. It has five tools:
+
+| Tool | What it does |
+| --- | --- |
+| `list_devices` | Lists the models, OS versions and Android system images you can lease on this machine. It never downloads anything. |
+| `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
+| `release_simulator` | Releases this session's lease. |
+| `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. |
+| `run_on_device` | Runs one `simctl`, `adb` or `devicectl` command on this session's lease, on the machine that holds the device. Takes `tool`, `args` and, optionally, `stdin`. Never takes a device or a lease id: Simlock fills in the lease's device and refuses a command that names another. Returns `{exitCode, stdout, stderr, truncated}`; stdout and stderr each keep their last 32768 characters, and `truncated` says when any was cut. A non-zero `exitCode` is the command's own answer, not an error. Without a lease it answers `NO_LEASE`. There is no terminal, and a command that waits for input is stopped after the time limit (10 minutes by default). |
+
+The server sends the short version of the rules to the client when it connects, and the full text as the resource `simlock://instructions`. It renews its lease while it runs, and releases it when the agent tool closes the connection. It also starts the daemon if it is not running.
+
+<Tabs syncKey="agent-tool">
+<TabItem label="Claude Code">
+
+Add the server to `.mcp.json` at the root of your project:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "simlock": {
+      "command": "simlock",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or let `simlock setup --mcp` run `claude mcp add -s user simlock -- simlock mcp` for you.
+
+The server takes the Claude Code session's identity, the same one the CLI uses in that session.
+
+</TabItem>
+<TabItem label="Codex">
+
+```sh
+codex mcp add simlock -- simlock mcp
+```
+
+Or let `simlock setup --mcp` run it for you, at the user scope.
+
+The server gets its own identity from its process ID. It is not the identity the CLI has in the same session.
+
+</TabItem>
+<TabItem label="Other MCP clients">
+
+Configure a stdio server that runs `simlock` with the argument `mcp`. Leave `SIMLOCK_AGENT_ID` unset: each server process gets its own identity from its process ID.
+
+This works when the client starts one server process per agent session. If your client shares one server process between sessions, those sessions share one requester and one lease.
+
+</TabItem>
+</Tabs>
+
+To install and launch apps, the agent calls `run_on_device`, for example `{"tool":"simctl","args":["install","/builds/App.app"]}`. File paths are on the machine that holds the device. It works the same through `simlock --gateway mcp`.
+
+If the agent's lease ends for another reason, such as an operator releasing it, the server sends the agent a warning log message. If the device crashes and Simlock reboots it, the agent gets a warning, then a notice when it is ready again under the same lease.
+
+## Through a gateway
+
+On the gateway's own machine, add `--gateway` before the command, for example `simlock --gateway lease ...` or `simlock --gateway mcp`. Agents on other machines use the HTTP API. See [When you need a gateway](/simlock/docs/gateway).

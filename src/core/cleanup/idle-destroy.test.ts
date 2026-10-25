@@ -15,6 +15,7 @@ const config: Config = {
     execTimeoutMs: 11 * 60_000,
     leaseRequestTimeoutMs: 5 * 60_000,
     routing: "warm-then-free" as const,
+    alerts: { destinations: [] },
   },
   drivers: {},
   eventBuffer: { capacity: 1 },
@@ -35,6 +36,7 @@ const config: Config = {
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
   },
   idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
+  update: { check: true },
   warmPool: {
     enabled: true,
     maxConcurrentBoots: 1,

@@ -1,0 +1,92 @@
+name: Website
+
+# Builds the site (website/) from a commit and deploys it to GitHub Pages. It deploys at the end of
+# every release, from the release commit, and by hand (Actions → Website → Run workflow); not on
+# every push to main, so the site describes the version on npm rather than what main is becoming.
+# A pull request that touches the site builds it without deploying, so a page that breaks the
+# build fails its pull request instead of a release.
+
+on:
+  pull_request:
+    paths:
+      [
+        "website/**",
+        "docs/*.md",
+        "src/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        ".github/workflows/website.yml",
+      ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or tag to build; empty builds the branch the run starts from"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit to build"
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # why: a newer push to the same pull request makes the older build moot; a deploy's build is
+    # never cancelled.
+    concurrency:
+      group: website-build-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Enable Corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+      # why: the build script runs `pnpm openapi`, which compiles the daemon from the root's dependencies.
+      - name: Install root dependencies
+        working-directory: .
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Check the HTTP API reference
+        run: node scripts/check-openapi.mjs
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: website/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    # why: on the job, not the workflow, so it holds when a release calls this workflow too; two
+    # deploys at once would race for the same site.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

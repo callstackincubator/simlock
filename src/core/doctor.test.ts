@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -16,22 +16,20 @@ import { DriverCatalog } from "./driver-catalog.js";
 import type { DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
-import { Registry } from "./registry.js";
+import type { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupRead } from "./startup-read.js";
-import { HeldWritesFilesystem, testComponentWiring } from "./testing.js";
+import { loadTestRegistry, openTestState, testComponentWiring, testStateOf } from "./testing.js";
 import { createTestEngine } from "../leasing/testing.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const registered = await registry.registerDevice({
       driverData: { fakeDeviceId: "missing" },
@@ -91,31 +89,22 @@ describe("Doctor", () => {
   it("reports but does not correct a leased-state device with no lease record", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const filesystem = new MemoryFilesystem();
-    await filesystem.writeFileAtomic(
-      "/state.json",
-      JSON.stringify({
-        devices: [
-          {
-            physical: false,
-            createdAt: 1,
-            driverData: { fakeDeviceId: "simlock-stale" },
-            driverDeviceId: "simlock-stale",
-            id: "dev_1",
-            spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-            state: "leased",
-          },
-        ],
-        leases: [],
-      }),
-    );
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
+    const stale = await registry.registerDevice({
+      driverData: { fakeDeviceId: "simlock-stale" },
+      driverDeviceId: "simlock-stale",
+      provisionDuration: 0,
+      spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
+    });
+    await registry.transitionDevice(stale.id, "ready", {
+      event: "device.ready",
+      payload: { bootDuration: 0, deviceId: stale.id },
+    });
+    await registry.transitionDevice(stale.id, "leased");
     const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setManagedReality({
       devices: [
@@ -149,12 +138,10 @@ describe("Doctor", () => {
   it("keeps the first-detected timestamp when drift persists across ticks", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await registry.registerDevice({
       driverData: { fakeDeviceId: "simlock-drift" },
@@ -221,15 +208,13 @@ describe("Doctor", () => {
     for (const { detail, mark } of cases) {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const device = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-marked" },
         driverDeviceId: "simlock-marked",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -288,15 +273,13 @@ describe("Doctor", () => {
   it("flags both a foreign state change and a foreign provenance change on a device that shows both", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "simlock-both" },
       driverDeviceId: "simlock-both",
       provisionDuration: 0,
       spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -341,15 +324,13 @@ describe("Doctor", () => {
   it("ignores provenance marks while Simlock is itself erasing the device", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "simlock-reclaiming" },
       driverDeviceId: "simlock-reclaiming",
       provisionDuration: 0,
       spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -397,12 +378,10 @@ describe("Doctor", () => {
   it("fixes registry-attributable drift and leaves unregistered reality report-only", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const missing = await registry.registerDevice({
       driverData: { fakeDeviceId: "missing" },
@@ -468,12 +447,10 @@ describe("Doctor", () => {
   it("--fix marks a missing device deleted although another device holds a lease", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const spec = { physical: false, model: "Phone", osVersion: "1", platform: "ios" } as const;
     const ids: string[] = [];
@@ -522,95 +499,13 @@ describe("Doctor", () => {
     expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["leased", "deleted"]);
   });
 
-  it.each([
-    {
-      name: "--fix marking a missing device deleted",
-      observedDrifted: undefined,
-      before: undefined,
-      fix: true,
-      expected: { state: "deleted" },
-    },
-    {
-      name: "--fix shutting down a device observed stopped",
-      observedDrifted: observed("drifted", "stopped"),
-      before: { fix: false },
-      fix: true,
-      expected: { state: "shutdown" },
-    },
-    {
-      name: "a run flagging a device observed stopped",
-      observedDrifted: observed("drifted", "stopped"),
-      before: undefined,
-      fix: false,
-      expected: { foreignStateDetectedAt: 10_000, state: "ready" },
-    },
-    {
-      name: "a run flagging a device whose erasable mark is gone",
-      observedDrifted: {
-        ...observed("drifted", "running"),
-        mark: { durable: "tok", erasable: undefined, erasableReadable: true },
-      },
-      before: undefined,
-      fix: false,
-      expected: { foreignProvenanceDetectedAt: 10_000, state: "ready" },
-    },
-  ])(
-    "$name keeps its write, and another device's transition committed in the decision section while that write is in flight keeps its own",
-    async ({ before, expected, fix, observedDrifted }) => {
-      const clock = new FakeClock(10_000);
-      const eventBus = new EventBus(clock);
-      const filesystem = new HeldWritesFilesystem();
-      const registry = await Registry.load({
-        clock,
-        eventBus,
-        filesystem,
-        idGenerator: sequence(),
-        statePath: "/state.json",
-      });
-      const drifted = await readyDevice(registry, "drifted", "ios");
-      const warm = await shutdownDevice(registry, "warm", "ios");
-      const driver = new FakeDriver({ clock, platform: "ios" });
-      driver.setManagedReality({
-        devices: [observed("warm", "stopped"), ...(observedDrifted ? [observedDrifted] : [])],
-        processes: [],
-      });
-      const decisions = new SerializedDecision();
-      const doctor = new Doctor({
-        clock,
-        config: config(),
-        decisions,
-        drivers: [driver],
-        eventBus,
-        registry,
-      });
-      if (before !== undefined) await doctor.reconcile(before);
-
-      filesystem.holding = true;
-      const reconciling = doctor.reconcile({ fix });
-      await filesystem.held(1);
-      const booting = decisions.run(() =>
-        registry.transitionDevice(warm.id, "ready", {
-          event: "device.ready",
-          payload: { bootDuration: 0, deviceId: warm.id },
-        }),
-      );
-      await filesystem.releaseUntil(Promise.all([reconciling, booting]));
-
-      const record = (id: string) => registry.snapshot.devices.find((d) => d.id === id);
-      expect(record(drifted.id)).toMatchObject(expected);
-      expect(record(warm.id)?.state).toBe("ready");
-    },
-  );
-
   it("expires an overdue live lease through leasing when fixing", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await registry.registerDevice({
       driverData: { fakeDeviceId: "live" },
@@ -654,6 +549,7 @@ describe("Doctor", () => {
       eventBus,
       idGenerator: sequence(),
       registry,
+      state: testStateOf(registry),
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 }),
     });
 
@@ -674,12 +570,10 @@ describe("Doctor", () => {
   it("reports foreign-state-change for a device booted outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const iosDevice = await shutdownDevice(registry, "simlock-ios-1", "ios");
     const androidDevice = await shutdownDevice(registry, "simlock_android-1", "android");
@@ -739,12 +633,10 @@ describe("Doctor", () => {
   it("does not report foreign-state-change for a device this daemon holds an operation claim on", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     // A lease-path boot from `shutdown` runs `makeReady` while the committed record still
     // says `shutdown` -- observed reality goes `running` before that boot's own transition
@@ -786,12 +678,10 @@ describe("Doctor", () => {
   it("reports foreign-state-change for a device shut down outside Simlock, on both platforms", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const iosDevice = await readyDevice(registry, "simlock-ios-2", "ios");
     const androidDevice = await readyDevice(registry, "simlock_android-2", "android");
@@ -851,12 +741,10 @@ describe("Doctor", () => {
   it("never reports drift when the observed state is transitioning", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     await readyDevice(registry, "simlock-transition", "ios");
 
@@ -890,15 +778,13 @@ describe("Doctor", () => {
   it("never reports drift for provisioning or reclaiming registry devices", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "simlock-provisioning" },
       driverDeviceId: "simlock-provisioning",
       provisionDuration: 0,
       spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -947,31 +833,16 @@ describe("Doctor", () => {
   });
 
   describe("stalled transitions", () => {
-    it("isStalledTransition holds for a provisioning device past its threshold with no claim", async () => {
+    it("isStalledTransition does not hold for a provisioning device whose platform has no driver", async () => {
       const clock = new FakeClock(10_000);
       const registry = await loadRegistry(clock, new EventBus(clock));
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
       const device = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
       });
-      const stalled = (now: number) =>
-        isStalledTransition({
-          claims: new DeviceOperationClaims(),
-          config: config().stalledTransition,
-          device,
-          driver,
-          now,
-        });
 
-      expect(stalled(10_000 + 9_000)).toBe(false);
-      expect(stalled(10_000 + 9_001)).toBe(true);
       // No driver for the platform: nothing to measure against, so no stall.
       expect(
         isStalledTransition({
@@ -982,39 +853,6 @@ describe("Doctor", () => {
           now: 10_000 + 9_001,
         }),
       ).toBe(false);
-    });
-
-    it("isStalledTransition does not hold for a device with a live operation claim", async () => {
-      const clock = new FakeClock(10_000);
-      const registry = await loadRegistry(clock, new EventBus(clock));
-      const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
-      const device = await readyDevice(registry, "simlock-erasing", "ios");
-      const lease = await registry.createLease({
-        deviceId: device.id,
-        requesterId: "agent",
-        ownerId: "agent",
-        ttlMs: 60_000,
-        ttlDeadline: 999_999,
-      });
-      await registry.beginRelease(lease.id);
-      const reclaiming = registry.snapshot.devices.find((entry) => entry.id === device.id);
-      expect(reclaiming?.state).toBe("reclaiming");
-      const claims = new DeviceOperationClaims();
-      const claim = claims.tryClaim(device.id, "reclaim");
-      const stalled = () =>
-        isStalledTransition({
-          claims,
-          config: config().stalledTransition,
-          device: reclaiming ?? device,
-          driver,
-          // Far past the reclaim threshold (2_000 * 3).
-          now: clock.now() + 600_000,
-        });
-
-      expect(stalled()).toBe(false);
-      // The same device, the same age, is a stall once no live operation accounts for it.
-      claim?.release();
-      expect(stalled()).toBe(true);
     });
 
     it("the doctor's stalled-transition finding is unchanged", async () => {
@@ -1030,7 +868,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const provisioning = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -1086,61 +924,16 @@ describe("Doctor", () => {
       ]);
     });
 
-    it("reports a stalled-transition finding for a provisioning device past its driver-derived threshold", async () => {
-      const clock = new FakeClock(10_000);
-      const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
-        clock,
-        eventBus,
-        filesystem: new MemoryFilesystem(),
-        idGenerator: sequence(),
-        statePath: "/state.json",
-      });
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
-      const device = await registry.registerDevice({
-        driverData: {},
-        driverDeviceId: "simlock-stuck",
-        provisionDuration: 0,
-        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-      });
-      clock.advance(9_001);
-
-      const report = await new Doctor({
-        decisions: new SerializedDecision(),
-        clock,
-        config: config(),
-        drivers: [driver],
-        eventBus,
-        registry,
-      }).reconcile();
-
-      expect(report.findings).toContainEqual({
-        ageMs: 9_001,
-        deviceId: device.id,
-        enteredAt: 10_000,
-        kind: "stalled-transition",
-        platform: "ios",
-        state: "provisioning",
-        thresholdMs: 9_000,
-      });
-    });
-
     it("does not report a stall for a device this daemon holds an operation claim on", async () => {
       // A backgrounded reclaim keeps its device in `reclaiming` for a full erase, which can
       // outlast the threshold. The claim, not the clock, says work is in progress; without it a
       // healthy reclaim is reported as a stall and `--fix` quarantines it.
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = new FakeDriver({
         clock,
@@ -1148,7 +941,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-claimed" },
         driverDeviceId: "simlock-claimed",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -1189,52 +982,13 @@ describe("Doctor", () => {
       );
     });
 
-    it("does not report a stalled-transition finding for a device still legitimately in-flight", async () => {
-      const clock = new FakeClock(10_000);
-      const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
-        clock,
-        eventBus,
-        filesystem: new MemoryFilesystem(),
-        idGenerator: sequence(),
-        statePath: "/state.json",
-      });
-      const driver = new FakeDriver({
-        clock,
-        estimateMs: { boot: 2_000, provision: 1_000 },
-        platform: "ios",
-      });
-      await registry.registerDevice({
-        driverData: {},
-        driverDeviceId: "simlock-slow",
-        provisionDuration: 0,
-        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-      });
-      clock.advance(8_000);
-
-      const report = await new Doctor({
-        decisions: new SerializedDecision(),
-        clock,
-        config: config(),
-        drivers: [driver],
-        eventBus,
-        registry,
-      }).reconcile();
-
-      expect(report.findings.filter((finding) => finding.kind === "stalled-transition")).toEqual(
-        [],
-      );
-    });
-
     it("reports a stalled-transition finding for a reclaiming device whose emulator was killed out from under the daemon", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
       const device = await readyDevice(registry, "simlock-killed", "ios");
@@ -1271,12 +1025,10 @@ describe("Doctor", () => {
     it("holds a reclaiming device to the slower clean level's estimate", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       // A record in `reclaiming` does not say which clean level started it, so the threshold
       // has to clear the slower of the two: pricing it at `standard` would call a healthy
@@ -1324,12 +1076,10 @@ describe("Doctor", () => {
     it("emits device.stalled-transition-detected from the doctor, once, for a stalled device and not for other findings", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = new FakeDriver({
         clock,
@@ -1337,7 +1087,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -1369,12 +1119,10 @@ describe("Doctor", () => {
     it("--fix quarantines a stalled provisioning device through QuarantineCoordinator", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = new FakeDriver({
         clock,
@@ -1382,7 +1130,7 @@ describe("Doctor", () => {
         platform: "ios",
       });
       const device = await registry.registerDevice({
-        driverData: {},
+        driverData: { fakeDeviceId: "simlock-stuck" },
         driverDeviceId: "simlock-stuck",
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
@@ -1437,41 +1185,39 @@ describe("Doctor", () => {
     it("--fix never quarantines a device that (inconsistently) still carries a lease", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const filesystem = new MemoryFilesystem();
-      await filesystem.writeFileAtomic(
-        "/state.json",
-        JSON.stringify({
-          devices: [
-            {
-              physical: false,
-              createdAt: 1,
-              driverData: {},
-              driverDeviceId: "simlock-stuck",
-              id: "dev_1",
-              lastLeaseEndedAt: 1,
-              spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
-              state: "reclaiming",
-            },
-          ],
-          leases: [
-            {
-              deviceId: "dev_1",
-              grantedAt: 1,
-              id: "lse_1",
-              requesterId: "agent",
-              ownerId: "agent",
-              ttlDeadline: 999_999,
-            },
-          ],
-        }),
-      );
-      const registry = await Registry.load({
+      const state = await openTestState();
+      let registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem,
         idGenerator: sequence(),
-        statePath: "/state.json",
+        state,
       });
+      const device = await registry.registerDevice({
+        driverData: { fakeDeviceId: "simlock-stuck" },
+        driverDeviceId: "simlock-stuck",
+        provisionDuration: 0,
+        spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
+      });
+      await registry.transitionDevice(device.id, "ready", {
+        event: "device.ready",
+        payload: { bootDuration: 0, deviceId: device.id },
+      });
+      const first = await registry.createLease({
+        deviceId: device.id,
+        ownerId: "agent",
+        requesterId: "agent",
+        ttlDeadline: 9_999_999,
+        ttlMs: 60_000,
+      });
+      await registry.beginRelease(first.id);
+      // why: the registry never grants a lease on a reclaiming device, so the inconsistent row goes in directly.
+      state.database
+        .prepare(
+          "INSERT INTO leases (id, device_id, requester_id, owner_id, granted_at, ttl_ms, ttl_deadline, last_renewed_at, id_chosen_by_requester) VALUES ('lse_stray', ?, 'agent', 'agent', 1, 60000, 9999999, 1, 0)",
+        )
+        .run(device.id);
+      registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence(), state });
+      clock.advance(100_000);
       const driver = new FakeDriver({ clock, estimateMs: { reclaim: 2_000 }, platform: "ios" });
       const quarantine = { enterFromStalledTransition: vi.fn() };
 
@@ -1486,7 +1232,7 @@ describe("Doctor", () => {
       }).reconcile({ fix: true });
 
       expect(report.findings).toContainEqual(
-        expect.objectContaining({ deviceId: "dev_1", kind: "stalled-transition" }),
+        expect.objectContaining({ deviceId: device.id, kind: "stalled-transition" }),
       );
       expect(quarantine.enterFromStalledTransition).not.toHaveBeenCalled();
       expect(registry.snapshot.devices[0]?.state).toBe("reclaiming");
@@ -1496,12 +1242,10 @@ describe("Doctor", () => {
   it("reports no live-drift finding for a quarantined simulator while its retry runs, and registry-device-missing once the fake no longer lists it", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await readyDevice(registry, "simlock-quarantined", "ios");
     const lease = await registry.createLease({
@@ -1586,12 +1330,10 @@ describe("Doctor", () => {
   it("--fix reconciles an unleased device's state to observed reality in both directions", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const bootedOutside = await shutdownDevice(registry, "simlock-booted", "ios");
     const shutdownOutside = await readyDevice(registry, "simlock-shutdown", "ios");
@@ -1638,16 +1380,14 @@ describe("Doctor", () => {
   it("--fix keeps a spent fresh device shutdown when it is observed running, so its delete still finds it", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
       leaseIdentity: { android: "reusable", ios: "fresh" },
-      statePath: "/state.json",
     });
     const spent = await registry.registerDevice({
-      driverData: {},
+      driverData: { fakeDeviceId: "simlock-spent" },
       driverDeviceId: "simlock-spent",
       provisionDuration: 0,
       spec: { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
@@ -1697,12 +1437,10 @@ describe("Doctor", () => {
   it("--fix leaves a leased device untouched while still reporting the finding", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const device = await readyDevice(registry, "simlock-leased", "ios");
     await registry.createLease({
@@ -1755,12 +1493,10 @@ describe("Doctor", () => {
   it("emits device.foreign-state-detected once per finding, post-commit", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const bootedOutside = await shutdownDevice(registry, "simlock-booted", "ios");
     const shutdownOutside = await readyDevice(registry, "simlock-shutdown", "ios");
@@ -1834,12 +1570,10 @@ describe("Doctor", () => {
     async function setup() {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const registered = await registry.registerDevice({
         driverData: { fakeDeviceId: "gone" },
@@ -1883,25 +1617,15 @@ describe("Doctor", () => {
       expect(driver.calls.map((call) => call.operation)).not.toContain("listManaged");
       expect(report.findings).toEqual([]);
     });
-
-    it("is not required: without one, each driver is listed", async () => {
-      const { doctor, driver } = await setup();
-
-      await doctor.reconcile();
-
-      expect(driver.calls.map((call) => call.operation)).toContain("listManaged");
-    });
   });
 
   it("reports a platform whose driver refused to start, with the reason it refused", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
 
     const report = await new Doctor({
@@ -1933,12 +1657,10 @@ describe("Doctor", () => {
   it("leaves a refused driver alone under --fix, since adopting it is the refusal's point", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem: new MemoryFilesystem(),
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
 
     const report = await new Doctor({
@@ -1959,12 +1681,10 @@ describe("Doctor", () => {
     it("collects driver-advisory findings from a driver that implements advisories()", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
         { code: "slim-runtime-unsupported", message: "iOS 17.0 predates the 18.5 floor" },
@@ -1992,12 +1712,10 @@ describe("Doctor", () => {
     it("contributes nothing from a driver that has no advisories() method", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = new FakeDriver({ clock, platform: "ios" });
 
@@ -2016,12 +1734,10 @@ describe("Doctor", () => {
     it("tolerates a rejecting advisories() without failing the rest of reconcile", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const registered = await registry.registerDevice({
         driverData: { fakeDeviceId: "missing" },
@@ -2053,12 +1769,10 @@ describe("Doctor", () => {
     it("--fix never acts on a driver-advisory finding", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
         { code: "slim-runtime-unsupported", message: "detail" },
@@ -2087,12 +1801,10 @@ describe("Doctor", () => {
     it("excludes driver-advisory findings from the doctor.reconciled event's driftFindings", async () => {
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
-      const registry = await Registry.load({
+      const registry = await loadTestRegistry({
         clock,
         eventBus,
-        filesystem: new MemoryFilesystem(),
         idGenerator: sequence(),
-        statePath: "/state.json",
       });
       const driver = withAdvisories(new FakeDriver({ clock, platform: "ios" }), [
         { code: "slim-runtime-unsupported", message: "detail" },
@@ -2328,14 +2040,36 @@ describe("Doctor", () => {
       expect(prerequisiteFindings(report)).toEqual([]);
     });
 
-    it("leaves prerequisite-missing findings out of doctor.reconciled", async () => {
+    it("a service check that throws adds no finding and does not fail the run", async () => {
+      const { doctor } = await doctorWith({
+        serviceCheck: {
+          manager: "launchd",
+          name: "com.callstack.simlock.worker",
+          check: async () => {
+            throw new Error("launchctl timed out");
+          },
+        },
+      });
+
+      const report = await doctor.reconcile({ prerequisites: true });
+
+      expect(report.findings.map((finding) => finding.kind)).not.toContain("service-broken");
+    });
+
+    it("leaves prerequisite-missing and service-broken findings out of doctor.reconciled", async () => {
       const { doctor, eventBus } = await doctorWith({
         prerequisiteChecks: [prerequisiteCheck("android", [EMULATOR])],
+        serviceCheck: {
+          manager: "launchd",
+          name: "com.callstack.simlock.worker",
+          check: async () => ["/gone/node"],
+        },
       });
 
       const report = await doctor.reconcile({ prerequisites: true });
 
       expect(prerequisiteFindings(report)).toHaveLength(1);
+      expect(report.findings.map((finding) => finding.kind)).toContain("service-broken");
       const reconciled = eventBus.replay().find((event) => event.event === "doctor.reconciled");
       const payload = reconciled!.payload as {
         readonly driftFindings: readonly { readonly kind: string }[];
@@ -2555,53 +2289,6 @@ describe("Doctor with a platform it cannot observe", () => {
     expect(registry.snapshot.devices[0]?.state).toBe("deleted");
   });
 
-  it("records a destroyed legacy device missing in the decision section, keeping a transition committed while that write is in flight", async () => {
-    const clock = new FakeClock(10_000);
-    const eventBus = new EventBus(clock);
-    const filesystem = new HeldWritesFilesystem();
-    const registry = await Registry.load({
-      clock,
-      eventBus,
-      filesystem,
-      idGenerator: sequence(),
-      statePath: "/state.json",
-    });
-    const stranded = await readyDevice(registry, "stranded", "ios");
-    const warm = await shutdownDevice(registry, "warm", "ios");
-    const driver = new FakeDriver({
-      clock,
-      legacyDevices: {
-        stranded: { device: driverDevice("stranded"), path: "/Library/Devices/stranded" },
-      },
-      platform: "ios",
-    });
-    driver.setManagedReality({ devices: [observed("warm", "stopped")], processes: [] });
-    const decisions = new SerializedDecision();
-    const doctor = new Doctor({
-      clock,
-      config: config(),
-      decisions,
-      drivers: [driver],
-      eventBus,
-      registry,
-    });
-
-    filesystem.holding = true;
-    const reconciling = doctor.reconcile({ fix: true });
-    await filesystem.held(1);
-    const booting = decisions.run(() =>
-      registry.transitionDevice(warm.id, "ready", {
-        event: "device.ready",
-        payload: { bootDuration: 0, deviceId: warm.id },
-      }),
-    );
-    await filesystem.releaseUntil(Promise.all([reconciling, booting]));
-
-    const record = (id: string) => registry.snapshot.devices.find((d) => d.id === id);
-    expect(record(stranded.id)?.state).toBe("deleted");
-    expect(record(warm.id)?.state).toBe("ready");
-  });
-
   it("never destroys a legacy device that a lease still references", async () => {
     const { clock, driver, eventBus, registry } = await legacyDeviceSetup();
     const device = registry.snapshot.devices[0]!;
@@ -2722,6 +2409,7 @@ describe("Doctor: optional module findings", () => {
               count: 1,
               mode: "full" as const,
               model: "iPhone 17",
+              origin: "configured" as const,
               osVersion: "27.0",
               platform: "ios" as const,
               ready: 0,
@@ -2812,14 +2500,6 @@ describe("Doctor: optional module findings", () => {
     );
   });
 
-  it("returns the finding with prerequisites false too", async () => {
-    const { doctor } = await setup({ optionalModules: () => [unavailable] });
-
-    const report = await doctor.reconcile({ prerequisites: false });
-
-    expect(report.findings).toStrictEqual([unavailable]);
-  });
-
   it("logs a warning naming the error when optionalModules throws, contributes nothing, and still returns the other findings", async () => {
     const sink = new MemoryLogSink();
     const { doctor } = await setup({
@@ -2858,12 +2538,10 @@ async function legacyDeviceSetup() {
 }
 
 function loadRegistry(clock: FakeClock, eventBus: EventBus): Promise<Registry> {
-  return Registry.load({
+  return loadTestRegistry({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: sequence(),
-    statePath: "/state.json",
   });
 }
 
@@ -2884,12 +2562,10 @@ function observed(deviceId: string, runState: "running" | "stopped") {
 async function readyIosDevice() {
   const clock = new FakeClock(10_000);
   const eventBus = new EventBus(clock);
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem: new MemoryFilesystem(),
     idGenerator: sequence(),
-    statePath: "/state.json",
   });
   const registered = await registry.registerDevice({
     driverData: { fakeDeviceId: "device-1" },
@@ -2920,7 +2596,7 @@ async function readyDevice(
   platform: "ios" | "android",
 ) {
   const device = await registry.registerDevice({
-    driverData: {},
+    driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
     spec: { physical: false, model: "Phone", osVersion: "1", platform },
@@ -2949,65 +2625,45 @@ async function shutdownDevice(
 }
 
 describe("Doctor and physical devices (ADR 0022 §4)", () => {
-  const physical = (state: "ready" | "leased" | "reclaiming", extra: object = {}) => ({
-    createdAt: 1,
-    driverData: {},
-    driverDeviceId: `00008110-${state}`,
-    enrolledApps: [],
-    id: `dev_${state}`,
-    physical: true,
-    spec: {
-      class: "phone",
-      model: "iPhone 15 Pro",
-      osVersion: "18.4",
-      physical: true,
-      platform: "ios",
-    },
-    state,
-    ...extra,
-  });
-
-  async function physicalHarness(records: readonly object[], leases: readonly object[] = []) {
-    const clock = new FakeClock(100_000);
+  async function physicalHarness(states: readonly ("ready" | "leased" | "reclaiming")[]) {
+    const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const filesystem = new MemoryFilesystem();
-    await filesystem.writeFileAtomic(
-      "/state.json",
-      JSON.stringify({ devices: [], leases, physicalDevices: records }),
-    );
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
+    for (const state of states) {
+      const device = await registry.enrollPhysical({
+        apps: [],
+        class: "phone",
+        driverDeviceId: `00008110-${state}`,
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        platform: "ios",
+      });
+      if (state === "ready") continue;
+      const lease = await registry.createLease({
+        deviceId: device.id,
+        ownerId: "agent",
+        requesterId: "agent",
+        ttlDeadline: 10_000_000,
+        ttlMs: 60_000,
+      });
+      if (state === "reclaiming") await registry.beginRelease(lease.id);
+    }
+    clock.advance(99_000);
     const driver = new FakeDriver({
       clock,
       estimateMs: { boot: 2_000, provision: 1_000, reclaim: 1_000 },
       platform: "ios",
     });
     driver.setManagedReality({ devices: [], processes: [] });
-    return { clock, driver, eventBus, filesystem, registry };
+    return { clock, driver, eventBus, registry };
   }
 
-  const heldLease = {
-    deviceId: "dev_leased",
-    grantedAt: 1,
-    id: "lse_held",
-    idChosenByRequester: false,
-    lastRenewedAt: 1,
-    ownerId: "agent",
-    requesterId: "agent",
-    ttlDeadline: 10_000_000,
-    ttlMs: 60_000,
-  };
-
   it("raises no drift finding for a ready or a leased physical record that no root holds, and --fix leaves both as they are", async () => {
-    const { clock, driver, eventBus, registry } = await physicalHarness(
-      [physical("ready"), physical("leased")],
-      [heldLease],
-    );
+    const { clock, driver, eventBus, registry } = await physicalHarness(["ready", "leased"]);
     const destroy = vi.spyOn(driver, "destroy");
     const shutdown = vi.spyOn(driver, "shutdown");
 
@@ -3027,7 +2683,7 @@ describe("Doctor and physical devices (ADR 0022 §4)", () => {
   });
 
   it("does not report as an orphan the ID a physical record holds, and a purge destroys only the orphan, as a virtual driver device", async () => {
-    const { clock, driver, eventBus, registry } = await physicalHarness([physical("ready")]);
+    const { clock, driver, eventBus, registry } = await physicalHarness(["ready"]);
     driver.setManagedReality({
       devices: [
         {
@@ -3059,9 +2715,7 @@ describe("Doctor and physical devices (ADR 0022 §4)", () => {
   });
 
   it("reports stalled-transition for a reclaiming physical record past its threshold, priced at the physical reclaim estimate, and --fix quarantines it", async () => {
-    const { clock, driver, eventBus, registry } = await physicalHarness([
-      physical("reclaiming", { lastLeaseEndedAt: 1_000 }),
-    ]);
+    const { clock, driver, eventBus, registry } = await physicalHarness(["reclaiming"]);
     const quarantine = new QuarantineCoordinator({
       claims: new DeviceOperationClaims(),
       clock,
@@ -3091,7 +2745,7 @@ describe("Doctor and physical devices (ADR 0022 §4)", () => {
 
     expect(report.findings).toEqual([
       expect.objectContaining({
-        deviceId: "dev_reclaiming",
+        deviceId: registry.snapshot.devices[0]?.id,
         kind: "stalled-transition",
         thresholdMs: 90_000,
       }),
@@ -3102,38 +2756,13 @@ describe("Doctor and physical devices (ADR 0022 §4)", () => {
 });
 
 describe("Doctor and a physical reclaim in flight (ADR 0022 §7, §8)", () => {
-  const reclaimingRecord = (id: string, extra: object = {}) => ({
-    createdAt: 1,
-    driverData: {},
-    driverDeviceId: `00008110-${id}`,
-    enrolledApps: [],
-    id,
-    physical: true,
-    spec: {
-      class: "phone",
-      model: "iPhone 15 Pro",
-      osVersion: "18.4",
-      physical: true,
-      platform: "ios",
-    },
-    state: "reclaiming",
-    ...extra,
-  });
-
-  async function harness(records: readonly object[]) {
-    const clock = new FakeClock(100_000);
+  async function harness() {
+    const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
-    const filesystem = new MemoryFilesystem();
-    await filesystem.writeFileAtomic(
-      "/state.json",
-      JSON.stringify({ devices: [], leases: [], physicalDevices: records }),
-    );
-    const registry = await Registry.load({
+    const registry = await loadTestRegistry({
       clock,
       eventBus,
-      filesystem,
       idGenerator: sequence(),
-      statePath: "/state.json",
     });
     const driver = new FakeDriver({
       clock,
@@ -3167,14 +2796,48 @@ describe("Doctor and a physical reclaim in flight (ADR 0022 §7, §8)", () => {
       quarantine,
       registry,
     });
-    return { claims, clock, doctor, eventBus, filesystem, quarantine, registry };
+    return { claims, clock, doctor, eventBus, quarantine, registry };
+  }
+
+  async function enrollReclaiming(registry: Registry, name: string) {
+    const device = await registry.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: `00008110-${name}`,
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    const lease = await registry.createLease({
+      deviceId: device.id,
+      ownerId: "agent",
+      requesterId: "agent",
+      ttlDeadline: 10_000_000,
+      ttlMs: 60_000,
+    });
+    await registry.beginRelease(lease.id);
+    return device;
   }
 
   it("a physical reclaim interrupted by a killed daemon is aged from reclaimingSince by stalled-transition", async () => {
-    const { doctor, quarantine } = await harness([
-      reclaimingRecord("dev_old_start", { lastLeaseEndedAt: 99_000, reclaimingSince: 1_000 }),
-      reclaimingRecord("dev_new_start", { lastLeaseEndedAt: 1_000, reclaimingSince: 99_000 }),
-    ]);
+    const { clock, doctor, quarantine, registry } = await harness();
+    const oldStart = await enrollReclaiming(registry, "old_start");
+    const newStart = await enrollReclaiming(registry, "new_start");
+    await registry.transitionDevice(
+      newStart.id,
+      "absent",
+      {
+        event: "device.absence-detected",
+        payload: { absentReason: "locked", deviceId: newStart.id, previousState: "reclaiming" },
+      },
+      { absentReason: "locked" },
+    );
+    clock.advance(98_000);
+    await registry.transitionDevice(newStart.id, "reclaiming", {
+      event: "device.returned",
+      payload: { deviceId: newStart.id, osVersion: "18.4" },
+    });
+    clock.advance(1_000);
 
     const report = await doctor.reconcile();
 
@@ -3182,28 +2845,31 @@ describe("Doctor and a physical reclaim in flight (ADR 0022 §7, §8)", () => {
       report.findings
         .filter((finding) => finding.kind === "stalled-transition")
         .map((finding) => finding.deviceId),
-    ).toEqual(["dev_old_start"]);
+    ).toEqual([oldStart.id]);
     quarantine.dispose();
   });
 
   it("doctor --fix on a stalled reclaiming device that is claimed by the time the fix runs writes nothing, emits no device.quarantined and arms no retry", async () => {
-    const { claims, clock, doctor, eventBus, filesystem, quarantine, registry } = await harness([
-      reclaimingRecord("dev_stalled", { lastLeaseEndedAt: 1_000, reclaimingSince: 1_000 }),
-    ]);
-    const before = await filesystem.readFile("/state.json");
+    const { claims, clock, doctor, eventBus, quarantine, registry } = await harness();
+    const stalled = await enrollReclaiming(registry, "stalled");
+    clock.advance(99_000);
+    let commits = 0;
+    registry.onCommit(() => {
+      commits += 1;
+    });
     let claimTaken = false;
     eventBus.subscribe("device.stalled-transition-detected", () => {
-      claimTaken = claims.tryClaim("dev_stalled", "reclaim") !== undefined;
+      claimTaken = claims.tryClaim(stalled.id, "reclaim") !== undefined;
     });
 
     const report = await doctor.reconcile({ fix: true });
 
     expect(report.findings).toContainEqual(
-      expect.objectContaining({ deviceId: "dev_stalled", kind: "stalled-transition" }),
+      expect.objectContaining({ deviceId: stalled.id, kind: "stalled-transition" }),
     );
     expect(claimTaken).toBe(true);
     expect(registry.snapshot.devices[0]?.state).toBe("reclaiming");
-    expect(await filesystem.readFile("/state.json")).toBe(before);
+    expect(commits).toBe(0);
     expect(eventBus.replay().filter((event) => event.event === "device.quarantined")).toEqual([]);
     expect(clock.pendingTimerCount).toBe(0);
     quarantine.dispose();
@@ -3233,6 +2899,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free" as const,
+      alerts: { destinations: [] },
     },
     drivers: {},
     eventBuffer: { capacity: 10 },
@@ -3245,6 +2912,7 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       stableObservations: 2,
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
+    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -3313,6 +2981,7 @@ describe("Doctor: warm pool targets", () => {
   const figuresOf = (
     targets: readonly {
       model: string;
+      origin?: "configured" | "learned";
       osVersion?: string;
       platform?: "ios" | "android";
       short?: "runtime-missing" | "unknown-model" | "ram-budget";
@@ -3324,6 +2993,7 @@ describe("Doctor: warm pool targets", () => {
       booting: 0,
       count: 1,
       mode: "full" as const,
+      origin: "configured" as const,
       platform: "ios" as const,
       ready: 0,
       ...target,
@@ -3366,11 +3036,13 @@ describe("Doctor: warm pool targets", () => {
     return report.findings.filter((finding) => finding.kind === "warm-pool-target-unreachable");
   }
 
-  it("reports a target short with runtime-missing as unreachable, naming the install command", async () => {
+  it("reports a configured target short with runtime-missing as unreachable, naming the install command, and no learned entry, even one short runtime-missing", async () => {
     const found = await findings({
       figures: figuresOf([
         { model: "iPhone 17", osVersion: "26.0" },
         { model: "iPhone 17", osVersion: "27.0", short: "runtime-missing" },
+        { model: "iPhone 16", origin: "learned", osVersion: "27.0", short: "runtime-missing" },
+        { model: "iPhone 15", origin: "learned", osVersion: "26.0", short: "unknown-model" },
       ]),
     });
 

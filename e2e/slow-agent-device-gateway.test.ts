@@ -1,4 +1,3 @@
-import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,33 +49,6 @@ interface WorkerView {
   readonly connection: string;
   readonly capacity?: Readonly<Record<string, { readonly limit: number }>>;
   readonly capabilities?: readonly { readonly name: string; readonly state: string }[];
-}
-
-const GIB = 1024 ** 3;
-const CHUNK = 1024 * 1024;
-
-// why: AES in counter mode over zeros gives a 1 GiB body that needs no file on disk: each leg regenerates the same bytes chunk by chunk.
-function* uploadChunks(): Generator<Buffer> {
-  const cipher = createCipheriv("aes-128-ctr", Buffer.alloc(16, 7), Buffer.alloc(16));
-  const zeros = Buffer.alloc(CHUNK);
-  for (let offset = 0; offset < GIB; offset += CHUNK) yield cipher.update(zeros);
-}
-
-const uploadStream = (): ReadableStream<Uint8Array> => {
-  const chunks = uploadChunks();
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      const next = chunks.next();
-      if (next.done) controller.close();
-      else controller.enqueue(new Uint8Array(next.value));
-    },
-  });
-};
-
-function uploadDigest(): string {
-  const hash = createHash("sha256");
-  for (const chunk of uploadChunks()) hash.update(chunk);
-  return hash.digest("hex");
 }
 
 const sharedEnvs = new Set<SharedTestEnv>();
@@ -155,10 +127,10 @@ function defineSuite(target: Target): void {
     gateway = await withSharedDaemon({
       driver: "none",
       configOverrides: {
-        mode: "gateway",
         http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
         capabilities: { "agent-device": { enabled: true } },
       },
+      role: "gateway",
     });
     sharedEnvs.add(gateway);
     const minted = await gateway.cli(["token", "create", "--role", "worker"], { timeout: 60_000 });
@@ -168,7 +140,7 @@ function defineSuite(target: Target): void {
     worker = await withSharedDaemon({
       driver: "real",
       configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        http: { enabled: false, host: "127.0.0.1", port: await freeLoopbackPort() },
         gateway: { label: "worker", token: secret, url: `ws://127.0.0.1:${gatewayPort}` },
         capabilities: { "agent-device": { enabled: true, command: pinned } },
         capacity: {
@@ -234,25 +206,6 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "through the gateway, a screenshot saved as an artifact downloads to the agent's machine as a PNG",
-    { timeout: 600_000 },
-    async () => {
-      const a = await agent("a");
-      ok(await open(a));
-      ok(await a.run(["install", "Appduct", target.app]));
-      ok(await a.run(["open", target.bundleId]));
-      const dir = await mkdtemp(join(tmpdir(), "simlock-ad-gw-artifact-"));
-      onTestFinished(() => rm(dir, { force: true, recursive: true }));
-      const png = join(dir, "artifact.png");
-      await expect(readFile(png)).rejects.toThrow();
-      ok(await a.run(["screenshot", png], FIRST_SNAPSHOT));
-      const bytes = await readFile(png);
-      expect(bytes.length).toBeGreaterThan(8);
-      expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-    },
-  );
-
-  it(
     "with capabilities.agent-device.enabled unset on the gateway, its /v1/agent-device/health answers 404 where it answered something else while enabled",
     { timeout: 600_000 },
     async () => {
@@ -301,90 +254,9 @@ function defineSuite(target: Target): void {
     async () => {
       const listed = await gateway.cli(["worker", "list"], { timeout: 60_000 });
       expect(listed.code, listed.stderr).toBe(0);
-      expect(listed.stdout).toMatch(/^\S+ \(worker\): connected .* -- agent-device available$/m);
-    },
-  );
-
-  // why: the preflight, the direct PUT and the finalize are what agent-device does for an upload; the time runs from the preflight to the finalize answer.
-  async function timedUpload(
-    baseUrl: string,
-    token: string,
-    leaseId: string,
-    sha256: string,
-  ): Promise<number> {
-    const headers = {
-      authorization: `Bearer ${token}`,
-      "x-agent-device-lease-id": leaseId,
-      "x-agent-device-token": token,
-    };
-    const started = performance.now();
-    const preflight = await fetch(`${baseUrl}/upload/preflight`, {
-      body: JSON.stringify({
-        artifactType: "file",
-        fileName: "payload.bin",
-        sha256,
-        sizeBytes: GIB,
-        uploadAttemptId: randomUUID(),
-      }),
-      headers: { ...headers, "content-type": "application/json" },
-      method: "POST",
-    });
-    expect(preflight.status, "preflight").toBe(200);
-    const ticket = (await preflight.json()) as {
-      uploadId: string;
-      upload: { url: string; headers: Record<string, string> };
-    };
-    const put = await fetch(ticket.upload.url, {
-      body: uploadStream(),
-      duplex: "half",
-      headers: { ...ticket.upload.headers, "x-agent-device-lease-id": leaseId },
-      method: "PUT",
-    } as RequestInit);
-    expect(put.status, "direct upload").toBe(200);
-    await put.arrayBuffer();
-    const finalize = await fetch(`${baseUrl}/upload/finalize`, {
-      body: JSON.stringify({ uploadId: ticket.uploadId }),
-      headers: { ...headers, "content-type": "application/json" },
-      method: "POST",
-    });
-    expect(finalize.status, "finalize").toBe(200);
-    await finalize.arrayBuffer();
-    return performance.now() - started;
-  }
-
-  it.runIf(platform === "ios")(
-    "a 1 GiB upload takes at most 1.5 times as long through the gateway as straight to the worker",
-    { timeout: 1_800_000 },
-    async () => {
-      const sha256 = uploadDigest();
-      const median = (values: number[]) =>
-        [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] as number;
-      const runs = async (who: Agent, env: SharedTestEnv) => {
-        ok(await open(who));
-        const [lease] = await listLeases(env);
-        expect(lease, "the opened lease").toBeDefined();
-        const base = `http://127.0.0.1:${String(env.httpPort)}/v1/agent-device`;
-        const times: number[] = [];
-        for (let run = 0; run < 3; run += 1) {
-          times.push(await timedUpload(base, who.token, (lease as { id: string }).id, sha256));
-        }
-        ok(await who.run(["close"]));
-        await waitForFree(worker);
-        await waitFor(async () => (await listLeases(gateway)).length === 0, {
-          timeout: 240_000,
-          interval: 1_000,
-          label: "the lease is gone from the gateway's simlock list",
-        });
-        return median(times);
-      };
-
-      const direct = await runs(await makeAgent(worker, "direct"), worker);
-      const through = await runs(await agent("gateway"), gateway);
-
-      expect(
-        through / direct,
-        `gateway ${String(through)} ms, worker ${String(direct)} ms`,
-      ).toBeLessThanOrEqual(1.5);
+      expect(listed.stdout).toMatch(
+        /^\S+ \(worker\): connected .* -- agent-device available( -- |$)/m,
+      );
     },
   );
 

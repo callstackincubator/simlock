@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { OPERATIONS } from "../contract/index.js";
 import {
@@ -9,10 +9,10 @@ import {
   type TokenSecrets,
 } from "../ports/index.js";
 import { AdminAuthenticationFailedError, AuthError, createAuth, type TokenRole } from "./index.js";
-import { TokenStoreError } from "./token-store.js";
+import { tokensOwner } from "./token-store.js";
 import { authStrategies } from "./strategies/index.js";
 import type { AuthConfig, AuthStrategyDefinition, StrategyAnswer } from "./strategy.js";
-import { createAuthWith, proxyAuthConfig } from "./testing.js";
+import { createAuthWith, openMemoryStateDatabase, proxyAuthConfig } from "./testing.js";
 
 const dataDirectory = "/home/agent/.simlock";
 const config: AuthConfig = { enabled: true, host: "127.0.0.1", port: 4700 };
@@ -48,21 +48,15 @@ async function options() {
   const filesystem = new MemoryFilesystem();
   const secrets = new FakeTokenSecrets();
   await filesystem.mkdirp(dataDirectory);
-  await filesystem.writeFileAtomic(
-    `${dataDirectory}/tokens.json`,
-    JSON.stringify(
-      seeds.map(({ id, secret, role, label }) => ({
-        id,
-        hash: secrets.hash(secret),
-        role,
-        ...(label === undefined ? {} : { label }),
-        createdAt: 1,
-      })),
-    ),
-    { mode: 0o600 },
-  );
+  const { database } = await openMemoryStateDatabase([tokensOwner]);
+  for (const { id, secret, role, label } of seeds) {
+    database
+      .prepare("INSERT INTO tokens (id, hash, role, label, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(id, secrets.hash(secret), role, label ?? null, 1);
+  }
   return {
     config,
+    database,
     dataDirectory,
     filesystem,
     secrets,
@@ -290,16 +284,17 @@ describe("resolveHelloRole", () => {
     );
   });
 
-  it("checks the token store before the admin secret, so a corrupt store fails loudly even for the admin secret", async () => {
+  it("checks the token store before the admin secret, so a failing token read fails loudly even for the admin secret", async () => {
     const opts = await options();
     const auth = createAuth(opts);
     await auth.adminSecret.persist();
     const adminSecret = (await opts.filesystem.readFile(`${dataDirectory}/admin.token`)).trim();
-    await opts.filesystem.writeFileAtomic(`${dataDirectory}/tokens.json`, "{ not valid json");
+    const failure = new Error("database is locked");
+    vi.spyOn(opts.database, "prepare").mockImplementation(() => {
+      throw failure;
+    });
 
-    await expect(auth.resolveHelloRole({ credential: adminSecret })).rejects.toThrow(
-      TokenStoreError,
-    );
+    await expect(auth.resolveHelloRole({ credential: adminSecret })).rejects.toBe(failure);
   });
 });
 

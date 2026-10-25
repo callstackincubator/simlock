@@ -9,7 +9,7 @@ function wideByDefault(): boolean {
 }
 
 // why: the operator decides the sidebar's width and every page keeps it; with no choice made, a
-// window too narrow for the sidebar, a list and an inspector side by side starts it collapsed.
+// window too narrow for the sidebar, a list and a drawer side by side starts it collapsed.
 export function useSidebar(): { readonly collapsed: boolean; readonly toggle: () => void } {
   const preferences = usePreferences();
   const [collapsed, setCollapsed] = useState(() => {

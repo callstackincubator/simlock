@@ -9,7 +9,7 @@ export interface FrontReply {
   readonly details?: { readonly reason: string };
 }
 
-const LEASE_ENDED_MESSAGE = "lease ended by simlock; run disconnect, then open";
+export const LEASE_ENDED_MESSAGE = "lease ended by simlock; run disconnect, then open";
 
 /** why: the CLI allocates a new lease only for agent-device's own lease-gone reasons, so this one fails the command and prints the message. */
 export function leaseEndedByHost(): FrontReply {

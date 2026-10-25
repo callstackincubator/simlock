@@ -1,3 +1,4 @@
+import { type WorkerView, workerName } from "./workers";
 import type { Toned } from "./tones";
 
 export type ScreenPhase = "idle" | "starting" | "live" | "stopped";
@@ -84,5 +85,64 @@ export function screenView(input: {
     readout: readout({ failed: failure !== undefined, meta, phase, stats }),
     waiting: live && stats.painted === 0 ? waitingNote : undefined,
     width: meta?.width ?? 0,
+  };
+}
+
+export interface StreamOffer {
+  readonly offered: boolean;
+  readonly reason?: string;
+}
+
+// why: a worker answers a stream request with a 404 when its `stream` capability is not on, so the
+// console says so before it asks; a worker the console cannot see is left to the daemon's own
+// answer.
+export function streamOffer(worker: WorkerView | undefined): StreamOffer {
+  if (worker === undefined) return { offered: true };
+  const entry = worker.capabilities?.find((capability) => capability.name === "stream");
+  if (entry?.state === "available") return { offered: true };
+  const name = workerName(worker);
+  if (entry?.state === "unavailable") {
+    const reason = `Streaming is unavailable on ${name}. ${entry.reason ?? ""}`;
+    return { offered: false, reason: reason.trim() };
+  }
+  return { offered: false, reason: `Streaming is off on ${name}.` };
+}
+
+// why: the daemon streams a device that is ready or leased, and the console asks for a picture only
+// then; a change from one to the other is no reason to ask again.
+const STREAMING_STATES: ReadonlySet<string> = new Set(["ready", "leased"]);
+
+const WAITING_SENTENCES: ReadonlyMap<string, string> = new Map([
+  ["shutdown", "The device is shut down. Its screen shows while it runs."],
+  ["provisioning", "The device is starting. Its screen shows once it is ready."],
+  ["reclaiming", "The device is being reset. Its screen shows once it is ready."],
+  ["quarantined", "The device is quarantined. It has no screen to show."],
+  ["absent", "The device is not connected. Its screen shows once it is back."],
+]);
+
+export function streamsDevice(state: string, offer: StreamOffer): boolean {
+  return offer.offered && STREAMING_STATES.has(state);
+}
+
+export type DeviceScreen =
+  | { readonly kind: "picture" }
+  | { readonly kind: "sentence"; readonly text: string };
+
+// why: `conflict` is the daemon's 409 message for a device the row still calls ready or leased: the
+// row is behind, and the daemon's words stand until it catches up. A state word this console does
+// not know is shown as itself, because wire input is a claim.
+export function deviceScreen(input: {
+  readonly state: string;
+  readonly offer: StreamOffer;
+  readonly conflict: string | undefined;
+}): DeviceScreen {
+  const { conflict, offer, state } = input;
+  if (!offer.offered) return { kind: "sentence", text: offer.reason ?? "" };
+  if (STREAMING_STATES.has(state)) {
+    return conflict === undefined ? { kind: "picture" } : { kind: "sentence", text: conflict };
+  }
+  return {
+    kind: "sentence",
+    text: WAITING_SENTENCES.get(state) ?? `The device is ${state}. It has no screen to show.`,
   };
 }

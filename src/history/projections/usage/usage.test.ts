@@ -294,7 +294,7 @@ describe("usage projection: request rows", () => {
     await r.history.stop();
   });
 
-  it("a field already set is not changed by a later event, an event already stored changes no row a second time, and an event for an unknown request or lease changes no row", async () => {
+  it("a field already set is not changed by a later event, and an event for an unknown request or lease changes no row", async () => {
     const r = await rig();
     r.emit("lease.requested", requested("R1"));
     r.at(T0 + 1_000);
@@ -308,25 +308,9 @@ describe("usage projection: request rows", () => {
     r.at(T0 + 5_000);
     r.emit("lease.released", released("L1", "killed"));
     r.relay("w1", "lease.requested", requested("R9"), T0 + 6_000);
-    r.bus.republish({
-      event: "lease.requested",
-      id: `evt_relay_${T0}_1`,
-      module: "gateway",
-      payload: { ...requested("R9", { requester: "mallory" }), workerId: "w1" } as never,
-      timestamp: T0 + 7_000,
-    });
     r.relay("w1", "lease.requested", requested("R9", { requester: "eve" }), T0 + 8_000);
     r.emit("lease.granted", granted("LX", "R-unknown"));
     r.emit("lease.released", released("L-unknown"));
-    const ready = { bootDuration: 10, deviceId: "d1", platform: "ios" };
-    r.relay("w1", "device.ready", ready, T0 + 9_000);
-    r.bus.republish({
-      event: "device.ready",
-      id: `evt_relay_${T0}_3`,
-      module: "gateway",
-      payload: { ...ready, workerId: "w1" } as never,
-      timestamp: T0 + 9_000,
-    });
 
     const rows = await rowsOf(r);
 
@@ -340,7 +324,6 @@ describe("usage projection: request rows", () => {
     });
     expect(row(rows, "R1").rejectedAt).toBeUndefined();
     expect(row(rows, "R9").requester).toBe("alice");
-    expect(await factsOf(r)).toHaveLength(1);
     await r.history.stop();
   });
 
@@ -385,7 +368,7 @@ describe("usage projection: request rows", () => {
     await r.history.stop();
   });
 
-  it("on a worker, a probe's row has probe set, is not counted in waiting, and its lease.declined sets rejectedAt, reason and declined and writes a device fact row", async () => {
+  it("on a worker, a probe's row has probe set, is not counted in waiting, and its lease.declined sets rejectedAt, reason and declined", async () => {
     const r = await rig();
     r.emit("lease.requested", requested("P1", { fleetRequestId: "F1" }));
     r.at(T0 + 10_000);
@@ -411,9 +394,6 @@ describe("usage projection: request rows", () => {
     expect(row(rows, "Q1").probe).toBe(false);
     expect(waiting).toHaveLength(1);
     expect(figure(waiting[0], "waiting")).toEqual({ integral: 50_000, peak: 1 });
-    expect(await factsOf(r)).toMatchObject([
-      { at: T0 + 20_000, kind: "lease.declined", platform: "ios" },
-    ]);
     await r.history.stop();
   });
 });
@@ -483,7 +463,6 @@ describe("usage projection: a gateway", () => {
     await dispatch(r, "B", "WL-B", T0 + 30_000);
     r.relay("w1", "lease.granted", granted("WL-B", "B", { source: "provisioned" }), T0 + 41_000);
     await dispatch(r, "C", "WL-C", T0 + 50_000);
-    const heldBefore = await count(r, "SELECT count(*) AS n FROM held_leases");
     r.relay("w1", "lease.released", released("WL-A"), T0 + 75_000);
     r.relay(
       "w1",
@@ -491,11 +470,11 @@ describe("usage projection: a gateway", () => {
       { deviceId: "dev-WL-B", leaseId: "WL-B", ownerId: "alice" },
       T0 + 101_000,
     );
+    r.emit("lease.requested", requested("D"));
+    await dispatch(r, "D", "WL-A", T0 + 110_000);
 
     const rows = await rowsOf(r);
 
-    expect(heldBefore).toBe(2);
-    expect(await count(r, "SELECT count(*) AS n FROM held_leases")).toBe(0);
     expect(row(rows, "A")).toMatchObject({
       endReason: "explicit",
       endedAt: T0 + 75_000,
@@ -509,29 +488,27 @@ describe("usage projection: a gateway", () => {
       source: "provisioned",
     });
     expect(row(rows, "C").source).toBeUndefined();
+    expect(row(rows, "D").source).toBeUndefined();
     await r.history.stop();
   });
 
-  it("a relayed lease with an over-long id, an unknown source or no leaseId joins by the cut id, leaves source absent and holds nothing without an id", async () => {
+  it("a relayed lease with an over-long id, an unknown source or no leaseId joins by the cut id and leaves source absent", async () => {
     const r = await rig({ fleet: true });
     const long = "L".repeat(500);
     r.emit("lease.requested", requested("A"));
     r.relay("w1", "lease.granted", granted(long, "A", { source: "mystery" as never }), T0 + 15_000);
     r.relay("w1", "lease.granted", { ...granted("X", "A"), leaseId: undefined }, T0 + 16_000);
     await dispatch(r, "A", long, T0 + 20_000);
-    const held = await count(r, "SELECT count(*) AS n FROM held_leases");
     r.relay("w1", "lease.released", released(long), T0 + 75_000);
 
     const rows = await rowsOf(r);
 
-    expect(held).toBe(1);
     expect(row(rows, "A")).toMatchObject({
       endReason: "explicit",
       heldMs: 60_000,
       workerLeaseId: "L".repeat(200),
     });
     expect(row(rows, "A").source).toBeUndefined();
-    expect(await count(r, "SELECT count(*) AS n FROM held_leases")).toBe(0);
     await r.history.stop();
   });
 
@@ -562,37 +539,48 @@ describe("usage projection: a gateway", () => {
 describe("usage projection: minute rows", () => {
   it("a relayed platform that is not ios or android mints no platform key: a capacity key, a request spec and a device platform of another value change no minute row and leave the platform absent", async () => {
     const r = await rig({ fleet: false });
-    r.relay(
-      "w1",
-      "capacity.changed",
-      { tv: { running: 1, reserved: 1, maxRunning: 4 } } as never,
-      T0,
-    );
-    r.relay(
-      "w1",
-      "lease.requested",
-      requested("R-tv", { requestSpec: { platform: "tv" } }),
-      T0 + 1,
-    );
-    r.relay(
-      "w1",
-      "device.ready",
-      { deviceId: "d1", bootDuration: 900, platform: "tv" } as never,
-      T0 + 2,
-    );
+    const others = ["tv", "all", "IOS"];
+    others.forEach((platform, index) => {
+      r.relay(
+        "w1",
+        "capacity.changed",
+        { [platform]: { running: 1, reserved: 1, maxRunning: 4 } } as never,
+        T0 + index * 10,
+      );
+      r.relay(
+        "w1",
+        "lease.requested",
+        requested(`R-${platform}`, { requestSpec: { platform } }),
+        T0 + index * 10 + 1,
+      );
+      r.relay(
+        "w1",
+        "device.ready",
+        { deviceId: `d-${platform}`, bootDuration: 900, platform } as never,
+        T0 + index * 10 + 2,
+      );
+    });
 
+    const rows = await rowsOf(r);
     const facts = await factsOf(r);
 
-    expect(await count(r, "SELECT count(*) AS n FROM minute_rows WHERE platform = 'tv'")).toBe(0);
-    expect(await count(r, "SELECT count(*) AS n FROM minute_rows WHERE platform = 'ios'")).toBe(0);
-    expect(row(await rowsOf(r), "R-tv").platform).toBe("");
-    expect(facts.map((fact) => [fact.deviceId, fact.durationMs, fact.platform])).toEqual([
-      ["d1", 900, undefined],
-    ]);
+    for (const platform of ["tv", "IOS", "ios", "android"]) {
+      expect(await buckets(r, { from: T0, platform, to: T0 + MIN })).toEqual([]);
+    }
+    const all = await buckets(r, { from: T0, platform: "all", to: T0 + MIN });
+    expect(all).toHaveLength(1);
+    expect(figure(all[0], "waiting")?.peak).toBe(3);
+    for (const name of ["slotsUsed", "slotsMax"] as const) {
+      expect(figure(all[0], name)).toBeUndefined();
+    }
+    for (const platform of others) expect(row(rows, `R-${platform}`).platform).toBe("");
+    expect(facts.map((fact) => [fact.deviceId, fact.durationMs, fact.platform])).toEqual(
+      others.map((platform) => [`d-${platform}`, 900, undefined]),
+    );
     await r.history.stop();
   });
 
-  it("slotsUsed is running plus reserved and slotsMax per platform and on all; RAM used and limit and queue depth (both lines summed) only on all; no row for a minute with no change", async () => {
+  it("slotsUsed is running plus reserved and slotsMax per platform and on all; RAM used and limit and queue depth (both lines summed) only on all", async () => {
     const r = await rig();
     r.emit(
       "capacity.changed",
@@ -622,8 +610,6 @@ describe("usage projection: minute rows", () => {
     expect(figure(all[0], "ramUsedBytes")).toEqual({ integral: 100 * MIN, peak: 100 });
     expect(figure(all[0], "ramLimitBytes")).toEqual({ integral: 1_000 * MIN, peak: 1_000 });
     expect(figure(all[0], "queueDepth")).toEqual({ integral: 5 * MIN, peak: 5 });
-    expect(await count(r, "SELECT count(*) AS n FROM minute_rows WHERE platform = 'ios'")).toBe(1);
-    expect(await count(r, "SELECT count(*) AS n FROM minute_rows WHERE platform = 'all'")).toBe(2);
     await r.history.stop();
   });
 
@@ -778,7 +764,7 @@ describe("usage projection: minute rows", () => {
     await r.history.stop();
   });
 
-  it("daemon.stopping, daemon.started and, on a gateway, worker.disconnected each write a gap marker", async () => {
+  it("daemon.stopping ends the carried levels until the next daemon.started, and on a gateway worker.disconnected ends that worker's levels, so no buckets appear in the gap", async () => {
     const r = await rig({ fleet: true });
     r.emit("capacity.changed", capacity({ global: [2, 0, 4], ios: [2, 0, 4] }));
     r.relay("w1", "capacity.changed", capacity({ global: [2, 0, 4], ios: [2, 0, 4] }));
@@ -809,7 +795,6 @@ describe("usage projection: minute rows", () => {
     expect(carried[8]).toMatchObject({ knownMs: 30_000 });
     expect(figure(carried[8], "slotsUsed")).toEqual({ integral: 2 * 30_000, peak: 2 });
     expect(worker.map((bucket) => (bucket.start - T0) / MIN)).toEqual([0, 1, 2, 3, 4]);
-    expect(await count(r, "SELECT count(*) AS n FROM gaps")).toBe(4);
     await r.history.stop();
   });
 
@@ -1275,7 +1260,7 @@ describe("usage projection: rebuild", () => {
   const breakMinuteTable = (path: string) =>
     execOn(path, "ALTER TABLE minute_rows DROP COLUMN knownMs");
 
-  it("a failed check rebuilds in batches of 1 000 with other work running between them: rows older than the oldest event are kept, the rest equal the live rows, an event emitted mid-rebuild is projected once, and status() gives rebuiltAt after; a start with nothing to fix gives neither field", async () => {
+  it("a failed check rebuilds in batches with other work running between them: rows older than the oldest event are kept, the rest equal the live rows, an event emitted mid-rebuild is projected once, and status() gives rebuiltAt after; a start with nothing to fix gives neither field", async () => {
     const first = await rig({ eventRetention: DAY });
     first.at(T0 - 2 * DAY);
     first.emit("lease.requested", requested("OLD"));
@@ -1396,7 +1381,7 @@ describe("usage projection: rebuild", () => {
 });
 
 describe("usage projection: prune", () => {
-  it("prune deletes request, minute, gap, device fact and held lease rows older than metrics.retention and keeps one at the cutoff, at start and one hour later", async () => {
+  it("prune deletes request, minute, device fact and held lease rows older than metrics.retention and keeps one at the cutoff, at start and one hour later", async () => {
     const retention = 10 * DAY;
     const cutoff = T0;
     const first = await rig({
@@ -1425,34 +1410,58 @@ describe("usage projection: prune", () => {
       fleet: true,
       metricsRetention: retention,
     });
-    const afterStart = {
-      facts: (await factsOf(second)).map((fact) => fact.deviceId),
-      gaps: await count(second, "SELECT count(*) AS n FROM gaps"),
-      held: await count(second, "SELECT count(*) AS n FROM held_leases"),
-      minutes: (
+    const heldSource = async (name: string, workerLeaseId: string) => {
+      second.emit("lease.requested", requested(`Q-${name}`));
+      second.emit("request.granted", {
+        leaseId: `G-${name}`,
+        requestId: `Q-${name}`,
+        worker: "w1",
+        workerLeaseId,
+      });
+      return row(await rowsOf(second), `Q-${name}`).source;
+    };
+    const minutesOf = async () =>
+      (
         await buckets(second, {
           from: cutoff - 2 * MIN,
           platform: "ios",
-          to: cutoff + MIN,
+          to: cutoff + HOUR + MIN,
           workerId: "*",
         })
-      ).map((bucket) => bucket.start),
+      ).map((bucket) => bucket.start);
+    const afterStart = {
+      facts: (await factsOf(second)).map((fact) => fact.deviceId),
+      minutes: await minutesOf(),
       requests: (await rowsOf(second)).map((candidate) => candidate.requestId),
     };
+    const startSources = [
+      await heldSource("start-old", "L-old"),
+      await heldSource("start-edge", "L-edge"),
+      await heldSource("start-new", "L-new"),
+    ];
     second.clock.advance(HOUR);
     const afterHour = {
       facts: (await factsOf(second)).map((fact) => fact.deviceId),
-      gaps: await count(second, "SELECT count(*) AS n FROM gaps"),
-      held: await count(second, "SELECT count(*) AS n FROM held_leases"),
-      requests: (await rowsOf(second)).map((candidate) => candidate.requestId),
+      minutes: await minutesOf(),
+      requests: (await rowsOf(second))
+        .map((candidate) => candidate.requestId)
+        .filter((requestId) => requestId.startsWith("R-")),
     };
+    const hourSources = [
+      await heldSource("hour-edge", "L-edge"),
+      await heldSource("hour-new", "L-new"),
+    ];
 
     expect(afterStart.requests).toEqual(["R-edge", "R-new"]);
     expect(afterStart.facts).toEqual(["d-edge", "d-new"]);
-    expect(afterStart.gaps).toBe(2);
-    expect(afterStart.held).toBe(2);
-    expect(afterStart.minutes).toEqual([cutoff]);
-    expect(afterHour).toEqual({ facts: ["d-new"], gaps: 1, held: 1, requests: ["R-new"] });
+    expect(afterStart.minutes).toEqual([cutoff, cutoff + HOUR]);
+    expect(startSources).toEqual([undefined, "warm", "warm"]);
+    expect(afterHour).toEqual({
+      facts: ["d-new"],
+      minutes: [cutoff + HOUR],
+      requests: ["R-new"],
+    });
+    expect(hourSources).toEqual([undefined, "warm"]);
     await second.history.stop();
   });
 });

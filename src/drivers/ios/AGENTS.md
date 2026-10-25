@@ -7,14 +7,15 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                | Role                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------- |
-| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules               |
-| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                          |
-| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                                       |
-| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                    |
-| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done                     |
-| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone |
+| File                | Role                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`          | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules                                                                                                   |
+| `device-data.ts`    | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`) |
+| `physical.ts`       | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                                                                                                              |
+| `devicectl-exec.ts` | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                           |
+| `slim-labels.ts`    | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                                                                                                        |
+| `prerequisites.ts`  | `iosPrerequisites`: Xcode selected, license accepted, first launch done                                                                                                         |
+| `screen-capture.ts` | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone                                                                                     |
 
 ## How it works
 
@@ -71,16 +72,15 @@ off, locked. Present = listed, paired, unlocked.
 
 Passthrough —
 
-- `simctl`: `xcrun simctl --set <root> …`. Refused: `create`, `erase`, `delete`, `shutdown all`,
-  `runtime delete`, any flag before the subcommand (`--set`, `--profiles` named). Refused on a physical lease.
+- `simctl`: `xcrun simctl --set <root> …`; with a device (`device.exec`) the lease's UDID goes first among
+  a device verb's operands (`simctl-device.ts`, ADR 0047). Refused: `booted`, another UUID, `create`, `erase`,
+  `delete`, `shutdown all`, `runtime delete`, a flag before the subcommand (`--set`, `--profiles`), a physical or non-iOS lease.
 - `devicectl`: physical iOS lease only; no local wrapper. `devicectlExecCommand` allows
   `device install app`, `device uninstall app`, `device process launch|terminate|signal`,
   `device info apps|lockState|details|processes`, each with its own options. Host-path options
-  (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`, `-j`, `-l`) are refused
-  before `--`. Adds `--device <udid>` unless the caller names one.
+  (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`, `-j`, `-l`) are refused before `--`. Adds `--device <udid>` unless the caller names one; another UDID is refused.
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
-
 Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture
 <udid> --codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>` for a
 simulator; a physical iPhone runs `simlock-device-capture` with the same arguments, no such
@@ -132,7 +132,7 @@ record of a device's mode; `driverData` holds the slim signature.
 - **A screen stream can freeze after a reboot under its lease.** The capture program checks the
   simulator is booted only when it starts, then repaints its last surface every 200 ms, so after
   the health monitor reboots a crashed simulator the viewer can see the old picture until they
-  press Stop and Show screen again. A lease ending stops it as usual.
+  leave the Screen tab and open it again. A lease ending stops it as usual.
 - **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does today: the
   scaler is sized once, from the first picture. An iPhone that stays connected and unlocked but
   stops sending video, or a decoder that stops producing pictures, shows the last picture until

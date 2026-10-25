@@ -5,7 +5,9 @@ import {
   type Clock,
   type Filesystem,
   isMissingPathError,
+  isLockError,
   type Logger,
+  passesQuickCheck,
   type SqliteDatabase,
   type SqliteOpener,
   SqliteUnavailableError,
@@ -13,11 +15,14 @@ import {
 import {
   BUSY_TIMEOUT_MS,
   configureDatabase,
+  createWorkerIndex,
   envelopeSize,
   INSERT_EVENT_SQL,
-  isLockError,
-  passesQuickCheck,
+  isWorkerEvent,
+  selectEventsBefore,
   selectEventsSince,
+  selectNewestEvents,
+  selectOldestTimestamp,
 } from "./database.js";
 import { HISTORY_DB_NAME } from "./names.js";
 import { pruneHistory, totalEventBytes } from "./prune.js";
@@ -58,8 +63,21 @@ export interface EventHistoryStatus {
   readonly rebuildFailed?: true;
 }
 
+export type EventsPageRead =
+  | { readonly kind: "events"; readonly events: EventEnvelope[] }
+  | { readonly kind: "not-kept"; readonly oldestTs: number }
+  | { readonly kind: "unavailable" };
+
 export interface EventHistoryHandle {
-  replay(input?: { readonly sinceTs?: number }): Promise<EventEnvelope[]>;
+  replay(input?: {
+    readonly sinceTs?: number;
+    readonly workerId?: string;
+  }): Promise<EventEnvelope[]>;
+  replayPage(input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+    readonly workerId?: string;
+  }): Promise<EventsPageRead>;
   status(): EventHistoryStatus;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -124,20 +142,70 @@ class EventHistory implements EventHistoryHandle {
     };
   }
 
-  async replay(input: { readonly sinceTs?: number } = {}): Promise<EventEnvelope[]> {
+  async replay(
+    input: { readonly sinceTs?: number; readonly workerId?: string } = {},
+  ): Promise<EventEnvelope[]> {
     const { bus, logger } = this.#options;
-    if (input.sinceTs === undefined) return bus.replay();
+    const ofWorker = (events: EventEnvelope[]) =>
+      events.filter((envelope) => isWorkerEvent(envelope, input.workerId));
+    if (input.sinceTs === undefined) return ofWorker(bus.replay());
     const database = this.#database;
-    if (database === undefined || !this.#readable) return bus.replay({ sinceTs: input.sinceTs });
+    if (database === undefined || !this.#readable) {
+      return ofWorker(bus.replay({ sinceTs: input.sinceTs }));
+    }
     try {
-      return selectEventsSince(database, input.sinceTs);
+      return selectEventsSince(database, input.sinceTs, input.workerId);
     } catch (error: unknown) {
       logger.warn("History read failed; replaying from memory", {
         error: describe(error),
         path: this.#path,
       });
-      return bus.replay({ sinceTs: input.sinceTs });
+      return ofWorker(bus.replay({ sinceTs: input.sinceTs }));
     }
+  }
+
+  async replayPage(input: {
+    readonly beforeId?: string;
+    readonly limit: number;
+    readonly workerId?: string;
+  }): Promise<EventsPageRead> {
+    const database = this.#database;
+    if (input.beforeId === undefined) {
+      return { events: this.#newest(input.limit, input.workerId), kind: "events" };
+    }
+    if (database === undefined || !this.#readable || !this.#writing) return { kind: "unavailable" };
+    try {
+      const events = selectEventsBefore(database, input.beforeId, input.limit, input.workerId);
+      if (events !== undefined) return { events, kind: "events" };
+      const oldestTs = selectOldestTimestamp(database);
+      return oldestTs === undefined
+        ? { events: [], kind: "events" }
+        : { kind: "not-kept", oldestTs };
+    } catch (error: unknown) {
+      this.#options.logger.warn("History page read failed", {
+        error: describe(error),
+        path: this.#path,
+      });
+      return { kind: "unavailable" };
+    }
+  }
+
+  #newest(limit: number, workerId: string | undefined): EventEnvelope[] {
+    const database = this.#database;
+    if (database !== undefined && this.#readable && this.#writing) {
+      try {
+        return selectNewestEvents(database, limit, workerId);
+      } catch (error: unknown) {
+        this.#options.logger.warn("History read failed; paging from memory", {
+          error: describe(error),
+          path: this.#path,
+        });
+      }
+    }
+    return this.#options.bus
+      .replay()
+      .filter((envelope) => isWorkerEvent(envelope, workerId))
+      .slice(-limit);
   }
 
   async start(): Promise<void> {
@@ -160,6 +228,7 @@ class EventHistory implements EventHistoryHandle {
     }
     // why: nothing up to the rebuild awaits, so no event can land between the ring's copy and the live writer
     this.#database = database;
+    this.#indexWorkers(database);
     this.#migrate(database);
     const rebuilding = this.#prepare(database);
     if (rebuilding === undefined) return;
@@ -176,6 +245,20 @@ class EventHistory implements EventHistoryHandle {
     this.#prune();
     if (rebuilding.length > 0) await this.#rebuild(database, rebuilding);
     this.#arm();
+  }
+
+  #indexWorkers(database: SqliteDatabase): void {
+    try {
+      createWorkerIndex(database);
+    } catch (error: unknown) {
+      this.#options.logger.warn(
+        "The history's worker index could not be built; reads by worker scan the table",
+        {
+          error: describe(error),
+          path: this.#path,
+        },
+      );
+    }
   }
 
   #migrate(database: SqliteDatabase): void {

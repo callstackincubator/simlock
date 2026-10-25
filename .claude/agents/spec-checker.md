@@ -91,8 +91,9 @@ _note_:
 - **Note**: anything else, above all a gap the implementer may close as an
   `Assumption:` line (`coding.md` rule 2): a wording, an order, a bound
   the spec implies. A test for a case the spec does not name, defensive
-  handling, a needless Depends on, a task slightly over size. At most five
-  notes, the ones most likely to matter; drop the rest.
+  handling, a needless Depends on, a task slightly over size. A note only
+  when the implementer would act on it; none is the usual count, and a
+  report never pads to a number.
 
 1. **contradiction.** A line that breaks an agent rule or an accepted ADR,
    or two lines that cannot both hold. A Done when line the task's own
@@ -102,12 +103,15 @@ _note_:
 2. **unverifiable.** A Done when line or Completion condition no reviewer
    could check from the diff, the suite, or a named command.
 3. **untested.** A sentence in Scope, In short, the Technical spec or Done
-   when that states behaviour, with no Tests line that would fail if the
-   behaviour broke. "Unchanged", "as today" and "in today's order" are
-   behaviour: name the test that pins them, or the finding. So is a Tests
-   line whose seam cannot see the claim: an order across two modules tested
-   inside one of them, a user-visible result tested on an internal
-   callback.
+   when that states what an invoker (a caller, a user, a stored record, an
+   event) sees, with no Tests line that would fail if it broke. A sentence
+   about internal order, a fallback nothing can observe, "unchanged", "as
+   today" or "in today's order" is a note at most, and only when no
+   existing test pins it. A Tests line whose seam cannot see its claim is
+   a finding: an order across two modules tested inside one of them, a
+   user-visible result tested on an internal callback. A Tests line that
+   no Behaviours row backs, or one line per case, is a finding too: the
+   count of tests is set by the Behaviours table, not by the prose.
 4. **failure-mode.** A way the change can fail that no line answers and no
    rule decides: a remote process that does not answer, a restart midway,
    input out of bounds, an empty list, two callers at once, a wait with no

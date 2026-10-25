@@ -65,6 +65,7 @@ import {
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets } from "./relay.js";
+import type { UpdateCoordinator } from "./update-coordinator.js";
 
 type RequestId = string | number;
 
@@ -146,7 +147,7 @@ export interface DaemonServerEngineOptions {
   readonly catalog: CatalogReader;
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly doctor?: Doctor;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly historyPath?: string;
   readonly leases: LeaseCommands;
   readonly hostFacts: () => HostFacts;
@@ -166,6 +167,7 @@ export interface DaemonServerEngineOptions {
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
   readonly tokens?: TokenOperations;
+  readonly update?: UpdateCoordinator;
 }
 
 export interface DaemonServerCommonOptions {
@@ -269,6 +271,7 @@ export type DaemonServerOptions =
   | (DaemonServerCommonOptions & DaemonServerEngineOptions & { readonly dispatcher?: undefined })
   | (DaemonServerCommonOptions & {
       readonly dispatcher: ContractDispatcher;
+      readonly update?: UpdateCoordinator;
     });
 
 type DaemonHealth = "starting" | "running" | "failed";
@@ -315,6 +318,7 @@ function buildDispatcher(
     registry: options.registry,
     ...(options.stalls === undefined ? {} : { stalls: options.stalls }),
     ...(options.tokens === undefined ? {} : { tokens: options.tokens }),
+    ...(options.update === undefined ? {} : { update: options.update }),
     version: options.version,
   });
 }
@@ -572,11 +576,25 @@ export class DaemonServer {
     // this monitor.
     this.#engine?.healthMonitor?.start();
     this.#engine?.physicalDeviceWatcher?.start();
+    // why: a gateway's `events.subscribe` parked on readiness resumes only after this continuation, so the rollback's `daemon.update-failed` waits one turn of the event loop for it to subscribe.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!this.#stopping) this.options.update?.announceResultFile();
+  }
+
+  // why: a stale or unreadable result file must never keep the daemon from starting.
+  async #reportUpdateResult(): Promise<void> {
+    try {
+      await this.options.update?.readResultFile();
+    } catch (error: unknown) {
+      this.#logger.warn("Could not read the update result file", { message: errorMessage(error) });
+    }
   }
 
   async #converge(): Promise<void> {
     try {
       await this.options.converge?.();
+      // why: read before health is `running`, so a `daemon.update` that sees `running` also sees the failure a rolled back update left.
+      await this.#reportUpdateResult();
       this.#health = "running";
     } catch (error: unknown) {
       this.#health = "failed";
@@ -782,7 +800,8 @@ export class DaemonServer {
       return;
     }
 
-    if (connection.protocolMismatch) {
+    // why: `daemon.update` is the second frozen call (ADR 0042 §1): it skips the version gate but not the role check, which the dispatcher still runs, and readiness except for `query`.
+    if (connection.protocolMismatch && frame.type !== "daemon.update") {
       relayChannel?.abort();
       await this.#respondError(
         connection.socket,
@@ -1034,6 +1053,12 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "lease.get":
+        return this.#dispatcher.dispatch(
+          "lease.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "lease.list":
         return this.#dispatcher.dispatch(
           "lease.list",
@@ -1085,6 +1110,12 @@ export class DaemonServer {
       case "usage.get":
         return this.#dispatcher.dispatch(
           "usage.get",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "inbox.get":
+        return this.#dispatcher.dispatch(
+          "inbox.get",
           frame.payload ?? {},
           this.#session(connection),
         );
@@ -1159,6 +1190,10 @@ export class DaemonServer {
         );
       case "worker.remove":
         return this.#dispatcher.dispatch("worker.remove", frame.payload, this.#session(connection));
+      case "worker.update":
+        return this.#dispatcher.dispatch("worker.update", frame.payload, this.#session(connection));
+      case "alerts.test":
+        return this.#dispatcher.dispatch("alerts.test", frame.payload, this.#session(connection));
       case "component.install":
         return this.#installComponent(connection, frame.id, "component.install", frame.payload);
       case "worker.install-component":
@@ -1184,6 +1219,8 @@ export class DaemonServer {
         return this.#dispatcher.dispatch("device.add", frame.payload, this.#session(connection));
       case "device.remove":
         return this.#dispatcher.dispatch("device.remove", frame.payload, this.#session(connection));
+      case "daemon.update":
+        return this.#dispatcher.dispatch("daemon.update", frame.payload, this.#session(connection));
       // why: "daemon.stop" is deliberately absent from this switch: `#dispatchLine` intercepts it
       // itself, ahead of the protocol-mismatch and `#stopping` gates (ADR §6's frozen exception,
       // scoped to protocol version only -- still gated on a completed handshake and the `admin`

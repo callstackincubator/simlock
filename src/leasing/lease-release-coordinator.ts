@@ -78,7 +78,6 @@ interface ParticipantCalls {
 
 /**
  * why: lease commits happen in the serialized decision section; reclaiming is deliberately outside it.
- * Concurrent `releaseAll` calls are not idempotent: overlapping snapshots can yield UnknownLeaseError.
  */
 export class LeaseReleaseCoordinator
   implements LeaseReleaseCommands, LeaseExpirationAdmin, LeaseReleaseMaintenance, StartupLeaseEnder

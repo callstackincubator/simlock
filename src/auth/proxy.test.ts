@@ -8,7 +8,7 @@ import {
   MemoryFilesystem,
   MemoryLogSink,
 } from "../ports/index.js";
-import { AuthError, createAuth, type Identity } from "./index.js";
+import { AuthError, createAuth, type Identity, tokensOwner } from "./index.js";
 import {
   authConfigWith,
   createTestKey,
@@ -21,6 +21,7 @@ import {
   type TestKey,
   unsigned,
   withAlteredSignature,
+  openMemoryStateDatabase,
 } from "./testing.js";
 
 const k1 = await createTestKey("ES256", "k1");
@@ -50,6 +51,7 @@ async function harness(
         ? { enabled: true, host: "127.0.0.1", port: 4700 }
         : authConfigWith(proxyAuth),
     dataDirectory: "/home/agent/.simlock",
+    database: (await openMemoryStateDatabase([tokensOwner])).database,
     filesystem,
     secrets: new CryptoTokenSecrets(),
     idGenerator: { generate: () => "id" },
@@ -227,33 +229,22 @@ describe("authenticateRequest with the proxy strategy", () => {
     }
   });
 
-  it("sends a Bearer value to the token strategy when it starts slk_ and to the proxy check otherwise, with header authorization", async () => {
-    const { auth } = await harness({ proxyAuth: { ...proxyAuthConfig, header: "authorization" } });
-    const { secret } = await auth.tokens.create("agent", "ci");
-    const bearer = (value: string) => new Headers({ authorization: `Bearer ${value}` });
+  it("sends a Bearer value to the token strategy when it starts slk_ and to the proxy check otherwise, with header authorization written in lowercase or with capitals", async () => {
+    for (const header of ["authorization", "Authorization"]) {
+      const { auth } = await harness({ proxyAuth: { ...proxyAuthConfig, header } });
+      const { secret } = await auth.tokens.create("agent", "ci");
+      const bearer = (value: string) => new Headers({ authorization: `Bearer ${value}` });
 
-    expect(await outcome(auth, bearer(secret))).toMatchObject({ identity: { via: "token" } });
-    expect(await outcome(auth, bearer(await k1.sign(personClaims())))).toEqual(person());
-    expect(await outcome(auth, bearer("abc"))).toEqual(refused("malformed"));
-    expect(await outcome(auth, bearer("slk_unknown"))).toEqual({
-      status: 401,
-      message: "Unknown bearer token",
-    });
-  });
-
-  it("takes header authorization written with capitals as authorization", async () => {
-    const { auth } = await harness({ proxyAuth: { ...proxyAuthConfig, header: "Authorization" } });
-    const { secret } = await auth.tokens.create("agent", "ci");
-
-    expect(await outcome(auth, new Headers({ authorization: `Bearer ${secret}` }))).toMatchObject({
-      identity: { via: "token" },
-    });
-    expect(
-      await outcome(
-        auth,
-        new Headers({ authorization: `Bearer ${await k1.sign(personClaims())}` }),
-      ),
-    ).toEqual(person());
+      expect(await outcome(auth, bearer(secret)), header).toMatchObject({
+        identity: { via: "token" },
+      });
+      expect(await outcome(auth, bearer(await k1.sign(personClaims()))), header).toEqual(person());
+      expect(await outcome(auth, bearer("abc")), header).toEqual(refused("malformed"));
+      expect(await outcome(auth, bearer("slk_unknown")), header).toEqual({
+        status: 401,
+        message: "Unknown bearer token",
+      });
+    }
   });
 
   it("keeps answering Unknown bearer token for a Bearer value that is not a token when proxy sign-in is off", async () => {

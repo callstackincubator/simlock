@@ -26,9 +26,9 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
   dispatcher in process, never through the socket.
 - A gateway is a second set of handlers for the same contract. Every frontend
   works against either mode unchanged.
-- State lives on the worker (`state.json`, written only by core's
-  `Registry`). A gateway keeps only its tokens, its instance id and its drained-worker set on
-  disk; everything else is rebuilt from the workers that reconnect.
+- State lives on the worker (`state.db`, its registry tables written only by core's
+  `Registry`; the warm pool's learned kinds in its own tables). A gateway keeps only its tokens, its instance id and its drained-worker set on
+  disk (`state.db`); everything else is rebuilt from the workers that reconnect.
 
 ## Modules
 
@@ -45,23 +45,27 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |
 | drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
 | gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
+| alerts | Gateway only: chosen fleet events POSTed to webhook destinations | [alerts](../../src/alerts/AGENTS.md) |
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
-| agent-device | Optional edge: the agent-device daemon beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
-| stream | Optional edge: a leased device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
+| agent-device | Optional edge: the two agent-device daemons (simulators, phones) beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
+| stream | Optional edge: a running device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
 | auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
 | http | HTTP frontend: routes, SSE | [http](../../src/http/AGENTS.md) |
 | cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |
 | mcp | stdio MCP server for one agent session | [mcp](../../src/mcp/AGENTS.md) |
 | simlock-client, client, admin | The typed programmatic client (`simlock/client`, `simlock/admin`) | [simlock-client](../../src/simlock-client/AGENTS.md) · [client](../../src/client/AGENTS.md) · [admin](../../src/admin/AGENTS.md) |
+| updater | The detached process that installs a Simlock version with npm, restarts the daemon and rolls back | [updater](../../src/updater/AGENTS.md) |
 | lease-policy | Client-side renew timer | [lease-policy](../../src/lease-policy/AGENTS.md) |
 | bus | Post-commit business events and their in-memory ring | [bus](../../src/bus/AGENTS.md) |
+| state | `state.db`: opens it, refuses an old file, damage and a newer version, migrates each owner's tables | [state](../../src/state/AGENTS.md) |
 | history | The durable event history: `history.db`, prune, set-aside, projections (usage: request, minute and device fact rows) | [history](../../src/history/AGENTS.md) |
 | ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
+| instructions | The static rules text for agents: `simlock instructions`, the MCP server instructions and resource; `simlock setup`, which installs the router skill | [instructions](../../src/instructions/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
 | daemon-protocol | Socket framing and the protocol version | [daemon-protocol](../../src/daemon-protocol/AGENTS.md) |
 | test-support | Shared test helpers | [test-support](../../src/test-support/AGENTS.md) |
-| `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [CONSOLE.md](../CONSOLE.md) |
+| `ui/` | Web console, served by the daemon: data, model, state, design system and screens in layers | [ui](../../ui/AGENTS.md) · [console.mdx](../../website/src/content/docs/docs/worker/console.mdx) |
 
 ## Dependencies
 
@@ -73,13 +77,14 @@ Arrows point from the optional to the required (architecture rule 15).
 | `past-index` | Outside a component, import only its index file (tests may also import its testing file) |
 | `core-not-leasing` | Core declares a port; the composition root connects leasing to it |
 | `core-not-drivers` | Core and leasing reach a platform only through the `Driver` interface |
-| `no-fs-or-process` | Core, leasing, agent-device, host-load and stream use ports, never `fs` or `child_process` |
+| `no-fs-or-process` | Core, leasing, agent-device, host-load, stream and alerts use ports, never `fs` or `child_process` |
 | `definition-is-light` | A module's definition file imports its own module only for types or by dynamic import |
 | `auth-imports-little` | `src/auth` imports only ports and contract |
 | `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |
 | `not-modules` | Core, leasing, drivers, gateway and contract import nothing from modules or module-registry |
 | `not-agent-device` | Core, leasing and drivers import nothing from agent-device |
 | `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
+| `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `src/daemon/main.ts` imports it |
 | `not-stream`, `stream-not-edges` | Nothing required imports stream; stream imports no frontend, gateway or driver |
 | `gateway-not-edges`, `gateway-only-dispatch` | Gateway imports no driver or frontend, and from daemon only `src/daemon/dispatch.ts` |
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |

@@ -9,12 +9,18 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
+   `refuseWhenDaemonAnswers` (`src/daemon/main.ts:241`) first connects to the socket: a daemon
+   that answers makes this one fail with `DaemonAlreadyRunningError`, before any `state.db` is opened.
+   `openStateDatabase` then opens the role's `state.db` (both roles) in this order, each failure
+   being the daemon's start error: an old file of the role's former state refuses, then
+   `node:sqlite` missing, the open and its pragmas, `quick_check`, and in one `BEGIN IMMEDIATE`
+   transaction each owner's version (a newer one, or a migration that throws, refuses).
    `createAuth` then builds the token store and the admin secret (hash in memory), once, for both modes.
-5. `config.mode: gateway` → the gateway section. Otherwise go on.
+5. Started with `--gateway` (role `gateway`, data directory `<root>/gateway`) → the gateway section. Otherwise go on.
 
 ## Worker: build (before the claim)
 
-6. `Registry.load` — `state.json`.
+6. `Registry.load` — the `registry` and device-data tables of `state.db`.
 7. Instance identity — `loadInstanceId`, `instance.json`. Written once per home,
    never regenerated.
 8. Root validation — `discoverDrivers`: each driver checks its owned root against
@@ -30,7 +36,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 ## Worker: claim and converge (`DaemonServer.start`)
 
 11. Claim the socket — `DaemonEndpointHost.start`. A live daemon →
-    `DaemonAlreadyRunningError`; the start rejects, exit 1. A stale socket file is
+    `DaemonAlreadyRunningError`; the start rejects, the entry logs `Daemon already running` and exits 0. A stale socket file is
     removed.
 12. Host load sampling starts.
 13. `admin.token` written (0600, atomic).
@@ -42,7 +48,9 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
     the first host load reading is in; HTTP starts when `http.enabled`.
 
 Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
-reaches its settle step, the steps after the read are skipped.
+reaches its settle step, the steps after the read are skipped. Before step 16 it
+removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
+the data directory (`sweepWriteLeftovers`).
 
 16. Settle open requests — `leasing.settleRequests`: every `open` request fails
     `INTERNAL`; `lease.rejected` with reason `daemon-restarted`.
@@ -63,7 +71,8 @@ reaches its settle step, the steps after the read are skipped.
        `device.shutdown` (initiator `startup-interrupted-reclaim`).
     3. Spent deletes: `shutdown` devices that may not be granted again are deleted
        inline. A failed delete is logged; the device stays `shutdown`.
-    4. Warm pool and capacity observer start.
+    4. Warm pool and capacity observer start. The pool closes the lease rows of its learned-kind
+       record whose lease the registry no longer holds, and its first pass boots the recorded kinds.
 22. `queue.changed` with the first depth. Converge done → health `running`.
 
 Arm (skipped when a stop already ran):
@@ -93,7 +102,7 @@ platform runs the deferred reclaim (step 21.2).
 
 1. Instance identity — `instance.json`.
 2. `FleetLeaseIndex`, routing policy,
-   `GatewayService` (`workers.json`), `FleetLeaseCoordinator`, `DaemonServer`
+   `GatewayService` (drained workers in `state.db`), `FleetLeaseCoordinator`, `DaemonServer`
    with `GatewayDispatcher`. No registry, drivers, reaper or health monitor.
 3. `DaemonServer.start`: claim → host load → `admin.token` → converge starts →
    the event history starts → HTTP starts (uplink listener on the same server).
@@ -120,7 +129,7 @@ platform runs the deferred reclaim (step 21.2).
 7. Close connections, remove `admin.token`, release the socket (released even when the removal fails).
 
 A gateway's stop: agent-device edge and HTTP, then `FleetLeaseCoordinator` and
-`GatewayService` are disposed, then the event history stops.
+`GatewayService` are disposed, then the event history stops and `state.db` closes.
 
-A stop releases nothing. Leases stay in `state.json` with their deadlines; the
+A stop releases nothing. Leases stay in `state.db` with their deadlines; the
 next start re-arms or ends them (steps 19–20).

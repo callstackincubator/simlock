@@ -8,22 +8,26 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [start
 
 ## Files
 
-| File                                      | Role                                                                |
-| ----------------------------------------- | ------------------------------------------------------------------- |
-| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`             |
-| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant              |
-| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back        |
-| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel               |
-| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once |
-| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                              |
-| `lease-expiry-scheduler.ts`               | TTL timers                                                          |
-| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim      |
-| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease             |
-| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                       |
-| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                               |
-| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request         |
-| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`              |
-| `testing.ts`                              | Builds core + leasing for other modules' tests                      |
+| File                                      | Role                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`                         |
+| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant                          |
+| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back                    |
+| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel; `requesterLimitDecision` |
+| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once             |
+| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                                          |
+| `lease-expiry-scheduler.ts`               | TTL timers                                                                      |
+| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim                  |
+| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease                         |
+| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                                   |
+| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                                           |
+| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request                     |
+| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`                          |
+| `testing.ts`                              | Builds core + leasing for other modules' tests                                  |
+
+## The update hold
+
+`holdForUpdate()` (on the `Leasing` handle, typed `UpdateHold`) closes admission and refuses every request not provisioning right now, whatever its state (`new`, queued, re-queued, or retrying after a failed provision), with `DaemonUpdatingError` (`DAEMON_UPDATING`, `lease.rejected` reason `updating`); `releaseUpdateHold()` reopens it. It is apart from `beginMaintenance` so the warm pool and reclaim go on: nuke stops them, an update does not. Renew and release never go through admission, so held leases work as usual. A request already provisioning when the hold begins is granted; the check is `#refuseUnderHold`, before every provision starts.
 
 ## How it works
 
@@ -31,8 +35,9 @@ Lock: one `SerializedDecision` per core, shared with core's reclaim, warm pool
 and registry writers. Read-decide-commit runs under it; driver I/O never does.
 
 1. **Admit** (lock) — `LeaseAcquisitionCoordinator.request`: replay by
-   idempotency key + requester → refuse under maintenance → refuse a requester
-   at `lease.maxPerRequester` (1) or with a pending request → refuse a taken
+   idempotency key + requester → refuse under the update hold (`DaemonUpdatingError`, `lease.rejected` reason `updating`) → refuse under maintenance → refuse a requester
+   at `lease.maxPerRequester` (1; a number, or one per platform) or with a pending request
+   on its platform (`requesterLimitDecision`) → refuse a taken
    `leaseId` → `LeaseRequestBook.admit` stores the request, then queues it.
    Emits `lease.requested`.
 2. **Resolve** (no lock) — request → spec: default mode, class or OS range →
@@ -56,7 +61,8 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    that fails hands the device to core's quarantine through a port leasing
    declares, and the waiter's slot is freed either way.
 5. **Grant** (lock) — `LeaseLifecycle.grant` → one registry commit: device
-   `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL.
+   `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL. A grant of a ready
+   device wakes the queue, so the next waiter plans without another event.
 6. **Renew** — moves `ttlDeadline`; emits `lease.renewed`. The gateway forwards
    renews; it runs no timers of its own.
 7. **End** — explicit release, TTL expiry, `device-lost` (health monitor or
@@ -89,7 +95,7 @@ its lease as `device-lost` with no reclaim.
 | Reads before a crash or absence | 2                   | `health.stableObservations`                              |
 | Recovery attempts               | 3, backoff from 5 s | `health.maxRecoveryAttempts`, `health.recoveryBackoffMs` |
 
-Writes go through core's `Registry` (`state.json`). Request states: `open` →
+Writes go through core's `Registry` (`state.db`). Request states: `open` →
 `granted` | `failed` | `cancelled`. Waiter states live in memory only.
 
 ## Rules
@@ -103,7 +109,7 @@ Writes go through core's `Registry` (`state.json`). Request states: `open` →
   `createLeasing` builds.
 - A daemon start fails every request the previous process left open,
   as `daemon-restarted`.
-- A waiting reason is never stored: not in `state.json`, not in an event.
+- A waiting reason is never stored: not in `state.db`, not in an event.
 
 ## Known gaps
 

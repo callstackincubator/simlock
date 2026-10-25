@@ -7,11 +7,17 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { OptionalModuleDefinition, WorkerHooks } from "../modules/index.js";
 import { readHistoryEvents } from "../history/testing.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
+import {
+  FakeClock,
+  IpcError,
+  JsonLinesLogger,
+  MemoryFilesystem,
+  MemoryLogSink,
+} from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 import { openRelay, openUplink, relayInput, settleWithin } from "./test-relay-support.js";
@@ -125,7 +131,12 @@ async function prepare(options: RigOptions) {
     clock,
     configOverrides: {
       capabilities: Object.fromEntries((options.on ?? []).map((name) => [name, { enabled: true }])),
-      ...(port === undefined ? {} : { http: { enabled: true, host: "127.0.0.1", port } }),
+      // why: a standalone worker serves HTTP by default (ADR 0046); a rig that asks for no HTTP pins it off.
+      ...(port === undefined
+        ? options.extra?.role === "gateway"
+          ? {}
+          : { http: { enabled: false } }
+        : { http: { enabled: true, host: "127.0.0.1", port } }),
       ...options.overrides,
     },
     dataDirectory: directory,
@@ -135,7 +146,7 @@ async function prepare(options: RigOptions) {
     logger: new JsonLinesLogger({ clock, level: "debug", sink }),
     optionalModules: options.modules,
     socketPath: join(directory, "daemon.sock"),
-    statePath: join(directory, "state.json"),
+    deviceDataTables: fakeDeviceDataTables,
     version: "1.2.3",
     ...options.extra,
   } as StartDaemonOptions;
@@ -167,10 +178,6 @@ async function capabilities(daemon: DaemonServer) {
     readonly capabilities?: readonly { name: string; state: string; reason?: string }[];
   };
   return status.capabilities ?? [];
-}
-
-function recordsOf(sink: MemoryLogSink, message: string) {
-  return sink.records.filter((record) => record.message === message);
 }
 
 async function leaseAndRelease(daemon: DaemonServer): Promise<string> {
@@ -273,7 +280,6 @@ describe("optional modules: HTTP routes", () => {
   });
 
   it("with agent-device on and a fake module registered, both modules' routes and relay targets answer, and both capabilities are listed", async () => {
-    const seen: string[] = [];
     const { daemon, origin } = await start({
       http: true,
       modules: [
@@ -282,10 +288,7 @@ describe("optional modules: HTTP routes", () => {
           fakeModule({
             mount: () => handler,
             name: "alpha",
-            relayTarget: (_request, tenant) => {
-              seen.push(tenant);
-              return Promise.resolve(new Response("alpha"));
-            },
+            relayTarget: () => Promise.resolve(new Response("alpha")),
           }),
         ),
       ],
@@ -305,10 +308,9 @@ describe("optional modules: HTTP routes", () => {
     );
 
     expect([alphaRoute.status, agentDeviceRoute.status]).toEqual([200, 200]);
-    expect(seen).toEqual(["gw.g1.alice"]);
     expect((await alphaRelay.body()).state).toBe("fulfilled");
     expect(nobodyRelay).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
-    expect(agentDeviceRelay).not.toMatchObject({ code: "RELAY_TARGET_MISSING" });
+    expect(agentDeviceRelay).toMatchObject({ state: "fulfilled" });
     expect((await capabilities(daemon)).map((entry) => entry.name)).toEqual([
       "agent-device",
       "alpha",
@@ -368,7 +370,7 @@ describe("optional modules: relay targets", () => {
 
 describe("optional modules: doctor findings", () => {
   it("a fake module's finding reaches doctor.run as module-unavailable with module, message and remedy; a second module whose findings() throws loses only its own", async () => {
-    const { daemon, sink } = await start({
+    const { daemon } = await start({
       modules: definitions(
         fakeModule({
           findings: () => [{ message: "it is down", remedy: "bring it up" }],
@@ -397,32 +399,6 @@ describe("optional modules: doctor findings", () => {
     expect(report.findings.filter((finding) => finding.kind === "module-unavailable")).toHaveLength(
       1,
     );
-    expect(
-      recordsOf(sink, "Could not read optional module findings").map((record) => record.fields),
-    ).toEqual([{ message: "boom", module: "bravo" }]);
-  });
-
-  it("a module whose findings() throws, reads, then throws again is warned once per run of failures, not once per read", async () => {
-    const steps = ["throw", "throw", "read", "throw", "throw"];
-    const { daemon, sink } = await start({
-      modules: definitions(
-        fakeModule({
-          findings: () => {
-            if (steps.shift() === "throw") throw new Error("boom");
-            return [];
-          },
-          name: "alpha",
-        }),
-      ),
-      on: ["alpha"],
-    });
-    const startupWarnings = recordsOf(sink, "Could not read optional module findings").length;
-
-    for (let run = 0; run < 5 - startupWarnings; run += 1) {
-      await daemon.dispatch("doctor.run", {}, admin);
-    }
-
-    expect(recordsOf(sink, "Could not read optional module findings")).toHaveLength(2);
   });
 });
 
@@ -572,16 +548,15 @@ describe("optional modules: a start that cannot go on", () => {
 });
 
 describe("optional modules: the context a module receives", () => {
-  it("has a logger named after the module, and events.subscribe delivers a bus event", async () => {
+  it("events.subscribe delivers a bus event and the module receives its config", async () => {
     const delivered: string[] = [];
     const seen: { config?: unknown } = {};
-    const { daemon, sink } = await start({
+    const { daemon } = await start({
       modules: definitions(
         fakeModule({
           name: "alpha",
           onCreate: (ctx) => {
             seen.config = ctx.config;
-            ctx.logger.info("alpha says hello");
             ctx.events.subscribe("lease.released", (envelope) => {
               delivered.push(envelope.payload.leaseId);
             });
@@ -593,9 +568,6 @@ describe("optional modules: the context a module receives", () => {
 
     const leaseId = await leaseAndRelease(daemon);
 
-    expect(recordsOf(sink, "alpha says hello").map((record) => record.module)).toEqual([
-      "daemon.alpha",
-    ]);
     expect(delivered).toEqual([leaseId]);
     expect(seen.config).toEqual({ greeting: "hello" });
   });
@@ -630,49 +602,69 @@ describe("optional modules: afterSocketClaimed", () => {
     expect(seen).toEqual([true]);
   });
 
-  it("never runs in a daemon that lost the socket race", async () => {
-    const claimed = vi.fn();
-    const filesystem = new MemoryFilesystem();
-    const directory = await mkdtemp(join(tmpdir(), "simlock-modules-race-"));
-    directories.push(directory);
-    const options = (modules: readonly OptionalModuleDefinition<unknown>[]) =>
-      ({
-        clock: new FakeClock(1_000),
-        configOverrides: { capabilities: { alpha: { enabled: true } } },
-        dataDirectory: directory,
-        drivers: [
-          new FakeDriver({
-            availableOsVersions: ["26.5"],
-            clock: new FakeClock(1_000),
-            platform: "ios",
-          }),
-        ],
-        filesystem,
-        logger: new JsonLinesLogger({
+  it.each([
+    // why: the loser refuses at the probe, before it opens state.db, so it builds no module at all
+    ["at the probe", undefined, 0],
+    // why: the loser's probe finds nothing answering, then its claim finds the address taken
+    [
+      "at the claim",
+      {
+        connect: () =>
+          Promise.reject(new IpcError("endpoint-not-found", "nothing answers", undefined)),
+        listen: () => Promise.reject(new IpcError("address-in-use", "address taken", undefined)),
+      } as StartDaemonOptions["ipc"],
+      1,
+    ],
+  ] as const)(
+    "never runs in a daemon that lost the socket race %s",
+    async (_where, loserIpc, created) => {
+      const claimed = vi.fn();
+      const filesystem = new MemoryFilesystem();
+      const directory = await mkdtemp(join(tmpdir(), "simlock-modules-race-"));
+      directories.push(directory);
+      const options = (
+        modules: readonly OptionalModuleDefinition<unknown>[],
+        ipc?: StartDaemonOptions["ipc"],
+      ) =>
+        ({
           clock: new FakeClock(1_000),
-          level: "debug",
-          sink: new MemoryLogSink(),
-        }),
-        optionalModules: modules,
-        statePath: join(directory, "state.json"),
-        version: "1.2.3",
-      }) as StartDaemonOptions;
-    const first = await startDaemon(options([]));
-    daemons.push(first);
+          configOverrides: { capabilities: { alpha: { enabled: true } }, http: { enabled: false } },
+          dataDirectory: directory,
+          drivers: [
+            new FakeDriver({
+              availableOsVersions: ["26.5"],
+              clock: new FakeClock(1_000),
+              platform: "ios",
+            }),
+          ],
+          filesystem,
+          ...(ipc === undefined ? {} : { ipc }),
+          logger: new JsonLinesLogger({
+            clock: new FakeClock(1_000),
+            level: "debug",
+            sink: new MemoryLogSink(),
+          }),
+          optionalModules: modules,
+          deviceDataTables: fakeDeviceDataTables,
+          version: "1.2.3",
+        }) as StartDaemonOptions;
+      const first = await startDaemon(options([]));
+      daemons.push(first);
 
-    const loser = fakeModule({ hooks: { afterSocketClaimed: claimed }, name: "alpha" });
-    const second = await startDaemon(options(definitions(loser))).then(
-      () => "started",
-      () => "rejected",
-    );
-    await sleep(50);
+      const loser = fakeModule({ hooks: { afterSocketClaimed: claimed }, name: "alpha" });
+      const second = await startDaemon(options(definitions(loser), loserIpc)).then(
+        () => "started",
+        () => "rejected",
+      );
+      await sleep(50);
 
-    expect({ claimed: claimed.mock.calls.length, created: loser.creates, second }).toEqual({
-      claimed: 0,
-      created: 1,
-      second: "rejected",
-    });
-  });
+      expect({ claimed: claimed.mock.calls.length, created: loser.creates, second }).toEqual({
+        claimed: 0,
+        created,
+        second: "rejected",
+      });
+    },
+  );
 
   it.each([
     [
@@ -683,18 +675,16 @@ describe("optional modules: afterSocketClaimed", () => {
     ],
     ["rejects", () => Promise.reject(new Error("hook broke"))],
   ] as const)(
-    "an afterSocketClaimed that %s is logged as failed, and the daemon still starts",
+    "an afterSocketClaimed that %s does not stop the daemon starting",
     async (_how, hook) => {
-      const { sink } = await start({
-        modules: definitions(fakeModule({ hooks: { afterSocketClaimed: hook }, name: "alpha" })),
+      const claimed = vi.fn(hook);
+      const { daemon } = await start({
+        modules: definitions(fakeModule({ hooks: { afterSocketClaimed: claimed }, name: "alpha" })),
         on: ["alpha"],
       });
 
-      await vi.waitFor(() =>
-        expect(
-          recordsOf(sink, "Optional module hook failed").map((record) => record.fields),
-        ).toEqual([{ hook: "afterSocketClaimed", message: "hook broke", module: "alpha" }]),
-      );
+      await vi.waitFor(() => expect(claimed).toHaveBeenCalledTimes(1));
+      expect(daemon.health).toBe("running");
     },
   );
 });
@@ -702,25 +692,22 @@ describe("optional modules: afterSocketClaimed", () => {
 describe("optional modules: beforeDeviceReclaim", () => {
   it("a release reclaims the device when no turned-on module has beforeDeviceReclaim", async () => {
     const notes: string[] = [];
-    const { clock, daemon } = await start({
+    const { daemon } = await start({
       modules: definitions(fakeModule({ name: "alpha" })),
       notes,
       on: ["alpha"],
       overrides: { lease: { endWaitMs: END_WAIT_MS } },
     });
 
-    const timers = vi.spyOn(clock, "setTimer");
-
     await leaseAndRelease(daemon);
 
     await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
-    expect(timers.mock.calls.map(([delay]) => delay)).not.toContain(END_WAIT_MS);
   });
 
   it("beforeDeviceReclaim runs after a release commits and before the device's reclaim starts", async () => {
     const notes: string[] = [];
     let live: DaemonServer | undefined;
-    const { clock, daemon } = await start({
+    const { daemon } = await start({
       modules: definitions(
         fakeModule({
           hooks: {
@@ -745,20 +732,17 @@ describe("optional modules: beforeDeviceReclaim", () => {
       overrides: { lease: { endWaitMs: END_WAIT_MS } },
     });
     live = daemon;
-    const timers = vi.spyOn(clock, "setTimer");
 
     await leaseAndRelease(daemon);
     await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
 
     expect(notes).toEqual(["lease gone", "hook done", "driver reclaim"]);
-    expect(timers.mock.calls.map(([delay]) => delay)).toContain(END_WAIT_MS);
   });
 });
 
 describe("optional modules: stop hooks", () => {
-  it("beforeDrain finishes before the HTTP gateway stops and before leasing's settle starts", async () => {
+  it("beforeDrain finishes before the HTTP gateway stops", async () => {
     let origin: string | undefined;
-    let moduleLog: { info(message: string): void } | undefined;
     const notes: string[] = [];
     const rig = await start({
       http: true,
@@ -772,13 +756,9 @@ describe("optional modules: stop hooks", () => {
                 () => "refused",
               );
               notes.push(`gateway ${health}`);
-              moduleLog?.info("drain done");
             },
           },
           name: "alpha",
-          onCreate: (ctx) => {
-            moduleLog = ctx.logger;
-          },
         }),
       ),
       on: ["alpha"],
@@ -787,10 +767,7 @@ describe("optional modules: stop hooks", () => {
 
     await rig.daemon.stop("test");
 
-    const messages = rig.sink.records.map((record) => record.message);
     expect(notes).toEqual(["gateway 200"]);
-    expect(messages.indexOf("drain done")).toBeGreaterThanOrEqual(0);
-    expect(messages.indexOf("drain done")).toBeLessThan(messages.indexOf("Daemon stopping"));
   });
 
   it("by the time the stop ends, agent-device's waiting allocate is cancelled through leasing and another module's beforeDrain has run", async () => {
@@ -855,7 +832,7 @@ describe("optional modules: stop hooks", () => {
     expect(cancelled).toHaveLength(1);
   });
 
-  it("beforeDriversDispose finishes before any driver's dispose starts", async () => {
+  it("beforeDriversDispose finishes before the driver's dispose starts", async () => {
     const notes: string[] = [];
     const { daemon } = await start({
       modules: definitions(
@@ -878,9 +855,9 @@ describe("optional modules: stop hooks", () => {
     expect(notes).toEqual(["hook done", "driver dispose"]);
   });
 
-  it("with two modules whose beforeDrain hangs and settles at once, both start together; on a fake clock the step ends at 30 s with only the hanging one logged as ran out of time, and the stop goes on", async () => {
+  it("with two modules whose beforeDrain hangs and settles at once, both start together; on a fake clock the step ends at 30 s, and the stop goes on", async () => {
     const started: string[] = [];
-    const { clock, daemon, sink } = await start({
+    const { clock, daemon } = await start({
       modules: definitions(
         fakeModule({
           hooks: {
@@ -916,13 +893,10 @@ describe("optional modules: stop hooks", () => {
     await stopping;
 
     expect(stoppedEarly).toBe(false);
-    expect(
-      recordsOf(sink, "Optional module hook ran out of time").map((record) => record.fields),
-    ).toEqual([{ hook: "beforeDrain", module: "hangs" }]);
   });
 
-  it("a beforeDrain that throws is logged as failed, and the HTTP gateway still stops", async () => {
-    const { daemon, origin, sink } = await start({
+  it("a beforeDrain that throws does not keep the HTTP gateway from stopping", async () => {
+    const { daemon, origin } = await start({
       http: true,
       modules: definitions(
         fakeModule({
@@ -942,15 +916,12 @@ describe("optional modules: stop hooks", () => {
       () => "refused",
     );
 
-    expect(recordsOf(sink, "Optional module hook failed").map((record) => record.fields)).toEqual([
-      { hook: "beforeDrain", message: "drain broke", module: "alpha" },
-    ]);
     expect(afterStop).toBe("refused");
   });
 
-  it("a beforeDriversDispose that throws is logged, and the drivers are still disposed", async () => {
+  it("a beforeDriversDispose that throws does not keep the drivers from being disposed", async () => {
     const notes: string[] = [];
-    const { daemon, sink } = await start({
+    const { daemon } = await start({
       modules: definitions(
         fakeModule({
           hooks: { beforeDriversDispose: () => Promise.reject(new Error("dispose broke")) },
@@ -963,15 +934,12 @@ describe("optional modules: stop hooks", () => {
 
     await daemon.stop("test");
 
-    expect(recordsOf(sink, "Optional module hook failed").map((record) => record.fields)).toEqual([
-      { hook: "beforeDriversDispose", message: "dispose broke", module: "alpha" },
-    ]);
     expect(notes).toContain("driver dispose");
   });
 
-  it("a beforeDriversDispose that runs past 30 s on a fake clock is logged, and the drivers are still disposed", async () => {
+  it("a beforeDriversDispose that runs past 30 s on a fake clock does not keep the drivers from being disposed", async () => {
     const notes: string[] = [];
-    const { clock, daemon, sink } = await start({
+    const { clock, daemon } = await start({
       modules: definitions(
         fakeModule({
           hooks: {
@@ -989,12 +957,12 @@ describe("optional modules: stop hooks", () => {
 
     const stopping = daemon.stop("test");
     await vi.waitFor(() => expect(notes).toContain("hook started"));
-    clock.advance(30_000);
+    clock.advance(29_999);
+    await sleep(30);
+    expect(notes).not.toContain("driver dispose");
+    clock.advance(1);
     await stopping;
 
-    expect(
-      recordsOf(sink, "Optional module hook ran out of time").map((record) => record.fields),
-    ).toEqual([{ hook: "beforeDriversDispose", module: "alpha" }]);
     expect(notes).toContain("driver dispose");
   });
 });

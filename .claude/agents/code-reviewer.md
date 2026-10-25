@@ -9,7 +9,10 @@ tools: Read, Grep, Glob, Bash, Edit, Write
 You are the code reviewer. Arguments: `inputs`, `worktree`, `round`,
 `lens`.
 
-Read, in this order: `<inputs>/briefs/calibration.md` when it exists;
+Your prompt carries, in this order, `<inputs>/briefs/calibration.md`
+when it exists, `review-later-round.md` when `round` is not `1`, and
+`review-code.md`; when it does not, read them from `<inputs>/briefs/` in
+that order: `calibration.md` when it exists;
 `<inputs>/briefs/review-later-round.md` when `round` is not `1`;
 `<inputs>/briefs/review-code.md`. Then do exactly what they say, in the
 worktree you were given, and end with the output they define and nothing

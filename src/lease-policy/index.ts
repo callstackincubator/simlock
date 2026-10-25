@@ -1,5 +1,5 @@
 /**
- * Client-side lease renewal: the timer half of ADR 0004 §2 ("'Held' is a client policy, not a
+ * why: Client-side lease renewal: the timer half of ADR 0004 §2 ("'Held' is a client policy, not a
  * daemon mode ... what it does while alive is renew on a timer (one third of the TTL) and
  * release on exit, parent death, or a catchable signal").
  *
@@ -8,7 +8,7 @@
  *
  * - the CLI's holder and the MCP session follow the *same* policy, and a second copy of a
  *   liveness loop is exactly the duplication ADR 0004 exists to remove;
- * - the typed client deliberately owns no renew loop (ADR 0003 §10, `docs/CLIENT.md`): renew
+ * - the typed client deliberately owns no renew loop (ADR 0003 §10): renew
  *   and reconnect policy is a frontend concern, so this is a helper frontends *choose*, never
  *   something `connectSimlock` starts on their behalf. Nothing here is exported from
  *   `simlock/client` or `simlock/admin`.

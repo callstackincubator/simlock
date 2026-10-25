@@ -1,3 +1,4 @@
+import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
 import {
@@ -9,8 +10,11 @@ import {
   settled,
   signIn,
   startDaemon,
+  startHostWithLease,
   test,
+  withActionSurfaces,
 } from "./fixtures.js";
+import { addInboxItems, waitingItem } from "./inbox-stub.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "18.4"] as const;
@@ -18,7 +22,10 @@ const LEASE = ["lease", "--platform", "ios", "--device", "iPhone 16", "--os", "1
 interface Pages {
   readonly views: readonly { readonly label: string; readonly path: string }[];
   readonly worker: string;
+  readonly device: string;
   readonly lease: string;
+  readonly request: string;
+  readonly event: string;
 }
 
 async function takeLease(host: RunningDaemon, agent: string): Promise<string> {
@@ -31,19 +38,37 @@ async function hostWithLease(): Promise<{ readonly host: RunningDaemon; readonly
   const host = await startDaemon("worker", { driverScript: { ios: IOS } });
   const lease = await takeLease(host, "console-views");
   const listed = await host.cli(["worker", "list", "--json"]);
-  const [worker] = (listed.json as { workers: { id: string }[] }).workers;
+  const [worker] = (listed.json as { workers: { id: string; leases: { deviceId: string }[] }[] })
+    .workers;
+  const workerPath = `/fleet/${encodeURIComponent(worker?.id ?? "")}`;
+  const replay = await fetch(new URL("/v1/events?since=1h", host.url), {
+    headers: { Authorization: `Bearer ${host.tokens.operator}` },
+  });
+  const granted = (
+    (await replay.json()) as { events: { event: string; id: string }[] }
+  ).events.find((entry) => entry.event === "lease.granted");
   return {
     host,
     pages: {
+      device: `${workerPath}/${encodeURIComponent(worker?.leases[0]?.deviceId ?? "")}?tab=devices`,
+      event: `/activity/${encodeURIComponent(granted?.id ?? "")}`,
       lease: `/leases/${encodeURIComponent(lease)}/`,
+      request: "/queue/req_none",
       views: NAV.map((entry) => ({ label: entry.label, path: entry.path })),
-      worker: `/workers/${encodeURIComponent(worker?.id ?? "")}`,
+      worker: workerPath,
     },
   };
 }
 
 function every(pages: Pages): readonly string[] {
-  return [...pages.views.map((view) => view.path), pages.worker, pages.lease];
+  return [
+    ...pages.views.map((view) => view.path),
+    pages.worker,
+    pages.device,
+    pages.lease,
+    pages.request,
+    pages.event,
+  ];
 }
 
 async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
@@ -52,9 +77,20 @@ async function openSignedIn(page: Page, host: RunningDaemon): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 }
 
+// why: an open drawer hides the page behind it from assistive technology.
+function opensDrawer(path: string): boolean {
+  return /^\/(leases|queue|activity|inbox)\/./.test(path) || /^\/fleet\/[^/?]+\/./.test(path);
+}
+
 async function visit(page: Page, host: RunningDaemon, path: string): Promise<void> {
   await page.goto(new URL(path, host.url).toString());
-  await expect(page.locator("#main").getByRole("heading").first()).toBeVisible();
+  // why: an open drawer hides the page behind it from assistive technology, so there the heading is found by hidden role too.
+  await expect(
+    page
+      .locator("#main")
+      .getByRole("heading", { includeHidden: opensDrawer(path) })
+      .first(),
+  ).toBeVisible();
   await expect(page.locator("#main")).not.toContainText("Loading…");
   await settled(page);
 }
@@ -76,7 +112,6 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
-        for (const summary of await page.locator("#main summary").all()) await summary.click();
         expect(await hasHorizontalScroll(page), path).toBe(false);
       }
     } finally {
@@ -90,7 +125,9 @@ test.describe("every view", () => {
     const { host, pages } = await hostWithLease();
     try {
       await openSignedIn(page, host);
-      for (const path of every(pages)) {
+      // why: a drawer traps the keyboard inside itself, so the lease and device pages are left out
+      // of this order.
+      for (const path of every(pages).filter((candidate) => !opensDrawer(candidate))) {
         await visit(page, host, path);
         // why: a radio group is one stop, at its checked radio, and nothing inside a closed
         // disclosure is a stop, so those are left out of the order Tab should follow; neither is
@@ -125,24 +162,19 @@ test.describe("every view", () => {
       }
 
       await visit(page, host, "/");
-      await expect(page.locator("#main .chart")).toHaveCount(3);
+      await expect(page.locator("#main .chart")).toHaveCount(2);
       const chart = page.locator(".chart [tabindex='0']").first();
       await chart.focus();
       await page.keyboard.press("ArrowLeft");
       await expect(page.locator(".chart-tip")).toContainText("leases held");
-      await page.locator("#main summary").first().focus();
-      await page.keyboard.press("Enter");
-      await expect(page.getByRole("columnheader", { name: "Leases held" })).toBeVisible();
-      await visit(page, host, "/events");
+      // why: the chart's numbers are a table only a screen reader reads; it holds no stop for the keyboard.
+      await expect(page.getByRole("table", { name: "Leases held" })).toBeAttached();
+      await visit(page, host, "/activity");
       await page.getByRole("radio", { name: "All" }).focus();
       await page.keyboard.press("ArrowRight");
       await expect(page.getByRole("radio", { name: "Leases" })).toBeChecked();
       await visit(page, host, pages.lease);
-      await page
-        .getByRole("navigation", { name: "Breadcrumb" })
-        .getByRole("link", { name: "Leases" })
-        .focus();
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("Escape");
       await expect(page).toHaveURL(/\/leases$/);
     } finally {
       await host.dispose();
@@ -158,11 +190,11 @@ test.describe("every view", () => {
       for (const [path, title, index] of [
         ["/", "Leases held, last hour", 0],
         ["/", "Requests in the queue, last hour", 1],
-        ["/", "Device slots in use, last hour", 2],
-        ["/events", "Events", 0],
+        ["/usage", "Device slots in use, last hour", 0],
+        ["/activity", "Activity", 0],
       ] as const) {
         await visit(page, host, path);
-        if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(3);
+        if (path === "/") await expect(page.locator("#main .chart")).toHaveCount(2);
         const chart = page.locator("#main .chart").nth(index);
         const heading = page.getByRole("heading", { name: title, exact: true });
         const ring = () => chart.evaluate((element) => getComputedStyle(element).outlineStyle);
@@ -240,12 +272,28 @@ test.describe("every view", () => {
 
       for (const path of every(pages)) {
         await visit(page, host, path);
+        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
         const chart = page.locator(".chart svg").first();
-        if ((await chart.count()) > 0) {
+        if (!opensDrawer(path) && (await chart.count()) > 0) {
           await chart.hover();
           await expect(page.locator(".chart-tip")).toBeVisible();
-          await page.locator("#main summary").first().click();
         }
+        const found = await page.evaluate(() => ({
+          styles: document.querySelectorAll("style").length,
+          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+        }));
+        expect(found, path).toEqual({ styles: 0, violations: [] });
+      }
+      // why: a healthy host has nothing in its Inbox, so a request that has waited two minutes is
+      // stubbed to give the Inbox a row and its drawer something to open.
+      await addInboxItems(page, () => [waitingItem("req_busy", 125_000)]);
+      for (const path of [
+        "/inbox",
+        "/",
+        `/inbox/${encodeURIComponent("request/req_busy/waiting")}`,
+      ]) {
+        await visit(page, host, path);
+        if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
         const found = await page.evaluate(() => ({
           styles: document.querySelectorAll("style").length,
           violations: (window as unknown as { cspViolations: string[] }).cspViolations,
@@ -258,60 +306,111 @@ test.describe("every view", () => {
     }
   });
 
-  test("the overview's tiles show the numbers the daemon gives", async ({ page }) => {
+  test("no <style> element or Content-Security-Policy violation with a menu, a dialog, a toast and the search open", async ({
+    page,
+  }) => {
+    const host = await startHostWithLease();
+    try {
+      await page.addInitScript(() => {
+        const seen: string[] = [];
+        (window as unknown as { cspViolations: string[] }).cspViolations = seen;
+        document.addEventListener("securitypolicyviolation", (event) => {
+          seen.push(`${event.violatedDirective} ${event.blockedURI}`);
+        });
+      });
+      const errors: string[] = [];
+      page.on("console", (message) => {
+        if (/content.security.policy/i.test(message.text())) errors.push(message.text());
+      });
+      await withActionSurfaces(page, host, async (surface) => {
+        const found = await page.evaluate(() => ({
+          styles: document.querySelectorAll("style").length,
+          violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+        }));
+        expect(found, surface).toEqual({ styles: 0, violations: [] });
+      });
+      await page.reload();
+      await expect(page.getByRole("button", { name: "Search or jump to…" })).toBeVisible();
+      await page.keyboard.press("Control+k");
+      await page.getByRole("combobox", { name: "Search pages, items and actions" }).fill("a");
+      await expect(page.getByRole("option", { name: "Activity" })).toBeVisible();
+      await settled(page);
+      const found = await page.evaluate(() => ({
+        styles: document.querySelectorAll("style").length,
+        violations: (window as unknown as { cspViolations: string[] }).cspViolations,
+      }));
+      expect(found, "search").toEqual({ styles: 0, violations: [] });
+      expect(errors).toEqual([]);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`Fleet, a worker page, a device drawer, Queue and Activity with a drawer open, and the search pass an automated WCAG AA check (${colorScheme})`, async ({
+      page,
+    }) => {
+      const { host, pages } = await hostWithLease();
+      try {
+        await page.emulateMedia({ colorScheme });
+        await openSignedIn(page, host);
+        for (const path of [
+          "/fleet",
+          pages.worker,
+          pages.device,
+          "/queue",
+          pages.request,
+          "/activity",
+          pages.event,
+        ]) {
+          await visit(page, host, path);
+          if (opensDrawer(path)) await expect(page.getByRole("dialog")).toBeVisible();
+          const results = await new AxeBuilder({ page })
+            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+            .analyze();
+          expect(results.passes.map((rule) => rule.id)).toContain("color-contrast");
+          expect(
+            results.violations.map((violation) => ({
+              id: violation.id,
+              targets: violation.nodes.map((node) => node.target.join(" ")),
+            })),
+            path,
+          ).toEqual([]);
+        }
+        await visit(page, host, "/fleet");
+        await page.keyboard.press("Control+k");
+        await page
+          .getByRole("combobox", { name: "Search pages, items and actions" })
+          .fill("console");
+        await expect(page.getByRole("option", { name: /console-views/ }).first()).toBeVisible();
+        await settled(page);
+        const searching = await new AxeBuilder({ page })
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+          .analyze();
+        expect(searching.passes.map((rule) => rule.id)).toContain("color-contrast");
+        expect(
+          searching.violations.map((violation) => ({
+            id: violation.id,
+            targets: violation.nodes.map((node) => node.target.join(" ")),
+          })),
+          "search",
+        ).toEqual([]);
+      } finally {
+        await host.dispose();
+      }
+    });
+  }
+
+  test("the Overview's Leased tile opens Leases", async ({ page }) => {
     const { host } = await hostWithLease();
     try {
-      const tiles = () =>
-        page
-          .getByRole("list", { name: "Fleet at a glance" })
-          .getByRole("listitem")
-          .evaluateAll((items) =>
-            items.map((item) =>
-              [...item.querySelectorAll(".stat-label, .stat-value, .stat-unit")]
-                .map((part) => part.textContent)
-                .join(" | "),
-            ),
-          );
-      const response = await fetch(new URL("/v1/workers", host.url), {
-        headers: { Authorization: `Bearer ${host.tokens.operator}` },
-      });
-      const { workers } = (await response.json()) as {
-        workers: { capacity?: { ios: { limit: number }; android: { limit: number } } }[];
-      };
-      const limit = workers.reduce(
-        (sum, worker) =>
-          sum + (worker.capacity?.ios.limit ?? 0) + (worker.capacity?.android.limit ?? 0),
-        0,
-      );
       await openSignedIn(page, host);
 
-      await expect
-        .poll(async () => (await tiles()).slice(0, 4))
-        .toEqual([
-          `Utilisation | ${Math.round((100 * 1) / limit)} | %`,
-          `Leases | 1 | of ${limit}`,
-          "Waiting | 0 | none",
-          "Workers | 1 | of 1 up",
-        ]);
-      const stats = (await (
-        await fetch(new URL("/v1/stats?since=1h", host.url), {
-          headers: { Authorization: `Bearer ${host.tokens.operator}` },
-        })
-      ).json()) as { totals: { granted: number; wait: { p95: number | null } } };
-      const wait = stats.totals.wait.p95;
-      await expect
-        .poll(async () => (await tiles()).slice(4))
-        .toEqual([
-          `Granted | ${stats.totals.granted} | last hour`,
-          `Wait p95 | ${
-            wait === null
-              ? "—"
-              : wait < 1_000
-                ? `${Math.round(wait)} ms`
-                : `${Math.floor(wait / 1_000)} s`
-          } | last hour`,
-        ]);
-      await page.getByRole("link", { name: /^Leases 1/ }).click();
+      await page
+        .getByRole("list", { name: "Fleet at a glance" })
+        .getByRole("link", { name: /^Leased 1/ })
+        .click();
+
       await expect(page.getByRole("heading", { level: 1, name: "Leases" })).toBeVisible();
     } finally {
       await host.dispose();
@@ -326,7 +425,7 @@ test.describe("every view", () => {
       for (const width of [1280, 1024, 768, 360]) {
         await page.setViewportSize({ height: 800, width });
         await visit(page, host, pages.lease);
-        const shown = page.locator("#main .id", { hasText: id });
+        const shown = page.locator(".drawer .id", { hasText: id });
         await expect(shown).toHaveAttribute("title", id);
         const shape = await shown.evaluate((element) => ({
           lines: Math.round(

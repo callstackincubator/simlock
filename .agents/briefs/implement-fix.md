@@ -11,7 +11,9 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
    between two components, list every path through the same code (each caller, flag,
    mode and order, including both at once) and check each.
 2. **Fix every instance:**
-   - behaviour: make a test fail first, then fix. Extend the test that
+   - behaviour: make a test fail first, then fix. Open
+     `docs/internal/agent-rules/testing.md` rules 2, 7, 9 and 10 before
+     writing it. Extend the test that
      proves the behaviour next to it; write a new one only when none does,
      and list it under `fixes` with the test you could not extend and why
      (testing rule 9);
@@ -29,10 +31,11 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
      test;
    - a `ci:` line: the named test failed in CI; a line asking to merge the
      base branch: merge it and resolve the conflicts.
-   - a `stack:` line: bring the whole stack up to date with `gh stack
-sync` (`gh stack rebase` where it stops on a conflict), resolve the
-     conflicts, push every branch it moved, and list each PR whose branch
-     needed a resolution.
+   - a `stack:` line naming a parent branch: in your worktree, `git merge
+origin/<parent>` into the branch, resolve the conflicts, run the tests
+     of the files the resolution touched, commit the merge and push. Never
+     rebase, never force-push, never touch another branch: the orchestrator
+     carries the merge up the stack with `stack-sync.sh`.
 3. Run only the commands under "Tests agents run" in `toolchain.md`. Never
    run a check listed under "Checks agents never run", nor a tool behind it,
    from any path: the commit and push hooks run them, and their errors show

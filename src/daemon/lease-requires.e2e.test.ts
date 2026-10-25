@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -59,12 +59,12 @@ describe("lease.request requires, through a gateway", () => {
     directories.push(directory);
     const port = await freeLoopbackPort();
     const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
       optionalModules: [agentDeviceModuleWith({})],
-      statePath: join(directory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(gateway);
@@ -109,7 +109,7 @@ describe("lease.request requires, through a gateway", () => {
       optionalModules: [agentDeviceModuleWith({ upstream: fake })],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
-      statePath: join(directory, "state.json"),
+      deviceDataTables: fakeDeviceDataTables,
       version: "1.0.0-e2e",
     } as Parameters<typeof startDaemon>[0]);
     daemons.push(daemon);

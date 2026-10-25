@@ -79,7 +79,7 @@ describe("a single host as a fleet of one", () => {
     });
   });
 
-  it("simlock worker drain against a worker exits 2 with UNSUPPORTED_IN_WORKER_MODE", async () => {
+  it("without a gateway on the machine, worker drain exits 2 with UNSUPPORTED_IN_WORKER_MODE and no hint", async () => {
     const env = await withDaemon();
     const id = await instanceId(env);
 
@@ -87,7 +87,10 @@ describe("a single host as a fleet of one", () => {
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.error?.code).toBe("UNSUPPORTED_IN_WORKER_MODE");
+    expect(result.error).toEqual({
+      code: "UNSUPPORTED_IN_WORKER_MODE",
+      message: "worker.drain acts on a gateway's workers, and this daemon is not a gateway",
+    });
   });
 
   it("GET /v1/workers on a worker answers 200 with one worker for an operator token", async () => {
@@ -119,6 +122,18 @@ describe("a single host as a fleet of one", () => {
 
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+  });
+
+  it("GET /v1/inbox on a worker answers 200 with its items for an operator token and 403 for an agent token", async () => {
+    const host = await httpHost();
+
+    const operator = await fetch(`${host.baseUrl}/v1/inbox`, { headers: host.operatorAuth });
+    const agent = await fetch(`${host.baseUrl}/v1/inbox`, { headers: host.agentAuth });
+
+    expect(operator.status).toBe(200);
+    expect(await operator.json()).toEqual({ items: [] });
+    expect(agent.status).toBe(403);
+    expect(((await agent.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
   });
 
   it("POST /v1/workers/{id}/drain on a worker answers 501 UNSUPPORTED_IN_WORKER_MODE", async () => {

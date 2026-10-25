@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FakeDriver } from "../core/testing.js";
+import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "../agent-device/testing.js";
 import { FakeHostInfo, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
@@ -47,13 +47,13 @@ describe("a worker's capabilities through a gateway", () => {
     directories.push(gatewayDirectory);
     const port = await freeLoopbackPort();
     const gateway = await startDaemon({
-      configOverrides: { http: { enabled: true, host: "127.0.0.1", port }, mode: "gateway" },
+      configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+      role: "gateway",
       dataDirectory: gatewayDirectory,
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo({ arch: "x64", os: "Linux", osVersion: "6.8.0" }),
       logger: new NoopLogger(),
       optionalModules: [agentDeviceModuleWith({})],
-      statePath: join(gatewayDirectory, "state.json"),
       version: "1.0.0-e2e",
     });
     daemons.push(gateway);
@@ -81,7 +81,7 @@ describe("a worker's capabilities through a gateway", () => {
       optionalModules: [agentDeviceModuleWith({ upstream: options.fake })],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
-      statePath: join(workerDirectory, "state.json"),
+      deviceDataTables: fakeDeviceDataTables,
       version: "1.0.0-e2e",
     } as Parameters<typeof startDaemon>[0]);
     daemons.push(worker);

@@ -19,16 +19,18 @@ whose first line is the ledger tag (`toolchain.md`, "Review measurement"),
 then `key: value` lines and nothing else: `issue`, `branch`, `pr` once there
 is one, `mode` or `round`, and what the stage works on, pasted from the last
 report (`remaining`, `fixes`, the reviewer's arguments). Include immutable `base-sha`, `merge-base`, `head` and, after review,
-`previous` plus the resolution ledger. No prose, and no
-reminders of what the agent's own instructions already say. Never pass a
-model or `isolation`: every stage of a task works in the task's one
-worktree, one after another. Never invoke the stage skills from here: a skill waits for an
-earlier run of itself, so two implements would run one after the other.
+`previous` plus the resolution ledger. Last, the text the agent would
+otherwise have to open: for an `implementer`, `brief:` and the full text of
+`.agents/briefs/implement-<mode>.md`; for a `reviewer`, `protocol:` and the
+full text of `docs/internal/REVIEW.md`, both from this checkout. No other
+prose. Never pass a model or `isolation`: every stage of a task works in
+the task's one worktree, one after another. Never invoke the stage skills
+from here: a skill waits for an earlier run of itself.
 
-Every stage is a new agent. Never send a finished agent its next stage
-with SendMessage: it carries its whole context into every turn, which costs
-up to ten times what a new agent does. SendMessage is only for a question
-to a running agent, or for a report block that is missing.
+Every stage is a new agent; never send a finished agent its next stage
+with SendMessage (its whole context rides along, at up to ten times the
+cost). SendMessage is only for a question to a running agent, or for a
+report block that is missing.
 
 You are woken when an agent finishes; its report is the result. Never poll,
 sleep or read an agent's transcript while it runs. A report without its
@@ -146,20 +148,26 @@ they name; never build again or restart review at round 1.
    `open` in any report: decide, then tell (above).
 2. **Review**: `reviewer` with the PR number; it picks the lenses
    (`docs/internal/REVIEW.md`). Before every review round
-   and every fix run, run `node .agents/scripts/ci-failures.mjs <M>` and
-   `gh pr view <M> --json mergeable` once. The script reads the newest
-   finished CI run, which is often older than the head: newer pushes cancel
-   theirs. Each failed test no open `flaky-test` issue names joins the fix
-   run's `fixes` as `ci: <its line> run <id>`, and a conflict as a line
-   asking to merge the base branch (`stack: gh stack sync` for a stacked
-   PR). With no fix run due, they get one
-   before the round.
+   and every fix run, run `node .agents/scripts/ci-triage.mjs <M>` and
+   `gh pr view <M> --json mergeable` once. The triage reads the newest
+   finished CI run, which is often older than the head (newer pushes cancel
+   theirs), and sorts each failed test: `flaky` and `unknown` get its
+   `rerun <id>` lines run as `gh run rerun <id> --failed`, no fix run;
+   `base` means the branch inherited the failure: run
+   `.agents/scripts/stack-sync.sh <top PR>` and let CI run again; only
+   `reach`, and `unknown` red a second time, joins the fix run's `fixes`
+   as `ci: <its line> run <id>`. A conflict joins as `stack: merge
+origin/<parent branch>`. With no fix run due, they get one before the
+   round.
 3. **Decide** on the review report:
    - Incomplete assessment: preserve findings and missing scope; park. It
      is neither a defect nor a pass.
    - Fix lines with `Rerun: round 2` or `fix-check`: one consolidated fix
      run with the immutable base/merge-base, `previous <Commit>`, ledger
-     and findings, then `reviewer` with the round `Rerun` names.
+     and findings, then `reviewer` with the round `Rerun` names. After a
+     rebase or stack sync, the review also gets `previous-base: <the
+base-sha the previous check used>`, so the inputs script can map the
+     previous commit across the rebase.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
      at the cap: park. Mechanical changes get a coordinator diff check.
    - Commits after reviews passed, including conflict resolutions and CI
@@ -206,7 +214,9 @@ they name; never build again or restart review at round 1.
    the counts for a review the diff's kind left out (for an ADR-only diff:
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
    legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
-   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included. Add
+   as `docs/internal/REVIEW.md` "Measurement" says, fix-checks included:
+   one `Round <r>: <full commit>` line per check first, and `round` on
+   every finding. Add
    `Assessment: complete` only when coverage is complete and no finding is
    open; otherwise `Assessment: incomplete` and park. `<t>` is
    `tokens=` from `node .agents/scripts/usage.mjs`, this session's usage so
@@ -283,14 +293,26 @@ Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
 draft). Check the Depends on yourself; no workflow promotes tasks.
 
+- **Before the first build**: the feature's ADR branches fork from an old
+  `main`, so run `.agents/scripts/stack-sync.sh <the top ADR PR>` to merge
+  `main` forward into them, then start `reviewer` on each open ADR PR
+  (round 1, in the background) while the first task builds. An ADR PR
+  passes review the way a task's does (step 2, items 3 to 5, ADR-only
+  counts) and must be ready before the stack merges; its review never
+  waits for the gate to refuse.
 - A task's build stage gets `base: <branch of the stack's top PR>`; with no
-  PR yet, no `base` (it starts from `main`).
-- Its review passed (step 2, item 6): `gh pr ready <M>` and `gh stack link
-<PR below> <M>` (PR numbers, bottom to top; none below yet: nothing to
-  link). When its branch did not start from the stack's top (another task
-  joined meanwhile), one `implementer` fix run with `fixes: stack: gh stack
-sync` brings every branch up to date; a conflict it resolved gets a fix
-  check on that PR. PR body Status: `Gate: waiting for the stack`.
+  PR yet, no `base` (it starts from `main`). As soon as the build reports
+  its draft PR, `gh stack link <PR below> <M>` (PR numbers, bottom to top;
+  none below yet: nothing to link): the stack is linked at build time, so
+  every later sync sees the whole chain.
+- Its review passed (step 2, item 6): `gh pr ready <M>`. When its branch
+  did not start from the stack's top (another task joined meanwhile), run
+  `.agents/scripts/stack-sync.sh <top PR>` yourself: it merges forward,
+  bottom to top, in temporary worktrees, and never rebases. It stops on
+  the first conflict (`conflict <branch> <parent> <files>`): send that
+  task's branch one `implementer` fix run with `fixes: stack: merge
+origin/<parent>`, then a fix check on that PR, then the script again.
+  PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one
   task to move the other.
@@ -301,12 +323,11 @@ sync` brings every branch up to date; a conflict it resolved gets a fix
   stack stays open and nothing merges; the maintainer decides.
 
 **Merging the stack.** When every task has joined the stack and nothing is
-in flight, run the gate on the top PR: `merge-pr.sh <top>` gates every PR
-in the stack and merges them all, bottom to top. A conflict with `main`
-(another feature merged meanwhile): one `implementer` fix run with `fixes:
-stack: gh stack sync`, never one merge run per branch; a conflict it
-resolved gets a fix check on that PR; then the gate again. Red CI: the fix
-run goes to the lowest red PR, then the same sync carries it up.
+in flight, run `.agents/scripts/stack-sync.sh <top>` once more (another
+feature may have merged meanwhile), resolve a conflict as above, then the
+gate on the top PR: `merge-pr.sh <top>` gates every PR in the stack and
+merges them all, bottom to top. Red CI: the fix run goes to the lowest red
+PR, then the same sync carries it up.
 
 Stop when nothing is runnable and nothing is in flight.
 

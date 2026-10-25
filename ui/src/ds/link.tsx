@@ -21,6 +21,10 @@ export function NavigationProvider(props: {
   );
 }
 
+export function useNavigateTo(): Navigate | undefined {
+  return useContext(NavigateContext);
+}
+
 const MODIFIER_KEYS = ["altKey", "ctrlKey", "metaKey", "shiftKey"] as const;
 
 type ClickKeys = Pick<MouseEvent, "button" | (typeof MODIFIER_KEYS)[number]>;

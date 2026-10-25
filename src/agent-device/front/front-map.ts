@@ -11,6 +11,8 @@ interface DeviceFacts {
   readonly deviceKey?: string;
   // why: an adopted entry was rebuilt after a gateway restart and has no device key until a call names one.
   readonly adopted?: boolean;
+  // why: agent-device's device list was read for this lease's name, so a device it did not name is not asked about again.
+  readonly named?: boolean;
 }
 
 export interface FrontMapEntry extends DeviceFacts {
@@ -35,8 +37,10 @@ export interface ListedLease {
   readonly ttlDeadline: number;
 }
 
-interface Held extends Omit<DeviceFacts, "deviceKey"> {
+interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named"> {
   deviceKey?: string;
+  name?: string;
+  named?: boolean;
   readonly identity: Identity;
   readonly address: string;
   ttlMs: number;
@@ -88,6 +92,13 @@ export class FrontMap {
     if (held !== undefined && held.deviceKey === undefined) held.deviceKey = deviceKey;
   }
 
+  setName(leaseId: string, name: string | undefined): void {
+    const held = this.#held.get(leaseId);
+    if (held === undefined) return;
+    held.named = true;
+    if (name !== undefined) held.name = name;
+  }
+
   setTtl(leaseId: string, ttlMs: number): void {
     const held = this.#held.get(leaseId);
     if (held !== undefined) held.ttlMs = ttlMs;
@@ -112,7 +123,10 @@ export class FrontMap {
     held.releasing = false;
   }
 
-  async refresh(list: (identity: Identity) => Promise<readonly ListedLease[]>): Promise<void> {
+  async refresh(
+    list: (identity: Identity) => Promise<readonly ListedLease[]>,
+    stillHeld: (leaseId: string) => boolean = () => false,
+  ): Promise<void> {
     this.#prune();
     const now = this.clock.now();
     const byPrincipal = new Map<string, { identity: Identity; oldest: number; ids: string[] }>();
@@ -145,8 +159,9 @@ export class FrontMap {
           const held = this.#held.get(id);
           if (held === undefined) continue;
           const found = listed.find((lease) => lease.id === id);
-          if (found === undefined) this.markEnded(id);
-          else held.deadline = found.ttlDeadline;
+          if (found === undefined) {
+            if (!stillHeld(id)) this.markEnded(id);
+          } else held.deadline = found.ttlDeadline;
         }
       }),
     );

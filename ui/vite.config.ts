@@ -17,7 +17,7 @@ export default defineConfig({
     modulePreload: { polyfill: false },
   },
   server: {
-    // Development only: a local daemon with `http.enabled` answers `/v1` on its default port.
-    proxy: { "/v1": "http://127.0.0.1:4700" },
+    // why: development only; a local worker with `http.enabled` answers `/v1` on its default port, 4701.
+    proxy: { "/v1": "http://127.0.0.1:4701" },
   },
 });

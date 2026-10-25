@@ -1,9 +1,23 @@
+import { describe, expect, it } from "vitest";
+
 import type { EventBus } from "../bus/index.js";
-import { type Clock, MemoryFilesystem } from "../ports/index.js";
+import {
+  type Clock,
+  MemoryFilesystem,
+  NodeSqliteOpener,
+  NoopLogger,
+  type SqliteOpener,
+  type SqliteSchemaOwner,
+} from "../ports/index.js";
+import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import { ComponentInstaller } from "./component-installer.js";
-import { DiskSpaceGuard, type Driver } from "./driver.js";
+import { type DeviceDataTable, DiskSpaceGuard, type Driver } from "./driver.js";
+import { fakeDeviceDataTable } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
-import type { Registry } from "./registry.js";
+import type { Platform } from "./domain.js";
+import { Registry, type RegistryOptions } from "./registry.js";
+import { registryOwner } from "./registry-schema.js";
+import { warmPoolOwner } from "./warm-pool/index.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 /**
@@ -18,7 +32,7 @@ export {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 export { readyTransitionUpdate } from "./driver.js";
-export { FakeDriver } from "./fake-driver.js";
+export { FakeDriver, fakeDeviceDataTable } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 export { QuarantineCoordinator } from "./quarantine-coordinator.js";
 
@@ -59,33 +73,72 @@ export function testComponentWiring<
   };
 }
 
-export class HeldWritesFilesystem extends MemoryFilesystem {
-  holding = false;
-  readonly #held: (() => void)[] = [];
+export const fakeDeviceDataTables: ReadonlyMap<Platform, DeviceDataTable> = new Map([
+  ["android", fakeDeviceDataTable],
+  ["ios", fakeDeviceDataTable],
+]);
 
-  override async writeFileAtomic(path: string, contents: string): Promise<void> {
-    if (this.holding) await new Promise<void>((resolve) => this.#held.push(resolve));
-    await super.writeFileAtomic(path, contents);
-  }
+// why: the real adapter on SQLite's in-memory database, whatever path the state module asks for.
+const memorySqlite: SqliteOpener = {
+  open: (_path, options) => new NodeSqliteOpener().open(":memory:", options),
+};
 
-  async held(count: number): Promise<void> {
-    for (let turn = 0; this.#held.length < count; turn++) {
-      if (turn === 100) throw new Error(`Only ${String(this.#held.length)} writes were held`);
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  }
+export function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<StateDatabase> {
+  return openStateDatabase({
+    dataDirectory: "/memory",
+    filesystem: new MemoryFilesystem(),
+    logger: new NoopLogger(),
+    oldFiles: [],
+    owners,
+    sqlite: memorySqlite,
+    upgradeStep: "",
+  });
+}
 
-  async releaseUntil(done: Promise<unknown>): Promise<void> {
-    let settled = false;
-    const settle = () => {
-      settled = true;
-    };
-    done.then(settle, settle);
-    for (let turn = 0; !settled; turn++) {
-      if (turn === 100) throw new Error("The held writes never settled");
-      await new Promise((resolve) => setImmediate(resolve));
-      this.#held.shift()?.();
-    }
-    await done;
-  }
+export function openTestState(): Promise<StateDatabase> {
+  return openMemoryState([registryOwner, warmPoolOwner, fakeDeviceDataTable]);
+}
+
+export function describeDeviceDataTable(
+  name: string,
+  table: DeviceDataTable,
+  examples: readonly [unknown, unknown, ...unknown[]],
+): void {
+  describe(`DeviceDataTable ${name}`, () => {
+    it("reads back each example it was written with, a second write replaces the first, and a missing id is refused", async () => {
+      const state = await openMemoryState([table]);
+      const [first, second] = examples;
+      for (const [index, example] of examples.entries()) {
+        const id = `dev_${String(index)}`;
+        table.write(state.database, id, example);
+        const read = table.read(state.database, id);
+        expect(read).toStrictEqual(example);
+      }
+      table.write(state.database, "dev_replace", first);
+      table.write(state.database, "dev_replace", second);
+      expect(table.read(state.database, "dev_replace")).toStrictEqual(second);
+      expect(() => table.read(state.database, "dev_missing")).toThrow();
+      state.close();
+    });
+  });
+}
+
+const registryStates = new WeakMap<Registry, StateDatabase>();
+
+// why: the daemon hands the registry and the warm pool one `state.db` handle, so a test engine takes the registry's.
+export function testStateOf(registry: Registry): StateDatabase {
+  const state = registryStates.get(registry);
+  if (state === undefined) throw new Error("this registry was not loaded by loadTestRegistry");
+  return state;
+}
+
+export async function loadTestRegistry(
+  options: Omit<RegistryOptions, "deviceData" | "state"> & {
+    readonly state?: StateDatabase | undefined;
+  },
+): Promise<Registry> {
+  const state = options.state ?? (await openTestState());
+  const registry = await Registry.load({ ...options, deviceData: fakeDeviceDataTables, state });
+  registryStates.set(registry, state);
+  return registry;
 }

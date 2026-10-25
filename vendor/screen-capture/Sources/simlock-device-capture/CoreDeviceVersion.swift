@@ -1,17 +1,18 @@
 // simlock's own, MIT-licensed (see NOTICE.md).
 //
-// The one place the CoreDevice version pin is enforced (architecture rule: one place enforces a
-// rule). It runs before any CoreDevice call, because this program links the framework `weak` and a
-// newer CoreDevice is exactly the case where calling into it is the thing that must not happen.
+// The one place the CoreDevice version floor is enforced (architecture rule: one place enforces a
+// rule). It runs before any CoreDevice call, because this program links the framework `weak` and an
+// older CoreDevice lacks what the stubs declare.
 import Foundation
 
 enum CoreDeviceVersion {
-    /// The major this program's stubs were written against. A new Xcode major turns iPhone streams
-    /// off until `Stubs/` is checked against that release and this number moves with it.
-    static let supportedMajor = "642"
+    /// The oldest major this program's stubs were written against. A later major goes on: Apple
+    /// builds CoreDevice with library evolution, so a later major keeps the stubs' calls unless it
+    /// drops or renames one, and then the program stops at that call.
+    static let minimumMajor = 642
 
     static let requirement =
-        "Physical iPhone streams need Xcode 27 (CoreDevice \(supportedMajor).x); "
+        "Physical iPhone streams need Xcode 27 or later (CoreDevice \(minimumMajor) or later); "
 
     static let infoPlist =
         "/Library/Developer/PrivateFrameworks/CoreDevice.framework/Resources/Info.plist"
@@ -25,7 +26,7 @@ enum CoreDeviceVersion {
 
     /// `SIMLOCK_COREDEVICE_INFO_PLIST` exists for the slow lane, which cannot install a different
     /// CoreDevice onto the Mac it runs on. The driver never passes it, and strips it from a daemon's
-    /// environment, so no operator's configuration can point the pin at another file.
+    /// environment, so no operator's configuration can point the floor at another file.
     static func read(environment: [String: String] = ProcessInfo.processInfo.environment) -> Reading {
         let path = environment["SIMLOCK_COREDEVICE_INFO_PLIST"] ?? infoPlist
         guard FileManager.default.fileExists(atPath: path) else { return .absent }
@@ -56,7 +57,7 @@ enum CoreDeviceVersion {
         case .unreadable:
             return requirement + "this Mac's CoreDevice version cannot be read"
         case .version(let value):
-            guard major(of: value) == supportedMajor else {
+            guard let found = Int(major(of: value)), found >= minimumMajor else {
                 return requirement
                     + "this Mac has CoreDevice \(value.trimmingCharacters(in: .whitespacesAndNewlines))"
             }

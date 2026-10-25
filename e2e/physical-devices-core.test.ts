@@ -18,8 +18,8 @@ import {
 } from "./helpers/physical-state.js";
 
 /**
- * The core knows a device record may be physical (ADR 0022): a physical record is written into
- * `state.json`'s `physicalDevices` by hand, as the tests below do, and every path that acts on
+ * why: the core knows a device record may be physical (ADR 0022): a physical record is written into
+ * `state.db`'s `devices` table by hand, as the tests below do, and every path that acts on
  * simulators and emulators leaves it alone. "No driver call names it" means the fake driver's
  * call log has no call whose arguments carry the record's `driverDeviceId`.
  */
@@ -494,7 +494,8 @@ interface Fleet {
 
 async function fleetWithPhysicalWorker(physical: readonly PhysicalSeed[]): Promise<Fleet> {
   const { env: gateway, port } = await withHttpDaemon((port) => ({
-    configOverrides: { http: { host: "127.0.0.1", port }, mode: "gateway" },
+    configOverrides: { http: { host: "127.0.0.1", port } },
+    role: "gateway",
     driver: "none",
   }));
   const minted = await gateway.cli(["token", "create", "--role", "worker"]);

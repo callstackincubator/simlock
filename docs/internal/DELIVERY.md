@@ -104,8 +104,10 @@ What any change includes without its spec asking is listed once, in
   you.
 - **Merge.** Agents merge only through `.agents/scripts/merge-pr.sh`
   (delivery rule 15). A feature's PRs form one GitHub stack, its ADR PRs at
-  the bottom, and merge together, so `main` never holds half a feature. A
-  bug merges on its own.
+  the bottom, and merge together, so `main` never holds half a feature.
+  The stack is kept current by `.agents/scripts/stack-sync.sh`, which
+  merges forward bottom to top and never rebases, so no human has to
+  force-push. A bug merges on its own.
 - The same reviews run on a person's PR when you ask; the agent posts the
   findings as a comment and pushes nothing.
 
@@ -131,8 +133,12 @@ Two transitions stay manual on purpose, one click each: `bug:new` →
 last five: blocking findings per review raised and fixed, notes, PRs
 needing a second round, median hours to merge, rounds and tokens,
 handoffs. `--since <date>` lists PRs; `--calibration` prints the recent
-incorrect findings every reviewer reads. Change one thing in the pipeline
-at a time and compare the rows before and after.
+incorrect findings every reviewer reads. `delivery-counters.mjs --since
+<date>` prints the per-PR counters the process review judges delivery
+changes by (CI lines sent to fix runs, stack syncs, empty builds, fix runs
+that changed nothing, tests per Tests line), and `instruction-reads.mjs`
+how often each role opens each rule, brief and manual. Change one thing in
+the pipeline at a time and compare the rows before and after.
 
 Weekly routines keep the suite and the reviews in shape: `harden-tests`,
 `audit-tests`, `garden-comments` and `calibrate-reviews`
@@ -142,9 +148,25 @@ Weekly routines keep the suite and the reviews in shape: `harden-tests`,
 
 `main` takes changes only through a PR whose Quality, Fallow and Console
 checks passed. It is a GitHub ruleset that binds agents and you alike.
-Releases run from the Release workflow (`.github/workflows/release.yml`),
-started by hand on `main`; agents cannot start it (`gh workflow run` is
-denied in `.claude/settings.json`).
+
+A release is cut by hand from the Release workflow
+(`.github/workflows/release.yml`): Actions → Release → Run workflow on
+`main`, choosing `feature` (the next 0.X), `patch` (the next 0.X.Y) or
+`auto` (`feature` when a commit since the last tag is a `feat` or a
+breaking change, else `patch`). There is no semantic versioning. The run
+checks that main's CI passed on the commit, builds the package on macOS so
+both iOS capture programs ship, pushes the release commit (`package.json`,
+`CHANGELOG.md`) and the tag `v0.X.Y`, publishes the same tarball to npm
+through trusted publishing with provenance, creates the GitHub release with
+the tarball attached, and deploys the website from the release commit.
+`dry_run` stops after the build. The version and changelog arithmetic is
+`node scripts/release.mjs`, tested in `src/release-script.test.ts`. Agents
+cannot start the workflow (`gh workflow run` is denied in
+`.claude/settings.json`).
+
+The website deploys with every release and by hand (Actions → Website → Run
+workflow, optionally from a commit or tag), and no longer on every push to
+`main`, so the site describes the version on npm.
 
 ## Where ADRs fit
 

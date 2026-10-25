@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
-import { FakeClock, MemoryFilesystem } from "../ports/index.js";
+import { FakeClock } from "../ports/index.js";
+import { loadTestRegistry, openTestState } from "../core/testing.js";
 import {
   DeviceOperationClaims,
   type DriverReality,
   type LeaseRecord,
   type ObservedRunState,
   type Platform,
-  Registry,
   type ReleasedLease,
   SerializedDecision,
   StartupRead,
@@ -18,26 +18,17 @@ import { LeaseLifecycle } from "./lease-lifecycle.js";
 import { LeaseReconciler } from "./lease-reconciler.js";
 import { LeaseReleaseCoordinator } from "./lease-release-coordinator.js";
 
-const STATE_PATH = "/home/agent/.simlock/state.json";
-
-async function createHarness(
-  options: { readonly ids?: readonly string[]; readonly state?: object } = {},
-) {
+async function createHarness(options: { readonly ids?: readonly string[] } = {}) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
   const ids = [...(options.ids ?? [])];
   let nextId = 0;
-  const filesystem = new MemoryFilesystem();
-  if (options.state !== undefined) {
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(STATE_PATH, JSON.stringify(options.state));
-  }
-  const registry = await Registry.load({
+  const state = await openTestState();
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => ids.shift() ?? `${nextId++}` },
-    statePath: STATE_PATH,
+    state,
   });
   const lifecycle = new LeaseLifecycle({
     clock,
@@ -67,11 +58,11 @@ async function createHarness(
     clock,
     coordinator,
     eventBus,
-    filesystem,
     lifecycle,
     reclaims,
     reconciler,
     registry,
+    state,
   };
 }
 
@@ -84,7 +75,7 @@ async function leaseOn(
   ttlDeadline: number,
 ): Promise<LeaseRecord> {
   const device = await harness.registry.registerDevice({
-    driverData: {},
+    driverData: { fakeDeviceId: driverDeviceId },
     driverDeviceId,
     provisionDuration: 0,
     spec: { physical: false, model: "Phone", osVersion: "1", platform },
@@ -127,40 +118,21 @@ function eventNames(harness: Harness): string[] {
 
 describe("LeaseReconciler", () => {
   it("skips the lease of a physical device, whatever the read says of its ID or its deadline, and keeps the lease and the device as they are", async () => {
-    const lease = {
-      deviceId: "dev_phys",
-      grantedAt: 1,
-      id: "lse_phys",
-      idChosenByRequester: false,
-      lastRenewedAt: 1,
+    const harness = await createHarness();
+    const phone = await harness.registry.enrollPhysical({
+      apps: [],
+      class: "phone",
+      driverDeviceId: "00008110-001A2B3C4D5E",
+      model: "iPhone 15 Pro",
+      osVersion: "18.4",
+      platform: "ios",
+    });
+    const lease = await harness.registry.createLease({
+      deviceId: phone.id,
       ownerId: "agent",
       requesterId: "agent",
       ttlDeadline: 500,
       ttlMs: 60_000,
-    };
-    const harness = await createHarness({
-      state: {
-        devices: [],
-        leases: [lease],
-        physicalDevices: [
-          {
-            createdAt: 1,
-            driverData: {},
-            driverDeviceId: "00008110-001A2B3C4D5E",
-            enrolledApps: [],
-            id: "dev_phys",
-            physical: true,
-            spec: {
-              class: "phone",
-              model: "iPhone 15 Pro",
-              osVersion: "18.4",
-              physical: true,
-              platform: "ios",
-            },
-            state: "leased",
-          },
-        ],
-      },
     });
 
     // why: the deadline has passed, so each of these reads would end a virtual device's lease;
@@ -170,7 +142,7 @@ describe("LeaseReconciler", () => {
     await harness.reconciler.run(read({}));
     await harness.reconciler.run(read({ ios: reality(["00008110-001A2B3C4D5E", "stopped"]) }));
 
-    expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual(["lse_phys"]);
+    expect(harness.registry.snapshot.leases.map((kept) => kept.id)).toEqual([lease.id]);
     expect(harness.registry.snapshot.devices[0]?.state).toBe("leased");
     expect(eventNames(harness)).toEqual([]);
     expect(harness.reclaims).toEqual([]);
@@ -372,19 +344,12 @@ describe("LeaseReconciler", () => {
     const harness = await createHarness();
     const orphan = await leaseOn(harness, "ios", "d1", 5_000);
     const ended = await leaseOn(harness, "ios", "d2", 6_000);
-    const state = JSON.parse(await harness.filesystem.readFile(STATE_PATH)) as {
-      devices: { id: string }[];
-    };
-    await harness.filesystem.writeFileAtomic(
-      STATE_PATH,
-      JSON.stringify({ ...state, devices: state.devices.filter((d) => d.id !== orphan.deviceId) }),
-    );
-    const reloaded = await Registry.load({
+    harness.state.database.prepare("DELETE FROM devices WHERE id = ?").run(orphan.deviceId);
+    const reloaded = await loadTestRegistry({
       clock: harness.clock,
       eventBus: harness.eventBus,
-      filesystem: harness.filesystem,
       idGenerator: { generate: () => "unused" },
-      statePath: STATE_PATH,
+      state: harness.state,
     });
     const reconciler = new LeaseReconciler({
       clock: harness.clock,

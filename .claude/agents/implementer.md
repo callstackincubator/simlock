@@ -9,8 +9,39 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Agent, WebFetch, WebSearch
 
 # Implement an issue
 
-Rules in `docs/internal/agent-rules/`: `coding.md`, `testing.md` and
-`always-in-scope.md`. Every command comes from `toolchain.md`.
+The checklist below is what the review judges you by. It is the short
+form of the rule files under `docs/internal/agent-rules/`, cited by file
+and number; your brief names the ones to open before you act, and a
+finding cites them. Every command comes from `toolchain.md`.
+
+## Checklist
+
+1. The issue body is the spec: build what it says, plus the always-in-scope
+   list below; a small gap is an `Assumption:` line, a contradiction a
+   stop (`coding.md` 1, 2).
+2. Branch `<kind>/<n>`; every agent is in a worktree; `origin/<branch>` is
+   the truth (`coding.md` 3, 4). The PR walks every Done when line to the hunk
+   or test that delivers it (`coding.md` 5).
+3. A test's title is a claim its body proves; break the code once and watch
+   it fail on a named assertion, never by timing out (`testing.md` 1, 2).
+4. Every behaviour a caller, a user, a stored record or an event can see
+   has one test, at the seam its Tests line names and at no other, that
+   goes red when its code is deleted, error paths included (`testing.md` 3). A test drives the module through its surface, never an
+   internal file without a `why:` (`testing.md` 6). One test per spec Tests
+   line, its cases a table; extend the test that already proves the claim
+   next to it (`testing.md` 7). A property every instance shares is one test
+   (`testing.md` 8). A regression test is for a bug that reached `main`
+   (`testing.md` 9).
+5. Always in scope, with no spec asking: claims the change makes false are
+   fixed or deleted (comments, docs, test names, manuals, help text);
+   both event catalogs for a changed event; a port and a fake for a new
+   external API; wire input validated for shape and bounds; a module's
+   surface through `index.ts` and one factory; a manual and an
+   ARCHITECTURE row for a new module; Fallow entries for files nothing
+   imports; every comment starts with `why:` or goes; a vendored
+   artifact's notice and rows (`always-in-scope.md`).
+6. Never `git stash`, never the slow lane, never a check listed under
+   "Checks agents never run"; the hooks and CI run them (toolchain).
 
 The issue body is the spec. Build exactly what it says, plus what
 `always-in-scope.md` lists. Do not claim, review, mark ready or merge.
@@ -62,7 +93,10 @@ Read the issue body; for a task, its parent's body and the ADRs under
 Decisions; for a bug, the triage report (its Simplest fix is the agreed
 approach) and any `## Decision` comment; the latest `## Handoff` comment
 (its Findings are facts). Never the rest of the comment thread. Reread the
-files under Rules in play before touching the code they cover.
+files under Rules in play before touching the code they cover, and open
+the rule files your brief names under `docs/internal/agent-rules/`, whole:
+a rule file is short and read once, and the narrow-read rule below is for
+code.
 
 Read code narrowly: find what you need with `rg -n`, then read only those
 lines. Never print a whole file to skim it: everything you read stays in
@@ -103,8 +137,9 @@ not work around it.
 
 ## 3. Your mode
 
-Read `.agents/briefs/implement-<mode>.md` from the main checkout's tree
-(the worktree has it too) and do what it says.
+Your prompt carries the full text of `.agents/briefs/implement-<mode>.md`
+under `brief:`; do what it says. When it does not (an older caller), read
+the file from the main checkout's tree (the worktree has it too).
 
 ## Report
 
@@ -119,7 +154,7 @@ Assessment: complete | incomplete — <missing scope>
 tests: <green>/<spec tests>  cycles: <built>/<Tests lines>
 remaining:
   <Tests line, in build order>
-audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>
+audit: stale <n>  replaced <n>  donewhen <k>/<n>  probed <p>/<t>  covered <c>/<f>
 fixes:
   <finding path:line> -> found <n> fixed <n>
 run: pass | fail <test file:line>  ci: pass | fail | running | unchecked

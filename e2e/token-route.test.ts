@@ -1,13 +1,13 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withHttpDaemon, type TestEnv } from "./helpers/index.js";
 
 /**
- * `GET /v1/tokens` answers `token.list` over HTTP, so the console can name a lease's holder by
- * its token's label. A real daemon and a real `tokens.json`, so what is proven is what reaches
+ * why: `GET /v1/tokens` answers `token.list` over HTTP, so the console can name a lease's holder by
+ * its token's label. A real daemon and a real `state.db`, so what is proven is what reaches
  * the wire, not what a handler returns before the contract's output schema has had its say.
  */
 
@@ -33,7 +33,7 @@ async function httpDaemon(mode: "worker" | "gateway"): Promise<HttpDaemon> {
   const { env, port } = await withHttpDaemon((port) => {
     const http = { enabled: true, host: "127.0.0.1", port };
     return mode === "gateway"
-      ? { configOverrides: { http, mode: "gateway" }, driver: "none" }
+      ? { configOverrides: { http }, driver: "none", role: "gateway" as const }
       : { configOverrides: { http } };
   });
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -96,9 +96,11 @@ describe("GET /v1/tokens", () => {
     const daemon = await httpDaemon("worker");
     const operator = await mint(daemon.env, "operator");
     const agent = await mint(daemon.env, "agent", "ci-runner-3");
-    const stored = JSON.parse(await readFile(join(daemon.env.home, "tokens.json"), "utf8")) as {
-      hash: string;
-    }[];
+    const database = new DatabaseSync(join(daemon.env.dataDirectory, "state.db"), {
+      readOnly: true,
+    });
+    const stored = database.prepare("SELECT hash FROM tokens").all() as { hash: string }[];
+    database.close();
     expect(stored).toHaveLength(2);
 
     const response = await getTokens(daemon, operator.secret);

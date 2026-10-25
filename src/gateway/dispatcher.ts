@@ -39,6 +39,9 @@ import { createUsageReader, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
+  inboxItems,
+  isSimlockError,
+  EVENTS_PAGE_DEFAULT,
   OPERATIONS,
   requestedDevice,
   type OperationName,
@@ -48,6 +51,7 @@ import {
   DispatchError,
   identityGet,
   runDispatch,
+  eventsPageAnswer,
   usageAnswer,
   type DispatchSession,
   type ErasedHandler,
@@ -57,7 +61,7 @@ import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import type { WorkerDirectory } from "./fleet-ports.js";
+import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -81,12 +85,37 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
  */
 export type GatewayConfig = DeepReadonly<z.infer<(typeof OPERATIONS)["config.get"]["output"]>>;
 
+/** why: ADR 0035 §1; what `alerts.test` needs of a send, declared here because `src/gateway` may not import `src/alerts`. */
+export type AlertTestOutcome =
+  | { readonly ok: true; readonly status: number }
+  | {
+      readonly ok: false;
+      readonly reason: "unknown-destination" | "stopped" | "status" | "unreachable" | "timeout";
+      readonly status?: number;
+      readonly error?: string;
+    };
+
+type DaemonUpdateOutput = z.infer<(typeof OPERATIONS)["daemon.update"]["output"]>;
+
+// why: ADR 0042 §6: the gateway's own update has no lease wait and goes straight to installing; `src/daemon` supplies it.
+export interface GatewayUpdate {
+  request(
+    input: z.infer<(typeof OPERATIONS)["daemon.update"]["input"]>,
+  ): Promise<Omit<DaemonUpdateOutput, "health" | "version">>;
+  state(): Pick<DaemonUpdateOutput, "lastUpdateFailure" | "latestVersion" | "update">;
+}
+
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
   /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
-  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "status">;
+  readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly workers: WorkerRegistry;
+  /**
+   * why: ADR 0035 §1; declared here, not imported from `src/alerts`, which this module may not
+   * import. Posts one sample to the named alert destination and says what came of it.
+   */
+  readonly testDestination?: (destination: string) => Promise<AlertTestOutcome>;
   /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
    * satisfies it. */
   readonly directory: WorkerDirectory;
@@ -107,6 +136,9 @@ export interface GatewayDispatcherOptions {
    * `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly health: () => "starting" | "running" | "failed";
+  readonly version: string;
+  readonly latestVersion: () => string | null;
+  readonly update: GatewayUpdate;
   readonly host: AggregateStatusOptions["host"];
   readonly load?: () => AggregateStatusOptions["load"];
   readonly awaitReady: () => Promise<void>;
@@ -127,9 +159,54 @@ export interface GatewayDispatcherOptions {
   >;
   readonly leaseIndex: Pick<
     FleetLeaseIndex,
-    "project" | "all" | "isGatewayRequester" | "requesterPrefix"
+    "project" | "all" | "isGatewayRequester" | "requesterPrefix" | "resolve" | "findByWorkerLease"
   >;
 }
+
+const UNKNOWN_DESTINATION: AlertTestOutcome = { ok: false, reason: "unknown-destination" };
+
+function alertTestError(
+  destination: string,
+  result: Extract<AlertTestOutcome, { ok: false }>,
+): DispatchError {
+  switch (result.reason) {
+    case "unknown-destination":
+      return new DispatchError(
+        "UNKNOWN_ALERT_DESTINATION",
+        `No alert destination named "${destination}". Check gateway.alerts.destinations in the gateway's config.`,
+        { destination },
+      );
+    case "stopped":
+      return new DispatchError("DAEMON_STOPPING", "Gateway is stopping");
+    case "status":
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} answered HTTP ${result.status}`,
+        {
+          destination,
+          status: result.status,
+        },
+      );
+    case "timeout":
+      return new DispatchError("ALERT_SEND_FAILED", `${destination} did not answer within 10 s`, {
+        destination,
+        error: "timeout",
+      });
+    case "unreachable": {
+      const error = result.error ?? "network-error";
+      return new DispatchError(
+        "ALERT_SEND_FAILED",
+        `${destination} could not be reached: ${error}`,
+        {
+          destination,
+          error,
+        },
+      );
+    }
+  }
+}
+
+const UPDATE_UPLINK_BOUND_MS = 90_000;
 
 export class GatewayDispatcher {
   readonly #logger: Logger;
@@ -165,14 +242,19 @@ export class GatewayDispatcher {
       "events.subscribe": this.#eventsSubscribe,
       "events.unsubscribe": this.#eventsUnsubscribe,
       "token.create": this.#tokenCreate,
+      "inbox.get": this.#inboxGet,
       "token.list": this.#tokenList,
       "token.revoke": this.#tokenRevoke,
       "worker.list": this.#workerList,
       "worker.drain": this.#workerDrain,
       "worker.undrain": this.#workerUndrain,
       "worker.remove": this.#workerRemove,
+      "worker.update": this.#workerUpdate,
+      "alerts.test": this.#alertsTest,
+      "daemon.update": this.#daemonUpdate,
       "worker.install-component": this.#workerInstallComponent,
       "lease.list": this.#leaseList,
+      "lease.get": this.#leaseGet,
       "list.get": this.#listGet,
       "identity.get": identityGet,
 
@@ -231,7 +313,8 @@ export class GatewayDispatcher {
       authorizeLookups: {
         leaseRequesterId: (id) => this.options.coordinator.leaseRequesterId(id),
         ownerId: (id) => this.options.coordinator.ownerId(id),
-        pendingRequestOwner: (id) => this.options.coordinator.pendingRequestOwner(id),
+        pendingRequestOwner: (id, platform) =>
+          this.options.coordinator.pendingRequestOwner(id, platform),
       },
       awaitReady: () => this.options.awaitReady(),
       onOutputMismatch: (operationName, issues) => {
@@ -255,7 +338,13 @@ export class GatewayDispatcher {
     const history = this.options.eventHistory.status();
     if (this.options.health() === "starting") {
       return {
-        daemon: { health: "starting", mode: "gateway", ...consoleUrl },
+        daemon: {
+          health: "starting",
+          mode: "gateway",
+          version: this.options.version,
+          ...this.options.update.state(),
+          ...consoleUrl,
+        },
         history,
         host: this.options.host,
         ...loadField,
@@ -263,6 +352,9 @@ export class GatewayDispatcher {
     }
     const status = aggregateStatus(this.options.workers.views(), {
       health: this.options.health(),
+      version: this.options.version,
+      latestVersion: this.options.latestVersion(),
+      progress: this.options.update.state(),
       host: this.options.host,
       ...(load === undefined ? {} : { load }),
       physicalQueueDepth: this.options.coordinator.physicalQueueDepth,
@@ -282,7 +374,18 @@ export class GatewayDispatcher {
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
   #eventsReplay: Handler<"events.replay"> = (input) =>
-    this.options.eventHistory.replay(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs });
+    input.beforeId === undefined && input.limit === undefined
+      ? this.options.eventHistory.replay({
+          ...(input.sinceTs === undefined ? {} : { sinceTs: input.sinceTs }),
+          ...(input.workerId === undefined ? {} : { workerId: input.workerId }),
+        })
+      : eventsPageAnswer(
+          this.options.eventHistory.replayPage({
+            ...(input.beforeId === undefined ? {} : { beforeId: input.beforeId }),
+            limit: input.limit ?? EVENTS_PAGE_DEFAULT,
+            ...(input.workerId === undefined ? {} : { workerId: input.workerId }),
+          }),
+        );
 
   #eventsSubscribe: Handler<"events.subscribe"> = (_input, session) => {
     const subscriptionId = session.manageEventSubscription(true);
@@ -313,6 +416,25 @@ export class GatewayDispatcher {
     return { revoked };
   };
 
+  // why: the rules read what `worker.list`, `lease.list`, `list.get` and `token.list` serve an admin, so
+  // the Inbox never disagrees with the pages that list the same things; a token store that is
+  // unavailable leaves holders named by their ids, as the console did with no tokens.
+  #inboxGet: Handler<"inbox.get"> = async () => {
+    const tokens = await Promise.resolve()
+      .then(() => this.#requireTokens().list())
+      .catch(() => []);
+    return {
+      items: [
+        ...inboxItems(this.options.workers.views(), {
+          leases: this.#fleetLeases(),
+          now: this.options.clock.now(),
+          requests: this.#fleetWaiting(),
+          tokens,
+        }),
+      ],
+    };
+  };
+
   #workerList: Handler<"worker.list"> = () => ({ workers: this.options.workers.views() });
 
   #workerDrain: Handler<"worker.drain"> = async (input) => {
@@ -323,6 +445,70 @@ export class GatewayDispatcher {
   #workerUndrain: Handler<"worker.undrain"> = async (input) => {
     await this.options.workers.setDrained(input.workerId, false);
     return { drained: false, workerId: input.workerId };
+  };
+
+  #daemonUpdate: Handler<"daemon.update"> = async (input) => ({
+    ...(await this.options.update.request(input)),
+    health: this.options.health(),
+    version: this.options.version,
+  });
+
+  #workerUpdate: Handler<"worker.update"> = async (input) => {
+    const view = this.options.workers.view(input.workerId);
+    if (view === undefined) {
+      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${input.workerId}`, {
+        workerId: input.workerId,
+      });
+    }
+    const target = this.options.directory.target(input.workerId);
+    const client = liveClient(target);
+    if (view.connection === "disconnected" || client === undefined || target === undefined) {
+      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${input.workerId} is not connected`, {
+        workerId: input.workerId,
+      });
+    }
+    const { workerId, ...request } = input;
+    const answer = await this.#withinUplinkBound(
+      client.updateDaemon(request).catch((error: unknown) => {
+        throw relayedUpdateError(error, workerId);
+      }),
+      workerId,
+    );
+    this.options.workers.refreshUpdate(workerId, answer);
+    await target.refresh();
+    return { ...answer, workerId };
+  };
+
+  // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read.
+  #withinUplinkBound<Value>(call: Promise<Value>, workerId: string): Promise<Value> {
+    return new Promise<Value>((resolve, reject) => {
+      const timer = this.options.clock.setTimer(UPDATE_UPLINK_BOUND_MS, () => {
+        reject(
+          new DispatchError(
+            "WORKER_NOT_CONNECTED",
+            `worker ${workerId} did not answer within 90 s; check simlock worker list`,
+            { workerId },
+          ),
+        );
+      });
+      call.then(
+        (value) => {
+          this.options.clock.cancel(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          this.options.clock.cancel(timer);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  #alertsTest: Handler<"alerts.test"> = async (input) => {
+    const { destination } = input;
+    const result = (await this.options.testDestination?.(destination)) ?? UNKNOWN_DESTINATION;
+    if (result.ok) return { destination, status: result.status };
+    throw alertTestError(destination, result);
   };
 
   #workerRemove: Handler<"worker.remove"> = async (input) => ({
@@ -358,6 +544,56 @@ export class GatewayDispatcher {
       session.role === "admin" ? this.#fleetLeases() : this.#ownedFleetLeases(session.principal),
   });
 
+  // why: the one place a gateway lease record gets `workerLeaseId` (the worker's own id), so `lease.list`, `lease.get` and `list.get kind=leases` agree and `status.get` (which calls `project` directly) does not carry it.
+  #fleetLease<Lease extends { readonly id: string; readonly requesterId: string }>(
+    raw: Lease,
+    view: { readonly id: string; readonly label?: string | undefined },
+  ) {
+    return {
+      ...this.options.leaseIndex.project(raw, view.id, view.label),
+      workerLeaseId: raw.id,
+    };
+  }
+
+  // why: finds the record `lease.list` would hold for this session without building the list -- a gateway-issued lease through the index (its owner, or an admin), a worker's own local lease for an admin only, by a raw id the index does not rename.
+  #leaseGet: Handler<"lease.get"> = (input, session) => {
+    const isAdmin = session.role === "admin";
+    const entry = this.options.leaseIndex.resolve(input.leaseId);
+    const lease =
+      entry === undefined
+        ? isAdmin
+          ? this.#localLease(input.leaseId)
+          : undefined
+        : isAdmin || entry.ownerId === session.principal
+          ? this.#issuedLease(entry)
+          : undefined;
+    if (lease === undefined) {
+      throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${input.leaseId}`, {
+        leaseId: input.leaseId,
+      });
+    }
+    return { lease };
+  };
+
+  #issuedLease(entry: { readonly workerId: string; readonly workerLeaseId: string }) {
+    const view = this.options.workers.view(entry.workerId);
+    const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
+    return view === undefined || raw === undefined ? undefined : this.#fleetLease(raw, view);
+  }
+
+  #localLease(leaseId: string) {
+    for (const view of this.options.workers.views()) {
+      const raw = view.leases?.find((lease) => lease.id === leaseId);
+      if (
+        raw !== undefined &&
+        this.options.leaseIndex.findByWorkerLease(view.id, raw.id) === undefined
+      ) {
+        return this.#fleetLease(raw, view);
+      }
+    }
+    return undefined;
+  }
+
   /** Every lease this gateway issued to `ownerId`, projected to its fleet-facing form. Looks up
    * each entry's current record from the owning worker's view rather than caching one on the
    * index itself, so a renewed TTL/`lastRenewedAt` is always current. An entry whose worker view
@@ -370,7 +606,7 @@ export class GatewayDispatcher {
       const view = this.options.workers.view(entry.workerId);
       const raw = view?.leases?.find((lease) => lease.id === entry.workerLeaseId);
       if (view === undefined || raw === undefined) continue;
-      leases.push(this.options.leaseIndex.project(raw, view.id, view.label));
+      leases.push(this.#fleetLease(raw, view));
     }
     return leases;
   }
@@ -424,11 +660,7 @@ export class GatewayDispatcher {
   #fleetLeases() {
     return this.options.workers
       .views()
-      .flatMap((view) =>
-        (view.leases ?? []).map((lease) =>
-          this.options.leaseIndex.project(lease, view.id, view.label),
-        ),
-      );
+      .flatMap((view) => (view.leases ?? []).map((lease) => this.#fleetLease(lease, view)));
   }
 
   /**
@@ -494,7 +726,7 @@ export class GatewayDispatcher {
 
   #leaseCancel: Handler<"lease.cancel"> = async (input, session) => {
     const requesterId = input.requesterId ?? session.principal;
-    const result = await this.options.coordinator.cancelPending(requesterId);
+    const result = await this.options.coordinator.cancelPending(requesterId, input.platform);
     return { result };
   };
 
@@ -566,4 +798,16 @@ function unsupportedByDesign(
 // why: relays run from a gateway to its workers, so a gateway's own front door has none.
 function relayRefused(): never {
   throw new DispatchError("FORBIDDEN", "A gateway does not accept relay operations");
+}
+
+// why: a worker's refusal keeps its code and message so HTTP and the CLI answer it as the worker would (409, 502); a link that closed under the call
+// never answered, so it is WORKER_NOT_CONNECTED like the 90 s limit.
+function relayedUpdateError(error: unknown, workerId: string): unknown {
+  if (!isSimlockError(error)) return error;
+  if (isUplinkLost(error)) {
+    return new DispatchError("WORKER_NOT_CONNECTED", `worker ${workerId} is not connected`, {
+      workerId,
+    });
+  }
+  return new DispatchError(error.code, error.message, error.details);
 }

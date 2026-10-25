@@ -175,7 +175,11 @@ export class CapacityCoordinator {
     return [
       ...devices.map((device) =>
         device.id !== undefined && booting.has(device.id)
-          ? { ...device, mode: "full" as const }
+          ? {
+              ...device,
+              mode: "full" as const,
+              state: device.state === "shutdown" ? "booting" : device.state,
+            }
           : device,
       ),
       ...this.#provisioningReservations.map(asProvisioningDevice),

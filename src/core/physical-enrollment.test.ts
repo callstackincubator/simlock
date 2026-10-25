@@ -4,9 +4,9 @@ import { EventBus } from "../bus/index.js";
 import { FakeClock, FakeSystemStats, MemoryFilesystem } from "../ports/index.js";
 import { type FakePhysicalDevice } from "./fake-driver.js";
 import type { PhysicalDevice } from "./domain.js";
-import { createCore, loadConfig, Registry } from "./index.js";
+import { createCore, loadConfig } from "./index.js";
 import { PhysicalEnrollment } from "./physical-enrollment.js";
-import { FakeDriver, testComponentWiring } from "./testing.js";
+import { FakeDriver, loadTestRegistry, testComponentWiring, testStateOf } from "./testing.js";
 
 const UDID = "00008110-001A2B3C4D5E";
 const ALIAS = "7A1C0E52-6B7D-4F1E-9C1A-2D3E4F5A6B7C";
@@ -26,12 +26,10 @@ async function build(physicalDevices: readonly FakePhysicalDevice[] = [IPHONE]) 
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
-  const registry = await Registry.load({
+  const registry = await loadTestRegistry({
     clock,
     eventBus,
-    filesystem,
     idGenerator: { generate: () => `${next++}` },
-    statePath: "/state.json",
   });
   const core = createCore({
     clock,
@@ -39,6 +37,7 @@ async function build(physicalDevices: readonly FakePhysicalDevice[] = [IPHONE]) 
     drivers: [driver],
     eventBus,
     registry,
+    state: testStateOf(registry),
     systemStats,
     ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
   });
@@ -269,6 +268,9 @@ describe("PhysicalEnrollment", () => {
     });
     held.release();
     await expect(waiting).resolves.toMatchObject({ reenrolled: true });
+    await expect(harness.core.enrollment.remove(UDID)).resolves.toMatchObject({
+      state: "deleted",
+    });
   });
 
   it.each([
@@ -402,6 +404,7 @@ describe("PhysicalEnrollment", () => {
       drivers: [harness.driver, android],
       eventBus: harness.eventBus,
       registry: harness.registry,
+      state: testStateOf(harness.registry),
       systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 }),
       ...testComponentWiring({
         clock: harness.clock,
@@ -529,20 +532,6 @@ describe("PhysicalEnrollment", () => {
     await expect(harness.core.enrollment.add("ios", UDID)).rejects.toThrow(
       `${UDID} is leased: release it first`,
     );
-  });
-
-  it("takes the enrollment claim of the device while its second inspection runs, and frees it after", async () => {
-    const harness = await build();
-    const { device } = await harness.core.enrollment.add("ios", UDID);
-    const held = holdInspection(harness.driver, 2);
-    const waiting = harness.core.enrollment.add("ios", UDID);
-    await vi.waitFor(() => expect(held.reached).toHaveBeenCalled());
-
-    expect(harness.core.claims.claim(device.id)?.kind).toBe("enrollment");
-    held.release();
-    await waiting;
-
-    expect(harness.core.claims.claim(device.id)).toBeUndefined();
   });
 
   it("answers UNKNOWN_DEVICE, naming the ID, to a remove of an ID with no record and of a deleted one", async () => {

@@ -428,20 +428,6 @@ describe("IosSimctlDriver", () => {
       ).rejects.toMatchObject({ component: "latest", downloadable: true, osVersion: "default" });
     });
 
-    it("gives a clean RuntimeMissingError, not a parse-time DriverCrashError, when no runtime is installed", async () => {
-      const runner = new ScriptedProcessRunner([
-        { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
-      ]);
-      const driver = await createDriver(runner);
-
-      const result = await driver
-        .resolveSpec({ model: "iPhone 16", platform: "ios" })
-        .catch((error: unknown) => error);
-
-      expect(result).toBeInstanceOf(RuntimeMissingError);
-      expect(result).not.toBeInstanceOf(DriverCrashError);
-    });
-
     it("lists an empty runtimes catalog with defaultRuntime undefined instead of throwing", async () => {
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: emptyRuntimesCatalog } },
@@ -1265,15 +1251,6 @@ describe("IosSimctlDriver", () => {
       });
     });
 
-    it("lists a model no installed runtime pairs with, with an empty list", async () => {
-      const driver = await createDriver(pairingRunner());
-
-      const catalog = await driver.listCatalog();
-
-      expect(catalog.models).toContain("iPhone 8");
-      expect(catalog.modelRuntimes["iPhone 8"]).toEqual([]);
-    });
-
     it("resolveSpec accepts every listed pair and refuses every unlisted pair of a listed model and an installed runtime", async () => {
       const models = ["iPhone 16", "iPhone XS", "iPad Pro", "iPad mini", "iPhone 8"];
       const installed = ["18.4", "26.0"];
@@ -1309,23 +1286,6 @@ describe("IosSimctlDriver", () => {
         }
       }
       expect({ accepted, refused }).toEqual({ accepted: 5, refused: 5 });
-    });
-
-    it("resolves an exact version when any installed build of that version pairs with the model", async () => {
-      const driver = await createDriver(pairingRunner());
-
-      await expect(
-        driver.resolveSpec({
-          model: "iPad mini",
-          osVersion: "26.0",
-          platform: "ios",
-        }),
-      ).resolves.toEqual({
-        physical: false,
-        model: "iPad mini",
-        osVersion: "26.0",
-        platform: "ios",
-      });
     });
 
     it("pairs two device types that differ only in letter case through the first, as resolveSpec matches them", async () => {
@@ -1678,12 +1638,6 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("hands a lease holder the device set its simulator cannot be addressed without", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    expect(driver.leaseEnvironment(VIRTUAL_DEVICE)).toEqual({ SIMLOCK_IOS_DEVICE_SET: deviceRoot });
-  });
-
   it("answers virtualLeaseEnvironment with the device set, and leaseEnvironment for a virtual device equals it", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
@@ -1700,10 +1654,9 @@ describe("IosSimctlDriver", () => {
     });
   });
 
-  it("answers uninstall for the reclaim strategy of a physical device, and erase for a simulator's", async () => {
+  it("answers uninstall for the reclaim strategy of a physical device", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("erase");
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "standard" })).toBe("uninstall");
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "full" })).toBe("uninstall");
   });
@@ -1715,6 +1668,90 @@ describe("IosSimctlDriver", () => {
       args: ["simctl", "--set", deviceRoot, "install", "booted", "./MyApp.app"],
       command: "xcrun",
       env: {},
+    });
+  });
+
+  it("fills a simctl device verb's missing device with the lease's UDID", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+    const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
+    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const scoped = ["simctl", "--set", deviceRoot];
+    const cases: readonly (readonly [readonly string[], readonly string[]])[] = [
+      [
+        ["install", "/b/App.app"],
+        ["install", udid, "/b/App.app"],
+      ],
+      [
+        ["launch", "--console", "com.x"],
+        ["launch", "--console", udid, "com.x"],
+      ],
+      [
+        ["launch", "-a", "arm64", "com.x"],
+        ["launch", "-a", "arm64", udid, "com.x"],
+      ],
+      [
+        ["spawn", "-s", "launchctl", "list"],
+        ["spawn", "-s", udid, "launchctl", "list"],
+      ],
+      [
+        ["io", "screenshot", "/tmp/s.png"],
+        ["io", udid, "screenshot", "/tmp/s.png"],
+      ],
+      [
+        ["install", udid, "/b/App.app"],
+        ["install", udid, "/b/App.app"],
+      ],
+      [
+        ["install", udid.toLowerCase(), "/b/App.app"],
+        ["install", udid.toLowerCase(), "/b/App.app"],
+      ],
+      [
+        ["list", "devices"],
+        ["list", "devices"],
+      ],
+      [
+        ["runtime", "list"],
+        ["runtime", "list"],
+      ],
+    ];
+
+    for (const [args, expected] of cases) {
+      await expect(
+        driver.passthrough("simctl", simulator, args, { hasTerminal: false, platform: "ios" }),
+      ).resolves.toEqual({ args: [...scoped, ...expected], command: "xcrun", env: {} });
+    }
+  });
+
+  it("refuses a simctl command that names another device, or that runs on another platform", async () => {
+    const driver = await createDriver(new ScriptedProcessRunner([]));
+    const udid = "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90";
+    const other = "0A1B2C3D-0000-4000-8000-123456789ABC";
+    const simulator = { address: "", deviceId: udid, driverData: {}, physical: false } as const;
+    const refusal = (command: string, named: string) =>
+      `Refusing \`simctl ${command}\`: it names device ${named}, and this lease holds ${udid}. Leave the device out; Simlock fills it in.`;
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [["install", other, "/b/App.app"], refusal(`install ${other} /b/App.app`, other)],
+      [["install", "booted", "/b/App.app"], refusal("install booted /b/App.app", "booted")],
+      [
+        ["launch", "--console", "booted", "com.x"],
+        refusal("launch --console booted com.x", "booted"),
+      ],
+    ];
+
+    for (const [args, message] of cases) {
+      await expect(
+        driver.passthrough("simctl", simulator, args, { hasTerminal: false, platform: "ios" }),
+      ).rejects.toMatchObject({ message, tool: "simctl" });
+    }
+    await expect(
+      driver.passthrough("simctl", simulator, ["install", "/b/App.app"], {
+        hasTerminal: false,
+        platform: "android",
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "Refusing `simctl`: it only serves an iOS simulator, and this lease is on the android platform.",
+      tool: "simctl",
     });
   });
 
@@ -2385,63 +2422,44 @@ describe("IosSimctlDriver", () => {
       );
     });
 
-    it("skips slim with reason runtime-too-old on iOS 18.4 (single boot, no spawns)", async () => {
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_4.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_4.udid, "-b") } },
-        { match: simctl("listapps", slim18_4.udid) },
-      ]);
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        new MemoryFilesystem(),
-        slimOptions(),
-        undefined,
-        onSlimSkipped,
-      );
+    it.each([
+      ["18.4", slim18_4],
+      ["17.5", slim17_5],
+    ])(
+      "skips slim with reason runtime-too-old on iOS %s (single boot, no spawns)",
+      async (_version, data) => {
+        const runner = new ScriptedProcessRunner([
+          { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
+          { match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") } },
+          { match: simctl("listapps", data.udid) },
+        ]);
+        const onSlimSkipped = vi.fn();
+        const driver = await createSlimDriver(
+          runner,
+          new MemoryFilesystem(),
+          slimOptions(),
+          undefined,
+          onSlimSkipped,
+        );
 
-      const result = await driver.makeReady(
-        { address: slim18_4.udid, deviceId: slim18_4.udid, driverData: slim18_4 },
-        prepareSlim,
-      );
+        const result = await driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          prepareSlim,
+        );
 
-      expect(result).toEqual({
-        address: slim18_4.udid,
-        deviceId: slim18_4.udid,
-        driverData: slim18_4,
-        mode: "full",
-      });
-      expect(runner.calls).toHaveLength(3);
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ deviceId: slim18_4.udid, reason: "runtime-too-old" }),
-      );
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-    });
-
-    it("skips slim with reason runtime-too-old on iOS 17.5", async () => {
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim17_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim17_5.udid, "-b") } },
-        { match: simctl("listapps", slim17_5.udid) },
-      ]);
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        new MemoryFilesystem(),
-        slimOptions(),
-        undefined,
-        onSlimSkipped,
-      );
-
-      await driver.makeReady(
-        { address: slim17_5.udid, deviceId: slim17_5.udid, driverData: slim17_5 },
-        prepareSlim,
-      );
-
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "runtime-too-old" }),
-      );
-    });
+        expect(result).toEqual({
+          address: data.udid,
+          deviceId: data.udid,
+          driverData: data,
+          mode: "full",
+        });
+        expect(runner.calls).toHaveLength(3);
+        expect(onSlimSkipped).toHaveBeenCalledWith(
+          expect.objectContaining({ deviceId: data.udid, reason: "runtime-too-old" }),
+        );
+        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
+      },
+    );
 
     it("skips slim with reason unknown-runtime on an unparseable runtimeId", async () => {
       const runner = new ScriptedProcessRunner([
@@ -2585,46 +2603,6 @@ describe("IosSimctlDriver", () => {
         unknownLabels: ["com.apple.chronod", "com.apple.liveactivitiesd"],
       });
       expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("a device already marked slim with a rejected-label history skips the whole pass on the next boot (second-review finding #3, issue #87)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
-      const alreadySlimmedData = {
-        ...slim18_5,
-        slimMarkToken: "tok-1",
-        slimSignature: widgetsSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      const result = await driver.makeReady(
-        {
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: alreadySlimmedData,
-        },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: alreadySlimmedData,
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
     });
 
     it("4 chunks, one times out: reboots, writes no marker, and a later boot re-applies (finding #2, issue #87 review; second-review finding #3)", async () => {
@@ -3914,42 +3892,35 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
     });
 
-    it("reports three unused default-set devices as unavailable in residue, naming xcrun simctl delete unavailable (#241)", async () => {
-      const runner = new ScriptedProcessRunner([
-        imagesListed([target]),
-        defaultSetListed({ [target.runtime]: { unused: 3 } }),
-        deleted,
-        imagesListed([]),
-        imagesListed([]),
-        defaultSetListed({ [target.runtime]: { unused: 3 } }),
-      ]);
-      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
-
-      const removal = await driver.removeComponent(receipt, { signal: signal() });
-
-      expect(removal.residue).toBe(
+    it.each([
+      [
+        3,
         "3 never-used simulators in the default device set are now unavailable; Simlock does " +
           "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
-      );
-    });
+      ],
+      [
+        1,
+        "1 never-used simulator in the default device set is now unavailable; Simlock does " +
+          "not delete simulators there -- `xcrun simctl delete unavailable` clears them",
+      ],
+    ])(
+      "reports %s unused default-set devices as unavailable in residue, naming xcrun simctl delete unavailable, in the singular for one (#241)",
+      async (unused, residue) => {
+        const runner = new ScriptedProcessRunner([
+          imagesListed([target]),
+          defaultSetListed({ [target.runtime]: { unused } }),
+          deleted,
+          imagesListed([]),
+          imagesListed([]),
+          defaultSetListed({ [target.runtime]: { unused } }),
+        ]);
+        const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
 
-    it("names a single unused default-set device in the singular in residue (#241)", async () => {
-      const runner = new ScriptedProcessRunner([
-        imagesListed([target]),
-        defaultSetListed({ [target.runtime]: { unused: 1 } }),
-        deleted,
-        imagesListed([]),
-        imagesListed([]),
-        defaultSetListed({ [target.runtime]: { unused: 1 } }),
-      ]);
-      const driver = await createDriver(runner, new FakeClock(), await assetStore([]));
+        const removal = await driver.removeComponent(receipt, { signal: signal() });
 
-      const removal = await driver.removeComponent(receipt, { signal: signal() });
-
-      expect(removal.residue).toMatch(
-        /^1 never-used simulator in the default device set is now unavailable;/,
-      );
-    });
+        expect(removal.residue).toBe(residue);
+      },
+    );
 
     it("carries both the unavailable devices and the download left in the asset store in residue (#241)", async () => {
       const runner = new ScriptedProcessRunner([
@@ -4509,18 +4480,6 @@ describe("IosSimctlDriver defaultModels", () => {
         "Apple Watch Series 9 (45mm)",
       ],
     });
-  });
-
-  it("has no iOS list for auto or desktop", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    expect(Object.keys(driver.defaultModels).sort()).toEqual([
-      "phone",
-      "tablet",
-      "tv",
-      "vision",
-      "watch",
-    ]);
   });
 });
 

@@ -4,6 +4,34 @@
 
 .feed {
   position: relative;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* As a page's last part the feed fills the page's height; the box's height comes from the page,
+ * never from its rows, so it still scrolls inside itself. */
+.page > .feed:last-child,
+.page > :last-child > .feed:last-child,
+.page > .tabs:last-child > .tab-panel > .feed:last-child {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* Tabs that end a page, with a feed as their panel's last part, pass the page's height down to it. */
+.page > .tabs:last-child,
+.page > .tabs:last-child > .tab-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.page > .feed:last-child .feed-box,
+.page > :last-child > .feed:last-child .feed-box,
+.page > .tabs:last-child > .tab-panel > .feed:last-child .feed-box {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 20rem;
 }
 
 .feed-box {
@@ -11,7 +39,6 @@
   overflow-y: auto;
   overflow-anchor: none;
   overscroll-behavior: contain;
-  border-top: 1px solid var(--border);
 }
 
 .feed-box:focus-visible {
@@ -38,4 +65,16 @@
   min-height: 32px;
   background: var(--bg);
   transform: translateX(-50%);
+}
+
+/* The last row: why the list stops, below the scrolling box and outside the list. */
+.feed-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
 }

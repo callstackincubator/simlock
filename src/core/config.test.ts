@@ -7,6 +7,8 @@ import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
 import { configSchema } from "../contract/schemas.js";
 import {
+  ALERT_EVENTS,
+  ALERT_FORMATS,
   type Config,
   effectiveAllowDownload,
   loadConfig,
@@ -96,6 +98,7 @@ describe("loadConfig", () => {
         maxConcurrentRecoveries: 1,
       },
       idle: { deleteAfterMs: 60 * 60_000, shutdownAfterMs: 10 * 60_000 },
+      update: { check: true },
       lease: {
         defaultTtlMs: 15 * 60_000,
         maxTtlMs: 4 * 60 * 60_000,
@@ -117,10 +120,10 @@ describe("loadConfig", () => {
         maxBytes: 256 * 1024 * 1024,
       },
       downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-      http: { enabled: false, host: "127.0.0.1", port: 4700 },
+      http: { enabled: true, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
-        maxConcurrentBoots: 1,
+        maxConcurrentBoots: 2,
         reserveRunning: { android: 0, ios: 0 },
         targets: [],
         quarantine: {
@@ -135,6 +138,7 @@ describe("loadConfig", () => {
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);
+    expect(configSchema.shape.eventLog.parse(config.eventLog)).toEqual(config.eventLog);
   });
 
   it("defaults exec.timeoutMs to ten minutes and rejects a non-positive one", async () => {
@@ -204,19 +208,6 @@ describe("loadConfig", () => {
       maxBytes: 256 * 1024 * 1024,
       retention: 7 * 24 * 60 * 60 * 1000,
     });
-  });
-
-  it("reports eventLog.retention and eventLog.maxBytes at their defaults", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(config.eventLog).toEqual({
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    });
-    expect(configSchema.shape.eventLog.parse(config.eventLog)).toEqual(config.eventLog);
   });
 
   it("rejects a non-positive or fractional eventLog.retention and eventLog.maxBytes, naming the key", async () => {
@@ -409,20 +400,31 @@ describe("loadConfig", () => {
   );
 
   describe("warmPool.targets and warmPool.maxConcurrentBoots", () => {
-    async function load(warmPool?: unknown) {
+    async function load(warmPool?: unknown, cpuCount = 8) {
       const filesystem = new MemoryFilesystem();
       await filesystem.mkdirp("/home/agent/.simlock");
       if (warmPool !== undefined) {
         await filesystem.writeFileAtomic(configPath, JSON.stringify({ warmPool }));
       }
-      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+      const systemStats = new FakeSystemStats({ cpuCount, totalRamBytes: 32 * gibibyte });
+      return loadConfig({ configPath, filesystem, systemStats });
     }
 
-    it("defaults to no targets and one concurrent boot", async () => {
-      const config = await load();
-
-      expect(config.warmPool.targets).toEqual([]);
-      expect(config.warmPool.maxConcurrentBoots).toBe(1);
+    it("defaults to no targets and max(1, floor(cpuCount / 4)) concurrent boots, and a file value wins", async () => {
+      expect((await load()).warmPool.targets).toEqual([]);
+      for (const [cpuCount, boots] of [
+        [2, 1],
+        [6, 1],
+        [8, 2],
+        [10, 2],
+        [12, 3],
+      ] as const) {
+        expect(
+          (await load(undefined, cpuCount)).warmPool.maxConcurrentBoots,
+          `${cpuCount} CPUs`,
+        ).toBe(boots);
+      }
+      expect((await load({ maxConcurrentBoots: 5 }, 2)).warmPool.maxConcurrentBoots).toBe(5);
     });
 
     it("loads a target with a model, an OS range, a mode and a count, and a boot cap of two", async () => {
@@ -443,12 +445,6 @@ describe("loadConfig", () => {
       ]);
     });
 
-    it("rejects a target with a count of 0 naming warmPool.targets[0].count", async () => {
-      await expect(
-        load({ targets: [{ count: 0, model: "iPhone 17", platform: "ios" }] }),
-      ).rejects.toThrow("warmPool.targets[0].count");
-    });
-
     it("rejects a target that names a class naming warmPool.targets[1].class", async () => {
       await expect(
         load({
@@ -458,12 +454,6 @@ describe("loadConfig", () => {
           ],
         }),
       ).rejects.toThrow("warmPool.targets[1].class");
-    });
-
-    it("rejects a target of an unknown platform naming warmPool.targets[0].platform", async () => {
-      await expect(
-        load({ targets: [{ count: 1, model: "iPhone 17", platform: "tvos" }] }),
-      ).rejects.toThrow("warmPool.targets[0].platform");
     });
 
     it.each([
@@ -480,6 +470,16 @@ describe("loadConfig", () => {
       [
         "a missing platform",
         { count: 1, model: "iPhone 17" },
+        'Invalid config value for "warmPool.targets[0].platform"',
+      ],
+      [
+        "a count of 0",
+        { count: 0, model: "iPhone 17", platform: "ios" },
+        'Invalid config value for "warmPool.targets[0].count": expected a positive integer',
+      ],
+      [
+        "an unknown platform",
+        { count: 1, model: "iPhone 17", platform: "tvos" },
         'Invalid config value for "warmPool.targets[0].platform"',
       ],
       [
@@ -713,33 +713,65 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("reads lease.maxPerRequester, and defaults it to 1", async () => {
+  it.each([
+    [undefined, 1],
+    [2, 2],
+    [
+      { ios: 1, android: 1 },
+      { ios: 1, android: 1 },
+    ],
+    [{ ios: 2 }, { ios: 2 }],
+    [{}, {}],
+  ])("reads an operator's lease.maxPerRequester %j as %j (absent: 1)", async (written, read) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    const unset = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ lease: { maxPerRequester: 3 } }));
-
-    const set = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(unset.lease).toMatchObject({ maxPerRequester: 1 });
-    expect(set.lease).toMatchObject({ maxPerRequester: 3 });
-  });
-
-  it.each([[0], [-1], [1.5], ["2"]])(
-    "rejects lease.maxPerRequester %j, naming the key",
-    async (value) => {
-      const filesystem = new MemoryFilesystem();
-      await filesystem.mkdirp("/home/agent/.simlock");
+    if (written !== undefined) {
       await filesystem.writeFileAtomic(
         configPath,
-        JSON.stringify({ lease: { maxPerRequester: value } }),
+        JSON.stringify({ lease: { maxPerRequester: written } }),
       );
+    }
 
-      await expect(
-        loadConfig({ configPath, filesystem, systemStats: createStats() }),
-      ).rejects.toThrow("lease.maxPerRequester");
-    },
-  );
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
+
+    expect(config.lease.maxPerRequester).toEqual(read);
+  });
+
+  it.each([
+    [0, "lease.maxPerRequester"],
+    [-1, "lease.maxPerRequester"],
+    [1.5, "lease.maxPerRequester"],
+    ["2", "lease.maxPerRequester"],
+    [{ ios: 0 }, "lease.maxPerRequester.ios"],
+    [{ ios: 1.5 }, "lease.maxPerRequester.ios"],
+    [{ ios: "1" }, "lease.maxPerRequester.ios"],
+  ])("rejects lease.maxPerRequester %j, naming %s", async (value, path) => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: value } }),
+    );
+
+    await expect(
+      loadConfig({ configPath, filesystem, systemStats: createStats() }),
+    ).rejects.toThrow(path);
+  });
+
+  it("accepts a platform lease.maxPerRequester does not know, with a warning, and ignores it", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(
+      configPath,
+      JSON.stringify({ lease: { maxPerRequester: { ios: 1, tvos: 1 } } }),
+    );
+    const warn = vi.fn();
+
+    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
+
+    expect(config.lease.maxPerRequester).toEqual({ ios: 1 });
+    expect(warn).toHaveBeenCalledWith('Unknown config key: "lease.maxPerRequester.tvos"');
+  });
 
   it("lease.endWaitMs defaults to 600000 and accepts a positive number and 2147483647", async () => {
     const filesystem = new MemoryFilesystem();
@@ -873,17 +905,24 @@ describe("loadConfig", () => {
     },
   );
 
-  it("warns about unknown keys without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ limits: { web: {} } }));
+  it.each([
+    [{ limits: { web: {} } }, "limits.web"],
+    [{ health: { maxBoltCount: 7 } }, "health.maxBoltCount"],
+    [{ ios: { slim: { turboMode: true } } }, "ios.slim.turboMode"],
+  ])(
+    "warns about an unknown key, nested or not, without rejecting the file: %j",
+    async (contents, key) => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
 
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "limits.web"');
-  });
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
+      ).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith(`Unknown config key: "${key}"`);
+    },
+  );
 
   it("applies a file-level health override", async () => {
     const filesystem = new MemoryFilesystem();
@@ -938,18 +977,6 @@ describe("loadConfig", () => {
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
     ).rejects.toThrow(path);
-  });
-
-  it("warns about an unknown key nested under health without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ health: { maxBoltCount: 7 } }));
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "health.maxBoltCount"');
   });
 
   it("applies a file-level downloads override", async () => {
@@ -1179,21 +1206,6 @@ describe("loadConfig", () => {
     ).rejects.toThrow("ios.slim.categories");
   });
 
-  it("warns about an unknown key nested under ios.slim without rejecting the file", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { slim: { turboMode: true } } }),
-    );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats(), warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.turboMode"');
-  });
-
   it("defaults android.emulator to a windowed launch with the emulator's GPU, audio, and boot animation", async () => {
     const config = await loadConfig({
       configPath,
@@ -1308,38 +1320,27 @@ describe("loadConfig", () => {
 
       const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
 
-      expect(config[platform].defaultModels[deviceClass]).toEqual(
-        typeof value === "string" ? [value] : value,
-      );
+      expect(config[platform].defaultModels).toStrictEqual({
+        [deviceClass]: typeof value === "string" ? [value] : value,
+      });
     },
   );
 
-  it("stores a string ios.defaultModels value as a one-element list", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { defaultModels: { phone: "iPhone 15" } } }),
-    );
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-
-    expect(config.ios.defaultModels).toStrictEqual({ phone: ["iPhone 15"] });
-  });
-
   it.each([
-    [{ phone: "" }, "ios.defaultModels.phone"],
-    [{ phone: [] }, "ios.defaultModels.phone"],
-    [{ phone: ["iPhone 15", ""] }, "ios.defaultModels.phone"],
-    [{ phone: 15 }, "ios.defaultModels.phone"],
-    [{ phone: [15] }, "ios.defaultModels.phone"],
-    [{ phone: [["iPhone 15"]] }, "ios.defaultModels.phone"],
-    [{ mobile: "iPhone 15" }, "ios.defaultModels.mobile"],
-    [{ constructor: "iPhone 15" }, "ios.defaultModels.constructor"],
-  ])("refuses ios.defaultModels %j, naming the key", async (defaultModels, path) => {
+    ["ios", { phone: "" }, "ios.defaultModels.phone"],
+    ["ios", { phone: [] }, "ios.defaultModels.phone"],
+    ["ios", { phone: ["iPhone 15", ""] }, "ios.defaultModels.phone"],
+    ["ios", { phone: 15 }, "ios.defaultModels.phone"],
+    ["ios", { phone: [15] }, "ios.defaultModels.phone"],
+    ["ios", { phone: [["iPhone 15"]] }, "ios.defaultModels.phone"],
+    ["ios", { mobile: "iPhone 15" }, "ios.defaultModels.mobile"],
+    ["ios", { constructor: "iPhone 15" }, "ios.defaultModels.constructor"],
+    ["android", { phone: [] }, "android.defaultModels.phone"],
+    ["android", { fridge: "Pixel 8" }, "android.defaultModels.fridge"],
+  ])("refuses %s.defaultModels %j, naming the key", async (platform, defaultModels, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultModels } }));
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ [platform]: { defaultModels } }));
 
     await expect(
       loadConfig({ configPath, filesystem, systemStats: createStats() }),
@@ -1360,26 +1361,6 @@ describe("loadConfig", () => {
     await expect(load({ phone: [] })).rejects.toThrow(
       "expected a model name or a non-empty list of model names",
     );
-  });
-
-  it("refuses an empty android.defaultModels list and a key that is not a class, naming the key", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ android: { defaultModels: { phone: [] } } }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "android.defaultModels.phone"');
-
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ android: { defaultModels: { fridge: "Pixel 8" } } }),
-    );
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "android.defaultModels.fridge"');
   });
 
   it("applies a file-level stalledTransition override", async () => {
@@ -1518,12 +1499,6 @@ describe("loadConfig capacity strategies", () => {
       ...(options.warn === undefined ? {} : { warn: options.warn }),
     });
   }
-
-  it("selects the resource strategy when nothing names one", async () => {
-    const config = await load({});
-
-    expect(config.capacity.strategy).toBe("resource");
-  });
 
   it("defaults the fixed strategy to a machine-independent pin", async () => {
     const config = await load({ capacity: { strategy: "fixed" } });
@@ -1696,6 +1671,7 @@ describe("loadConfig modes (ADR 0005)", () => {
     contents: unknown,
     options: {
       readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly role?: "worker" | "gateway";
       readonly warn?: (message: string) => void;
     } = {},
   ) {
@@ -1706,48 +1682,59 @@ describe("loadConfig modes (ADR 0005)", () => {
       configPath,
       filesystem,
       systemStats: createStats(),
+      ...(options.role === undefined ? {} : { role: options.role }),
       ...(options.overrides === undefined ? {} : { overrides: options.overrides }),
       ...(options.warn === undefined ? {} : { warn: options.warn }),
     });
   }
 
-  it("defaults to worker mode, with HTTP off and a 24h disconnected-view retention", async () => {
+  it("defaults to worker mode, with HTTP on and a 24h disconnected-view retention", async () => {
     const config = await load({});
 
     expect(config.mode).toBe("worker");
-    expect(config.http.enabled).toBe(false);
+    expect(config.http.enabled).toBe(true);
     expect(config.gateway).toEqual({
       disconnectedRetentionMs: 24 * 60 * 60_000,
       execTimeoutMs: 11 * 60_000,
       leaseRequestTimeoutMs: 5 * 60_000,
       routing: "warm-then-free",
+      alerts: { destinations: [] },
     });
   });
 
-  it("rejects a mode outside the two the ADR names", async () => {
-    await expect(load({ mode: "hybrid" })).rejects.toThrow("mode");
-  });
+  it.each([
+    ["file worker", { contents: { mode: "worker" } }],
+    ["file gateway", { contents: { mode: "gateway" } }],
+    ["override gateway", { contents: {}, overrides: { mode: "gateway" } }],
+  ] as const)(
+    "refuses a config that sets mode, either value, from the file or the overrides, with the message that names --gateway (%s)",
+    async (_name, { contents, ...options }) => {
+      await expect(load(contents, options)).rejects.toThrow(
+        '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.',
+      );
+    },
+  );
 
   it("turns HTTP on by default in gateway mode -- a gateway is the fleet's contact point", async () => {
-    const config = await load({ mode: "gateway" });
+    const config = await load({}, { role: "gateway" });
 
     expect(config.http.enabled).toBe(true);
     expect(config.http.port).toBe(4700);
   });
 
   it("refuses a gateway that switches HTTP off, naming the key, and loads a worker that does", async () => {
-    await expect(load({ mode: "gateway", http: { enabled: false } })).rejects.toThrow(
+    await expect(load({ http: { enabled: false } }, { role: "gateway" })).rejects.toThrow(
       "http.enabled",
     );
     // HTTP is genuinely optional for a worker.
-    await expect(load({ mode: "worker", http: { enabled: false } })).resolves.toMatchObject({
+    await expect(load({ http: { enabled: false } })).resolves.toMatchObject({
       http: { enabled: false },
       mode: "worker",
     });
   });
 
   it("keeps an explicit gateway http host/port", async () => {
-    const config = await load({ mode: "gateway", http: { host: "0.0.0.0", port: 4800 } });
+    const config = await load({ http: { host: "0.0.0.0", port: 4800 } }, { role: "gateway" });
 
     expect(config.http).toEqual({ enabled: true, host: "0.0.0.0", port: 4800 });
   });
@@ -1756,12 +1743,11 @@ describe("loadConfig modes (ADR 0005)", () => {
     const warn = vi.fn();
     const config = await load(
       {
-        mode: "gateway",
         capacity: { strategy: "fixed", config: { maxRunning: 3 } },
         ios: { defaultMode: "slim" },
         lease: { defaultTtlMs: 60_000 },
       },
-      { warn },
+      { role: "gateway", warn },
     );
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "capacity"'));
@@ -1777,7 +1763,7 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("reads lease.maxPerRequester in gateway mode without an ignored-key warning", async () => {
     const warn = vi.fn();
 
-    const config = await load({ mode: "gateway", lease: { maxPerRequester: 2 } }, { warn });
+    const config = await load({ lease: { maxPerRequester: 2 } }, { role: "gateway", warn });
 
     expect(config.lease).toMatchObject({ maxPerRequester: 2 });
     expect(warn).not.toHaveBeenCalled();
@@ -1787,17 +1773,26 @@ describe("loadConfig modes (ADR 0005)", () => {
     const warn = vi.fn();
 
     const config = await load(
-      { mode: "gateway", metrics: { retention: 120 * 24 * 3_600_000 } },
-      { warn },
+      { metrics: { retention: 120 * 24 * 3_600_000 } },
+      { role: "gateway", warn },
     );
 
     expect(config.metrics).toEqual({ retention: 120 * 24 * 3_600_000 });
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("reads update.check in a gateway config without a warning", async () => {
+    const warn = vi.fn();
+
+    const config = await load({ update: { check: false } }, { role: "gateway", warn });
+
+    expect(config.update).toEqual({ check: false });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("raises the unknown-key warning for eventLog.rotateBytes in a gateway config", async () => {
     const warn = vi.fn();
-    await load({ mode: "gateway", eventLog: { rotateBytes: 1024 } }, { warn });
+    await load({ eventLog: { rotateBytes: 1024 } }, { role: "gateway", warn });
 
     expect(warn).toHaveBeenCalledWith('Unknown config key: "eventLog.rotateBytes"');
   });
@@ -1805,8 +1800,8 @@ describe("loadConfig modes (ADR 0005)", () => {
   it("warns about android.emulator on a gateway without refusing the config", async () => {
     const warn = vi.fn();
     const config = await load(
-      { mode: "gateway", android: { defaultModels: {}, emulator: { headless: true } } },
-      { warn },
+      { android: { defaultModels: {}, emulator: { headless: true } } },
+      { role: "gateway", warn },
     );
 
     expect(warn).toHaveBeenCalledWith(
@@ -1818,21 +1813,23 @@ describe("loadConfig modes (ADR 0005)", () => {
 
   it("warns about the worker-side gateway.* keys on a gateway, but not the gateway's own", async () => {
     const warn = vi.fn();
-    const config = await load({
-      mode: "gateway",
-      gateway: {
-        url: "ws://127.0.0.1:4700/v1/uplink",
-        token: "secret",
-        label: "ignored",
-        disconnectedRetentionMs: 60_000,
+    const config = await load(
+      {
+        gateway: {
+          url: "ws://127.0.0.1:4700/v1/uplink",
+          token: "secret",
+          label: "ignored",
+          disconnectedRetentionMs: 60_000,
+        },
       },
-    });
+      { role: "gateway" },
+    );
 
     expect(config.gateway.disconnectedRetentionMs).toBe(60_000);
 
     const warned = await load(
-      { mode: "gateway", gateway: { url: "ws://127.0.0.1:4700/v1/uplink" } },
-      { warn },
+      { gateway: { url: "ws://127.0.0.1:4700/v1/uplink" } },
+      { role: "gateway", warn },
     );
     expect(warned.mode).toBe("gateway");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
@@ -1865,18 +1862,131 @@ describe("loadConfig modes (ADR 0005)", () => {
     await expect(load({ gateway: { token: "join-secret" } })).rejects.toThrow("gateway.url");
   });
 
-  it("does not pair those keys on a gateway, which reads neither", async () => {
-    const warn = vi.fn();
-    await expect(
-      load({ mode: "gateway", gateway: { url: "ws://fleet.example" } }, { warn }),
-    ).resolves.toBeDefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "gateway.url"'));
+  it("refuses a joined worker's own HTTP listener with the exact error, and keeps every valid and invalid neighbour as it was", async () => {
+    const refusal =
+      'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)';
+    const joined = { url: "wss://fleet.example", token: "join-secret" };
+    type Case = {
+      readonly name: string;
+      readonly contents: Record<string, unknown>;
+      readonly overrides?: Parameters<typeof loadConfig>[0]["overrides"];
+      readonly role?: "worker" | "gateway";
+      readonly error?: string;
+      readonly http?: boolean;
+    };
+    const cases: readonly Case[] = [
+      { name: "file only", contents: { gateway: joined, http: { enabled: true } }, error: refusal },
+      {
+        name: "overrides only",
+        contents: {},
+        overrides: { gateway: joined, http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "membership in file, HTTP in overrides",
+        contents: { gateway: joined },
+        overrides: { http: { enabled: true } },
+        error: refusal,
+      },
+      {
+        name: "HTTP in file, membership in overrides",
+        contents: { http: { enabled: true } },
+        overrides: { gateway: joined },
+        error: refusal,
+      },
+      {
+        name: "override false repairs file true",
+        contents: { gateway: joined, http: { enabled: true } },
+        overrides: { http: { enabled: false } },
+        http: false,
+      },
+      {
+        name: "ws URL, HTTP false",
+        contents: { gateway: { ...joined, url: "ws://fleet.example/x" }, http: { enabled: false } },
+        http: false,
+      },
+      { name: "wss URL, HTTP omitted", contents: { gateway: joined }, http: false },
+      { name: "standalone, HTTP true", contents: { http: { enabled: true } }, http: true },
+      { name: "standalone, HTTP false", contents: { http: { enabled: false } }, http: false },
+      { name: "standalone, HTTP omitted", contents: {}, http: true },
+      { name: "gateway, HTTP omitted", contents: {}, role: "gateway", http: true },
+      {
+        name: "gateway, HTTP true",
+        contents: { http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "gateway, HTTP false",
+        contents: { http: { enabled: false } },
+        role: "gateway",
+        error: "http.enabled",
+      },
+      {
+        name: "gateway ignoring membership keys",
+        contents: { gateway: joined, http: { enabled: true } },
+        role: "gateway",
+        http: true,
+      },
+      {
+        name: "empty URL",
+        contents: { gateway: { url: "", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "malformed URL",
+        contents: { gateway: { url: "not a url", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "http URL",
+        contents: { gateway: { url: "http://fleet.example", token: "t" }, http: { enabled: true } },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "https URL",
+        contents: {
+          gateway: { url: "https://fleet.example", token: "t" },
+          http: { enabled: true },
+        },
+        error: "a ws:// or wss:// URL",
+      },
+      {
+        name: "URL without token",
+        contents: { gateway: { url: "wss://fleet.example" }, http: { enabled: true } },
+        error: "gateway.token",
+      },
+      {
+        name: "token without URL",
+        contents: { gateway: { token: "t" }, http: { enabled: true } },
+        error: "a gateway URL, since gateway.token is set",
+      },
+      {
+        name: "removed mode key",
+        contents: { mode: "worker", gateway: joined, http: { enabled: true } },
+        error: '"mode" is no longer a config key',
+      },
+    ];
+
+    for (const { name, contents, overrides, role, error, http } of cases) {
+      const outcome = load(contents, {
+        ...(overrides === undefined ? {} : { overrides }),
+        ...(role === undefined ? {} : { role }),
+      });
+      if (error === undefined) {
+        await expect(outcome, name).resolves.toMatchObject({ http: { enabled: http } });
+      } else if (error === refusal) {
+        await expect(outcome, name).rejects.toMatchObject({ message: refusal });
+      } else {
+        await expect(outcome, name).rejects.toThrow(error);
+      }
+    }
   });
 
   it.each(["http://fleet.example/v1/uplink", "fleet.example", "not a url"])(
     "rejects a gateway.url that is not a WebSocket URL: %s",
     async (url) => {
-      await expect(load({ gateway: { url } })).rejects.toThrow("gateway.url");
+      await expect(load({ gateway: { url } })).rejects.toThrow("a ws:// or wss:// URL");
     },
   );
 
@@ -1895,15 +2005,18 @@ describe("loadConfig modes (ADR 0005)", () => {
   });
 
   it("defaults the gateway lease-request timeout well under the exec backstop", async () => {
-    const config = await load({ mode: "gateway" });
+    const config = await load({}, { role: "gateway" });
     expect(config.gateway.leaseRequestTimeoutMs).toBeLessThan(config.gateway.execTimeoutMs);
   });
 
-  it("lets an override name the mode, like every other key", async () => {
-    const config = await load({}, { overrides: { mode: "gateway" } });
+  it("reports the role it was loaded for as config.mode", async () => {
+    expect((await load({}, { role: "gateway" })).mode).toBe("gateway");
+    expect((await load({}, { role: "worker" })).mode).toBe("worker");
+  });
 
-    expect(config.mode).toBe("gateway");
-    expect(config.http.enabled).toBe(true);
+  it("HTTP defaults to port 4700 for a gateway and 4701 for a worker", async () => {
+    expect((await load({}, { role: "gateway" })).http.port).toBe(4700);
+    expect((await load({})).http.port).toBe(4701);
   });
 });
 
@@ -1924,12 +2037,180 @@ describe("effectiveAllowDownload", () => {
   });
 });
 
+describe("gateway.alerts.destinations", () => {
+  const validDestination = {
+    name: "audit",
+    format: "generic",
+    url: "https://n8n.example.com/x",
+    events: ["worker.connected"],
+    secret: "s3cr3t",
+  };
+  const nameExpected =
+    "expected a name of lowercase letters, digits and dashes that starts with a letter, at most 32 characters";
+  const urlExpected =
+    "expected an https:// URL, or an http:// URL to localhost, 127.0.0.1 or [::1], with no user name or password";
+  const formatExpected = 'expected one of "generic", "slack"';
+  const eventsExpected = `expected a non-empty list of alert events, each once: ${ALERT_EVENTS.join(", ")}`;
+
+  async function load(
+    gateway: Record<string, unknown>,
+    role: "gateway" | "worker" = "gateway",
+    warn: (message: string) => void = () => {},
+  ): Promise<Config> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp("/home/agent/.simlock");
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ gateway }));
+    return loadConfig({ configPath, filesystem, role, systemStats: createStats(), warn });
+  }
+
+  function loadDestinations(destinations: unknown, role: "gateway" | "worker" = "gateway") {
+    return load({ alerts: { destinations } }, role);
+  }
+
+  it("loadConfig accepts a valid generic destination and defaults gateway.alerts.destinations to an empty list", async () => {
+    expect((await load({})).gateway.alerts.destinations).toEqual([]);
+    for (const url of [
+      "https://n8n.example.com/x",
+      "http://localhost:5678/x",
+      "http://127.0.0.1/x",
+      "http://[::1]:80/x",
+    ]) {
+      const config = await loadDestinations([{ ...validDestination, url }]);
+      expect(config.gateway.alerts.destinations).toEqual([{ ...validDestination, url }]);
+    }
+    const names = await loadDestinations([
+      { ...validDestination, name: "ops-1" },
+      validDestination,
+    ]);
+    expect(names.gateway.alerts.destinations.map((each) => each.name)).toEqual(["ops-1", "audit"]);
+  });
+
+  const bad = (field: string, value: unknown) => ({ ...validDestination, [field]: value });
+  const without = (field: string) => {
+    const { [field as "name"]: _omitted, ...rest } = validDestination;
+    return rest;
+  };
+
+  it.each([
+    ["name", bad("name", "Audit"), nameExpected],
+    ["name", bad("name", "1ops"), nameExpected],
+    ["name", bad("name", "a_b"), nameExpected],
+    ["name", bad("name", ""), nameExpected],
+    ["name", bad("name", "a".repeat(33)), nameExpected],
+    ["name", without("name"), nameExpected],
+    ["format", bad("format", "teams"), formatExpected],
+    ["format", bad("format", "json"), formatExpected],
+    ["format", without("format"), formatExpected],
+    ["url", bad("url", "http://n8n.internal/x"), urlExpected],
+    ["url", bad("url", "ftp://example.com"), urlExpected],
+    ["url", bad("url", "n8n.example.com/x"), urlExpected],
+    ["url", bad("url", "https://user:pw@host/x"), urlExpected],
+    ["url", bad("url", "https://user@host/x"), urlExpected],
+    ["url", bad("url", "https://:pw@host/x"), urlExpected],
+    ["url", bad("url", ""), urlExpected],
+    ["url", without("url"), urlExpected],
+    ["events", bad("events", []), eventsExpected],
+    ["events", bad("events", ["lease.granted"]), eventsExpected],
+    ["events", bad("events", ["worker.connected", "worker.connected"]), eventsExpected],
+    ["events", without("events"), eventsExpected],
+    ["secret", bad("secret", ""), "expected a non-empty secret for a generic destination"],
+    ["secret", without("secret"), "expected a non-empty secret for a generic destination"],
+  ])("loadConfig refuses a bad %s with its message", async (field, destination, expected) => {
+    await expect(loadDestinations([validDestination])).resolves.toBeDefined();
+    await expect(loadDestinations([destination])).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].${field}": ${expected}`,
+    );
+  });
+
+  it("loadConfig accepts a slack destination, refuses a secret on it, and lists both formats in the format message", async () => {
+    const { secret: _secret, ...slack } = { ...validDestination, format: "slack" };
+    const config = await loadDestinations([slack]);
+    expect(config.gateway.alerts.destinations).toEqual([slack]);
+
+    for (const secret of ["s", "", null]) {
+      await expect(loadDestinations([{ ...slack, secret }])).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations[0].secret": expected no secret: a slack destination is not signed',
+      );
+    }
+    await expect(
+      loadDestinations([{ ...slack, url: "https://user:pw@hooks.slack.com/x" }]),
+    ).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
+    );
+    await expect(loadDestinations([bad("format", "teams")])).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].format": ${formatExpected}`,
+    );
+  });
+
+  it("loadConfig refuses a repeated name, a bad list and a bad entry, on a gateway and on a worker", async () => {
+    await expect(loadDestinations([validDestination, validDestination])).rejects.toThrow(
+      'Invalid config value for "gateway.alerts.destinations[1].name": expected a name no other destination uses',
+    );
+    const sixteen = Array.from({ length: 16 }, (_, index) => ({
+      ...validDestination,
+      name: `d${index}`,
+    }));
+    await expect(loadDestinations(sixteen)).resolves.toBeDefined();
+    for (const list of [[...sixteen, validDestination], {}, "x"]) {
+      await expect(loadDestinations(list)).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations": expected a list of at most 16 destinations',
+      );
+    }
+    for (const entry of ["x", null, []]) {
+      await expect(loadDestinations([entry])).rejects.toThrow(
+        'Invalid config value for "gateway.alerts.destinations[0]": expected an object',
+      );
+    }
+    await expect(loadDestinations([bad("url", "ftp://x")], "worker")).rejects.toThrow(
+      `Invalid config value for "gateway.alerts.destinations[0].url": ${urlExpected}`,
+    );
+  });
+
+  it("loadConfig reports name before url when two fields are bad, and the first bad destination", async () => {
+    await expect(
+      loadDestinations([
+        { ...validDestination, url: "ftp://x", name: "Bad" },
+        { ...validDestination, name: "Worse" },
+      ]),
+    ).rejects.toThrow(`"gateway.alerts.destinations[0].name": ${nameExpected}`);
+  });
+
+  it("loadConfig warns about an unknown key inside a destination and still loads", async () => {
+    const warnings: string[] = [];
+    const config = await load(
+      { alerts: { destinations: [{ ...validDestination, headers: {} }] } },
+      "gateway",
+      (message) => warnings.push(message),
+    );
+    expect(warnings).toEqual(['Unknown config key: "gateway.alerts.destinations[0].headers"']);
+    expect(config.gateway.alerts.destinations).toEqual([validDestination]);
+  });
+
+  it("config.get's format enum lists exactly core's ALERT_FORMATS", () => {
+    const destination = configSchema.shape.gateway.shape.alerts.shape.destinations.element;
+    expect(destination.shape.format.options).toEqual([...ALERT_FORMATS]);
+  });
+
+  it("config.get's schema keeps every field of a loaded destination, a slack one without a secret", async () => {
+    const { secret: _secret, ...slack } = { ...validDestination, name: "chat", format: "slack" };
+    const config = await loadDestinations([validDestination, slack]);
+    expect(config.gateway.alerts.destinations[1]).toEqual(slack);
+    const parsed = configSchema.parse(config);
+    expect(parsed.gateway.alerts).toEqual(config.gateway.alerts);
+  });
+});
+
 describe("redactConfig", () => {
-  async function load(contents: unknown): Promise<Config> {
+  async function load(contents: unknown, role?: "gateway" | "worker"): Promise<Config> {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
     await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-    return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    return loadConfig({
+      configPath,
+      filesystem,
+      ...(role ? { role } : {}),
+      systemStats: createStats(),
+    });
   }
 
   it("replaces a set gateway.token with the marker, keeps every other key, and leaves the input untouched", async () => {
@@ -1944,6 +2225,47 @@ describe("redactConfig", () => {
     expect(redacted).toEqual({ ...before, gateway: { ...before.gateway, token: REDACTED_VALUE } });
     expect(config).toEqual(before);
     expect(config.gateway.token).toBe("secret-join-token");
+  });
+
+  it("masks every destination's url and secret, keeps name, format and events, and leaves its input untouched (a slack destination gets no secret key)", async () => {
+    const destinations = [
+      {
+        name: "audit",
+        format: "generic",
+        url: "https://n8n.example.com/hook-token",
+        events: ["worker.connected"],
+        secret: "s3cr3t",
+      },
+      {
+        name: "ops",
+        format: "generic",
+        url: "http://localhost:5678/x",
+        events: ["worker.disconnected"],
+        secret: "other",
+      },
+      {
+        name: "chat",
+        format: "slack",
+        url: "https://hooks.slack.com/services/T0/B0/token",
+        events: ["worker.connected"],
+      },
+    ];
+    for (const token of ["join-token", undefined]) {
+      const config = await load({ gateway: { token, alerts: { destinations } } }, "gateway");
+      const before = structuredClone(config);
+
+      const redacted = redactConfig(config);
+
+      expect(redacted.gateway.alerts.destinations).toEqual(
+        destinations.map((destination) => ({
+          ...destination,
+          url: REDACTED_VALUE,
+          ...("secret" in destination ? { secret: REDACTED_VALUE } : {}),
+        })),
+      );
+      expect(redacted.gateway.token).toBe(token === undefined ? undefined : REDACTED_VALUE);
+      expect(config).toEqual(before);
+    }
   });
 
   it("adds no gateway.token to a config that has none, so unset still reads as unset", async () => {
@@ -2135,6 +2457,19 @@ describe("loadConfig over http.proxyAuth", () => {
     for (const signOutUrl of ["not a url", "ftp://team.dev/out"]) {
       await expect(load({ ...complete, signOutUrl }), signOutUrl).rejects.toThrow(
         'Invalid config value for "http.proxyAuth.signOutUrl": expected an http:// or https:// URL',
+      );
+    }
+  });
+
+  it("refuses a wrong-type header, jwksUrl or signOutUrl with our message", async () => {
+    const cases = [
+      ["header", "an HTTP header name"],
+      ["jwksUrl", "an https:// URL, or http:// on 127.0.0.1, ::1 or localhost"],
+      ["signOutUrl", "an http:// or https:// URL"],
+    ] as const;
+    for (const [key, message] of cases) {
+      await expect(load({ ...complete, [key]: 7 }), key).rejects.toThrow(
+        `Invalid config value for "http.proxyAuth.${key}": expected ${message}`,
       );
     }
   });

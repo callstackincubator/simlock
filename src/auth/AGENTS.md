@@ -19,7 +19,7 @@ Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-wa
 | `strategies/proxy-jwt/index.ts`     | The proxy strategy: a sign-in proxy's JWT in `http.proxyAuth.header`; owns the `proxyAuth` config schema |
 | `strategies/proxy-jwt/key-cache.ts` | `KeyCache`: the proxy's published keys, on the `Clock`                                                   |
 | `strategies/conformance.test.ts`    | Every registered strategy: `not-mine` without its credential, `via` = name                               |
-| `token-store.ts`                    | `TokenStore`: hashed tokens in `tokens.json`; re-reads the file per verify                               |
+| `token-store.ts`                    | `TokenStore`: hashed tokens in the `tokens` table of `state.db`; one read per verify; `tokensOwner`      |
 | `admin-secret.ts`                   | `AdminSecretManager`: per-start secret, `admin.token`                                                    |
 | `hello.ts`                          | `SessionRoleResolver`, `resolveAgentRole`, `AdminAuthenticationFailedError`                              |
 | `tokens.ts`                         | `TokenRole`, `TokenRecord`, `TokenOperations`                                                            |
@@ -31,7 +31,7 @@ Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-wa
 | `authenticateRequest` | Asks the enabled strategies in registry order; returns `Identity` or throws `AuthError`                  |
 | `resolveHelloRole`    | No credential → `agent`; operator token or admin secret → `admin`; else `AdminAuthenticationFailedError` |
 | `authenticateUplink`  | None or unknown → `unauthenticated`; not a `worker` token → `forbidden`; else accept with the token id   |
-| `tokens`              | `create`, `list`, `revoke` (both dispatchers)                                                            |
+| `tokens`              | `create`, `list`, `revoke` (both dispatchers); `verify` (the module host, for a local profile)           |
 | `adminSecret`         | `persist`, `remove` (`DaemonServer`)                                                                     |
 
 ## Strategies
@@ -53,7 +53,7 @@ its credential). A value over 8 KiB is `malformed` and nothing is fetched. Other
 person (`sub` non-empty and at most 120 characters, `email` non-empty) is `identified`:
 `proxy:<iss>#<sub>`, role `operator`, `via` `proxy`, `expiresAt` = `exp`×1000 + 60 s, `ambient`.
 A verified JWT with no person claims is `not-mine`. Anything else is `rejected` "Sign-in proxy
-identity refused: <reason>" with `details.reason` (the nine reasons are in `docs/HTTP-API.md`),
+identity refused: <reason>" with `details.reason` (the reasons are in `strategies/proxy-jwt/`),
 and one `warn` log line with the reason and jose's message, never the JWT.
 
 `KeyCache` is ours, not jose's remote set, so it runs on the `Clock`: keys are kept 10 minutes
@@ -66,5 +66,5 @@ the `KeySetFetcher` port, which never follows a redirect and caps the body at 64
 ## Facts
 
 - A worker join token is `forbidden` on HTTP and accepted only by `authenticateUplink`.
-- `tokens.json` is re-read on every verify, so `token create`/`revoke` from another process takes effect at once. Writes are serialised in `TokenStore`.
+- Every verify reads the `tokens` table, so a `token revoke` takes effect at once. `create` and `revoke` are each one transaction, so two at once never lose one another. `createAuth` takes the daemon's `SqliteDatabase`, never the state module.
 - The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` (0600, atomic) only by `persist`, after the socket claim.

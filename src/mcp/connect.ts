@@ -17,9 +17,13 @@ import {
 import {
   DAEMON_STARTUP_TIMEOUT_MS,
   IpcError,
+  startErrorFrom,
+  startTimeoutMessage,
   type Clock,
+  type DaemonExit,
   type DaemonLauncher,
   type IpcConnector,
+  type LaunchedDaemon,
 } from "../ports/index.js";
 
 /** What it takes to reach a daemon that is already listening -- no launcher anywhere in it,
@@ -53,24 +57,62 @@ export async function connectWithAutoLaunch(
   } catch (error: unknown) {
     if (!isUnavailable(error)) throw error;
   }
-  await options.launcher.launch();
+  const launched = await options.launcher.launch();
+  let exit: DaemonExit | undefined;
+  void launched.exited.then((value) => {
+    exit = value;
+  });
   const deadline = options.clock.now() + (options.startupTimeoutMs ?? DAEMON_STARTUP_TIMEOUT_MS);
   let lastError: unknown;
   while (options.clock.now() < deadline) {
     try {
-      return await connectToRunningDaemon(options);
+      return await connectStartingDaemon(options);
     } catch (error: unknown) {
       if (!isUnavailable(error)) throw error;
       lastError = error;
+      if (exit !== undefined) return await connectAfterExit(options, launched, exit);
       await delay(options.clock, options.retryIntervalMs ?? 50);
     }
   }
+  const output = await launched.readOutput().catch(() => "");
   throw new SimlockError(
     "DAEMON_STARTUP_FAILED",
     "transport",
-    `Timed out starting simlock daemon: ${errorMessage(lastError)}`,
+    startTimeoutMessage(errorMessage(lastError), output),
     {},
   );
+}
+
+async function connectAfterExit(
+  options: ConnectToRunningDaemonOptions,
+  launched: LaunchedDaemon,
+  exit: DaemonExit,
+): Promise<SimlockClient> {
+  const output = await launched.readOutput().catch(() => "");
+  try {
+    return await connectStartingDaemon(options);
+  } catch (error: unknown) {
+    if (!isUnavailable(error)) throw error;
+  }
+  throw new SimlockError("DAEMON_STARTUP_FAILED", "transport", startErrorFrom(exit, output), {});
+}
+
+async function connectStartingDaemon(
+  options: ConnectToRunningDaemonOptions,
+): Promise<SimlockClient> {
+  try {
+    return await connectToRunningDaemon(options);
+  } catch (error: unknown) {
+    if (isSimlockError(error) && error.code === "DAEMON_CONNECTION_LOST") {
+      throw new SimlockError(
+        "DAEMON_STARTUP_FAILED",
+        "transport",
+        "The daemon closed its connection while starting, before answering hello",
+        {},
+      );
+    }
+    throw error;
+  }
 }
 
 /**

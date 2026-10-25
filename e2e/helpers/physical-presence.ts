@@ -1,6 +1,3 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
 import { expect } from "vitest";
 
 import type { FakeDriverErrorSpec, FakeDriverPlatformScript } from "../fake-driver/types.js";
@@ -14,6 +11,7 @@ import {
   type PhysicalSeed,
   type SeededLease,
 } from "./physical-state.js";
+import { patchPhysicalRows, readPhysicalRecords } from "./state-db.js";
 import { waitFor } from "./wait.js";
 
 export const ENROLLED = ["com.example.mail", "com.example.maps"] as const;
@@ -167,21 +165,13 @@ export async function patchPhysicalRecords(
   env: Pick<TestEnv, "home">,
   patch: (record: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<void> {
-  const path = join(env.home, "state.json");
-  const state = JSON.parse(await readFile(path, "utf8")) as {
-    physicalDevices: Record<string, unknown>[];
-  };
-  state.physicalDevices = state.physicalDevices.map(patch);
-  await writeFile(path, JSON.stringify(state, null, 2), "utf8");
+  patchPhysicalRows(env, patch);
 }
 
 export async function physicalRecords(
   env: Pick<TestEnv, "home">,
 ): Promise<Record<string, unknown>[]> {
-  const state = JSON.parse(await readFile(join(env.home, "state.json"), "utf8")) as {
-    physicalDevices: Record<string, unknown>[];
-  };
-  return state.physicalDevices;
+  return readPhysicalRecords(env);
 }
 
 export interface DeviceRow {

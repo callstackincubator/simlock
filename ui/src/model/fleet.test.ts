@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { platformSlots, slotsLabel, workerHealth } from "./fleet";
+import { hasIssue, platformSlots, slotsLabel, workerHealth } from "./fleet";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
@@ -77,6 +77,41 @@ describe("a worker's health square", () => {
       tone: "error",
       word: "disconnected",
     });
+  });
+});
+
+describe("a worker with an issue", () => {
+  it("is one that is lost, failed, drained, starting, over its RAM budget, under memory pressure, or at 85% of CPU, disk or memory", () => {
+    const budget = { ...capacity(4, 4), ramBudget: { overLimit: true } };
+    const full = (disk: number) =>
+      ({
+        ...load(30, 40),
+        disk: { freeBytes: (1 - disk / 100) * 1000 * GIB, totalBytes: 1000 * GIB },
+      }) as NonNullable<WorkerView["load"]>;
+    const issues: readonly Partial<WorkerView>[] = [
+      { connection: "disconnected" },
+      { connection: "incompatible" },
+      { health: "failed" },
+      { drained: true },
+      { health: "starting" },
+      { capacity: budget as unknown as NonNullable<WorkerView["capacity"]> },
+      { load: load(30, 40, "warn") },
+      { load: load(30, 40, "critical") },
+      { load: load(85, 40) },
+      { load: load(30, 85) },
+      { load: full(85) },
+    ];
+    const fine: readonly Partial<WorkerView>[] = [
+      {},
+      { health: "running", load: load(84, 84, "normal") },
+      { load: full(84) },
+      { load: load(30, 97, "normal") },
+    ];
+
+    for (const overrides of issues)
+      expect(hasIssue(worker(overrides)), JSON.stringify(overrides).slice(0, 60)).toBe(true);
+    for (const overrides of fine)
+      expect(hasIssue(worker(overrides)), JSON.stringify(overrides).slice(0, 60)).toBe(false);
   });
 });
 

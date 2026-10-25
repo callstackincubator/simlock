@@ -96,9 +96,9 @@ describe("a list row", () => {
       name: "lease.granted",
       summary: "claude-1 · mac-1",
       time: expect.stringMatching(/^\d\d:\d\d:\d\d$/),
-      to: "/events/evt_7?subject=lease",
+      to: "/activity/evt_7?subject=lease",
     });
-    expect(eventRows([granted], [], "all")[0]?.to).toBe("/events/evt_7");
+    expect(eventRows([granted], [], "all")[0]?.to).toBe("/activity/evt_7");
   });
 
   it("is toned only where the name reports trouble", () => {
@@ -117,6 +117,29 @@ describe("a list row", () => {
     const [row] = eventRows([rejected], [worker("wrk_1", "mac-1")], "all");
 
     expect(row?.summary).toBe("unauthenticated");
+  });
+});
+
+describe("a search of the list", () => {
+  const events = [
+    event("lease.granted", { requester: "claude-1", token: "Marker-Value" }, 1),
+    event("worker.connected", { workerId: "wrk_1" }, 2),
+    event("device.ready", { deviceId: "dev_1" }, 3),
+  ];
+  const found = (query: string) =>
+    eventRows(events, [worker("wrk_1", "Mac Studio")], "all", query).map((row) => row.name);
+
+  it("matches part of the event name or the summary line, ignoring case, and no other payload value", () => {
+    expect(found("")).toEqual(["lease.granted", "worker.connected", "device.ready"]);
+    expect(found("GRANT")).toEqual(["lease.granted"]);
+    expect(found("ice.rea")).toEqual(["device.ready"]);
+    expect(found("mac stu")).toEqual(["worker.connected"]);
+    expect(found("CLAUDE")).toEqual(["lease.granted"]);
+    expect(found("marker-value")).toEqual([]);
+    expect(found("dev_1")).toEqual([]);
+    expect(eventRows(events, [], "lease", "grant")[0]?.to).toBe(
+      "/activity/evt_1?subject=lease&q=grant",
+    );
   });
 });
 
@@ -183,12 +206,12 @@ describe("what an event links to", () => {
 
     expect(eventAction(queued, places({ requests: [request("req_1")] }))).toEqual({
       label: "Open request",
-      to: "/waiting/req_1",
+      to: "/queue/req_1",
     });
     expect(eventAction(queued, NO_PLACES)).toBeUndefined();
   });
 
-  it("is the attention item of a quarantined device", () => {
+  it("is the Inbox item of a quarantined device", () => {
     const quarantined = worker("wrk_1", "mac-1", {
       devices: [
         {
@@ -204,7 +227,22 @@ describe("what an event links to", () => {
         event("device.quarantined", { deviceId: "dev_1", workerId: "wrk_1" }),
         places({ workers: [quarantined] }),
       ),
-    ).toEqual({ label: "Open attention item", to: "/attention/wrk_1%2Fdev_1%2Fquarantined" });
+    ).toEqual({ label: "Open Inbox item", to: "/inbox/wrk_1%2Fdev_1%2Fquarantined" });
+  });
+
+  it("ends the Inbox address in a slash when the worker's id holds a dot", () => {
+    const quarantined = worker("wrk.local", "mac-1", {
+      devices: [
+        { id: "dev_1", spec: { model: "iPhone 16", osVersion: "18.4" }, state: "quarantined" },
+      ],
+    });
+
+    expect(
+      eventAction(
+        event("device.quarantined", { deviceId: "dev_1", workerId: "wrk.local" }),
+        places({ workers: [quarantined] }),
+      )?.to,
+    ).toBe("/inbox/wrk.local%2Fdev_1%2Fquarantined/");
   });
 
   it("is the worker the console lists, and none for one it does not", () => {
@@ -212,7 +250,7 @@ describe("what an event links to", () => {
 
     expect(eventAction(connected, places({ workers: [worker("wrk_1")] }))).toEqual({
       label: "Open worker",
-      to: "/workers/wrk_1",
+      to: "/fleet/wrk_1",
     });
     expect(eventAction(connected, NO_PLACES)).toBeUndefined();
   });
@@ -263,32 +301,19 @@ describe("the events chart", () => {
 
 describe("the event chosen", () => {
   const events = [event("lease.granted", {}, 2), event("device.ready", {}, 1)];
-  const rows = eventRows(events, [], "all");
-  const choose = (id: string | undefined, shown = rows) =>
-    chosenEvent(events, shown, id, NO_PLACES, T0);
+  const choose = (id: string | undefined) => chosenEvent(events, id, NO_PLACES, T0);
 
-  it("is the one the URL names", () => {
+  it("is the one the URL names, even one a filter or a search hides", () => {
     const chosen = choose("evt_1");
 
     expect(chosen.kind === "event" && chosen.detail.name).toBe("device.ready");
   });
 
-  it("is the first row when the URL names none", () => {
-    const chosen = choose(undefined);
-
-    expect(chosen.kind === "event" && chosen.detail.id).toBe("evt_2");
+  it("is none when the URL names none, so the drawer stays shut", () => {
+    expect(choose(undefined)).toEqual({ kind: "none" });
   });
 
-  it("opens an event the filter hides", () => {
-    const filtered = eventRows(events, [], "lease");
-
-    const chosen = choose("evt_1", filtered);
-
-    expect(chosen.kind === "event" && chosen.detail.id).toBe("evt_1");
-  });
-
-  it("is missing for an id the feed does not hold, and none for an empty feed", () => {
+  it("is missing for an id the feed does not hold", () => {
     expect(choose("evt_gone")).toEqual({ id: "evt_gone", kind: "missing" });
-    expect(chosenEvent([], [], undefined, NO_PLACES, T0)).toEqual({ kind: "none" });
   });
 });

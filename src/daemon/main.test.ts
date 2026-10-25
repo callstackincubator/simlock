@@ -13,28 +13,48 @@ import {
   OWNED_ROOT_MARKER_FILE,
   type OwnedRootError,
   REDACTED_VALUE,
-  Registry,
+  registryOwner,
 } from "../core/index.js";
 import { agentDeviceModule } from "../agent-device/definition.js";
 import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
-import { FakeDriver } from "../core/testing.js";
+import {
+  FakeDriver,
+  fakeDeviceDataTable,
+  fakeDeviceDataTables,
+  loadTestRegistry,
+} from "../core/testing.js";
+import { seedTokensDatabase } from "../auth/testing.js";
+import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { IosSimctlDriver } from "../drivers/ios/index.js";
+import { androidDeviceDataTable } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDeviceDataTable } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import {
   CryptoIdGenerator,
-  CryptoTokenSecrets,
   FakeClock,
   FakeHostInfo,
   FakeHostLoadProbe,
+  FakeNpmCli,
+  FakeUpdaterLauncher,
+  type NpmCli,
+  type NpmOutcome,
   type HostLoadCounters,
   FakeProcessSupervisor,
+  daemonDataDirectory,
+  FakeServiceManager,
+  serviceDefinition,
+  type ServiceDefinition,
+  type ServiceManager,
+  type ServiceState,
+  FakeSystemStats,
   FakeTcpProbe,
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  NodeSqliteOpener,
+  NoopLogger,
   ScriptedProcessRunner,
   type IdGenerator,
 } from "../ports/index.js";
@@ -43,8 +63,13 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   logAndroidDiagnostic,
+  productionDeviceDataTables,
+  resolveDeviceDataTables,
   emitSlimDiagnostic,
+  parseDaemonArgv,
   processRunnerFor,
+  productionServiceCheck,
+  serviceCheckFor,
   startDaemon,
   type DriverDiscoveryContext,
   type StartDaemonOptions,
@@ -62,13 +87,21 @@ afterEach(async () => {
   );
 });
 
+// why: a standalone worker serves HTTP and agent-device by default (ADR 0046); a test that asks for neither pins them off, and two daemons would clash on port 4701.
+const STANDALONE_OFF = {
+  capabilities: { "agent-device": { enabled: false } },
+  http: { enabled: false },
+} as const;
+
 /** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
  * discovery rather than the fake driver below. */
 async function start(
-  overrides: Partial<Omit<StartDaemonOptions, "drivers">> & {
+  overrides: Partial<Omit<StartDaemonOptions, "deviceDataTables" | "drivers">> & {
+    readonly deviceDataTables?: StartDaemonOptions["deviceDataTables"] | undefined;
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
   } = {},
 ) {
+  const { configOverrides, ...rest } = overrides;
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
@@ -78,16 +111,174 @@ async function start(
     clock,
     dataDirectory: directory,
     drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+    deviceDataTables: fakeDeviceDataTables,
     filesystem: new MemoryFilesystem(),
     hostLoadProbe: null,
     logger,
-    statePath: join(directory, "state.json"),
     version: "1.2.3",
-    ...overrides,
+    ...rest,
+    configOverrides:
+      overrides.role === "gateway" ? configOverrides : { ...STANDALONE_OFF, ...configOverrides },
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };
 }
+
+describe("interrupted writes", () => {
+  it("startup followed by doctor --fix removes dead-pid .tmp files beside config.json and instance.json while preserving live-pid files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-interrupted-write-"));
+    temporaryDirectories.push(directory);
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(directory);
+    const deadPid = 41001;
+    const livePid = 41002;
+    const processSupervisor = new FakeProcessSupervisor([livePid]);
+    const writeId = "00000000-0000-4000-8000-000000000001";
+    const leftovers = ["config.json", "instance.json"].flatMap((target) =>
+      [deadPid, livePid].map((pid) => ({
+        path: join(directory, `.${target}.${pid}.${writeId}.tmp`),
+        pid,
+        contents: `interrupted ${target} write by ${pid}`,
+      })),
+    );
+    for (const leftover of leftovers) {
+      await filesystem.writeFileAtomic(leftover.path, leftover.contents, { mode: 0o600 });
+    }
+
+    const { daemon } = await start({
+      dataDirectory: directory,
+      filesystem,
+      processSupervisor,
+    });
+    await daemon.dispatch(
+      "doctor.run",
+      { fix: true },
+      {
+        manageEventSubscription: () => undefined,
+        principal: "operator",
+        via: "socket",
+        role: "admin",
+      },
+    );
+
+    for (const leftover of leftovers.filter(({ pid }) => pid === livePid)) {
+      expect(await filesystem.readFile(leftover.path)).toBe(leftover.contents);
+    }
+    const remaining = await Promise.all(
+      leftovers.map(async ({ path, pid }) => ({
+        path,
+        exists: await filesystem.exists(path),
+        writerAlive: processSupervisor.isAlive(pid),
+      })),
+    );
+    expect(remaining).toEqual(
+      leftovers.map(({ path, pid }) => ({
+        path,
+        exists: pid === livePid,
+        writerAlive: pid === livePid,
+      })),
+    );
+  });
+});
+
+describe("interrupted root assembly", () => {
+  async function startWithRoot(
+    filesystem: MemoryFilesystem,
+    processSupervisor: FakeProcessSupervisor,
+  ) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-interrupted-staging-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const devices = join(SIMLOCK_HOME, "devices");
+    const deviceRoot = join(devices, "ios");
+    await filesystem.mkdirp(devices);
+    const driver = Object.assign(
+      new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+      {
+        deviceRoot,
+      },
+    );
+    const result = await start({
+      dataDirectory: directory,
+      drivers: [driver],
+      filesystem,
+      processSupervisor,
+    });
+    return { ...result, devices };
+  }
+
+  async function stage(filesystem: MemoryFilesystem, devices: string, name: string) {
+    const path = join(devices, name);
+    await filesystem.mkdirp(path);
+    await filesystem.writeFileAtomic(join(path, "marker.json"), "{}");
+    return path;
+  }
+
+  it("startup removes a staging directory named for a dead pid and keeps one named for a live pid", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const dead = await stage(filesystem, devices, ".ios.41003.root-id.staging");
+    const live = await stage(filesystem, devices, ".ios.41004.root-id.staging");
+
+    await startWithRoot(filesystem, new FakeProcessSupervisor([41004]));
+
+    expect([await filesystem.exists(dead), await filesystem.exists(live)]).toEqual([false, true]);
+  });
+
+  it("startup leaves a pid-less legacy staging directory in place and logs it once", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const legacy = await stage(filesystem, devices, ".ios.root-id.staging");
+
+    const { sink } = await startWithRoot(filesystem, new FakeProcessSupervisor());
+
+    expect(await filesystem.exists(legacy)).toBe(true);
+    expect(
+      sink.records.filter(
+        (record) =>
+          record.message === "left a legacy staging directory in place" &&
+          (record.fields as { path?: string } | undefined)?.path === legacy,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("startup leaves a directory of the user's own that only looks like a staging directory", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const theirs = await stage(filesystem, devices, ".photos.2023.backup.staging");
+
+    await startWithRoot(filesystem, new FakeProcessSupervisor());
+
+    expect(await filesystem.exists(theirs)).toBe(true);
+  });
+
+  it("startup leaves a .tmp-named file of the user's own beside a device root", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const theirs = join(devices, ".notes.41006.0b9f6c1e-6a4d-4c43-9d0e-3f2a1b7c8d90.tmp");
+    await filesystem.writeFileAtomic(theirs, "mine");
+
+    await startWithRoot(filesystem, new FakeProcessSupervisor());
+
+    expect(await filesystem.exists(theirs)).toBe(true);
+  });
+
+  it("startup leaves a dead writer's leftover that another user owns", async () => {
+    const filesystem = new MemoryFilesystem();
+    const devices = join(SIMLOCK_HOME, "devices");
+    await filesystem.mkdirp(devices);
+    const foreign = await stage(filesystem, devices, ".ios.41005.root-id.staging");
+    filesystem.defineAttributes(foreign, { uid: (process.getuid?.() ?? 0) + 1 });
+
+    await startWithRoot(filesystem, new FakeProcessSupervisor());
+
+    expect(await filesystem.exists(foreign)).toBe(true);
+  });
+});
 
 async function historyEventsWhen(
   directory: string,
@@ -116,6 +307,8 @@ describe("the version a daemon reports", () => {
     const clock = new FakeClock(1_000);
     const socketPath = join(directory, "daemon.sock");
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
@@ -123,7 +316,6 @@ describe("the version a daemon reports", () => {
       hostLoadProbe: null,
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
       socketPath,
-      statePath: join(directory, "state.json"),
     });
     runningDaemons.push(daemon);
     const packageJson = JSON.parse(
@@ -170,6 +362,20 @@ describe("the event history", () => {
   });
 });
 
+async function queryState(
+  directory: string,
+  sql: string,
+): Promise<readonly Record<string, unknown>[]> {
+  const database = await new NodeSqliteOpener().open(join(directory, "state.db"), {
+    readOnly: true,
+  });
+  try {
+    return database.prepare(sql).all();
+  } finally {
+    database.close();
+  }
+}
+
 /** A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
  * fails fast, and the fake clock never fires its retry. */
 async function unreachableGatewayUrl(): Promise<string> {
@@ -180,11 +386,38 @@ async function unreachableGatewayUrl(): Promise<string> {
   return `ws://127.0.0.1:${port}`;
 }
 
+// why: a drivers module must export the device-data tables of its platforms, and the module file
+// cannot import the repo's TypeScript, so this is the fake driver's table spelled out in plain JS.
+const MODULE_DEVICE_DATA_TABLES = `
+const table = {
+  migrations: [
+    "CREATE TABLE fake_device_data (device_id TEXT PRIMARY KEY, fake_device_id TEXT NOT NULL) STRICT",
+  ],
+  name: "fake-device-data",
+  read(database, deviceId) {
+    const row = database
+      .prepare("SELECT fake_device_id FROM fake_device_data WHERE device_id = ?")
+      .get(deviceId);
+    if (row === undefined) throw new Error("No fake driver data for device " + deviceId);
+    return { fakeDeviceId: row.fake_device_id };
+  },
+  version: 1,
+  write(database, deviceId, driverData) {
+    database
+      .prepare(
+        "INSERT INTO fake_device_data (device_id, fake_device_id) VALUES (?, ?) ON CONFLICT (device_id) DO UPDATE SET fake_device_id = excluded.fake_device_id",
+      )
+      .run(deviceId, driverData.fakeDeviceId);
+  },
+};
+export const deviceDataTables = new Map([["android", table], ["ios", table]]);
+`;
+
 async function writeModule(contents: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-drivers-module-"));
   temporaryDirectories.push(directory);
   const modulePath = join(directory, "drivers.mjs");
-  await writeFile(modulePath, contents, "utf8");
+  await writeFile(modulePath, `${contents}\n${MODULE_DEVICE_DATA_TABLES}`, "utf8");
   return modulePath;
 }
 
@@ -242,24 +475,6 @@ async function freeLoopbackPort(): Promise<number> {
   return address.port;
 }
 describe("startDaemon", () => {
-  it("writes a structured start record with version, protocol version, socket path, and effective config", async () => {
-    const { daemon, sink } = await start();
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "info",
-        message: "Daemon started",
-        fields: expect.objectContaining({
-          version: "1.2.3",
-          protocolVersion: DAEMON_PROTOCOL_VERSION,
-          socketPath: daemon.socketPath,
-        }),
-      }),
-    );
-    const record = sink.records.find((entry) => entry.message === "Daemon started");
-    expect(record?.fields?.config).toMatchObject({ log: { level: "info" } });
-  });
-
   it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
@@ -364,13 +579,140 @@ describe("startDaemon", () => {
     expect(runs).toEqual({ android: 2, ios: 2 });
   });
 
+  it("a worker's doctor reports service-broken for each service whose paths are gone", async () => {
+    const gone = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
+    const mainGone = "/Users/me/simlock/dist/daemon/main.js";
+    const name = "com.callstack.simlock.worker";
+    const remedy = "Run `simlock daemon install` again.";
+    const admin = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "operator",
+      role: "admin",
+    } as const;
+    for (const testCase of [
+      { label: "not installed", missing: [], expected: [] },
+      { label: "installed and whole", missing: [], expected: [] },
+      {
+        label: "one path gone",
+        missing: [gone],
+        expected: [{ kind: "service-broken", manager: "launchd", name, missing: [gone], remedy }],
+      },
+      {
+        label: "both gone",
+        missing: [gone, mainGone],
+        expected: [
+          { kind: "service-broken", manager: "launchd", name, missing: [gone, mainGone], remedy },
+        ],
+      },
+    ]) {
+      const { daemon } = await start({
+        serviceCheck: { manager: "launchd", name, check: async () => testCase.missing },
+      });
+      const report = (await daemon.dispatch("doctor.run", {}, admin)) as {
+        readonly findings: readonly { readonly kind: string }[];
+      };
+      expect(
+        report.findings.filter((finding) => finding.kind === "service-broken"),
+        testCase.label,
+      ).toEqual(testCase.expected);
+    }
+  });
+
+  it("serviceCheckFor reads the worker's service state through the manager: the missing paths when broken, none otherwise, and no check on a gateway or without a manager", async () => {
+    const definition = () =>
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: "/simlock",
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: {},
+      });
+    const name = "com.callstack.simlock.worker";
+    const states: readonly { readonly state: ServiceState; readonly missing: readonly string[] }[] =
+      [
+        { state: { state: "not-installed" }, missing: [] },
+        { state: { state: "installed", path: "/p" }, missing: [] },
+        { state: { state: "not-loaded", path: "/p" }, missing: [] },
+        {
+          state: { state: "broken", path: "/p", missing: ["/gone/node", "/gone/main.js"] },
+          missing: ["/gone/node", "/gone/main.js"],
+        },
+      ];
+    for (const testCase of states) {
+      const { serviceCheck } = serviceCheckFor(
+        "worker",
+        new FakeServiceManager({ state: testCase.state }),
+        definition,
+      );
+      expect(serviceCheck?.manager).toBe("launchd");
+      expect(serviceCheck?.name).toBe(name);
+      expect(await serviceCheck?.check(), testCase.state.state).toEqual(testCase.missing);
+    }
+    expect(
+      serviceCheckFor("worker", new FakeServiceManager({ manager: "systemd" }), definition)
+        .serviceCheck?.manager,
+    ).toBe("systemd");
+    expect(serviceCheckFor("gateway", new FakeServiceManager(), definition)).toEqual({});
+    expect(serviceCheckFor("worker", undefined, definition)).toEqual({});
+  });
+
+  it("productionServiceCheck builds the service definition from the process facts and reads its state: the worker's missing paths, and no check on a gateway", async () => {
+    const seen: ServiceDefinition[] = [];
+    const manager: ServiceManager = {
+      manager: "launchd",
+      state: async (definition) => {
+        seen.push(definition);
+        return { state: "broken", path: definition.path, missing: [definition.command] };
+      },
+      install: async () => undefined,
+      uninstall: async () => undefined,
+      start: async () => undefined,
+    };
+    const host = {
+      manager,
+      root: "/Users/me/.simlock",
+      home: "/Users/me",
+      nodePath: "/gone/node",
+      mainPath: "/gone/main.js",
+      env: { PATH: "/usr/bin" },
+    };
+
+    const { serviceCheck } = productionServiceCheck("worker", host);
+
+    expect(serviceCheck?.name).toBe("com.callstack.simlock.worker");
+    expect(await serviceCheck?.check()).toEqual(["/gone/node"]);
+    expect(seen).toEqual([
+      serviceDefinition({
+        role: "worker",
+        root: "/Users/me/.simlock",
+        dataDirectory: daemonDataDirectory("/Users/me/.simlock", "worker"),
+        home: "/Users/me",
+        nodePath: "/gone/node",
+        mainPath: "/gone/main.js",
+        env: { PATH: "/usr/bin" },
+      }),
+    ]);
+    expect(productionServiceCheck("gateway", host)).toEqual({});
+
+    const systemd = productionServiceCheck("worker", {
+      ...host,
+      manager: { ...manager, manager: "systemd" },
+      home: "/home/me",
+      root: "/home/me/.simlock",
+    });
+    await systemd.serviceCheck?.check();
+    expect(seen.at(-1)?.path).toBe(
+      "/home/me/.config/systemd/user/com.callstack.simlock.worker.service",
+    );
+  });
+
   it("stores lease requests under the configured limits, with failures classified by contract code", async () => {
-    const filesystem = new MemoryFilesystem();
     const { daemon, directory } = await start({
       configOverrides: { lease: { maxRequestRecords: 1 } },
-      filesystem,
     });
-    const statePath = join(directory, "state.json");
     const missingRuntime = {
       model: "iPhone 16",
       osVersion: "99.0",
@@ -392,13 +734,8 @@ describe("startDaemon", () => {
     // With the default cap both failures stay stored; with an unclassified failure the code
     // would be INTERNAL.
     await expect
-      .poll(async () => {
-        const state = JSON.parse(await filesystem.readFile(statePath)) as {
-          readonly leaseRequests: readonly unknown[];
-        };
-        return state.leaseRequests;
-      })
-      .toMatchObject([{ failure: { code: "RUNTIME_MISSING" }, requesterId: "second" }]);
+      .poll(() => queryState(directory, "SELECT requester_id, failure_code FROM lease_requests"))
+      .toEqual([{ failure_code: "RUNTIME_MISSING", requester_id: "second" }]);
   });
 
   it("establishes the instance identity once, and reuses it on the next start", async () => {
@@ -440,6 +777,7 @@ describe("startDaemon", () => {
           new Error("adb server would not die"),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
     });
 
     await daemon.stop("test");
@@ -512,6 +850,7 @@ describe("startDaemon", () => {
           Promise.resolve([{ name: "emulator", version: "35.4.9" }]),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -536,6 +875,7 @@ describe("startDaemon", () => {
           ]),
         ),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -554,6 +894,7 @@ describe("startDaemon", () => {
           return Promise.resolve([]);
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
     });
 
@@ -586,14 +927,6 @@ describe("startDaemon", () => {
         module: "daemon.components",
       }),
     );
-  });
-
-  it("scopes child loggers under daemon.<module> so records are attributable", async () => {
-    const { sink } = await start();
-
-    const modules = new Set(sink.records.map((record) => record.module));
-    expect(modules).toContain("daemon.server");
-    expect(modules).toContain("daemon.connection-host");
   });
 });
 
@@ -731,31 +1064,39 @@ describe("startDaemon wires core and leasing together", () => {
 
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
     const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
     // The previous process's registry: one request still open when it stopped.
-    const previous = await Registry.load({
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const previous = await loadTestRegistry({
       clock,
       eventBus: new EventBus(clock),
-      filesystem,
       idGenerator: { generate: () => "1" },
-      statePath,
+      state,
     });
     await previous.createLeaseRequest({
       ownerId: "agent-1",
       request: ios,
       requesterId: "agent-1",
     });
+    state.close();
 
     const daemon = await startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-      filesystem,
+      filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath,
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
@@ -767,140 +1108,93 @@ describe("startDaemon wires core and leasing together", () => {
     expect(names.indexOf("capacity.changed")).toBeGreaterThan(names.indexOf("lease.rejected"));
   });
 
-  it("finishes leasing's startup before core's convergence re-arms a quarantined device's retry", async () => {
+  it("ends the lease whose device is not running before core's device steps announce capacity, so a restart no longer holds it", async () => {
     const clock = new FakeClock(1_000);
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
-    let holdWrites = false;
-    let releaseWrite: () => void = () => undefined;
-    const writeHeld = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let reachWrite: () => void = () => undefined;
-    const writeReached = new Promise<void>((resolve) => {
-      reachWrite = resolve;
-    });
-    class HoldingFilesystem extends MemoryFilesystem {
-      async writeFileAtomic(
-        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
-      ): Promise<void> {
-        if (holdWrites && arguments_[0] === statePath) {
-          reachWrite();
-          await writeHeld;
-        }
-        return super.writeFileAtomic(...arguments_);
-      }
-    }
-    const filesystem = new HoldingFilesystem();
-    const options = (driver: FakeDriver) =>
-      ({
-        clock,
-        dataDirectory: directory,
-        drivers: [driver],
-        filesystem,
-        hostLoadProbe: null,
-        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-        statePath,
-        version: "1.2.3",
-      }) as StartDaemonOptions;
-    const failing = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    failing.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-    const first = await startDaemon(options(failing));
-    const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
-    await first.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
-    await first.stop("test");
-    const previous = await Registry.load({
-      clock,
-      eventBus: new EventBus(clock),
-      filesystem,
-      idGenerator: { generate: () => "open-request" },
-      statePath,
-    });
-    await previous.createLeaseRequest({
-      ownerId: "agent-1",
-      request: ios,
-      requesterId: "agent-1",
-    });
-    holdWrites = true;
-
-    const starting = startDaemon(
-      options(new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })),
-    );
-    // Waits on the write itself, not on real time: how long startup takes to reach it depends on
-    // the machine's load. The race lets a startup that never writes fail on the count below.
-    await Promise.race([writeReached, starting]);
-    const timersWhileLeasingStartupPending = clock.pendingTimerCount;
-    releaseWrite();
-    runningDaemons.push(await starting);
-    const timersAfterStartup = clock.pendingTimerCount;
-
-    expect(timersWhileLeasingStartupPending).toBe(1);
-    expect(timersAfterStartup).toBeGreaterThan(timersWhileLeasingStartupPending);
-  });
-
-  it("stays starting until leasing has ended the lease whose device is not running, and no longer holds the lease once it is up", async () => {
-    const clock = new FakeClock(1_000);
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
-    temporaryDirectories.push(directory);
-    const statePath = join(directory, "state.json");
-    let holdWrites = false;
-    let releaseWrite: () => void = () => undefined;
-    const writeHeld = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let reachWrite: () => void = () => undefined;
-    const writeReached = new Promise<void>((resolve) => {
-      reachWrite = resolve;
-    });
-    class HoldingFilesystem extends MemoryFilesystem {
-      async writeFileAtomic(
-        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
-      ): Promise<void> {
-        if (holdWrites && arguments_[0] === statePath) {
-          reachWrite();
-          await writeHeld;
-        }
-        return super.writeFileAtomic(...arguments_);
-      }
-    }
-    const filesystem = new HoldingFilesystem();
     const options = () =>
       ({
         clock,
+        configOverrides: STANDALONE_OFF,
         dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
-        filesystem,
+        filesystem: new MemoryFilesystem(),
         logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-        statePath,
+        // why: capacity follows the host's cpus and memory, and a small runner has too few slots for three leases at once, so a later request waits for ever on the fake clock (30 s timeout in runs 39459769408 and 39457371326).
+        systemStats: new FakeSystemStats({ cpuCount: 16, totalRamBytes: 64 * 1024 ** 3 }),
+        version: "1.2.3",
+      }) as StartDaemonOptions;
+    const first = await startDaemon(options());
+    // why: several leases, so a reconcile that runs beside core's steps lands some releases after the announcement.
+    const grants: Grant[] = [];
+    for (const requesterId of ["agent-1", "agent-2", "agent-3"]) {
+      grants.push((await first.dispatch("lease.request", { ...ios, requesterId }, agent)) as Grant);
+    }
+    await first.stop("test");
+    // why: the history orders events by their time, and the second start's must follow the first's.
+    clock.advance(1);
+    const secondRunStart = clock.now();
+
+    const daemon = await startDaemon(options());
+    runningDaemons.push(daemon);
+
+    const leases = (await daemon.dispatch("list.get", { kind: "leases" }, admin)) as readonly {
+      readonly id: string;
+    }[];
+    for (const grant of grants) {
+      expect(leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    }
+    const secondRun = (
+      await historyEventsWhen(directory, (all) =>
+        all.some(
+          (event) => event.event === "capacity.changed" && event.timestamp >= secondRunStart,
+        ),
+      )
+    )
+      .filter((event) => event.timestamp >= secondRunStart)
+      .sort((left, right) => left.seq - right.seq)
+      .map((event) => event.event);
+    expect(secondRun.filter((name) => name === "lease.released")).toHaveLength(grants.length);
+    expect(secondRun.lastIndexOf("lease.released")).toBeLessThan(
+      secondRun.indexOf("capacity.changed"),
+    );
+    // why: two daemon starts and a history wait of up to 4 s outrun the 5 s default on a loaded CI runner (run 39454292501 timed out at 5015 ms, 59 ms locally).
+  }, 30_000);
+
+  it("closes state.db on stop, and lists the same device and lease after a worker is stopped and started again", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const options = () =>
+      ({
+        clock,
+        configOverrides: STANDALONE_OFF,
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver],
+        filesystem: new MemoryFilesystem(),
+        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
         version: "1.2.3",
       }) as StartDaemonOptions;
     const first = await startDaemon(options());
     const grant = (await first.dispatch("lease.request", ios, agent)) as Grant;
+    const list = async (daemon: Awaited<ReturnType<typeof startDaemon>>, kind: string) =>
+      (
+        (await daemon.dispatch("list.get", { kind }, admin)) as readonly { readonly id: string }[]
+      ).map((row) => row.id);
+    const devicesBefore = await list(first, "devices");
     await first.stop("test");
-    // The restarted process's driver knows no device, so the leased one is gone from its platform.
-    holdWrites = true;
+    // why: closing the last connection checkpoints and removes the WAL, so a stop that left state.db open leaves it.
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
 
-    let started = false;
-    const starting = startDaemon(options()).then((daemon) => {
-      started = true;
-      return daemon;
-    });
-    // Waits on the write, not on real time: the steps before it include real I/O, so under load
-    // they outlast any fixed sleep. From the write on, a startup that did not wait for it only
-    // has in-memory work left, which finishes before the next macrotask.
-    await Promise.race([writeReached, starting]);
-    await new Promise((resolve) => setImmediate(resolve));
-    const startedWhileEndingPending = started;
-    releaseWrite();
-    const daemon = await starting;
+    const daemon = await startDaemon(options());
     runningDaemons.push(daemon);
 
-    expect(startedWhileEndingPending).toBe(false);
-    const state = JSON.parse(await filesystem.readFile(statePath)) as {
-      readonly leases: readonly { readonly id: string }[];
-    };
-    expect(state.leases.map((lease) => lease.id)).not.toContain(grant.lease.id);
+    expect(devicesBefore).toContain(grant.device.id);
+    expect(await list(daemon, "devices")).toEqual(devicesBefore);
+    expect(await list(daemon, "leases")).toEqual([grant.lease.id]);
   });
 
   it("holds shutdown open while a release's erase runs, and does not read that erase as a stall", async () => {
@@ -939,16 +1233,10 @@ describe("startDaemon wires core and leasing together", () => {
   it("cancels the expiry timer of an outstanding lease on shutdown, so nothing expires after it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    const filesystem = new MemoryFilesystem();
-    const { daemon, directory } = await start({ clock, drivers: [driver], filesystem });
-    const statePath = join(directory, "state.json");
+    const { daemon, directory } = await start({ clock, drivers: [driver] });
     await daemon.dispatch("lease.request", { ...ios, ttlMs: 10_000 }, agent);
     const leaseIds = async () =>
-      (
-        JSON.parse(await filesystem.readFile(statePath)) as {
-          readonly leases: readonly { readonly id: string }[];
-        }
-      ).leases.map((lease) => lease.id);
+      (await queryState(directory, "SELECT id FROM leases")).map((row) => row.id);
     const before = await leaseIds();
     expect(before).toHaveLength(1);
 
@@ -986,7 +1274,11 @@ describe("startDaemon wires core and leasing together", () => {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
       driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-      const { daemon } = await start({ clock, drivers: [driver] });
+      const { daemon } = await start({
+        clock,
+        configOverrides: { warmPool: { enabled: false } },
+        drivers: [driver],
+      });
       const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
       await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
       await settleRealTime();
@@ -1065,6 +1357,7 @@ describe("startDaemon startup readiness", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -1074,9 +1367,9 @@ describe("startDaemon startup readiness", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem: new MemoryFilesystem(),
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -1128,6 +1421,7 @@ describe("startDaemon stopped while starting", () => {
     const filesystem = new MemoryFilesystem();
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -1137,10 +1431,10 @@ describe("startDaemon stopped while starting", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem,
       hostLoadProbe: null,
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     });
 
@@ -1177,15 +1471,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
     const secret = "slk_test_agent";
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash(secret), role: "agent", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
     const port = await freeLoopbackPort();
 
     const startPromise = startDaemon({
@@ -1200,8 +1487,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -1244,11 +1531,13 @@ describe("startDaemon stop with a warm target", () => {
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.hangMakeReady();
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       configOverrides: {
         capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         warmPool: {
+          maxConcurrentBoots: 1,
           targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
         },
       },
@@ -1256,7 +1545,6 @@ describe("startDaemon stop with a warm target", () => {
       drivers: [driver],
       filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
@@ -1310,10 +1598,10 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
         dataDirectory: directory,
         drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger,
         socketPath,
-        statePath: join(directory, "state.json"),
         version: "1.2.3",
       } as StartDaemonOptions);
       // `stop()` is idempotent, so it is safe for `afterEach` to also stop whatever this
@@ -1386,7 +1674,6 @@ describe("startDaemon socket race with HTTP enabled", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-socket-race-"));
     temporaryDirectories.push(directory);
     const filesystem = new MemoryFilesystem();
-    const statePath = join(directory, "state.json");
     const options = (port: number): StartDaemonOptions =>
       ({
         clock: new FakeClock(1_000),
@@ -1399,13 +1686,13 @@ describe("startDaemon socket race with HTTP enabled", () => {
             platform: "ios",
           }),
         ],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger: new JsonLinesLogger({
           clock: new FakeClock(1_000),
           level: "debug",
           sink: new MemoryLogSink(),
         }),
-        statePath,
         version: "1.2.3",
       }) as StartDaemonOptions;
 
@@ -1416,11 +1703,11 @@ describe("startDaemon socket race with HTTP enabled", () => {
       const outcome = await Promise.race([
         second.then(
           () => "resolved" as const,
-          () => "rejected" as const,
+          (error: unknown) => error,
         ),
         new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3_000)),
       ]);
-      expect(outcome).toBe("rejected");
+      expect(outcome).toMatchObject({ name: "DaemonAlreadyRunningError" });
     } finally {
       await first.stop("test-cleanup").catch(() => undefined);
     }
@@ -1456,13 +1743,13 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
             platform: "ios",
           }),
         ],
+        deviceDataTables: fakeDeviceDataTables,
         filesystem,
         logger: new JsonLinesLogger({
           clock: new FakeClock(1_000),
           level: "debug",
           sink: new MemoryLogSink(),
         }),
-        statePath: join(directory, "state.json"),
         version: "1.2.3",
       }) as StartDaemonOptions;
 
@@ -1486,16 +1773,18 @@ describe("startDaemon with HTTP off", () => {
   // #395: the socket-claim callback now runs with HTTP off too (it dials the uplink), so it
   // must still leave the HTTP frontend unstarted.
   it("starts no HTTP gateway when http.enabled is false", async () => {
-    const { sink } = await start({ configOverrides: { http: { enabled: false } } });
+    const port = await freeLoopbackPort();
+    await start({ configOverrides: { http: { enabled: false, host: "127.0.0.1", port } } });
     await new Promise((resolve) => setTimeout(resolve, 200));
-    // Either outcome of a started frontend counts: bound ("listening") or refused ("failed").
-    expect(
-      sink.records
-        .map((record) => record.message)
-        .filter(
-          (message) => message.startsWith("HTTP gateway") || message.startsWith("HTTP frontend"),
-        ),
-    ).toEqual([]);
+    const outcome = await new Promise<"connected" | "refused">((resolve) => {
+      const socket = connect(port, "127.0.0.1");
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve("connected");
+      });
+      socket.once("error", () => resolve("refused"));
+    });
+    expect(outcome).toBe("refused");
   });
 });
 
@@ -1524,9 +1813,9 @@ describe("startDaemon HTTP gateway bind failure", () => {
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem,
           logger,
-          statePath: join(directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow(/EADDRINUSE|address already in use/i);
@@ -1567,26 +1856,21 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const filesystem = new MemoryFilesystem();
-    const secrets = new CryptoTokenSecrets();
-    await filesystem.mkdirp(directory);
-    await filesystem.writeFileAtomic(
-      join(directory, "tokens.json"),
-      JSON.stringify([
-        { id: "tok_agent", hash: secrets.hash("slk_cause_agent"), role: "agent", createdAt: 0 },
-        { id: "tok_op", hash: secrets.hash("slk_cause_operator"), role: "operator", createdAt: 0 },
-      ]),
-    );
+    await seedTokensDatabase(directory, [
+      ["tok_agent", "slk_cause_agent", "agent"],
+      ["tok_op", "slk_cause_operator", "operator"],
+    ]);
     const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
     const daemon = await startDaemon({
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       dataDirectory: directory,
       drivers: [driver],
       filesystem,
       hostLoadProbe: null,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions);
     runningDaemons.push(daemon);
@@ -1689,6 +1973,18 @@ describe("discoverDrivers", () => {
     expect(drivers.find((driver) => driver.platform === "ios")?.deviceRoot).toBe(IOS_ROOT);
   });
 
+  it("names the daemon's pid in the staging directory of the iOS root it creates", async () => {
+    const filesystem = new MemoryFilesystem();
+    const rename = vi.spyOn(filesystem, "rename");
+
+    await discoverIos({ filesystem });
+
+    expect(rename).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`/devices/\\.ios\\.${process.pid}\\.[^/]+\\.staging$`)),
+      IOS_ROOT,
+    );
+  });
+
   it("keeps the daemon up when the iOS device root is refused, reporting the platform instead", async () => {
     const filesystem = await foreignOwnedRoot();
 
@@ -1719,21 +2015,6 @@ describe("discoverDrivers", () => {
       reason: "wrong-instance",
       summary: refusal.message,
     });
-  });
-
-  it("logs the refused root, so the reason survives even if nobody runs doctor", async () => {
-    const sink = new MemoryLogSink();
-
-    await discoverIos({ filesystem: await foreignOwnedRoot(), sink });
-
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: "Skipped iOS driver: device root rejected",
-        module: "daemon.driver-discovery",
-        fields: expect.objectContaining({ reason: "wrong-instance", root: IOS_ROOT }),
-      }),
-    );
   });
 
   it("still fails startup when the iOS driver fails for a reason that is not a refusal", async () => {
@@ -1797,6 +2078,24 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     );
   });
 
+  it("names the daemon's pid in the staging directory of the Android root it creates", async () => {
+    const filesystem = await androidSdk();
+    const probe = new FakeTcpProbe([5038]);
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    const rename = vi.spyOn(filesystem, "rename");
+
+    await discoverAndroid(filesystem, probe, [4242]);
+
+    expect(rename).toHaveBeenCalledWith(
+      expect.stringMatching(new RegExp(`/devices/\\.android\\.${process.pid}\\.[^/]+\\.staging$`)),
+      join(SIMLOCK_HOME, "devices", "android"),
+    );
+  });
+
   it("launches the discovered Android driver's emulators with the android.emulator options it was handed", async () => {
     const filesystem = await androidSdk();
     await filesystem.mkdirp(SIMLOCK_HOME);
@@ -1851,32 +2150,38 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
-  it("hands the Android driver the ABI of the host architecture it was given", async () => {
-    const filesystem = await androidSdk();
-    await filesystem.mkdirp(SIMLOCK_HOME);
-    await filesystem.writeFileAtomic(
-      join(SIMLOCK_HOME, "adb-server.json"),
-      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
-    );
-    // Nothing is scripted: the install is refused once its argv is recorded.
-    const processRunner = new ScriptedProcessRunner([]);
+  it.each([
+    { abi: "x86_64", hostArch: "x64" },
+    { abi: "arm64-v8a", hostArch: "arm64" },
+  ] as const)(
+    "hands the Android driver the ABI of the host architecture it was given: $hostArch -> $abi",
+    async ({ abi, hostArch }) => {
+      const filesystem = await androidSdk();
+      await filesystem.mkdirp(SIMLOCK_HOME);
+      await filesystem.writeFileAtomic(
+        join(SIMLOCK_HOME, "adb-server.json"),
+        JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+      );
+      // why: nothing is scripted: the install is refused once its argv is recorded.
+      const processRunner = new ScriptedProcessRunner([]);
 
-    const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      hostArch: "x64",
-      processRunner,
-    });
-    await drivers
-      .find((driver) => driver.platform === "android")
-      ?.installComponent("35", {
-        onProgress: () => undefined,
-        signal: new AbortController().signal,
-      })
-      .catch(() => undefined);
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        hostArch,
+        processRunner,
+      });
+      await drivers
+        .find((driver) => driver.platform === "android")
+        ?.installComponent("35", {
+          onProgress: () => undefined,
+          signal: new AbortController().signal,
+        })
+        .catch(() => undefined);
 
-    expect(processRunner.calls.flatMap((call) => call.args)).toContain(
-      "system-images;android-35;google_apis;x86_64",
-    );
-  });
+      expect(processRunner.calls.flatMap((call) => call.args)).toContain(
+        `system-images;android-35;google_apis;${abi}`,
+      );
+    },
+  );
 
   it("logs a warning when the Android driver reports that devices.xml could not be read", async () => {
     const filesystem = await androidSdk();
@@ -2168,19 +2473,24 @@ describe("processRunnerFor", () => {
     return sink.records.filter((record) => record.message === "process");
   }
 
-  it("at log.level: info no process line is written", async () => {
-    expect(await runOnce("info")).toEqual([]);
-  });
-
-  it("at log.level: debug each command leaves one process line under daemon.process", async () => {
-    expect(await runOnce("debug")).toEqual([
-      expect.objectContaining({
-        level: "debug",
-        module: "daemon.process",
-        fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
-      }),
-    ]);
-  });
+  it.each([
+    { level: "info", expected: [] },
+    {
+      level: "debug",
+      expected: [
+        expect.objectContaining({
+          level: "debug",
+          module: "daemon.process",
+          fields: expect.objectContaining({ command: "adb", args: ["devices"], code: 0 }),
+        }),
+      ],
+    },
+  ] as const)(
+    "at log.level: $level a command leaves the expected process lines",
+    async ({ level, expected }) => {
+      expect(await runOnce(level)).toEqual(expected);
+    },
+  );
 });
 
 describe("startDaemon event history", () => {
@@ -2444,7 +2754,9 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       "simlock-drivers-module-does-not-exist.mjs",
     );
 
-    await expect(discover(new MemoryLogSink())).rejects.toThrow();
+    await expect(discover(new MemoryLogSink())).rejects.toThrow(
+      /simlock-drivers-module-does-not-exist/,
+    );
   });
 });
 interface MinimalClient {
@@ -2582,8 +2894,8 @@ describe("startDaemon logger wiring", () => {
     const { daemon, sink } = await start({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
+      role: "gateway",
     });
 
     await expect(
@@ -2666,7 +2978,11 @@ describe("startDaemon with the agent-device edge", () => {
     await filesystem.writeFileAtomic(`${packageRoot}/package.json`, '{"name":"agent-device"}');
     await filesystem.writeFileAtomic(entry, "");
     filesystem.defineSymlink(command, realCli);
-    await filesystem.writeFileAtomic(join(directory, "config.json"), JSON.stringify(config));
+    // why: HTTP and agent-device are on by default for a standalone worker (ADR 0046); a test here asks for agent-device and never for HTTP, and two daemons would clash on 4701.
+    await filesystem.writeFileAtomic(
+      join(directory, "config.json"),
+      JSON.stringify({ http: { enabled: false }, ...(config as Record<string, unknown>) }),
+    );
     if (options.record !== undefined) {
       await filesystem.writeFileAtomic(
         join(directory, "agent-device-daemon.json"),
@@ -2676,16 +2992,22 @@ describe("startDaemon with the agent-device edge", () => {
     return { directory, filesystem };
   }
 
-  function versionAndDaemon(directory: string): ScriptedProcessRunner {
+  function versionAndDaemon(directory: string, role?: "phones"): ScriptedProcessRunner {
+    const version = {
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+    };
+    const daemon = (marker: readonly string[]) => ({
+      hangs: true,
+      match: { args: [entry, ...marker], command: process.execPath },
+    });
+    const simulators = daemon([`--simlock-home=${directory}`]);
+    if (role === undefined) return new ScriptedProcessRunner([version, simulators]);
     return new ScriptedProcessRunner([
-      {
-        match: { args: [realCli, "--version"], command: process.execPath },
-        result: { code: 0, stderr: "", stdout: "0.21.28\n" },
-      },
-      {
-        hangs: true,
-        match: { args: [entry, `--simlock-home=${directory}`], command: process.execPath },
-      },
+      version,
+      simulators,
+      version,
+      daemon([`--simlock-home=${directory}`, "--simlock-role=phones"]),
     ]);
   }
 
@@ -2693,17 +3015,22 @@ describe("startDaemon with the agent-device edge", () => {
     setup: Awaited<ReturnType<typeof setUp>>,
     ports: {
       readonly agentDevice?: OptionalModuleDefinition<unknown>;
+      readonly clock?: FakeClock;
       readonly drivers?: StartDaemonOptions["drivers"];
       readonly modules?: readonly FakeModule[];
       readonly processRunner: ScriptedProcessRunner;
       readonly processSupervisor: FakeProcessSupervisor;
+      readonly role?: "gateway";
+      readonly tcpProbe?: FakeTcpProbe;
     },
   ) {
-    const clock = new FakeClock(1_000);
+    const clock = ports.clock ?? new FakeClock(1_000);
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
       dataDirectory: setup.directory,
+      ...(ports.role === undefined ? {} : { role: ports.role }),
+      deviceDataTables: fakeDeviceDataTables,
       drivers: ports.drivers ?? [
         new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
       ],
@@ -2718,12 +3045,11 @@ describe("startDaemon with the agent-device edge", () => {
       ],
       processRunner: ports.processRunner,
       processSupervisor: ports.processSupervisor,
-      statePath: join(setup.directory, "state.json"),
-      tcpProbe: new FakeTcpProbe(),
+      tcpProbe: ports.tcpProbe ?? new FakeTcpProbe(),
       version: "1.2.3",
     });
     runningDaemons.push(daemon);
-    return { daemon, sink };
+    return { clock, daemon, sink };
   }
 
   it("runs a module's beforeDriversDispose and stops agent-device's child, both before the drivers are disposed", async () => {
@@ -2776,9 +3102,71 @@ describe("startDaemon with the agent-device edge", () => {
     ]);
   });
 
-  it("resolves and grants a lease to an ordinary client while agent-device's /health never answers, and stops the child before the drivers are disposed", async () => {
+  it("stops both agent-device daemons when the worker stops, the phone daemon and the simulator daemon each by its own pid", async () => {
     const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
-    const events: string[] = [];
+    const health = new FakeAgentDeviceHealth();
+    health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+    const tcpProbe = new FakeTcpProbe();
+    const processSupervisor = new KillingSupervisor();
+    const version = {
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout: "0.21.28\n" },
+    };
+    const daemonAt = (stateDirName: string, pid: number, port: number, marker: string[]) => ({
+      hangs: true,
+      match: {
+        args: [entry, `--simlock-home=${setup.directory}`, ...marker],
+        command: process.execPath,
+      },
+      onSpawn: async () => {
+        processSupervisor.markAlive(pid);
+        await setup.filesystem.writeFileAtomic(
+          join(setup.directory, stateDirName, "daemon.json"),
+          JSON.stringify({ httpPort: port, pid, token: "t" }),
+        );
+        tcpProbe.startListening(port);
+      },
+    });
+    const runner = new ScriptedProcessRunner([
+      version,
+      daemonAt("agent-device", 2, 4310, []),
+      version,
+      daemonAt("agent-device-phones", 4, 4311, ["--simlock-role=phones"]),
+    ]);
+    const spawn = runner.spawn.bind(runner);
+    vi.spyOn(runner, "spawn").mockImplementation((spawned, args, options) => {
+      const handle = spawn(spawned, args, options);
+      if (args[0] === entry) processSupervisor.kills.set(handle.pid, () => handle.kill());
+      return handle;
+    });
+    const { clock, daemon } = await startEdge(setup, {
+      agentDevice: agentDeviceModuleWith({ health }),
+      clock: new FakeClock(1_000),
+      processRunner: runner,
+      processSupervisor,
+      tcpProbe,
+    });
+    for (let tick = 0; tick < 400 && runner.calls.length < 4; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    for (let tick = 0; tick < 20; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+
+    const stopping = daemon.stop("test");
+    for (let tick = 0; tick < 100; tick += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(100);
+    }
+    await stopping;
+
+    expect(processSupervisor.signals.map((signal) => signal.pid).sort()).toEqual([2, 4]);
+  });
+
+  it("resolves and grants a lease to an ordinary client while agent-device's /health never answers", async () => {
+    const setup = await setUp({ capabilities: { "agent-device": { command, enabled: true } } });
     const processSupervisor = new KillingSupervisor();
     const runner = versionAndDaemon(setup.directory);
     const spawn = runner.spawn.bind(runner);
@@ -2787,19 +3175,13 @@ describe("startDaemon with the agent-device edge", () => {
       if (args[0] === entry) {
         processSupervisor.markAlive(handle.pid);
         processSupervisor.kills.set(handle.pid, () => handle.kill());
-        void handle.wait().then(() => events.push("agent-device exited"));
       }
       return handle;
     });
     const clock = new FakeClock(1_000);
-    class DisposingDriver extends FakeDriver {
-      async dispose(): Promise<void> {
-        events.push("driver disposed");
-      }
-    }
 
     const { daemon } = await startEdge(setup, {
-      drivers: [new DisposingDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+      drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       processRunner: runner,
       processSupervisor,
     });
@@ -2811,8 +3193,6 @@ describe("startDaemon with the agent-device edge", () => {
     });
 
     await daemon.stop("test");
-
-    expect(events).toEqual(["agent-device exited", "driver disposed"]);
   });
 
   async function spawnedEnvironment(drivers: (clock: FakeClock) => StartDaemonOptions["drivers"]) {
@@ -2826,6 +3206,40 @@ describe("startDaemon with the agent-device edge", () => {
     await pollUntil(() => runner.calls.length === 2);
     return runner.calls[1]?.options.env ?? {};
   }
+
+  it.each([
+    ["teamId", "AGENT_DEVICE_IOS_TEAM_ID", "ABCDE12345"],
+    ["bundleId", "AGENT_DEVICE_IOS_BUNDLE_ID", "com.example.runner"],
+    ["provisioningProfile", "AGENT_DEVICE_IOS_PROVISIONING_PROFILE", "Simlock Runner Profile"],
+    ["signingIdentity", "AGENT_DEVICE_IOS_SIGNING_IDENTITY", "Apple Development: Ada (XYZ)"],
+  ])(
+    "a capabilities.agent-device.ios.%s the operator sets reaches the phone daemon's spawn environment as %s",
+    async (key, envName, value) => {
+      const setup = await setUp({
+        capabilities: { "agent-device": { command, enabled: true, ios: { [key]: value } } },
+      });
+      const runner = versionAndDaemon(setup.directory, "phones");
+      const clock = new FakeClock(1_000);
+      await startEdge(setup, {
+        clock,
+        processRunner: runner,
+        processSupervisor: new FakeProcessSupervisor(),
+      });
+      // why: the simulator daemon's /health never answers, so the phone daemon starts when its ready window runs out.
+      for (let tick = 0; tick < 400 && runner.calls.length < 4; tick += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        clock.advance(100);
+      }
+
+      expect(runner.calls[3]?.args).toEqual([
+        entry,
+        `--simlock-home=${setup.directory}`,
+        "--simlock-role=phones",
+      ]);
+      expect(runner.calls[3]?.options.env?.[envName]).toBe(value);
+      expect(runner.calls[1]?.options.env?.[envName]).toBeUndefined();
+    },
+  );
 
   it("hands the drivers' lease environment to the agent-device daemon", async () => {
     const env = await spawnedEnvironment((clock) => [
@@ -2877,28 +3291,36 @@ describe("startDaemon with the agent-device edge", () => {
       {
         capabilities: { "agent-device": { command, enabled: true } },
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
       { record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
     const processSupervisor = new FakeProcessSupervisor([900]);
 
-    await startEdge(setup, { drivers: [], processRunner: runner, processSupervisor });
+    await startEdge(setup, {
+      drivers: [],
+      processRunner: runner,
+      processSupervisor,
+      role: "gateway",
+    });
     await pollUntil(() => false, 100);
 
     expect(runner.calls).toEqual([]);
     expect(processSupervisor.signals).toEqual([]);
   });
 
-  it('a worker with no capabilities["agent-device"] section, and one with enabled false, answer status.get with { name: agent-device, state: off }', async () => {
+  it('a worker with no capabilities["agent-device"] section, one with enabled false, and one with only the old agentDevice key answer status.get with { name: agent-device, state: off }', async () => {
     const admin = {
       manageEventSubscription: () => undefined,
       via: "socket",
       principal: "op",
       role: "admin",
     } as const;
-    for (const config of [{}, { capabilities: { "agent-device": { enabled: false } } }]) {
+    for (const config of [
+      {},
+      { capabilities: { "agent-device": { enabled: false } } },
+      { agentDevice: { command, enabled: true } },
+    ]) {
       const setup = await setUp(config);
       const { daemon } = await startEdge(setup, {
         processRunner: new ScriptedProcessRunner([]),
@@ -2939,28 +3361,6 @@ describe("startDaemon with the agent-device edge", () => {
     expect(loads).toBe(1);
   });
 
-  it('a worker whose config has only the old agentDevice key warns `Unknown config key: "agentDevice"` and reports agent-device off', async () => {
-    const admin = {
-      manageEventSubscription: () => undefined,
-      via: "socket",
-      principal: "op",
-      role: "admin",
-    } as const;
-    const setup = await setUp({ agentDevice: { command, enabled: true } });
-
-    const { daemon, sink } = await startEdge(setup, {
-      processRunner: new ScriptedProcessRunner([]),
-      processSupervisor: new FakeProcessSupervisor(),
-    });
-
-    expect(sink.records.map((record) => record.message)).toContain(
-      'Unknown config key: "agentDevice"',
-    );
-    expect((await daemon.dispatch("status.get", {}, admin)).capabilities).toEqual([
-      { name: "agent-device", state: "off" },
-    ]);
-  });
-
   it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {
     const setup = await setUp(
       { capabilities: { "agent-device": { command, enabled: false } } },
@@ -2989,7 +3389,9 @@ describe("startDaemon with the agent-device edge", () => {
     const runner = new ScriptedProcessRunner([]);
     const processSupervisor = new FakeProcessSupervisor([900]);
 
-    await expect(startEdge(second, { processRunner: runner, processSupervisor })).rejects.toThrow();
+    await expect(
+      startEdge(second, { processRunner: runner, processSupervisor }),
+    ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
     await pollUntil(() => false, 100);
 
     expect(runner.calls).toEqual([]);
@@ -3043,38 +3445,139 @@ describe("startDaemon with the agent-device edge", () => {
       });
     }, 10_000);
 
-    it("lists agent-device's module-unavailable finding before a module's own", async () => {
-      const setup = await setUp({
-        capabilities: {
-          "agent-device": { command: "/opt/missing/agent-device", enabled: true },
-          alpha: { enabled: true },
-        },
-      });
-      const { daemon } = await startEdge(setup, {
-        modules: [
-          fakeModule({
-            findings: () => [{ message: "it is down", remedy: "bring it up" }],
-            name: "alpha",
-          }),
-        ],
-        processRunner: new ScriptedProcessRunner([]),
-        processSupervisor: new FakeProcessSupervisor(),
-      });
-
-      await expect
-        .poll(
-          async () =>
-            (
-              (await daemon.dispatch("doctor.run", {}, operator)) as {
-                readonly findings: readonly { readonly kind: string; readonly module?: string }[];
-              }
-            ).findings
-              .filter((finding) => finding.kind === "module-unavailable")
-              .map((finding) => finding.module),
-          { timeout: 4_000 },
-        )
-        .toEqual(["agent-device", "alpha"]);
+    const version = (stdout: string) => ({
+      match: { args: [realCli, "--version"], command: process.execPath },
+      result: { code: 0, stderr: "", stdout },
     });
+
+    // why: the simulator daemon's version answer is the row's own text when it is not the running one, and the phone daemon's follows `phones`.
+    function scriptedDaemons(
+      setup: Awaited<ReturnType<typeof setUp>>,
+      tcpProbe: FakeTcpProbe,
+      simulator: string,
+      phones: string | undefined,
+    ): ScriptedProcessRunner {
+      if (simulator === "missing") return new ScriptedProcessRunner([]);
+      return new ScriptedProcessRunner([
+        version(simulator === "running" ? "0.21.28\n" : simulator),
+        {
+          hangs: true,
+          match: { args: [entry, `--simlock-home=${setup.directory}`], command: process.execPath },
+          onSpawn: async () => {
+            await setup.filesystem.writeFileAtomic(
+              join(setup.directory, "agent-device", "daemon.json"),
+              JSON.stringify({ httpPort: 4310, pid: 2, token: "t" }),
+            );
+            tcpProbe.startListening(4310);
+          },
+        },
+        version(phones === undefined || phones === "unstartable" ? "0.21.28\n" : phones),
+      ]);
+    }
+
+    const findingLabel = (finding: { readonly module?: string; readonly message?: string }) => {
+      if (finding.module === "alpha") return "alpha";
+      return finding.message?.startsWith("phone daemon: ") === true ? "phones" : "simulator";
+    };
+
+    it.each([
+      {
+        name: "both daemons down: agent-device is found nowhere",
+        simulator: "missing",
+        phones: undefined,
+        findings: ["simulator", "phones", "alpha"],
+        capability: "unavailable",
+      },
+      {
+        name: "not found, and capabilities.agent-device.enabled never set: it is on only by default",
+        simulator: "missing",
+        phones: undefined,
+        enabled: undefined,
+        findings: ["alpha"],
+        capability: "off",
+      },
+      {
+        name: "a wrong version, and capabilities.agent-device.enabled never set",
+        simulator: "0.20.3\n",
+        phones: undefined,
+        enabled: undefined,
+        findings: ["simulator", "phones", "alpha"],
+        capability: "unavailable",
+      },
+      {
+        name: "the phone daemon finds a wrong version",
+        simulator: "running",
+        phones: "0.20.3\n",
+        findings: ["phones", "alpha"],
+        capability: "available",
+      },
+      {
+        name: "the phone daemon cannot start",
+        simulator: "running",
+        phones: "unstartable",
+        findings: ["phones", "alpha"],
+        capability: "available",
+      },
+    ] as const)(
+      "lists a phone daemon finding that starts with `phone daemon: ` after the simulator daemon's and before another module's, while the capability follows the simulator daemon, and says nothing of a command never found while agent-device is on only by default: $name",
+      async ({ capability, findings, phones, simulator, ...row }) => {
+        const setup = await setUp({
+          capabilities: {
+            "agent-device": {
+              command: simulator === "missing" ? "/opt/missing/agent-device" : command,
+              ...("enabled" in row ? {} : { enabled: true }),
+            },
+            alpha: { enabled: true },
+          },
+        });
+        const health = new FakeAgentDeviceHealth();
+        health.respondWith({ rpcProtocolVersion: 2, service: "agent-device-daemon" });
+        const tcpProbe = new FakeTcpProbe();
+        const runner = scriptedDaemons(setup, tcpProbe, simulator, phones);
+        const { clock, daemon } = await startEdge(setup, {
+          agentDevice: agentDeviceModuleWith({ health }),
+          clock: new FakeClock(1_000),
+          modules: [
+            fakeModule({
+              findings: () => [{ message: "it is down", remedy: "bring it up" }],
+              name: "alpha",
+            }),
+          ],
+          processRunner: runner,
+          processSupervisor: new FakeProcessSupervisor(),
+          tcpProbe,
+        });
+        const unavailable = async () =>
+          (
+            (await daemon.dispatch("doctor.run", {}, operator)) as {
+              readonly findings: readonly {
+                readonly kind: string;
+                readonly module?: string;
+                readonly message?: string;
+              }[];
+            }
+          ).findings.filter((finding) => finding.kind === "module-unavailable");
+        const labelled = async () => (await unavailable()).map(findingLabel);
+        // why: the simulator daemon's polls sleep on the fake clock, so the test advances it until the findings settle.
+        for (let tick = 0; tick < 400; tick += 1) {
+          if (JSON.stringify(await labelled()) === JSON.stringify(findings)) break;
+          await new Promise((resolve) => setImmediate(resolve));
+          clock.advance(100);
+        }
+
+        expect(await labelled()).toEqual(findings);
+        expect(
+          (await unavailable())
+            .filter((finding) => finding.module !== "alpha")
+            .map((f) => f.module),
+        ).toEqual(findings.filter((label) => label !== "alpha").map(() => "agent-device"));
+        const status = await daemon.dispatch("status.get", {}, operator);
+        expect(status.capabilities?.find((entry) => entry.name === "agent-device")?.state).toBe(
+          capability,
+        );
+      },
+      20_000,
+    );
 
     it("reports module-unavailable for agent-device, naming the command when capabilities.agent-device.command is found nowhere", async () => {
       const setup = await setUp({
@@ -3148,13 +3651,14 @@ describe("startDaemon host load", () => {
     temporaryDirectories.push(directory);
     const clock = new FakeClock(1_000);
     const daemon = await startDaemon({
+      configOverrides: STANDALONE_OFF,
+      deviceDataTables: fakeDeviceDataTables,
       clock,
       dataDirectory: directory,
       drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
       filesystem: new MemoryFilesystem(),
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
       ...overrides,
     } as StartDaemonOptions);
@@ -3182,6 +3686,7 @@ describe("startDaemon host load", () => {
     const socketPath = join(directory, "daemon.sock");
     const startPromise = startDaemon({
       clock,
+      configOverrides: STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [
         new FakeDriver({
@@ -3191,10 +3696,10 @@ describe("startDaemon host load", () => {
           platform: "ios",
         }),
       ],
+      deviceDataTables: fakeDeviceDataTables,
       filesystem: new MemoryFilesystem(),
       hostLoadProbe: new FakeHostLoadProbe(COUNTERS),
       socketPath,
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
     } as StartDaemonOptions).then((daemon) => {
       runningDaemons.push(daemon);
@@ -3280,7 +3785,7 @@ describe("startDaemon host load", () => {
     clock.advance(3 * 86_400_000);
 
     const load = (await workerStatus(daemon)).load as { ageMs: number } | undefined;
-    expect(load?.ageMs).toBeLessThanOrEqual(86_400_000);
+    expect(load?.ageMs).toBe(86_400_000);
   });
 
   it("with hostLoadProbe: null answers the same as with a probe, apart from load, and arms no host load timer", async () => {
@@ -3333,12 +3838,13 @@ describe("startDaemon host load", () => {
       await expect(
         startDaemon({
           clock,
+          configOverrides: STANDALONE_OFF,
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem: new SecretRefusingFilesystem(),
           hostLoadProbe,
           socketPath: join(directory, "daemon.sock"),
-          statePath: join(directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow("disk is read-only");
@@ -3397,13 +3903,12 @@ describe("startDaemon in gateway mode host load", () => {
       clock,
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        mode: "gateway",
       },
+      role: "gateway",
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
       logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-      statePath: join(directory, "state.json"),
       version: "1.2.3",
       ...rest,
     } as StartDaemonOptions);
@@ -3463,13 +3968,13 @@ describe("startDaemon in gateway mode host load", () => {
           clock,
           configOverrides: {
             http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-            mode: "gateway",
           },
+          role: "gateway",
           dataDirectory: first.directory,
           drivers: [],
+          deviceDataTables: fakeDeviceDataTables,
           filesystem: new MemoryFilesystem(),
           hostLoadProbe,
-          statePath: join(first.directory, "state.json"),
           version: "1.2.3",
         } as StartDaemonOptions),
       ).rejects.toThrow();
@@ -3483,5 +3988,482 @@ describe("startDaemon in gateway mode host load", () => {
 
     expect(losingProbe.reads).toBe(0);
     expect(withLoser).toBe(withoutLoser);
+  });
+});
+
+describe("daemon role (ADR 0034)", () => {
+  it("startDaemon with role gateway and no data directory uses <root>/gateway", async () => {
+    const root = await mkdtemp(join(tmpdir(), "simlock-main-root-"));
+    temporaryDirectories.push(root);
+    vi.stubEnv("SIMLOCK_HOME", root);
+    try {
+      const daemon = await startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        },
+        drivers: [],
+        deviceDataTables: fakeDeviceDataTables,
+        role: "gateway",
+      });
+      runningDaemons.push(daemon);
+
+      expect(existsSync(join(root, "gateway", "instance.json"))).toBe(true);
+      expect(existsSync(join(root, "instance.json"))).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    [[], "worker"],
+    [["--gateway"], "gateway"],
+    [["--gateway", "x"], undefined],
+    [["--worker"], undefined],
+  ] as const)(
+    "parseDaemonArgv reads no arguments as a worker, --gateway as a gateway, and anything else as nothing (%j)",
+    (argv, expected) => {
+      expect(parseDaemonArgv(argv)).toBe(expected);
+    },
+  );
+});
+
+describe("startDaemon state.db", () => {
+  const previousModule = process.env.SIMLOCK_DRIVERS_MODULE;
+
+  afterEach(() => {
+    if (previousModule === undefined) {
+      delete process.env.SIMLOCK_DRIVERS_MODULE;
+    } else {
+      process.env.SIMLOCK_DRIVERS_MODULE = previousModule;
+    }
+  });
+
+  it.each([
+    [
+      "worker",
+      "state.json",
+      "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.",
+    ],
+    [
+      "worker",
+      "tokens.json",
+      "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.",
+    ],
+    [
+      "gateway",
+      "tokens.json",
+      "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.",
+    ],
+    [
+      "gateway",
+      "workers.json",
+      "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.",
+    ],
+  ] as const)(
+    "a %s started with %s in its folder refuses with the old-file message and its step",
+    async (role, file, step) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-old-file-"));
+      temporaryDirectories.push(directory);
+      const oldFile = join(directory, file);
+      await writeFile(oldFile, "[]", "utf8");
+
+      await expect(start({ dataDirectory: directory, role })).rejects.toMatchObject({
+        message: `Found ${oldFile}, which this Simlock no longer reads. To upgrade: ${step.replace("<path>", oldFile)} See https://callstackincubator.github.io/simlock/docs/worker/running-the-daemon#upgrade-simlock.`,
+      });
+      expect(existsSync(join(directory, "state.db"))).toBe(false);
+    },
+  );
+
+  it("a token created, then the daemon restarted on the same state.db, verifies and lists with every field", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-token-restart-"));
+    temporaryDirectories.push(directory);
+    const admin = {
+      manageEventSubscription: () => undefined,
+      principal: "admin",
+      role: "admin",
+      via: "socket",
+    } as const;
+    const port = await freeLoopbackPort();
+    const launch = (now: number) =>
+      startDaemon({
+        clock: new FakeClock(now),
+        configOverrides: {
+          ...STANDALONE_OFF,
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [],
+        hostLoadProbe: null,
+        version: "1.2.3",
+      } as StartDaemonOptions);
+    type Created = { readonly secret: string; readonly token: Record<string, unknown> };
+    const first = await launch(1_000);
+    const labelled = (await first.dispatch(
+      "token.create",
+      { label: "ci", role: "agent" },
+      admin,
+    )) as Created;
+    const bare = (await first.dispatch("token.create", { role: "operator" }, admin)) as Created;
+    await first.stop();
+
+    const second = await launch(2_000);
+    runningDaemons.push(second);
+
+    const listed = (await second.dispatch("token.list", {}, admin)) as {
+      readonly tokens: readonly Record<string, unknown>[];
+    };
+    expect(listed.tokens).toEqual([labelled.token, bare.token]);
+    expect("label" in (listed.tokens[1] ?? {})).toBe(false);
+
+    const statusWith = async (secret: string) =>
+      (
+        await fetch(`http://127.0.0.1:${port}/v1/status`, {
+          headers: { authorization: `Bearer ${secret}` },
+        })
+      ).status;
+    expect(await statusWith(labelled.secret)).toBe(200);
+    expect(await statusWith(bare.secret)).toBe(200);
+    expect(await statusWith("slk_not-a-created-secret")).toBe(401);
+  });
+
+  it("a start that fails after state.db opened closes it before it throws", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-closes-state-"));
+    temporaryDirectories.push(directory);
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const previous = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "1" },
+      state,
+    });
+    await previous.registerDevice({
+      driverData: { fakeDeviceId: "fk-1" },
+      driverDeviceId: "drv-1",
+      provisionDuration: 0,
+      spec: { model: "iPhone 16", osVersion: "26.5", physical: false, platform: "ios" },
+    });
+    state.database.exec("DELETE FROM fake_device_data");
+    state.close();
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
+
+    await expect(start({ dataDirectory: directory })).rejects.toMatchObject({
+      name: "RegistryLoadError",
+    });
+
+    expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
+  });
+
+  it("a second startDaemon on a folder whose daemon runs leaves state.db's schema_versions and bytes unchanged", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-live-state-"));
+    temporaryDirectories.push(directory);
+    await start({ dataDirectory: directory });
+    const versions = () => queryState(directory, "SELECT owner, version FROM schema_versions");
+    const before = await versions();
+    const bytesBefore = await readFile(join(directory, "state.db"));
+    // why: a newer binary brings a newer version of an owner the live daemon's state.db has; opening would migrate it in.
+    const newerTable = {
+      ...fakeDeviceDataTable,
+      migrations: [
+        ...fakeDeviceDataTable.migrations,
+        "CREATE TABLE newer_fake_data (id TEXT) STRICT",
+      ],
+      version: 2,
+    };
+
+    await expect(
+      start({
+        dataDirectory: directory,
+        deviceDataTables: new Map([["ios", newerTable]]),
+      }),
+    ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
+
+    expect(await versions()).toEqual(before);
+    expect(await readFile(join(directory, "state.db"))).toEqual(bytesBefore);
+  });
+
+  it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-no-tables-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "drivers.mjs");
+    await writeFile(modulePath, "export function createDrivers() { return []; }\n", "utf8");
+    process.env.SIMLOCK_DRIVERS_MODULE = modulePath;
+
+    await expect(
+      start({ dataDirectory: directory, deviceDataTables: undefined, drivers: undefined }),
+    ).rejects.toMatchObject({
+      message: `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
+    });
+    expect(existsSync(join(directory, "state.db"))).toBe(false);
+  });
+
+  it("resolveDeviceDataTables answers the option's map when given, else the drivers module's export, else the production map", async () => {
+    expect(await resolveDeviceDataTables({ deviceDataTables: fakeDeviceDataTables })).toBe(
+      fakeDeviceDataTables,
+    );
+
+    // why: the module exports tables of its own, so a module checked first would answer a different map.
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      "export function createDrivers() { return []; }",
+    );
+    const optionMap = new Map(fakeDeviceDataTables);
+    expect(await resolveDeviceDataTables({ deviceDataTables: optionMap })).toBe(optionMap);
+
+    delete process.env.SIMLOCK_DRIVERS_MODULE;
+    const production = await resolveDeviceDataTables({});
+    expect(production).toEqual(productionDeviceDataTables());
+    expect(production.get("ios")).toBe(iosDeviceDataTable);
+    expect(production.get("android")).toBe(androidDeviceDataTable);
+
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      "export function createDrivers() { return []; }",
+    );
+    const fromModule = await resolveDeviceDataTables({});
+    expect([...fromModule.keys()].sort()).toEqual(["android", "ios"]);
+    expect(fromModule.get("ios")?.name).toBe("fake-device-data");
+    expect(fromModule).not.toBe(fakeDeviceDataTables);
+  });
+});
+
+describe("startDaemon version check", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startChecked(npm: NpmCli, overrides: Partial<StartDaemonOptions> = {}) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-"));
+    temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: overrides.role === "gateway" ? {} : STANDALONE_OFF,
+      dataDirectory: directory,
+      drivers: [],
+      filesystem: new MemoryFilesystem(),
+      hostLoadProbe: null,
+      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+      npm,
+      version: "0.3.0",
+      ...overrides,
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { clock, daemon, sink };
+  }
+
+  const latestOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
+      .daemon.latestVersion;
+
+  it("a start that fails after the version check began leaves no timer and asks npm no more", async () => {
+    class SecretRefusingFilesystem extends MemoryFilesystem {
+      override async writeFileAtomic(
+        ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+      ): Promise<void> {
+        if (arguments_[0].endsWith("admin.token")) throw new Error("disk is read-only");
+        return super.writeFileAtomic(...arguments_);
+      }
+    }
+    const failedStart = async (check: boolean) => {
+      const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0\n" }] });
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-fail-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      await expect(
+        startDaemon({
+          clock,
+          configOverrides: { ...STANDALONE_OFF, update: { check } },
+          dataDirectory: directory,
+          drivers: [],
+          filesystem: new SecretRefusingFilesystem(),
+          hostLoadProbe: null,
+          logger: new NoopLogger(),
+          npm,
+          socketPath: join(directory, "daemon.sock"),
+          version: "0.3.0",
+        } as StartDaemonOptions),
+      ).rejects.toThrow("disk is read-only");
+      // why: the answer is processed after the call; wait it out so a leaked next-check timer exists before it is counted.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      const pending = clock.pendingTimerCount;
+      clock.advance(2 * 24 * 60 * 60 * 1000);
+      return { calls: npm.calls.length, pending };
+    };
+
+    const checked = await failedStart(true);
+    const unchecked = await failedStart(false);
+
+    expect(checked).toEqual({ calls: 1, pending: unchecked.pending });
+  });
+
+  it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {
+    const pending: ((outcome: NpmOutcome) => void)[] = [];
+    const npm: NpmCli = {
+      view: () => new Promise<NpmOutcome>((resolve) => pending.push(resolve)),
+      install: () => Promise.reject(new Error("unused")),
+      globalRoot: () => Promise.reject(new Error("unused")),
+    };
+    const day = 24 * 60 * 60 * 1000;
+
+    const { clock, daemon, sink } = await startChecked(npm);
+
+    expect(pending).toHaveLength(1);
+    expect(await latestOf(daemon)).toBeNull();
+    pending[0]?.({ ok: true, output: "0.4.0\n" });
+    await expect.poll(() => latestOf(daemon)).toBe("0.4.0");
+    const query = (await daemon.dispatch("daemon.update", { query: true }, operator)) as {
+      latestVersion: unknown;
+    };
+    expect(query.latestVersion).toBe("0.4.0");
+
+    clock.advance(day - 1);
+    expect(pending).toHaveLength(1);
+    const later: NpmOutcome[] = [
+      { ok: false, message: "npm did not finish within 30 seconds" },
+      { ok: true, output: "not a version\n" },
+      { ok: true, output: "0.5.0\n" },
+    ];
+    for (const [index, outcome] of later.entries()) {
+      clock.advance(index === 0 ? 1 : day);
+      await expect.poll(() => pending.length).toBe(index + 2);
+      pending[index + 1]?.(outcome);
+      const failed = index < 2;
+      if (failed) {
+        await expect
+          .poll(() => sink.records.filter((record) => record.level === "warn").length)
+          .toBe(index + 1);
+      }
+      await expect.poll(() => latestOf(daemon)).toBe(failed ? "0.4.0" : "0.5.0");
+    }
+
+    const off = new FakeNpmCli({ view: [{ ok: true, output: "0.9.0\n" }] });
+    const disabled = await startChecked(off, { configOverrides: { update: { check: false } } });
+    disabled.clock.advance(2 * day);
+    expect(off.calls).toEqual([]);
+    expect(await latestOf(disabled.daemon)).toBeNull();
+
+    const stopping = await startChecked(npm);
+    expect(pending).toHaveLength(5);
+    await stopping.daemon.stop("test");
+    pending[4]?.({ ok: true, output: "0.7.0\n" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(stopping.clock.pendingTimerCount).toBe(0);
+
+    // why: stopping while the next check is scheduled (no npm call in flight) must cancel that timer.
+    const scheduled = new FakeNpmCli({ view: [{ ok: true, output: "0.8.0\n" }] });
+    const idle = await startChecked(scheduled);
+    await expect.poll(() => latestOf(idle.daemon)).toBe("0.8.0");
+    await expect.poll(() => idle.clock.pendingTimerCount).toBeGreaterThan(0);
+    const armed = idle.clock.pendingTimerCount;
+    await idle.daemon.stop("test");
+    expect(idle.clock.pendingTimerCount).toBeLessThan(armed);
+    idle.clock.advance(2 * day);
+    expect(scheduled.calls).toHaveLength(1);
+
+    const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
+    const gateway = await startChecked(gatewayNpm, { role: "gateway" });
+    await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
+  });
+});
+
+describe("startDaemon gateway update", () => {
+  const operator = {
+    manageEventSubscription: () => undefined,
+    via: "socket",
+    principal: "test-operator",
+    role: "admin",
+  } as const;
+
+  async function startUpdatable(
+    launcher: FakeUpdaterLauncher,
+    filesystem = new MemoryFilesystem(),
+    given?: string,
+  ) {
+    await filesystem.mkdirp("/opt/simlock");
+    const directory = given ?? (await mkdtemp(join(tmpdir(), "simlock-main-gw-update-")));
+    if (given === undefined) temporaryDirectories.push(directory);
+    const clock = new FakeClock(1_000);
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: {
+        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+      },
+      dataDirectory: directory,
+      drivers: [],
+      filesystem,
+      hostLoadProbe: null,
+      logger: new NoopLogger(),
+      npm: new FakeNpmCli({
+        globalRoot: [{ ok: true, output: "/opt" }],
+        view: [{ ok: true, output: "0.4.0" }],
+      }),
+      role: "gateway",
+      updater: { launcher, otherRoleRunning: async () => false, packageRoot: "/opt/simlock" },
+      version: "0.3.0",
+    } as StartDaemonOptions);
+    runningDaemons.push(daemon);
+    return { daemon, directory, filesystem };
+  }
+
+  const daemonOf = async (daemon: DaemonServer) =>
+    ((await daemon.dispatch("status.get", {}, operator)) as { daemon: Record<string, unknown> })
+      .daemon;
+
+  it("a failed install shows in the gateway's status.get as lastUpdateFailure, and the gateway keeps serving", async () => {
+    const launcher = new FakeUpdaterLauncher({
+      exit: 1,
+      lines: [JSON.stringify({ failed: { message: "npm exited 1", stage: "installing" } })],
+    });
+    const { daemon } = await startUpdatable(launcher);
+
+    await daemon.dispatch("daemon.update", {}, operator);
+
+    await expect
+      .poll(async () => (await daemonOf(daemon)).lastUpdateFailure)
+      .toEqual({
+        at: 1_000,
+        from: "0.3.0",
+        message: "npm exited 1",
+        stage: "installing",
+        to: "0.4.0",
+      });
+    expect(await daemonOf(daemon)).toMatchObject({ health: "running", update: null });
+  });
+
+  it("a gateway that starts after a rolled-back update reports the failure in status.get and announces daemon.update-failed", async () => {
+    const filesystem = new MemoryFilesystem();
+    const failure = {
+      at: 900,
+      from: "0.3.0",
+      message: "the new version did not start",
+      stage: "restarting",
+      to: "0.4.0",
+    };
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-gw-rolled-back-"));
+    temporaryDirectories.push(directory);
+    await filesystem.mkdirp(directory);
+    await filesystem.writeFileAtomic(
+      join(directory, "update-result.json"),
+      JSON.stringify(failure),
+    );
+    const { daemon } = await startUpdatable(new FakeUpdaterLauncher(), filesystem, directory);
+
+    expect((await daemonOf(daemon)).lastUpdateFailure).toEqual(failure);
+    await expect(
+      daemon.dispatch("events.replay", {}, operator) as Promise<readonly { event: string }[]>,
+    ).resolves.toContainEqual(expect.objectContaining({ event: "daemon.update-failed" }));
+    await expect(filesystem.exists(join(directory, "update-result.json"))).resolves.toBe(false);
   });
 });

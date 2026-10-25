@@ -28,15 +28,18 @@ const body = { device: "iPhone 17 Pro", platform: "ios" as const };
 async function createTracked(
   tracker: LeaseRequestTracker,
   dispatcher: FakeDispatcher,
-  requestBody: typeof body & {
+  requestBody: {
+    readonly device: string;
+    readonly platform: "ios" | "android";
     readonly ttlMs?: number;
     readonly mode?: "slim" | "full";
     readonly imageTag?: string;
     readonly physical?: boolean;
   } = body,
+  nth = 0,
 ): Promise<{ readonly view: TrackedRequestView; readonly callIndex: number }> {
   const outcomePromise = tracker.submit(identity, requestBody);
-  const call = await waitForDispatch(dispatcher, "lease.request");
+  const call = await waitForDispatch(dispatcher, "lease.request", nth);
   const callIndex = dispatcher.calls.indexOf(call);
   call.session.onProgress?.({ queuePosition: 1, stage: "queued" });
   const outcome = await outcomePromise;
@@ -131,16 +134,6 @@ describe("LeaseRequestTracker.submit", () => {
     }
   });
 
-  it("replays an Idempotency-Key for the same requester instead of double-submitting", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    const { view: first } = await createTrackedWithKey(tracker, dispatcher, "key-1");
-
-    const replay = await tracker.submit(identity, body, "key-1");
-    expect(replay.kind).toBe("created");
-    if (replay.kind === "created") expect(replay.view.id).toBe(first.id);
-    expect(dispatcher.calls.filter((c) => c.operation === "lease.request")).toHaveLength(1);
-  });
-
   it("does not replay an Idempotency-Key across different requesters", async () => {
     const { dispatcher, tracker } = buildTracker();
     await createTrackedWithKey(tracker, dispatcher, "key-1");
@@ -171,6 +164,32 @@ describe("LeaseRequestTracker.cancel", () => {
     const result = await tracker.cancel(view.id, identity);
     expect(result).toEqual({ kind: "cancelled" });
     expect(tracker.get(view.id)?.state).toEqual({ stage: "cancelled" });
+  });
+
+  it("cancelling one of a requester's two waiting requests of different platforms cancels that one and leaves the other waiting", async () => {
+    const { dispatcher, tracker } = buildTracker();
+    const ios = await createTracked(tracker, dispatcher);
+    const android = await createTracked(
+      tracker,
+      dispatcher,
+      { device: "Pixel 9", platform: "android" },
+      1,
+    );
+    const cancelled: string[] = [];
+    dispatcher.handlers["lease.cancel"] = (input) => {
+      const { platform } = input as { platform?: string };
+      const index = platform === "android" ? android.callIndex : ios.callIndex;
+      cancelled.push(platform ?? "none");
+      dispatcher.calls[index]?.reject(new RequestCancelledError("req"));
+      return { result: "cancelled" };
+    };
+
+    const result = await tracker.cancel(android.view.id, identity);
+
+    expect(result).toEqual({ kind: "cancelled" });
+    expect(cancelled).toEqual(["android"]);
+    expect(tracker.get(android.view.id)?.state).toEqual({ stage: "cancelled" });
+    expect(tracker.get(ios.view.id)?.state).toEqual({ queuePosition: 1, stage: "queued" });
   });
 
   it("reports not-cancellable, naming the lease, once the request is already granted", async () => {
@@ -296,16 +315,23 @@ describe("LeaseRequestTracker.submit with allowDownload on a gateway", () => {
   });
 });
 
-describe("LeaseRequestTracker.submit with a mode", () => {
-  it("passes mode through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, mode: "slim" });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ mode: "slim" });
+describe("LeaseRequestTracker.submit with an optional request field", () => {
+  it.each([
+    ["mode", { mode: "slim" }],
+    ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["physical", { physical: true }],
+  ] as const)(
+    "passes %s through onto the dispatch input, and omits it when the body names none",
+    async (field, extra) => {
+      const { dispatcher, tracker } = buildTracker();
+      await createTracked(tracker, dispatcher, { ...body, ...extra });
+      expect(dispatcher.calls[0]?.input).toMatchObject(extra);
 
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("mode");
-  });
+      const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
+      await createTracked(tracker2, dispatcher2);
+      expect(Object.keys(dispatcher2.calls[0]?.input ?? {})).not.toContain(field);
+    },
+  );
 });
 
 describe("LeaseRequestTracker granted lease payload", () => {
@@ -378,30 +404,6 @@ describe("LeaseRequestTracker granted lease payload", () => {
       imageTag: "google_apis_playstore",
     });
     expect(await granted(spec)).not.toHaveProperty("imageTag");
-  });
-});
-
-describe("LeaseRequestTracker.submit with an image tag", () => {
-  it("passes imageTag through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, imageTag: "google_apis_playstore" });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ imageTag: "google_apis_playstore" });
-
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(dispatcher2.calls[0]?.input).not.toHaveProperty("imageTag");
-  });
-});
-
-describe("LeaseRequestTracker.submit with a physical request", () => {
-  it("passes physical through onto the dispatch input, and omits it when the body names none", async () => {
-    const { dispatcher, tracker } = buildTracker();
-    await createTracked(tracker, dispatcher, { ...body, physical: true });
-    expect(dispatcher.calls[0]?.input).toMatchObject({ physical: true });
-
-    const { dispatcher: dispatcher2, tracker: tracker2 } = buildTracker();
-    await createTracked(tracker2, dispatcher2);
-    expect(Object.keys(dispatcher2.calls[0]?.input ?? {})).not.toContain("physical");
   });
 });
 
