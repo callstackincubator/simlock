@@ -24,129 +24,160 @@ export function commandWords(cmd) {
   return { words: words.slice(at), dynamic: cmd.dynamic.slice(at) };
 }
 
+// why: one entry per character class the scanner meets; the first whose `at` holds scans it.
+const SCANNERS = [
+  { at: (p) => p.src[p.i] === "\n", scan: newline },
+  { at: (p) => p.src[p.i] === " " || p.src[p.i] === "\t", scan: blank },
+  { at: (p) => p.src[p.i] === "#" && p.word === null, scan: comment },
+  { at: (p) => p.src[p.i] === "\\", scan: escaped },
+  { at: (p) => p.src[p.i] === "'", scan: singleQuoted },
+  {
+    at: (p) => p.src[p.i] === '"',
+    scan: (p) => (p.i = readDoubleQuoted(p.src, p.i + 1, current(p), p.commands)),
+  },
+  {
+    at: (p) => p.src[p.i] === "$",
+    scan: (p) => (p.i = readDollar(p.src, p.i, current(p), p.commands)),
+  },
+  {
+    at: (p) => p.src[p.i] === "`",
+    scan: (p) => (p.i = readBacktick(p.src, p.i, current(p), p.commands)),
+  },
+  { at: (p) => p.src.startsWith("<<<", p.i), scan: hereString },
+  { at: (p) => p.src.startsWith("<<", p.i), scan: heredoc },
+  { at: (p) => /^(?:[<>]|&>)/.test(p.src.slice(p.i, p.i + 2)), scan: redirect },
+  { at: (p) => ";|&()".includes(p.src[p.i]), scan: separator },
+];
+
 function parseInto(src, commands) {
-  let i = 0;
-  let cmd = newCommand();
-  let word = null;
-  let redirectOp = null;
-  const pending = [];
-
-  const current = () => (word ??= { text: "", dynamic: false });
-  const endWord = () => {
-    if (word === null) return;
-    if (redirectOp === "<<<") cmd.stdin = word.text;
-    else if (redirectOp !== null) cmd.redirects.push({ op: redirectOp, target: word.text });
-    else {
-      cmd.words.push(word.text);
-      cmd.dynamic.push(word.dynamic);
-    }
-    redirectOp = null;
-    word = null;
-  };
-  const endCommand = () => {
-    endWord();
-    redirectOp = null;
-    if (cmd.words.length > 0 || cmd.redirects.length > 0 || cmd.stdin !== null) commands.push(cmd);
-    cmd = newCommand();
-  };
-
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "\n") {
-      endCommand();
-      i++;
-      // why: heredoc bodies start on the line after the operator, in the order they were opened.
-      for (const doc of pending.splice(0)) {
-        const lines = [];
-        while (i < src.length) {
-          const eol = src.indexOf("\n", i);
-          const line = src.slice(i, eol === -1 ? src.length : eol);
-          i = eol === -1 ? src.length : eol + 1;
-          if ((doc.strip ? line.replace(/^\t+/, "") : line).trim() === doc.delimiter) break;
-          lines.push(doc.strip ? line.replace(/^\t+/, "") : line);
-        }
-        doc.cmd.stdin = lines.join("\n");
-        doc.cmd.stdinDynamic = !doc.quoted && /[$`]/.test(doc.cmd.stdin);
-      }
-      continue;
-    }
-    if (c === " " || c === "\t") {
-      endWord();
-      i++;
-      continue;
-    }
-    if (c === "#" && word === null) {
-      while (i < src.length && src[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "\\") {
-      if (src[i + 1] === "\n") i += 2;
-      else {
-        current().text += src[i + 1] ?? "";
-        i += 2;
-      }
-      continue;
-    }
-    if (c === "'") {
-      const end = src.indexOf("'", i + 1);
-      current().text += src.slice(i + 1, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end + 1;
-      continue;
-    }
-    if (c === '"') {
-      i = readDoubleQuoted(src, i + 1, current(), commands);
-      continue;
-    }
-    if (c === "$") {
-      i = readDollar(src, i, current(), commands);
-      continue;
-    }
-    if (c === "`") {
-      i = readBacktick(src, i, current(), commands);
-      continue;
-    }
-    if (c === "<" && src.startsWith("<<<", i)) {
-      endWord();
-      redirectOp = "<<<";
-      i += 3;
-      continue;
-    }
-    if (c === "<" && src[i + 1] === "<") {
-      endWord();
-      i += 2;
-      const strip = src[i] === "-";
-      if (strip) i++;
-      while (src[i] === " " || src[i] === "\t") i++;
-      const quote = src[i] === "'" || src[i] === '"' ? src[i] : "";
-      if (quote !== "") i++;
-      let delimiter = "";
-      while (i < src.length && !/[\s;&|()<>'"]/.test(src[i])) delimiter += src[i++];
-      if (quote !== "" && src[i] === quote) i++;
-      pending.push({ cmd, delimiter, strip, quoted: quote !== "" });
-      continue;
-    }
-    if (c === ">" || c === "<" || (c === "&" && src[i + 1] === ">")) {
-      if (word !== null && /^\d+$/.test(word.text) && !word.dynamic) word = null;
-      else endWord();
-      let op = c;
-      i++;
-      while (i < src.length && /[>&|]/.test(src[i]) && op.length < 3) op += src[i++];
-      if (op.endsWith("&") && /[\d-]/.test(src[i] ?? "")) {
-        while (/[\d-]/.test(src[i] ?? "")) i++;
-        continue;
-      }
-      redirectOp = op;
-      continue;
-    }
-    if (c === ";" || c === "|" || c === "&" || c === "(" || c === ")") {
-      endCommand();
-      i++;
-      continue;
-    }
-    current().text += c;
-    i++;
+  const p = { src, commands, i: 0, cmd: newCommand(), word: null, redirectOp: null, pending: [] };
+  while (p.i < src.length) {
+    const scanner = SCANNERS.find((s) => s.at(p));
+    if (scanner === undefined) current(p).text += src[p.i++];
+    else scanner.scan(p);
   }
-  endCommand();
+  endCommand(p);
+}
+
+function current(p) {
+  p.word ??= { text: "", dynamic: false };
+  return p.word;
+}
+
+function endWord(p) {
+  if (p.word === null) return;
+  if (p.redirectOp === "<<<") p.cmd.stdin = p.word.text;
+  else if (p.redirectOp !== null) p.cmd.redirects.push({ op: p.redirectOp, target: p.word.text });
+  else {
+    p.cmd.words.push(p.word.text);
+    p.cmd.dynamic.push(p.word.dynamic);
+  }
+  p.redirectOp = null;
+  p.word = null;
+}
+
+function endCommand(p) {
+  endWord(p);
+  p.redirectOp = null;
+  const { cmd } = p;
+  if (cmd.words.length > 0 || cmd.redirects.length > 0 || cmd.stdin !== null) p.commands.push(cmd);
+  p.cmd = newCommand();
+}
+
+function newline(p) {
+  endCommand(p);
+  p.i++;
+  // why: heredoc bodies start on the line after the operator, in the order they were opened.
+  for (const doc of p.pending.splice(0)) readHeredocBody(p, doc);
+}
+
+function readHeredocBody(p, doc) {
+  const lines = [];
+  while (p.i < p.src.length) {
+    const line = nextLine(p);
+    const text = doc.strip ? line.replace(/^\t+/, "") : line;
+    if (text.trim() === doc.delimiter) break;
+    lines.push(text);
+  }
+  doc.cmd.stdin = lines.join("\n");
+  doc.cmd.stdinDynamic = !doc.quoted && /[$`]/.test(doc.cmd.stdin);
+}
+
+function nextLine(p) {
+  const eol = p.src.indexOf("\n", p.i);
+  const end = eol === -1 ? p.src.length : eol;
+  const line = p.src.slice(p.i, end);
+  p.i = end + 1;
+  return line;
+}
+
+function blank(p) {
+  endWord(p);
+  p.i++;
+}
+
+function comment(p) {
+  while (p.i < p.src.length && p.src[p.i] !== "\n") p.i++;
+}
+
+function escaped(p) {
+  if (p.src[p.i + 1] !== "\n") current(p).text += p.src[p.i + 1] ?? "";
+  p.i += 2;
+}
+
+function singleQuoted(p) {
+  const end = p.src.indexOf("'", p.i + 1);
+  const close = end === -1 ? p.src.length : end;
+  current(p).text += p.src.slice(p.i + 1, close);
+  p.i = close + 1;
+}
+
+function hereString(p) {
+  endWord(p);
+  p.redirectOp = "<<<";
+  p.i += 3;
+}
+
+function heredoc(p) {
+  endWord(p);
+  p.i += 2;
+  const strip = p.src[p.i] === "-";
+  if (strip) p.i++;
+  while (p.src[p.i] === " " || p.src[p.i] === "\t") p.i++;
+  p.pending.push({ cmd: p.cmd, strip, ...readDelimiter(p) });
+}
+
+function readDelimiter(p) {
+  const { src } = p;
+  const quote = src[p.i] === "'" || src[p.i] === '"' ? src[p.i] : "";
+  if (quote !== "") p.i++;
+  let delimiter = "";
+  while (p.i < src.length && !/[\s;&|()<>'"]/.test(src[p.i])) delimiter += src[p.i++];
+  if (quote !== "" && src[p.i] === quote) p.i++;
+  return { delimiter, quoted: quote !== "" };
+}
+
+function redirect(p) {
+  // why: a number right before the operator is the file descriptor, not a word.
+  if (p.word !== null && /^\d+$/.test(p.word.text) && !p.word.dynamic) p.word = null;
+  else endWord(p);
+  const op = readOperator(p);
+  if (op.endsWith("&") && /[\d-]/.test(p.src[p.i] ?? "")) {
+    while (/[\d-]/.test(p.src[p.i] ?? "")) p.i++;
+    return;
+  }
+  p.redirectOp = op;
+}
+
+function readOperator(p) {
+  let op = p.src[p.i++];
+  while (p.i < p.src.length && /[>&|]/.test(p.src[p.i]) && op.length < 3) op += p.src[p.i++];
+  return op;
+}
+
+function separator(p) {
+  endCommand(p);
+  p.i++;
 }
 
 function newCommand() {
@@ -174,44 +205,59 @@ function readDoubleQuoted(src, i, word, commands) {
 // why: `"$(cat <<'EOF' … EOF)"` is how a model writes a long body inline; its text is plain.
 const CAT_HEREDOC = /^\$\(\s*cat\s*<<-?\s*(['"]?)(\w+)\1[ \t]*\n([\s\S]*?)\n[ \t]*\2[ \t]*\n\s*\)/;
 
+// why: what follows a `$` decides what it starts; the first entry whose `at` holds reads it.
+const DOLLARS = [
+  { at: (next) => next === "(", read: dollarParen },
+  { at: (next) => next === "'", read: ansiQuoted },
+  { at: (next) => next === "{", read: dollarBrace },
+  { at: (next) => /[\w@*#?$!-]/.test(next), read: dollarName },
+];
+
 function readDollar(src, i, word, commands) {
   const next = src[i + 1] ?? "";
-  if (next === "(") {
-    const doc = CAT_HEREDOC.exec(src.slice(i));
-    if (doc !== null) {
-      word.text += doc[3];
-      if (doc[1] === "" && /[$`]/.test(doc[3])) word.dynamic = true;
-      return i + doc[0].length;
-    }
-    const end = matchingParen(src, i + 2);
-    parseInto(src.slice(i + 2, end), commands);
-    word.dynamic = true;
-    return end + 1;
-  }
-  if (next === "'") {
-    let j = i + 2;
-    while (j < src.length && src[j] !== "'") {
-      if (src[j] === "\\" && j + 1 < src.length) {
-        word.text += { n: "\n", t: "\t", "\\": "\\", "'": "'" }[src[j + 1]] ?? src[j + 1];
-        j += 2;
-      } else word.text += src[j++];
-    }
-    return j + 1;
-  }
-  if (next === "{") {
-    const end = src.indexOf("}", i);
-    word.dynamic = true;
-    return end === -1 ? src.length : end + 1;
-  }
-  if (/[\w@*#?$!-]/.test(next)) {
-    let j = i + 1;
-    if (/\w/.test(next)) while (/\w/.test(src[j] ?? "")) j++;
-    else j++;
-    word.dynamic = true;
-    return j;
-  }
+  const reader = DOLLARS.find((d) => d.at(next));
+  if (reader !== undefined) return reader.read(src, i, word, commands);
   word.text += "$";
   return i + 1;
+}
+
+function dollarParen(src, i, word, commands) {
+  const doc = CAT_HEREDOC.exec(src.slice(i));
+  if (doc !== null) {
+    word.text += doc[3];
+    if (doc[1] === "" && /[$`]/.test(doc[3])) word.dynamic = true;
+    return i + doc[0].length;
+  }
+  const end = matchingParen(src, i + 2);
+  parseInto(src.slice(i + 2, end), commands);
+  word.dynamic = true;
+  return end + 1;
+}
+
+const ANSI_ESCAPES = { n: "\n", t: "\t", "\\": "\\", "'": "'" };
+
+function ansiQuoted(src, i, word) {
+  let j = i + 2;
+  while (j < src.length && src[j] !== "'") {
+    if (src[j] === "\\" && j + 1 < src.length) {
+      word.text += ANSI_ESCAPES[src[j + 1]] ?? src[j + 1];
+      j += 2;
+    } else word.text += src[j++];
+  }
+  return j + 1;
+}
+
+function dollarBrace(src, i, word) {
+  const end = src.indexOf("}", i);
+  word.dynamic = true;
+  return end === -1 ? src.length : end + 1;
+}
+
+function dollarName(src, i, word) {
+  let j = i + 2;
+  if (/\w/.test(src[i + 1])) while (/\w/.test(src[j] ?? "")) j++;
+  word.dynamic = true;
+  return j;
 }
 
 function readBacktick(src, i, word, commands) {

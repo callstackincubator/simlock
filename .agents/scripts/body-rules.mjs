@@ -17,38 +17,42 @@ const FOOTER = /^[*_]Written by an agent\.[*_]$/;
 const HANDOFF = ["Done", "Not done", "Findings", "Blocked on"];
 const TRIAGE = ["Reproduction", "Root cause", "Simplest fix", "Alternatives rejected", "Risk"];
 
+// why: the first lines name what a body is; the first kind whose `at` holds checks it.
+const KINDS = [
+  { at: (filled) => /^## Handoff\s*$/.test(filled[0] ?? ""), check: handoff },
+  { at: isTriageReport, check: triage },
+  { at: (filled) => (filled[0] ?? "").startsWith("Spec updated:"), check: specUpdated },
+  { at: (filled) => /^## Review notes\s*$/.test(filled[0] ?? ""), check: reviewNotes },
+];
+
 export function bodyDefects(raw) {
   const text = String(raw ?? "").replace(/\r/g, "");
-  const defects = [];
-  const prose = withoutCode(text);
-  const lines = prose.split("\n");
+  const lines = withoutCode(text).split("\n");
   const filled = text
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l !== "");
+  const defects = [];
   if (!FOOTER.test(filled.at(-1) ?? "")) {
     defects.push(
       "Every body and comment an agent writes ends with the line `*Written by an agent.*` (delivery rule 12): add it as the last line.",
     );
   }
-  const first = filled[0] ?? "";
-  const second = filled[1] ?? "";
-  if (/^## Handoff\s*$/.test(first)) defects.push(...handoff(lines));
-  else if (
-    /^## Reproduction\s*$/.test(first) ||
-    (/^Supersedes the report above\.?$/.test(first) && /^## Reproduction\s*$/.test(second))
-  ) {
-    defects.push(...triage(lines));
-  } else if (first.startsWith("Spec updated:")) {
-    if (filled.filter((l) => !FOOTER.test(l)).length > 1) {
-      defects.push(
-        'A "Spec updated" comment is one line and the footer (delivery rule 12): say in that line which sections moved.',
-      );
-    }
-  } else if (/^## Review notes\s*$/.test(first)) {
-    defects.push(...reviewNotes(lines));
-  }
-  return defects;
+  const kind = KINDS.find((k) => k.at(filled));
+  return kind === undefined ? defects : [...defects, ...kind.check(lines, filled)];
+}
+
+function isTriageReport(filled) {
+  const [first = "", second = ""] = filled;
+  const report = (l) => /^## Reproduction\s*$/.test(l);
+  return report(first) || (/^Supersedes the report above\.?$/.test(first) && report(second));
+}
+
+function specUpdated(_, filled) {
+  if (filled.filter((l) => !FOOTER.test(l)).length <= 1) return [];
+  return [
+    'A "Spec updated" comment is one line and the footer (delivery rule 12): say in that line which sections moved.',
+  ];
 }
 
 function handoff(lines) {
@@ -76,39 +80,50 @@ function handoff(lines) {
   return out;
 }
 
-function triage(lines) {
-  const out = [];
-  const headings = lines.flatMap((l) => {
-    const h = /^##\s+(.+?)\s*$/.exec(l);
-    return h === null ? [] : [h[1]];
-  });
-  const expected = headings.at(-1) === "Side findings" ? [...TRIAGE, "Side findings"] : TRIAGE;
-  if (headings.join("|") !== expected.join("|")) {
-    out.push(
+const TRIAGE_RULES = [
+  {
+    when: (lines) => {
+      const headings = lines.flatMap((l) => /^##\s+(.+?)\s*$/.exec(l)?.slice(1) ?? []);
+      const expected = headings.at(-1) === "Side findings" ? [...TRIAGE, "Side findings"] : TRIAGE;
+      return headings.join("|") !== expected.join("|");
+    },
+    reason: () =>
       "A triage report has the sections Reproduction, Root cause, Simplest fix, Alternatives rejected, Risk and, when there are any, Side findings, in that order (delivery rule 8).",
-    );
-  }
-  const root = section(lines, "Root cause");
-  if (root !== null && !/\S+\.\w+:\d+/.test(root.join("\n"))) {
-    out.push("The Root cause names the file and line, as `path:line` (delivery rule 8).");
-  }
-  const alternatives = section(lines, "Alternatives rejected");
-  if (alternatives !== null && alternatives.filter((l) => l.trim() !== "").length > 3) {
-    out.push(
+  },
+  {
+    when: (lines) =>
+      sectionHas(lines, "Root cause", (body) => !/\S+\.\w+:\d+/.test(body.join("\n"))),
+    reason: () => "The Root cause names the file and line, as `path:line` (delivery rule 8).",
+  },
+  {
+    when: (lines) =>
+      sectionHas(
+        lines,
+        "Alternatives rejected",
+        (body) => body.filter((l) => l.trim() !== "").length > 3,
+      ),
+    reason: () =>
       "Alternatives rejected holds at most three lines, one per alternative (delivery rule 8).",
-    );
-  }
-  const risk = section(lines, "Risk");
-  if (risk !== null && risk.filter((l) => /^\s*[-*] /.test(l)).length > 3) {
-    out.push("Risk holds at most three bullets (delivery rule 8).");
-  }
-  const words = countWords(lines);
-  if (words > 300) {
-    out.push(
-      `This report is ${words} words outside code; the budget is 300 (delivery rule 12): cut it.`,
-    );
-  }
-  return out;
+  },
+  {
+    when: (lines) =>
+      sectionHas(lines, "Risk", (body) => body.filter((l) => /^\s*[-*] /.test(l)).length > 3),
+    reason: () => "Risk holds at most three bullets (delivery rule 8).",
+  },
+  {
+    when: (lines) => countWords(lines) > 300,
+    reason: (lines) =>
+      `This report is ${countWords(lines)} words outside code; the budget is 300 (delivery rule 12): cut it.`,
+  },
+];
+
+function triage(lines) {
+  return TRIAGE_RULES.filter((r) => r.when(lines)).map((r) => r.reason(lines));
+}
+
+function sectionHas(lines, name, test) {
+  const body = section(lines, name);
+  return body !== null && test(body);
 }
 
 function reviewNotes(lines) {

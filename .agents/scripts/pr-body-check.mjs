@@ -210,48 +210,70 @@ for (const f of failures) {
 process.exit(failures.length > 0 && !draftOk ? 1 : 0);
 
 function checkLedger(text) {
+  for (const f of ledgerFindings(text).filter((f) => f.outcome === "open")) {
+    failures.push(`finding ${f.id} is open in the Review ledger (delivery rule 15)`);
+  }
+  const rounds = ledgerRounds(text);
+  checkRoundOrder(rounds.map((r) => r.round).filter((r) => r !== "fix-check"));
+  if (diffHead !== null) for (const r of rounds) checkAncestry(r);
+}
+
+function ledgerFindings(text) {
   const json = /```json\n([\s\S]*?)\n```/.exec(text);
-  let findings = [];
   try {
-    findings = JSON.parse(json?.[1] ?? "").findings ?? [];
+    return JSON.parse(json?.[1] ?? "").findings ?? [];
   } catch {
     failures.push(
       "the `## Review ledger` comment has no json block that parses (REVIEW.md, Measurement)",
     );
+    return [];
   }
-  for (const f of findings.filter((f) => f.outcome === "open")) {
-    failures.push(`finding ${f.id} is open in the Review ledger (delivery rule 15)`);
-  }
+}
+
+function ledgerRounds(text) {
   const rounds = [];
   for (const l of text.split("\n").filter((l) => l.startsWith("Round "))) {
     const round = /^Round (1|2|fix-check): ([0-9a-f]{40})\s*$/.exec(l);
-    if (round === null)
+    if (round === null) {
       failures.push(
         `a ledger line is not "Round <1|2|fix-check>: <full sha>": "${l.slice(0, 60)}"`,
       );
-    else rounds.push({ round: round[1], sha: round[2] });
+    } else rounds.push({ round: round[1], sha: round[2] });
   }
-  const order = rounds.map((r) => r.round).filter((r) => r !== "fix-check");
-  if (order.filter((r) => r === "1").length > 1 || order.filter((r) => r === "2").length > 1) {
+  return rounds;
+}
+
+function checkRoundOrder(order) {
+  const twice = (r) => order.filter((x) => x === r).length > 1;
+  if (twice("1") || twice("2")) {
     failures.push("the ledger has more than one round 1 or round 2 (REVIEW.md, the cap)");
   } else if (order.length > 0 && order[0] !== "1") {
     failures.push("the ledger's first round is not round 1 (REVIEW.md, the cap)");
   }
-  if (diffHead === null) return;
-  for (const { round, sha } of rounds) {
-    if (!hasCommit(sha) || !hasCommit(diffHead)) {
-      warnings.push(
-        `round ${round}'s ${sha.slice(0, 9)} or the head is not in this clone; its ancestry is unchecked`,
-      );
-    } else if (!git(["merge-base", "--is-ancestor", sha, diffHead], true)) {
-      failures.push(`round ${round}'s ${sha.slice(0, 9)} is not an ancestor of the head`);
-    }
+}
+
+function checkAncestry({ round, sha }) {
+  if (!hasCommit(sha) || !hasCommit(diffHead)) {
+    warnings.push(
+      `round ${round}'s ${sha.slice(0, 9)} or the head is not in this clone; its ancestry is unchecked`,
+    );
+  } else if (!git(["merge-base", "--is-ancestor", sha, diffHead], true)) {
+    failures.push(`round ${round}'s ${sha.slice(0, 9)} is not an ancestor of the head`);
   }
 }
 
 function checkDoneWhen() {
   const number = Number(DELIVERY_BRANCH.exec(branch)[2]);
-  const issue = api(`issues/${number}`);
+  const items = checklistItems();
+  walkLines(items, api(`issues/${number}`).body ?? "", "Done when", `#${number}`);
+  const parent = apiOrNull(`issues/${number}/parent`);
+  if (parent !== null && closesLastSubIssue(parent.number, number)) {
+    walkLines(items, parent.body ?? "", "Completion conditions", `#${parent.number}`);
+  }
+}
+
+// why: a checklist line may wrap onto indented lines; a blank or unindented line ends it.
+function checklistItems() {
   const checklist = [];
   for (const l of lines) {
     const item = /^\s*- \[([ xX])\] (.*)$/.exec(l);
@@ -259,76 +281,84 @@ function checkDoneWhen() {
     else if (/^\s+\S/.test(l) && checklist.length > 0) checklist.at(-1).text += ` ${l.trim()}`;
     else if (l.trim() === "" || !/^\s/.test(l)) checklist.push(null);
   }
-  const items = checklist
+  return checklist
     .filter((c) => c !== null)
     .map((c) => ({ ...c, words: new Set(contentWords(c.text)) }));
-  const walk = (text, heading, from) => {
-    for (const bullet of bullets(text, heading)) {
-      const prose = bullet.replace(/`[^`]*`/g, " ").replace(/\([^)]*\)/g, " ");
-      const wanted = [...new Set(contentWords(contentWords(prose).length > 0 ? prose : bullet))];
-      const share = (c) => wanted.filter((w) => c.words.has(w)).length / Math.max(1, wanted.length);
-      const best = items.reduce(
-        (a, c) => (a === undefined || share(c) > share(a) ? c : a),
-        undefined,
+}
+
+function walkLines(items, text, heading, from) {
+  for (const bullet of bullets(text, heading)) {
+    const line = matchingLine(items, bullet);
+    const quoted = `"${bullet.slice(0, 50)}"`;
+    if (line === undefined) {
+      failures.push(
+        `${from}'s ${heading} line ${quoted} is not a checklist line of the body (coding rule 5)`,
       );
-      const line = best !== undefined && share(best) >= MATCH ? best : undefined;
-      const quoted = `"${bullet.slice(0, 50)}"`;
-      if (line === undefined) {
-        failures.push(
-          `${from}'s ${heading} line ${quoted} is not a checklist line of the body (coding rule 5)`,
-        );
-      } else if (!line.ticked) {
-        failures.push(`${from}'s ${heading} line ${quoted} is not ticked (coding rule 5)`);
-      }
+    } else if (!line.ticked) {
+      failures.push(`${from}'s ${heading} line ${quoted} is not ticked (coding rule 5)`);
     }
-  };
-  walk(issue.body ?? "", "Done when", `#${number}`);
-  const parent = apiOrNull(`issues/${number}/parent`);
-  if (parent === null) return;
-  const open = api(`issues/${parent.number}/sub_issues`, "-f", "per_page=100")
+  }
+}
+
+function matchingLine(items, bullet) {
+  const prose = bullet.replace(/`[^`]*`/g, " ").replace(/\([^)]*\)/g, " ");
+  const wanted = [...new Set(contentWords(contentWords(prose).length > 0 ? prose : bullet))];
+  const share = (c) => wanted.filter((w) => c.words.has(w)).length / Math.max(1, wanted.length);
+  const best = items.reduce((a, c) => (a === undefined || share(c) > share(a) ? c : a), undefined);
+  return best !== undefined && share(best) >= MATCH ? best : undefined;
+}
+
+// why: in a stack every other open sub-issue must be closed by a PR below this one.
+function closesLastSubIssue(parent, number) {
+  const open = api(`issues/${parent}/sub_issues`, "-f", "per_page=100")
     .filter((i) => i.state === "open" && i.number !== number)
     .map((i) => i.number);
-  if (open.length > 0) {
-    const stack = apiOrNull(`stacks?pull_request=${prNumber}`) ?? [];
-    const members = (stack.find((x) => x.open)?.pull_requests ?? []).map((p) => p.number);
-    const below = members.slice(0, Math.max(0, members.indexOf(Number(prNumber))));
-    const closed = new Set(below.flatMap((m) => closes(api(`pulls/${m}`).body ?? "")));
-    if (open.some((n) => !closed.has(n))) return;
-  }
-  walk(parent.body ?? "", "Completion conditions", `#${parent.number}`);
+  if (open.length === 0) return true;
+  const stack = apiOrNull(`stacks?pull_request=${prNumber}`) ?? [];
+  const members = (stack.find((x) => x.open)?.pull_requests ?? []).map((p) => p.number);
+  const below = members.slice(0, Math.max(0, members.indexOf(Number(prNumber))));
+  const closed = new Set(below.flatMap((m) => closes(api(`pulls/${m}`).body ?? "")));
+  return open.every((n) => closed.has(n));
 }
 
 function checkDiff() {
-  const routine = ROUTINES.find(([re]) => re.test(branch));
-  const calibration = branch.startsWith("chore/calibrate-reviews-");
   const counts = lines.find((l) => REVIEW_COUNTS.test(l)) ?? "";
   if (DELIVERY_BRANCH.test(branch) && counts.startsWith("Spec review: skipped.")) {
     failures.push(
       "Spec review is skipped on a branch whose issue is its spec (REVIEW.md, Routing)",
     );
   }
-  let kind = option("--kind", args);
-  if (kind === null && diffBase !== null && diffHead !== null) {
-    if (!hasCommit(diffBase) || !hasCommit(diffHead)) {
-      warnings.push(
-        "the PR's base or head is not in this clone (git fetch origin); its diff is unchecked",
-      );
-      return;
-    }
-    const mergeBase = git(["merge-base", diffBase, diffHead]).trim();
-    kind = execFileSync(process.execPath, [join(HERE, "diff-kind.mjs"), mergeBase, diffHead], {
-      encoding: "utf8",
-    }).trim();
-    if (calibration) {
-      const names = git(["diff", "--name-only", mergeBase, diffHead]).split("\n").filter(Boolean);
-      if (names.some((n) => n !== CALIBRATION)) {
-        failures.push(
-          `a calibrate-reviews PR changes ${CALIBRATION} alone; it also changes ${names.filter((n) => n !== CALIBRATION)[0]}`,
-        );
-      }
-    }
+  const kind = option("--kind", args) ?? kindFromGit();
+  if (kind !== null) checkKind(kind, counts);
+}
+
+// why: null when the diff cannot be read: no SHAs given, or this clone lacks them.
+function kindFromGit() {
+  if (diffBase === null || diffHead === null) return null;
+  if (!hasCommit(diffBase) || !hasCommit(diffHead)) {
+    warnings.push(
+      "the PR's base or head is not in this clone (git fetch origin); its diff is unchecked",
+    );
+    return null;
   }
-  if (kind === null) return;
+  const mergeBase = git(["merge-base", diffBase, diffHead]).trim();
+  if (branch.startsWith("chore/calibrate-reviews-")) checkCalibration(mergeBase);
+  return execFileSync(process.execPath, [join(HERE, "diff-kind.mjs"), mergeBase, diffHead], {
+    encoding: "utf8",
+  }).trim();
+}
+
+function checkCalibration(mergeBase) {
+  const other = git(["diff", "--name-only", mergeBase, diffHead])
+    .split("\n")
+    .find((n) => n !== "" && n !== CALIBRATION);
+  if (other !== undefined) {
+    failures.push(`a calibrate-reviews PR changes ${CALIBRATION} alone; it also changes ${other}`);
+  }
+}
+
+function checkKind(kind, counts) {
+  const routine = ROUTINES.find(([re]) => re.test(branch));
   if (routine !== undefined && kind !== routine[1]) {
     failures.push(`this routine's PR must be ${routine[1]}, and its diff is ${kind}`);
   }

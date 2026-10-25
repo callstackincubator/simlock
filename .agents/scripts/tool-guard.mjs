@@ -121,100 +121,56 @@ const HOOK_BYPASS = [
   /\bLEFTHOOK_EXCLUDE=(?!fallow(?:\s|$))/,
 ];
 
-const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
-const tool = input.tool_name;
-const args = input.tool_input ?? {};
-const subAgent = typeof input.agent_id === "string";
-const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
-
-if (tool === "Agent" || tool === "Task") agentRules();
-
-if (tool === "Bash" && subAgent) {
-  const shell = code(args.command ?? "");
-  if (HOOK_BYPASS.some((re) => re.test(shell))) {
-    refuse(
-      "Refused: this skips the git hooks. They run the checks agents never run by hand. Only the " +
-        "build stage may skip Fallow, on a push before its last cycle: " +
-        "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
-    );
-  }
-  const found = forbiddenCheck(shell);
-  if (found !== null) {
-    refuse(
-      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
-        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
-        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
-        'the commands under "Tests agents run".',
-    );
-  }
-  const raw = args.command ?? "";
-  const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
-  if (!slowLane) {
-    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
-      refuse(
-        "Refused: a test run needs `timeout: 600000` on this Bash call. The default 120 s " +
-          "moves a two-minute run to the background, and a background job holds your report " +
-          "until it ends. Run it again in the foreground with the timeout set.",
-      );
-    }
-    if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
-      refuse(
-        "Refused: nothing runs in the background in a delivery stage. A background job holds " +
-          "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
-          "Run the command in the foreground with `timeout: 600000` on the Bash call.",
-      );
-    }
-    if (SLEEP_LOOP.test(shell)) {
-      refuse(
-        "Refused: no loop that sleeps. Nothing you started runs in the background, so there is " +
-          "nothing to wait for: run the command itself in the foreground with `timeout: 600000`.",
-      );
-    }
-    if (BARE_CAT.test(raw)) {
-      refuse(
-        "Refused: `cat > file` with no input reads stdin until the tool times out. Write the " +
-          "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
-      );
-    }
+// why: each rule is a refusal and the test that triggers it; `refuseFirst` walks a table.
+function refuseFirst(rules, ctx) {
+  for (const rule of rules) {
+    if (rule.when(ctx)) refuse(typeof rule.reason === "function" ? rule.reason(ctx) : rule.reason);
   }
 }
-if (tool === "Bash") commandRules(args.command ?? "");
-process.exit(0);
+
+const AGENT_RULES = [
+  {
+    when: (c) => Boolean(args.isolation) && STAGES.has(c.type),
+    reason: (c) =>
+      `Refused: pass no \`isolation\` to the ${c.type}. Every stage of a task works in ` +
+      "the task's one worktree (`.agents/scripts/worktree.sh <branch>`), one stage after " +
+      "another. Start the agent again without `isolation`.",
+  },
+  {
+    when: (c) => STAGES.has(c.type) && typeof args.model === "string" && args.model !== "",
+    reason: (c) =>
+      `Refused: pass no \`model\` to the ${c.type}: it runs on the model its frontmatter pins. ` +
+      "Start the agent again without `model`.",
+  },
+  {
+    when: () => subAgent && args.run_in_background !== false,
+    reason:
+      "Refused: a helper agent runs in the foreground: pass `run_in_background: false`. A " +
+      "background helper reports to the orchestrator, not to you, and nothing wakes you when " +
+      "it ends.",
+  },
+  {
+    when: (c) => (STAGES.has(c.type) || LENSES.has(c.type)) && !LEDGER.test(firstLine(c.prompt)),
+    reason:
+      "Refused: the prompt's first line is the ledger tag (toolchain.md, \"Review " +
+      'measurement"): `ledger: pr=<M> issue=<N> stage=<stage> round=<r> role=<role> ' +
+      "lens=<lens>`, `-` for a key that does not apply yet. Start the agent again with it.",
+  },
+];
+const PROMPT_CHECKS = {
+  implementer: briefCheck,
+  reviewer: protocolCheck,
+  "code-reviewer": strictAreaCheck,
+};
 
 function agentRules() {
-  const type = args.subagent_type;
-  const prompt = String(args.prompt ?? "");
-  if (args.isolation && STAGES.has(type)) {
-    refuse(
-      `Refused: pass no \`isolation\` to the ${type}. Every stage of a task works in ` +
-        "the task's one worktree (`.agents/scripts/worktree.sh <branch>`), one stage after " +
-        "another. Start the agent again without `isolation`.",
-    );
-  }
-  if (STAGES.has(type) && typeof args.model === "string" && args.model !== "") {
-    refuse(
-      `Refused: pass no \`model\` to the ${type}: it runs on the model its frontmatter pins. ` +
-        "Start the agent again without `model`.",
-    );
-  }
-  if (subAgent && args.run_in_background !== false) {
-    refuse(
-      "Refused: a helper agent runs in the foreground: pass `run_in_background: false`. A " +
-        "background helper reports to the orchestrator, not to you, and nothing wakes you when " +
-        "it ends.",
-    );
-  }
-  if (!STAGES.has(type) && !LENSES.has(type)) return;
-  if (!LEDGER.test(prompt.replace(/^\s+/, "").split("\n")[0])) {
-    refuse(
-      "Refused: the prompt's first line is the ledger tag (toolchain.md, \"Review " +
-        'measurement"): `ledger: pr=<M> issue=<N> stage=<stage> round=<r> role=<role> ' +
-        "lens=<lens>`, `-` for a key that does not apply yet. Start the agent again with it.",
-    );
-  }
-  if (type === "implementer") briefCheck(prompt);
-  if (type === "reviewer") protocolCheck(prompt);
-  if (type === "code-reviewer") strictAreaCheck(prompt);
+  const ctx = { type: args.subagent_type, prompt: String(args.prompt ?? "") };
+  refuseFirst(AGENT_RULES, ctx);
+  PROMPT_CHECKS[ctx.type]?.(ctx.prompt);
+}
+
+function firstLine(prompt) {
+  return prompt.replace(/^\s+/, "").split("\n")[0];
 }
 
 function briefCheck(prompt) {
@@ -244,13 +200,8 @@ function protocolCheck(prompt) {
       .split("\n")
       .find((l) => l.startsWith("# ")) ?? "";
   const at = prompt.search(/^protocol:/m);
-  if (
-    at === -1 ||
-    !prompt
-      .slice(at)
-      .split("\n")
-      .some((l) => l.trim() === heading.trim())
-  ) {
+  const lines = at === -1 ? [] : prompt.slice(at).split("\n");
+  if (!lines.some((l) => l.trim() === heading.trim())) {
     refuse(
       "Refused: a reviewer's prompt carries `protocol:` and then the full text of " +
         "`docs/internal/REVIEW.md` from this checkout. Paste it and start the agent again.",
@@ -261,15 +212,7 @@ function protocolCheck(prompt) {
 function strictAreaCheck(prompt) {
   const model = typeof args.model === "string" ? args.model : "";
   if (model === "" || /opus/i.test(model) || /\bstage=replay\b/.test(prompt)) return;
-  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
-  if (dir === undefined) return;
-  let patch;
-  try {
-    patch = fs.readFileSync(path.resolve(cwd, dir, "diff.patch"), "utf8");
-  } catch {
-    return;
-  }
-  const hit = [...patch.matchAll(/^diff --git a\/(\S+) b\/(\S+)/gm)]
+  const hit = [...inputsPatch(prompt).matchAll(/^diff --git a\/(\S+) b\/(\S+)/gm)]
     .flatMap((m) => [m[1], m[2]])
     .find((p) => STRICT_AREAS.some((re) => re.test(p)));
   if (hit !== undefined) {
@@ -281,249 +224,304 @@ function strictAreaCheck(prompt) {
   }
 }
 
-function commandRules(raw) {
-  let dir = cwd;
-  const written = new Map();
-  for (const cmd of parseShell(raw)) {
-    const { words, dynamic } = commandWords(cmd);
-    if (words.length === 0) continue;
-    const name = path.basename(words[0]);
-    if (name === "cd" && words[1] !== undefined && !dynamic[1]) {
-      dir = path.resolve(dir, words[1].replace(/^~(?=\/|$)/, os.homedir()));
-      continue;
-    }
-    if (name === "cat" && cmd.stdin !== null) {
-      for (const r of cmd.redirects) {
-        if (r.op === ">" || r.op === ">>") written.set(path.resolve(dir, r.target), cmd.stdin);
-      }
-    }
-    if (name === "git" && subAgent) gitRules(words);
-    if (name === "gh") ghRules(words, dynamic, cmd, dir, written);
-    slowLaneRules(words);
+// why: an `inputs:` directory the guard cannot read leaves the call alone.
+function inputsPatch(prompt) {
+  const dir = /^inputs:\s*[`'"]?([^`'"\s]+)/m.exec(prompt)?.[1];
+  if (dir === undefined) return "";
+  try {
+    return fs.readFileSync(path.resolve(cwd, dir, "diff.patch"), "utf8");
+  } catch {
+    return "";
   }
 }
+
+function commandRules(raw) {
+  const state = { dir: cwd, written: new Map() };
+  for (const cmd of parseShell(raw)) {
+    const { words, dynamic } = commandWords(cmd);
+    if (words.length > 0 && !changesDirectory(state, words, dynamic))
+      commandStep(state, cmd, words, dynamic);
+  }
+}
+
+function changesDirectory(state, words, dynamic) {
+  if (path.basename(words[0]) !== "cd" || words[1] === undefined || dynamic[1]) return false;
+  state.dir = path.resolve(state.dir, words[1].replace(/^~(?=\/|$)/, os.homedir()));
+  return true;
+}
+
+function commandStep(state, cmd, words, dynamic) {
+  const name = path.basename(words[0]);
+  if (name === "cat" && cmd.stdin !== null) trackWrites(state, cmd);
+  if (name === "git" && subAgent) gitRules(words);
+  if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
+  slowLaneRules(words);
+}
+
+// why: a body file written by a heredoc earlier in the same command is not on disk yet.
+function trackWrites(state, cmd) {
+  for (const r of cmd.redirects) {
+    if (r.op === ">" || r.op === ">>")
+      state.written.set(path.resolve(state.dir, r.target), cmd.stdin);
+  }
+}
+
+const GIT_RULES = [
+  {
+    when: (g) => g.sub === "stash",
+    reason:
+      "Refused: never `git stash` in a delivery stage: every worktree shares one stash list, so " +
+      "a pop can take another agent's changes. Commit the work instead.",
+  },
+  {
+    when: (g) =>
+      g.sub === "rebase" ||
+      (g.sub === "pull" && g.rest.some((w) => /^(?:-r|--rebase(?!=false))/.test(w))),
+    reason:
+      "Refused: never rebase in a delivery stage: a stack moves by merging forward " +
+      "(`.agents/scripts/stack-sync.sh`), and a rebased branch needs a force push nobody may " +
+      "make (delivery rule 15). Merge the base branch instead: `git merge origin/<base>`.",
+  },
+  {
+    when: (g) => g.sub === "push" && g.rest.some(rewritesRemote),
+    reason:
+      "Refused: this push rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force` or " +
+      "`--delete`). Push fast-forwards only; when the push is rejected, merge the remote " +
+      "branch in and push again.",
+  },
+];
 
 function gitRules(words) {
   let at = 1;
   while (at < words.length && words[at].startsWith("-"))
     at += GIT_VALUE_FLAGS.has(words[at]) ? 2 : 1;
-  const sub = words[at];
-  const rest = words.slice(at + 1);
-  if (sub === "stash") {
-    refuse(
-      "Refused: never `git stash` in a delivery stage: every worktree shares one stash list, so " +
-        "a pop can take another agent's changes. Commit the work instead.",
-    );
-  }
-  if (
-    sub === "rebase" ||
-    (sub === "pull" && rest.some((w) => /^(?:-r|--rebase(?!=false))/.test(w)))
-  ) {
-    refuse(
-      "Refused: never rebase in a delivery stage: a stack moves by merging forward " +
-        "(`.agents/scripts/stack-sync.sh`), and a rebased branch needs a force push nobody may " +
-        "make (delivery rule 15). Merge the base branch instead: `git merge origin/<base>`.",
-    );
-  }
-  if (
-    sub === "push" &&
-    rest.some(
-      (w) =>
-        w.startsWith("+") ||
-        /^:./.test(w) ||
-        /^--(?:force|delete|mirror)/.test(w) ||
-        /^-[a-zA-Z]*[fd]/.test(w),
-    )
-  ) {
-    refuse(
-      "Refused: this push rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force` or " +
-        "`--delete`). Push fast-forwards only; when the push is rejected, merge the remote " +
-        "branch in and push again.",
-    );
-  }
+  refuseFirst(GIT_RULES, { sub: words[at], rest: words.slice(at + 1) });
 }
 
-function ghRules(words, dynamic, cmd, dir, written) {
-  const [, group, verb] = words;
-  if (group === "issue" && verb === "edit" && flagValues(words, ["--add-assignee"]).length > 0) {
-    refuse(
+function rewritesRemote(word) {
+  return (
+    word.startsWith("+") ||
+    /^:./.test(word) ||
+    /^--(?:force|delete|mirror)/.test(word) ||
+    /^-[a-zA-Z]*[fd]/.test(word)
+  );
+}
+
+const GH_RULES = [
+  {
+    when: (c) =>
+      c.group === "issue" &&
+      c.verb === "edit" &&
+      flagValues(c.words, ["--add-assignee"]).length > 0,
+    reason:
       "Refused: claim an issue with `node .agents/scripts/claim.mjs <n>` (`--triage` for a " +
-        "`bug:new` triage), not by hand. It assigns you only when the issue is open, unassigned " +
-        "and labelled as work an agent may take (delivery rules 1 and 2).",
-    );
-  }
-  if (subAgent) {
-    const label = addedLabels(words, group, verb).find((l) => WORK_LABELS.has(l));
-    if (label !== undefined) {
-      refuse(
-        `Refused: agents never label their way into work (delivery rule 1): \`${label}\` is the ` +
-          "maintainer's or the spec session's to set. Leave the label as it is and say in your " +
-          "report what should change.",
-      );
-    }
-    if (group === "pr" && verb === "ready") {
-      refuse(
-        "Refused: only the orchestrator marks a PR ready, after its review (delivery rule 14). " +
-          "Leave it in draft and report.",
-      );
-    }
-    if (group === "pr" && verb === "create") {
-      if (!words.includes("--draft") && !words.includes("-d")) {
-        refuse(
-          "Refused: every PR starts in draft (delivery rule 14). Run `gh pr create` again with " +
-            "`--draft`; the orchestrator marks it ready after review.",
-        );
-      }
-      const head = flagValues(words, ["--head", "-H"]).at(-1) ?? currentBranch(dir);
-      if (head.endsWith("-repro")) {
-        refuse(
-          "Refused: a `bug/<n>-repro` branch opens no pull request (delivery rule 8). Push the " +
-            "test to the branch and name it in the triage report.",
-        );
-      }
-    }
-    if (group === "api" && /(?:^|\/)repos\/[^/]+\/[^/]+\/pulls$/.test(apiPath(words))) {
-      const fields = apiFields(words);
-      const post =
-        flagValues(words, ["-X", "--method"]).at(-1)?.toUpperCase() ??
-        (fields.length > 0 ? "POST" : "GET");
-      if (post === "POST" && !fields.some((f) => f.key === "draft" && f.value === "true")) {
-        refuse(
-          "Refused: every PR starts in draft (delivery rule 14). Create it again with " +
-            "`-F draft=true`; the orchestrator marks it ready after review.",
-        );
-      }
-    }
-  }
-  const body = postedBody(words, dynamic, cmd, dir, written);
-  if (body === null) return;
-  const defects = bodyDefects(body);
+      "`bug:new` triage), not by hand. It assigns you only when the issue is open, unassigned " +
+      "and labelled as work an agent may take (delivery rules 1 and 2).",
+  },
+  {
+    when: (c) => subAgent && workLabel(c) !== undefined,
+    reason: (c) =>
+      `Refused: agents never label their way into work (delivery rule 1): \`${workLabel(c)}\` is the ` +
+      "maintainer's or the spec session's to set. Leave the label as it is and say in your " +
+      "report what should change.",
+  },
+  {
+    when: (c) => subAgent && c.group === "pr" && c.verb === "ready",
+    reason:
+      "Refused: only the orchestrator marks a PR ready, after its review (delivery rule 14). " +
+      "Leave it in draft and report.",
+  },
+  {
+    when: (c) => subAgent && prCreate(c) && !c.words.includes("--draft") && !c.words.includes("-d"),
+    reason:
+      "Refused: every PR starts in draft (delivery rule 14). Run `gh pr create` again with " +
+      "`--draft`; the orchestrator marks it ready after review.",
+  },
+  {
+    when: (c) => subAgent && prCreate(c) && prHead(c).endsWith("-repro"),
+    reason:
+      "Refused: a `bug/<n>-repro` branch opens no pull request (delivery rule 8). Push the " +
+      "test to the branch and name it in the triage report.",
+  },
+  {
+    when: (c) => subAgent && restCreatesReadyPr(c.words),
+    reason:
+      "Refused: every PR starts in draft (delivery rule 14). Create it again with " +
+      "`-F draft=true`; the orchestrator marks it ready after review.",
+  },
+];
+
+function ghRules(c) {
+  refuseFirst(GH_RULES, c);
+  const body = postedBody(c);
+  const defects = body === null ? [] : bodyDefects(body);
   if (defects.length > 0) {
     const reason = defects.join(" ");
     refuse(`Refused: ${reason[0].toLowerCase()}${reason.slice(1)} Fix the body and post again.`);
   }
 }
 
+function workLabel(c) {
+  return addedLabels(c.words, c.group, c.verb).find((l) => WORK_LABELS.has(l));
+}
+
+function prCreate(c) {
+  return c.group === "pr" && c.verb === "create";
+}
+
+function prHead(c) {
+  return flagValues(c.words, ["--head", "-H"]).at(-1) ?? currentBranch(c.dir);
+}
+
+function restCreatesReadyPr(words) {
+  if (words[1] !== "api" || !/(?:^|\/)repos\/[^/]+\/[^/]+\/pulls$/.test(apiPath(words)))
+    return false;
+  const fields = apiFields(words);
+  const method = flagValues(words, ["-X", "--method"]).at(-1)?.toUpperCase();
+  const post = (method ?? (fields.length > 0 ? "POST" : "GET")) === "POST";
+  return post && !fields.some((f) => f.key === "draft" && f.value === "true");
+}
+
+const BODY_VERBS = ["comment", "create", "edit", "close"];
+const FIELD_FLAGS = ["-f", "-F", "--field", "--raw-field"];
+
 // why: a body is null when the command posts none; an unreadable one refuses here.
-function postedBody(words, dynamic, cmd, dir, written) {
-  const [, group, verb] = words;
-  const unreadable = () =>
-    refuse(
-      "Refused: the guard cannot read a body built by `$(...)`, a backtick or a variable, so it " +
-        "cannot check its shape (delivery rule 12). Write the body to a file and pass " +
-        "`--body-file <file>` (`-F body=@<file>` for `gh api`).",
-    );
-  const fromFile = (file) => {
-    if (file === "-") {
-      if (cmd.stdin === null || cmd.stdinDynamic) unreadable();
-      return cmd.stdin;
-    }
-    const at = path.resolve(dir, file.replace(/^~(?=\/|$)/, os.homedir()));
-    if (written.has(at)) return written.get(at);
-    try {
-      return fs.readFileSync(at, "utf8");
-    } catch {
-      return refuse(
-        `Refused: \`${file}\` does not exist yet, so the guard cannot check the body. Write the ` +
-          "file first, then post it in its own command.",
-      );
-    }
-  };
-  if (
-    (group === "issue" || group === "pr") &&
-    ["comment", "create", "edit", "close"].includes(verb)
-  ) {
-    const inline = verb === "close" ? ["--comment", "-c"] : ["--body", "-b"];
-    for (let i = 3; i < words.length; i++) {
-      const [flag, value, valueAt] = splitFlag(words, i);
-      if (inline.includes(flag)) {
-        if (dynamic[valueAt]) unreadable();
-        return value ?? "";
-      }
-      if (verb !== "close" && (flag === "--body-file" || flag === "-F")) {
-        if (dynamic[valueAt]) unreadable();
-        return fromFile(value ?? "");
-      }
-    }
-    return null;
-  }
-  if (group === "api") {
-    for (let i = 2; i < words.length; i++) {
-      const [flag, value, valueAt] = splitFlag(words, i);
-      if (flag === "--input" && value !== undefined) {
-        if (dynamic[valueAt]) unreadable();
-        try {
-          const json = JSON.parse(fromFile(value));
-          if (typeof json?.body === "string") return json.body;
-        } catch {
-          return null;
-        }
-      }
-      if (
-        !["-f", "-F", "--field", "--raw-field"].includes(flag) ||
-        !(value ?? "").startsWith("body=")
-      )
-        continue;
-      if (dynamic[valueAt]) unreadable();
-      const text = value.slice("body=".length);
-      return (flag === "-F" || flag === "--field") && text.startsWith("@")
-        ? fromFile(text.slice(1))
-        : text;
-    }
+function postedBody(c) {
+  if ((c.group === "issue" || c.group === "pr") && BODY_VERBS.includes(c.verb)) return issueBody(c);
+  if (c.group === "api") return apiBody(c);
+  return null;
+}
+
+function issueBody(c) {
+  const inline = c.verb === "close" ? ["--comment", "-c"] : ["--body", "-b"];
+  const files = c.verb === "close" ? [] : ["--body-file", "-F"];
+  for (let i = 3; i < c.words.length; i++) {
+    const [flag, value, valueAt] = splitFlag(c.words, i);
+    if (inline.includes(flag)) return readable(c, valueAt, value ?? "");
+    if (files.includes(flag)) return bodyFile(c, readable(c, valueAt, value ?? ""));
   }
   return null;
 }
 
-function slowLaneRules(words) {
-  const name = path.basename(words[0]);
-  const runner = words.findIndex((w) => path.basename(w) === "vitest");
-  if (
-    runner !== -1 &&
-    (runner === 0 ||
-      (["pnpm", "npx", "bunx", "yarn", "npm"].includes(name) &&
-        words
-          .slice(1, runner)
-          .every((w) => ["exec", "dlx", "x", "run"].includes(w) || w.startsWith("-"))))
-  ) {
-    const after = words.slice(runner + 1);
-    const slowFile = after.some((w) => /(?:^|\/)e2e\/slow-[^/]*$/.test(w));
-    const e2e = after.some(
-      (w, i) => w === "--project=e2e" || (w === "--project" && after[i + 1] === "e2e"),
-    );
-    const filtered = flagValues(after, ["--tags-filter"], 0).some((v) => v.includes("!slow"));
-    if (slowFile || (e2e && !filtered)) {
-      refuse(
-        "Refused: the slow lane runs only through `scripts/slow-e2e.sh <test files>`, which holds " +
-          "the machine-wide lock (delivery rule 16). Run the fast e2e lane with `pnpm test:e2e " +
-          "<files>`, and leave the slow lane to the hardware verifier.",
-      );
-    }
+function apiBody(c) {
+  for (let i = 2; i < c.words.length; i++) {
+    const [flag, value, valueAt] = splitFlag(c.words, i);
+    const input =
+      flag === "--input" && value !== undefined ? inputBody(c, value, valueAt) : undefined;
+    if (input !== undefined) return input;
+    if (FIELD_FLAGS.includes(flag) && (value ?? "").startsWith("body="))
+      return fieldBody(c, flag, value, valueAt);
   }
-  if (
-    subAgent &&
-    name === "pnpm" &&
-    SLOW_LANE_SCRIPTS.has(pnpmOperands(words.slice(1)).find((w) => w !== "run"))
-  ) {
-    refuse(
+  return null;
+}
+
+// why: undefined goes on to the next word, null stops at a file that holds no JSON.
+function inputBody(c, value, valueAt) {
+  try {
+    const json = JSON.parse(bodyFile(c, readable(c, valueAt, value)));
+    return typeof json?.body === "string" ? json.body : undefined;
+  } catch {
+    return null;
+  }
+}
+
+function fieldBody(c, flag, value, valueAt) {
+  const text = readable(c, valueAt, value).slice("body=".length);
+  const file = (flag === "-F" || flag === "--field") && text.startsWith("@");
+  return file ? bodyFile(c, text.slice(1)) : text;
+}
+
+function readable(c, valueAt, value) {
+  if (c.dynamic[valueAt]) unreadable();
+  return value;
+}
+
+function unreadable() {
+  refuse(
+    "Refused: the guard cannot read a body built by `$(...)`, a backtick or a variable, so it " +
+      "cannot check its shape (delivery rule 12). Write the body to a file and pass " +
+      "`--body-file <file>` (`-F body=@<file>` for `gh api`).",
+  );
+}
+
+function bodyFile(c, file) {
+  if (file === "-") {
+    if (c.cmd.stdin === null || c.cmd.stdinDynamic) unreadable();
+    return c.cmd.stdin;
+  }
+  const at = path.resolve(c.dir, file.replace(/^~(?=\/|$)/, os.homedir()));
+  if (c.written.has(at)) return c.written.get(at);
+  try {
+    return fs.readFileSync(at, "utf8");
+  } catch {
+    return refuse(
+      `Refused: \`${file}\` does not exist yet, so the guard cannot check the body. Write the ` +
+        "file first, then post it in its own command.",
+    );
+  }
+}
+
+const SLOW_LANE_RULES = [
+  {
+    when: (words) => vitestRunsSlowLane(words),
+    reason:
       "Refused: the slow lane runs only through `scripts/slow-e2e.sh <test files>`, which holds " +
-        "the machine-wide lock (delivery rule 16). Run it through the script, or report the " +
-        "lines that need it under `hardware`.",
-    );
-  }
-  const script = words.findIndex((w) => path.basename(w) === "slow-e2e.sh");
-  if (
-    script !== -1 &&
-    (script === 0 || ["sh", "bash", "zsh"].includes(name)) &&
-    words[script + 1] !== "status" &&
-    typeof input.agent_type === "string" &&
-    !SLOW_LANE_AGENTS.has(input.agent_type)
-  ) {
-    refuse(
+      "the machine-wide lock (delivery rule 16). Run the fast e2e lane with `pnpm test:e2e " +
+      "<files>`, and leave the slow lane to the hardware verifier.",
+  },
+  {
+    when: (words) =>
+      subAgent &&
+      path.basename(words[0]) === "pnpm" &&
+      SLOW_LANE_SCRIPTS.has(pnpmOperands(words.slice(1)).find((w) => w !== "run")),
+    reason:
+      "Refused: the slow lane runs only through `scripts/slow-e2e.sh <test files>`, which holds " +
+      "the machine-wide lock (delivery rule 16). Run it through the script, or report the " +
+      "lines that need it under `hardware`.",
+  },
+  {
+    when: (words) => startsSlowLane(words) && !SLOW_LANE_AGENTS.has(input.agent_type ?? ""),
+    reason:
       "Refused: only the hardware verifier and the implementer run the slow lane (delivery rule " +
-        "16); `scripts/slow-e2e.sh status` is open to every agent. Report what needs the lane " +
-        "instead.",
-    );
-  }
+      "16); `scripts/slow-e2e.sh status` is open to every agent. Report what needs the lane " +
+      "instead.",
+  },
+];
+
+function slowLaneRules(words) {
+  refuseFirst(SLOW_LANE_RULES, words);
+}
+
+function vitestRunsSlowLane(words) {
+  const runner = words.findIndex((w) => path.basename(w) === "vitest");
+  if (runner === -1 || !runsAsCommand(words, runner)) return false;
+  const after = words.slice(runner + 1);
+  const slowFile = after.some((w) => /(?:^|\/)e2e\/slow-[^/]*$/.test(w));
+  const e2e = after.some(
+    (w, i) => w === "--project=e2e" || (w === "--project" && after[i + 1] === "e2e"),
+  );
+  const filtered = flagValues(after, ["--tags-filter"], 0).some((v) => v.includes("!slow"));
+  return slowFile || (e2e && !filtered);
+}
+
+// why: `vitest` as the program, or after `pnpm exec`, `npx` and the like; not as an operand.
+function runsAsCommand(words, runner) {
+  if (runner === 0) return true;
+  const launcher = ["pnpm", "npx", "bunx", "yarn", "npm"].includes(path.basename(words[0]));
+  return (
+    launcher &&
+    words
+      .slice(1, runner)
+      .every((w) => ["exec", "dlx", "x", "run"].includes(w) || w.startsWith("-"))
+  );
+}
+
+// why: the main session has no `agent_type`, and it may start the lane.
+function startsSlowLane(words) {
+  const script = words.findIndex((w) => path.basename(w) === "slow-e2e.sh");
+  if (script === -1 || typeof input.agent_type !== "string") return false;
+  const shell = script === 0 || ["sh", "bash", "zsh"].includes(path.basename(words[0]));
+  return shell && words[script + 1] !== "status";
 }
 
 function addedLabels(words, group, verb) {
@@ -658,3 +656,64 @@ function firstOperand(words) {
 function unquote(word) {
   return word.replace(/^['"]|['"]$/g, "");
 }
+
+// why: the rule tables above are consts, so the hook runs once they all exist.
+const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+const tool = input.tool_name;
+const args = input.tool_input ?? {};
+const subAgent = typeof input.agent_id === "string";
+const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
+
+if (tool === "Agent" || tool === "Task") agentRules();
+
+if (tool === "Bash" && subAgent) {
+  const shell = code(args.command ?? "");
+  if (HOOK_BYPASS.some((re) => re.test(shell))) {
+    refuse(
+      "Refused: this skips the git hooks. They run the checks agents never run by hand. Only the " +
+        "build stage may skip Fallow, on a push before its last cycle: " +
+        "`LEFTHOOK_EXCLUDE=fallow git push ...`.",
+    );
+  }
+  const raw = args.command ?? "";
+  const slowLane = /slow-e2e\.sh|\.exit\b/.test(raw);
+  if (!slowLane) {
+    if (TEST_RUNNER.test(shell) && !(Number(args.timeout) >= 300000)) {
+      refuse(
+        "Refused: a test run needs `timeout: 600000` on this Bash call. The default 120 s " +
+          "moves a two-minute run to the background, and a background job holds your report " +
+          "until it ends. Run it again in the foreground with the timeout set.",
+      );
+    }
+    if (args.run_in_background === true || BACKGROUND_JOB.test(shell)) {
+      refuse(
+        "Refused: nothing runs in the background in a delivery stage. A background job holds " +
+          "your report until it ends or hits its 30-minute cap, and polling it costs the turn. " +
+          "Run the command in the foreground with `timeout: 600000` on the Bash call.",
+      );
+    }
+    if (SLEEP_LOOP.test(shell)) {
+      refuse(
+        "Refused: no loop that sleeps. Nothing you started runs in the background, so there is " +
+          "nothing to wait for: run the command itself in the foreground with `timeout: 600000`.",
+      );
+    }
+    if (BARE_CAT.test(raw)) {
+      refuse(
+        "Refused: `cat > file` with no input reads stdin until the tool times out. Write the " +
+          "file with the Write tool, or give cat a heredoc (`cat > file <<'EOF'`).",
+      );
+    }
+  }
+  const found = forbiddenCheck(shell);
+  if (found !== null) {
+    refuse(
+      `Refused: \`${found}\` is under "Checks agents never run" in toolchain.md. The commit ` +
+        "hook runs lint, the comment lint and typecheck; the push hook runs Fallow and the e2e " +
+        "typecheck; CI runs the rest. Their errors show in the commit or push output. Run only " +
+        'the commands under "Tests agents run".',
+    );
+  }
+}
+if (tool === "Bash") commandRules(args.command ?? "");
+process.exit(0);
