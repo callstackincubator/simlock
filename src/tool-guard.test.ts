@@ -99,6 +99,37 @@ describe("tool-guard.mjs", () => {
   });
 
   it.each([
+    ["pnpm exec vitest run --project unit src/a.test.ts", {}, "timeout: 600000"],
+    ["pnpm test:changed", { timeout: 120_000 }, "timeout: 600000"],
+    ["ls", { run_in_background: true, timeout: 600_000 }, "background"],
+    ["(git push origin x > log 2>&1; echo done) &", { timeout: 600_000 }, "background"],
+    ["until ! pgrep -f lefthook >/dev/null; do sleep 5; done; tail x", {}, "loop that sleeps"],
+    ["for _ in $(seq 18); do [ -f out ] && break; sleep 30; done", {}, "loop that sleeps"],
+    ["cat > /tmp/x 2>/dev/null; mkdir -p .agents/scratch", {}, "no input"],
+    ["cat > ../pr-911.md", {}, "no input"],
+  ])("refuses a sub-agent's wait or background job: %s", (command, input, reason) => {
+    const result = call({
+      tool_name: "Bash",
+      tool_input: { command, ...input },
+      agent_id: "a1",
+      agent_type: "implementer",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(reason);
+  });
+
+  it.each([
+    "ls vitest* ui/vitest.config.ts",
+    "cat vitest.config.ts | head",
+    'for _ in $(seq 18); do [ -f "$log.exit" ] && break; sleep 30; done; cat "$log.exit"',
+    "cat > ../pr-911.md <<'EOF'\nCloses #1\nEOF\ngit status",
+    "python3 - <<'EOF'\nfor i in range(3):\n  time.sleep(1)\nEOF",
+  ])("lets a sub-agent run a foreground command, the slow lane wait included: %s", (command) => {
+    expect(bash(command, "a1", "implementer")).toEqual(OK);
+  });
+
+  it.each([
     "git push --no-verify -u origin task/1",
     "git commit -q --no-verify -m x",
     "LEFTHOOK=0 git push origin HEAD:task/1",
