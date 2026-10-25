@@ -45,8 +45,14 @@ list and this one the same.
   (`.agents/scripts/commit-msg-check.mjs`) refuses a subject on
   `<kind>/<n>` that is not `<type>(<scope>): <what> (#<n>)`, and on
   `bug/<n>-repro` one that is not `test: reproduce #<n> — <claim>`.
-- **Push hook:** Fallow, then the e2e typecheck.
-- **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
+- **Push hook:** Fallow's audit (the findings the branch adds against
+  `origin/main`), then the e2e typecheck.
+- **CI:** what `pnpm check` runs, and Fallow, on every push. CI's Fallow
+  (`fallow --ci`) checks the whole tree and fails on any dead-code finding
+  or clone group, `warn` rules included; complexity fails above the
+  `.fallowrc.json` limits, and refactoring targets never fail. Its findings
+  show as annotations on the PR. A `fallow-ignore` comment names its reason
+  after ` -- `, and one that no longer hides a finding fails. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing
   tests, the e2e lane in three shards); the Quality check passes only when all of them
   do. The console lane runs in four shards
