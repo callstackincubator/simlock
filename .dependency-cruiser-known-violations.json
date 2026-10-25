@@ -174,5 +174,38 @@
       "severity": "error",
       "name": "past-index"
     }
+  },
+  {
+    "type": "dependency",
+    "from": "src/cli/passthrough.ts",
+    "to": "child_process",
+    "unresolvedTo": "child_process",
+    "dependencyTypes": ["core", "dynamic-import"],
+    "rule": {
+      "severity": "error",
+      "name": "no-fs-or-process"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/history/testing.ts",
+    "to": "fs/promises",
+    "unresolvedTo": "fs/promises",
+    "dependencyTypes": ["core", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "no-fs-or-process"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/http/server.ts",
+    "to": "fs",
+    "unresolvedTo": "fs",
+    "dependencyTypes": ["core", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "no-fs-or-process"
+    }
   }
 ]

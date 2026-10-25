@@ -112,12 +112,14 @@ export default {
       "^src/(core|leasing)/",
       { path: "^src/drivers/" },
     ),
-    direction(
-      "no-fs-or-process",
-      "core, leasing, agent-device, host-load, stream and alerts reach the filesystem and processes only through injected ports",
-      "^src/(core|leasing|agent-device|host-load|stream|alerts)/",
-      { dependencyTypes: ["core"], path: fsOrProcess },
-    ),
+    {
+      name: "no-fs-or-process",
+      comment:
+        "application code reaches the filesystem and processes only through injected ports; src/ports/ holds the adapters, src/test-support/ is test-only",
+      severity: "error",
+      from: { path: "^src/", pathNot: `^src/(ports|test-support)/|${testFile}` },
+      to: { dependencyTypes: ["core"], path: fsOrProcess },
+    },
     direction(
       "not-agent-device",
       "the core, leasing and the drivers import nothing from the agent-device edge",
