@@ -1415,7 +1415,6 @@ async function discoverIosDriver(
   }
 }
 
-/** Surfaces what the Android driver reports through `onDiagnostic` as a warning. */
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
   if (diagnostic.kind === "snapshot-cold-boot") {
     logger.warn("Android snapshot boot fell back to a cold boot", {
