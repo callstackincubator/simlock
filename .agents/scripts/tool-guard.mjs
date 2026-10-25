@@ -41,7 +41,8 @@ const WRAPPERS = new Set(["time", "nice", "env", "command", "exec"]);
 const PNPM_VALUE_FLAGS = new Set(["-C", "--dir", "-F", "--filter", "--reporter"]);
 const STAGES = new Set(["implementer", "reviewer", "hardware-verifier"]);
 // why: the runners agents are allowed to run; `slow-e2e.sh` is excluded above, not here.
-const TEST_RUNNER = /\bvitest\b|\bplaywright\s+test\b|\bpnpm\s+(?:run\s+)?test(?::\w+)?\b/;
+const TEST_RUNNER =
+  /\bvitest\s+(?:run|--)|\bplaywright\s+test\b|\bpnpm\s+(?:run\s+)?test(?::[\w-]+)?(?:\s|$)/;
 // why: a `&` that is not `&&` and ends a command or a line starts a background job.
 const BACKGROUND_JOB = /(?:^|[^&])&\s*(?:$|\n|\)|;)/m;
 const SLEEP_LOOP = /\b(?:until|while|for)\b[^\n]*\bdo\b[\s\S]*?\bsleep\b/;
