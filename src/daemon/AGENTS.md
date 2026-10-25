@@ -88,7 +88,7 @@ Health: `starting` → `running`, or `failed`.
   `daemon`, `host` and `load` only.
 - Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
   (`convergence-failed`).
-- A stop during converge → nothing is armed, no `daemon.started`.
+- A stop during converge → nothing is armed, no `daemon.started`; parked requests get `DAEMON_STOPPING`.
 - Arm: owner-routed push subscription → `daemon.started` → driver refusal events →
   health monitor and physical device watcher start.
 - A gateway's dispatcher never parks.

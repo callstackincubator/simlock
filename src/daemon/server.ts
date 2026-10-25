@@ -612,6 +612,8 @@ export class DaemonServer {
     } catch {
       throw new StartupFailedError();
     }
+    // why: a request parked before the stop passed the entry gates already; releasing it would start work after `settle()` took its snapshot.
+    if (this.#stopping) throw new DispatchError("DAEMON_STOPPING", "Daemon is stopping");
   }
 
   stop(reason = "requested"): Promise<void> {
