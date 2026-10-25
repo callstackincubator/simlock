@@ -308,7 +308,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     this.#replyEdit = edit;
   }
 
-  // why: agent-device names the device it picked beside the lease in its allocate reply; `"none"` is a reply that names no device.
+  // why: agent-device 0.21.28 names no device in its allocate reply, so a test that needs one in the reply asks for it here; `"none"` is the default.
   nameDeviceInNextReply(device: FakeReplyDevice | "none"): void {
     this.#replyDevice = device;
   }

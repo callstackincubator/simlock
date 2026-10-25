@@ -186,12 +186,19 @@ async function ruleShardList(check: Check, unit: Unit): Promise<void> {
   }
 }
 
+// why: agent-device's allocate reply names no device, so a name the command carries is checked against the name read from its device list, once per lease.
+async function withName(check: Check, leased: TokenDevice): Promise<TokenDevice> {
+  if (leased.name !== undefined || leased.named === true) return leased;
+  const read = (await check.tokenDevices()).find((device) => device.leaseId === leased.leaseId);
+  return read ?? leased;
+}
+
 async function ruleDevice(check: Check, place: Fields): Promise<boolean> {
   const device = place["device"];
   if (!present(device)) return false;
-  const leased = check.leased;
-  if (leased === undefined) throw refuse(SIMLOCK_PICKS);
+  if (check.leased === undefined) throw refuse(SIMLOCK_PICKS);
   const name = device as string;
+  const leased = await withName(check, check.leased);
   if (namesDevice(leased, name)) return false;
   if (!(await namesLeasedModel(check, leased, name))) throw refuse(SIMLOCK_PICKS);
   delete place["device"];

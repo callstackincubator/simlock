@@ -3614,11 +3614,14 @@ describe("the agent-device front's request rules", () => {
       }
     });
 
-    it("`--device` with the leased model, or a catalog alias of it, reaches agent-device as `udid` of the leased device on iOS and `serial` on Android, with no `device`; another model is refused", async () => {
+    it("`--device` with the leased device's own name is forwarded as sent; with the leased model, or a catalog alias of it, it reaches agent-device as `udid` of the leased device on iOS and `serial` on Android, with no `device`; another model is refused", async () => {
       const rig = await setUp({ drivers: bothDrivers });
       await granted(rig, 1, { device: "iPhone 17 Pro" });
       await granted(rig, 2, { device: "Pixel 8", platform: "android" });
       await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: { udid: idOf(rig, 1) } }));
+      const byName = await forwarded(rig, () =>
+        runCommand(rig, "snapshot", 1, { flags: { device: nameOf(rig, 1) } }),
+      );
 
       const ios = flagsOf(
         await forwarded(rig, () =>
@@ -3629,6 +3632,7 @@ describe("the agent-device front's request rules", () => {
         await forwarded(rig, () => runCommand(rig, "snapshot", 2, { flags: { device: "p8" } })),
       );
 
+      expect(flagsOf(byName)["device"]).toBe(nameOf(rig, 1));
       expect(ios["udid"]).toBe(idOf(rig, 1));
       expect(ios).not.toHaveProperty("device");
       expect(android["serial"]).toBe(idOf(rig, 2));
