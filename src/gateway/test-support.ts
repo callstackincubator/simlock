@@ -16,8 +16,6 @@ import type {
   ExecInput,
   ExecOptions,
   ExecOutput,
-  LeaseCancelInput,
-  LeaseCancelOutput,
   LeaseGrant,
   LeaseRecord,
   LeaseReleaseInput,
@@ -465,6 +463,7 @@ export class ScriptedWorkerClient {
     return outcome.grant;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async renewLease(input: LeaseRenewInput): Promise<LeaseRecord> {
     this.calls.push(`lease.renew:${input.leaseId}`);
     this.#throwIfFailing();
@@ -473,6 +472,7 @@ export class ScriptedWorkerClient {
     return outcome?.record ?? (leaseFixture(input.leaseId, "dev_1") as LeaseRecord);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async releaseLease(input: LeaseReleaseInput): Promise<LeaseReleaseOutput> {
     this.calls.push(`lease.release:${input.leaseId}`);
     this.#throwIfFailing();
@@ -482,15 +482,7 @@ export class ScriptedWorkerClient {
     return { leaseId: input.leaseId };
   }
 
-  async cancelLease(_input: LeaseCancelInput = {}): Promise<LeaseCancelOutput> {
-    this.calls.push("lease.cancel");
-    this.#throwIfFailing();
-    return { result: "cancelled" };
-  }
-
-  /** #118: `FleetLeaseCoordinator#exec` forwards here with the namespaced requester -- assert
-   * on `calls` (test: "device.exec forwarding sends the namespaced requesterId"). */
-  // fallow-ignore-next-line complexity -- one scripted outcome per branch of a real exec.
+  // fallow-ignore-next-line -- one scripted outcome per branch of a real exec (complexity), reached through the GatewayWorkerClient that asClient() casts this double to (unused-class-member).
   async exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
@@ -504,7 +496,7 @@ export class ScriptedWorkerClient {
     return { exitCode: outcome?.exitCode ?? 0 };
   }
 
-  /** ADR 0010 §7: the gateway's relay asks through this -- scripted by `installComponentHandler`. */
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async installComponent(
     input: ComponentInstallInput,
     options: InstallComponentOptions = {},
@@ -514,6 +506,7 @@ export class ScriptedWorkerClient {
     return this.installComponentHandler(input, options);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async getCatalog(): Promise<CatalogOutput> {
     this.calls.push("catalog.get");
     if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
@@ -521,6 +514,7 @@ export class ScriptedWorkerClient {
     return this.catalog;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async getConfig(): Promise<{
     readonly downloads: { readonly policy: DownloadPolicy; readonly timeoutMs: number };
     readonly lease: { readonly maxTtlMs: number };
@@ -546,6 +540,7 @@ export class ScriptedWorkerClient {
     };
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async close(): Promise<void> {
     this.closed = true;
   }

@@ -148,7 +148,6 @@ export class AcquisitionPlanner {
     return this.#planProvision(input);
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through LeaseAcquisitionCoordinator's `AcquisitionPlannerPort`.
   planPhysical(input: PhysicalPlanInput): AcquisitionPlan {
     let heldForOlder = false;
     for (const device of input.snapshot.devices) {

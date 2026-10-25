@@ -18,7 +18,6 @@ export interface AgentDeviceUpstream {
 export class SupervisorAgentDeviceUpstream implements AgentDeviceUpstream {
   constructor(readonly supervisor: { availability(): AgentDeviceAvailability }) {}
 
-  // fallow-ignore-next-line unused-class-member -- reached through the AgentDeviceUpstream port by the host.
   current(): AgentDeviceUpstreamState {
     const availability = this.supervisor.availability();
     switch (availability.state) {
@@ -37,7 +36,6 @@ export class SupervisorAgentDeviceUpstream implements AgentDeviceUpstream {
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- reached through the AgentDeviceUpstream port by the host.
   async fetch(request: Request): Promise<Response> {
     return globalThis.fetch(request);
   }

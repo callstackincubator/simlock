@@ -22,7 +22,7 @@ export { DEVICE_READY_MS, waitFor } from "./wait.js";
 export { events } from "./events.js";
 export type { RecordedEvent } from "./events.js";
 export { waitForDeviceState, waitForLeaseCount } from "./status.js";
-export { SCREEN_TAGS, readScreenFrames, type ScreenFrame } from "./screen-frames.js";
+export { SCREEN_TAGS, readScreenFrames } from "./screen-frames.js";
 export { REPO_ROOT } from "./repo-root.js";
 export type { CliResult } from "./cli.js";
 export {
@@ -41,4 +41,4 @@ export {
   waitForFree,
   warmUp,
 } from "./agent-device-targets.js";
-export type { DeviceRow, LeaseRow, RequestRow, Target } from "./agent-device-targets.js";
+export type { RequestRow, Target } from "./agent-device-targets.js";

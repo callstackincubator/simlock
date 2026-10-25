@@ -178,7 +178,6 @@ export class ReclaimCoordinator {
     return recovered;
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through LeaseReleaseCoordinator's reclaim port.
   async reclaimReturned(
     deviceId: string,
     osVersion?: string,

@@ -1198,7 +1198,6 @@ const PACKAGED_DEVICE_CAPTURE = fileURLToPath(
   new URL("../bin/simlock-device-capture", import.meta.url),
 );
 const PACKAGED_SCRCPY_SERVER = fileURLToPath(
-  // fallow-ignore-next-line unresolved-import -- a file pnpm build copies into dist, not a module.
   new URL("../vendor/scrcpy/scrcpy-server-v5.0.1", import.meta.url),
 );
 

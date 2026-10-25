@@ -16,9 +16,9 @@ import { waitFor } from "./wait.js";
 
 export const ENROLLED = ["com.example.mail", "com.example.maps"] as const;
 export const AGENT_APPS = ["com.agent.one", "com.agent.two"] as const;
-export const RECLAIM_FAILURE: FakeDriverErrorSpec = { message: "device busy", type: "generic" };
+const RECLAIM_FAILURE: FakeDriverErrorSpec = { message: "device busy", type: "generic" };
 
-export const GRACE_HEALTH = { probeIntervalMs: 200, stableObservations: 2 };
+const GRACE_HEALTH = { probeIntervalMs: 200, stableObservations: 2 };
 
 export type AbsentReason = "locked" | "untrusted" | "not-present";
 
@@ -69,7 +69,7 @@ function scriptedExtras(script: DeviceScript | undefined) {
   };
 }
 
-export function iosScript(
+function iosScript(
   devices: readonly ScriptedSeed[],
   options: { readonly failReclaim?: boolean } = {},
 ): FakeDriverPlatformScript {

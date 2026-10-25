@@ -8,9 +8,9 @@ import { REPO_ROOT } from "../helpers/repo-root.js";
 import { waitFor } from "../helpers/wait.js";
 
 export const PROXY_URL = "http://127.0.0.1:4180";
-export const GATEWAY_PORT = 4700;
+const GATEWAY_PORT = 4700;
 export const ISSUER = "http://127.0.0.1:5556/dex";
-export const CLIENT_ID = "simlock-real-proxy";
+const CLIENT_ID = "simlock-real-proxy";
 export const ALICE = { email: "alice@example.test", password: "password" } as const;
 
 export interface LaneDaemon {

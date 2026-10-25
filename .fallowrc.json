@@ -98,7 +98,10 @@
   },
   "rules": {
     "unused-dependencies": "warn",
-    "stale-suppressions": "error"
+    "stale-suppressions": "error",
+    // why: a suppression is a claim that Fallow cannot see a use; the `-- <reason>` says which
+    // use, so a reader can check it and a stale one can be judged.
+    "require-suppression-reason": "error"
   },
   "health": {
     "thresholdOverrides": [
