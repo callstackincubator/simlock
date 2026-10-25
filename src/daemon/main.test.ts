@@ -1834,41 +1834,57 @@ describe("startDaemon HTTP gateway bind failure", () => {
     }
   });
 
-  // why: the bind failure lands after convergence has finished (the bind is held back), so a
-  // start that does not wait for the listener would already be `running`.
-  it("fails a start whose HTTP listener cannot bind before it reports running, stopping with http-start-failed", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-late-bind-"));
-    temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-    const port = await freeLoopbackPort();
-    const occupier = createServer();
-    await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
-    const restoreListen = delayTcpListen(200);
-    try {
-      await expect(
-        startDaemon({
+  // why: the bind is held until convergence has had every chance to finish, then fails, so a start that does not wait for the listener (either role's convergence) would already have logged "Daemon started".
+  it.each(["worker", "gateway"] as const)(
+    "fails a %s start whose HTTP listener cannot bind before it reports running, stopping with http-start-failed",
+    async (role) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-late-bind-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const sink = new MemoryLogSink();
+      const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+      const port = await freeLoopbackPort();
+      const occupier = createServer();
+      await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+      const hold = holdTcpListen();
+      try {
+        const settled = startDaemon({
           clock,
           configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
           dataDirectory: directory,
           drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
           deviceDataTables: fakeDeviceDataTables,
           filesystem: new MemoryFilesystem(),
+          hostLoadProbe: null,
           logger,
+          role,
           version: "1.2.3",
-        } as StartDaemonOptions),
-      ).rejects.toThrow(/EADDRINUSE|address already in use/i);
-    } finally {
-      restoreListen();
-      await new Promise((resolve) => occupier.close(resolve));
-    }
+        } as StartDaemonOptions).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await hold.bindRequested;
+        // why: yields whole event-loop turns, not wall time: convergence is in-memory, so a start that does not wait for the bind logs "Daemon started" within them.
+        for (
+          let turn = 0;
+          turn < 200 && !sink.records.some((record) => record.message === "Daemon started");
+          turn += 1
+        ) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        hold.release();
+        expect(String(await settled)).toMatch(/EADDRINUSE|address already in use/i);
+      } finally {
+        hold.restore();
+        await new Promise((resolve) => occupier.close(resolve));
+      }
 
-    const messages = sink.records.map((record) => record.message);
-    expect(messages).not.toContain("Daemon started");
-    const stopping = sink.records.find((record) => record.message === "Daemon stopping");
-    expect(stopping?.fields?.reason).toBe("http-start-failed");
-  });
+      const messages = sink.records.map((record) => record.message);
+      expect(messages).not.toContain("Daemon started");
+      const stopping = sink.records.find((record) => record.message === "Daemon stopping");
+      expect(stopping?.fields?.reason).toBe("http-start-failed");
+    },
+  );
 });
 
 async function pollUntilListening(port: number, secret: string): Promise<unknown> {
@@ -2814,6 +2830,52 @@ function delayTcpListen(delayMs: number): () => void {
   } as typeof Server.prototype.listen;
   return () => {
     Server.prototype.listen = original;
+  };
+}
+
+/** why: holds every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) until
+ * `release()`, then runs it for real; a Unix-socket `listen(path, callback)` call (a string first
+ * argument) passes straight through. `bindRequested` settles when the first TCP bind is asked for.
+ * Holds the HTTP gateway's own bind open without touching `src/http`: `@hono/node-server`'s
+ * `serve()` ultimately calls `http.Server#listen`, which is `net.Server`'s own method. Always
+ * call `restore`, even on failure. */
+function holdTcpListen(): {
+  readonly bindRequested: Promise<void>;
+  readonly release: () => void;
+  readonly restore: () => void;
+} {
+  const original = Server.prototype.listen;
+  type ListenFn = (...callArgs: unknown[]) => Server;
+  const held: Array<() => void> = [];
+  let released = false;
+  let requested: () => void = () => undefined;
+  const bindRequested = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  Server.prototype.listen = function patchedListen(this: Server, ...args: unknown[]) {
+    const isTcp =
+      typeof args[0] === "number" ||
+      (typeof args[0] === "object" && args[0] !== null && !("path" in (args[0] as object)));
+    if (!isTcp) {
+      return (original as ListenFn).apply(this, args);
+    }
+    const run = (): void => {
+      (original as ListenFn).apply(this, args);
+    };
+    if (released) run();
+    else held.push(run);
+    requested();
+    return this;
+  } as typeof Server.prototype.listen;
+  return {
+    bindRequested,
+    release: () => {
+      released = true;
+      for (const run of held.splice(0)) run();
+    },
+    restore: () => {
+      Server.prototype.listen = original;
+    },
   };
 }
 
