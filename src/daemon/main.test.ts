@@ -1523,6 +1523,37 @@ describe("startDaemon HTTP gateway startup readiness", () => {
   });
 });
 
+describe("startDaemon stop with a cleanup run in flight (#985)", () => {
+  it("logs no warning or error once a stop lands while the cleanup run daemon.started began is still in flight", async () => {
+    // why: holds the cleanup run that `daemon.started` starts on its disk read, so the stop
+    // lands while the run is in flight, as an `http-start-failed` stop right after a start does.
+    class HeldDiskFree extends MemoryFilesystem {
+      readonly held: (() => void)[] = [];
+      override async diskFree(path: string): Promise<number> {
+        await new Promise<void>((resolve) => this.held.push(resolve));
+        return super.diskFree(path);
+      }
+    }
+    const filesystem = new HeldDiskFree();
+    const { daemon, sink } = await start({ filesystem });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    expect(filesystem.held).toHaveLength(1);
+
+    await daemon.stop("http-start-failed");
+    for (const release of filesystem.held.splice(0)) release();
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    const stopping = sink.records.findIndex((record) => record.message === "Daemon stopping");
+    expect(stopping).toBeGreaterThanOrEqual(0);
+    expect(
+      sink.records
+        .slice(stopping)
+        .filter((record) => record.level === "warn" || record.level === "error")
+        .map(({ message, module, fields }) => ({ message, module, fields })),
+    ).toEqual([]);
+  });
+});
+
 describe("startDaemon stop with a warm target", () => {
   it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
