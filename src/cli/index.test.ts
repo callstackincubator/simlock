@@ -1892,15 +1892,23 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
     },
   );
 
-  it("preserves DAEMON_STOPPING from the startup status probe and closes its client", async () => {
+  it("reports a daemon that answers the startup status probe with DAEMON_STOPPING as its own start error and closes its client", async () => {
     const daemon = new HelloThenDeathIpc("stopping");
-    const launcher = new FakeDaemonLauncher(() => daemon.startListening());
+    const launcher = new FakeDaemonLauncher(() => daemon.startListening(), {
+      exit: { code: 1, signal: null },
+      output: `${JSON.stringify({ message: "Daemon failed to start", fields: { message: "listen EADDRINUSE: address already in use :::7777" } })}\n`,
+    });
     const output = outputCapture({ ...realCliEnvironmentPorts(), ipc: daemon, launcher });
     expect(await runCli(["daemon", "start", "--token", "probe"], output.environmentWith())).toBe(1);
     expect(launcher.launches).toBe(1);
     expect(daemon.helloReplies).toBe(1);
     expect(daemon.clientCloses).toBe(1);
-    expect(JSON.parse(output.stderr)).toMatchObject({ error: { code: "DAEMON_STOPPING" } });
+    expect(JSON.parse(output.stderr)).toMatchObject({
+      error: {
+        code: "DAEMON_STARTUP_FAILED",
+        message: "The daemon could not start: listen EADDRINUSE: address already in use :::7777",
+      },
+    });
   });
 
   it("daemon start's wait for health to leave starting ends past the daemon's startup-read cap with DAEMON_STARTUP_FAILED, leaving the daemon running", async () => {
@@ -1925,6 +1933,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
       "the wait outlasts the daemon's own startup read by 30 s",
     ).toBeGreaterThanOrEqual(STARTUP_READ_LIMIT_MS + 30_000);
     expect(await run).toBe(1);
+    expect(daemon.frameTypes, "the CLI sends the daemon no stop").not.toContain("daemon.stop");
     expect(daemon.deaths, "the daemon is not stopped by the CLI").toBe(0);
     expect(JSON.parse(output.stderr)).toMatchObject({
       error: {
@@ -8150,6 +8159,7 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
 class HelloThenDeathIpc implements IpcConnector {
   helloReplies = 0;
   deaths = 0;
+  readonly frameTypes: string[] = [];
   #listening = false;
 
   rejectedCredentials = 0;
@@ -8218,6 +8228,7 @@ class HelloThenDeathConnection implements IpcConnection {
       type?: unknown;
       payload?: { credential?: string };
     };
+    if (typeof frame.type === "string") this.daemon.frameTypes.push(frame.type);
     if (frame.type === "status.get") this.#answerStatus(frame.id);
     if (frame.type !== "hello" || typeof frame.id !== "number") return false;
     this.#answerHello(frame.id, frame.payload?.credential);
