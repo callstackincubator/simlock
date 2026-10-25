@@ -1564,6 +1564,60 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
         .map(({ message, module, fields }) => ({ message, module, fields })),
     ).toEqual([]);
   });
+
+  it("ends the device deletion a cleanup run has in flight before the driver is disposed", async () => {
+    // why: records the order of the driver's calls, and holds the deletion the cleanup run proposes mid-call.
+    class HeldDestroyDriver extends FakeDriver {
+      readonly order: string[] = [];
+      readonly held: (() => void)[] = [];
+      override async destroy(device: Parameters<FakeDriver["destroy"]>[0]): Promise<void> {
+        this.order.push("destroy started");
+        await new Promise<void>((resolve) => this.held.push(resolve));
+        await super.destroy(device);
+        this.order.push("destroy finished");
+      }
+      async dispose(): Promise<void> {
+        this.order.push("dispose");
+      }
+    }
+    const clock = new FakeClock(1_000);
+    const driver = new HeldDestroyDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({ clock, drivers: [driver] });
+    const agent = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent",
+      role: "agent",
+    } as const;
+    const request = {
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requesterId: "agent-1",
+    };
+    const grant = (await daemon.dispatch("lease.request", request, agent)) as {
+      readonly lease: { readonly id: string };
+    };
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    // why: the idle rules shut a released device down after 10 minutes and delete it after 60; each tick is the reaper's 60 s timer.
+    for (let minute = 0; minute < 70 && driver.held.length === 0; minute += 1) {
+      clock.advance(60_000);
+      for (let turn = 0; turn < 20; turn += 1) await turnOfTheEventLoop();
+    }
+    expect(driver.held).toHaveLength(1);
+
+    const stopped = daemon.stop("test-stop");
+    let stopEnded = false;
+    void stopped.then(() => {
+      stopEnded = true;
+    });
+    for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+    expect(driver.order).toEqual(["destroy started"]);
+    for (const release of driver.held.splice(0)) release();
+    await stopped;
+
+    expect(driver.order).toEqual(["destroy started", "destroy finished", "dispose"]);
+  });
 });
 
 describe("startDaemon stop with a warm target", () => {
