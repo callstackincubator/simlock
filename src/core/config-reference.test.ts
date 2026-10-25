@@ -74,6 +74,8 @@ function documentedKeys(): string[] {
 // it once and documents each key under `capacity.config`.
 const LEGACY = new Set(["limits", "ramBudget"]);
 
+// why: the keys a validator accepts live in the closures config.ts and validation.ts build, and
+// no index exports them; this test reads them where they are made to hold the website to them.
 describe("website reference/configuration.mdx", () => {
   it("names every key the config validator accepts in the first cell of a table row", () => {
     const documented = documentedKeys();
