@@ -23,6 +23,7 @@ import { option } from "./cli-args.mjs";
 
 const TRAILER = /^Docs: none \(.+\)\s*$/m;
 const DOCS = "website/src/content/docs/";
+const QUOTES = ["'", '"', "`"];
 
 const git = (...a) =>
   execFileSync("git", a, {
@@ -112,7 +113,7 @@ function skipped(text, i) {
   if (two === "//") return endOf(text, "\n", i);
   if (two === "/*") return endOf(text, "*/", i);
   const quote = text[i];
-  if (quote !== '"' && quote !== "'" && quote !== "`") return i;
+  if (!QUOTES.includes(quote)) return i;
   let j = i + 1;
   while (j < text.length && text[j] !== quote) j += text[j] === "\\" ? 2 : 1;
   return j + 1;

@@ -53,17 +53,18 @@ function fromGraphql(node) {
   };
 }
 
+const BLANK = {
+  state: "open",
+  body: "",
+  labels: [],
+  assignees: [],
+  parent: null,
+  subIssues: [],
+  prs: [],
+};
+
 function normalise(n, raw) {
-  return {
-    number: n,
-    state: raw.state ?? "open",
-    body: raw.body ?? "",
-    labels: raw.labels ?? [],
-    assignees: raw.assignees ?? [],
-    parent: raw.parent ?? null,
-    subIssues: raw.subIssues ?? [],
-    prs: raw.prs ?? [],
-  };
+  return { ...BLANK, ...raw, number: n };
 }
 
 export function issues(numbers, world) {
