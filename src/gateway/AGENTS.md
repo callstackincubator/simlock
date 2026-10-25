@@ -101,7 +101,7 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 
 **Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) and `lease.get`
 (one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record
-also carries `workerLeaseId`, the worker's own id (not on `status.get`). `inbox.get` runs `inboxItems` (contract) over the worker views, `#fleetLeases()`, `#fleetWaiting()` and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
+also carries `workerLeaseId`, the worker's own id (not on `status.get`). `inbox.get` runs `inboxItems` (contract) over the worker views, the fleet's leases and waiting requests (what `list.get` returns for `leases` and `requests`) and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
 
 **Uplink drop.** View → `disconnected`, kept; `worker.disconnected`. In-flight calls → `WORKER_UNREACHABLE`, an in-flight lease request → `worker-failed`. `token.revoke` closes its uplinks.
 
