@@ -1836,6 +1836,45 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect((retry as RequesterAlreadyLeasedError).existingLeaseId).toBe(rebuiltLeaseId);
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
+
+  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline, and keeps that lease routable to its worker (#984)", async () => {
+    const { clock, coordinator, directory, leaseIndex, workers } = harness();
+    const clientA = new ScriptedWorkerClient();
+    const clientB = new ScriptedWorkerClient();
+    directory.add("wrk_a", clientA);
+    directory.add("wrk_b", clientB);
+    connectWorker(workers, "wrk_a", {
+      leases: [
+        {
+          ...leaseFixture("lse_old", "dev_old"),
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+          ttlDeadline: 900_001,
+        },
+      ],
+    });
+    connectWorker(workers, "wrk_b");
+    workers.disconnected("wrk_a");
+    directory.unreachable.add("wrk_a");
+
+    clock.advance(900_000 - clock.now());
+    const beforeDeadline = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+    expect(beforeDeadline).toBeInstanceOf(RequesterAlreadyLeasedError);
+    expect((beforeDeadline as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_a.lse_old");
+
+    clock.advance(2);
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const afterDeadline = await coordinator
+      .request(REQUEST, requestOptions({ noWait: true }))
+      .catch((error: unknown) => error);
+
+    expect(afterDeadline).toMatchObject({ lease: { id: "wrk_b.lse_1", worker: { id: "wrk_b" } } });
+    expect(leaseIndex.resolve("wrk_a.lse_old")).toMatchObject({
+      requesterId: "agent-1",
+      workerId: "wrk_a",
+    });
+  });
 });
 
 describe("FleetLeaseCoordinator sends a worker only requests its catalog can serve (ADR 0009 §3)", () => {
