@@ -332,7 +332,9 @@ export async function startDaemon(
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.
     // Read the tail here, before any caller's catch reaches `dispose`, and fail with both.
     const tail = (await readLog()).split("\n").slice(-20).join("\n");
-    expect(started.code, `daemon start failed: ${started.stderr}\n${tail}`).toBe(0);
+    throw new Error(
+      `daemon start failed (exit code ${String(started.code)}): ${started.stderr}\n${tail}`,
+    );
   };
   const dispose = async (options: { readonly preservePages?: readonly Page[] } = {}) => {
     const preserved = new Set(options.preservePages ?? []);
