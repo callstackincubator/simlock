@@ -1837,7 +1837,7 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
-  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline, and keeps that lease routable to its worker (#984)", async () => {
+  it("grants a requester a new lease once its only lease, on a disconnected worker, is past its last reported deadline (not one ms before it), still counts a lease past its deadline on a connected worker, and keeps the lease routable to its worker (#984)", async () => {
     const { clock, coordinator, directory, leaseIndex, workers } = harness();
     const clientA = new ScriptedWorkerClient();
     const clientB = new ScriptedWorkerClient();
@@ -1853,17 +1853,34 @@ describe("drain and unreachable lifecycle (ADR §9/§28/§29, #119)", () => {
       ],
     });
     connectWorker(workers, "wrk_b");
+    connectWorker(workers, "wrk_c", {
+      leases: [
+        {
+          ...leaseFixture("lse_conn", "dev_conn"),
+          requesterId: `${GATEWAY_PREFIX}agent-2`,
+          ttlDeadline: 1,
+        },
+      ],
+    });
     workers.disconnected("wrk_a");
     directory.unreachable.add("wrk_a");
 
+    clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     clock.advance(900_000 - clock.now());
     const beforeDeadline = await coordinator
       .request(REQUEST, requestOptions({ noWait: true }))
       .catch((error: unknown) => error);
     expect(beforeDeadline).toBeInstanceOf(RequesterAlreadyLeasedError);
     expect((beforeDeadline as RequesterAlreadyLeasedError).existingLeaseId).toBe("wrk_a.lse_old");
+    const connected = await coordinator
+      .request(
+        REQUEST,
+        requestOptions({ noWait: true, ownerId: "agent-2", requesterId: "agent-2" }),
+      )
+      .catch((error: unknown) => error);
+    expect(connected).toBeInstanceOf(RequesterAlreadyLeasedError);
 
-    clock.advance(2);
+    clock.advance(1);
     clientB.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
     const afterDeadline = await coordinator
       .request(REQUEST, requestOptions({ noWait: true }))
