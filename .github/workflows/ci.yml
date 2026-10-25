@@ -281,3 +281,25 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: node .agents/scripts/protocol-bump-check.mjs --base "origin/$BASE_REF"
+
+  # why: checked on the PR's whole range, so a surface change in one commit and its page in a
+  # later one pass together.
+  docs-surface:
+    name: Docs surface
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Public surface and website pages change together
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node .agents/scripts/docs-surface-check.mjs --base "origin/$BASE_REF"

@@ -56,6 +56,10 @@ pre-push:
       priority: 1
       run: node .agents/scripts/protocol-bump-check.mjs --base origin/main
       fail_text: "A contract shape change and a PROTOCOL_VERSION_RANGE bump go together (toolchain.md, Contract shapes)."
+    docs-surface:
+      priority: 1
+      run: node .agents/scripts/docs-surface-check.mjs --base origin/main
+      fail_text: "A public surface change and its website pages go together (documentation rule 9)."
     typecheck-e2e:
       priority: 2
       run: pnpm run typecheck:e2e:types
