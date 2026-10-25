@@ -7,11 +7,9 @@ import { waitFor } from "./wait.js";
 const ATTEMPTS = 5;
 
 // why: `freeLoopbackPort` releases the port it picked, so another process can take it before
-// the daemon binds it. The daemon then stops with `EADDRINUSE` a moment after it claimed its
-// socket, so a `daemon start` can exit 0 and the next CLI call times out auto-starting a daemon
-// that fails the same way (#553). So this waits for the daemon's own "HTTP gateway listening"
-// line, and on `EADDRINUSE` starts a fresh env on a new port. `pickPort` lets this helper's own
-// test hand it a taken port first.
+// the daemon binds it. The daemon then fails its start with `EADDRINUSE` and `daemon start` exits
+// non-zero (#981), so this starts a fresh env on a new port. It also waits for the daemon's own
+// "HTTP gateway listening" line. `pickPort` lets this helper's own test hand it a taken port first.
 export async function withHttpDaemon(
   options: (port: number) => WithDaemonOptions,
   pickPort: () => Promise<number> = freeLoopbackPort,

@@ -21,6 +21,8 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 
+const EXIT_GRACE_MS = 2_000;
+
 class AutoLaunchAdminConnector {
   private startupDeadline: number | undefined;
 
@@ -33,7 +35,10 @@ class AutoLaunchAdminConnector {
     private readonly checkConfig: () => Promise<void>,
   ) {}
 
-  async connect(resolveCredential: () => Promise<string | undefined>): Promise<SimlockAdminClient> {
+  async connect(
+    resolveCredential: () => Promise<string | undefined>,
+    options: { readonly untilStarted?: boolean } | undefined = undefined,
+  ): Promise<SimlockAdminClient> {
     try {
       return await this.finishConnection(this.connectClient(resolveCredential));
     } catch (error: unknown) {
@@ -52,7 +57,8 @@ class AutoLaunchAdminConnector {
     let lastError: unknown;
     while (this.clock.now() < deadline) {
       try {
-        return await this.finishConnection(this.connectClient(resolveCredential));
+        const client = await this.finishConnection(this.connectClient(resolveCredential));
+        return options?.untilStarted === true ? await this.untilStarted(client, launched) : client;
       } catch (error: unknown) {
         if (!(await isUnavailable(error))) throw error;
         lastError = error;
@@ -70,6 +76,43 @@ class AutoLaunchAdminConnector {
       startTimeoutMessage(errorMessage(lastError), output),
       {},
     );
+  }
+
+  /** why: the first `status.get` answer arrives while the daemon is still converging, and a start that fails later (an HTTP port it cannot bind) must not be reported as running. */
+  private async untilStarted(
+    client: SimlockAdminClient,
+    launched: LaunchedDaemon,
+  ): Promise<SimlockAdminClient> {
+    const { isSimlockError, SimlockError } = await import("../contract/index.js");
+    for (;;) {
+      let health: string | undefined;
+      try {
+        health = (await client.getStatus()).daemon.health;
+      } catch (error: unknown) {
+        if (!isSimlockError(error) || error.code !== "DAEMON_CONNECTION_LOST") throw error;
+      }
+      if (health === "running") return client;
+      if (health === "starting") {
+        await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
+        continue;
+      }
+      await client.close().catch(() => undefined);
+      // why: a daemon launched through a service manager has no child to exit, so the wait for its exit is short and the log is read either way.
+      const exit = await Promise.race([
+        launched.exited,
+        new Promise<DaemonExit>((resolve) =>
+          this.clock.setTimer(EXIT_GRACE_MS, () => resolve({ code: null, signal: null })),
+        ),
+      ]);
+      const output = await launched.readOutput().catch(() => "");
+      const { startErrorFrom } = await import("../ports/index.js");
+      throw new SimlockError(
+        "DAEMON_STARTUP_FAILED",
+        "transport",
+        startErrorFrom(exit, output),
+        {},
+      );
+    }
   }
 
   private async connectAfterExit(
@@ -292,7 +335,7 @@ export function buildCliEnvironment(
     codexHome: ports.codexHome,
     runTool: ports.runTool,
     filesystem,
-    connectAdmin: (resolveCredential) => autoLaunch.connect(resolveCredential),
+    connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {
       const { resolveDaemonSocketPath } = await import("../ports/index.js");

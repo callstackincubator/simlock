@@ -627,6 +627,11 @@ async function composeDaemon(
       if (stopping) return;
       await step();
     }
+    // why: startup is not done while the HTTP listener may still fail to bind: `running` is a promise that the console and API answer.
+    await gatewayStarted.catch((error: unknown) => {
+      void daemon.stop("http-start-failed").catch(() => undefined);
+      throw error;
+    });
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
@@ -1078,6 +1083,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     converge: async () => {
       await gatewayService.start();
       fleetCoordinator.start();
+      // why: the gateway is not up while its HTTP listener may still fail to bind; the stop reason names that, not convergence.
+      await httpStarted.catch((error: unknown) => {
+        void daemon.stop("http-start-failed").catch(() => undefined);
+        throw error;
+      });
     },
     dispose: async () => {
       options.versionCheck.dispose();
