@@ -58,7 +58,7 @@ This check runs again while a request waits. If the last worker that could serve
 
 If a worker starts to boot a device for the request and then fails, the request fails with that worker's error. If every worker that could serve a request fails to create the device, the request fails with `PROVISION_FAILED` (exit 1).
 
-A requester holds at most `lease.maxPerRequester` leases through the gateway (1 by default), counted across the whole fleet. When the limit is set per platform, each platform is counted on its own. Another request fails with `REQUESTER_ALREADY_LEASED` (exit 13).
+A requester holds at most `lease.maxPerRequester` leases through the gateway (1 by default), counted across the whole fleet. When the limit is set per platform, each platform is counted on its own. Another request fails with `REQUESTER_ALREADY_LEASED` (exit 13). A lease on a worker that is disconnected does not count once its last reported deadline has passed, because no renew can have reached it through the gateway.
 
 All codes are listed in [Error reference](/simlock/docs/reference/errors).
 

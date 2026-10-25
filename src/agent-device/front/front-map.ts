@@ -11,6 +11,8 @@ interface DeviceFacts {
   readonly deviceKey?: string;
   // why: an adopted entry was rebuilt after a gateway restart and has no device key until a call names one.
   readonly adopted?: boolean;
+  // why: agent-device's device list was read for this lease's name, so a device it did not name is not asked about again.
+  readonly named?: boolean;
 }
 
 export interface FrontMapEntry extends DeviceFacts {
@@ -35,8 +37,10 @@ export interface ListedLease {
   readonly ttlDeadline: number;
 }
 
-interface Held extends Omit<DeviceFacts, "deviceKey"> {
+interface Held extends Omit<DeviceFacts, "deviceKey" | "name" | "named"> {
   deviceKey?: string;
+  name?: string;
+  named?: boolean;
   readonly identity: Identity;
   readonly address: string;
   ttlMs: number;
@@ -86,6 +90,13 @@ export class FrontMap {
   setDeviceKey(leaseId: string, deviceKey: string): void {
     const held = this.#held.get(leaseId);
     if (held !== undefined && held.deviceKey === undefined) held.deviceKey = deviceKey;
+  }
+
+  setName(leaseId: string, name: string | undefined): void {
+    const held = this.#held.get(leaseId);
+    if (held === undefined) return;
+    held.named = true;
+    if (name !== undefined) held.name = name;
   }
 
   setTtl(leaseId: string, ttlMs: number): void {

@@ -73,6 +73,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    its client without waiting for the daemon to end its side. An answered probe ends the window, including a `starting` status: subsequent
    command failures retain their original codes even while a lease queues or boots.
    The connector retains the launch deadline across a rejected credential and agent fallback.
+   `daemon start` (`untilStarted`) then polls `status.get` every 50 ms until health leaves `starting`: `running` ends it; anything else (a `DAEMON_STOPPING` answer included) fails with the daemon's own error from `startErrorFrom`; 90 s (`STARTUP_READ_LIMIT_MS` plus 30 s) of `starting` fails with `DAEMON_STARTUP_FAILED` ("still starting") and leaves the daemon running.
    A pre-existing daemon is never probed or reclassified; other daemon errors keep their codes.
 4. **`simlock lease`** — `requestLease`; progress pushes as JSON lines on stderr; one result
    line on stdout, with the session's `role` (`--export-env`: shell lines). `--agent-id`
