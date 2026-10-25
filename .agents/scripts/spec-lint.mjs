@@ -354,30 +354,40 @@ function checkFacts() {
   }
 }
 
-function pathRefs(lines) {
+function ref(path, from, to, tool = false) {
+  return { tool, path, from: +from, to: +(to ?? from) };
+}
+
+function backtickedRef(content, last) {
+  const full = PATH_LINE.exec(content);
+  if (full !== null) {
+    const tool = full[1] !== undefined;
+    return { found: ref(full[2], full[3], full[4], tool), last: tool ? null : full[2] };
+  }
+  const tail = /^:(\d+)(?:-(\d+))?$/.exec(content);
+  if (tail === null || last === null) return { found: null, last };
+  return { found: ref(last, tail[1], tail[2]), last };
+}
+
+function backtickedRefs(line) {
   const refs = [];
-  for (const line of prose(lines)) {
-    let last = null;
-    for (const m of line.matchAll(/`([^`]+)`/g)) {
-      const full = PATH_LINE.exec(m[1]);
-      const tail = /^:(\d+)(?:-(\d+))?$/.exec(m[1]);
-      if (full !== null) {
-        last = full[1] === undefined ? full[2] : null;
-        refs.push({
-          tool: full[1] !== undefined,
-          path: full[2],
-          from: +full[3],
-          to: +(full[4] ?? full[3]),
-        });
-      } else if (tail !== null && last !== null) {
-        refs.push({ tool: false, path: last, from: +tail[1], to: +(tail[2] ?? tail[1]) });
-      }
-    }
-    for (const m of line.replace(/`[^`]*`/g, " ").matchAll(PLAIN_PATH_LINE)) {
-      refs.push({ tool: false, path: m[1], from: +m[2], to: +(m[3] ?? m[2]) });
-    }
+  let last = null;
+  for (const m of line.matchAll(/`([^`]+)`/g)) {
+    const next = backtickedRef(m[1], last);
+    last = next.last;
+    if (next.found !== null) refs.push(next.found);
   }
   return refs;
+}
+
+function plainRefs(line) {
+  return [...line.replace(/`[^`]*`/g, " ").matchAll(PLAIN_PATH_LINE)].map((m) =>
+    ref(m[1], m[2], m[3]),
+  );
+}
+
+function pathRefs(lines) {
+  return prose(lines).flatMap((line) => [...backtickedRefs(line), ...plainRefs(line)]);
 }
 
 function tree(sha) {
