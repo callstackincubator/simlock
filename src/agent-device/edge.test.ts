@@ -3977,6 +3977,14 @@ describe("the agent-device front's request rules", () => {
 
       expect(flagsOf(comma)["device"]).toBe(idOf(rig, 1));
       expect(flagsOf(unnamed)["device"]).toBe(idOf(rig, 2));
+
+      await forwarded(rig, () => shard(rig, 2, {}, secrets.two));
+      const listed = rig.fake.requests
+        .filter((r) => r.params?.["command"] === "devices")
+        .map((r) =>
+          String((r.params?.["meta"] as Record<string, unknown> | undefined)?.["leaseId"]),
+        );
+      expect(listed.length).toBe(new Set(listed).size);
     });
 
     // why: agent-device 0.21.28 answers an allocate with `{ lease }` and no device; only its `devices` inventory names a device, and its session check matches `--device` by that name alone (#971).
