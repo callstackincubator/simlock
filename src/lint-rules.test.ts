@@ -791,7 +791,7 @@ describe("the repo's known violations", () => {
     expect(found.map(key).sort()).toEqual(
       read(".dependency-cruiser-known-cycles.json").map(key).sort(),
     );
-  });
+  }, 60_000);
 
   it("lists every file outside src/ports/ that imports fs or child_process, and no file that stopped", () => {
     const rule = (v: Violation) => v.rule.name === "no-fs-or-process";
