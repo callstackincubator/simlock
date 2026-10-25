@@ -304,29 +304,13 @@ export async function startDaemon(
   };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
-    const before = (await readLog()).length;
     daemonMayBeRunning = true;
     const started = await cli([...gatewayFlag, "daemon", "start"], env, { timeout: 30_000 });
-    // why: `daemon start` exits 0 once the daemon answers from its socket, which can come before
-    // the daemon fails to bind its HTTP port and stops (#553). So a clean exit is not yet a start:
-    // wait for this start's own "HTTP gateway listening" or `EADDRINUSE` line (the log keeps the
-    // earlier starts' lines), and fail on the latter.
-    if (started.code === 0 && !httpConfig.enabled) {
+    // why: `daemon start` exits 0 only once the daemon is running, HTTP listener included, and
+    // exits 1 when it stopped while starting (#981), so the exit code alone says whether it started.
+    if (started.code === 0) {
       daemonStarted = true;
       return;
-    }
-    if (started.code === 0) {
-      await waitFor(
-        async () => {
-          const added = (await readLog()).slice(before);
-          return added.includes("EADDRINUSE") || added.includes('"HTTP gateway listening"');
-        },
-        { label: "the daemon's HTTP listener" },
-      );
-      if (!(await readLog()).slice(before).includes("EADDRINUSE")) {
-        daemonStarted = true;
-        return;
-      }
     }
     // why: a failed start reports only what the CLI saw while polling the socket, and `dispose`
     // deletes this home with `daemon.log` — the only record of the cause the daemon itself wrote.

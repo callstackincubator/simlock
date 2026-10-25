@@ -86,6 +86,7 @@ simlock --gateway simctl --lease 3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c6a
 - `--lease <lease-id>` names which lease the command runs under. Put it right after `simctl` or `adb`. You can leave it out when you hold exactly one lease. Against a worker it is accepted and ignored.
 - File paths in the arguments are paths on the worker, not on your machine. `simctl install` needs the app to exist on the worker already.
 - Commands that need a terminal, such as a bare `adb shell`, are refused. Input piped to the command is sent once.
+- Right after a worker restarts, the gateway hides its leases from `lease.list` and `lease.get` until the worker is no longer `starting`. That is the worker's startup checks plus one gateway refresh: usually seconds, up to about a minute, because a platform's startup read is capped at 60 seconds. In that window the command fails with `No lease is held by <your id>` although the lease stands. Do not request a new device on that message: wait a minute and run the command again.
 
 ## Commands Simlock refuses
 

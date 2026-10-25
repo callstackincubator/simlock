@@ -362,12 +362,20 @@ function checkKind(kind, counts) {
   if (routine !== undefined && kind !== routine[1]) {
     failures.push(`this routine's PR must be ${routine[1]}, and its diff is ${kind}`);
   }
-  if (/\bCode review: skipped\./.test(counts) && ["full", "large", "tests-only"].includes(kind)) {
+  if (skipsNeededCodeReview(kind, counts, routine)) {
     failures.push(`Code review is skipped on a ${kind} diff (REVIEW.md, Routing)`);
   }
   if (kind === "adr-only" && counts !== "" && !/\bClaims review: skipped\./.test(counts)) {
     warnings.push("a Claims review ran on an adr-only diff, which needs the spec review alone");
   }
+}
+
+// why: the review protocol routes a delivery PR's and a routine's lenses; a person's chore PR
+// has no review round to route, and merges on the maintainer's say.
+function skipsNeededCodeReview(kind, counts, routine) {
+  const reviewed = DELIVERY_BRANCH.test(branch) || routine !== undefined;
+  const needsCode = ["full", "large", "tests-only"].includes(kind);
+  return reviewed && needsCode && /\bCode review: skipped\./.test(counts);
 }
 
 function bullets(text, heading) {

@@ -39,10 +39,18 @@ function writeAgentFallbackNotice(environment: CliEnvironment, source: Credentia
 export async function connectDaemonClient(
   environment: CliEnvironment,
   tokenFlag: string | undefined,
-  options: { readonly launch?: boolean } = {},
+  options: { readonly launch?: boolean; readonly untilStarted?: boolean } = {},
 ): Promise<SimlockAdminClient> {
-  const connect =
-    options.launch === false ? environment.connectExistingAdmin : environment.connectAdmin;
+  const connect: (
+    resolveCredential: () => Promise<string | undefined>,
+  ) => Promise<SimlockAdminClient> =
+    options.launch === false
+      ? environment.connectExistingAdmin
+      : (resolveCredential) =>
+          environment.connectAdmin(
+            resolveCredential,
+            options.untilStarted === true ? { untilStarted: true } : undefined,
+          );
 
   let source: CredentialSource = "none";
   const resolveCredential = async (): Promise<string | undefined> => {

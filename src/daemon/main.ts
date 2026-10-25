@@ -51,6 +51,7 @@ import {
   ANDROID_PASSTHROUGH_TOOLS,
   hostAbiFor,
   SdkMissingError,
+  type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidDeviceDataTable,
   androidPrerequisites,
@@ -627,6 +628,11 @@ async function composeDaemon(
       if (stopping) return;
       await step();
     }
+    // why: startup is not done while the HTTP listener may still fail to bind: `running` is a promise that the console and API answer.
+    await gatewayStarted.catch((error: unknown) => {
+      void daemon.stop("http-start-failed").catch(() => undefined);
+      throw error;
+    });
     leasing.announceQueueDepth();
   };
   const daemon = new DaemonServer({
@@ -1078,6 +1084,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     converge: async () => {
       await gatewayService.start();
       fleetCoordinator.start();
+      // why: the gateway is not up while its HTTP listener may still fail to bind; the stop reason names that, not convergence.
+      await httpStarted.catch((error: unknown) => {
+        void daemon.stop("http-start-failed").catch(() => undefined);
+        throw error;
+      });
     },
     dispose: async () => {
       options.versionCheck.dispose();
@@ -1413,6 +1424,20 @@ async function discoverIosDriver(
   }
 }
 
+export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
+  if (diagnostic.kind === "snapshot-cold-boot") {
+    logger.warn("Android snapshot boot fell back to a cold boot", {
+      avdName: diagnostic.avdName,
+      readyAfterMs: diagnostic.readyAfterMs,
+    });
+    return;
+  }
+  logger.warn("Android device profile source could not be read", {
+    path: diagnostic.path,
+    reason: diagnostic.reason,
+  });
+}
+
 /**
  * Android refuses for one more reason than iOS does -- it needs a private adb server as
  * well as an owned root -- and both refusals cost the platform rather than the daemon.
@@ -1435,6 +1460,7 @@ async function discoverAndroidDriver(
       hostAbi: hostAbiFor(options.hostArch),
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
+      onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,

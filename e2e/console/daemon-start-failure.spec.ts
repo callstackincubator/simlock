@@ -29,12 +29,7 @@ async function hold(port: number): Promise<() => Promise<void>> {
   return () => new Promise<void>((resolve) => holder.close(() => resolve()));
 }
 
-// why: a slow startup read keeps the daemon converging after its HTTP bind fails, so `daemon start`
-// gets its status probe answered and exits 0 before the daemon stops itself (#933). Without the
-// delay that order is a race the daemon wins about one start in seven.
-const SLOW_STARTUP_READ = { latencyMs: { listManaged: 5_000 } } as const;
-
-test("a daemon start that cannot bind its HTTP port reports the port conflict, even when `daemon start` exits 0", async () => {
+test("a daemon start that cannot bind its HTTP port reports the port conflict", async () => {
   const daemon = await startDaemon("worker");
   try {
     // why: restarting on its own home and port first shows that same start is accepted, so the
@@ -43,7 +38,6 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict, e
     await daemon.start();
 
     await daemon.stop();
-    await daemon.writeDriverScript({ android: SLOW_STARTUP_READ, ios: SLOW_STARTUP_READ });
     const release = await hold(daemon.port);
     let failure: unknown;
     let started = false;
@@ -61,9 +55,9 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict, e
         `premise: the daemon bound port ${String(daemon.port)}, which this test holds`,
       );
     }
-    // why: `startDaemon` words a failed start "daemon start failed (exit code N)", so this pins the
-    // exit-0 order #933 is about; if the slow read stops forcing it, the test fails here.
-    expect(reported(failure)).toContain("daemon start failed (exit code 0)");
+    // why: `daemon start` waits for the daemon to leave `starting` and exits 1 when it stopped (#981),
+    // so the failure is the CLI's own exit, not a clean exit followed by a log wait.
+    expect(reported(failure)).toContain("daemon start failed (exit code 1)");
     expect(reported(failure)).toContain("EADDRINUSE");
     expect(reported(failure)).toContain(String(daemon.port));
   } finally {

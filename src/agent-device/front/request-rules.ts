@@ -16,7 +16,7 @@ import {
   type Fields,
 } from "../shared/selectors.js";
 import type { FrontContext } from "./context.js";
-import { LeaseCheckFailed, tokenDevices, type TokenDevice } from "./token-devices.js";
+import { LeaseCheckFailed, namedTokenDevices, type TokenDevice } from "./token-devices.js";
 
 type RpcRequest = Extract<RpcRead, { kind: "request" }>;
 
@@ -186,12 +186,19 @@ async function ruleShardList(check: Check, unit: Unit): Promise<void> {
   }
 }
 
+// why: agent-device's allocate reply names no device, so a name the command carries is checked against the name read from its device list, once per lease.
+async function withName(check: Check, leased: TokenDevice): Promise<TokenDevice> {
+  if (leased.name !== undefined || leased.named === true) return leased;
+  const read = (await check.tokenDevices()).find((device) => device.leaseId === leased.leaseId);
+  return read ?? leased;
+}
+
 async function ruleDevice(check: Check, place: Fields): Promise<boolean> {
   const device = place["device"];
   if (!present(device)) return false;
-  const leased = check.leased;
-  if (leased === undefined) throw refuse(SIMLOCK_PICKS);
+  if (check.leased === undefined) throw refuse(SIMLOCK_PICKS);
   const name = device as string;
+  const leased = await withName(check, check.leased);
   if (namesDevice(leased, name)) return false;
   if (!(await namesLeasedModel(check, leased, name))) throw refuse(SIMLOCK_PICKS);
   delete place["device"];
@@ -332,6 +339,7 @@ function buildCheck(
   platforms: readonly string[],
   params: Fields,
   kind: Unit["kind"],
+  request: Request,
 ): Check {
   const leaseId = kind === "command" ? commandLeaseId(params) : undefined;
   const held = leaseId === undefined ? undefined : context.map.get(leaseId);
@@ -348,7 +356,7 @@ function buildCheck(
         : undefined,
     meta,
     platforms,
-    tokenDevices: () => (devices ??= tokenDevices(context, identity)),
+    tokenDevices: () => (devices ??= namedTokenDevices(context, identity, request)),
   };
 }
 
@@ -357,9 +365,10 @@ export async function checkRequest(
   identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
+  request: Request,
 ): Promise<RulesOutcome> {
   try {
-    return await run(context, identity, read, platforms);
+    return await run(context, identity, read, platforms, request);
   } catch (error) {
     if (error instanceof Refused) return { kind: "refused", reply: error.reply };
     if (error instanceof LeaseCheckFailed) {
@@ -379,6 +388,7 @@ async function run(
   identity: Identity,
   read: RpcRequest,
   platforms: readonly string[],
+  request: Request,
 ): Promise<RulesOutcome> {
   if (!isKnownRpcMethod(read.method)) throw refuse(`refused: unknown method ${read.method}`);
   const body = structuredClone(read.body);
@@ -387,7 +397,7 @@ async function run(
   const main = unitFor(methodName(read.method) ?? "", params);
   if (main === undefined) return { kind: "accepted", read };
   const units = [main, ...stepsOf(main)];
-  const check = buildCheck(context, identity, platforms, params, main.kind);
+  const check = buildCheck(context, identity, platforms, params, main.kind, request);
   checkMeta(check);
   for (const unit of units) checkTypes(unit);
   for (const unit of units) await applyRules(check, unit);
