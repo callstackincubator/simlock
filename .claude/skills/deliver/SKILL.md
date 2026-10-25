@@ -316,7 +316,10 @@ each task's PR in the order its review passed.
 
 Runnable: open, `task:ready`, unassigned, and every issue under its Depends
 on closed or a task of this feature whose PR passed review (open, not a
-draft). Check the Depends on yourself; no workflow promotes tasks.
+draft). Read it from `node .agents/scripts/runnable.mjs <N>`: its last line
+lists the runnable tasks; no workflow promotes tasks. Each `depends-outside
+#<d>` line on an open issue is a `Waiting:` line of the run summary (step 4),
+and a `B` line (a missing number, a cycle) parks the feature.
 
 - **Before the first build**: the feature's ADR branches fork from an old
   `main`, so run `.agents/scripts/stack-sync.sh <the top ADR PR>` to merge
@@ -343,7 +346,7 @@ origin/<parent>`, then a fix check on that PR, then the script again.
   task to move the other.
 - Both at the hardware check: the second `hardware-verifier` waits for the
   lane's lock (rule 16).
-- After each `gh pr ready`, list again.
+- After each `gh pr ready`, run `runnable.mjs` again.
 - A task parks: keep delivering the tasks that do not depend on it. The
   stack stays open and nothing merges; the maintainer decides.
 

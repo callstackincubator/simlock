@@ -134,7 +134,11 @@ is open, done means closed as completed.
    command output it was read from, never a summary. It need not repeat
    what `always-in-scope.md` lists, and a small gap it leaves is an
    assumption, not a question (rule 3). A task with an empty technical
-   section is `task:draft` no matter what anyone says in a comment. Before
+   section is `task:draft` no matter what anyone says in a comment. The
+   lint runs before the check: `.agents/scripts/spec-lint.mjs` checks the
+   body's structure, the spec session fixes its blocking lines before any
+   checker starts, and the issue-state workflow moves a task whose lint
+   fails back to `task:draft`. Before
    a task gets `task:ready`, the spec session has the `check-spec` skill
    read the body as posted, with a fresh context, and fixes in the body
    what it reports; the same checker then rechecks only what the fix

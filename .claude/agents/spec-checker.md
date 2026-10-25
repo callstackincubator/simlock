@@ -62,6 +62,15 @@ spec must agree with:
 Budget: about 35 file reads or searches. A question you cannot settle
 within it is a finding, not a reason to read more.
 
+`.agents/scripts/spec-lint.mjs` has passed the body before you start, so
+spend the budget on content: do not re-check the structural parts it
+covers (`size`; the Tests and Behaviours counts of `untested`; the Failure
+modes table of `failure-mode`; the `Searches:` lines of `interaction` and
+`derived-list`; the Depends on numbers, cycle, depends-outside and chain of
+`overlap`; the slow-lane test name of `hardware`; Words used of
+`undefined`; and of `fact`, the commit line, the Source cells and that each
+`path:line` exists).
+
 ## 2. Plan it, then break it (`task` scope)
 
 Before the categories, two passes. Write both in your scratchpad; neither
