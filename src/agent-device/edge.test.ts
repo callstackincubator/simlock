@@ -4431,6 +4431,7 @@ describe(
       const received = await drainDownload(response);
 
       expect(received.ended).toBe(false);
+      expect(received.bytes).toBeLessThanOrEqual(downloadLimit);
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
     });
 
