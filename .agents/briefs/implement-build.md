@@ -79,7 +79,7 @@ cycle wires in are dead code until then. The last cycle's push runs every hook. 
 `base` argument (a task stacked on its feature's last reviewed PR), the PR
 targets that branch. The PR body, in this order: `Closes #<N>`; a
 `### Status` section the orchestrator keeps current; the Done when lines
-as an unchecked list; `## Assumptions` ("none", or one `- Assumption:` line
+as an unchecked list, in the issue's words; `## Assumptions` ("none", or one `- Assumption:` line
 per gap); the line `*Written by an agent.*`. Keep it current as you go.
 
 - Every test command runs in the foreground with `timeout: 600000` set on
