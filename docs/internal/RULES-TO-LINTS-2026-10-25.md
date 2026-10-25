@@ -4,6 +4,19 @@ Scouted 2026-10-25 on `chore/audit-delivery-process` (working tree, with its unc
 
 Effort: S is under an hour (one regex or one test). M is about half a day (a script with cases). L is a day or more. Confidence says how well the check matches what the rule means. Value is my guess at defects or agent-minutes saved per month.
 
+## Verdicts (maintainer review, 2026-10-25)
+
+Each item below is **apply** (in the next PRs, grouped as listed), **later** (right, not now) or **ignore** (with the reason). The eight drifts are fixed in the first conversion PR.
+
+| Verdict | Items | Reason |
+| --- | --- | --- |
+| apply, PR A: tests and catalogs, plus the drift fixes | R1, R13, R14, R15, R16, R17, R18, R19, R20, R22, R25, R30, R38, R45 | Repo tests and a diff-scoped `test-lint.mjs`. Five of them fail on real drift today; R13, R15, R38 and R45 are review-finding classes from the ledgers (time bounds, vacuous assertions, internal-file imports, unbounded wire fields) that build agents do not read the rule for. R30 widens an existing depcruise rule and needs a known-violations list that only shrinks. |
+| apply, PR B: guards and PR checks | R3, R4, R5, R7, R8, R9, R10 (sub-agents only), R11, R12, R23, R24, R27, R28, R35, R39, R41, R42, R47 (the merge check only), R48, R2 | One regex or one function each in `tool-guard.mjs`, `report-guard.mjs`, `pr-body-check.mjs`, `issue-state.yml` or a `commit-msg` hook. R5 and R8 close silent holes (a slugged branch skips every delivery check; a `+refspec` force push is allowed). R4 makes the gate read what rule 15 says it "cannot read". R2 is the only M-sized one and the one most often broken (the footer and budgets on comments). |
+| apply, PR C: the spec lint | R31, R32, R33, R34, R43 | `spec-lint.mjs` takes the structural half of the checker's categories before an Opus checker starts, with `runnable.mjs` replacing the orchestrator's hand check of Depends on, and the `chain` and `depends-outside` findings the process review asked for. R43 adds the website trailer check and the config-keys catalog test. Checker rounds are half a spec session; this is where the minutes are. |
+| later | R29, R36, R37, R40, R46 | R36 needs a findings-schema field (severity) first; R37 would fight legitimate tables and the red-green record already serves the intent; R40 depends on SubagentStop firing for nested lenses (verify, then do); R29 is an input the spec lens can count itself; R46 needs the TS API for a rule that only applies when an index grows. |
+| ignore | R21, R44, R49, R50 | R21 has no value (casing never drifted); R44 is covered by R25's test on every commit; R49 costs CI minutes for noise the weekly mutation run already produces; R50 is an AST comparison for a judgement call (one claim, one level). |
+| ignore, R10's main-session half | — | The maintainer asks this session to set labels by hand; an `ask` rule would only add prompts. The sub-agent half stays. |
+
 ## Drift the scout found (a check would have caught each)
 
 - **`SERVICE_FAILED` is missing from `website/src/content/docs/docs/reference/errors.mdx`.** The exit-code table lists 55 of `ERROR_TABLE`'s 56 codes. The code is only on `using-devices/errors.mdx:78`. See R17.
