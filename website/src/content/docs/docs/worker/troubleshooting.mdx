@@ -132,6 +132,8 @@ A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the s
 3. Run `simlock doctor`. A `stalled-transition` finding means a device got stuck mid-way; `simlock doctor --fix` takes it out of service and retries.
 4. If one runtime or system image keeps failing, remove it and install it again ([Runtimes and images](/simlock/docs/worker/runtimes-and-images)).
 
+Two Android warnings in the daemon log point at the cause. `Android snapshot boot fell back to a cold boot` (fields `avdName`, `readyAfterMs`) means a device restored from its snapshot took over three times the expected time, so the snapshot is probably damaged. `Android device profile source could not be read` (fields `path`, `reason`) means the Android `devices.xml` exists but could not be read or parsed. A missing file is not reported.
+
 ## Android licence not accepted
 
 **Symptom.** A lease or `simlock component install android ...` fails with `LICENSE_NOT_ACCEPTED` (exit 12):

@@ -93,7 +93,10 @@ async function daemonStatus(context: CommandContext, json: boolean): Promise<num
 
 async function startDaemon(context: CommandContext): Promise<StatusGetOutput> {
   const { environment, token } = context;
-  const client = await connectDaemonClient(environment, token, { launch: true });
+  const client = await connectDaemonClient(environment, token, {
+    launch: true,
+    untilStarted: true,
+  });
   try {
     return await client.getStatus();
   } finally {
