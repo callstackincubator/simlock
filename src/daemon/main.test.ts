@@ -1524,6 +1524,8 @@ describe("startDaemon HTTP gateway startup readiness", () => {
 });
 
 describe("startDaemon stop with a cleanup run in flight (#985)", () => {
+  const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
   it("logs no warning or error once a stop lands while the cleanup run daemon.started began is still in flight", async () => {
     // why: holds the cleanup run that `daemon.started` starts on its disk read, so the stop
     // lands while the run is in flight, as an `http-start-failed` stop right after a start does.
@@ -1536,16 +1538,22 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
     }
     const filesystem = new HeldDiskFree();
     const { daemon, sink } = await start({ filesystem });
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    expect(filesystem.held).toHaveLength(1);
+    await vi.waitFor(() => expect(filesystem.held).toHaveLength(1));
 
-    // why: the stop must wait for the held run, so the read is released while the stop is pending,
-    // after a stop that did not wait would already have closed the state database.
+    // why: the stop must wait for the held run, so the read is released only once the stop has
+    // either ended (a stop that did not wait has closed the state database by then) or sat
+    // pending through many event-loop turns. Turns, not milliseconds: a loaded machine runs the
+    // same turns, only slower.
     const stopped = daemon.stop("http-start-failed");
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    let stopEnded = false;
+    void stopped.then(() => {
+      stopEnded = true;
+    });
+    for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
     for (const release of filesystem.held.splice(0)) release();
     await stopped;
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    // why: a run that outlived the stop surfaces its failure a few turns after its read returns.
+    for (let turn = 0; turn < 50; turn += 1) await turnOfTheEventLoop();
 
     const stopping = sink.records.findIndex((record) => record.message === "Daemon stopping");
     expect(stopping).toBeGreaterThanOrEqual(0);
