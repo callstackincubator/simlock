@@ -522,9 +522,7 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     });
     return envelope(id, {
       data: {
-        ...(picked === undefined || picked === "none" || address === undefined
-          ? {}
-          : { device: { id: address, name: `simlock-${address}`, ...picked } }),
+        ...replyDevice(picked, address),
         lease: { ...scope, ...edit, leaseId, tenantId: tenant, ttlMs: params["ttlMs"] },
       },
       ok: true,
@@ -702,6 +700,15 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     if (!closes || typeof leaseId !== "string" || !this.leases.delete(leaseId)) return [];
     return [{ leaseId, outcome: "released" }];
   }
+}
+
+// why: agent-device's allocate reply names no device; only a test that asks for one gets one.
+function replyDevice(
+  picked: FakeReplyDevice | "none" | undefined,
+  address: string | undefined,
+): { readonly device?: Record<string, unknown> } {
+  if (picked === undefined || picked === "none" || address === undefined) return {};
+  return { device: { id: address, name: `simlock-${address}`, ...picked } };
 }
 
 export function agentDeviceModuleWith(fakes: {
