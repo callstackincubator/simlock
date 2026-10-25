@@ -142,7 +142,8 @@ gh issue view <N> --json number,title,labels,assignees,body
 
 ## 2. Deliver one issue
 
-Claim it: `gh issue edit <N> --add-assignee @me`. Its branch is
+Claim it: `node .agents/scripts/claim.mjs <N>`; a refusal says why the
+issue is not yours to take (rules 1 and 2): stop there. Its branch is
 `<kind>/<N>`. A task of a feature, or an issue whose feature has an open
 ADR PR, is stacked (step 3): its build stage gets `base:` and its PR waits
 in the stack instead of the gate. If it already has a PR, read the PR body's `### Status`
@@ -350,7 +351,9 @@ in flight: first the feature's ADRs. Each ADR under its Decisions is
 _Accepted — not yet implemented_; send the top PR's branch one
 `implementer` fix run with `fixes: adr: <nnnn> to Accepted` per ADR (a
 status line and the index row, nothing else; rule 10), then the
-coordinator's mechanical fix-check. Then run
+coordinator's mechanical fix-check: `node .agents/scripts/adr-flip-check.mjs
+<commit>` on each fix commit, `verified by: coordinator` only on exit 0,
+another fix run otherwise. Then run
 `.agents/scripts/stack-sync.sh <top>` once more (another feature may have
 merged meanwhile), resolve a conflict as above, then the gate on the top
 PR: `merge-pr.sh <top>` gates every PR in the stack and merges them all,

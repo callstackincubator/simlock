@@ -193,7 +193,10 @@ is open, done means closed as completed.
     use it to tell agent text from a person's, since agents post under a
     maintainer's account. `.agents/scripts/pr-body-check.mjs` checks a PR
     body's shape and budget: the issue-state workflow runs it on every PR,
-    and the gate (rule 15) refuses a body it fails.
+    and the gate (rule 15) refuses a body it fails. The tool guard refuses,
+    before it is posted, a body or comment without the footer, and a
+    handoff, triage report, "Spec updated" or review notes comment out of
+    its shape or budget.
 
 13. **Assume every agent is in a worktree:** [coding.md](coding.md) rule 4.
 
@@ -252,8 +255,7 @@ closes the issue:
 
 ```bash
 gh issue list --search 'label:bug:ready,task:ready no:assignee'
-gh issue view <n> --json body -q .body    # a task: every Depends on allows it (rule 1)
-gh issue edit <n> --add-assignee @me
+node .agents/scripts/claim.mjs <n>    # refuses a closed, claimed or not-ready issue, or a task its Depends on hold back
 .agents/scripts/worktree.sh task/<n>    # or bug/<n>, feature/<n>; resumes origin/<branch>
 ```
 
@@ -305,7 +307,10 @@ rules mechanically, so nobody has to remember them:
 - A claim on a `*:ready` issue with no comment, label change, or commit on
   `<kind>/<n>` for three days is released, with a comment.
 - A pull request from a `<kind>/<n>` branch fails its check unless its body
-  closes `#<n>` and closes nothing else.
+  closes `#<n>` and closes nothing else. A branch that starts with a kind
+  prefix and is not exactly `<kind>/<n>` (or an ADR's `feature/<n>-adr...`)
+  fails it, and so does a PR that closes a task or a bug from any branch
+  but that issue's `<kind>/<n>`.
 
 The judgment call stays manual by design: `bug:new` → `bug:ready`, once
 the maintainer has read the triage report. A task needs none: the spec

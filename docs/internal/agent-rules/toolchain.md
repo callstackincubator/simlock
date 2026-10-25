@@ -41,7 +41,10 @@ list and this one the same.
 - **Commit hook:** formats the staged files and stages the result, then
   lint, the comment lint (architecture rule 17), the test lint (testing
   rules 5, 6 and 10 and always-in-scope 8, on the lines the commit adds) and
-  typecheck. Errors show in its output.
+  typecheck. Errors show in its output. Its commit-msg step
+  (`.agents/scripts/commit-msg-check.mjs`) refuses a subject on
+  `<kind>/<n>` that is not `<type>(<scope>): <what> (#<n>)`, and on
+  `bug/<n>-repro` one that is not `test: reproduce #<n> — <claim>`.
 - **Push hook:** Fallow, then the e2e typecheck.
 - **CI:** what `pnpm check` runs, and Fallow, on every push. The `pnpm
   check` steps run as parallel jobs (static checks, unit tests, the timing
@@ -80,7 +83,8 @@ gate:
 the ending below. Every other routine ends the same way; its skill adds
 only what it changes:
 
-1. `reviewer` with the PR number, round 1. Fix each Fix line yourself,
+1. `reviewer` with the PR number, round 1, started as the `review` skill
+   starts it. Fix each Fix line yourself,
    within the routine's kind of edit, then the check its `Rerun` names:
    `reviewer` with that round, `previous <Commit>` and the complete
    resolution ledger. `Rerun: none` with findings open: leave the PR in

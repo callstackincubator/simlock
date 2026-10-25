@@ -37,7 +37,8 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    lens gets its own detached worktree at `commit`, prepared with
    `.agents/scripts/worktree.sh --prepare <path>`; spec and claims get
    read-only worktrees. Spawn the selected `spec-reviewer`,
-   `code-reviewer` and `claims-reviewer` together in the foreground, each
+   `code-reviewer` and `claims-reviewer` together in the foreground
+   (`run_in_background: false`), each
    prompt the ledger tag line (`toolchain.md`, "Review measurement"), then
    inputs, worktree, round and lens, then the full text of
    `<inputs>/briefs/calibration.md`, of `review-later-round.md` for a

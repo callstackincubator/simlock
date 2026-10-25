@@ -23,12 +23,12 @@ gh issue list --label bug:new --search 'no:assignee' --json number,title,comment
 ## 1. Claim
 
 The issue must be open, carry exactly `bug:new` and have no assignee.
-Otherwise (`bug:ready`, `bug:needs-info`, `bug:blocked`, any other label,
-closed, or assigned) stop and say why. Triage is the only work on
-`bug:new`; `bug:ready` is the maintainer's call. Then:
+Triage is the only work on `bug:new`; `bug:ready` is the maintainer's
+call. The claim script checks this and assigns you; when it refuses, stop
+and say why:
 
 ```bash
-gh issue edit <N> --add-assignee @me
+node .agents/scripts/claim.mjs <N> --triage
 ```
 
 Continue from a previous attempt, if any, rather than repeating it:
