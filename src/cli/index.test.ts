@@ -8217,39 +8217,38 @@ class HelloThenDeathConnection implements IpcConnection {
       type?: unknown;
       payload?: { credential?: string };
     };
-    if (frame.type === "status.get" && this.daemon.closeAfter === "stopping") {
-      const reply = {
-        id: frame.id,
-        ok: false,
-        error: {
-          code: "DAEMON_STOPPING",
-          message: "Daemon is stopping",
-          details: {},
-        },
-      };
-      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
-    }
-    if (frame.type === "status.get" && this.daemon.closeAfter === "starting") {
-      const reply = {
-        id: frame.id,
-        ok: true,
-        payload: {
-          daemon: {
-            health: "starting",
-            mode: "worker",
-            version: "0.0.0-test",
-            update: null,
-            lastUpdateFailure: null,
-            latestVersion: null,
-          },
-          host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
-        },
-      };
-      for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
-    }
+    if (frame.type === "status.get") this.#answerStatus(frame.id);
     if (frame.type !== "hello" || typeof frame.id !== "number") return false;
     this.#answerHello(frame.id, frame.payload?.credential);
     return true;
+  }
+
+  #answerStatus(id: unknown): void {
+    const { closeAfter } = this.daemon;
+    if (closeAfter !== "stopping" && closeAfter !== "starting") return;
+    const reply =
+      closeAfter === "stopping"
+        ? {
+            id,
+            ok: false,
+            error: { code: "DAEMON_STOPPING", message: "Daemon is stopping", details: {} },
+          }
+        : {
+            id,
+            ok: true,
+            payload: {
+              daemon: {
+                health: "starting",
+                mode: "worker",
+                version: "0.0.0-test",
+                update: null,
+                lastUpdateFailure: null,
+                latestVersion: null,
+              },
+              host: { arch: "arm64", os: "macOS", osVersion: "15.5", tools: [] },
+            },
+          };
+    for (const listener of this.#dataListeners) listener(`${JSON.stringify(reply)}\n`);
   }
 
   #answerHello(id: number, credential: string | undefined): void {
