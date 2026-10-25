@@ -54,6 +54,7 @@ export class LeaseHealthMonitor {
   readonly #inFlight = new Set<string>();
   readonly #logger: Logger;
   readonly #pendingBackoffs = new Map<TimerHandle, () => void>();
+  readonly #running = new Set<Promise<void>>();
   #disposed = false;
   #tickTimer: TimerHandle | undefined;
 
@@ -90,6 +91,21 @@ export class LeaseHealthMonitor {
     this.#pendingBackoffs.clear();
   }
 
+  /**
+   * why: Resolves once the running tick and every recovery have ended, including work a finishing
+   * one starts. Call after `dispose()`: a disposed monitor starts no recovery, so this ends.
+   */
+  async settle(): Promise<void> {
+    while (this.#running.size > 0) {
+      await Promise.allSettled(this.#running);
+    }
+  }
+
+  #track(work: Promise<void>): void {
+    this.#running.add(work);
+    void work.finally(() => this.#running.delete(work));
+  }
+
   #armTick(): void {
     if (this.#disposed) {
       return;
@@ -98,12 +114,14 @@ export class LeaseHealthMonitor {
       this.options.config.health.probeIntervalMs,
       () => {
         this.#tickTimer = undefined;
-        void this.#runTick().then(
-          () => this.#armTick(),
-          (error: unknown) => {
-            this.#logger.error("health monitor tick failed", { error: summarizeError(error) });
-            this.#armTick();
-          },
+        this.#track(
+          this.#runTick().then(
+            () => this.#armTick(),
+            (error: unknown) => {
+              this.#logger.error("health monitor tick failed", { error: summarizeError(error) });
+              this.#armTick();
+            },
+          ),
         );
       },
     );
@@ -249,19 +267,24 @@ export class LeaseHealthMonitor {
   }
 
   #dispatchRecovery(device: VirtualDevice, lease: LeaseRecord): void {
+    if (this.#disposed) {
+      return;
+    }
     if (this.#inFlight.size >= this.options.config.health.maxConcurrentRecoveries) {
       // Cap reached; this device's counters stay elevated and it is retried next tick.
       return;
     }
     this.#inFlight.add(device.id);
-    void this.#recover(device, lease)
-      .catch((error: unknown) => {
-        this.#logger.error("unexpected error recovering device", {
-          deviceId: device.id,
-          error: summarizeError(error),
-        });
-      })
-      .finally(() => this.#inFlight.delete(device.id));
+    this.#track(
+      this.#recover(device, lease)
+        .catch((error: unknown) => {
+          this.#logger.error("unexpected error recovering device", {
+            deviceId: device.id,
+            error: summarizeError(error),
+          });
+        })
+        .finally(() => this.#inFlight.delete(device.id)),
+    );
   }
 
   async #recover(device: VirtualDevice, lease: LeaseRecord): Promise<void> {

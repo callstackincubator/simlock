@@ -119,9 +119,9 @@ platform runs the deferred reclaim (step 21.2).
 2. Stop auxiliary fronts: agent-device edge (cancel its waiting allocates),
    HTTP (after its start settles), the uplink and its redial loop.
 3. Log, emit `daemon.stopping`.
-4. Unsubscribe pushes; dispose host load, dispatcher, reaper, then wait for every
-   cleanup run in flight (scheduled, dry-run or rule-scoped) to end; dispose health
-   monitor, physical watcher.
+4. Unsubscribe pushes; dispose host load, dispatcher, reaper, health monitor, then wait for every
+   cleanup run in flight (scheduled, dry-run or rule-scoped) and every health tick or
+   recovery reboot in flight to end; dispose physical watcher.
 5. Settle — later converge steps are skipped; leasing drains the physical
    watcher and background reclaims; core drains the warm pool.
 6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
