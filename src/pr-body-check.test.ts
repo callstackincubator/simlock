@@ -359,10 +359,14 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     const ran = "0 blocking, 0 fixed, 0 notes";
 
     expect(check(counts(ran, "skipped", ran), "--kind", "docs-only").status).toBe(0);
+    expect(
+      check(counts("skipped", "skipped", "skipped"), "--branch", "chore/lints", "--kind", "full")
+        .status,
+    ).toBe(0);
     for (const kind of ["full", "large", "tests-only"]) {
-      expect(check(counts(ran, "skipped", ran), "--kind", kind).lines).toEqual([
-        expect.stringContaining(`Code review is skipped on a ${kind} diff`),
-      ]);
+      expect(
+        check(counts(ran, "skipped", ran), "--branch", "task/12", "--kind", kind).lines,
+      ).toEqual([expect.stringContaining(`Code review is skipped on a ${kind} diff`)]);
     }
     expect(
       check(counts("skipped", ran, ran), "--branch", "task/12", "--kind", "full").lines,
