@@ -131,6 +131,11 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 
 ## Known gaps
 
+- **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` leave out
+  a `starting` worker's leases (the worker's startup checks plus one gateway refresh, usually seconds,
+  up to about a minute: a platform's startup read is capped at 60 s). Meanwhile the owner's remote
+  commands fail with "No lease is held by …" and MCP `status()` reports none, though the lease stands.
+  Agents must not request a new device on that message right after a worker restart.
 - **A fleet request is stored only once a worker takes it.** A gateway restart loses every open
   request; ids answer `404`, a repeated `Idempotency-Key` is new. Leases survive, so a repeat may get
   `REQUESTER_ALREADY_LEASED` naming the lease.
