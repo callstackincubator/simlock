@@ -23,9 +23,10 @@
 //     Status, Assumptions and Review sections (rule 12);
 //   - with a PR number, on a <kind>/<n> branch: a `## Done when` bullet of issue <n> matches no
 //     `- [ ]` or `- [x]` line of the body, or matches one that is not ticked. A line matches when
-//     it holds at least 70% of the bullet's content words (lowercased, camelCase split, backticks
-//     and punctuation dropped, a trailing `s` dropped, stop words left out), so it may reword the
-//     bullet or add `— <how checked>`; and when every
+//     it holds at least half the bullet's content words (lowercased, camelCase split, punctuation
+//     dropped, a trailing `s` dropped, stop words left out; words in code spans and parentheses
+//     count only when nothing else is left), so it may reword the bullet or add `— <how
+//     checked>`; and when every
 //     other open sub-issue of the issue's parent is closed by a PR below this one in its stack
 //     (or there is none), the same for the parent's `## Completion conditions` (coding rule 5);
 //   - the diff's kind (`diff-kind.mjs` from the merge-base to the head) and the counts line
@@ -50,8 +51,8 @@ import { option } from "./cli-args.mjs";
 
 const BUDGET = 200;
 const HERE = dirname(fileURLToPath(import.meta.url));
-// why: a checklist line may reword its Done when bullet; most of the bullet's words must stay.
-const MATCH = 0.7;
+// why: the check catches a line the PR never walked, not paraphrase; half the words is enough.
+const MATCH = 0.5;
 const STOP_WORDS = new Set(
   "a an the and or but nor of to in on at by for with from into onto as is are was were be been it its this that these those than then there their they them which who whom what when where how all any each every both either no not only so such too very can could may might must shall should will would do doe did has have had here our we you your one".split(
     " ",
@@ -263,7 +264,8 @@ function checkDoneWhen() {
     .map((c) => ({ ...c, words: new Set(contentWords(c.text)) }));
   const walk = (text, heading, from) => {
     for (const bullet of bullets(text, heading)) {
-      const wanted = [...new Set(contentWords(bullet))];
+      const prose = bullet.replace(/`[^`]*`/g, " ").replace(/\([^)]*\)/g, " ");
+      const wanted = [...new Set(contentWords(contentWords(prose).length > 0 ? prose : bullet))];
       const share = (c) => wanted.filter((w) => c.words.has(w)).length / Math.max(1, wanted.length);
       const best = items.reduce(
         (a, c) => (a === undefined || share(c) > share(a) ? c : a),

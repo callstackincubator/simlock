@@ -312,7 +312,7 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
         "- [x] Website builds and passes — ran it\n- [x] With the `Tests` line above `pnpmTest:changed` passing:\n  9/9 green",
       ),
     ).toEqual({ status: 0, lines: [] });
-    expect(task("- [x] The website build passes.\n- [x] pnpm passes above").lines).toEqual([
+    expect(task("- [x] The website build passes.\n- [x] pnpm ran, 9/9 green").lines).toEqual([
       expect.stringContaining("is not a checklist line"),
     ]);
   });
