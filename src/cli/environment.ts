@@ -22,6 +22,8 @@ import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
 
 const EXIT_GRACE_MS = 2_000;
+// why: the daemon bounds its own startup read at STARTUP_READ_LIMIT_MS, so the CLI waits past it before it calls a daemon that is still starting stuck.
+const STARTING_WAIT_EXTRA_MS = 30_000;
 
 class AutoLaunchAdminConnector {
   private startupDeadline: number | undefined;
@@ -84,6 +86,8 @@ class AutoLaunchAdminConnector {
     launched: LaunchedDaemon,
   ): Promise<SimlockAdminClient> {
     const { isSimlockError, SimlockError } = await import("../contract/index.js");
+    const { STARTUP_READ_LIMIT_MS } = await import("../core/index.js");
+    const giveUpAt = this.clock.now() + STARTUP_READ_LIMIT_MS + STARTING_WAIT_EXTRA_MS;
     for (;;) {
       let health: string | undefined;
       try {
@@ -93,6 +97,15 @@ class AutoLaunchAdminConnector {
       }
       if (health === "running") return client;
       if (health === "starting") {
+        if (this.clock.now() >= giveUpAt) {
+          await client.close().catch(() => undefined);
+          throw new SimlockError(
+            "DAEMON_STARTUP_FAILED",
+            "transport",
+            "The daemon is still starting; check simlock daemon status or daemon.log",
+            {},
+          );
+        }
         await new Promise<void>((resolve) => this.clock.setTimer(50, resolve));
         continue;
       }
