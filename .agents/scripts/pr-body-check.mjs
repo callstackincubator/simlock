@@ -21,9 +21,11 @@
 //     rule 2);
 //   - the prose runs over 200 words: everything outside code blocks, checklist lines and the
 //     Status, Assumptions and Review sections (rule 12);
-//   - with a PR number, on a <kind>/<n> branch: a `## Done when` bullet of issue <n> is not a
-//     `- [ ]` or `- [x]` line of the body (its first 60 characters, case, backticks and spaces
-//     folded, start the line; a `— <how checked>` may follow), or is not ticked; and when every
+//   - with a PR number, on a <kind>/<n> branch: a `## Done when` bullet of issue <n> matches no
+//     `- [ ]` or `- [x]` line of the body, or matches one that is not ticked. A line matches when
+//     it holds at least 70% of the bullet's content words (lowercased, camelCase split, backticks
+//     and punctuation dropped, a trailing `s` dropped, stop words left out), so it may reword the
+//     bullet or add `— <how checked>`; and when every
 //     other open sub-issue of the issue's parent is closed by a PR below this one in its stack
 //     (or there is none), the same for the parent's `## Completion conditions` (coding rule 5);
 //   - the diff's kind (`diff-kind.mjs` from the merge-base to the head) and the counts line
@@ -48,6 +50,13 @@ import { option } from "./cli-args.mjs";
 
 const BUDGET = 200;
 const HERE = dirname(fileURLToPath(import.meta.url));
+// why: a checklist line may reword its Done when bullet; most of the bullet's words must stay.
+const MATCH = 0.7;
+const STOP_WORDS = new Set(
+  "a an the and or but nor of to in on at by for with from into onto as is are was were be been it its this that these those than then there their they them which who whom what when where how all any each every both either no not only so such too very can could may might must shall should will would do doe did has have had here our we you your one".split(
+    " ",
+  ),
+);
 const REVIEW_COUNTS =
   /^Spec review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Code review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\. Claims review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.(?: Comment review: (?:\d+ blocking, \d+ fixed, \d+ notes?|skipped)\.)?\s*$/;
 const ROUNDS = /^Rounds: \d+\. Tokens: (?:[\d.]+M|n\/a)\.\s*$/m;
@@ -242,16 +251,25 @@ function checkLedger(text) {
 function checkDoneWhen() {
   const number = Number(DELIVERY_BRANCH.exec(branch)[2]);
   const issue = api(`issues/${number}`);
-  const checklist = lines.flatMap((l) => {
+  const checklist = [];
+  for (const l of lines) {
     const item = /^\s*- \[([ xX])\] (.*)$/.exec(l);
-    return item === null ? [] : [{ ticked: item[1] !== " ", text: fold(item[2]) }];
-  });
+    if (item !== null) checklist.push({ ticked: item[1] !== " ", text: item[2] });
+    else if (/^\s+\S/.test(l) && checklist.length > 0) checklist.at(-1).text += ` ${l.trim()}`;
+    else if (l.trim() === "" || !/^\s/.test(l)) checklist.push(null);
+  }
+  const items = checklist
+    .filter((c) => c !== null)
+    .map((c) => ({ ...c, words: new Set(contentWords(c.text)) }));
   const walk = (text, heading, from) => {
     for (const bullet of bullets(text, heading)) {
-      const key = fold(bullet)
-        .replace(/[.;:,]+$/, "")
-        .slice(0, 60);
-      const line = checklist.find((c) => c.text.startsWith(key));
+      const wanted = [...new Set(contentWords(bullet))];
+      const share = (c) => wanted.filter((w) => c.words.has(w)).length / Math.max(1, wanted.length);
+      const best = items.reduce(
+        (a, c) => (a === undefined || share(c) > share(a) ? c : a),
+        undefined,
+      );
+      const line = best !== undefined && share(best) >= MATCH ? best : undefined;
       const quoted = `"${bullet.slice(0, 50)}"`;
       if (line === undefined) {
         failures.push(
@@ -330,8 +348,14 @@ function bullets(text, heading) {
   return out;
 }
 
-function fold(text) {
-  return text.toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
+function contentWords(text) {
+  return text
+    .replace(/`/g, "")
+    .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z\d]+/)
+    .map((w) => (w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w))
+    .filter((w) => w !== "" && !STOP_WORDS.has(w));
 }
 
 function closes(text) {

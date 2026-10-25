@@ -277,7 +277,7 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     expect(check(body("- Assumption: a bound with no choice")).status).toBe(1);
   });
 
-  it("walks the issue's Done when lines as checklist lines, ticked once the PR is ready", () => {
+  it("walks the issue's Done when lines as checklist lines, ticked once the PR is ready, matching a reworded line by its words", () => {
     const issue = {
       "issues/7": {
         body: "## Done when\n\n- `pnpm test:changed` passes with the Tests lines above.\n- The website build passes.\n\n## Out of scope\n\nx\n",
@@ -306,6 +306,14 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
       expect.stringContaining(
         '#7\'s Done when line "`pnpm test:changed` passes with the Tests lines ab" is not a checklist line',
       ),
+    ]);
+    expect(
+      task(
+        "- [x] Website builds and passes — ran it\n- [x] With the `Tests` line above `pnpmTest:changed` passing:\n  9/9 green",
+      ),
+    ).toEqual({ status: 0, lines: [] });
+    expect(task("- [x] The website build passes.\n- [x] pnpm passes above").lines).toEqual([
+      expect.stringContaining("is not a checklist line"),
     ]);
   });
 
