@@ -13,6 +13,10 @@
 # names>), <m> min waited`, and `merge-pr: #<pr> re-running the failed jobs of run <id>: <jobs>`
 # for each run it re-runs.
 #
+# When the PRs it merges close the last open sub-issues of the top PR's feature, every
+# `docs/internal/adr/NNNN-*.md` they add or change must read `**Status:** Accepted` (not
+# Proposed, not "not yet implemented") at the top PR's head (delivery rule 10), checked first.
+#
 # Red CI gets one re-run of its failed jobs when no failure is this PR's to fix: every red
 # check is a job GitHub cancelled (no runner came), or every test that failed is named by an
 # open `flaky-test` issue (testing rule 5). MERGE_PR_POLL_SECONDS sets the poll interval.
@@ -151,10 +155,38 @@ gates() {
   esac
 }
 
+# why: a feature's ADRs flip to Accepted when it closes (delivery rule 10), and the stack that
+# closes its last open sub-issue is the last chance to see that they did.
+adr_status() {
+  closing='(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
+  closed=$(for p in $members; do api "pulls/$p" -q '.body // ""' | grep -oiE "$closing" || true; done |
+    grep -oE '[0-9]+$' | sort -u)
+  issue=$(api "pulls/$target" -q '.body // ""' | grep -oiE "$closing" | grep -oE '[0-9]+$' | head -n 1 || true)
+  [ -n "$issue" ] || return 0
+  feature=$(api "issues/$issue/parent" -q .number 2>/dev/null) || return 0
+  for n in $(paged "issues/$feature/sub_issues" '.[] | select(.state == "open") | .number'); do
+    echo "$closed" | grep -qx "$n" || return 0
+  done
+  head=$(api "pulls/$target" -q .head.sha)
+  adrs=$(for p in $members; do paged "pulls/$p/files" '.[] | select(.status != "removed") | .filename'; done |
+    grep -E '^docs/internal/adr/[0-9]{4}-[^/]*\.md$' | sort -u || true)
+  for adr in $adrs; do
+    status=$(api "contents/$adr" -f ref="$head" -H 'Accept: application/vnd.github.raw' |
+      awk '/^- \*\*Status:\*\*/ { on = 1; printf "%s", $0; next }
+        on && /^[[:space:]]+[^[:space:]]/ { printf " %s", $0; next } { on = 0 }')
+    case $status in
+      *"not yet implemented"*) ;;
+      "- **Status:** Accepted"*) continue ;;
+    esac
+    fail "#$target closes the last open sub-issue of #$feature, and $adr reads \"$(echo "${status:-no Status line}" | cut -c1-80)\"; flip it to Accepted first (delivery rule 10)"
+  done
+}
+
 stack=$(api "stacks?pull_request=$target" \
   -q '[.[] | select(.open)][0].pull_requests // [] | .[] | select(.state == "open") | .number')
 members=$(echo "$stack" | sed "/^$target\$/q")
 [ -n "$members" ] || members=$target
+adr_status
 for pr in $members; do gates; done
 
 if [ "$members" = "$target" ]; then
