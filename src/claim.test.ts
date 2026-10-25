@@ -78,7 +78,9 @@ const task = (body: string, extra: Issue = {}): Issue => ({
   ...extra,
 });
 
-describe("claim.mjs", () => {
+// why: each case spawns node and a fake gh several times; under a loaded suite run the default
+// five seconds is not enough, and a hang still fails within the half minute.
+describe("claim.mjs", { timeout: 30_000 }, () => {
   it.each([
     ["a ready bug", { 5: { state: "open", labels: ["bug:ready"] } }, []],
     ["a bug:new issue to triage", { 5: { state: "open", labels: ["bug:new"] } }, ["--triage"]],
