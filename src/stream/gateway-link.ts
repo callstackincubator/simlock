@@ -7,6 +7,7 @@ import {
   StreamRefusalError,
   streamUnavailable,
   unknownDevice,
+  unknownLease,
   unknownWorker,
 } from "./refusal.js";
 import type { StreamLink, StreamTarget } from "./service.js";
@@ -60,7 +61,21 @@ async function serveDevice(
       tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
     }),
   );
-  return fromResponse(workerId, subject, response);
+  try {
+    return await fromResponse(workerId, subject, response);
+  } catch (error) {
+    // why: the worker names the lease by its own id, which the caller never saw; the gateway puts
+    // back the id the caller asked for.
+    if (
+      target.leaseId !== undefined &&
+      error instanceof StreamRefusalError &&
+      error.status === 404 &&
+      error.code === "UNKNOWN_LEASE"
+    ) {
+      throw unknownLease(target.leaseId);
+    }
+    throw error;
+  }
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker
