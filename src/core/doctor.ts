@@ -1,5 +1,5 @@
 import type { EventBus } from "../bus/index.js";
-import { parseOsConstraint } from "../contract/index.js";
+import { boundDriverSummary, DRIVER_DETAIL_MAX, parseOsConstraint } from "../contract/index.js";
 import { type Clock, type Logger, NoopLogger } from "../ports/index.js";
 import type { Config } from "./config.js";
 import {
@@ -1136,7 +1136,8 @@ const DRIVER_RETRY_REMEDY =
 
 function driverUnavailableFindings(rejections: readonly DriverRejection[]): DoctorFinding[] {
   return rejections.map((rejection) => ({
-    detail: `${rejection.summary}. ${DRIVER_RETRY_REMEDY}`,
+    // why: a driver's summary is an error message of any length; the remedy is kept whole.
+    detail: `${boundDriverSummary(rejection.summary, DRIVER_DETAIL_MAX - DRIVER_RETRY_REMEDY.length - 2)}. ${DRIVER_RETRY_REMEDY}`,
     kind: "driver-unavailable" as const,
     platform: rejection.platform,
     reason: rejection.reason,

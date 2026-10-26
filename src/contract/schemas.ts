@@ -154,6 +154,18 @@ export function quarantineCauseMessage(text: string): string | undefined {
   return `${cut}…`;
 }
 
+/** The longest `detail` a `driver-unavailable` finding carries. */
+export const DRIVER_DETAIL_MAX = 1000;
+
+/** A driver's refusal text cut to `max` characters, ending in `…` inside it. */
+export function boundDriverSummary(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
 interface CauseCarrier {
   readonly quarantineCause?: { readonly message?: string | undefined } | undefined;
 }
@@ -914,7 +926,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
     kind: z.literal("driver-unavailable"),
     platform: platformSchema,
     reason: z.string().max(64),
-    detail: z.string(),
+    detail: z.string().max(DRIVER_DETAIL_MAX),
   }),
   z.object({
     kind: z.literal("service-broken"),
