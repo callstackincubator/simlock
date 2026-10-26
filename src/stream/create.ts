@@ -69,7 +69,16 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
   // does -- a simulator's repeats its last frame -- so these four events are what end it.
   for (const event of DEVICE_STOP_EVENTS) {
     options.events.subscribe(event, (envelope) => {
-      void captures.stopOnDevice(envelope.payload.deviceId);
+      // why: a leased phone that drops off ends its lease after this event (the registry commits the
+      // end, then emits, and the participants run after), so this stop is the one a viewer's last
+      // frame can be written on; the lease end that follows finds no capture left and adds none.
+      const payload = envelope.payload as { readonly previousState?: string };
+      void captures.stopOnDevice(
+        envelope.payload.deviceId,
+        event === "device.absence-detected" && payload.previousState === "leased"
+          ? "device-lost"
+          : undefined,
+      );
     });
   }
   return {

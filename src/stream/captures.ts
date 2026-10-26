@@ -15,13 +15,16 @@ export interface CaptureSlot {
   // why: the viewer is gone. The slot stays registered until its open settles and what it attached
   // is closed, so a lease that ends meanwhile still waits for the device to be left alone.
   release(): Promise<void>;
+  // why: the lease-end reason this slot was stopped with, so its body can end on a frame that says
+  // why; absent for a viewer that left or a device that stopped with no lease end.
+  endedReason(): string | undefined;
 }
 
 export interface CaptureRegistry {
   // why: a device's stream belongs to the device, not to a lease, because a device nobody leases streams
   // too; its captures end when the device stops running or its lease ends, whoever the viewer is.
   beginOnDevice(deviceId: string): CaptureSlot;
-  stopOnDevice(deviceId: string): Promise<number>;
+  stopOnDevice(deviceId: string, reason?: string): Promise<number>;
 }
 
 interface Slot {
@@ -32,11 +35,12 @@ interface Slot {
   settle: () => void;
   close: (() => Promise<void>) | undefined;
   closing: Promise<void> | undefined;
+  reason: string | undefined;
 }
 
 interface SlotTable {
   begin(key: string): CaptureSlot;
-  stop(key: string): Promise<number>;
+  stop(key: string, reason?: string): Promise<number>;
 }
 
 function createSlotTable(): SlotTable {
@@ -69,6 +73,7 @@ function createSlotTable(): SlotTable {
         close: undefined,
         closing: undefined,
         controller: new AbortController(),
+        reason: undefined,
         settle,
         settled,
       };
@@ -83,6 +88,7 @@ function createSlotTable(): SlotTable {
           slot.settle();
         },
         ended: slot.controller.signal,
+        endedReason: () => slot.reason,
         abandon: () => {
           slot.settle();
           forget(key, slot);
@@ -93,11 +99,14 @@ function createSlotTable(): SlotTable {
         },
       };
     },
-    stop: async (key) => {
+    stop: async (key, reason) => {
       const forKey = running.get(key);
       if (forKey === undefined) return 0;
       running.delete(key);
-      for (const slot of forKey) slot.controller.abort();
+      for (const slot of forKey) {
+        slot.reason = reason;
+        slot.controller.abort();
+      }
       await Promise.allSettled([...forKey].map(closeSlot));
       return forKey.size;
     },
@@ -116,7 +125,7 @@ export function createStreamLeaseEnd(captures: CaptureRegistry): ModuleLeaseEndP
     // the wait if leasing gives up first.
     leaseEnded: async (ended, signal) => {
       await Promise.race([
-        captures.stopOnDevice(ended.deviceId),
+        captures.stopOnDevice(ended.deviceId, ended.reason),
         new Promise<void>((resolve) => {
           if (signal.aborted) resolve();
           else signal.addEventListener("abort", () => resolve(), { once: true });

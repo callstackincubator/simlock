@@ -1,5 +1,7 @@
 import {
   type DeviceRecord,
+  encodeScreenFrame,
+  SCREEN_FRAME_TAG,
   type LeaseRecord,
   type Platform,
   type PhysicalDriverDevice,
@@ -74,7 +76,7 @@ export function createWorkerStreamLink(options: WorkerStreamLinkOptions): Stream
           ),
         );
         slot.attach(feed.close);
-        stream = await readScreenFeed(feed, options.bounds);
+        stream = await readScreenFeed(feed, options.bounds, () => endedFrame(slot.endedReason()));
       } catch (error) {
         slot.abandon();
         if (slot.ended.aborted) throw deviceStopped();
@@ -143,4 +145,12 @@ function leasedDeviceId(options: WorkerStreamLinkOptions, leaseId: string): stri
   const lease = options.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
   if (lease === undefined) throw unknownLease(leaseId);
   return lease.deviceId;
+}
+
+function endedFrame(reason: string | undefined): Uint8Array | undefined {
+  if (reason === undefined) return undefined;
+  return encodeScreenFrame(
+    SCREEN_FRAME_TAG.ended,
+    new TextEncoder().encode(JSON.stringify({ reason })),
+  );
 }
