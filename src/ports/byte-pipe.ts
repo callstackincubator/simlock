@@ -87,6 +87,8 @@ export class FakeBytePipeProcess implements BytePipeProcess {
   readonly stdinWrites: Uint8Array[] = [];
   readonly kills: string[] = [];
   exitOnStdinClose = true;
+  // why: a test sets this to make every later write fail, as a pipe whose reader has gone does.
+  writeError: Error | undefined;
   readonly #onStderrLine: ((line: string) => void) | undefined;
   #controller!: ReadableStreamDefaultController<Uint8Array>;
   #resolveExit!: (exit: BytePipeExit) => void;
@@ -124,6 +126,7 @@ export class FakeBytePipeProcess implements BytePipeProcess {
   }
 
   writeStdin(bytes: Uint8Array): Promise<void> {
+    if (this.writeError !== undefined) return Promise.reject(this.writeError);
     this.stdinWrites.push(bytes);
     return Promise.resolve();
   }

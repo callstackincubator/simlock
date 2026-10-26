@@ -180,6 +180,31 @@ describe("iOS device input", () => {
     expect(failures).toEqual(["The input helper exited with code 1"]);
   });
 
+  it("closing stops the helper without failing the input, and a failed write fails the input and stops the helper", async () => {
+    const closing = setup();
+    const closingOpen = closing.factory.open(simulator(), new AbortController().signal);
+    closing.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    const closable = (await closingOpen) as DeviceInput;
+    const closeFailures: string[] = [];
+    closable.onFailed((error) => closeFailures.push(error.message));
+    await closable.close();
+    expect(closing.launcher.last.stdinClosed).toBe(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(closeFailures).toEqual([]);
+
+    const broken = setup();
+    const brokenOpen = broken.factory.open(simulator(), new AbortController().signal);
+    broken.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    const input = (await brokenOpen) as DeviceInput;
+    const failures: string[] = [];
+    input.onFailed((error) => failures.push(error.message));
+    broken.launcher.last.writeError = new Error("write EPIPE");
+    input.send({ kind: "touch", type: "begin", x: 0.5, y: 0.5 });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(failures).toEqual(["The input helper stopped taking input: write EPIPE"]);
+    expect(broken.launcher.last.stdinClosed).toBe(true);
+  });
+
   it("a physical iPhone's device input is unavailable and no process is started", async () => {
     const { clock, factory, launcher } = setup();
     const pending = factory
