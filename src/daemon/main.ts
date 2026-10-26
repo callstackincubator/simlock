@@ -1120,7 +1120,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     const gateway = new HttpGateway(app, {
       host: config.http.host,
       logger: httpLogger,
-      // ADR 0005 §4: the uplink upgrades on this same listener, so the fleet has one inbound
+      // why: ADR 0005 §4: the uplink upgrades on this same listener, so the fleet has one inbound
       // port. The factory only needs the server's `upgrade` event, which is all it is given.
       onServerCreated: (server) =>
         createUpgradeRouter({
