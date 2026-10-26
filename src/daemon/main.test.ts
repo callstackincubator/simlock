@@ -94,8 +94,6 @@ const STANDALONE_OFF = {
   http: { enabled: false },
 } as const;
 
-/** `drivers: undefined` is spelled out by a caller that wants real (module-substituted)
- * discovery rather than the fake driver below. */
 async function start(
   overrides: Partial<Omit<StartDaemonOptions, "deviceDataTables" | "drivers">> & {
     readonly deviceDataTables?: StartDaemonOptions["deviceDataTables"] | undefined;
@@ -409,7 +407,6 @@ describe("the event history", () => {
   it("judges retention by the injected clock, so an event younger than the retention on that clock survives the start-up prune", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    // The fake clock reads 1_000; a real clock would put the 7-day cutoff far past 500.
     await seedHistory(directory, [500]);
 
     await start({ dataDirectory: directory });
@@ -446,7 +443,7 @@ async function queryState(
   }
 }
 
-/** A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
+/** why: A gateway URL on a port just released. Nothing listens there, so a worker's uplink dial
  * fails fast, and the fake clock never fires its retry. */
 async function unreachableGatewayUrl(): Promise<string> {
   const probe = createServer();
@@ -491,7 +488,6 @@ async function writeModule(contents: string): Promise<string> {
   return modulePath;
 }
 
-/** A driver whose disposal is observable, which `FakeDriver` deliberately is not. */
 class DisposableFakeDriver extends FakeDriver {
   constructor(
     private readonly disposed: string[],
@@ -517,7 +513,6 @@ async function agentStatus(daemon: DaemonServer) {
   )) as { readonly host: { readonly tools: readonly unknown[] } };
 }
 
-/** A fake driver that reports tool versions, which `FakeDriver` does not. */
 class ToolsFakeDriver extends FakeDriver {
   constructor(
     options: ConstructorParameters<typeof FakeDriver>[0],
@@ -532,7 +527,7 @@ class ToolsFakeDriver extends FakeDriver {
 }
 
 /**
- * Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
+ * why: Binds an ephemeral loopback port and releases it. A fixed port fails whenever two runs of
  * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
  * -- and another run's daemon can even answer on it.
  */
@@ -565,7 +560,7 @@ describe("startDaemon", () => {
       readonly gateway: { readonly token?: string };
     };
 
-    // The fixture is real: the daemon did log its start and emit `daemon.started` to both
+    // why: The fixture is real: the daemon did log its start and emit `daemon.started` to both
     // the ring and the file, so "absent" below means redacted, not never written.
     expect(sink.records.some((record) => record.message === "Daemon started")).toBe(true);
     expect(eventFile).toContain('"daemon.started"');
@@ -634,13 +629,12 @@ describe("startDaemon", () => {
       role: "admin",
     } as const;
 
-    // doctor.run parks until startup convergence has finished, so by the time it answers,
+    // why: doctor.run parks until startup convergence has finished, so by the time it answers,
     // convergence's own reconcile has run -- and must not have counted.
     const first = (await daemon.dispatch("doctor.run", {}, admin)) as {
       readonly findings: readonly { readonly kind: string; readonly prerequisite?: string }[];
     };
     expect(runs).toEqual({ android: 1, ios: 1 });
-    // Android has no driver in this daemon, so the finding is the platform's, not running.
     expect(first.findings).toContainEqual(
       expect.objectContaining({ kind: "prerequisite-missing", platform: "android" }),
     );
@@ -801,8 +795,6 @@ describe("startDaemon", () => {
         .catch(() => undefined);
     }
 
-    // With the default cap both failures stay stored; with an unclassified failure the code
-    // would be INTERNAL.
     await expect
       .poll(() => queryState(directory, "SELECT requester_id, failure_code FROM lease_requests"))
       .toEqual([{ failure_code: "RUNTIME_MISSING", requester_id: "second" }]);
@@ -821,14 +813,14 @@ describe("startDaemon", () => {
     await first.daemon.stop("test");
     await start({ dataDirectory: directory, filesystem });
 
-    // Never regenerated: a second id would strand every device already sitting in a root
+    // why: Never regenerated: a second id would strand every device already sitting in a root
     // marked with the first one (ADR 0001, decision 2).
     expect(written.instanceId).not.toBe("");
     expect(JSON.parse(await filesystem.readFile(identityPath))).toEqual(written);
   });
 
   it("disposes every driver on shutdown, and reports the one that failed without stopping", async () => {
-    // The wiring, not the halves: `DaemonServer` awaiting its `dispose` option is tested in
+    // why: The wiring, not the halves: `DaemonServer` awaiting its `dispose` option is tested in
     // `server.test.ts` and a driver reaping its adb server in the Android driver's own, and
     // between them sat the composition that connects the two. Losing it silently abandons
     // Simlock's adb server on every shutdown, and only `Driver.dispose` can stop one.
@@ -1024,7 +1016,7 @@ describe("startDaemon wires core and leasing together", () => {
     readonly device: { readonly id: string };
   };
 
-  /** Lets the work a mutated daemon would still be doing finish, so "nothing happened" is a
+  /** why: Lets the work a mutated daemon would still be doing finish, so "nothing happened" is a
    * statement about the daemon and not about how early the test looked. Only sound when that
    * work is all in memory: a timer fires after it however loaded the machine is, but real I/O
    * (a process spawn, a real file) can outlast it. */
@@ -1178,7 +1170,6 @@ describe("startDaemon wires core and leasing together", () => {
     const clock = new FakeClock(1_000);
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
     temporaryDirectories.push(directory);
-    // The previous process's registry: one request still open when it stopped.
     const state = await openStateDatabase({
       dataDirectory: directory,
       filesystem: new MemoryFilesystem(),
@@ -1320,7 +1311,6 @@ describe("startDaemon wires core and leasing together", () => {
     });
     await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
 
-    // Well past the stalled-transition threshold, but the erase holds its claim on the device.
     clock.advance(300_000);
     const devices = (await daemon.dispatch("list.get", { kind: "devices" }, admin)) as readonly {
       readonly id: string;
@@ -1367,7 +1357,6 @@ describe("startDaemon wires core and leasing together", () => {
     const grant = (await started.daemon.dispatch("lease.request", ios, agent)) as Grant;
     await started.daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
 
-    // Shutdown waits for the failed purge to settle into quarantine, which arms the retry.
     await started.daemon.stop("test");
     clock.advance(30_000);
     await settleRealTime();
@@ -1457,11 +1446,6 @@ describe("startDaemon wires core and leasing together", () => {
 });
 
 describe("startDaemon startup readiness", () => {
-  // Reproduces the issue #41 symptom end-to-end through the real startDaemon wiring:
-  // doctor.reconcile() shells out to driver.listManaged() per driver, which is where
-  // real convergence time is lost. Here it's held open on the FakeClock so the test
-  // can prove the socket answers hello/status.get ("starting"), parks lease.request,
-  // and only then converges -- without waiting on a real clock.
   it("claims the socket and answers hello/status.get while doctor.reconcile is still in flight", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-slow-"));
     temporaryDirectories.push(directory);
@@ -1506,7 +1490,7 @@ describe("startDaemon startup readiness", () => {
       void parkedLease.then(() => {
         leaseSettled = true;
       });
-      // Round-tripping another status.get proves the parked request was already
+      // why: Round-tripping another status.get proves the parked request was already
       // dispatched (and is awaiting the readiness gate) without relying on a timer.
       await client.request("status.get", {});
       expect(leaseSettled).toBe(false);
@@ -1559,7 +1543,6 @@ describe("startDaemon stopped while starting", () => {
         protocolVersion: DAEMON_PROTOCOL_VERSION,
       });
       expect((await client.request("daemon.stop", {})).ok).toBe(true);
-      // `daemon.stop` answers first and tears down after, so give the teardown real time to begin.
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     } finally {
       client.socket.end();
@@ -1573,11 +1556,6 @@ describe("startDaemon stopped while starting", () => {
 });
 
 describe("startDaemon HTTP gateway startup readiness", () => {
-  // ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
-  // being refused." Mirrors the socket-side test above (same FakeDriver latency trick to hold
-  // convergence open on the FakeClock), but drives a real HTTP request instead of a socket
-  // frame -- proving the gateway is actually listening (and its request actually parks) before
-  // convergence finishes, not just that `dispatch()` would park it in principle.
   it("parks an HTTP request until convergence completes, instead of refusing the connection", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
     temporaryDirectories.push(directory);
@@ -1607,7 +1585,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
       return daemon;
     });
 
-    // Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
+    // why: Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
     // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
     // `listen()`), so there is no single microtask boundary to await here the way the
     // socket-side test above can just retry-connect on the unix socket.
@@ -1621,8 +1599,6 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     void parkedStatusPromise.then(() => {
       settled = true;
     });
-    // Give the parked request's own microtasks a chance to run before asserting it hasn't --
-    // it must still be awaiting `dispatch()`'s startup-readiness gate, not merely slow.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(settled).toBe(false);
 
@@ -1900,7 +1876,7 @@ describe("startDaemon stop with a warm target", () => {
       .poll(() => driver.calls.filter((call) => call.operation === "makeReady").length)
       .toBe(1);
 
-    // The creation ends while the HTTP gateway is still being stopped: a pool not closed by then
+    // why: The creation ends while the HTTP gateway is still being stopped: a pool not closed by then
     // would start the second one, and the drain would wait for its whole boot.
     const stopping = daemon.stop("test-stop-target");
     driver.releaseMakeReady();
@@ -1911,24 +1887,6 @@ describe("startDaemon stop with a warm target", () => {
 });
 
 describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
-  // Before this fix, `stopAuxiliary` (this file's `stopAuxiliary` closure passed to
-  // `DaemonServer`) returned immediately whenever the concurrently-started HTTP gateway
-  // (`onSocketClaimed` -> `startHttpGateway()`) hadn't finished its own `listen()` yet --
-  // `stopHttpGateway` isn't assigned until it does. `#stop()` (server.ts) awaits
-  // `stopAuxiliary()` first, so it would go on to release leases, settle, and dispose while the
-  // gateway was still binding, then start accepting HTTP requests -- against a torn-down engine
-  // -- once its own `listen()` finally resolved. The fix makes `stopAuxiliary` await
-  // `gatewayStarted` (settled only once the gateway's own bind attempt finishes, one way or the
-  // other) before doing anything else.
-  //
-  // The window this reproduces (`onSocketClaimed` firing to the gateway's `listen()` actually
-  // resolving) is normally a handful of real milliseconds -- reachable, per the review, via
-  // `simlock daemon stop` during startup, but not something a test can land inside reliably by
-  // just racing real I/O against real I/O. So this test holds the window open deterministically
-  // instead: it patches `net.Server.prototype.listen` (restored in `finally`) to delay only a
-  // TCP bind (the gateway's) by 200ms, leaving the daemon's own Unix-socket `listen()` (a string
-  // first argument, not a port) untouched -- so the socket claims and answers `daemon.stop`
-  // long before the patched gateway bind is even allowed to start.
   it("never lets the HTTP gateway outlive full teardown when daemon.stop lands while the gateway is still mid-bind", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
     temporaryDirectories.push(directory);
@@ -1952,14 +1910,8 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
         socketPath,
         version: "1.2.3",
       } as StartDaemonOptions);
-      // `stop()` is idempotent, so it is safe for `afterEach` to also stop whatever this
-      // resolves to (it will, once the delayed gateway bind above finishes settling).
       void startPromise.then((daemon) => runningDaemons.push(daemon)).catch(() => undefined);
 
-      // Connects and authenticates as admin, then sends `daemon.stop` -- comfortably inside the
-      // 200ms window the patch above holds the gateway's own bind open for. The admin secret is
-      // written (`AdminSecretManager#persist`) before `onSocketClaimed` fires, so it is already
-      // there by the time the socket itself is reachable.
       const client = await connectRetrying(socketPath);
       const secret = (await readFileRetrying(filesystem, join(directory, "admin.token"))).trim();
       await client.request("hello", {
@@ -1971,8 +1923,6 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       expect(stopReply.ok).toBe(true);
       client.socket.end();
 
-      // Lets the delayed gateway bind actually fire and settle (one way or the other) before
-      // this test reads the log for it.
       await new Promise((resolve) => setTimeout(resolve, 400));
 
       const stoppingIndex = sink.records.findIndex(
@@ -1985,20 +1935,11 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
       const gatewayListeningIndex = sink.records.findIndex(
         (record) => record.message === "HTTP gateway listening",
       );
-      // The gateway actually got to bind (it does here -- the port is free and 200ms is ample
-      // real time for a loopback `listen()`), so this asserts the meaningful case directly
-      // rather than treating it as merely possible: it bound, and it was stopped, and both
-      // happened strictly before "Daemon stopping" (logged only once `stopAuxiliary` resolves --
-      // see `server.ts#stop`). Before the fix, `stoppingIndex` would be *smaller* than both of
-      // these -- `stopAuxiliary` returned immediately, so "Daemon stopping" logged right away,
-      // well before the (patch-delayed) gateway bind even started.
       expect(gatewayListeningIndex).toBeGreaterThanOrEqual(0);
       expect(gatewayListeningIndex).toBeLessThan(stoppingIndex);
       expect(gatewayStoppedIndex).toBeGreaterThanOrEqual(0);
       expect(gatewayStoppedIndex).toBeLessThan(stoppingIndex);
 
-      // And the port must never be reachable once the daemon has finished stopping -- the
-      // gateway did not outlive teardown just because it bound after `stop()` was requested.
       await expect(
         fetch(`http://127.0.0.1:${port}/v1/status`, {
           headers: { authorization: "Bearer irrelevant" },
@@ -2012,12 +1953,6 @@ describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", 
 });
 
 describe("startDaemon socket race with HTTP enabled", () => {
-  // Review finding V1: `gatewayStarted` is settled only from inside `onSocketClaimed`'s
-  // handler, and `start()` fires that callback only after the socket claim succeeds. A daemon
-  // that loses the start race therefore rejected without the callback ever running, so nothing
-  // settled `gatewayStarted` and `Promise.allSettled` waited on it forever -- `startDaemon()`
-  // hung instead of reporting the lost race, with no rejection and no non-zero exit code.
-  // Reachable by racing `simlock daemon start`, or by the CLI's own auto-launch.
   it("rejects rather than hanging when the socket is already claimed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-socket-race-"));
     temporaryDirectories.push(directory);
@@ -2046,7 +1981,6 @@ describe("startDaemon socket race with HTTP enabled", () => {
 
     const first = await startDaemon(options(await freeLoopbackPort()));
     try {
-      // A distinct port, so the only thing that can fail is the socket claim itself.
       const second = startDaemon(options(await freeLoopbackPort()));
       const outcome = await Promise.race([
         second.then(
@@ -2063,7 +1997,7 @@ describe("startDaemon socket race with HTTP enabled", () => {
 });
 
 describe("startDaemon gateway uplink when the socket claim fails", () => {
-  // #395: the uplink is dialled from `onSocketClaimed`, so a daemon that loses the claim never
+  // why: #395: the uplink is dialled from `onSocketClaimed`, so a daemon that loses the claim never
   // dials its gateway -- it would otherwise join as a worker it is about to stop being.
   it("never dials the gateway when the worker's socket is already claimed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-uplink-claim-"));
@@ -2107,7 +2041,6 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
         () => "resolved" as const,
         () => "rejected" as const,
       );
-      // The dial, were it made, reaches a loopback listener within milliseconds.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect({ dials, outcome }).toEqual({ dials: [], outcome: "rejected" });
     } finally {
@@ -2118,8 +2051,6 @@ describe("startDaemon gateway uplink when the socket claim fails", () => {
 });
 
 describe("startDaemon with HTTP off", () => {
-  // #395: the socket-claim callback now runs with HTTP off too (it dials the uplink), so it
-  // must still leave the HTTP frontend unstarted.
   it("starts no HTTP gateway when http.enabled is false", async () => {
     const port = await freeLoopbackPort();
     await start({ configOverrides: { http: { enabled: false, host: "127.0.0.1", port } } });
@@ -2137,12 +2068,6 @@ describe("startDaemon with HTTP off", () => {
 });
 
 describe("startDaemon HTTP gateway bind failure", () => {
-  // Review finding B6: before this fix, an HTTP bind failure (occupied port) logged and
-  // stopped the daemon from inside `onSocketClaimed`'s handler without `startDaemon()` itself
-  // ever seeing it -- the daemon's own `start()` would go on to resolve successfully once
-  // convergence finished, so the CLI reported success (exit code 0) with no socket, no HTTP,
-  // and no daemon actually running. This proves `startDaemon()` now rejects instead, and that
-  // the daemon never reports having started after it already reported stopping.
   it("rejects startDaemon() when the configured HTTP port is already in use, without emitting a started record after a stopping one", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-bind-"));
     temporaryDirectories.push(directory);
@@ -2174,10 +2099,6 @@ describe("startDaemon HTTP gateway bind failure", () => {
     const startedIndex = sink.records.findIndex((record) => record.message === "Daemon started");
     const stoppingIndex = sink.records.findIndex((record) => record.message === "Daemon stopping");
     expect(stoppingIndex).toBeGreaterThanOrEqual(0);
-    // Either "Daemon started" never appears (the common case: the bind failure is discovered
-    // and the whole thing torn down without convergence ever seeing readiness), or -- if
-    // convergence happened to finish first -- it appears strictly before "Daemon stopping",
-    // never after (ADR events rule 3: a fact must be true when emitted).
     if (startedIndex >= 0) {
       expect(startedIndex).toBeLessThan(stoppingIndex);
     }
@@ -2343,7 +2264,7 @@ describe("discoverDrivers", () => {
     const { drivers, rejections } = await discoverIos({ hostPlatform: "linux" });
 
     expect(drivers.some((driver) => driver.platform === "ios")).toBe(false);
-    // Nothing refused anything here: a host without Xcode is not a fail-closed refusal
+    // why: Nothing refused anything here: a host without Xcode is not a fail-closed refusal
     // and must not be reported as one.
     expect(rejections).toEqual([]);
   });
@@ -2355,7 +2276,7 @@ describe("discoverDrivers", () => {
   });
 
   it("builds both prerequisite checks on macOS, whether or not a driver started", async () => {
-    // The refused root costs the iOS driver; it must not cost the check that explains it.
+    // why: The refused root costs the iOS driver; it must not cost the check that explains it.
     const { drivers, prerequisiteChecks } = await discoverIos({
       filesystem: await foreignOwnedRoot(),
     });
@@ -2390,7 +2311,7 @@ describe("discoverDrivers", () => {
 
     const { drivers, rejections } = await discoverIos({ filesystem });
 
-    // Safety rule 9: the platform goes, the daemon stays -- a daemon that will not start
+    // why: Safety rule 9: the platform goes, the daemon stays -- a daemon that will not start
     // is a daemon that cannot tell anyone why.
     expect(drivers.some((driver) => driver.platform === "ios")).toBe(false);
     expect(rejections.map((rejection) => rejection.platform)).toEqual(["ios"]);
@@ -2402,7 +2323,7 @@ describe("discoverDrivers", () => {
 
     const { rejections } = await discoverIos({ filesystem });
 
-    // Built from a real `OwnedRootError`, key by key: the payload is a wire contract
+    // why: Built from a real `OwnedRootError`, key by key: the payload is a wire contract
     // `simlock events --json` publishes, so renaming `root` has to fail here.
     expect(rejections[0]).toEqual({
       event: "driver.root-rejected",
@@ -2418,7 +2339,7 @@ describe("discoverDrivers", () => {
   });
 
   it("still fails startup when the iOS driver fails for a reason that is not a refusal", async () => {
-    // Anything that is not an `OwnedRootError` is a bug rather than a fail-closed
+    // why: Anything that is not an `OwnedRootError` is a bug rather than a fail-closed
     // decision, and swallowing it would hide it behind a silently missing platform.
     await expect(
       discoverIos({
@@ -2449,7 +2370,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     const { drivers, rejections } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]));
 
     expect(drivers.some((driver) => driver.platform === "android")).toBe(false);
-    // The payload is a wire contract `simlock events --json` publishes for
+    // why: The payload is a wire contract `simlock events --json` publishes for
     // `driver.adb-server-rejected`, so a renamed key has to fail here.
     expect(rejections[0]).toMatchObject({
       event: "driver.adb-server-rejected",
@@ -2464,7 +2385,6 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     const filesystem = await androidSdk();
     const probe = new FakeTcpProbe([5038]);
     await filesystem.mkdirp(SIMLOCK_HOME);
-    // The server a previous daemon left behind, with the pid that proves it is Simlock's.
     await filesystem.writeFileAtomic(
       join(SIMLOCK_HOME, "adb-server.json"),
       JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
@@ -2503,8 +2423,6 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       join(SIMLOCK_HOME, "adb-server.json"),
       JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
     );
-    // Only the console-port lookup a boot starts with is scripted: the emulator launch after it
-    // is recorded and then refused, so the boot stops right after showing its argv.
     const processRunner = new ScriptedProcessRunner([
       {
         match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
@@ -2644,7 +2562,6 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
-  /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
     process.env.ANDROID_HOME = "/android-sdk";
@@ -2697,7 +2614,6 @@ const SIMLOCK_HOME = "/home/.simlock";
 const IOS_ROOT = join(SIMLOCK_HOME, "devices", "ios");
 const INSTANCE_ID = "instance-1";
 
-/** A root marked by a different Simlock instance -- the cheapest real `OwnedRootError`. */
 async function foreignOwnedRoot(): Promise<MemoryFilesystem> {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp(IOS_ROOT);
@@ -2713,7 +2629,6 @@ async function foreignOwnedRoot(): Promise<MemoryFilesystem> {
   return filesystem;
 }
 
-/** The very `OwnedRootError` the driver raises for that root, never a hand-written copy. */
 async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError> {
   try {
     await IosSimctlDriver.create({
@@ -2731,7 +2646,6 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   throw new Error("expected the iOS device root to be refused");
 }
 
-/** Discovery as it runs on a Mac, with the host platform supplied rather than sniffed. */
 function discoverIos(
   overrides: {
     readonly filesystem?: MemoryFilesystem;
@@ -2980,7 +2894,6 @@ describe("startDaemon event history", () => {
   it("writes no daemon log line for component.installed and device.slimmed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-event-file-"));
     temporaryDirectories.push(directory);
-    // The daemon's own bus is reachable only through what it hands discovery.
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers({ eventBus }) {
          eventBus.emit("component.installed", { componentId: "18.6", durationMs: 1, platform: "ios" }, "test");
@@ -3098,7 +3011,6 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   });
 
   it("a throwing event subscriber writes one JSON line through the logger and nothing through console.error", async () => {
-    // The drivers module is the one seam that reaches the daemon's own bus from outside.
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
          context.eventBus.subscribe("daemon.started", () => {
@@ -3135,7 +3047,6 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
       `export function createDrivers() { return []; }`,
     );
 
-    // No `prerequisiteChecks` export: `doctor` runs no check rather than the real ones.
     await expect(discover(new MemoryLogSink())).resolves.toEqual({
       drivers: [],
       prerequisiteChecks: [],
@@ -3168,7 +3079,6 @@ interface MinimalClient {
   ): Promise<{ readonly ok: boolean; readonly payload?: unknown }>;
 }
 
-/** Minimal newline-delimited-JSON client, mirroring the real daemon protocol framing. */
 function connectClient(socketPath: string): Promise<MinimalClient> {
   return new Promise((resolve, reject) => {
     const socket = connect(socketPath);
@@ -3218,7 +3128,7 @@ async function connectRetrying(socketPath: string, timeoutMs = 2_000): Promise<M
   }
 }
 
-/** Delays every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) by
+/** why: Delays every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) by
  * `delayMs`, real time, via `setTimeout` -- but passes a Unix-socket `listen(path, callback)`
  * call (a string first argument) straight through unpatched. Used only by the S5 race test
  * above to hold the HTTP gateway's own bind open deterministically without touching `src/http`
@@ -3291,9 +3201,6 @@ function holdTcpListen(): {
   };
 }
 
-/** Polls a `MemoryFilesystem` path with no backoff -- used to read `admin.token` the moment
- * `AdminSecretManager#persist` lands it, without adding artificial delay to a test that is
- * deliberately racing that write's timing against something else (see the S5 race test). */
 async function readFileRetrying(
   filesystem: MemoryFilesystem,
   path: string,
@@ -3310,7 +3217,6 @@ async function readFileRetrying(
   }
 }
 
-/** A disk whose free-space query fails, as `statfs` does on a data directory gone unreadable. */
 class UnmeasurableDiskFilesystem extends MemoryFilesystem {
   async diskFree(_path: string): Promise<number> {
     throw Object.assign(new Error("statfs failed"), { code: "EIO" });
@@ -3321,7 +3227,7 @@ describe("startDaemon logger wiring", () => {
   it("startDaemon hands its logger to the cleanup reaper: a scheduled cleanup run that fails is logged", async () => {
     const { sink } = await start({ filesystem: new UnmeasurableDiskFilesystem() });
 
-    // `daemon.started` triggers a run nobody awaits; its failure has no caller to reach.
+    // why: `daemon.started` triggers a run nobody awaits; its failure has no caller to reach.
     await pollUntil(() =>
       sink.records.some((record) => record.message === "scheduled cleanup run failed"),
     );
@@ -3337,7 +3243,7 @@ describe("startDaemon logger wiring", () => {
   });
 
   it("startDaemon hands the gateway dispatcher its error classifier: a typed refusal is logged with its code at info, not as INTERNAL at error", async () => {
-    // A gateway serves HTTP; on its default port two overlapping runs of this file collide.
+    // why: A gateway serves HTTP; on its default port two overlapping runs of this file collide.
     const { daemon, sink } = await start({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
@@ -3372,8 +3278,6 @@ describe("startDaemon logger wiring", () => {
   });
 });
 
-/** Polls until `condition` holds or the time runs out, without failing: the caller's own
- * assertion afterwards is what names a miss. */
 async function pollUntil(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition() && Date.now() < deadline) {
