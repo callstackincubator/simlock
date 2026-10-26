@@ -14,14 +14,14 @@ import { createIosDeviceInput } from "./index.js";
 const COMMAND = "/opt/simlock/simlock-screen-capture";
 const DEVICE_SET = "/home/.simlock/devices/ios";
 
-function simulator(runtimeId = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"): VirtualDriverDevice {
+function simulator(runtimeId?: string): VirtualDriverDevice {
   return {
     address: "UDID-1",
     deviceId: "UDID-1",
     driverData: {
       deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
       name: "simlock-1",
-      runtimeId,
+      runtimeId: runtimeId ?? "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
       udid: "UDID-1",
     },
     physical: false,
@@ -115,5 +115,26 @@ describe("iOS device input", () => {
       { body: { type: "up", usage: 0x04 }, tag: INPUT_TAG.key },
     ]);
     expect(isUnavailableInput(input)).toBe(false);
+
+    for (const runtimeId of [
+      "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+      "com.apple.CoreSimulator.SimRuntime.iOS-28-1",
+      "garbage",
+    ]) {
+      const other = setup();
+      const opened = other.factory.open(simulator(runtimeId), new AbortController().signal);
+      other.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+      const limited = (await opened) as DeviceInput;
+      const limitedConfigs: InputScreenConfig[] = [];
+      limited.onConfig((config) => limitedConfigs.push(config));
+      expect(limitedConfigs).toEqual([
+        { height: 2556, keyboardUnavailable: true, orientation: "portrait", width: 1179 },
+      ]);
+      limited.send({ kind: "key", type: "down", usage: 0x04 });
+      limited.send({ kind: "touch", type: "begin", x: 0.5, y: 0.25 });
+      expect(decoded(other.launcher.last.stdinWrites)).toEqual([
+        { body: { type: "begin", x: 0.5, y: 0.25 }, tag: INPUT_TAG.touch },
+      ]);
+    }
   });
 });
