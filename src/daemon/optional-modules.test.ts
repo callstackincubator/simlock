@@ -289,7 +289,11 @@ describe("optional modules: HTTP routes", () => {
       modules: definitions(fakeModule({ name: "alpha" })),
       on: ["alpha"],
     });
-    const { secret } = await daemon.dispatch("token.create", { label: "o", role: "admin" }, admin);
+    const { secret } = await daemon.dispatch(
+      "token.create",
+      { label: "o", role: "operator" },
+      admin,
+    );
     const grant = (await daemon.dispatch("lease.request", ios, agent)) as { lease: { id: string } };
     const response = await fetch(`${origin}/v1/leases/${grant.lease.id}/renew`, {
       headers: { authorization: `Bearer ${secret}` },
