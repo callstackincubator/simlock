@@ -54,6 +54,7 @@ import type {
   ProcessRunner,
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
+import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-leftovers.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
@@ -295,14 +296,15 @@ export class IosSimctlDriver implements Driver {
   readonly #physical: IosPhysicalHandler;
   readonly #resolvedSpecs = new Map<string, ResolvedIosSpec>();
   readonly #deviceRoot: string;
-  readonly #rootOptions: EnsureOwnedRootOptions;
+  readonly #instanceId: string;
+  readonly #rootOptions: EnsureOwnedRootOptions | undefined;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
 
   private constructor(
     options: IosSimctlDriverOptions,
     deviceRoot: string,
-    rootOptions: EnsureOwnedRootOptions,
+    rootOptions: EnsureOwnedRootOptions | undefined,
   ) {
     this.#clock = options.clock;
     this.componentFootprint = {
@@ -321,6 +323,7 @@ export class IosSimctlDriver implements Driver {
       simlockHome: options.simlockHome,
     });
     this.#deviceRoot = deviceRoot;
+    this.#instanceId = options.instanceId;
     this.#rootOptions = rootOptions;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
@@ -339,7 +342,7 @@ export class IosSimctlDriver implements Driver {
                     configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
                 }),
             deviceOsVersion: (udid) => this.#physical.osVersion(udid),
-            deviceSet: deviceRoot,
+            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
             filesystem: options.filesystem,
             launcher: options.screenCapture.launcher,
             ...(options.screenCapture.onLog === undefined
@@ -359,6 +362,18 @@ export class IosSimctlDriver implements Driver {
    * machine's default device set (safety rule 9).
    */
   static async create(options: IosSimctlDriverOptions): Promise<IosSimctlDriver> {
+    const deviceSet = configuredDeviceSet(options);
+    if (deviceSet === "default") {
+      await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
+      return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
+    }
+    if (options.coreSimulatorRoot !== undefined) {
+      await refuseXcodeSetLeftovers(
+        options.filesystem,
+        xcodeDeviceSetPath(options),
+        options.instanceId,
+      );
+    }
     const rootOptions: EnsureOwnedRootOptions = {
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
@@ -385,6 +400,7 @@ export class IosSimctlDriver implements Driver {
    * a `mv` can have left the user's own device set standing where this one was.
    */
   async revalidateRoot(): Promise<void> {
+    if (this.#rootOptions === undefined) return;
     await ensureOwnedRoot(this.#rootOptions);
   }
 
@@ -641,7 +657,8 @@ export class IosSimctlDriver implements Driver {
     ]);
     let foreign: ReadonlyMap<string, DefaultSetDevices>;
     try {
-      foreign = devicesPerRuntime(JSON.parse(defaultSet.stdout) as unknown);
+      const parsed = JSON.parse(defaultSet.stdout) as unknown;
+      foreign = devicesPerRuntime(parsed, await this.#ownedUdids(parsed));
     } catch (error: unknown) {
       if (error instanceof DriverCrashError) throw error;
       throw new DriverCrashError(`Could not parse simctl device list: ${errorMessage(error)}`);
@@ -741,7 +758,16 @@ export class IosSimctlDriver implements Driver {
       throw new DriverCrashError("simctl create returned no device UDID");
     }
 
-    await this.#writeMark(udid);
+    try {
+      await this.#writeMark(udid);
+    } catch (error: unknown) {
+      // why: In Xcode's set an unmarked simulator is nobody's, so one left here would never
+      // be listed, reclaimed or deleted by Simlock again.
+      if (this.#rootOptions === undefined) {
+        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
+      }
+      throw error;
+    }
 
     return {
       address: udid,
@@ -1085,6 +1111,9 @@ export class IosSimctlDriver implements Driver {
   }
 
   async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
+    // why: Under Xcode's set the default set is the driver's own, so no device is "pre-root"
+    // there, and a lost mark stays a report-only finding instead of a deletable legacy device.
+    if (this.#rootOptions === undefined) return undefined;
     const result = await this.#legacySimctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
     const found = parseManagedDevices(JSON.parse(result.stdout) as unknown).find(
       (device) => device.udid === driverDeviceId,
@@ -1125,7 +1154,19 @@ export class IosSimctlDriver implements Driver {
 
   async listManaged(): Promise<DriverReality> {
     const result = await this.#simctl(["list", "-j", "devices"], COMMAND_TIMEOUT_MS);
-    const parsed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    const listed = parseManagedDevices(JSON.parse(result.stdout) as unknown);
+    // why: Xcode's set also holds the user's own simulators and other Simlocks'; only a
+    // durable mark naming this instance proves a simulator here is ours.
+    const parsed =
+      this.#rootOptions !== undefined
+        ? listed
+        : (
+            await Promise.all(
+              listed.map(async (device) =>
+                (await this.#isMarkedByThisInstance(device.udid)) ? [device] : [],
+              ),
+            )
+          ).flat();
     const devices: ObservedDevice[] = await Promise.all(
       parsed.map(async (device) => {
         const mark = await this.#readMark(device.udid);
@@ -1307,7 +1348,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   virtualLeaseEnvironment(): Readonly<Record<string, string>> {
-    return { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
+    return this.#rootOptions === undefined ? {} : { SIMLOCK_IOS_DEVICE_SET: this.#deviceRoot };
   }
 
   leaseEnvironment(device: DriverDevice): Readonly<Record<string, string>> {
@@ -1346,7 +1387,7 @@ export class IosSimctlDriver implements Driver {
     const scopedArgs = device === undefined ? args : fillSimctlDevice(args, device.deviceId);
     // why: No environment: simctl ignores every variable that could carry the device set.
     return await Promise.resolve({
-      args: ["simctl", "--set", this.#deviceRoot, ...scopedArgs],
+      args: this.#scopedSimctlArgv(scopedArgs),
       command: "xcrun",
       env: {},
     });
@@ -1462,6 +1503,7 @@ export class IosSimctlDriver implements Driver {
   async #writeMark(udid: string): Promise<void> {
     const token = this.#idGenerator.generate();
     const contents = JSON.stringify({
+      instanceId: this.#instanceId,
       token,
       udid,
       writtenAt: new Date(this.#clock.now()).toISOString(),
@@ -1486,15 +1528,43 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #readToken(path: string): Promise<string | undefined> {
+    return (await this.#readMarkFile(path))?.token;
+  }
+
+  async #readMarkFile(
+    path: string,
+  ): Promise<{ readonly token: string; readonly instanceId: string | undefined } | undefined> {
     try {
       const contents = await this.#filesystem.readFile(path);
       const parsed = JSON.parse(contents) as unknown;
-      return isRecord(parsed) && typeof parsed.token === "string" && parsed.token !== ""
-        ? parsed.token
-        : undefined;
+      if (!isRecord(parsed) || typeof parsed.token !== "string" || parsed.token === "") {
+        return undefined;
+      }
+      return {
+        instanceId:
+          typeof parsed.instanceId === "string" && parsed.instanceId !== ""
+            ? parsed.instanceId
+            : undefined,
+        token: parsed.token,
+      };
     } catch {
       return undefined;
     }
+  }
+
+  /** why: Under Xcode's set the default set holds this instance's simulators too, and they are not foreign. */
+  async #ownedUdids(listed: unknown): Promise<ReadonlySet<string>> {
+    if (this.#rootOptions !== undefined || !isRecord(listed) || !isRecord(listed.devices)) {
+      return new Set();
+    }
+    const udids = parseManagedDevices(listed).map((device) => device.udid);
+    const owned = await Promise.all(udids.map((udid) => this.#isMarkedByThisInstance(udid)));
+    return new Set(udids.filter((_udid, index) => owned[index]));
+  }
+
+  async #isMarkedByThisInstance(udid: string): Promise<boolean> {
+    const durable = await this.#readMarkFile(join(this.#deviceDirectory(udid), MARK_FILE_NAME));
+    return durable?.instanceId === this.#instanceId;
   }
 
   async #resolvedSpec(spec: VirtualSpec): Promise<ResolvedIosSpec> {
@@ -1576,6 +1646,8 @@ export class IosSimctlDriver implements Driver {
   }
 
   #scopedSimctlArgv(args: readonly string[]): string[] {
+    // why: Xcode's own set is simctl's default, so a call there carries no `--set`.
+    if (this.#rootOptions === undefined) return ["simctl", ...args];
     return ["simctl", "--set", this.#deviceRoot, ...args];
   }
 
@@ -1714,6 +1786,32 @@ function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string
 function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
   const configured = options.driverConfig["deviceCaptureCommand"];
   return typeof configured === "string" && configured !== "" ? configured : undefined;
+}
+
+function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "default" {
+  const configured = options.driverConfig["deviceSet"];
+  if (configured === undefined || configured === "simlock") return "simlock";
+  if (configured !== "default") {
+    throw new OwnedRootError(
+      `Refusing the ios device set: drivers.ios.deviceSet must be "simlock" or "default", but it is ${JSON.stringify(configured)}`,
+      "invalid-device-set",
+      typeof configured === "string" ? configured : JSON.stringify(configured),
+      "ios",
+    );
+  }
+  if (options.driverConfig["deviceRoot"] !== undefined) {
+    throw new OwnedRootError(
+      `Refusing the ios device set: drivers.ios.deviceRoot names Simlock's own set, but drivers.ios.deviceSet is "default". Remove one of them.`,
+      "invalid-device-set",
+      configured,
+      "ios",
+    );
+  }
+  return "default";
+}
+
+function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
+  return join(options.coreSimulatorRoot ?? ".", "Devices");
 }
 
 function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
@@ -1986,13 +2084,18 @@ interface DefaultSetDevices {
   readonly unused: number;
 }
 
-function devicesPerRuntime(value: unknown): ReadonlyMap<string, DefaultSetDevices> {
+function devicesPerRuntime(
+  value: unknown,
+  owned: ReadonlySet<string>,
+): ReadonlyMap<string, DefaultSetDevices> {
   if (!isRecord(value) || !isRecord(value.devices)) {
     throw new DriverCrashError("Invalid simctl device list JSON");
   }
   return new Map(
     Object.entries(value.devices).map(([runtime, devices]): [string, DefaultSetDevices] => {
-      const entries: readonly unknown[] = Array.isArray(devices) ? devices : [];
+      const entries: readonly unknown[] = (Array.isArray(devices) ? devices : []).filter(
+        (device: unknown) => !(isRecord(device) && owned.has(String(device.udid))),
+      );
       const used = entries.filter(
         (device) => !isRecord(device) || device.lastUsedAt !== undefined,
       ).length;

@@ -703,7 +703,7 @@ test.describe("the Activity page", () => {
   }) => {
     const fleet = await startFleet([{ driverScript: { ios: IOS }, label: "worker-a" }]);
     try {
-      const joinToken = fleet.gateway.tokens.worker;
+      const [joinToken = ""] = fleet.joinTokens;
       await openEvents(page, fleet.gateway);
       await expect(rows(page).filter({ hasText: "worker.connected" })).not.toHaveCount(0);
       const events = await cliEvents(fleet.gateway);

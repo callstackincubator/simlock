@@ -24,10 +24,12 @@ const AGENT_DEVICE = `## agent-device
 
 const IOS_BUILDS = `## iOS builds
 
-Simlock's simulators live in a device set of their own, not the default set that Xcode and \`xcrun simctl\` use. A tool that picks a simulator from the default set cannot find them.
+Look at the grant's \`environment\`. The build route depends on whether it holds \`SIMLOCK_IOS_DEVICE_SET\`.
 
-- Do not build against your leased device: \`xcodebuild -destination id=<udid>\`, \`react-native run-ios\`, \`expo run:ios\`, Detox and Maestro cannot find it, so they fail. Build for any simulator instead with \`-destination 'generic/platform=iOS Simulator'\`.
-- Then install the \`.app\` with \`agent-device install\`, or with \`simlock simctl install <device.address> <path-to-.app>\` when the path is on the machine that runs Simlock.`;
+- With \`SIMLOCK_IOS_DEVICE_SET\`, the simulator is in a device set of Simlock's own, not the default set that Xcode and \`xcrun simctl\` use. A tool that picks a simulator from the default set cannot find it. \`xcodebuild -destination id=<udid>\`, \`react-native run-ios\`, \`expo run:ios\`, Detox and Maestro fail on it.
+- With Xcode 27 or later, build for the device with \`-DVTSimulatorSetLocation="$SIMLOCK_IOS_DEVICE_SET"\` added to \`xcodebuild\`, and \`-destination "platform=iOS Simulator,id=<udid>"\`.
+- With an older Xcode, or a tool that takes no extra \`xcodebuild\` arguments, build for any simulator with \`-destination 'generic/platform=iOS Simulator'\`. Then install the \`.app\` with \`agent-device install\`, or with \`simlock simctl install <device.address> <path-to-.app>\` when the path is on the machine that runs Simlock.
+- Without \`SIMLOCK_IOS_DEVICE_SET\`, the simulator is in Xcode's own set: build and run it by its UDID with \`-destination "platform=iOS Simulator,id=<udid>"\`, or with any tool that takes a simulator UDID.`;
 
 const SIMLOCK_CLI = `## simlock CLI
 

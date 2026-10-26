@@ -622,7 +622,7 @@ describe("AgentDeviceSupervisor spawning", () => {
     },
   );
 
-  it("passes every key and value of the drivers' environment unchanged, and copies the iOS device set to the agent-device key", async () => {
+  it("passes every key and value of the drivers' environment unchanged, copies the iOS device set to the agent-device key, and sets none when the lease environment has none", async () => {
     const harness = await run({
       driverEnvironment: {
         ANDROID_ADB_SERVER_PORT: "5199",
@@ -640,6 +640,12 @@ describe("AgentDeviceSupervisor spawning", () => {
     });
     expect(env["AGENT_DEVICE_ANDROID_DEVICE_ALLOWLIST"]).toBeUndefined();
     expect(running(harness).platforms).toEqual(["ios", "android"]);
+
+    const xcodeSet = await run({ driverEnvironment: { ANDROID_ADB_SERVER_PORT: "5199" } });
+    expect(running(xcodeSet).platforms).toEqual(["ios", "android"]);
+    expect(xcodeSet.runner.calls[1]?.options.env).not.toHaveProperty(
+      "AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET",
+    );
   });
 
   it("points the daemon at an empty private directory when the iOS driver is off", async () => {

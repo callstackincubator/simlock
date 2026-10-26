@@ -46,7 +46,9 @@ afterEach(async () => {
 
 /** Starts a real gateway-side listener whose `authenticate` always refuses (recording every
  * `claimed` it was handed) and returns the base URL to dial it at. */
-async function startRefusingGateway(): Promise<{
+async function startRefusingGateway(
+  outcome: Exclude<UplinkAuthOutcome, "accept"> = "unauthenticated",
+): Promise<{
   url: string;
   claims: ClaimedUplinkIdentity[];
 }> {
@@ -55,7 +57,7 @@ async function startRefusingGateway(): Promise<{
   await factory.listen({
     authenticate: (_credential, claimed): Promise<UplinkAuthOutcome> => {
       claims.push(claimed);
-      return Promise.resolve("unauthenticated");
+      return Promise.resolve(outcome);
     },
     accept: () => {
       throw new Error("this gateway never accepts");
@@ -118,6 +120,29 @@ describe("WebSocketUplinkListenerFactory / P3", () => {
 
     expect(claims).toHaveLength(1);
     expect(claims[0]).toEqual({ label: "mac-mini-1", workerId: "wrk_1" });
+  });
+});
+
+describe("WebSocketUplinkListenerFactory refusals", () => {
+  it("answers 401 for an unauthenticated join, and 403 for a forbidden one or a worker-mismatch", async () => {
+    for (const [outcome, status] of [
+      ["unauthenticated", 401],
+      ["forbidden", 403],
+      ["worker-mismatch", 403],
+    ] as const) {
+      const { url } = await startRefusingGateway(outcome);
+
+      await expect(
+        new WebSocketUplinkConnector().connect({ token: "slk_x", url, workerId: "wrk_1" }),
+        outcome,
+      ).rejects.toMatchObject({
+        code: "rejected",
+        message: `The gateway refused the uplink with HTTP ${String(status)}`,
+      });
+
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = undefined;
+    }
   });
 });
 

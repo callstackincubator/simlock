@@ -22,7 +22,10 @@
 # Before a run it sources `.slow-lane.env` from the main checkout's root, if there is one: this
 # machine's settings, such as SIMLOCK_E2E_AGENT_DEVICE. A run's temporary homes live under
 # /tmp/simlock-slow, so `clean` and `stop` find a run's daemons, emulators and simulators by
-# that path and touch nothing else. A run starts by cleaning up after earlier ones.
+# that path and touch nothing else, except the simulators in Xcode's own device set whose durable
+# mark names the instance of a home under that path (a daemon run with drivers.ios.deviceSet
+# "default" keeps them there): `clean` and `stop` delete those too. A run starts by cleaning up
+# after earlier ones.
 #
 # The run is detached from the calling shell, so no tool time limit kills it halfway and
 # leaves booted devices behind. Its own harness tears down the devices it created.
@@ -90,9 +93,39 @@ def clean():
                 os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass
+    delete_marked_simulators()
     shutil.rmtree(lane_tmp, ignore_errors=True)
     for pid, name in procs:
         print(f"stopped {pid} {name}")
+
+def lane_instance_ids():
+    # why: each lane home holds its instance id in instance.json (a gateway's under gateway/); the homes sit one or two levels below lane_tmp.
+    ids = set()
+    for base, dirs, files in os.walk(lane_tmp):
+        if base[len(lane_tmp):].count(os.sep) >= 3:
+            dirs[:] = []
+        if "instance.json" in files:
+            try:
+                ids.add(json.loads(read(os.path.join(base, "instance.json")))["instanceId"])
+            except (ValueError, KeyError, TypeError):
+                pass
+    return ids
+
+def delete_marked_simulators():
+    # why: with drivers.ios.deviceSet "default" the lane's simulators live in the maintainer's Xcode set, which removing the lane folder does not clean; only a durable mark naming a lane instance proves a simulator is the lane's.
+    ids = lane_instance_ids()
+    devices = os.environ.get("SIMLOCK_SLOW_DEVICES") or os.path.expanduser("~/Library/Developer/CoreSimulator/Devices")
+    if not ids or not os.path.isdir(devices):
+        return
+    for udid in sorted(os.listdir(devices)):
+        try:
+            mark = json.loads(read(os.path.join(devices, udid, "simlock-mark.json")))
+        except ValueError:
+            continue
+        if isinstance(mark, dict) and mark.get("instanceId") in ids:
+            subprocess.run(["xcrun", "simctl", "shutdown", udid], capture_output=True)
+            subprocess.run(["xcrun", "simctl", "delete", udid], capture_output=True)
+            print(f"deleted simulator {udid}")
 
 def free_gib(path):
     stats = os.statvfs(path)

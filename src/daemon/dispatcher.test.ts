@@ -262,6 +262,7 @@ async function buildDispatcher(
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
+    readonly driverRejections?: ConstructorParameters<typeof Doctor>[0]["driverRejections"];
   } = {},
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
@@ -334,6 +335,9 @@ async function buildDispatcher(
     clock,
     config,
     drivers: [driver],
+    ...(overrides.driverRejections === undefined
+      ? {}
+      : { driverRejections: overrides.driverRejections }),
     eventBus,
     leaseExpirer: engine,
     quarantine: engine.core.quarantine,
@@ -877,6 +881,46 @@ describe("Dispatcher: role rejection", () => {
     });
   });
 
+  it("doctor.run answers a driver-unavailable finding with its reason and detail while iOS is refused", async () => {
+    const cases = [
+      {
+        reason: "invalid-device-set",
+        root: "Default",
+        summary: "Refusing the ios device set: bad",
+      },
+      {
+        reason: "device-set-changed",
+        root: "/Volumes/sims",
+        summary: "Refusing the ios device set: left",
+      },
+    ] as const;
+    for (const { reason, root, summary } of cases) {
+      const { dispatcher } = await buildDispatcher({
+        driverRejections: [
+          {
+            event: "driver.root-rejected",
+            payload: { platform: "ios", reason, root },
+            platform: "ios",
+            reason,
+            summary,
+          },
+        ],
+      });
+
+      const report = (await dispatcher.dispatch("doctor.run", {}, session({ role: "admin" }))) as {
+        findings: { kind: string; platform?: string; reason?: string; detail?: string }[];
+      };
+
+      const finding = report.findings.find((entry) => entry.kind === "driver-unavailable");
+      expect(finding, reason).toMatchObject({
+        kind: "driver-unavailable",
+        platform: "ios",
+        reason,
+      });
+      expect(finding?.detail, reason).toContain(summary);
+    }
+  });
+
   it("driver.passthrough resolves the scoped command through the driver that claims the tool", async () => {
     const { dispatcher } = await buildDispatcher({ passthroughTool: "simctl" });
 
@@ -1132,6 +1176,57 @@ describe("Dispatcher: ownership", () => {
         session({ principal: "tok_other", role: "admin" }),
       ),
     ).resolves.toMatchObject({ lease: { id: leaseId } });
+  });
+
+  it("status.get: an agent sees only the leases and waiting requests it owns, one that owns none sees empty lists, admin sees all", async () => {
+    const { dispatcher, engine } = await buildDispatcher();
+    const IOS = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const ask = (principal: string, requesterId: string) =>
+      dispatcher.dispatch(
+        "lease.request",
+        { ...IOS, requesterId },
+        session({ principal, role: "agent" }),
+      );
+    // why: two leases fill iOS (maxRunning: 2, see testConfig), so the next two requests wait.
+    await ask("tok_owner1", "owner1-lease");
+    await ask("tok_owner2", "owner2-lease");
+    void ask("tok_owner1", "owner1-waiting").catch(() => undefined);
+    void ask("host", "agent-7").catch(() => undefined);
+    await expect.poll(() => engine.queueDepth).toBe(2);
+
+    const cases = [
+      [
+        "admin",
+        { principal: "tok_admin", role: "admin" },
+        ["owner1-lease", "owner2-lease"],
+        ["owner1-waiting", "agent-7"],
+      ],
+      [
+        "an agent with a lease and a waiting request",
+        { principal: "tok_owner1", role: "agent" },
+        ["owner1-lease"],
+        ["owner1-waiting"],
+      ],
+      [
+        "an agent whose request waits under another requesterId",
+        { principal: "host", role: "agent" },
+        [],
+        ["agent-7"],
+      ],
+      ["an agent that owns nothing", { principal: "tok_nobody", role: "agent" }, [], []],
+    ] as const;
+    const seen = await Promise.all(
+      cases.map(async ([name, who]) => {
+        const status = await dispatcher.dispatch("status.get", {}, session(who));
+        return {
+          leases: status.leases?.map((lease) => lease.requesterId),
+          name,
+          waiting: status.waiting?.map((request) => request.requesterId),
+        };
+      }),
+    );
+
+    expect(seen).toEqual(cases.map(([name, , leases, waiting]) => ({ leases, name, waiting })));
   });
 
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
@@ -2388,7 +2483,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
     await expect.poll(() => engine.queueDepth).toBe(1);
 
     const listed = await requests(dispatcher);
-    const { waiting } = await dispatcher.dispatch("status.get", {}, session());
+    const { waiting } = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
 
     expect(listed.map((entry) => ("stage" in entry ? entry.stage : undefined))).toEqual([
       "starting",

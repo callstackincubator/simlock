@@ -143,10 +143,12 @@ import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
+  prepareDataDirectory,
   refuseWhenDaemonAnswers,
 } from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
+import { execBaseEnvironment } from "./exec-env.js";
 import { GatewayUplink } from "./gateway-uplink.js";
 import type { RelayTargets } from "./relay.js";
 
@@ -278,6 +280,7 @@ async function composeDaemon(
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
+  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
   const { config, defaulted } = await loadConfigWithDefaults({
@@ -305,6 +308,7 @@ async function composeDaemon(
     });
   // why: the logger needs the config's log level, so what the config load found to warn about is told once the logger exists.
   for (const message of configWarnings) logger.warn(message);
+  if (dataDirectoryWarning !== undefined) logger.warn(dataDirectoryWarning);
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
   // ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
   // missing `sw_vers` costs a fallback value, not the daemon.
@@ -671,7 +675,7 @@ async function composeDaemon(
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
     processRunner,
-    execEnv: process.env,
+    execEnv: execBaseEnvironment(process.env),
     queue: leasing,
     presence: latestPresence,
     reaper,
@@ -920,11 +924,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const uplinks = new WebSocketUplinkListenerFactory();
   options.gatewayUplinks?.(uplinks);
   const gatewayService = new GatewayService({
-    // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
-    // real and simply has no authority here (403); anything else is unauthenticated (401).
-    // C-2: the accepted case names the token's own id, so `token.revoke` can later find and
+    // why: ADR 0005 §4/§25: only a `worker`-role token pinned to the claimed worker id opens an
+    // uplink. The accepted case names the token's own id, so `token.revoke` can later find and
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
-    authenticate: (credential) => auth.authenticateUplink(credential),
+    authenticate: (credential, workerId) => auth.authenticateUplink(credential, workerId),
     clock,
     drainStore: new StateDrainStore({ database: state.database, logger: logger.child("gateway") }),
     eventBus,

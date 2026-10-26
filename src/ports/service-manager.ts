@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
-import type { DaemonRole } from "./paths.js";
+import { DATA_DIRECTORY_MODE, type DaemonRole } from "./paths.js";
 import type { ProcessResult, ProcessRunner } from "./process-runner.js";
 export type ServiceManagerName = "launchd" | "systemd";
 
@@ -204,7 +204,8 @@ function isExistsError(error: unknown): boolean {
 }
 
 async function ensureLog(filesystem: Filesystem, logPath: string): Promise<void> {
-  await filesystem.mkdirp(dirname(logPath));
+  // why: the log lives in the data directory, which a first install on a fresh machine creates.
+  await filesystem.mkdirp(dirname(logPath), { mode: DATA_DIRECTORY_MODE });
   try {
     await filesystem.writeFileExclusive(logPath, "", { mode: 0o600 });
   } catch (error: unknown) {

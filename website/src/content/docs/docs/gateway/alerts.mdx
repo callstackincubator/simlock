@@ -15,7 +15,7 @@ Alerts are sent only by a gateway. A worker on its own sends none; to watch a si
 | --- | --- |
 | `worker.connected` | A worker connected to the gateway. |
 | `worker.disconnected` | A worker's connection closed. The message says how many leases it held. |
-| `worker.rejected` | The gateway refused a worker's connection: its token is unknown, revoked, or not a worker token. Refusals within one second for the same reason and worker are sent as one. |
+| `worker.rejected` | The gateway refused a worker's connection: its token is unknown, revoked, not a worker token, or already used by another worker. Refusals within one second for the same reason and worker are sent as one. |
 | `worker.drain-started` | A worker was drained: it takes no new leases from the gateway. |
 | `worker.drain-ended` | A drained worker takes new leases again. |
 | `device.quarantine-abandoned` | A worker gave up cleaning a device after repeated failures and retired it. |

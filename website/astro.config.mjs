@@ -98,6 +98,7 @@ export default defineConfig({
             doc("using-devices/choosing-a-device", "Choose a device"),
             doc("using-devices/lease-lifecycle", "Lease lifecycle"),
             doc("using-devices/working-with-a-device", "Work with a leased device"),
+            doc("using-devices/build-and-run", "Build and run your app"),
             doc("using-devices/physical-devices", "Physical devices"),
             doc("using-devices/watching-the-screen", "Watch the screen"),
             doc("using-devices/agent-device", "agent-device"),

@@ -1113,6 +1113,103 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  it("status.get: an agent sees only the fleet leases and fleet requests it owns, one that owns none sees empty lists, admin sees all", async () => {
+    const { coordinator, directory, dispatcher, workers } = harness();
+    directory.add("wrk_1", new ScriptedWorkerClient());
+    const capacity = statusFixture().capacity;
+    const issued = (id: string, deviceId: string, ownerId: string) => ({
+      ...leaseFixture(id, deviceId),
+      ownerId,
+      requesterId: `${GATEWAY_REQUESTER_PREFIX}${ownerId}`,
+    });
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
+    workers.refresh("wrk_1", {
+      capacity: { ...capacity, ios: { ...capacity.ios, maxRunning: 0 } },
+      catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+        .platforms,
+      health: "running",
+      // why: lease_3 is the worker's own local lease, owned by a local "agent-1" this gateway never issued to.
+      leases: [
+        issued("lease_1", "dev_1", "agent-1"),
+        issued("lease_2", "dev_2", "agent-2"),
+        leaseFixture("lease_3", "dev_3"),
+      ],
+      queueDepth: 0,
+    });
+    const wait = (ownerId: string, requesterId: string) =>
+      void coordinator
+        .request(
+          { model: "iPhone 17", platform: "ios" },
+          { allowDownload: false, noWait: false, ownerId, requesterId },
+        )
+        .catch(() => undefined);
+    wait("agent-1", "fleet-a");
+    wait("agent-3", "fleet-b");
+    await expect.poll(() => coordinator.queueDepth).toBe(2);
+
+    const cases = [
+      [
+        "admin",
+        { principal: "operator-1", role: "admin" },
+        ["wrk_1.lease_1", "wrk_1.lease_2", "lease_3"],
+        ["fleet-a", "fleet-b"],
+      ],
+      [
+        "an agent with a lease and a waiting request",
+        { principal: "agent-1", role: "agent" },
+        ["wrk_1.lease_1"],
+        ["fleet-a"],
+      ],
+      [
+        "an agent with a lease only",
+        { principal: "agent-2", role: "agent" },
+        ["wrk_1.lease_2"],
+        [],
+      ],
+      [
+        "an agent with a waiting request only",
+        { principal: "agent-3", role: "agent" },
+        [],
+        ["fleet-b"],
+      ],
+      ["an agent that owns nothing", { principal: "nobody", role: "agent" }, [], []],
+    ] as const;
+    const seen = await Promise.all(
+      cases.map(async ([name, who]) => {
+        const status = await dispatcher.dispatch("status.get", {}, session(who));
+        return {
+          leases: status.leases?.map((lease) => lease.id),
+          name,
+          waiting: status.waiting?.map((request) => request.requesterId),
+        };
+      }),
+    );
+
+    expect(seen).toEqual(cases.map(([name, , leases, waiting]) => ({ leases, name, waiting })));
+
+    // why: `workers[]` repeats each worker's own leases and waiting requests, so an agent must not read them there.
+    const held = (status: Awaited<ReturnType<typeof dispatcher.dispatch<"status.get">>>) =>
+      (status.workers ?? []).flatMap((worker) => [
+        ...(worker.leases ?? []).map((lease) => lease.id),
+        ...(worker.waiting ?? []).map((request) => request.requesterId),
+      ]);
+    expect(
+      held(
+        await dispatcher.dispatch(
+          "status.get",
+          {},
+          session({ principal: "operator-1", role: "admin" }),
+        ),
+      ),
+    ).not.toEqual([]);
+    for (const principal of ["agent-1", "agent-2", "nobody"]) {
+      expect(
+        held(await dispatcher.dispatch("status.get", {}, session({ principal, role: "agent" }))),
+        principal,
+      ).toEqual([]);
+    }
+  });
+
   it("replays and subscribes to its own bus, which carries the fleet's events", async () => {
     const { dispatcher, eventBus } = harness();
     eventBus.emit(

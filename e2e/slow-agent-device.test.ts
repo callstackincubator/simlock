@@ -666,6 +666,64 @@ describe.skipIf(AGENT_DEVICE === undefined || !iosAvailable)(
   () => defineSuite(IOS),
 );
 
+// why: under `deviceSet: "default"` Simlock keeps its simulators in Xcode's own set, so plain `xcrun simctl` (no `--set`) must see the leased one; a daemon with a home of its own makes this a second daemon, not the shared one above.
+describe.skipIf(AGENT_DEVICE === undefined || !iosAvailable)(
+  "agent-device through simlock (iOS, drivers.ios.deviceSet default)",
+  { tags: ["slow", "ios"] },
+  () => {
+    let env: SharedTestEnv;
+
+    beforeAll(async () => {
+      const pinned = await assertPinnedAgentDevice("ios");
+      env = await withSharedDaemon({
+        driver: "real",
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+          capabilities: { "agent-device": { enabled: true, command: pinned } },
+          capacity: { config: { limits: { ios: { maxDevices: 1, maxRunning: 1 } } } },
+          drivers: { ios: { deviceSet: "default" } },
+        },
+      });
+      sharedEnvs.add(env);
+      const probe = await newAgentToken(env);
+      await waitForAgentDevice(env, probe.secret);
+    }, 420_000);
+
+    afterAll(async () => {
+      await cleanupAgents();
+      // why: the simulators are in the maintainer's Xcode set, which the home's removal does not clean.
+      if (env !== undefined) {
+        await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 300_000 });
+      }
+      await env?.teardown();
+      sharedEnvs.delete(env);
+    }, 420_000);
+
+    it(
+      "under a daemon with drivers.ios.deviceSet default, an agent opens an iOS device, plain xcrun simctl list devices lists its UDID, and snapshot answers",
+      { timeout: 900_000 },
+      async () => {
+        const a = await makeAgent(env, "default-set");
+        const opened = await a.run(["open", "--platform", "ios"], { timeout: 330_000 });
+        ok(opened);
+        const [lease] = await listLeases(env);
+        const udid = (await listDevices(env)).find(
+          (device) => device.id === lease?.deviceId,
+        )?.address;
+        expect(udid, "the leased device's address").toBeDefined();
+        expect(
+          execFileSync("xcrun", ["simctl", "list", "devices"], { encoding: "utf8" }),
+        ).toContain(udid as string);
+        ok(await a.run(["install", "Appduct", IOS.app]));
+        ok(await a.run(["open", IOS.bundleId]));
+        ok(await a.run(["snapshot"], FIRST_SNAPSHOT));
+        ok(await a.run(["close"]));
+      },
+    );
+  },
+);
+
 describe.skipIf(AGENT_DEVICE === undefined || !androidAvailable)(
   "agent-device through simlock (Android)",
   { tags: ["slow", "android"] },

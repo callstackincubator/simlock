@@ -423,8 +423,9 @@ export interface LegacyDevice {
   readonly path?: string;
 }
 
-// why: the frontend that runs it merges `env` over its own environment, because a tool spawned
-// without `PATH` would not be found, and then deletes every key in `unsetEnv` from the child's.
+// why: the frontend that runs it merges `env` over a base environment (the CLI's own; for
+// `device.exec`, the daemon's allowlisted keys), because a tool spawned without `PATH` would not
+// be found, and then deletes every key in `unsetEnv` from the child's.
 export interface PassthroughCommand {
   readonly command: string;
   readonly args: readonly string[];

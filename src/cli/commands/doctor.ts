@@ -29,6 +29,7 @@ async function run(
   try {
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
     writeDriverAdvisoryWarnings(environment, response);
+    writeUnavailableDrivers(environment, response);
     writeMissingPrerequisites(environment, response);
     writeBrokenService(environment, response);
     writeUnreachableWarmTargets(environment, response);
@@ -47,6 +48,18 @@ function writeDriverAdvisoryWarnings(
   for (const finding of report.findings) {
     if (finding.kind !== "driver-advisory") continue;
     environment.stderr.write(`Warning [${finding.platform}] ${finding.code}: ${finding.message}\n`);
+  }
+}
+
+function writeUnavailableDrivers(
+  environment: CommandContext["environment"],
+  report: DoctorReport,
+): void {
+  for (const finding of report.findings) {
+    if (finding.kind !== "driver-unavailable") continue;
+    environment.stderr.write(
+      `Unavailable [${finding.platform}] ${finding.reason}: ${finding.detail}\n`,
+    );
   }
 }
 

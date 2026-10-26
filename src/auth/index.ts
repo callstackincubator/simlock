@@ -41,6 +41,7 @@ export interface AuthOptions {
 export type UplinkAnswer =
   | "unauthenticated"
   | "forbidden"
+  | "worker-mismatch"
   | { readonly outcome: "accept"; readonly tokenId: string };
 
 export interface Auth {
@@ -49,7 +50,10 @@ export interface Auth {
     readonly principal?: string;
     readonly credential?: string;
   }): Promise<Role>;
-  authenticateUplink(credential: string | undefined): Promise<UplinkAnswer>;
+  authenticateUplink(
+    credential: string | undefined,
+    claimedWorkerId: string | undefined,
+  ): Promise<UplinkAnswer>;
   readonly tokens: TokenOperations;
   readonly adminSecret: { persist(): Promise<void>; remove(): Promise<void> };
 }
@@ -99,12 +103,17 @@ export function createAuthFrom(
       if (adminSecret.verify(hello.credential)) return "admin";
       throw new AdminAuthenticationFailedError();
     },
-    authenticateUplink: async (credential) => {
+    authenticateUplink: async (credential, claimedWorkerId) => {
       if (credential === undefined) return "unauthenticated";
       const record = await store.verify(credential);
       if (record === undefined) return "unauthenticated";
       if (record.role !== "worker") return "forbidden";
-      return { outcome: "accept", tokenId: record.id };
+      if (claimedWorkerId === undefined || claimedWorkerId === "") return "worker-mismatch";
+      const pinned =
+        record.workerId === undefined
+          ? await store.pinWorker(record.id, claimedWorkerId)
+          : record.workerId === claimedWorkerId;
+      return pinned ? { outcome: "accept", tokenId: record.id } : "worker-mismatch";
     },
     tokens: {
       create: (role, label) => store.create(role, label),

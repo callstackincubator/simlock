@@ -145,6 +145,8 @@ Everything the worker keeps is under `~/.simlock`:
 
 A gateway on the same machine keeps its own files in `~/.simlock/gateway`, with its own daemon. Commands reach it with `--gateway`, for example `simlock --gateway daemon status`. See [Setting up a gateway](/simlock/docs/gateway/setup).
 
+Simlock creates `~/.simlock` (and `~/.simlock/gateway`) so only your user can open it, because anyone who can reach `daemon.sock` can lease devices as an agent. It does not change the permissions of a folder that already exists. If other users can open it, the daemon log says `data directory <path> is accessible to other users (mode <mode>); run chmod 700 <path>` at each start: run that command to close it.
+
 To run a separate install on the same account, set `SIMLOCK_HOME` to another folder. Every command and the daemon it starts use that folder instead of `~/.simlock`. Keep the path short: the socket path must fit the system limit (104 bytes on macOS, 108 on Linux), and a longer one fails with `Point SIMLOCK_HOME at a shorter directory.`
 
 <Aside type="caution">

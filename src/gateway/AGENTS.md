@@ -46,9 +46,9 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 **Uplink, gateway side.**
 
 1. `GatewayService.start`: `registry.load()` (drained ids) before the listener opens.
-2. Upgrade auth (`../daemon/main.ts`): unknown token `401`, non-`worker` role `403`. Refusals emit
-   `worker.rejected`, coalesced per reason and claimed id over 1 s.
-3. A new uplink under a live worker id closes and replaces the old link.
+2. Upgrade auth (`../daemon/main.ts`, `authenticateUplink` with the claimed id, cut to `MAX_CLAIMED_FIELD_LENGTH`):
+   unknown token `401`, non-`worker` role or `worker-mismatch` `403`. Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
+3. A new uplink under a live worker id (so with the token pinned to it) closes and replaces the old link.
 4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch →
    view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
@@ -99,9 +99,8 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
-**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` (admin: all; else own) and `lease.get`
-(one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record
-also carries `workerLeaseId`, the worker's own id (not on `status.get`). `inbox.get` runs `inboxItems` (contract) over the worker views, the fleet's leases and waiting requests (what `list.get` returns for `leases` and `requests`) and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
+**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` and `lease.get` (one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record also carries `workerLeaseId`, the worker's own id (not on `status.get`).
+`lease.list` and `status.get`'s `leases`: admin all; else the index's entries it owns. `status.get`'s `waiting`: admin all; else the fleet requests it owns. For a non-admin, `workers[]` drops each worker's own `leases` and `waiting`. `inbox.get` runs `inboxItems` (contract) over the worker views, the fleet's leases and waiting requests (what `list.get` returns for `leases` and `requests`) and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
 
 **Uplink drop.** View → `disconnected`, kept; `worker.disconnected`. In-flight calls → `WORKER_UNREACHABLE`, an in-flight lease request → `worker-failed`. `token.revoke` closes its uplinks.
 
@@ -142,8 +141,6 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
   release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`;
   the request waits elsewhere. `worker drain` leaves it to the owner.
-- **A worker's claimed id is never verified against its join token.** Any `worker`-token holder can
-  claim any id and take over its link, view, drain flag and calls. Ids cut to 128 chars.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a

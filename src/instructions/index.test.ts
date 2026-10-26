@@ -60,6 +60,9 @@ const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> =
     LEASE_ENDED_MESSAGE,
   ],
   "## iOS builds": [
+    "`SIMLOCK_IOS_DEVICE_SET`",
+    "-DVTSimulatorSetLocation",
+    "Xcode 27",
     "`xcodebuild -destination id=<udid>`",
     "`react-native run-ios`",
     "`expo run:ios`",

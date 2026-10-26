@@ -34,7 +34,8 @@ Runs the command on the machine that owns the device and streams its output back
    `UNKNOWN_PASSTHROUGH_TOOL`. A refusal → `PASSTHROUGH_REFUSED`.
    The driver fills the lease's device into the command, and refuses one that names
    another device (ADR 0047), see "Resolution per platform".
-5. Env — the daemon's `process.env` + the command's `env`, minus its `unsetEnv`.
+5. Env — `execBaseEnvironment(process.env)` (`src/daemon/exec-env.ts`, the allowlisted
+   keys, read once at start) + the command's `env`, minus its `unsetEnv`.
 6. Spawn — `ProcessRunner.spawnStreaming`, pipes only. `stdin` is written once,
    then closed.
 7. `started` push the moment the process exists, then one `output` push per chunk
@@ -47,7 +48,7 @@ Runs the command on the machine that owns the device and streams its output back
 
 | Tool | Device | Command | Refused |
 |---|---|---|---|
-| `simctl` | iOS simulator | `xcrun simctl --set <device root> <args>`; the lease's UDID goes first among the operands of a device verb (`src/drivers/ios/simctl-device.ts`) | another UDID or `booted` on a device verb, `simctl` on a non-iOS lease, `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, any flag before the subcommand, a physical device |
+| `simctl` | iOS simulator | `xcrun simctl --set <device root> <args>` (no `--set` under `drivers.ios.deviceSet: default`); the lease's UDID goes first among the operands of a device verb (`src/drivers/ios/simctl-device.ts`) | another UDID or `booted` on a device verb, `simctl` on a non-iOS lease, `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, any flag before the subcommand, a physical device |
 | `devicectl` | iOS physical | `xcrun devicectl <cmd> --device <udid> <rest>`; `--device` added unless the args name one; a `--device` / `-d` that is not the lease's UDID is refused | a command not on the allowed list (`src/drivers/ios/devicectl-exec.ts`), an option off it, host-path options (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`), a simulator |
 | `adb` | Android emulator | `adb -P <simlock port> -s <serial> <args>`, `ANDROID_ADB_SERVER_PORT` set; no `-s` for a no-device subcommand (`devices`, `version`, `forward --list`, …) or an empty address | `-s` other than the lease's serial, `-t` whatever it names, `-e`, `-d`, `adb` on a non-Android lease, bare `adb shell`, `kill-server`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, globals other than `-s`/`-t`/`-d`/`-e` |
 | `adb` | Android physical | `adb -P <default port> -s <serial> <args>`; strips `ANDROID_ADB_SERVER_ADDRESS`, `ADB_SERVER_SOCKET`, `ANDROID_SERIAL` | bare `adb shell`, any leading flag, server and transport verbs (`kill-server`, `connect`, `tcpip`, `usb`, …), `reboot bootloader`/`sideload`, a closed default-server gate |
@@ -83,8 +84,9 @@ gateway that gives up the same way leaves the worker's command running.
   keeps running, maybe against a device reclaimed and granted again. Bounded by
   `exec.timeoutMs` and by `reclaiming` coming first; refused verbs stay refused.
 - **An `agent` token on a worker is a host-level credential.** Commands run as the
-  daemon's uid with its env; `adb pull <device path> <host path>` writes any path
-  the daemon can. Arguments are an accident boundary, not a security boundary.
+  daemon's uid (`simctl spawn` runs any program on the host); `adb pull <device path>
+  <host path>` writes any path the daemon can. Arguments are an accident boundary, not
+  a security boundary. Only the env is trimmed to the allowlist.
 - **No files.** Paths resolve on the worker: `simctl install /tmp/App.app` fails
   with the tool's own "no such file". Ship artifacts out of band; `device.upload`
   is an idea, not built.

@@ -1,7 +1,15 @@
 import type { Page } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
-import { expect, type RunningDaemon, settled, signIn, startDaemon, test } from "./fixtures.js";
+import {
+  expect,
+  mintJoinToken,
+  type RunningDaemon,
+  settled,
+  signIn,
+  startDaemon,
+  test,
+} from "./fixtures.js";
 import { returnToTab } from "./tab.js";
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
@@ -240,7 +248,7 @@ test.describe("the Usage page", () => {
               ...ONE_DEVICE,
               gateway: {
                 label,
-                token: gateway.tokens.worker,
+                token: await mintJoinToken(gateway),
                 url: `ws://127.0.0.1:${String(gateway.port)}`,
               },
             },

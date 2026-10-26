@@ -392,7 +392,8 @@ export function buildCliEnvironment(
         import("./passthrough.js").then(({ spawnPassthrough }) => spawnPassthrough(command))),
     readStdin: ports.readStdin ?? readPipedStdin,
     writeConfigFile: async (contents) => {
-      await filesystem.mkdirp(dataDirectory);
+      const { DATA_DIRECTORY_MODE } = await import("../ports/index.js");
+      await filesystem.mkdirp(dataDirectory, { mode: DATA_DIRECTORY_MODE });
       // why: Owner-only on every write: the file can hold `gateway.token`, and the atomic rename
       // replaces the old file, so a mode the user set by hand would not survive otherwise.
       await filesystem.writeFileAtomic(configPath, `${JSON.stringify(contents, null, 2)}\n`, {

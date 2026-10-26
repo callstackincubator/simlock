@@ -25,11 +25,12 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                                      |
 | `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                  |
 | `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                         |
+| `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                 |
 | `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                               |
 
 ## Composition (`main.ts`)
 
-Both modes: config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway's holds the `tokens` table only; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
+Both modes: the data directory (`prepareDataDirectory`: created `0700` when missing; an existing one keeps its mode, and one group or others can reach gets one `warn` line once the logger exists) → config (`config.json`) → `Logger` → host info → `EventBus` → event history (`createEventHistory`, not yet started) → `openStateDatabase` (the role's `state.db`; a gateway's holds the `tokens` table only; closed last in `dispose`, or by `startDaemon` when the start fails after the open).
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
@@ -54,11 +55,11 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
+1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 59, max: 59 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 63, max: 63 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -74,7 +75,7 @@ One pipeline for `Dispatcher`, `GatewayDispatcher` and HTTP:
 1. No handler → `UNKNOWN_REQUEST`.
 2. Parse input → `BAD_REQUEST`.
 3. Role: `admin` passes all; `agent` only `agent` operations → `FORBIDDEN`.
-4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes, so the handler answers `UNKNOWN_LEASE`.
+4. `authorize` hook (lease owner lookups) → `FORBIDDEN`. An unknown id passes, so the handler answers `UNKNOWN_LEASE`. Lists filter in the handler: an `agent`'s `lease.list`, and `status.get`'s `leases` and `waiting`, hold only what its principal owns.
 5. Park on readiness — every operation but `status.get` and `daemon.update {query}`.
 6. Handler → parse output; a mismatch is logged and answers `INTERNAL`.
 
@@ -106,17 +107,21 @@ Admin secret: fresh each start, hash kept in memory. Written to `admin.token` (0
 
 Security model: cooperative identity, not a hostile-process boundary.
 
-- Every socket peer is the same OS user; file modes are the real boundary.
+- Every socket peer is the same OS user; file modes are the real boundary: the data
+  directory is created `0700` (`DATA_DIRECTORY_MODE`) by whoever makes it first (the
+  daemon, `NodeDaemonLauncher`, `config set`, service install), and its files are `0600`.
+  An existing directory is never chmod'ed; the daemon warns when group or others can reach it.
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
 - A worker that joins a fleet grants its gateway `admin` over itself.
+- An `agent` token is shell access to the worker: `device.exec` runs host tools as the daemon's
+  user, with only the keys `execBaseEnvironment` (`exec-env.ts`) keeps plus the command's own.
 
 ## Uplink and relays (worker side)
 
 - `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
-- `relay.request` runs only on that connection; targets come from `relayTargets`
-  (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
+- `relay.request` runs only on that connection; targets come from `relayTargets` (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
 
 ## Logging and event records
 
@@ -134,8 +139,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 
 ## Rules
 
-- One `Dispatcher` instance serves the socket, the uplink and HTTP; HTTP calls
-  `DaemonServer.dispatch` in process.
+- One `Dispatcher` instance serves the socket, the uplink and HTTP; HTTP calls `DaemonServer.dispatch` in process.
 - Handlers never see raw input and never check roles.
 - The claim comes before any write to `admin.token` and before converge.
 - On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before

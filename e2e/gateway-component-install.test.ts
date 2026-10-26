@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { type TestEnv, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import {
+  mintJoinToken,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+  withHttpDaemon,
+} from "./helpers/index.js";
 
 interface WorkerView {
   readonly id: string;
@@ -49,10 +55,7 @@ describe("simlock component install through a gateway", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    expect(minted.code, minted.stderr).toBe(0);
-    const { secret } = minted.json as { secret: string };
-    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    const url = `ws://127.0.0.1:${port}`;
     const androidScript = {
       android: {
         availableOsVersions: ["34"],
@@ -63,11 +66,14 @@ describe("simlock component install through a gateway", () => {
       },
     };
     await withDaemon({
-      configOverrides: { gateway: { ...uplink, label: "open" } },
+      configOverrides: { gateway: { label: "open", token: await mintJoinToken(gateway), url } },
       driverScript: androidScript,
     });
     await withDaemon({
-      configOverrides: { downloads: { policy: "never" }, gateway: { ...uplink, label: "locked" } },
+      configOverrides: {
+        downloads: { policy: "never" },
+        gateway: { label: "locked", token: await mintJoinToken(gateway), url },
+      },
       driverScript: androidScript,
     });
     let workers: readonly WorkerView[] = [];

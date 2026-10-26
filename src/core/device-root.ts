@@ -22,7 +22,9 @@ export type RootRejectionReason =
   | "wrong-owner"
   | "wrong-permissions"
   | "non-empty-unowned-root"
-  | "unreadable";
+  | "unreadable"
+  | "invalid-device-set"
+  | "device-set-changed";
 
 export interface OwnedRootMarker {
   readonly schemaVersion: 1;

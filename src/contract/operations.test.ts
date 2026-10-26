@@ -248,6 +248,7 @@ describe("component.install input", () => {
     ["a newline", "35\n"],
     ["a control character", "35\u0000"],
     ["starting with '-', like an option", "-35"],
+    ["carrying ';', sdkmanager's package path separator", "35;extras"],
   ])("refuses a version that is %s", (_label, version) => {
     expect(parse(version)).toBe(false);
   });
@@ -261,12 +262,20 @@ describe("lease.request osVersion", () => {
       platform: "ios",
     });
 
-  it.each([["18.4"], ["Baklava"], ["34-ext12"], [">=18"], [">=18 <26"], ["18 - 26"]])(
-    "accepts %s",
-    (osVersion) => {
-      expect(parse(osVersion).success).toBe(true);
-    },
-  );
+  it.each([
+    ["18.4"],
+    ["17.4"],
+    ["34"],
+    ["18.5.1"],
+    ["Baklava"],
+    ["34-ext12"],
+    ["x".repeat(64)],
+    [">=18"],
+    [">=18 <26"],
+    ["18 - 26"],
+  ])("accepts %s", (osVersion) => {
+    expect(parse(osVersion).success).toBe(true);
+  });
 
   it.each([["^18"], ["~18"], ["18.x"], ["18.X"], ["*"], [">=18 || <17"], [""]])(
     "refuses %j with a message naming the accepted forms",
@@ -275,6 +284,28 @@ describe("lease.request osVersion", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues[0]?.message).toContain("18 - 26");
+        expect(result.error.issues[0]?.path).toEqual(["osVersion"]);
+      }
+    },
+  );
+
+  it.each([
+    ["trailing text after a space", "17.0 -foo"],
+    ["a leading '-', like an option", "-1"],
+    ["a ';', sdkmanager's package path separator", "34;extras"],
+    ["more than 64 characters", "x".repeat(65)],
+    ["a control character", "17.4\u0007"],
+    ["a leading space", " 17.4"],
+  ])(
+    "refuses an exact version with %s, naming the bound a component version has",
+    (_label, osVersion) => {
+      const result = parse(osVersion);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0]?.message).toBe(
+          "an exact OS version is 1 to 64 characters, none of them whitespace, a control character or `;`, and does not start with `-`",
+        );
         expect(result.error.issues[0]?.path).toEqual(["osVersion"]);
       }
     },

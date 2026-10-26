@@ -5,7 +5,7 @@ description: Install and launch an app on a leased simulator or emulator, run si
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Simlock keeps its simulators and emulators apart from your own. iOS simulators live in a device set Xcode does not read, and emulators connect to Simlock's own adb server instead of the default one. That is what stops another tool, or another agent, from wiping your device. It also means a bare `xcrun simctl` or `adb` does not see the device you leased.
+Simlock keeps its simulators and emulators apart from your own. By default (`drivers.ios.deviceSet` is `simlock`), iOS simulators live in a device set Xcode does not read, and emulators connect to Simlock's own adb server instead of the default one. That is what stops another tool, or another agent, from wiping your device. It also means a bare `xcrun simctl` or `adb` does not see the device you leased. When an admin sets `drivers.ios.deviceSet` to `default`, iOS simulators live in Xcode's own device set instead, and a bare `xcrun simctl` does see them; Android is unchanged. To build and run your own app, see [Build and run your app](/simlock/docs/using-devices/build-and-run).
 
 Run your commands through `simlock simctl` and `simlock adb`. They pass your arguments through unchanged and point the tool at Simlock's devices.
 
@@ -18,7 +18,7 @@ Read these from the grant line `simlock lease` prints (see [Lease lifecycle](/si
 | iOS | Simulator UDID | `device.driverDeviceId` | `6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90` |
 | Android | Emulator serial | `device.address` | `emulator-5556` |
 
-Always name your device by this id. Other agents' devices run in the same device set and on the same adb server, so `booted` in a `simctl` command, or an `adb` command with no `-s`, can reach a device that is not yours.
+Always name your device by this id. Other agents' devices run in the same device set (under `default`, Xcode's own, with your other simulators too) and on the same adb server, so `booted` in a `simctl` command, or an `adb` command with no `-s`, can reach a device that is not yours.
 
 ## Install and launch an app
 
@@ -45,7 +45,7 @@ simlock adb -s "$SERIAL" exec-out screencap -p > home.png
   </TabItem>
 </Tabs>
 
-`simlock simctl` adds `--set <Simlock's device set>` to the command. `simlock adb` adds `-P <Simlock's adb server port>`. Everything else is the tool you already know, with the exit code and output of the real command. `simlock adb -s "$SERIAL" shell` with no command gives you an interactive shell.
+Under `simlock`, `simlock simctl` adds `--set <Simlock's device set>` to the command; under `default` it adds nothing and runs plain `xcrun simctl`. `simlock adb` adds `-P <Simlock's adb server port>`. Everything else is the tool you already know, with the exit code and output of the real command. `simlock adb -s "$SERIAL" shell` with no command gives you an interactive shell.
 
 ## Use the real tools directly
 
@@ -53,7 +53,7 @@ When a build tool or test runner has to call `xcrun simctl` or `adb` itself, giv
 
 | Variable | When | What it is |
 | --- | --- | --- |
-| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator | Path of Simlock's device set, for `simctl --set` |
+| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator under `simlock` (not set under `default`) | Path of Simlock's device set, for `simctl --set` |
 | `ANDROID_ADB_SERVER_PORT` | Android | Port of the adb server that sees the device; `adb` reads it on its own |
 | `SIMLOCK_DEVICE_UDID` | Physical iPhone or iPad | The device's UDID |
 | `ANDROID_SERIAL` | Physical Android phone | The phone's serial; `adb` reads it on its own |
@@ -65,7 +65,7 @@ eval "$(simlock lease --platform android --device "Pixel 8" --detach --export-en
 adb -s emulator-5556 shell getprop ro.build.version.release
 ```
 
-`simctl` reads no variable for its device set, so on iOS pass the path yourself:
+`simctl` reads no variable for its device set, so under `simlock` pass the path yourself (under `default` there is no variable, and a plain `xcrun simctl list devices` lists your simulator):
 
 ```sh
 xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
@@ -97,7 +97,7 @@ Some commands would break a device behind Simlock's back or hit every agent at o
 | simctl | `create`, `erase`, `delete` | Simlock creates and wipes devices itself. |
 | simctl | `shutdown all` | Stops every agent's device. `shutdown <udid>` of your own is allowed. |
 | simctl | `runtime delete` | Deletes a runtime other devices use. |
-| simctl | `--set` or `--profiles` before the subcommand | Simlock chooses the device set. |
+| simctl | `--set` or `--profiles` before the subcommand | Simlock chooses the device set, under both settings. |
 | adb | `kill-server` | Disconnects every leased emulator. |
 | adb | `emu kill`, `emu avd stop` | Stops a device Simlock thinks is running. |
 | adb | `emu avd snapshot delete` | Deletes the snapshot Simlock restores the device from. |

@@ -1,5 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,6 +124,56 @@ describe("scripts/slow-e2e.sh", () => {
     expect(alive(leftover)).toBe(false);
     expect(alive(other)).toBe(true);
     expect(existsSync(lane)).toBe(false);
+  });
+
+  it("clean and stop delete, before removing the lane, the simulators whose durable mark names a lane instance, and no other", () => {
+    const { dir, env, lane } = machine();
+    const devices = join(dir, "Devices");
+    const bin = join(dir, "bin");
+    const calls = join(dir, "xcrun-calls.txt");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "xcrun"), `#!/bin/sh\necho "$@" >> "${calls}"\n`);
+    chmodSync(join(bin, "xcrun"), 0o755);
+    const mark = (udid: string, body: string | undefined) => {
+      mkdirSync(join(devices, udid), { recursive: true });
+      if (body !== undefined) writeFileSync(join(devices, udid, "simlock-mark.json"), body);
+    };
+    mark("MINE-1", JSON.stringify({ instanceId: "lane-one", token: "t", udid: "MINE-1" }));
+    mark("MINE-2", JSON.stringify({ instanceId: "lane-two", token: "t", udid: "MINE-2" }));
+    mark("OTHER", JSON.stringify({ instanceId: "somebody-else", token: "t", udid: "OTHER" }));
+    mark("NO-INSTANCE", JSON.stringify({ token: "t", udid: "NO-INSTANCE" }));
+    mark("UNMARKED", undefined);
+    mark("CORRUPT", "{not json");
+    const seedLane = () => {
+      mkdirSync(join(lane, "simlock-e2e-abc"), { recursive: true });
+      mkdirSync(join(lane, "simlock-e2e-def", "gateway"), { recursive: true });
+      writeFileSync(
+        join(lane, "simlock-e2e-abc", "instance.json"),
+        JSON.stringify({ instanceId: "lane-one" }),
+      );
+      writeFileSync(
+        join(lane, "simlock-e2e-def", "gateway", "instance.json"),
+        JSON.stringify({ instanceId: "lane-two" }),
+      );
+    };
+
+    for (const command of ["clean", "stop"]) {
+      seedLane();
+      writeFileSync(calls, "");
+      const result = spawnSync("sh", [SCRIPT, command], {
+        cwd: join(dir, "repo"),
+        env: { ...env, PATH: `${bin}:${process.env.PATH ?? ""}`, SIMLOCK_SLOW_DEVICES: devices },
+        encoding: "utf8",
+        timeout: 60_000,
+      });
+
+      expect(result.status, `${command}: ${result.stderr}`).toBe(0);
+      const deleted = readFileSync(calls, "utf8")
+        .split("\n")
+        .filter((line) => line.startsWith("simctl delete "));
+      expect(deleted.sort(), command).toEqual(["simctl delete MINE-1", "simctl delete MINE-2"]);
+      expect(existsSync(lane), `${command} removed the lane`).toBe(false);
+    }
   });
 
   it("clean is refused while a run holds the lock", () => {

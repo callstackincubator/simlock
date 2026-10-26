@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { NodeIpcTransport } from "../src/ports/index.js";
 import { SimlockWire } from "../src/simlock-client/wire.js";
-import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
 /**
@@ -198,7 +198,7 @@ describe("gateway event relay", () => {
   });
 
   it("a gateway pages its events by worker through GET /v1/events, and a worker answers its own id only", async () => {
-    const { first, gateway, port, read, second, secret } = await gatewayWithTwoWorkers();
+    const { first, gateway, port, read, second } = await gatewayWithTwoWorkers();
     const holders = [
       first.env.cliBackground(leaseArgs("by-worker-one-a")),
       first.env.cliBackground(leaseArgs("by-worker-one-b")),
@@ -265,7 +265,6 @@ describe("gateway event relay", () => {
     } finally {
       await wire.close();
     }
-    expect(secret).toBeDefined();
     for (const holder of holders) {
       holder.kill("SIGTERM");
       await holder.waitForExit(15_000);
@@ -331,11 +330,10 @@ async function gatewayWithTwoWorkers() {
     role: "gateway",
     driver: "none",
   }));
-  const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-  const { secret } = minted.json as { secret: string };
   const join = async (label: string): Promise<JoinedWorker> => {
+    const token = await mintJoinToken(gateway);
     const env = await withDaemon({
-      configOverrides: { gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` } },
+      configOverrides: { gateway: { label, token, url: `ws://127.0.0.1:${port}` } },
       driverScript: { ios: { knownModels: ["iPhone 17"], availableOsVersions: ["18.4"] } },
     });
     let id: string | undefined;
@@ -361,7 +359,7 @@ async function gatewayWithTwoWorkers() {
     expect(response.status, query).toBe(200);
     return ((await response.json()) as { events: RecordedEvent[] }).events;
   };
-  return { first, gateway, operator, port, read, second, secret };
+  return { first, gateway, operator, port, read, second };
 }
 
 const idsOf = (events: readonly RecordedEvent[]) => events.map((event) => event.id);

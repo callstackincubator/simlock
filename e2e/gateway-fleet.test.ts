@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { waitFor, waitForDeviceState, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import {
+  mintJoinToken,
+  waitFor,
+  waitForDeviceState,
+  withDaemon,
+  withHttpDaemon,
+} from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 /**
@@ -147,17 +153,17 @@ describe("gateway fleet", () => {
     const { secret, token } = minted.json as { secret: string; token: { role: string } };
     expect(token.role).toBe("worker");
 
-    // 2. Two workers, each with its own SIMLOCK_HOME (and therefore its own instance identity),
-    //    join with the same token and the gateway's base URL.
-    const fleetConfig = { gateway: { token: secret, url: `ws://127.0.0.1:${port}` } };
+    // why: two workers, each with its own SIMLOCK_HOME (so its own instance identity) and its
+    // own join token, because a gateway pins a token to the first worker that joins with it.
+    const url = `ws://127.0.0.1:${port}`;
     const workerA = await withDaemon({
-      configOverrides: { gateway: { ...fleetConfig.gateway, label: "worker-a" } },
+      configOverrides: { gateway: { label: "worker-a", token: secret, url } },
       // Seeded before the daemon starts: the worker reports its catalog as its uplink opens, and
       // a script written afterwards would only reach the gateway on its 30s periodic refresh.
       driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
     const workerB = await withDaemon({
-      configOverrides: { gateway: { ...fleetConfig.gateway, label: "worker-b" } },
+      configOverrides: { gateway: { label: "worker-b", token: await mintJoinToken(gateway), url } },
       driverScript: { ios: { knownModels: ["iPhone 17"], availableOsVersions: ["18.4"] } },
     });
 
@@ -285,15 +291,13 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
-    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    const url = `ws://127.0.0.1:${port}`;
     // Both workers have the same model and the same two runtimes installed, and pair the model
     // with a different one of them. Each also accepts its own other name for it and reports its
     // own image of one shared runtime.
     const installed = ["18.4", "26.0"];
     await withDaemon({
-      configOverrides: { gateway: { ...uplink, label: "worker-a" } },
+      configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
       driverScript: {
         ios: {
           availableOsVersions: installed,
@@ -307,7 +311,7 @@ describe("gateway fleet", () => {
       },
     });
     await withDaemon({
-      configOverrides: { gateway: { ...uplink, label: "worker-b" } },
+      configOverrides: { gateway: { label: "worker-b", token: await mintJoinToken(gateway), url } },
       driverScript: {
         ios: {
           availableOsVersions: installed,
@@ -402,12 +406,10 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
-    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    const url = `ws://127.0.0.1:${port}`;
     // Both workers list My Tablet; only worker-a has it as a custom profile.
     await withDaemon({
-      configOverrides: { gateway: { ...uplink, label: "worker-a" } },
+      configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
       driverScript: {
         android: {
           availableOsVersions: ["35"],
@@ -417,7 +419,7 @@ describe("gateway fleet", () => {
       },
     });
     await withDaemon({
-      configOverrides: { gateway: { ...uplink, label: "worker-b" } },
+      configOverrides: { gateway: { label: "worker-b", token: await mintJoinToken(gateway), url } },
       driverScript: {
         android: { availableOsVersions: ["35"], knownModels: ["Pixel 8", "My Tablet"] },
       },
@@ -457,14 +459,12 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
-    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    const url = `ws://127.0.0.1:${port}`;
     // One model per worker, so the model alone decides where a request lands. Both workers can
     // slim the one runtime they have.
     await withDaemon({
       configOverrides: {
-        gateway: { ...uplink, label: "default-full" },
+        gateway: { label: "default-full", token: await mintJoinToken(gateway), url },
         ios: { defaultMode: "full" },
       },
       driverScript: {
@@ -477,7 +477,7 @@ describe("gateway fleet", () => {
     });
     await withDaemon({
       configOverrides: {
-        gateway: { ...uplink, label: "default-slim" },
+        gateway: { label: "default-slim", token: await mintJoinToken(gateway), url },
         ios: { defaultMode: "slim" },
       },
       driverScript: {
@@ -582,8 +582,6 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
     const pixels = {
       android: {
         availableOsVersions: ["34"],
@@ -592,9 +590,11 @@ describe("gateway fleet", () => {
         modelClasses: { "Pixel 8": "phone" },
       },
     } as const;
-    const join = (label: string) =>
+    const join = async (label: string) =>
       withDaemon({
-        configOverrides: { gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` } },
+        configOverrides: {
+          gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
+        },
         driverScript: pixels,
         fakeDriverPlatforms: ["android"],
       });
@@ -659,12 +659,10 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-    const { secret } = minted.json as { secret: string };
-    const join = (label: string, osVersion: string) =>
+    const join = async (label: string, osVersion: string) =>
       withDaemon({
         configOverrides: {
-          gateway: { label, token: secret, url: `ws://127.0.0.1:${port}` },
+          gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
         },
         driverScript: {
           ios: {
@@ -733,6 +731,49 @@ describe("gateway fleet", () => {
     expect(rejected?.workerId).toBeDefined();
 
     expect(await listWorkers(gateway)).toEqual([]);
+  });
+
+  it("pins a join token to the first worker that joins with it, refuses a second worker with it as worker-mismatch, and lists the token with the first worker's id", async () => {
+    const { env: gateway, port } = await withHttpDaemon((port) => ({
+      configOverrides: { http: { host: "127.0.0.1", port } },
+      role: "gateway",
+      driver: "none",
+    }));
+    const minted = await gateway.cli(["token", "create", "--role", "worker"]);
+    const { secret, token } = minted.json as { secret: string; token: { id: string } };
+    const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
+    await withDaemon({ configOverrides: { gateway: { ...uplink, label: "first" } } });
+    const [first] = await waitForWorkers(
+      gateway,
+      (workers) => workers.length === 1 && workers[0]?.connection === "connected",
+      "the first worker joined",
+    );
+
+    await withDaemon({ configOverrides: { gateway: { ...uplink, label: "second" } } });
+
+    let rejected: { reason?: string; workerId?: string; label?: string } | undefined;
+    await waitFor(
+      async () => {
+        rejected = (await gateway.events()).find((event) => event.event === "worker.rejected")
+          ?.payload as typeof rejected;
+        return rejected !== undefined;
+      },
+      { label: "the gateway reported the second worker's refused uplink", timeout: 20_000 },
+    );
+    expect(rejected).toMatchObject({
+      label: "second",
+      reason: "worker-mismatch",
+      workerId: expect.any(String),
+    });
+    expect(rejected?.workerId).not.toBe(first?.id);
+    const listed = await gateway.cli(["token", "list"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect((listed.json as { tokens: unknown[] }).tokens).toEqual([
+      expect.objectContaining({ id: token.id, workerId: first?.id }),
+    ]);
+    expect((await listWorkers(gateway)).map((worker) => [worker.label, worker.connection])).toEqual(
+      [["first", "connected"]],
+    );
   });
 
   it("through a gateway, a caller-chosen lease ID comes back with no worker prefix, renews and releases by that ID, and a second request for it is LEASE_ID_TAKEN", async () => {

@@ -2410,7 +2410,16 @@ describe("DaemonServer download policy", () => {
 
   it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it and logging that", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    // why: the driver, not the request, names the component: a request's exact osVersion is held
+    // within the push's bound. Every resolve before the install answers as a missing runtime does.
+    for (const callNumber of [1, 2]) {
+      driver.failOn(
+        "resolveSpec",
+        callNumber,
+        new RuntimeMissingError("ios", "26.5", { component: "9".repeat(65) }),
+      );
+    }
     const sink = new MemoryLogSink();
     const harness = await createHarness({
       clock,
@@ -2419,13 +2428,12 @@ describe("DaemonServer download policy", () => {
     });
     const client = await createClient(harness.socketPath);
     await hello(client);
-    const osVersion = "9".repeat(65);
 
     const grant = await client.request("lease.request", {
       allowDownload: true,
       requesterId: "agent-1",
       model: "iPhone 16",
-      osVersion,
+      osVersion: "26.5",
       platform: "ios",
     });
 

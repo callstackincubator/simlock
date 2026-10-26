@@ -15,6 +15,7 @@ export type { Agent, AgentDeviceResult } from "./agent-device.js";
 export { freeLoopbackPort } from "./port.js";
 export { deviceStreamUrl } from "./device-stream.js";
 export { withHttpDaemon } from "./http-daemon.js";
+export { mintJoinToken } from "./join-token.js";
 // A flow that factors its own setup out of a test body needs to name what `withDaemon` hands
 // back; every other flow keeps it inferred.
 export type { SharedTestEnv, TestEnv } from "./env.js";

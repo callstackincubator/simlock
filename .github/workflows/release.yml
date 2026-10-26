@@ -239,10 +239,16 @@ jobs:
           TAG: ${{ needs.plan.outputs.tag }}
         # why: the lease fails the push when main moved since plan, instead of releasing a commit
         # nobody checked; the pair goes atomically so a tag never exists without its commit.
+        # why: the token goes as the extraheader actions/checkout writes, set through git's
+        # GIT_CONFIG_* environment rather than `-c`, so it is in neither the remote URL nor git's argv.
         run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
           git push --atomic --force-with-lease="refs/heads/main:$GITHUB_SHA" \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            HEAD:refs/heads/main "refs/tags/$TAG"
+            "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/main "refs/tags/$TAG"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notes

@@ -2624,6 +2624,33 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     );
   });
 
+  it("simlock doctor writes `Unavailable [<platform>] <reason>: <detail>` on stderr for a driver-unavailable finding and prints the report on stdout unchanged", async () => {
+    const output = outputCapture();
+    const findings = [
+      {
+        detail: "Refusing the ios device set: bad. Restart the daemon.",
+        kind: "driver-unavailable" as const,
+        platform: "ios" as const,
+        reason: "invalid-device-set",
+      },
+    ];
+
+    await expect(
+      runCli(
+        ["doctor"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(output.stderr.split("\n")).toContain(
+      "Unavailable [ios] invalid-device-set: Refusing the ios device set: bad. Restart the daemon.",
+    );
+    expect(JSON.parse(output.stdout)).toEqual({ findings });
+  });
+
   it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
     const output = outputCapture();
     const findings = [

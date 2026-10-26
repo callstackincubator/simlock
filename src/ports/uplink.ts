@@ -90,18 +90,18 @@ export interface UplinkListener {
 }
 
 /**
- * What the gateway makes of the credential presented at upgrade (ADR 0005 §4/§25). Three
- * outcomes, not two, because the difference is the difference between "who are you" and "you
- * are not allowed here":
+ * why: the refusals differ in what an operator must fix (ADR 0005 §4/§25):
  *
- * - `accept` -- a token the gateway holds with role `worker`.
+ * - `accept` -- a `worker` token pinned to the worker id the dial claimed (or pinned to it now).
  * - `unauthenticated` (`401`) -- no token, or one the gateway does not know. A revoked join
  *   token lands here, which is what closes an uplink after `simlock token revoke`.
  * - `forbidden` (`403`) -- a real token of the wrong role. An `agent` or `operator` token is
  *   valid elsewhere and carries no authority here, exactly as a `worker` token carries none on
  *   any other `/v1` route.
+ * - `worker-mismatch` (`403`) -- a `worker` token pinned to another worker id, a worker id
+ *   another token is pinned to, or no worker id at all.
  */
-export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden";
+export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden" | "worker-mismatch";
 
 /**
  * `authenticate`'s actual return type: the bare outcome, or -- only on acceptance -- an object
@@ -137,11 +137,9 @@ export interface ClaimedUplinkIdentity {
 
 export interface UplinkHandlers {
   /**
-   * Verifies the join token presented in the `Authorization: Bearer` header at upgrade time.
-   * Anything but `accept` answers its HTTP status and destroys the socket without ever
-   * completing the upgrade -- an unauthorized peer never reaches the daemon protocol at all.
-   * `claimed` is never itself trusted for anything but attribution on a refusal: a rejected
-   * dial proves no identity, so this is only what it *said*, not what it is.
+   * why: checked at upgrade, so anything but `accept` answers its HTTP status and destroys the
+   * socket before an unauthorized peer reaches the daemon protocol. `claimed.workerId` is checked
+   * against the worker the join token is pinned to; on a refusal it is only what the dial said.
    */
   authenticate(
     credential: string | undefined,

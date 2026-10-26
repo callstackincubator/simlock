@@ -139,7 +139,7 @@ This lists every runtime and image on the machine, whoever installed it.
 | `sizeBytes` | Disk it takes. Left out when it cannot be read. |
 | `installedBySimlock` | `true` only if Simlock installed it and it is still the same one on disk. Only these can be removed with Simlock. |
 | `devices` | Simlock's own devices of this platform and version. |
-| `foreignDevices` | Devices outside Simlock that use it: simulators in Xcode's default device set that have been booted at least once, or AVDs in your own AVD folder. |
+| `foreignDevices` | Devices outside Simlock that use it: simulators in Xcode's default device set that have been booted at least once (under `drivers.ios.deviceSet` `default`, those that this Simlock's mark does not name), or AVDs in your own AVD folder. |
 
 ## Remove a runtime or image
 
@@ -170,5 +170,5 @@ Nothing removes a component on its own: no cleanup rule, idle timer or low-disk 
 
 On iOS, two things can stay on disk after a removal. The result's `residue` field names each one:
 
-- Never-booted simulators of that runtime in Xcode's default device set become unavailable. Clear them with `xcrun simctl delete unavailable`.
+- Never-booted simulators of that runtime in Xcode's default device set (under `drivers.ios.deviceSet` `default`, those that this Simlock did not create) become unavailable. Clear them with `xcrun simctl delete unavailable`.
 - macOS keeps its own copy of the runtime download, often more than 8 GiB. Remove the platform in Xcode's Settings, under Platforms, to get that space back. Simlock never deletes it.

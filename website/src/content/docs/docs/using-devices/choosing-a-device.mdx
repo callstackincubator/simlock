@@ -73,7 +73,7 @@ Without `--os`, the lease gets the newest runtime installed for that platform. U
 
 A range is one or more of `>=`, `>`, `<=`, `<` followed by a version, separated by single spaces, or a hyphen range with spaces around the hyphen. A short version covers everything under it, so `<=26` includes 26.1. Quote ranges so the shell does not read `>` or `<`.
 
-Forms like `^18`, `~18`, `18.x`, `*` and `||` are refused with `BAD_REQUEST` (exit 2). Any other text is an exact version, which is how Android names such as `Baklava` or `34-ext12` work.
+Forms like `^18`, `~18`, `18.x`, `*` and `||` are refused with `BAD_REQUEST` (exit 2). Any other text is an exact version, which is how Android names such as `Baklava` or `34-ext12` work. An exact version is 1 to 64 characters with no spaces, control characters or `;`, and does not start with `-`; anything else is refused with `BAD_REQUEST`.
 
 A range takes an idle device whose OS is inside it first, and otherwise creates a device on the newest installed runtime inside it. A range never downloads anything: if no installed runtime is inside it, the lease fails at once with `RUNTIME_MISSING` (exit 12).
 
