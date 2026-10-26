@@ -1736,6 +1736,16 @@ describe("relay.request on a byte channel", () => {
     expect(parse(request)).toBe(false);
   });
 
+  it("accepts twoWay with GET and no body, and refuses it with another method, with a body, or as false, where the same request without twoWay is accepted", () => {
+    const channel = { ...request, channel: "a" };
+    expect(parse({ ...channel, twoWay: true })).toBe(true);
+    expect(parse({ ...channel, method: "POST" })).toBe(true);
+    expect(parse({ ...channel, method: "POST", twoWay: true })).toBe(false);
+    expect(parse({ ...channel, hasBody: true, method: "PUT" })).toBe(true);
+    expect(parse({ ...channel, hasBody: true, method: "PUT", twoWay: true })).toBe(false);
+    expect(parse({ ...channel, twoWay: false })).toBe(false);
+  });
+
   it("OPERATIONS has no relay.body and PUSH_SCHEMAS has no relay-chunk", () => {
     expect(Object.keys(OPERATIONS)).not.toContain("relay.body");
     expect(Object.keys(PUSH_SCHEMAS)).not.toContain("relay-chunk");
