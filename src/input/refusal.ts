@@ -15,3 +15,7 @@ export function upgradeRequired(): Response {
 export function unknownLease(leaseId: string): Response {
   return refusal(404, "UNKNOWN_LEASE", `Unknown lease: ${leaseId}`);
 }
+
+export function unavailable(code: string, message: string): Response {
+  return refusal(503, code, message);
+}

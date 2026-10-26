@@ -13,5 +13,6 @@ export function createWorker(ctx: WorkerContext<InputModuleConfig>): WorkerModul
     capability: input.capability,
     leaseRoute: input.leaseRoute,
     relayTwoWay: input.relayTwoWay,
+    socket: input.socket,
   };
 }

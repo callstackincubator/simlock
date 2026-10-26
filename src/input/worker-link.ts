@@ -7,7 +7,11 @@ import {
   type DeviceRecord,
   type LeaseRecord,
 } from "../core/index.js";
-import type { ModuleInputs, ModuleRelayTwoWayTarget } from "../modules/index.js";
+import type {
+  ModuleInputs,
+  ModuleLeaseSocketHandler,
+  ModuleRelayTwoWayTarget,
+} from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
 import { channelSocket } from "./channel.js";
 import { unknownLease } from "./refusal.js";
@@ -28,8 +32,16 @@ export interface WorkerInputLinkOptions {
 // unknown whoever asks, as `lease.get` answers.
 export function createWorkerInputLink(options: WorkerInputLinkOptions): {
   readonly relayTwoWay: ModuleRelayTwoWayTarget;
+  readonly socket: ModuleLeaseSocketHandler;
 } {
   return {
+    socket: {
+      open: (_request, _identity, held) => {
+        const lease = options.registry.snapshot.leases.find((entry) => entry.id === held.id);
+        if (lease === undefined) return Promise.resolve(unknownLease(held.id));
+        return Promise.resolve((socket) => void serve(options, lease, socket));
+      },
+    },
     relayTwoWay: (_request, _tenant, leaseId, pipe) => {
       const lease = options.registry.snapshot.leases.find((entry) => entry.id === leaseId);
       if (lease === undefined) return Promise.resolve(unknownLease(leaseId ?? ""));
