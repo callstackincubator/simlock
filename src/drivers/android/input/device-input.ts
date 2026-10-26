@@ -6,6 +6,7 @@ import {
   type InputMessage,
   type InputScreenConfig,
   type PhysicalDriverDevice,
+  ScreenUnavailableError,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
 import type { Clock, ProcessHandle, TcpStream } from "../../../ports/index.js";
@@ -35,7 +36,14 @@ export function createAndroidDeviceInput(options: AndroidDeviceInputOptions): De
     open: async (device: VirtualDriverDevice | PhysicalDriverDevice) => {
       const target = await options.targetFor(device);
       const scid = options.scid?.() ?? randomInt(0, SCID_LIMIT);
-      return await new AndroidDeviceInput(options, target, scid).start();
+      try {
+        return await new AndroidDeviceInput(options, target, scid).start();
+      } catch (error) {
+        // why: a phone's closed 5037 check is not a failure of the open but a device that takes no input
+        // now, which the socket tells its client apart from a failed open.
+        if (error instanceof ScreenUnavailableError) return { unavailable: error.message };
+        throw error;
+      }
     },
   };
 }
