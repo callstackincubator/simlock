@@ -13,31 +13,19 @@ export type WorkerRejectedReason = "unauthenticated" | "forbidden" | "worker-mis
 
 export interface EventMap {
   "lease.requested": {
-    /** The stored request's id, so an observer can correlate this event with its record. */
     readonly requestId: string;
-    /** The request as it arrived (ADR 0015 §9): `class` when it named one, and `model` only when
-     * it did. A request naming neither carries neither; the class it means is `phone`. */
     readonly requestSpec: unknown;
     readonly requester: string;
     readonly waitPolicy: string;
-    /** ADR 0021: the gateway's request id, on a worker's event for a gateway dispatch (a
-     * probe). Absent on a local request. */
     readonly fleetRequestId?: string;
   };
   "lease.queued": { readonly requestId: string; readonly queuePosition: number };
-  /** ADR 0004's Consequences: `mode` left this payload, a deliberate one-off exception to
-   * events rule 6 (additive changes only) taken while the package is 0.x -- there is one kind
-   * of lease now, so there is nothing to report. `EVENTS.md` records the exception. */
   "lease.granted": {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly requester: string;
-    /** The stored request this lease served: the id its `lease.requested` carried. */
     readonly requestId: string;
-    /** How the device came to be ready: handed over `warm`, `booted` from shut down, or
-     * `provisioned` for this request. */
     readonly source: "warm" | "booted" | "provisioned";
-    /** ADR 0021: the gateway's request id, when this grant served a gateway dispatch. */
     readonly fleetRequestId?: string;
     // why: events stored before this field existed lack it and a rebuild replays them, so the projector reads it as optional.
     readonly platform: "ios" | "android";
@@ -47,7 +35,7 @@ export interface EventMap {
     readonly leaseId: string;
     readonly deviceId: string;
     readonly reason: "explicit" | "killed" | "device-lost";
-    /** ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
+    /** why: ADR 0003 §8: the released lease's owner, so a `lease-lost` push can be routed to every
      * live connection whose principal owns it -- the registry no longer has the lease to look
      * this up from by the time this event fires (`beginRelease` already removed it), so it
      * travels on the event instead. */
@@ -59,40 +47,29 @@ export interface EventMap {
     readonly ownerId: string;
   };
   "lease.rejected": {
-    /** The request's id. A request refused at admission (`killed`, `already-leased`, `lease-id-taken`) was never
-     * stored and has no `lease.requested`, but it carries the id it would have been stored
-     * under. A gateway's `lease-id-taken` can also follow a grant (a worker's lease whose ID the
-     * gateway already routes elsewhere): that request was stored and has its `lease.requested`. */
     readonly requestId: string;
     readonly requester: string;
-    /** The request as it arrived, as on `lease.requested`: `class` when it named one, `model`
-     * only when it did (ADR 0015 §9). */
     readonly requestSpec: unknown;
     readonly reason:
       | "timeout"
       | "no-wait"
       | "unresolvable-spec"
-      /** A gateway's request that no worker taking requests can serve (ADR 0009 §4). */
       | "no-worker"
       | "already-leased"
-      /** The request named a lease ID an active lease or a waiting request holds (ADR 0020). */
       | "lease-id-taken"
       | "boot-timeout"
       | "killed"
       | "updating"
       | "cancelled"
-      /** A request still open when the daemon stopped, settled as failed at the next start. */
       | "daemon-restarted"
-      /** A gateway's request that failed on the worker it went to (ADR 0021 §4). */
       | "worker-failed";
-    /** On `worker-failed`: the error code the caller got. */
     readonly code?: string;
-    /** On `worker-failed`: the worker the request failed on. Named `worker`, never `workerId`,
+    /** why: On `worker-failed`: the worker the request failed on. Named `worker`, never `workerId`,
      * because `payload.workerId` marks a relayed event (ADR 0014 §6). */
     readonly worker?: string;
   };
   /**
-   * ADR 0021 §2: a worker refused or failed a gateway dispatch (a probe). The gateway owns that
+   * why: ADR 0021 §2: a worker refused or failed a gateway dispatch (a probe). The gateway owns that
    * request's outcome, so the worker never rejects it. `reason` takes `lease.rejected`'s values.
    */
   "lease.declined": {
@@ -235,9 +212,7 @@ export interface EventMap {
   "component.installed": {
     readonly platform: string;
     readonly componentId: string;
-    /** The exact version now installed. */
     readonly version: string;
-    /** True when the installer ran and the component was already there; nothing was recorded. */
     readonly alreadyPresent: boolean;
     readonly durationMs: number;
     readonly requesterId?: string;
@@ -251,15 +226,10 @@ export interface EventMap {
   };
   "component.removed": {
     readonly platform: string;
-    /** The component string the removal was asked for: the version, as the catalog lists it. */
     readonly componentId: string;
-    /** The exact version removed: the version of Simlock's record of installing it. */
     readonly version: string;
-    /** The component's size as listed just before it was removed, when the driver could read it. */
     readonly sizeBytes?: number;
-    /** What stayed on disk after the removal, and how to reclaim it, when something did. */
     readonly residue?: string;
-    /** The principal of the admin session that asked. */
     readonly requesterId: string;
   };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
@@ -301,15 +271,9 @@ export interface EventMap {
     readonly reason: string;
   };
   "doctor.reconciled": { readonly driftFindings: unknown };
-  /**
-   * A warm pool target that was met, or not yet checked, ends a pass short for a reason: the pass
-   * could do nothing for it. Emitted once per kind of device on that edge (targets that resolve to one spec emit one event
-   * between them), not on each short pass after.
-   */
   "warm-pool.target-missed": {
     readonly platform: string;
     readonly model: string;
-    /** Absent for a target that names none and did not resolve. */
     readonly osVersion?: string;
     readonly mode: "slim" | "full";
     readonly origin: "configured";
@@ -318,15 +282,6 @@ export interface EventMap {
     /** why: one reason, not all: the first of the reasons the target is short that applies. */
     readonly reason: string;
   };
-  // ---- gateway facts (ADR 0005 §22) ---------------------------------------------------------
-  //
-  // Emitted only by a daemon in gateway mode, about the workers connected to it. A worker's own
-  // events are *republished* on the gateway's bus under their original names with `workerId`
-  // added to the payload, so `simlock events` against a gateway shows the fleet; these six are
-  // the facts only the gateway can know.
-  /** A worker's uplink opened and its `hello` completed: the gateway can now drive it. An
-   * uplink that authenticated but negotiated no protocol emits nothing at all (ADR 0005 §31):
-   * it is in the registry as `incompatible`, which is where an operator finds it. */
   "worker.connected": {
     readonly workerId: string;
     readonly label?: string;
@@ -363,59 +318,31 @@ export interface EventMap {
     readonly label?: string;
     readonly count?: number;
   };
-  /** A worker's uplink closed. `leaseCount` is what the view still shows it holding at that
-   * moment -- the number an operator needs to know how much is stranded, and the reason the
-   * view is not dropped immediately (§6). */
   "worker.disconnected": {
     readonly workerId: string;
     readonly label?: string;
     readonly leaseCount: number;
   };
-  /** A disconnected worker's view was forgotten: by an operator (`worker.remove`) or because
-   * `gateway.disconnectedRetentionMs` elapsed. */
   "worker.removed": {
     readonly workerId: string;
     readonly label?: string;
     readonly reason: "operator" | "retention";
   };
-  /** ADR 0005 §9: the worker keeps its leases and receives no new dispatches from here on. */
   "worker.drain-started": { readonly workerId: string; readonly label?: string };
   "worker.drain-ended": { readonly workerId: string; readonly label?: string };
-  /**
-   * ADR 0005 §11/§22 (#118): the gateway's own dispatch sent a queued request to a worker and
-   * the worker took it (a grant, or the first `progress` push, whichever came first -- device
-   * work having started means the request is that worker's now). A `NO_CAPACITY` refusal is a
-   * stale view, not a dispatch, and emits nothing -- the request stays queued, or a `noWait`
-   * request gets one more walk without that worker (ADR 0009 §5).
-   *
-   * C2 (round 2 review): widened back to what `docs/internal/EVENTS.md` always specified for this row --
-   * `requesterId`/`platform`/`model` so the fact is self-contained (events rule 6) rather than
-   * naming only the gateway-internal `requestId`, `reason` (the routing policy's own warm-hit /
-   * free-capacity distinction, already computed by `RoutingPolicy#select` and previously
-   * discarded rather than plumbed through), and `queuedMs` (time spent queued before this
-   * dispatch). `reason` is spelled out as a literal union here rather than importing
-   * `RoutingReason` from `src/gateway/routing.ts`: this module stays platform- and
-   * gateway-agnostic (`architecture.md`), so a payload shape is duplicated rather than an import
-   * reaching up into a module layered above it.
-   */
   "request.dispatched": {
     readonly requestId: string;
     readonly workerId: string;
     readonly requesterId: string;
     readonly platform: string;
-    /** The exact model the request named; absent for a class request (ADR 0015 §9). */
     readonly model?: string;
-    /** The class the request named; absent for an exact one or one naming neither. */
     readonly class?: string;
-    /** The mode the request named (ADR 0009 §8); absent when it named none. */
     readonly mode?: "slim" | "full";
     readonly physical?: true;
     readonly reason: "warm-hit" | "free-capacity";
-    /** The routing stage that decided the pick (ADR 0009 §8). */
     readonly stage: string;
     readonly queuedMs: number;
   };
-  /** Payloads owned by the driver module that refused the root; see `DriverRejection`. */
   "driver.root-rejected": {
     readonly platform: string;
     readonly root: string;
@@ -428,8 +355,6 @@ export type EventName = keyof EventMap;
 
 export type EventEnvelope<Event extends EventName = EventName> = Event extends EventName
   ? {
-      /** Names this event for good: minted once where it happened, it survives a restart and is
-       * what every reader tells events apart by (ADR 0014). `seq` only orders within one run. */
       readonly id: string;
       readonly seq: number;
       readonly timestamp: number;
@@ -439,7 +364,6 @@ export type EventEnvelope<Event extends EventName = EventName> = Event extends E
     }
   : never;
 
-/** An envelope before a bus gives it a `seq`: everything the place the fact happened stamped. */
 export interface StampedEnvelope<Event extends EventName = EventName> {
   readonly id: string;
   readonly timestamp: number;
@@ -498,12 +422,6 @@ export class EventBus {
     });
   }
 
-  /**
-   * Publishes an envelope whose fact happened elsewhere (ADR 0014 §2): it keeps the `id` and
-   * `timestamp` it was stamped with and gets only this bus's next `seq`. Reaches the ring and
-   * every subscriber exactly as `emit` does. Not a second way to state a fact -- the gateway's
-   * worker link is its one caller, relaying what a worker already stated.
-   */
   republish<Event extends EventName>(envelope: StampedEnvelope<Event>): EventEnvelope<Event> {
     return this.#publish(envelope);
   }
@@ -585,7 +503,7 @@ export class EventBus {
       try {
         this.logger.error("Event handler failed", { error, envelope });
       } catch {
-        // Logging must not break event delivery.
+        // why: Logging must not break event delivery.
       }
     }
   }

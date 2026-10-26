@@ -77,7 +77,7 @@ type DeepReadonly<Value> = Value extends (infer Item)[]
     : Value;
 
 /**
- * The config `config.get` answers with, as this module sees it: the contract's own shape, made
+ * why: The config `config.get` answers with, as this module sees it: the contract's own shape, made
  * deeply readonly so `src/core`'s `Config` (which is) assigns into it. Declared this way rather
  * than by importing `Config` because `src/gateway` imports nothing from `core` (ADR 0005 §33),
  * and the gateway has no business with the type's *meaning* anyway -- it stores this value and
@@ -107,7 +107,6 @@ export interface GatewayUpdate {
 
 export interface GatewayDispatcherOptions {
   readonly historyPath?: string;
-  /** The gateway's own config -- what `config.get` returns (ADR 0005 §34). */
   readonly config: GatewayConfig;
   readonly eventHistory: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
   readonly workers: WorkerRegistry;
@@ -116,22 +115,12 @@ export interface GatewayDispatcherOptions {
    * import. Posts one sample to the named alert destination and says what came of it.
    */
   readonly testDestination?: (destination: string) => Promise<AlertTestOutcome>;
-  /** Each worker's live link, for `worker.install-component` (ADR 0010 §7). `GatewayService`
-   * satisfies it. */
   readonly directory: WorkerDirectory;
   readonly tokens?: TokenOperations;
-  /**
-   * C-2, ADR 0005 §8: "revoking closes the uplink". Called after a successful `token.revoke`
-   * with the revoked token's id, so any uplink that token authenticated is closed immediately
-   * rather than only at that worker's next reconnect (uplinks are long-lived, so without this a
-   * revoked worker token has no observable effect until the worker happens to redial). Optional
-   * so a test exercising `token.revoke` in isolation, with no `GatewayService` behind it, need
-   * not supply one -- revocation still writes the store either way.
-   */
   readonly closeUplinksForToken?: (tokenId: string) => Promise<void>;
   readonly clock: Clock;
   readonly logger?: Logger;
-  /** Classifies a thrown error for the `operation` log line (`classifyError` in production),
+  /** why: Classifies a thrown error for the `operation` log line (`classifyError` in production),
    * injected because `src/gateway` imports nothing from `src/core`. Unset or `undefined`:
    * `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
@@ -262,7 +251,6 @@ export class GatewayDispatcher {
       "cleanup.run": unsupportedByDesign("cleanup.run"),
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
-      // ADR 0010 §7: a gateway owns no components and has no download policy of its own.
       "component.install": unsupportedByDesign(
         "component.install",
         "component.install installs on one machine; on a gateway, name the workers to install on " +
@@ -276,7 +264,6 @@ export class GatewayDispatcher {
         "component.remove",
         "component.remove removes a component from one machine; run it against a worker",
       ),
-      // A device is plugged into one machine, and a gateway asks no worker.
       "device.add": unsupportedByDesign(
         "device.add",
         "device.add enrols a device plugged into one machine; run it on the worker the device is plugged into",
@@ -294,7 +281,7 @@ export class GatewayDispatcher {
       "device.exec": this.#deviceExec,
       "relay.request": relayRefused,
       "relay.cancel": relayRefused,
-      // "daemon.stop" is absent for the same reason it is absent from the worker's table: the
+      // why: "daemon.stop" is absent for the same reason it is absent from the worker's table: the
       // transport intercepts it ahead of any dispatch (ADR 0003 §6's frozen exception).
     };
   }
@@ -424,9 +411,6 @@ export class GatewayDispatcher {
 
   #tokenRevoke: Handler<"token.revoke"> = async (input) => {
     const revoked = await this.#requireTokens().revoke(input.id);
-    // C-2: only a token that actually existed can have opened an uplink -- revoking an unknown
-    // id (already-gone, or never real) has nothing to close, same as it has nothing to forget
-    // in the store.
     if (revoked) await this.options.closeUplinksForToken?.(input.id);
     return { revoked };
   };
@@ -531,8 +515,6 @@ export class GatewayDispatcher {
     workerId: input.workerId,
   });
 
-  /** ADR 0010 §7: the gateway asks each worker; each worker's own policy decides. The HTTP
-   * stream opens once the targets are resolved, which is this session's `onStarted`. */
   #workerInstallComponent: Handler<"worker.install-component"> = (input, session) =>
     relayComponentInstall(
       {
@@ -545,7 +527,7 @@ export class GatewayDispatcher {
     );
 
   /**
-   * ADR 0005 §14/§20: a non-admin session sees only the fleet leases *it* owns -- resolved
+   * why: ADR 0005 §14/§20: a non-admin session sees only the fleet leases *it* owns -- resolved
    * through the lease index by `ownerId`, never by scanning every worker's raw leases and
    * comparing `ownerId` to `session.principal` directly. That comparison would let an agent
    * token on the gateway that happens to name itself the same as some worker's own local agent
@@ -609,11 +591,6 @@ export class GatewayDispatcher {
     return undefined;
   }
 
-  /** Every lease this gateway issued to `ownerId`, projected to its fleet-facing form. Looks up
-   * each entry's current record from the owning worker's view rather than caching one on the
-   * index itself, so a renewed TTL/`lastRenewedAt` is always current. An entry whose worker view
-   * (or the specific lease on it) is momentarily missing -- a race with a reconnect rebuild, or
-   * a worker that just disconnected -- is skipped rather than fabricated. */
   #ownedFleetLeases(ownerId: string) {
     const leases = [];
     for (const entry of this.options.leaseIndex.all()) {
@@ -627,7 +604,7 @@ export class GatewayDispatcher {
   }
 
   /**
-   * The admin inspection of the fleet. `devices` and `leases` are the aggregate with
+   * why: The admin inspection of the fleet. `devices` and `leases` are the aggregate with
    * `workerId`; `rules` is empty, because cleanup rules are a machine's own configuration and a
    * gateway runs no reaper (ADR 0005 §2) -- an empty list says "this endpoint has none", which
    * is true, where a refusal would suggest the question was wrong.
@@ -651,7 +628,7 @@ export class GatewayDispatcher {
   };
 
   /**
-   * The fleet queue's requests, then each worker's own queue, each of those with its `workerId`.
+   * why: The fleet queue's requests, then each worker's own queue, each of those with its `workerId`.
    * A worker lists a request this gateway sent it under the gateway's own requester id (ADR 0005
    * §27); the gateway already lists that request, so the worker's copy is left out.
    */
@@ -667,11 +644,6 @@ export class GatewayDispatcher {
     return [...this.options.coordinator.waitingRequests(), ...onWorkers];
   }
 
-  /** Every lease every worker's view reports, each projected through the lease index -- rewritten
-   * to its gateway id/requester/`worker` for a lease this gateway issued (test: "lease.list
-   * rewrites ids only for gateway-issued leases"), passed through with only `workerId` added for
-   * a worker's own local lease. Admin-only visibility (`list.get`, and `#leaseList` for an admin
-   * session): a non-admin session never reaches this, see `#ownedFleetLeases` above. */
   #fleetLeases() {
     return this.options.workers
       .views()
@@ -679,7 +651,7 @@ export class GatewayDispatcher {
   }
 
   /**
-   * ADR 0005 §15: "the gateway's `lease.defaultTtlMs` fills in a request that names no `ttlMs`
+   * why: ADR 0005 §15: "the gateway's `lease.defaultTtlMs` fills in a request that names no `ttlMs`
    * and its `lease.maxTtlMs` caps what its own clients may ask for, both before anything is
    * dispatched". `owner` (§27a, narrowed round 3 review H3) is read only from `session.
    * isGatewayUplink` -- never merely `role === "admin"`, which HTTP's `operator` token also maps
@@ -704,8 +676,6 @@ export class GatewayDispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
-    // ADR 0021 §1: gateways do not chain, so no session may send the field a gateway puts on its
-    // own dispatch to a worker. Refused whatever `noWait` says, as on a worker.
     if (input.fleetRequestId !== undefined) {
       throw new DispatchError(
         "FORBIDDEN",
@@ -713,11 +683,11 @@ export class GatewayDispatcher {
       );
     }
     return this.options.coordinator.request(
-      // Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
+      // why: Forwarded as it arrived (ADR 0007 §2): the gateway has no default mode of its own, and
       // relays an image tag unread.
       requestedDevice(input),
       {
-        // `input.allowDownload` stays accepted and is not passed on: only installed runtimes
+        // why: `input.allowDownload` stays accepted and is not passed on: only installed runtimes
         // count through a gateway (ADR 0009 §3).
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
@@ -727,11 +697,10 @@ export class GatewayDispatcher {
           ? {}
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-        // ADR 0020: forwarded to the worker as sent, and the gateway's own lease ID when it grants.
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
         ...(input.requires === undefined ? {} : { requires: input.requires }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
-        // Always explicit past this point (§15): a request that named none is filled in here,
+        // why: Always explicit past this point (§15): a request that named none is filled in here,
         // before dispatch, rather than left for whichever worker happens to grant it to default
         // on its own -- which could differ fleet to fleet.
         ttlMs: input.ttlMs ?? this.options.config.lease.defaultTtlMs,
@@ -745,8 +714,6 @@ export class GatewayDispatcher {
     return { result };
   };
 
-  /** ADR §15's cap applies here too -- "what its own clients may ask for" is any `ttlMs` a
-   * fleet client names, renew included, not only the initial request. */
   #leaseRenew: Handler<"lease.renew"> = async (input) => {
     this.#requireTtlWithinCap(input.ttlMs);
     return this.options.coordinator.renew(input.leaseId, input.ttlMs);
@@ -762,10 +729,6 @@ export class GatewayDispatcher {
     return { leaseIds: [...leaseIds] };
   };
 
-  /** ADR §19b: proxied to the worker that owns the device, over the same uplink as everything
-   * else. Ownership was already checked once, at the gateway (this operation's own `authorize`
-   * hook, via `leaseRequesterId`/`ownerId` above) -- the worker checks it again, against the
-   * namespaced requester `FleetLeaseCoordinator#exec` forwards (§19a'). */
   #deviceExec: Handler<"device.exec"> = async (input, session) =>
     this.options.coordinator.exec(
       {
@@ -778,7 +741,7 @@ export class GatewayDispatcher {
     );
 
   /**
-   * ADR §15/§4's cap, applied identically to a request and a renew. Lives here rather than in
+   * why: ADR §15/§4's cap, applied identically to a request and a renew. Lives here rather than in
    * the contract schema for the same reason the worker's own copy does: `lease.maxTtlMs` is a
    * daemon config value the contract module cannot see.
    */
@@ -800,7 +763,6 @@ export class GatewayDispatcher {
   }
 }
 
-/** ADR 0005 §34: stays per-worker, permanently. */
 function unsupportedByDesign(
   operation: OperationName,
   message = `${operation} acts on one machine's devices; run it against a worker`,

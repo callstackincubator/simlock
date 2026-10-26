@@ -22,16 +22,8 @@ import { freeLoopbackPort } from "../helpers/port.js";
 import { REPO_ROOT } from "../helpers/repo-root.js";
 import { waitFor } from "../helpers/wait.js";
 
-/**
- * The browser lane's daemons. Each is a real daemon process with HTTP enabled on a free
- * loopback port and its own `SIMLOCK_HOME`, so nothing here touches the machine's own Simlock.
- * A worker runs the end-to-end suite's fake driver; a gateway runs no drivers at all.
- */
-
 export interface ConsoleDaemon {
-  /** The console's address, exactly as `simlock status --json` reports it. */
   readonly url: string;
-  /** Runs `simlock` against this daemon, for a test that changes its state (a revoked token). */
   readonly cli: (args: readonly string[]) => Promise<CliResult>;
   readonly tokens: {
     readonly operator: string;
@@ -40,19 +32,13 @@ export interface ConsoleDaemon {
   };
 }
 
-/** A daemon a test drives itself: its CLI, and stopping and starting it in place. */
 export interface RunningDaemon extends ConsoleDaemon {
   readonly port: number;
-  /** The daemon's unix socket, for a test that drives it with the programmatic client. */
   readonly socketPath: string;
   cliBackground(args: readonly string[]): CliBackgroundHandle;
-  /** Replaces the fake driver's script. A daemon reads its host facts and catalog at start. */
   writeDriverScript(script: FakeDriverScript): Promise<void>;
-  /** `simlock daemon stop`, keeping the home: `start()` brings the same daemon back. */
   stop(): Promise<void>;
-  /** `simlock daemon start` on the same home, port and tokens. */
   start(): Promise<void>;
-  /** Stops the daemon and deletes its home. */
   dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
   /** why: stats read completed minutes only, so this moves the usage rows two minutes back. */
   prepareHistoricalUsage(): Promise<void>;
@@ -60,7 +46,6 @@ export interface RunningDaemon extends ConsoleDaemon {
 
 export interface StartOptions {
   readonly config?: Readonly<Record<string, unknown>>;
-  /** The fake driver's script, written before the daemon starts. */
   readonly driverScript?: FakeDriverScript;
 }
 
@@ -213,7 +198,7 @@ async function closeActivePages(preserved: ReadonlySet<Page>): Promise<unknown> 
 }
 
 /**
- * Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
+ * why: Pins a worker's capacity to the flow, not the machine running it, as the end-to-end suite
  * does: fake devices use no real memory, so a nominal per-device budget keeps the RAM gate from
  * refusing a lease on a small CI runner.
  */
@@ -417,7 +402,6 @@ export async function startDaemon(
   }
 }
 
-/** A gateway and the workers that joined it, each labelled. */
 export interface Fleet {
   readonly gateway: RunningDaemon;
   readonly workers: readonly RunningDaemon[];
@@ -432,7 +416,7 @@ export async function mintJoinToken(gateway: RunningDaemon): Promise<string> {
 }
 
 /**
- * Starts a gateway and one worker per entry of `workers`, each joined to it with its label, and
+ * why: Starts a gateway and one worker per entry of `workers`, each joined to it with its label, and
  * waits until the gateway lists every one of them as connected and has read it: a worker that is
  * still `starting`, or not yet read, has no capacity or catalog in its view, and a test that
  * leases through the gateway or reads a card's capacity right away would see that gap.
@@ -504,15 +488,8 @@ export async function disposeFleet(
   await fleet.gateway.dispose(options);
 }
 
-/** The protocol range the stand-in below claims: older than any this gateway speaks. */
 export const OLD_PROTOCOL = { max: 3, min: 1 } as const;
 
-/**
- * A worker too old for the gateway, without building an old Simlock: it dials the gateway's
- * uplink with a real join token, as a worker does, and answers the gateway's `hello` the way a
- * daemon speaking only protocol {@link OLD_PROTOCOL} does. The gateway then lists it as
- * `incompatible` with both ranges. Resolves once the uplink is open; call the result to hang up.
- */
 export async function joinOldWorker(
   gateway: RunningDaemon,
   identity: { readonly id: string; readonly label: string },
@@ -699,10 +676,6 @@ export async function startProxiedDaemon(
   };
 }
 
-/**
- * `daemon` is a single host, shared by every test in a Playwright worker, and the base URL every
- * `page.goto` resolves against. `gateway` starts only for a test that asks for it.
- */
 export const test = base.extend<
   { proxied: ProxiedDaemon },
   { daemon: RunningDaemon; gateway: RunningDaemon; proxiedDaemon: ProxiedDaemon }
@@ -755,7 +728,6 @@ export const test = base.extend<
 
 export { expect };
 
-/** Signs in through the sign-in screen, as an operator would. */
 export async function signIn(page: Page, token: string): Promise<void> {
   await page.getByLabel("Operator token").fill(token);
   await page.getByRole("button", { name: "Sign in" }).click();

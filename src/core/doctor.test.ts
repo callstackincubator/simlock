@@ -201,7 +201,7 @@ describe("Doctor", () => {
         mark: { durable: undefined, erasable: "tok", erasableReadable: true },
       },
       { detail: undefined, mark: { durable: "tok", erasable: "tok", erasableReadable: true } },
-      // Unreadable is not absent: an Android mark is only reachable over adb while
+      // why: Unreadable is not absent: an Android mark is only reachable over adb while
       // the emulator runs, so a shut-down device must never read as erased.
       { detail: undefined, mark: { durable: "tok", erasable: undefined, erasableReadable: false } },
     ] as const;
@@ -264,9 +264,7 @@ describe("Doctor", () => {
           eventBus.replay().some((entry) => entry.event === "device.foreign-provenance-detected"),
         ).toBe(true);
       }
-      // A mark finding says nothing of the run state, which matches the registry's.
       expect(registry.snapshot.devices[0]?.foreignStateDetectedAt).toBeUndefined();
-      // Report-only: --fix must never touch a device over a mark finding.
       expect(registry.snapshot.devices[0]?.state).toBe("ready");
     }
   });
@@ -639,7 +637,7 @@ describe("Doctor", () => {
       eventBus,
       idGenerator: sequence(),
     });
-    // A lease-path boot from `shutdown` runs `makeReady` while the committed record still
+    // why: A lease-path boot from `shutdown` runs `makeReady` while the committed record still
     // says `shutdown` -- observed reality goes `running` before that boot's own transition
     // commits. Claiming the device is what tells doctor this is in-flight work, not drift.
     const iosDevice = await shutdownDevice(registry, "simlock-ios-1", "ios");
@@ -844,7 +842,6 @@ describe("Doctor", () => {
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
       });
 
-      // No driver for the platform: nothing to measure against, so no stall.
       expect(
         isStalledTransition({
           claims: undefined,
@@ -857,9 +854,6 @@ describe("Doctor", () => {
     });
 
     it("the doctor's stalled-transition finding is unchanged", async () => {
-      // The finding a stalled provisioning device and a stalled reclaiming device produced
-      // before the stall test became `isStalledTransition`, field for field, and none a moment
-      // before each threshold.
       const clock = new FakeClock(10_000);
       const eventBus = new EventBus(clock);
       const registry = await loadRegistry(clock, eventBus);
@@ -926,7 +920,7 @@ describe("Doctor", () => {
     });
 
     it("does not report a stall for a device this daemon holds an operation claim on", async () => {
-      // A backgrounded reclaim keeps its device in `reclaiming` for a full erase, which can
+      // why: A backgrounded reclaim keeps its device in `reclaiming` for a full erase, which can
       // outlast the threshold. The claim, not the clock, says work is in progress; without it a
       // healthy reclaim is reported as a stall and `--fix` quarantines it.
       const clock = new FakeClock(10_000);
@@ -965,8 +959,6 @@ describe("Doctor", () => {
         [],
       );
 
-      // Releasing the claim is what a crash cannot do: the same device, same age, is a
-      // stall once no live operation accounts for it.
       claim?.release();
       const unclaimed = await new Doctor({
         decisions: new SerializedDecision(),
@@ -1001,7 +993,7 @@ describe("Doctor", () => {
         ttlDeadline: 999_999,
       });
       await registry.beginRelease(lease.id);
-      // `kill -9` on the emulator leaves it absent from reality altogether, not `stopped`.
+      // why: `kill -9` on the emulator leaves it absent from reality altogether, not `stopped`.
       driver.setManagedReality({ devices: [], processes: [] });
       clock.advance(6_001);
 
@@ -1031,7 +1023,7 @@ describe("Doctor", () => {
         eventBus,
         idGenerator: sequence(),
       });
-      // A record in `reclaiming` does not say which clean level started it, so the threshold
+      // why: A record in `reclaiming` does not say which clean level started it, so the threshold
       // has to clear the slower of the two: pricing it at `standard` would call a healthy
       // `full` reclaim a stall.
       const driver = new FakeDriver({
@@ -1136,8 +1128,6 @@ describe("Doctor", () => {
         provisionDuration: 0,
         spec: { physical: false, model: "Phone", osVersion: "1", platform: "ios" },
       });
-      // Reality still shows the device (never actually booted) so the fix pass isn't
-      // also chasing an unrelated registry-device-missing finding on the same device.
       driver.setManagedReality({
         devices: [
           {
@@ -1556,7 +1546,7 @@ describe("Doctor", () => {
       }),
     ]);
 
-    // Post-commit: the registry mutations that resolved the drift are already committed
+    // why: Post-commit: the registry mutations that resolved the drift are already committed
     // by the time the fact is published, and doctor.reconciled is the final event.
     const commitEvents = events.filter(
       (event) => event.event === "device.ready" || event.event === "device.shutdown",
@@ -1655,7 +1645,7 @@ describe("Doctor", () => {
     );
     expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
     expect(report.findings[0]).toMatchObject({
-      // Discovery happens once, at startup, so the finding has to say what actually
+      // why: Discovery happens once, at startup, so the finding has to say what actually
       // retries the platform -- otherwise repairing the root and re-running `doctor`
       // reports the identical line and reads as a repair that did not work.
       detail: expect.stringContaining(
@@ -1853,7 +1843,6 @@ describe("Doctor", () => {
     };
     const RESTART = /restart the daemon/;
 
-    /** A check that reports `missing` and counts its runs. */
     function prerequisiteCheck(
       platform: "ios" | "android",
       missing: readonly (typeof EMULATOR)[] = [],
@@ -2108,7 +2097,7 @@ describe("Doctor with a platform it cannot observe", () => {
       registry,
     }).reconcile({ fix: true });
 
-    // "I could not look" is not "the device is gone". Marking these `deleted` would strand
+    // why: "I could not look" is not "the device is gone". Marking these `deleted` would strand
     // every simulator in the root behind a registry with no record of it -- the permanent
     // multi-gigabyte leak ADR 0001 exists to prevent, reachable with a `chmod`.
     expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
@@ -2127,8 +2116,6 @@ describe("Doctor with a platform it cannot observe", () => {
       registry,
     }).reconcile({ fix: true });
 
-    // Same reasoning with no rejection to report: a missing Android SDK or a non-Mac host
-    // is just as unobservable as a refused root.
     expect(report.findings).toEqual([]);
     expect(registry.snapshot.devices[0]?.state).toBe("ready");
   });
@@ -2160,8 +2147,6 @@ describe("Doctor with a platform it cannot observe", () => {
 
     const purged = await doctor.reconcile({ purgeOrphans: true });
 
-    // The process is the device's: destroying the device covers it, so reporting the
-    // process afterwards would name something that no longer exists.
     expect(purged.findings).toEqual([]);
     expect(eventBus.replay()).toContainEqual(
       expect.objectContaining({
@@ -2218,7 +2203,7 @@ describe("Doctor with a platform it cannot observe", () => {
       registry,
     }).reconcile({ purgeOrphans: true });
 
-    // A daemon that cannot prove one of its roots is not one to keep destroying on, and
+    // why: A daemon that cannot prove one of its roots is not one to keep destroying on, and
     // the roots are proven before anything is destroyed -- so this costs a re-run, never a
     // half-purge.
     expect(
@@ -2343,7 +2328,7 @@ describe("Doctor with a platform it cannot observe", () => {
       registry,
     }).reconcile({ fix: true });
 
-    // "I could not look outside the root" is not "it is out there": the conservative
+    // why: "I could not look outside the root" is not "it is out there": the conservative
     // finding is the one whose fix only writes to the registry.
     expect(report.findings.map((finding) => finding.kind)).toEqual(["registry-device-missing"]);
     expect(driver.calls.filter((call) => call.operation === "destroyLegacy")).toEqual([]);
@@ -2573,7 +2558,6 @@ function observed(deviceId: string, runState: "running" | "stopped") {
   return { ...driverDevice(deviceId), runState };
 }
 
-/** One `ready` iOS device in an otherwise empty registry. */
 async function readyIosDevice() {
   const clock = new FakeClock(10_000);
   const eventBus = new EventBus(clock);

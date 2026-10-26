@@ -9,16 +9,6 @@ import {
 } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
-/**
- * ADR 0005 #117 end to end, with real processes: a gateway daemon, two worker daemons that dial
- * it over a real WebSocket, and the CLI an operator would actually use.
- *
- * What this flow proves that the unit suites cannot: the uplink is a real network connection on
- * the gateway's own HTTP port, the join token is a real credential minted on the gateway and
- * read from a worker's config file, and `simlock status` against the gateway aggregates two
- * separate machines' registries.
- */
-
 interface WorkerView {
   readonly id: string;
   readonly label?: string;
@@ -63,7 +53,6 @@ async function listWorkers(gateway: TestEnv): Promise<WorkerView[]> {
   return (result.json as { workers: WorkerView[] }).workers;
 }
 
-/** Polls the *gateway*, never a worker: the gateway's own view is what this flow is about. */
 async function waitForWorkers(
   gateway: TestEnv,
   predicate: (workers: WorkerView[]) => boolean,
@@ -80,13 +69,11 @@ async function waitForWorkers(
   return workers;
 }
 
-/** A worker's per-platform limit, or 0 if the view has no capacity yet. Out here so the test
- * body below stays a sequence of assertions rather than a chain of fallbacks. */
 function iosLimit(worker: WorkerView | undefined): number {
   return worker?.capacity?.ios.limit ?? 0;
 }
 
-/** The id of the worker an operator would recognize by `label`. Throws rather than degrading
+/** why: The id of the worker an operator would recognize by `label`. Throws rather than degrading
  * to `""`, which would silently turn "no such worker" into a request for one. */
 function idOf(workers: readonly WorkerView[], label: string): string {
   const worker = workers.find((candidate) => candidate.label === label);
@@ -103,8 +90,6 @@ function iosModels(json: unknown): readonly string[] {
   return platforms.find((entry) => entry.platform === "ios")?.models ?? [];
 }
 
-/** A worker's iOS catalog entry, by the worker's label. */
-/** The label of the worker with the smallest id: the one whose catalog wins a disagreement. */
 function firstWorkerLabel(workers: readonly WorkerView[]): string {
   const first = [...workers].sort((left, right) => (left.id < right.id ? -1 : 1))[0];
   return first?.label ?? "";
@@ -116,14 +101,12 @@ function iosEntryOf(views: readonly WorkerView[], label: string) {
     ?.catalog.find((entry) => entry.platform === "ios");
 }
 
-/** The Xcode entry in a worker's host facts, by the worker's label. */
 function xcodeOf(views: readonly WorkerView[], label: string) {
   return views
     .find((view) => view.label === label)
     ?.host?.tools.find((tool) => tool.name === "xcode");
 }
 
-/** The worker named `label` has the same host facts and catalog in both lists. */
 function expectSameView(
   actual: readonly WorkerView[],
   expected: readonly WorkerView[],
@@ -138,7 +121,7 @@ function expectSameView(
 
 describe("gateway fleet", () => {
   it("two workers join, status aggregates them, a kill disconnects one, drain flags the other", async () => {
-    // `driver: "none"`: a gateway starts no drivers and warns about every worker-only key in
+    // why: `driver: "none"`: a gateway starts no drivers and warns about every worker-only key in
     // its config (ADR 0005 §2), so it gets no fake-driver wiring and no capacity seeding.
     const { env: gateway, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { host: "127.0.0.1", port } },
@@ -146,8 +129,6 @@ describe("gateway fleet", () => {
       driver: "none",
     }));
 
-    // 1. The gateway mints a join token. `--role worker` is what makes it a join token and
-    //    nothing else: it opens an uplink and no `/v1` route.
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     expect(minted.code).toBe(0);
     const { secret, token } = minted.json as { secret: string; token: { role: string } };
@@ -158,7 +139,7 @@ describe("gateway fleet", () => {
     const url = `ws://127.0.0.1:${port}`;
     const workerA = await withDaemon({
       configOverrides: { gateway: { label: "worker-a", token: secret, url } },
-      // Seeded before the daemon starts: the worker reports its catalog as its uplink opens, and
+      // why: Seeded before the daemon starts: the worker reports its catalog as its uplink opens, and
       // a script written afterwards would only reach the gateway on its 30s periodic refresh.
       driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
@@ -171,17 +152,14 @@ describe("gateway fleet", () => {
       gateway,
       (workers) =>
         workers.length === 2 &&
-        // The gateway marks a worker connected before its first refresh builds the view, so
+        // why: The gateway marks a worker connected before its first refresh builds the view, so
         // "connected" alone can still be a view with no capacity: wait for the capacity too.
         workers.every((worker) => worker.connection === "connected" && iosLimit(worker) > 0),
       "both workers connected to the gateway, each with its capacity",
     );
     expect(joined.map((worker) => worker.label).sort()).toEqual(["worker-a", "worker-b"]);
-    // Two machines, two identities: the ids are the workers' own `instance.json`, never a name
-    // the gateway invented or a label an operator chose.
     expect(new Set(joined.map((worker) => worker.id)).size).toBe(2);
 
-    // 3. `simlock status` against the gateway is the same shape one machine returns, summed.
     const status = await gateway.cli(["status", "--json"]);
     expect(status.code).toBe(0);
     const statusView = status.json as StatusView;
@@ -190,7 +168,6 @@ describe("gateway fleet", () => {
     expect(iosLimit(joined[0])).toBeGreaterThan(0);
     expect(statusView.capacity.ios.limit).toBe(iosLimit(joined[0]) + iosLimit(joined[1]));
 
-    // 4. The catalog is the union, and says which worker each model came from.
     await waitFor(
       async () => {
         const models = iosModels((await gateway.cli(["catalog", "--json"])).json);
@@ -206,7 +183,7 @@ describe("gateway fleet", () => {
     ).platforms.find((entry) => entry.platform === "ios");
     expect(iosCatalog?.modelWorkers?.["iPhone 16"]).toEqual([idOf(joined, "worker-a")]);
 
-    // 5. Killing a worker flips its view without anyone polling it: the uplink closing *is* the
+    // why: 5. Killing a worker flips its view without anyone polling it: the uplink closing *is* the
     //    signal (ADR 0005 §6). The gateway's own backstop tick is 30s, and this must not need
     //    it -- so a short deadline here is the assertion.
     await workerA.killDaemon();
@@ -215,12 +192,9 @@ describe("gateway fleet", () => {
       (workers) => connectionOf(workers, "worker-a") === "disconnected",
       "the killed worker's view flipped to disconnected",
     );
-    // The other worker is untouched, and the dead one's view is kept rather than dropped.
     expect(surviving).toHaveLength(2);
     expect(connectionOf(surviving, "worker-b")).toBe("connected");
 
-    // 6. Draining flags the surviving worker (what #118's dispatch will honour), and the flag
-    //    is on the view an operator reads back.
     const workerBId = idOf(surviving, "worker-b");
     const drain = await gateway.cli(["worker", "drain", workerBId]);
     expect(drain.code).toBe(0);
@@ -229,7 +203,6 @@ describe("gateway fleet", () => {
       true,
     );
 
-    // 7. Removing a *connected* worker is refused; the disconnected one is forgotten.
     const refused = await gateway.cli(["worker", "remove", workerBId]);
     expect(refused.error?.code).toBe("WORKER_CONNECTED");
     const workerAId = idOf(surviving, "worker-a");
@@ -237,17 +210,6 @@ describe("gateway fleet", () => {
     expect(removed.code).toBe(0);
     expect(await listWorkers(gateway)).toHaveLength(1);
 
-    // 8. A worker's own *business* events -- not just the gateway's own connect/disconnect
-    //    facts, which carry `workerId` too and would pass this check even with republishing
-    //    (`WorkerLink#onWorkerEvent`) deleted outright -- reach the gateway's buffer with
-    //    `workerId` attached, which is what makes `simlock events` against a gateway a
-    //    fleet-wide view (ADR 0005 §22). Driven deterministically: a real `lease.granted` on
-    //    worker B's own daemon, requested directly against its socket (routing across the
-    //    fleet is #118's, not this PR's), well after its `events.subscribe` was established at
-    //    connect. `module` is asserted as `lease-lifecycle` -- the emitting engine's own name,
-    //    unchanged by republishing -- specifically because it is not one of the six subjects
-    //    `docs/internal/EVENTS.md` calls "the gateway's own" (`worker.*`), so this cannot be satisfied by
-    //    a gateway-authored fact that merely happens to name worker B.
     const events = await gateway.events();
     const connectedFacts = events.filter((event) => event.event === "worker.connected");
     expect(connectedFacts).toHaveLength(2);
@@ -292,9 +254,6 @@ describe("gateway fleet", () => {
       driver: "none",
     }));
     const url = `ws://127.0.0.1:${port}`;
-    // Both workers have the same model and the same two runtimes installed, and pair the model
-    // with a different one of them. Each also accepts its own other name for it and reports its
-    // own image of one shared runtime.
     const installed = ["18.4", "26.0"];
     await withDaemon({
       configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
@@ -352,8 +311,6 @@ describe("gateway fleet", () => {
       modelRuntimes: { "iPhone 16": ["26.0"] },
     });
 
-    // Each worker's host facts sit beside its catalog, tools included once the worker has read
-    // them; `GET /v1/workers` serves the same views.
     const withTools = await waitForWorkers(
       gateway,
       (views) =>
@@ -387,8 +344,6 @@ describe("gateway fleet", () => {
     );
     expect(ios?.modelRuntimes).toEqual({ "iPhone 16": ["18.4", "26.0"] });
     expect(ios?.modelAliases).toEqual({ "iPhone 16": ["iphone-16-a", "iphone-16-b"] });
-    // The two workers class the model differently; the first worker in id order wins, so the
-    // fleet's class is the one the worker with the smaller id reported.
     const classOfLabel: Record<string, string | undefined> = {
       "worker-a": "phone",
       "worker-b": "tablet",
@@ -407,7 +362,6 @@ describe("gateway fleet", () => {
       driver: "none",
     }));
     const url = `ws://127.0.0.1:${port}`;
-    // Both workers list My Tablet; only worker-a has it as a custom profile.
     await withDaemon({
       configOverrides: { gateway: { label: "worker-a", token: await mintJoinToken(gateway), url } },
       driverScript: {
@@ -460,8 +414,6 @@ describe("gateway fleet", () => {
       driver: "none",
     }));
     const url = `ws://127.0.0.1:${port}`;
-    // One model per worker, so the model alone decides where a request lands. Both workers can
-    // slim the one runtime they have.
     await withDaemon({
       configOverrides: {
         gateway: { label: "default-full", token: await mintJoinToken(gateway), url },
@@ -536,8 +488,6 @@ describe("gateway fleet", () => {
     }));
     const minted = await gateway.cli(["token", "create", "--role", "worker"]);
     const { secret } = minted.json as { secret: string };
-    // The fake driver resolves model names exactly, so a grant proves the gateway sent the
-    // worker its own name for the model.
     await withDaemon({
       configOverrides: {
         gateway: { label: "worker", token: secret, url: `ws://127.0.0.1:${port}` },
@@ -608,7 +558,6 @@ describe("gateway fleet", () => {
       "both workers connected with their catalogs",
     );
 
-    // Warm one device on the first worker through its own socket, and let it go idle.
     const warmed = await warmWorker.cli([
       "lease",
       "--platform",
@@ -624,7 +573,7 @@ describe("gateway fleet", () => {
     };
     await warmWorker.cli(["release", warmLease.id]);
     await waitForDeviceState(warmWorker, warmDevice.driverDeviceId, "ready");
-    // Until the gateway's view shows that device ready, a request could miss it.
+    // why: Until the gateway's view shows that device ready, a request could miss it.
     await waitFor(
       async () => {
         const status = await gateway.cli(["status", "--json"]);
@@ -674,7 +623,6 @@ describe("gateway fleet", () => {
         },
         fakeDriverPlatforms: ["ios"],
       });
-    // Sorted either way by id, only the range can send the request to the newer worker.
     await join("worker-old", "17.5");
     await join("worker-new", "26.0");
     await waitForWorkers(
@@ -705,9 +653,6 @@ describe("gateway fleet", () => {
       role: "gateway",
       driver: "none",
     }));
-    // An operator token is a real credential that opens no uplink (ADR 0005 §25). The worker
-    // keeps retrying at its backoff cap rather than giving up, so what this asserts is the
-    // gateway's side: it never becomes a worker.
     const operator = await gateway.cli(["token", "create", "--role", "operator"]);
     const { secret } = operator.json as { secret: string };
     await withDaemon({
@@ -725,9 +670,6 @@ describe("gateway fleet", () => {
       },
       { label: "the gateway reported the refused uplink", timeout: 20_000 },
     );
-    // M3: `workerId` is whatever the dial claimed in its headers over the real WebSocket
-    // adapter, not just the in-memory one the unit suite scripts -- an operator otherwise had
-    // no way to tell *which* machine's misconfigured worker keeps knocking.
     expect(rejected?.workerId).toBeDefined();
 
     expect(await listWorkers(gateway)).toEqual([]);

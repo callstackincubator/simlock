@@ -222,7 +222,7 @@ log="${TMPDIR:-/tmp}/simlock-slow-e2e-$(date +%Y%m%d-%H%M%S).log"
 
 if ! mkdir "$lock" 2>/dev/null; then
   holder=$(cat "$lock/pid" 2>/dev/null || echo "")
-  # No pid yet means another caller is still starting its runner, unless that was long ago.
+  # why: No pid yet means another caller is still starting its runner, unless that was long ago.
   if { [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; } \
     || { [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin -1)" ]; }; then
     echo "busy: slow lane running as pid $holder from $(cat "$lock/root" 2>/dev/null), log $(cat "$lock/log" 2>/dev/null)" >&2
@@ -240,19 +240,17 @@ echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
 
-# The runner owns the lock from here: it records its pid, runs the lane, writes the exit code,
-# and removes the lock however the lane ends.
 TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
 import os, subprocess, sys
 lock, log, root, script, args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 child = os.fork()
 if child != 0:
-    # Written before this returns, so a second caller never sees a lock without a live pid.
+    # why: Written before this returns, so a second caller never sees a lock without a live pid.
     with open(os.path.join(lock, "pid"), "w") as f:
         f.write(str(child))
     sys.exit(0)
 os.setsid()
-# Let go of the caller's stdout and stderr, or `$(scripts/slow-e2e.sh)` waits for the whole run.
+# why: Let go of the caller's stdout and stderr, or `$(scripts/slow-e2e.sh)` waits for the whole run.
 null = os.open(os.devnull, os.O_RDWR)
 for fd in (0, 1, 2):
     os.dup2(null, fd)

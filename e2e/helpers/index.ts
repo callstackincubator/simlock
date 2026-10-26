@@ -1,7 +1,3 @@
-// Public surface for flow test files. Kept to exactly what a flow currently imports
-// through this barrel -- add an export here (from its owning helper module) the
-// moment a flow needs it, rather than pre-declaring the full internal surface, so an
-// unused re-export is always a real signal.
 export { withDaemon, withSharedDaemon } from "./env.js";
 export {
   assertPinnedAgentDevice,
@@ -16,8 +12,6 @@ export { freeLoopbackPort } from "./port.js";
 export { deviceStreamUrl } from "./device-stream.js";
 export { withHttpDaemon } from "./http-daemon.js";
 export { mintJoinToken } from "./join-token.js";
-// A flow that factors its own setup out of a test body needs to name what `withDaemon` hands
-// back; every other flow keeps it inferred.
 export type { SharedTestEnv, TestEnv } from "./env.js";
 export { DEVICE_READY_MS, waitFor } from "./wait.js";
 export { events } from "./events.js";
