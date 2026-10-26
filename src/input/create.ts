@@ -49,6 +49,8 @@ export function createWorkerInput(options: WorkerInputOptions): WorkerInput {
 export function createGatewayInput(options: GatewayInputLinkOptions): {
   readonly leaseRoute: ModuleLeaseHandler;
   readonly socket: ModuleLeaseSocketHandler;
+  readonly drain: () => void;
 } {
-  return { leaseRoute, socket: createGatewayInputLink(options) };
+  const link = createGatewayInputLink(options);
+  return { drain: link.drain, leaseRoute, socket: { open: link.open } };
 }

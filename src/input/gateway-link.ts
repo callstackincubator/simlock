@@ -1,11 +1,12 @@
 import { closeReason, MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
 import type {
+  FleetLeases,
   ModuleIdentity,
   ModuleLease,
   ModuleLeaseSocketAccept,
   ModuleTwoWayRelay,
 } from "../modules/index.js";
-import type { Clock, LeaseSocket } from "../ports/index.js";
+import type { Clock, LeaseSocket, TimerHandle } from "../ports/index.js";
 import { CHANNEL_TAG, encodeFrame, readFrames } from "./framing.js";
 import { unavailable } from "./refusal.js";
 
@@ -18,11 +19,16 @@ export interface GatewayInputLinkOptions {
   ) => Promise<Response | ModuleTwoWayRelay>;
   readonly requesterPrefix: string;
   readonly clock: Clock;
+  readonly leases: FleetLeases;
 }
 
 // why: the relay's own head deadline is 330 s, far too long for a person waiting on a socket; the
 // socket's open is bounded here and aborts the relay's open when it runs out.
 const OPEN_BOUND_MS = 10_000;
+
+// why: the worker's `0xF1` usually follows the relayed lease event, and it carries the reason; the gateway
+// waits this long for it before closing a socket whose lease it saw go.
+const LEASE_END_WAIT_MS = 2_000;
 
 export function createGatewayInputLink(options: GatewayInputLinkOptions): {
   open(
@@ -30,8 +36,77 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
     identity: ModuleIdentity,
     lease: ModuleLease,
   ): Promise<Response | ModuleLeaseSocketAccept>;
+  drain(): void;
 } {
+  const bridges = new Map<string, Set<Bridge>>();
+  options.leases.onRemoved((entry) => {
+    for (const bridge of bridges.get(entry.gatewayLeaseId) ?? []) bridge.leaseGone();
+  });
+
+  function bridge(
+    socket: LeaseSocket,
+    relay: ModuleTwoWayRelay,
+    controller: AbortController,
+    lease: ModuleLease,
+  ): void {
+    const writer = relay.writable.getWriter();
+    let writes: Promise<unknown> = Promise.resolve();
+    let ended = false;
+    let wait: TimerHandle | undefined;
+    const mine: Bridge = {
+      leaseGone: () => {
+        wait ??= options.clock.setTimer(LEASE_END_WAIT_MS, () => stop(4001, "lease ended"));
+      },
+      stop: (code, reason) => stop(code, reason),
+    };
+    const set = bridges.get(lease.id) ?? new Set<Bridge>();
+    set.add(mine);
+    bridges.set(lease.id, set);
+    function stop(code: number, reason: string): void {
+      if (ended) return;
+      ended = true;
+      if (wait !== undefined) options.clock.cancel(wait);
+      set.delete(mine);
+      if (set.size === 0) bridges.delete(lease.id);
+      socket.close(code, closeReason(reason));
+      controller.abort();
+    }
+    socket.onMessage((data) => {
+      // why: a frame over the limit would end the channel for everyone on the lease, and a message that long is dropped on every door.
+      if (data.length > MAX_INPUT_MESSAGE_BYTES) return;
+      const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
+      writes = writes.then(() => writer.write(frame)).catch(() => undefined);
+    });
+    socket.onClose(() => {
+      ended = true;
+      if (wait !== undefined) options.clock.cancel(wait);
+      set.delete(mine);
+      controller.abort();
+    });
+    void (async () => {
+      for await (const frame of readFrames(relay.readable)) {
+        if (frame.tag === CHANNEL_TAG.close) {
+          const closing = closeOf(frame.payload);
+          if (closing !== undefined) stop(closing.code, closing.reason);
+          return;
+        }
+        if (frame.tag === CHANNEL_TAG.heartbeat) continue;
+        const message = new Uint8Array(1 + frame.payload.length);
+        message[0] = frame.tag;
+        message.set(frame.payload, 1);
+        socket.send(message);
+      }
+      // why: the worker's direction ended with no close frame, or broke: it is gone, and the relay's own silence limit and an uplink that dropped end up here too.
+      stop(1011, `Worker ${lease.workerId ?? ""} stopped answering`);
+    })();
+  }
+
   return {
+    drain: () => {
+      for (const set of bridges.values()) {
+        for (const each of set) each.stop(1001, "Simlock is stopping");
+      }
+    },
     open: async (_request, identity, lease) => {
       const controller = new AbortController();
       const workerId = lease.workerId ?? "";
@@ -63,7 +138,7 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
         options.clock.cancel(timer);
       }
       if (relay instanceof Response) return relay;
-      return (socket) => bridge(socket, relay, controller);
+      return (socket) => bridge(socket, relay, controller, lease);
     },
   };
 }
@@ -88,29 +163,9 @@ function refusalFor(error: unknown, workerId: string, leaseId: string): Response
   throw error;
 }
 
-function bridge(socket: LeaseSocket, relay: ModuleTwoWayRelay, controller: AbortController): void {
-  const writer = relay.writable.getWriter();
-  let writes: Promise<unknown> = Promise.resolve();
-  socket.onMessage((data) => {
-    // why: a frame over the limit would end the channel for everyone on the lease, and a message that long is dropped on every door.
-    if (data.length > MAX_INPUT_MESSAGE_BYTES) return;
-    const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
-    writes = writes.then(() => writer.write(frame)).catch(() => undefined);
-  });
-  socket.onClose(() => controller.abort());
-  void (async () => {
-    for await (const frame of readFrames(relay.readable)) {
-      if (frame.tag === CHANNEL_TAG.close) {
-        const ended = closeOf(frame.payload);
-        if (ended !== undefined) socket.close(ended.code, ended.reason);
-        return;
-      }
-      const message = new Uint8Array(1 + frame.payload.length);
-      message[0] = frame.tag;
-      message.set(frame.payload, 1);
-      socket.send(message);
-    }
-  })();
+interface Bridge {
+  readonly leaseGone: () => void;
+  readonly stop: (code: number, reason: string) => void;
 }
 
 // why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
