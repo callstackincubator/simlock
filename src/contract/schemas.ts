@@ -1,22 +1,3 @@
-/**
- * Zod schemas re-declaring today's wire shapes for the contract module (ADR 0003 §1).
- *
- * These schemas deliberately do NOT import their "real" counterparts from `src/core` --
- * `DeviceRecord`, `LeaseRecord`, `Config`, `DoctorFinding`, `Proposal`, `EventEnvelope`, and so
- * on are core-private types. Re-declaring their fields here, by hand, is exactly what keeps
- * private domain records off the public package surface (the daemon maps its own records onto
- * these shapes in exactly one place -- `DaemonDispatcher#dispatch`'s `#parseOutput` call in
- * `src/daemon/dispatcher.ts`, which parses every handler's result through the operation's
- * output schema before it reaches a transport, stripping any field (such as `DeviceRecord`'s
- * quarantine/foreign/recovery bookkeeping) that a narrower output schema like
- * `grantedDeviceSchema` does not declare). If a core type's shape changes
- * without a matching edit here, that is a compile-time or (for shapes structurally compatible
- * but semantically different) a runtime output-validation failure at the daemon boundary --
- * see `DaemonServer`'s output parsing -- not a silent drift.
- *
- * This module must never import from src/core, src/daemon, src/drivers, src/http, src/cli,
- * src/mcp, or src/ports -- enforced by `pnpm lint` (`.oxlintrc.json`).
- */
 import { z } from "zod";
 
 export const platformSchema = z.enum(["ios", "android"]);
@@ -95,7 +76,6 @@ function checkDeviceType(
   }
 }
 
-/** The longest image tag a lease request may name. */
 const IMAGE_TAG_MAX = 64;
 
 /**
@@ -109,11 +89,7 @@ export const imageTagSchema = z
   .max(IMAGE_TAG_MAX)
   .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
 
-/** A device's spec as responses show it. The spec's planned mode is not shown (ADR 0007 §9): the
- * device's `mode` is the one mode a response reports. `imageTag` is shown on a device whose
- * request named one. */
 const deviceSpecSchema = z.object({
-  /** `true` for an enrolled physical device, `false` for a simulator or emulator. */
   physical: z.boolean(),
   platform: platformSchema,
   model: z.string(),
@@ -220,7 +196,6 @@ export const deviceRecordSchema = z
     address: z.string().optional(),
     absentReason: absentReasonSchema.optional(),
     physical: z.boolean(),
-    /** Present exactly when `physical` is `false`. */
     mode: deviceModeSchema.optional(),
     class: physicalClassSchema.optional(),
     leaseIdentity: leaseIdentitySchema.optional(),
@@ -258,7 +233,7 @@ export const statusDeviceSchema = z
     workerId: z.string().optional(),
   })
   .superRefine((device, context) => checkDeviceType(device, context, true))
-  // `list.get` records carry a virtual device's driver address, and a worker view parses them
+  // why: `list.get` records carry a virtual device's driver address, and a worker view parses them
   // through this schema: it drops the address of a device whose canonical ID is not shown.
   .transform((device): typeof device => {
     if (device.physical || device.driverDeviceId === undefined) return device;
@@ -279,11 +254,8 @@ export const grantedDeviceSchema = z
      * nothing here ever guesses at a value it wasn't told.
      */
     address: z.string().optional(),
-    /** Always present: see `checkDeviceType`. */
     physical: z.boolean(),
-    /** The mode the device actually has (see `DeviceRecord.mode`); absent exactly when `physical`. */
     mode: deviceModeSchema.optional(),
-    /** Carried by a physical device, but a grant does not require it (see `checkDeviceType`). */
     class: physicalClassSchema.optional(),
   })
   .superRefine((device, context) => checkDeviceType(device, context, false));
@@ -311,20 +283,7 @@ export const leaseRecordSchema = z.object({
   ttlMs: z.number(),
   ttlDeadline: z.number(),
   lastRenewedAt: z.number(),
-  /**
-   * ADR 0020: whether the requester chose `id` (`lease.request`'s `leaseId`) rather than simlock
-   * generating it. A gateway rebuilding its routing table reads it to name such a lease bare.
-   */
   idChosenByRequester: z.boolean(),
-  /**
-   * ADR 0005 §18: "the lease object gains `worker: { id, label }` (additive) so a client and
-   * the console can tell where the device lives. A worker's network address is never exposed."
-   * Additive and gateway-only -- a worker granting its own local lease has no second machine to
-   * name and never sets this; a gateway stamps it on every lease it forwards a grant/renew for,
-   * using the same worker id `id` already encodes (§16: a gateway lease id is
-   * `<workerId>.<workerLeaseId>`) plus the worker's display `label`, when it has one, for a
-   * console to render without a second lookup.
-   */
   worker: z.object({ id: z.string(), label: z.string().optional() }).optional(),
 });
 
@@ -335,19 +294,12 @@ const leaseTimingSchema = z.object({
   estimatedReadyMs: z.number(),
 });
 
-/**
- * Scoping variables a lease holder needs to reach the device it was just granted -- the
- * device-set path on iOS, the adb server port on Android (ADR 0001, decision 7). Built by the
- * driver that owns the device root and forwarded verbatim; no key here means anything to the
- * core or to this contract, which is what lets a third driver contribute its own scoping
- * without an edit here (architecture rule 2).
- */
 const leaseEnvironmentSchema = z.record(z.string(), z.string());
 
 export const leaseGrantSchema = z.object({
   device: grantedDeviceSchema,
   /**
-   * Always present, `{}` at the least: containment cuts both ways, and a grant that did not
+   * why: Always present, `{}` at the least: containment cuts both ways, and a grant that did not
    * carry it would hand back a `driverDeviceId` no documented workflow can address.
    */
   environment: leaseEnvironmentSchema,
@@ -479,8 +431,6 @@ export const passthroughCommandSchema = z.object({
 
 export const leaseProgressSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("queued"), queuePosition: z.number() }),
-  // ADR 0010 §3: the request waits on a component download. Bounded here so a gateway checks a
-  // worker's push before relaying it (safety rule 10).
   z.object({
     stage: z.literal("downloading"),
     component: z.string().max(64),
@@ -499,11 +449,6 @@ const runningCapacityEntrySchema = z.object({
   overLimit: z.boolean(),
 });
 
-/**
- * One platform's entry. `atRamBudget`: creating one more full device of the platform would be
- * refused for RAM -- the check the planner makes, so a gateway can pass such a worker over
- * (ADR 0009 §7). Always `false` under a strategy that keeps no RAM budget.
- */
 const platformCapacityEntrySchema = runningCapacityEntrySchema.extend({
   limit: z.number(),
   warm: z.number(),
@@ -533,7 +478,6 @@ export const WARM_POOL_NAME_MAX = 256;
 /** why: the configured targets plus the learned kinds, 32 per platform, the pool keeps. */
 const WARM_POOL_ENTRIES_MAX = WARM_POOL_TARGETS_MAX + 64;
 
-/** Why a warm target is short, in the order the first that applies is the one reported. */
 const warmPoolShortSchema = z.enum([
   "disabled",
   "no-driver",
@@ -610,17 +554,11 @@ export const daemonUpdateFields = {
   latestVersion: updateVersionSchema.nullable(),
 };
 
-/**
- * Limits on the catalog's other names and images. A worker's catalog is a claim the gateway
- * parses off the wire, so every string and list in these fields has a bound well above any
- * real host (an SDK ships some 70 device profiles and a few dozen images).
- */
 const CATALOG_NAME_MAX = 256;
 const CATALOG_ALIASES_PER_MODEL_MAX = 32;
 const CATALOG_ALIASED_MODELS_MAX = 4096;
 const CATALOG_IMAGE_FIELD_MAX = 128;
 const CATALOG_IMAGES_MAX = 1024;
-/** `customModels` is a subset of `models`; it takes the bound already on a per-model list. */
 const CATALOG_CUSTOM_MODELS_MAX = CATALOG_ALIASED_MODELS_MAX;
 
 /**
@@ -640,22 +578,14 @@ const catalogImageSchema = z.object({
   abi: z.string().max(CATALOG_IMAGE_FIELD_MAX),
 });
 
-/**
- * ADR 0008 §5: what machine a daemon runs on. Every string and the `tools` list are bounded,
- * because a gateway stores what each worker reports in that worker's view (safety rule 10).
- */
 const MAX_HOST_STRING_LENGTH = 128;
 const MAX_HOST_TOOLS = 32;
 const hostStringSchema = z.string().min(1).max(MAX_HOST_STRING_LENGTH);
 
 export const hostFactsSchema = z.object({
-  /** Operating system product name (`macOS`), or the kernel name where there is none. */
   os: hostStringSchema,
   osVersion: hostStringSchema,
-  /** CPU architecture as Node names it (`arm64`, `x64`). */
   arch: hostStringSchema,
-  /** The platform tools each driver uses, with the version installed. Empty on a gateway, which
-   * runs no drivers. */
   tools: z
     .array(
       z.object({
@@ -668,7 +598,6 @@ export const hostFactsSchema = z.object({
     .max(MAX_HOST_TOOLS),
 });
 
-/** The shape `fitHostFacts` reads: the core's own host facts type and this schema's both fit. */
 interface HostFactsShape {
   readonly arch: string;
   readonly os: string;
@@ -754,18 +683,7 @@ export const platformCatalogSchema = z.object({
   models: z.array(z.string()),
   runtimes: z.array(z.string()),
   defaultRuntime: z.string().optional(),
-  /**
-   * ADR 0008 §1: for each name in `models`, the installed runtimes it pairs with -- every pair
-   * listed here can be leased. An empty list means no installed runtime pairs with that model.
-   * On a gateway this is the union of each connected worker's own list for the model, never
-   * the cross product of fleet models and fleet runtimes.
-   */
   modelRuntimes: z.record(z.string(), z.array(z.string())),
-  /**
-   * ADR 0008 §1: for a name in `models`, the other names a lease request may use for it, in any
-   * letter case -- a device id a driver accepts beside a display name. Only models that have another
-   * name appear. On a gateway it is the union per model of what each worker lists.
-   */
   modelAliases: z
     .record(
       z.string().max(CATALOG_NAME_MAX),
@@ -774,38 +692,14 @@ export const platformCatalogSchema = z.object({
     .refine((aliases) => Object.keys(aliases).length <= CATALOG_ALIASED_MODELS_MAX, {
       message: `modelAliases lists more than ${CATALOG_ALIASED_MODELS_MAX} models`,
     }),
-  /**
-   * ADR 0015 §3: for a name in `models`, its class, when the platform's tools report one. A model
-   * the tools say nothing usable about has no entry. On a gateway it is the union over the
-   * connected workers; when two workers class a model differently, the first worker in id order
-   * wins.
-   */
   modelClasses: z
     .record(z.string().max(CATALOG_NAME_MAX), deviceClassSchema)
     .refine((classes) => Object.keys(classes).length <= CATALOG_ALIASED_MODELS_MAX),
-  /**
-   * ADR 0015 §4: for a class, the model Simlock would create for it on this host -- of the
-   * names on the class's preference list that `models` lists and that are of the class, the
-   * first that pairs with an installed runtime, else the first of them. A class in which no
-   * listed model counts has no entry. On a gateway a class's entry is kept only when every
-   * connected worker reports the same model for it, and that worker lists it itself.
-   */
   classDefaults: z.partialRecord(deviceClassSchema, z.string().max(CATALOG_NAME_MAX)),
-  /**
-   * ADR 0008 §1: every installed image, present only for a platform whose driver has images
-   * (Android). `runtime` is a value from `runtimes`; an image of an ABI the host cannot run
-   * natively is listed too. On a gateway it is the union by runtime, tag, and ABI.
-   */
   images: z.array(catalogImageSchema).max(CATALOG_IMAGES_MAX).optional(),
-  /**
-   * Names from `models` that exist because of something on this machine rather than the
-   * platform's tools -- on Android, a custom profile from Android Studio's `devices.xml`.
-   * Absent when there are none. On a gateway a model is listed when any worker that lists it
-   * marks it custom.
-   */
   customModels: z.array(z.string().max(CATALOG_NAME_MAX)).max(CATALOG_CUSTOM_MODELS_MAX).optional(),
   /**
-   * ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
+   * why: ADR 0005 §21: on a gateway, `models`/`runtimes` are the *union* over the fleet, and these
    * two maps say which workers each entry came from (`{"iPhone 16": ["wrk_a", "wrk_b"]}`).
    * Additive and gateway-only: a worker's own catalog needs no attribution, and a renderer
    * that predates the fleet still reads `models`/`runtimes` unchanged. Kept as annotations
@@ -862,7 +756,7 @@ export const proposalSchema = z.object({
 
 export const cleanupRuleSummarySchema = z.object({ name: z.string() });
 
-/** Mirrors `DriverDevice` (src/core/driver.ts) -- `driverData` stays opaque `unknown` on
+/** why: Mirrors `DriverDevice` (src/core/driver.ts) -- `driverData` stays opaque `unknown` on
  * purpose, exactly as the core treats it. */
 const driverDeviceSchema = z.object({
   deviceId: z.string(),
@@ -962,16 +856,6 @@ export const nukeReportSchema = z.object({
   releasedLeaseIds: z.array(z.string()),
 });
 
-/**
- * Mirrors `EventEnvelope` (src/bus/index.ts) at the envelope level only. `event` stays a plain
- * string and `payload` stays `z.unknown()` rather than redeclaring all ~30 `EventMap` payload
- * shapes here -- see docs/internal/EVENTS.md for the authoritative catalog. This is a deliberate,
- * documented simplification: re-declaring every business event's payload shape a second time,
- * next to `events.md`'s existing documentation requirement, is a lot of near-duplicate surface
- * for a channel this PR does not change the routing of. Tightening this (e.g. a discriminated
- * union keyed on `event`) is left as follow-up work; flagged in the PR description.
- */
-/** The largest magnitude, in ms, a JavaScript `Date` holds. */
 const MAX_DATE_MS = 8.64e15;
 
 export const historyStatusSchema = z.object({
@@ -985,17 +869,13 @@ export const historyStatusSchema = z.object({
 export const EVENT_ID_PATTERN = /^evt_[A-Za-z0-9_-]{1,64}$/;
 
 export const eventEnvelopeSchema = z.object({
-  /** Wire input is a claim (safety.md): a pushed `id` is bounded, not trusted. */
   id: z.string().regex(EVENT_ID_PATTERN),
   seq: z.number(),
-  /** A claim, bounded to the range a JavaScript date holds so the console can render it. */
   timestamp: z.number().min(-MAX_DATE_MS).max(MAX_DATE_MS),
   event: z.string(),
   payload: z.unknown().optional(),
   module: z.string(),
 });
-
-// ---- config.get -----------------------------------------------------------------------------
 
 const platformCapacityOptionsSchema = z.object({
   maxDevices: z.number().optional(),
@@ -1030,19 +910,11 @@ const resourceCapacityConfigSchema = z.object({
   }),
 });
 
-/**
- * Mirrors `CapacityConfig` (src/core/capacity/strategies/index.ts), discriminated on
- * `strategy` exactly as the core type is. Adding a third strategy needs a matching edit here --
- * there is no way around that with a hand-declared contract; it is the same trade-off the ADR
- * accepts for every other core-private shape.
- */
 const capacityConfigSchema = z.discriminatedUnion("strategy", [
   fixedCapacityConfigSchema,
   resourceCapacityConfigSchema,
 ]);
 
-/** Mirrors `Config` (src/core/config.ts) field for field. */
-/** ADR 0015 §4: `ios.defaultModels` and `android.defaultModels`, a list of model names per class. */
 const defaultModelsSchema = z.partialRecord(deviceClassSchema, z.array(z.string().min(1)).min(1));
 
 const proxyAuthSchema = z.object({
@@ -1054,9 +926,6 @@ const proxyAuthSchema = z.object({
 });
 
 export const configSchema = z.object({
-  /** ADR 0005 §1. `config.get` is how a caller learns which mode the daemon it is talking to
-   * runs in without inferring it from behaviour; `status.get`'s `daemon.mode` is the
-   * agent-role answer to the same question. */
   mode: z.enum(["worker", "gateway"]),
   capabilities: z.record(
     capabilityNameSchema,
@@ -1115,7 +984,7 @@ export const configSchema = z.object({
     level: z.enum(["debug", "info", "warn", "error"]),
     rotateBytes: z.number(),
   }),
-  // Optional: a newer gateway parses this from an older worker's `config.get`.
+  // why: Optional: a newer gateway parses this from an older worker's `config.get`.
   eventLog: z
     .object({
       retention: z.number().optional(),
@@ -1154,29 +1023,13 @@ export const configSchema = z.object({
       bootAnimation: z.boolean(),
     }),
   }),
-  /** ADR 0005 §3/§6. `url`/`token`/`label` are the worker's half, `disconnectedRetentionMs`
-   * the gateway's; a daemon carries the whole block whichever mode it runs in, and simply
-   * reads the half that applies (see `Config["gateway"]`). */
   gateway: z.object({
     url: z.string().optional(),
     token: z.string().optional(),
     label: z.string().optional(),
     disconnectedRetentionMs: z.number(),
     execTimeoutMs: z.number(),
-    /** ADR 0005 §29/P2: the forwarded `lease.request`'s own bound. Round 6 review: this was
-     * declared on `Config`, validated by `loadConfig`, and documented in CONFIGURATION.md, but
-     * missing here -- and since this schema is `config.get`'s declared output, zod stripped it,
-     * so an operator inspecting the effective config saw every other gateway key and concluded
-     * this one did not exist. `config.test.ts` now parses a loaded config through this schema
-     * and compares key sets, so the next such omission fails rather than disappears. */
     leaseRequestTimeoutMs: z.number(),
-    /** ADR 0005 §13/Decision 7: which routing policy dispatch uses. Gateway-side, read once at
-     * construction like `capacity.strategy` -- never a per-request choice. The set of names is
-     * re-declared here rather than imported from `src/gateway/routing.ts`'s own registry, the
-     * same way `capacityConfigSchema` above re-declares "fixed"/"resource" instead of importing
-     * `src/core/capacity`'s: this module describes wire shapes and imports no engine (its own
-     * header comment), gateway or worker alike. `"warm-then-free"` is the only policy in v1;
-     * adding a second means adding it to both registries, exactly as a capacity strategy does. */
     routing: z.enum(["warm-then-free"]),
     /**
      * why: `format` and `events` are re-declared, not imported from core; a test checks `format` against core's list. `secret` is optional so a `slack` destination parses.
@@ -1198,8 +1051,6 @@ export const configSchema = z.object({
     minimumThresholdMs: z.number(),
   }),
 });
-
-// ---- tokens -----------------------------------------------------------------------------------
 
 /**
  * `TokenRole` (agent/operator/worker token store roles, src/auth/tokens.ts) is a
@@ -1226,8 +1077,6 @@ export const tokenRecordSchema = z.object({
   workerId: z.string().max(128).optional(),
 });
 
-// ---- modes and worker views (ADR 0005) --------------------------------------------------------
-
 /**
  * Which mode a daemon runs in (ADR 0005 §1). A worker owns devices -- drivers, registry,
  * capacity, leases -- and is what every simlock daemon has been until now, so it is the
@@ -1236,49 +1085,31 @@ export const tokenRecordSchema = z.object({
  */
 export const daemonModeSchema = z.enum(["worker", "gateway"]);
 
-/** Mirrors `ProtocolRange` (protocol.ts). Re-declared rather than imported so this file stays
- * the one place a wire *shape* is written down; `protocol.ts` owns the negotiation logic. */
 const protocolRangeShapeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
-/**
- * ADR 0005 §6: the uplink is the reachability signal. `connected` means the worker's uplink is
- * open and its session negotiated a protocol version; `disconnected` means it closed and the
- * view is the last-known one (kept until `gateway.disconnectedRetentionMs` elapses or an
- * operator removes it); `incompatible` means the uplink is open but `hello` found no
- * overlapping protocol version (§31) -- the view then carries both ranges and nothing else the
- * gateway would have had to ask for over a protocol it cannot speak.
- */
 const workerConnectionStateSchema = z.enum(["connected", "disconnected", "incompatible"]);
-
-// ---- installs in progress (ADR 0010 §3) ---------------------------------------------------
 
 const MAX_LISTED_INSTALLS = 16;
 const MAX_INSTALL_COMPONENT_LENGTH = 64;
 
 /**
- * One component install a daemon has waiting or running. A worker's list reaches the gateway as
+ * why: One component install a daemon has waiting or running. A worker's list reaches the gateway as
  * a claim (safety rule 10), so the bounds cut rather than refuse: an over-long list keeps its
  * first (oldest) 16 entries and an over-long `component` its first 64 characters, and the view
  * stays usable instead of failing its whole refresh over one field.
  */
 const installInProgressSchema = z.object({
   platform: platformSchema,
-  /** As the daemon's driver named it: a version, or a word such as "newest". */
   component: z.string().transform((value) => value.slice(0, MAX_INSTALL_COMPONENT_LENGTH)),
-  /** `waiting` behind another install on its platform, or `downloading`. */
   state: z.enum(["waiting", "downloading"]),
-  /** When the first call for this install arrived. */
   since: z.number(),
-  /** How many calls are joined to it. */
   waiters: z.number().int().nonnegative(),
 });
 
-/** A list of at most `MAX_LISTED_INSTALLS` entries; a longer one is cut to its first ones. */
 function boundedInstalls<Entry extends z.ZodType>(entry: Entry) {
   return z.array(entry).transform((installs) => installs.slice(0, MAX_LISTED_INSTALLS));
 }
 
-/** A worker view's installs: the worker's own `status.get` list, copied (ADR 0010 §7). */
 const workerInstallsSchema = boundedInstalls(installInProgressSchema);
 
 /** `status.get`'s installs. On a gateway each entry names the worker it runs on. */
@@ -1347,50 +1178,33 @@ export function capabilityReason(text: string): string {
 export const workerViewSchema = z.object({
   capabilities: capabilityListSchema.optional(),
   load: workerLoadSchema.optional(),
-  /** The worker's own instance identity (`instance.json`), ADR 0005 §3a: stable across
-   * restarts, unique by construction, opaque to clients. Never a host name or an address. */
   id: z.string(),
-  /** `gateway.label` from the worker's config -- display only, need not be unique, and never
-   * used to route (§13: "label is display-only"). */
   label: z.string().optional(),
   connection: workerConnectionStateSchema,
-  /** ADR 0005 §9: a drained worker keeps its leases and receives no new dispatches. */
   drained: z.boolean(),
-  /** When the gateway last had this worker's uplink open, or last refreshed its view. */
   lastSeenAt: z.number(),
   health: daemonHealthSchema.optional(),
-  /** The worker daemon's own version string, as reported by its `hello` reply. */
   version: z.string().optional(),
-  /** Set only for an `incompatible` worker (§31), naming both ranges so an operator can see
-   * which side to upgrade. */
   protocol: z
     .object({ gateway: protocolRangeShapeSchema, worker: protocolRangeShapeSchema })
     .optional(),
   capacity: statusCapacitySchema.optional(),
-  /** The worker's warm pool as its last `status.get` read it; absent until one was read. */
   warmPool: statusWarmPoolSchema.optional(),
-  /**
-   * The worker's effective `downloads.policy`, read once with `config.get` when the uplink
-   * connects. Display only: routing counts installed runtimes and never reads it, and the
-   * gateway forwards every request with `allowDownload: false` (ADR 0009 §3). Absent for a
-   * worker whose `config.get` the gateway could not read (an incompatible one, or a call that
-   * failed).
-   */
   downloads: z
     .object({
       policy: z.enum(["never", "on-request", "always"]),
-      /** Optional so a gateway on an older build still parses a view. */
+      /** why: Optional so a gateway on an older build still parses a view. */
       timeoutMs: z.number().optional(),
     })
     .optional(),
-  /** A worker whose own cap is lower still refuses a request the gateway accepted; this lets the gateway notice. */
+  /** why: A worker whose own cap is lower still refuses a request the gateway accepted; this lets the gateway notice. */
   lease: z.object({ maxTtlMs: z.number() }).optional(),
   queueDepth: z.number().optional(),
   physicalQueueDepth: z.number().optional(),
   leases: z.array(leaseRecordSchema).optional(),
   devices: z.array(statusDeviceSchema).optional(),
   catalog: z.array(platformCatalogSchema).optional(),
-  /** Cleared on connect, so a just-connected worker has none: it tells a catalog read and found empty from one not yet arrived. */
+  /** why: Cleared on connect, so a just-connected worker has none: it tells a catalog read and found empty from one not yet arrived. */
   catalogReadAt: z.number().optional(),
   host: hostFactsSchema.optional(),
   installs: workerInstallsSchema.optional(),
@@ -1401,7 +1215,6 @@ export const workerViewSchema = z.object({
 });
 
 export const statusLeaseSchema = leaseRecordSchema.extend({
-  /** Which worker holds this lease; absent on a worker's own answer, set by a gateway. */
   workerId: z.string().optional(),
   // why: the part of a gateway lease id after `<workerId>.`, so a relayed event naming the worker's lease can be matched; set only by a gateway's `lease.list`, `lease.get` and `list.get kind=leases`.
   workerLeaseId: z.string().optional(),
