@@ -1958,6 +1958,7 @@ describe("DaemonServer driver rejections", () => {
   it("refuses at compile time to pair an event with another event's payload", () => {
     const rejection: DriverRejection = {
       event: "driver.adb-server-rejected",
+      // @ts-expect-error -- `port` is a number on the wire (docs/internal/EVENTS.md).
       payload: { port: "5038", reason: "occupied" },
       platform: "android",
       reason: "occupied",
