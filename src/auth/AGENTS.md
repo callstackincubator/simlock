@@ -9,30 +9,30 @@ Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-wa
 
 ## Files
 
-| File                                | Role                                                                                                     |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `index.ts`                          | `createAuth`, `Auth`, `AuthError`, `AdminAuthenticationFailedError`                                      |
-| `identity.ts`                       | `Identity`: principal, name, role, via, expiry, ambient, sign-out URL                                    |
-| `strategy.ts`                       | `AuthStrategyDefinition`, `AuthStrategy`, `StrategyAnswer`, `AuthConfig`                                 |
-| `strategies/index.ts`               | The registry: ordered definitions (`token`, then `proxy`)                                                |
-| `strategies/token/index.ts`         | The Simlock token strategy: `Authorization: Bearer slk_…`                                                |
-| `strategies/proxy-jwt/index.ts`     | The proxy strategy: a sign-in proxy's JWT in `http.proxyAuth.header`; owns the `proxyAuth` config schema |
-| `strategies/proxy-jwt/key-cache.ts` | `KeyCache`: the proxy's published keys, on the `Clock`                                                   |
-| `strategies/conformance.test.ts`    | Every registered strategy: `not-mine` without its credential, `via` = name                               |
-| `token-store.ts`                    | `TokenStore`: hashed tokens in the `tokens` table of `state.db`; one read per verify; `tokensOwner`      |
-| `admin-secret.ts`                   | `AdminSecretManager`: per-start secret, `admin.token`                                                    |
-| `hello.ts`                          | `SessionRoleResolver`, `resolveAgentRole`, `AdminAuthenticationFailedError`                              |
-| `tokens.ts`                         | `TokenRole`, `TokenRecord`, `TokenOperations`                                                            |
+| File                                | Role                                                                                                             |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                          | `createAuth`, `Auth`, `AuthError`, `AdminAuthenticationFailedError`                                              |
+| `identity.ts`                       | `Identity`: principal, name, role, via, expiry, ambient, sign-out URL                                            |
+| `strategy.ts`                       | `AuthStrategyDefinition`, `AuthStrategy`, `StrategyAnswer`, `AuthConfig`                                         |
+| `strategies/index.ts`               | The registry: ordered definitions (`token`, then `proxy`)                                                        |
+| `strategies/token/index.ts`         | The Simlock token strategy: `Authorization: Bearer slk_…`                                                        |
+| `strategies/proxy-jwt/index.ts`     | The proxy strategy: a sign-in proxy's JWT in `http.proxyAuth.header`; owns the `proxyAuth` config schema         |
+| `strategies/proxy-jwt/key-cache.ts` | `KeyCache`: the proxy's published keys, on the `Clock`                                                           |
+| `strategies/conformance.test.ts`    | Every registered strategy: `not-mine` without its credential, `via` = name                                       |
+| `token-store.ts`                    | `TokenStore`: hashed tokens in the `tokens` table of `state.db`; one read per verify; `pinWorker`; `tokensOwner` |
+| `admin-secret.ts`                   | `AdminSecretManager`: per-start secret, `admin.token`                                                            |
+| `hello.ts`                          | `SessionRoleResolver`, `resolveAgentRole`, `AdminAuthenticationFailedError`                                      |
+| `tokens.ts`                         | `TokenRole`, `TokenRecord`, `TokenOperations`                                                                    |
 
 ## Auth
 
-| Member                | Does                                                                                                     |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `authenticateRequest` | Asks the enabled strategies in registry order; returns `Identity` or throws `AuthError`                  |
-| `resolveHelloRole`    | No credential → `agent`; operator token or admin secret → `admin`; else `AdminAuthenticationFailedError` |
-| `authenticateUplink`  | None or unknown → `unauthenticated`; not a `worker` token → `forbidden`; else accept with the token id   |
-| `tokens`              | `create`, `list`, `revoke` (both dispatchers); `verify` (the module host, for a local profile)           |
-| `adminSecret`         | `persist`, `remove` (`DaemonServer`)                                                                     |
+| Member                | Does                                                                                                                                                                                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authenticateRequest` | Asks the enabled strategies in registry order; returns `Identity` or throws `AuthError`                                                                                                                                                                   |
+| `resolveHelloRole`    | No credential → `agent`; operator token or admin secret → `admin`; else `AdminAuthenticationFailedError`                                                                                                                                                  |
+| `authenticateUplink`  | None or unknown → `unauthenticated`; not a `worker` token → `forbidden`; claimed worker id empty, or not the one the token is pinned to (an unpinned token pins it now, unless another token holds it) → `worker-mismatch`; else accept with the token id |
+| `tokens`              | `create`, `list`, `revoke` (both dispatchers); `verify` (the module host, for a local profile)                                                                                                                                                            |
+| `adminSecret`         | `persist`, `remove` (`DaemonServer`)                                                                                                                                                                                                                      |
 
 ## Strategies
 
@@ -66,5 +66,6 @@ the `KeySetFetcher` port, which never follows a redirect and caps the body at 64
 ## Facts
 
 - A worker join token is `forbidden` on HTTP and accepted only by `authenticateUplink`.
+- A join token is pinned to the first worker id it is accepted with (`tokens.worker_id`, unique): `pinWorker` is one transaction (`UPDATE OR IGNORE ... WHERE worker_id IS NULL`, then a re-read), so of two first joins at once one wins. Re-pairing is `token revoke` + `token create`; `token.list` shows `workerId`.
 - Every verify reads the `tokens` table, so a `token revoke` takes effect at once. `create` and `revoke` are each one transaction, so two at once never lose one another. `createAuth` takes the daemon's `SqliteDatabase`, never the state module.
 - The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` (0600, atomic) only by `persist`, after the socket claim.

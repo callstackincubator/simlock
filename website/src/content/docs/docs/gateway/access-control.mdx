@@ -15,7 +15,7 @@ This page uses the gateway in its examples. Tokens work the same way on a worker
 | --- | --- | --- |
 | `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status (only its own leases and waiting requests), list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, and run commands on the devices it leases. |
 | `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and component installs. |
-| `worker` | A worker machine joining a gateway. | Open the worker's connection to the gateway, and nothing else. Any other request with it is refused with `403`. |
+| `worker` | A worker machine joining a gateway. | Open one worker's connection to the gateway, and nothing else. The first worker that joins with it is paired with it; another worker with the same token, and any other request with it, is refused with `403`. |
 
 A valid token used for something its role may not do gets `403 FORBIDDEN`. An unknown or revoked token gets `401 UNAUTHENTICATED`.
 
@@ -45,7 +45,7 @@ simlock --gateway token create --role agent --label ci-ios-runner-3
 
 The `secret` is printed once. Simlock keeps only a hash of it, so a lost secret cannot be shown again: make a new token and revoke the old one.
 
-List tokens. The list shows ids, roles and labels, never secrets:
+List tokens. The list shows ids, roles and labels, never secrets. A worker token that a worker has joined with also shows `workerId`, the id of the worker it is paired with:
 
 ```sh
 simlock --gateway token list
@@ -65,7 +65,7 @@ simlock --gateway token revoke tok_5e2b8d1c-4a7f-4c9e-b3d6-0f1a2c8e7b45
 {"revoked":true}
 ```
 
-A revoked token stops working at once, on its next request. Revoking a worker token also closes that worker's connection. Leases made with a revoked agent token stay until their time to live runs out or an operator releases them: the agent can no longer renew or release them. An id that names no token answers `"revoked":false`.
+A revoked token stops working at once, on its next request. Revoking a worker token also closes that worker's connection, and frees the worker to join with a new token. Leases made with a revoked agent token stay until their time to live runs out or an operator releases them: the agent can no longer renew or release them. An id that names no token answers `"revoked":false`.
 
 ## Admin commands on the CLI
 

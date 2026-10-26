@@ -46,9 +46,9 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 **Uplink, gateway side.**
 
 1. `GatewayService.start`: `registry.load()` (drained ids) before the listener opens.
-2. Upgrade auth (`../daemon/main.ts`): unknown token `401`, non-`worker` role `403`. Refusals emit
-   `worker.rejected`, coalesced per reason and claimed id over 1 s.
-3. A new uplink under a live worker id closes and replaces the old link.
+2. Upgrade auth (`../daemon/main.ts`, `authenticateUplink` with the claimed id, cut to `MAX_CLAIMED_FIELD_LENGTH`):
+   unknown token `401`, non-`worker` role or `worker-mismatch` `403`. Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
+3. A new uplink under a live worker id (so with the token pinned to it) closes and replaces the old link.
 4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch →
    view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
@@ -141,8 +141,6 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
   release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`;
   the request waits elsewhere. `worker drain` leaves it to the owner.
-- **A worker's claimed id is never verified against its join token.** Any `worker`-token holder can
-  claim any id and take over its link, view, drain flag and calls. Ids cut to 128 chars.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a

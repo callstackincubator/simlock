@@ -924,11 +924,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   const uplinks = new WebSocketUplinkListenerFactory();
   options.gatewayUplinks?.(uplinks);
   const gatewayService = new GatewayService({
-    // ADR 0005 §4/§25: only a `worker`-role token opens an uplink. A token of another role is
-    // real and simply has no authority here (403); anything else is unauthenticated (401).
-    // C-2: the accepted case names the token's own id, so `token.revoke` can later find and
+    // why: ADR 0005 §4/§25: only a `worker`-role token pinned to the claimed worker id opens an
+    // uplink. The accepted case names the token's own id, so `token.revoke` can later find and
     // close every uplink it authorized (`GatewayService#closeLinksForToken`, wired below).
-    authenticate: (credential) => auth.authenticateUplink(credential),
+    authenticate: (credential, workerId) => auth.authenticateUplink(credential, workerId),
     clock,
     drainStore: new StateDrainStore({ database: state.database, logger: logger.child("gateway") }),
     eventBus,

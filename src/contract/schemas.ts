@@ -1222,6 +1222,8 @@ export const tokenRecordSchema = z.object({
   role: tokenRoleSchema,
   label: z.string().optional(),
   createdAt: z.number(),
+  // why: the uplink cuts a claimed worker id to 128 characters before the token is pinned to it.
+  workerId: z.string().max(128).optional(),
 });
 
 // ---- modes and worker views (ADR 0005) --------------------------------------------------------

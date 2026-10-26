@@ -168,7 +168,7 @@ release and records nothing.
 | --- | --- | --- | --- |
 | `worker.connected` | A worker joined and the gateway can send it requests. | `workerId`, `label`, `version` | Own |
 | `worker.disconnected` | A worker's connection closed. | `workerId`, `label`, `leaseCount` (leases it still held) | Own |
-| `worker.rejected` | A worker was turned away: `unauthenticated` (missing or unknown join token) or `forbidden` (a token whose role is not `worker`). | `reason`, `workerId` and `label` as the worker claimed them, `count` when several identical refusals were folded into one | Own |
+| `worker.rejected` | A worker was turned away: `unauthenticated` (missing or unknown join token), `forbidden` (a token whose role is not `worker`) or `worker-mismatch` (a join token another worker already uses, or a worker that already joined with another token). | `reason`, `workerId` and `label` as the worker claimed them, `count` when several identical refusals were folded into one | Own |
 | `worker.removed` | The gateway forgot a disconnected worker. | `workerId`, `label`, `reason` (`operator`: `simlock worker remove`; `retention`: `gateway.disconnectedRetentionMs` passed) | Own |
 | `worker.drain-started` | `simlock worker drain` stopped new requests going to a worker. | `workerId`, `label` | Own |
 | `worker.drain-ended` | `simlock worker undrain` let requests go to the worker again. | `workerId`, `label` | Own |

@@ -5,6 +5,10 @@
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)
 - **Supersedes:** nothing
+- **Amended:** §4 and requirement 22 by the maintainer's decision on the
+  join-token pin (PR #894): a join token is pinned to the first worker id
+  that uses it, and a mismatch is a third `worker.rejected` reason,
+  `worker-mismatch` (`403`).
 - **Depends on:** [ADR 0004](0004-ttl-first-leases-on-every-transport.md)
 
 > This record is a PRD and an ADR in one file: the first half says what the
@@ -139,7 +143,10 @@ physical machine.
    its token store. The two ways that can fail are different facts and get
    different answers, as everywhere else in the API: a **missing or
    unrecognized token is `401`**, and a **valid token whose role is not
-   `worker` is `403`**. Either way nothing enters the worker registry and
+   `worker` is `403`**. A join token is pinned to the first worker id that
+   uses it: another claimed id, an id another token is pinned to, or no id
+   at all is `403` too, as `worker-mismatch`. Either way nothing enters the
+   worker registry and
    the gateway emits `worker.rejected` (requirement 22), which is the only
    trace an uplink refused at the door leaves.
 5. Over the uplink the **gateway is the protocol client**: it sends `hello`
@@ -445,8 +452,8 @@ drive the device it leased.
     (documented in `EVENTS.md` in the same change).
     `worker.rejected` covers an uplink refused at the door (requirement 4):
     payload `{ reason, workerId?, label?, protocol? }` with `reason` either
-    `unauthenticated` (`401`) or `forbidden` (`403`), everything else
-    optional because a dial that fails authentication proves no identity.
+    `unauthenticated` (`401`), `forbidden` (`403`) or `worker-mismatch`
+    (`403`), everything else optional because a dial that fails authentication proves no identity.
     Without it a refused uplink leaves no trace at all, and "why did that
     machine never appear" is exactly what an operator comes to the event
     stream to answer. `device.exec` deliberately emits **no** event: running

@@ -544,7 +544,7 @@ simlock token revoke <token-id>
 | `create` | `--label <text>` | A name to tell the token apart in `token list`. Must not be empty. | None |
 | `revoke` | `<token-id>` | The ID `token list` shows. Required. | — |
 
-Every subcommand prints one JSON line. `create` prints the secret once; it cannot be shown again.
+Every subcommand prints one JSON line. `create` prints the secret once; it cannot be shown again. `list` prints each token's `id`, `role`, `label` and `createdAt`, and for a worker token a worker has joined with, `workerId`: the id of the worker it is paired with.
 
 ## simlock worker
 

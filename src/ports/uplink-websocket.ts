@@ -255,11 +255,10 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     }
     const outcome = uplinkOutcome(result);
     if (outcome !== "accept") {
-      // 403 for a real token of the wrong role, 401 for one the gateway does not know
-      // (ADR 0005 §25) -- the same distinction the HTTP frontend draws for a `worker` token on
-      // an ordinary `/v1` route, in the opposite direction.
-      if (outcome === "forbidden") respondAndDestroy(socket, 403, "Forbidden");
-      else respondAndDestroy(socket, 401, "Unauthorized");
+      // why: 401 for a token the gateway does not know, 403 for a real token that may not open
+      // this uplink: the wrong role, or pinned to another worker (ADR 0005 §25).
+      if (outcome === "unauthenticated") respondAndDestroy(socket, 401, "Unauthorized");
+      else respondAndDestroy(socket, 403, "Forbidden");
       return;
     }
     // C-2: the token record id that authorized this uplink, carried onto `AcceptedUplink` so a

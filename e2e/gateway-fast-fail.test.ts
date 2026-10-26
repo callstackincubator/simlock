@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
+import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { CliResult, TestEnv } from "./helpers/index.js";
 import type { FakeDriverScript } from "./fake-driver/types.js";
 
@@ -32,17 +32,20 @@ async function startGateway() {
     role: "gateway",
     driver: "none",
   }));
-  const minted = await gateway.cli(["token", "create", "--role", "worker"]);
-  expect(minted.code, minted.stderr).toBe(0);
-  const { secret } = minted.json as { secret: string };
-  const uplink = { token: secret, url: `ws://127.0.0.1:${port}` };
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     gateway,
-    join: (label: string, script: FakeDriverScript, extraConfig: Record<string, unknown> = {}) =>
+    join: async (
+      label: string,
+      script: FakeDriverScript,
+      extraConfig: Record<string, unknown> = {},
+    ) =>
       // Seeded before the daemon starts: a worker reports its catalog as its uplink opens.
       withDaemon({
-        configOverrides: { gateway: { ...uplink, label }, ...extraConfig },
+        configOverrides: {
+          gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
+          ...extraConfig,
+        },
         driverScript: script,
         fakeDriverPlatforms: ["ios"],
       }),

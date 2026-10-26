@@ -161,7 +161,7 @@ simlock --gateway token revoke tok_9c1d4e7a-2b6f-4f3a-8d0e-5a7b3c9e1f24
 {"revoked":true}
 ```
 
-Revoking closes the worker's connection at once. The worker keeps trying to reconnect, and the gateway refuses every try. Its leases keep running on the worker until their time to live runs out, but agents can no longer reach them through the gateway.
+`token list` shows each used join token's `workerId`: the id of the worker it is paired with, as `worker list` shows it. Revoking closes the worker's connection at once. The worker keeps trying to reconnect, and the gateway refuses every try. Its leases keep running on the worker until their time to live runs out, but agents can no longer reach them through the gateway.
 
 <Aside>
 A worker that keeps dialling with a revoked token raises `worker.rejected` events on the gateway, about every 30 seconds. Remove the `gateway` key from the worker's configuration and restart it to stop that.
