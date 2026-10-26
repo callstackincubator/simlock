@@ -16,6 +16,7 @@ export function createWorker(ctx: WorkerContext<StreamModuleConfig>): WorkerModu
   return {
     capability: stream.capabilitySource,
     hooks: { beforeDeviceReclaim: (ended, signal) => stream.leaseEnd.leaseEnded(ended, signal) },
+    leaseRoute: stream.leaseRoute,
     mount: () => (request, identity) => stream.mount.handle(request, identity),
     relayTarget: stream.relayTarget,
   };

@@ -42,6 +42,7 @@ export interface StreamCapabilitySource {
 
 export interface WorkerStream {
   readonly mount: StreamMount;
+  readonly leaseRoute: StreamLeaseHandler;
   readonly relayTarget: StreamRelayTarget;
   readonly leaseEnd: ModuleLeaseEndParticipant;
   readonly capabilitySource: StreamCapabilitySource;
@@ -77,6 +78,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
       read: async () => describeAvailability(await options.screens.screenAvailability()),
     },
     leaseEnd: createStreamLeaseEnd(captures),
+    leaseRoute: createStreamLeaseHandler(service),
     mount: createStreamMount(service),
     relayTarget: createStreamRelayTarget(service),
   };
