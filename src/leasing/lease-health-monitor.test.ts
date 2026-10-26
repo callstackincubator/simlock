@@ -713,4 +713,40 @@ describe("LeaseHealthMonitor", () => {
     await flush();
     expect(makeReadyCalls(harness.driver)).toBe(1);
   });
+
+  it("settle() waits for a tick running when the monitor is disposed, and that tick starts no recovery", async () => {
+    const harness = await createHarness();
+    const { device } = await seedLeased(harness);
+    harness.driver.setManagedReality({
+      devices: [observedDevice(device.driverDeviceId, "stopped")],
+      processes: [],
+    });
+    harness.monitor.start();
+    harness.clock.advance(30_000);
+    await flush();
+    // why: holds tick 2 on its observation so the monitor is disposed while that tick runs.
+    const listManaged = harness.driver.listManaged.bind(harness.driver);
+    let release: () => void = () => undefined;
+    harness.driver.listManaged = async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return listManaged();
+    };
+    harness.clock.advance(30_000);
+    await flush();
+
+    harness.monitor.dispose();
+    let settled = false;
+    const settling = harness.monitor.settle().then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+
+    release();
+    await settling;
+    expect(settled).toBe(true);
+    expect(makeReadyCalls(harness.driver)).toBe(0);
+  });
 });

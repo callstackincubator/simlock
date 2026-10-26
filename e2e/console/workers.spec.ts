@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator, Page, Response } from "@playwright/test";
 
 import { waitFor } from "../helpers/wait.js";
 import {
@@ -823,12 +823,16 @@ test.describe("the workers page", () => {
         const url = new URL(request.url());
         if (url.pathname === "/v1/events") asked.push(url.search);
       });
-      page.on("response", (response) => {
+      const reads: Promise<void>[] = [];
+      const readEvents = (response: Response) => {
         if (new URL(response.url()).pathname !== "/v1/events") return;
-        void response.json().then((body: { events?: (typeof answered)[number][] }) => {
-          answered.push(...(body.events ?? []));
-        });
-      });
+        reads.push(
+          response.json().then((body: { events?: (typeof answered)[number][] }) => {
+            answered.push(...(body.events ?? []));
+          }),
+        );
+      };
+      page.on("response", readEvents);
       // why: a page of older events holds 100, so more than 100 of worker A's own are needed.
       for (let round = 0; round < 25; round += 1) {
         const granted = await fleet.gateway.cli([
@@ -867,6 +871,9 @@ test.describe("the workers page", () => {
       expect(asked.filter((query) => !query.includes(`worker=${encodeURIComponent(idA)}`))).toEqual(
         [],
       );
+      // why: a body still unread when host.dispose() closes the page would reject the test.
+      page.off("response", readEvents);
+      await Promise.all(reads);
       expect(answered.length).toBeGreaterThan(100);
       expect(answered.filter((event) => event.payload?.workerId !== idA)).toEqual([]);
 

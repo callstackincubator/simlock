@@ -45,6 +45,8 @@ export class CleanupReaper {
   readonly #unsubscribe: readonly (() => void)[];
   #followUpRequested = false;
   #running: Promise<readonly Proposal[]> | undefined;
+  /** why: runs a request started (a dry run, a rule-scoped run), which `#running` does not hold. */
+  readonly #requestRuns = new Set<Promise<readonly Proposal[]>>();
   #tickTimer: TimerHandle | undefined;
   #disposed = false;
   // Tracks the previous tick's pressure state so disk.pressure-detected fires
@@ -76,7 +78,13 @@ export class CleanupReaper {
       return this.#scheduleRun();
     }
 
-    return this.#runOnce(rule === undefined ? { dryRun } : { dryRun, rule });
+    const run = this.#runOnce(rule === undefined ? { dryRun } : { dryRun, rule });
+    this.#requestRuns.add(run);
+    const forget = () => {
+      this.#requestRuns.delete(run);
+    };
+    run.then(forget, forget);
+    return run;
   }
 
   dispose(): void {
@@ -91,6 +99,11 @@ export class CleanupReaper {
       this.options.clock.cancel(this.#tickTimer);
       this.#tickTimer = undefined;
     }
+  }
+
+  async settle(): Promise<void> {
+    // why: the run's failure reaches whoever started it; a stop only waits for every run to end.
+    await Promise.allSettled([this.#running, ...this.#requestRuns]);
   }
 
   async #runOnce({ dryRun = false, rule }: CleanupRunOptions = {}): Promise<readonly Proposal[]> {

@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +12,7 @@ import {
 } from "./errors.js";
 
 const TABLE: Readonly<Record<string, unknown>> = ERROR_TABLE;
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 describe("SimlockError", () => {
   it("narrows details by code", () => {
@@ -184,5 +189,29 @@ describe("RELAY_TARGET_MISSING", () => {
         ...entry,
       });
     }
+  });
+});
+
+describe("the website's errors reference", () => {
+  const page = readFileSync(
+    join(REPO_ROOT, "website/src/content/docs/docs/reference/errors.mdx"),
+    "utf8",
+  );
+  const exitCodes = page.split(/^## /m).find((part) => part.startsWith("Exit codes")) ?? "";
+  const rows = [...exitCodes.matchAll(/^\| (\d+) \| ([^|]*) \|/gm)].map((match) => ({
+    exit: Number(match[1]),
+    codes: [...(match[2] ?? "").matchAll(/`([A-Z_]+)`/g)].map((code) => code[1]),
+  }));
+
+  it("lists every error code in exactly one exit-code row, the row of its CLI exit code", () => {
+    expect(rows.find((row) => row.exit === 1)?.codes).toContain("INTERNAL");
+    const misplaced = Object.values(ERROR_TABLE).flatMap(({ code, cliExitCode }) => {
+      const holding = rows.filter((row) => row.codes.includes(code)).map((row) => row.exit);
+      return holding.length === 1 && holding[0] === cliExitCode
+        ? []
+        : [`${code}: exit ${cliExitCode}, listed under ${holding.join(", ") || "no row"}`];
+    });
+
+    expect(misplaced).toEqual([]);
   });
 });

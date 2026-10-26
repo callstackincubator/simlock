@@ -63,7 +63,6 @@ function swVersField(output: string, key: string): string | undefined {
 export class FakeHostInfo implements HostInfo {
   constructor(private readonly system: HostSystem) {}
 
-  // fallow-ignore-next-line unused-class-member -- reached through the HostInfo port by startDaemon.
   read(): Promise<HostSystem> {
     return Promise.resolve(this.system);
   }

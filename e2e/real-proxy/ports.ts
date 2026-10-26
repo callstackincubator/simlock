@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 
-export const LANE_PORTS = [4180, 5556, 4700] as const;
+const LANE_PORTS = [4180, 5556, 4700] as const;
 
 function isFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {

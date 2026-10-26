@@ -61,6 +61,33 @@ function brokenLinks(doc: string): string[] {
   );
 }
 
+function privateMembers(doc: string): string[] {
+  return lines(doc).flatMap((text, index) =>
+    [...text.matchAll(/`#[A-Za-z]\w*/g)].map((match) => `${doc}:${index + 1}: ${match[0]}\``),
+  );
+}
+
+function emptySections(doc: string, text = lines(doc)): string[] {
+  const found: string[] = [];
+  let open: { level: number; line: number; empty: boolean } | undefined;
+  let fenced = false;
+  const close = (level: number) => {
+    if (open !== undefined && open.empty && level <= open.level) {
+      found.push(`${doc}:${open.line}`);
+    }
+  };
+  text.forEach((line, index) => {
+    if (line.startsWith("```")) fenced = !fenced;
+    const heading = fenced ? null : /^(#{2,}) /.exec(line);
+    if (heading !== null) {
+      close(heading[1]!.length);
+      open = { level: heading[1]!.length, line: index + 1, empty: true };
+    } else if (open !== undefined && line.trim() !== "") open.empty = false;
+  });
+  close(2);
+  return found;
+}
+
 describe("module manuals, flow docs and the architecture map", () => {
   it("are found, the leasing manual and the startup flow among them", () => {
     expect(manuals).toContain("src/leasing/AGENTS.md");
@@ -92,6 +119,29 @@ describe("module manuals, flow docs and the architecture map", () => {
 
   it("name only .ts, .tsx, .mjs, .js and .md files, and directories, that exist", () => {
     expect([...manuals, ...flows, MAP].flatMap(missingPaths)).toEqual([]);
+  });
+
+  it("name files and exported names, never a private member", () => {
+    expect(privateMembers("docs/internal/templates/manual.md")).toEqual([
+      "docs/internal/templates/manual.md:12: `#field`",
+    ]);
+    expect([...manuals, ...flows].flatMap(privateMembers)).toEqual([]);
+  });
+
+  it("each manual opens with its Does, Entry and Uses lines", () => {
+    const missing = manuals.flatMap((manual) =>
+      ["Does", "Entry", "Uses"]
+        .filter((key) => !lines(manual).some((text) => text.startsWith(`${key}: `)))
+        .map((key) => `${manual}: ${key}`),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("hold no empty section", () => {
+    const sample = ["## Files", "", "## How it works", "### Steps", "1. Start", "## Rules"];
+    expect(emptySections("sample.md", sample)).toEqual(["sample.md:1", "sample.md:6"]);
+    expect([...manuals, ...flows].flatMap((doc) => emptySections(doc))).toEqual([]);
   });
 
   it("link only to files that exist", () => {

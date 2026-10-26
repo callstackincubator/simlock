@@ -149,7 +149,12 @@ export type ReclaimStrategy = ReclaimResult["strategy"];
  */
 export type DriverEstimate =
   | { readonly operation: "provision" }
-  | { readonly operation: "boot" }
+  | {
+      readonly operation: "boot";
+      /** why: With a `device` a driver may quote that device's own boot path, which it reads asynchronously. */
+      readonly device?: DriverDevice;
+      readonly purpose?: "prepare" | "recover";
+    }
   | { readonly operation: "reclaim"; readonly clean: "standard" | "full" };
 
 export interface DriverCatalogEntry {
@@ -351,6 +356,10 @@ export interface Driver {
   listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]>;
   /** Read-only: must never trigger a runtime / system-image download. */
   listCatalog(): Promise<DriverCatalogEntry>;
+  estimate(
+    estimate: DriverEstimate & { readonly operation: "boot"; readonly device: DriverDevice },
+    spec: DeviceSpec,
+  ): number | Promise<number>;
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number;
   leaseEnvironment(
     device: VirtualDriverDevice | PhysicalDriverDevice,

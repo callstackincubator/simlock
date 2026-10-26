@@ -8,8 +8,8 @@
   // The web console is its own entry: Vite loads ui/index.html, which loads ui/src/main.tsx. The
   // browser lane's specs are Playwright entry points, as the e2e tests are vitest's.
   // vitest.mutate.config.ts is named only by stryker.config.mjs (`pnpm mutate`).
-  // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; two of
-  // them (budget-guard, comment-lint) import from their neighbours (usage, comments).
+  // .agents/scripts/*.mjs are run by node from the hooks, the skills and the merge gate; three of
+  // them (budget-guard, comment-lint, test-lint) import from their neighbours (usage, comments).
   // .dependency-cruiser.cycles.mjs is named only by src/lint-rules.test.ts, which runs depcruise
   // with it (ADR 0027).
   // vendor/screen-capture/scripts/unframe.mjs is a diagnostic a person runs by hand against a
@@ -22,6 +22,10 @@
   // website/ is its own package (its own package.json, lockfile and pnpm root), built by Astro
   // and deployed to GitHub Pages; nothing in the product imports it.
   "ignorePatterns": ["website/**"],
+  // why: tsc's file arguments in the package.json scripts are tsconfig files and the
+  // --tsBuildInfoFile caches under node_modules/.cache/tsc, never code that runs, so none is an
+  // entry point; without this Fallow warns on every run that it skipped the three caches.
+  "ignoreCommandEntries": ["tsc"],
   "entry": [
     "src/cli/main.ts",
     "src/daemon/main.ts",
@@ -80,7 +84,10 @@
     // of that. The two are expected to diverge, not be merged; see fallow's own
     // guidance for code-duplication ("leave it duplicated when the similarity is
     // accidental and likely to diverge").
-    "ignore": ["e2e/fake-driver/fake-driver.ts"]
+    // why: src/drivers/android/profiles/ holds one data table per emulator profile, the hw.*
+    // keys its AVD gets; the tables are meant to look alike, and sharing their common rows
+    // would hide which value each profile sets.
+    "ignore": ["e2e/fake-driver/fake-driver.ts", "src/drivers/android/profiles/**"]
     // Common additions (uncomment to enable):
     // "ignore": [
     //   "**/lib/**",          // for repos that publish transpiled output to lib/
@@ -91,14 +98,19 @@
   },
   "rules": {
     "unused-dependencies": "warn",
-    "stale-suppressions": "error"
+    "stale-suppressions": "error",
+    // why: a suppression is a claim that Fallow cannot see a use; the `-- <reason>` says which
+    // use, so a reader can check it and a stale one can be judged.
+    "require-suppression-reason": "error"
   },
   "health": {
     "thresholdOverrides": [
       {
         "files": [".agents/scripts/*.mjs"],
-        "maxCrap": 100,
-        "reason": "Glue scripts for the delivery pipeline: git and transcript walks, option parsing, a Markdown shape check. They have no coverage pipeline, so CRAP is complexity squared; each is run against real PRs and transcripts when it changes, and none holds product logic."
+        "maxCyclomatic": 12,
+        "maxCognitive": 15,
+        "maxCrap": 156,
+        "reason": "Glue scripts for the delivery pipeline: git and transcript walks, option parsing, a Markdown shape check. Their tests spawn them rather than import them and there is no coverage pipeline, so Fallow counts 0% coverage and CRAP is cyclomatic squared plus cyclomatic. Cyclomatic 12 and cognitive 15 are the real limits; maxCrap 156 is the CRAP of a cyclomatic-12 function at 0% coverage (12 * 12 + 12), so CRAP never fails a function the cyclomatic ceiling passes."
       },
       {
         "files": ["src/agent-device/host/agent-device-supervisor.test.ts"],

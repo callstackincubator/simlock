@@ -31,11 +31,20 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
      test;
    - a `ci:` line: the named test failed in CI; a line asking to merge the
      base branch: merge it and resolve the conflicts.
+   - an `adr: <nnnn> to <status>` line: the feature is merging (delivery
+     rule 10); set that ADR's `**Status:**` line and its row in
+     `docs/internal/adr/README.md` to the status named, and change nothing
+     else.
    - a `stack:` line naming a parent branch: in your worktree, `git merge
 origin/<parent>` into the branch, resolve the conflicts, run the tests
      of the files the resolution touched, commit the merge and push. Never
      rebase, never force-push, never touch another branch: the orchestrator
      carries the merge up the stack with `stack-sync.sh`.
+     Every test command runs in the foreground with `timeout: 600000` set on
+     the Bash call, and nothing is left running: no `run_in_background`, no
+     trailing `&`, no loop that sleeps, no bare `cat > file`. The tool guard
+     refuses each; a background job would hold your report until it ends or
+     hits its 30-minute cap, which stalls the whole delivery.
 3. Run only the commands under "Tests agents run" in `toolchain.md`. Never
    run a check listed under "Checks agents never run", nor a tool behind it,
    from any path: the commit and push hooks run them, and their errors show

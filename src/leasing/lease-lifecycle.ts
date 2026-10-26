@@ -57,7 +57,6 @@ export interface LeaseLifecycleOptions {
 export class LeaseLifecycle {
   constructor(private readonly options: LeaseLifecycleOptions) {}
 
-  // fallow-ignore-next-line unused-class-member -- reached through LeaseAcquisitionCoordinator's leases port.
   async grant(input: {
     readonly deviceId: string;
     readonly ownerId: string;
@@ -125,7 +124,6 @@ export class LeaseLifecycle {
    * The fallback to `defaultMs` is unreachable for a live lease -- it only covers a lease the
    * snapshot no longer has, whose `renewLease` below is about to throw `UnknownLeaseError`.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through LeaseReleaseCoordinator's lifecycle port.
   async renew(leaseId: string, ttlMs?: number): Promise<LeaseRecord> {
     const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
     const effectiveTtlMs = ttlMs ?? current?.ttlMs ?? this.options.ttl.defaultMs;

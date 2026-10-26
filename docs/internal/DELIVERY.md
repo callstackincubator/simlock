@@ -8,17 +8,17 @@ holds its own steps. This page links to them rather than restating them.
 ## The model
 
 GitHub Issues is the spec and the queue. Every issue carries exactly one
-`<kind>:<state>` label, and agents act only on `bug:triage`, `bug:ready`
-and `task:ready`. The body is the spec; a comment changes nothing until a
-spec session folds it in. A reporter's issue is never rewritten. After
-`ready`, state is read from GitHub itself (assignee, linked PR, closed).
+`<kind>:<state>` label, and agents act only on `bug:new` (to triage it,
+nothing more), `bug:ready` and `task:ready`. The body is the spec; a
+comment changes nothing until a spec session folds it in. A reporter's
+issue is never rewritten. After `ready`, state is read from GitHub itself
+(assignee, linked PR, closed).
 Issue `<n>` is built on branch `<kind>/<n>`.
 
 | Label             | Meaning                                                  |
 | ----------------- | -------------------------------------------------------- |
 | `request:new`     | Inbox. Never picked up, body never edited.               |
-| `bug:new`         | Reported. Nobody has looked yet.                         |
-| `bug:triage`      | An agent may reproduce it and write the triage report.   |
+| `bug:new`         | An agent may triage it, and nothing more.                |
 | `bug:needs-info`  | Could not reproduce. Waiting on the reporter.            |
 | `bug:ready`       | An agent may fix it.                                     |
 | `bug:blocked`     | Waiting on the maintainer to clear a blocker.            |
@@ -31,13 +31,14 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 
 ## A bug
 
-1. A bug arrives as `bug:new`. If it sounds real, add `bug:triage`.
-2. `triage-bug` reproduces it as a failing test on `bug/<n>-repro` and
-   posts one report comment (delivery rule 8). If it cannot reproduce, it
-   moves the issue to `bug:needs-info`.
+1. A bug arrives as `bug:new`, and an agent may triage it from there.
+2. `triage-bug` (or `deliver` on a `bug:new` issue) reproduces it as a
+   failing test on `bug/<n>-repro` and posts one report comment (delivery
+   rule 8). The label stays `bug:new`. If it cannot reproduce, it moves the
+   issue to `bug:needs-info`.
 3. You read the report. Agree: add `bug:ready`, which also accepts the
-   shape the report proposes for a gap. Disagree: reply and re-add
-   `bug:triage`.
+   shape the report proposes for a gap. Disagree: reply and run
+   `triage-bug` again; the new report supersedes the old one.
 4. `deliver` builds the fix on `bug/<n>` from the repro branch, reviews it
    and merges it. The triage test becomes the regression test.
 
@@ -117,15 +118,17 @@ What any change includes without its spec asking is listed once, in
 
 - adding a state label removes the previous one;
 - an emptied Technical spec sends a `task:ready` task back to `task:draft`;
-- a reporter's reply moves `bug:needs-info` back to `bug:triage`, and two
+- a reporter's reply moves `bug:needs-info` back to `bug:new`, and two
   silent weeks close it;
-- a closed last sub-issue asks you to close its feature, and a closed
-  feature closes its request;
+- a closed last sub-issue closes its feature as completed (reopen it if a
+  completion condition does not hold), and a completed feature closes its
+  request;
 - a closed PR, or a claim silent for three days, releases the claim;
 - a PR from `<kind>/<n>` must close `#<n>` and nothing else.
 
-Two transitions stay manual on purpose, one click each: `bug:new` →
-`bug:triage` and `bug:triage` → `bug:ready`.
+One transition stays manual on purpose, one click: `bug:new` →
+`bug:ready`, after you read the triage report. Flipping a closed feature's
+ADRs to _Accepted_ (delivery rule 10) is yours too, unless delivery did it.
 
 ## Watching the pipeline
 

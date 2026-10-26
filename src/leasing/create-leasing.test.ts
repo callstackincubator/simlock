@@ -6,6 +6,8 @@ import {
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
+  type DeviceSpec,
+  type DriverEstimate,
   DriverCrashError,
   type VirtualSpec,
   type LeaseProgress,
@@ -983,9 +985,19 @@ describe("createLeasing", () => {
     });
   });
 
-  it("reports only the selected work as it begins", async () => {
+  it("reports only the selected work as it begins, quoting a shut-down device's own prepare-boot figure", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
+    // why: A real driver quotes a persisted-baseline boot below its cold figure; the fake does so only
+    // for an estimate that names the device and the prepare purpose.
+    class DeviceQuotingDriver extends FakeDriver {
+      override estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+        if (estimate.operation === "boot" && estimate.purpose === "prepare") {
+          return estimate.device === undefined ? 99 : 4;
+        }
+        return super.estimate(estimate, spec);
+      }
+    }
+    const driver = new DeviceQuotingDriver({
       availableOsVersions: ["26.5"],
       clock,
       estimateMs: { boot: 20, provision: 10, reclaim: 15 },
@@ -1010,12 +1022,57 @@ describe("createLeasing", () => {
       payload: { deviceId: shutdown.id, initiator: "test" },
     });
     const booted: string[] = [];
-    await harness.engine.request(request, {
-      onProgress: (progress) => booted.push(progress.stage),
+    const bootEtas: (number | undefined)[] = [];
+    const bootedGrant = await harness.engine.request(request, {
+      onProgress: (progress) => {
+        booted.push(progress.stage);
+        bootEtas.push(progress.stage === "booting" ? progress.etaMs : undefined);
+      },
       requesterId: "shutdown",
       ownerId: "shutdown",
     });
     expect(booted).toEqual(["booting"]);
+    expect(bootEtas).toEqual([4]);
+    expect(bootedGrant.timing.estimatedBootMs).toBe(4);
+  });
+
+  it("grants a shut-down device with the cold boot figure when its own boot estimate rejects", async () => {
+    const clock = new FakeClock(1_000);
+    class RejectingDeviceEstimateDriver extends FakeDriver {
+      override estimate(estimate: DriverEstimate, spec: DeviceSpec): number {
+        if (estimate.operation === "boot" && estimate.device !== undefined) {
+          return Promise.reject(new Error("emulator -version failed")) as unknown as number;
+        }
+        return super.estimate(estimate, spec);
+      }
+    }
+    const driver = new RejectingDeviceEstimateDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      estimateMs: { boot: 20, provision: 10, reclaim: 15 },
+      platform: "ios",
+    });
+    const harness = await createHarness({ driver, idleShutdownAfterMs: 0 });
+    const first = await harness.engine.request(request, { requesterId: "a", ownerId: "a" });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    const shutdown = harness.registry.snapshot.devices[0];
+    if (shutdown === undefined) throw new Error("Expected provisioned device");
+    await harness.registry.transitionDevice(shutdown.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: shutdown.id, initiator: "test" },
+    });
+
+    const granted = harness.engine
+      .request(request, { requesterId: "b", ownerId: "b" })
+      .then((grant) => grant.timing.estimatedBootMs);
+    // why: Without the fallback the waiter hangs, so the race turns that hang into a named failure.
+    const outcome = await Promise.race([
+      granted,
+      new Promise<string>((resolve) => setTimeout(() => resolve("still pending"), 1_000)),
+    ]);
+
+    expect(outcome).toBe(20);
   });
 
   it("reports queue insertion without speculative work and isolates callback failures", async () => {
@@ -1440,7 +1497,7 @@ describe("createLeasing RAM budget by mode", () => {
     });
   });
 
-  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; a delete brings it back under", async () => {
+  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; shutting the idle one down brings it back under", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       knownModels: ["iPhone 16", "iPhone 16 Pro"],
@@ -1471,15 +1528,14 @@ describe("createLeasing RAM budget by mode", () => {
       rule: "test",
       target: toShutDown.device.id,
     });
-    expect(before.engine.ramBudget?.usedBytes).toBe(1.5 * gibibyte);
+    expect(before.engine.ramBudget?.usedBytes).toBe(1 * gibibyte);
 
-    // Restarted at 2 GiB slim: the three slim devices use 6 GiB of 5.
     const after = await createHarness({
       driver,
       state: before.state,
       idleShutdownAfterMs: 0,
       limits: roomy,
-      ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 2 * gibibyte },
+      ramBudget: { ...ramBudget, iosSlimBytesPerDevice: 3 * gibibyte },
       totalRamBytes: 9 * gibibyte,
     });
     await after.engine.convergeRunningCapacity();
@@ -1514,8 +1570,6 @@ describe("createLeasing RAM budget by mode", () => {
     expect(reused.device.id).toBe(idle.device.id);
     expect(after.registry.snapshot.leases.map((lease) => lease.deviceId)).toContain(held.device.id);
 
-    // A release lowers nothing; deleting both idle devices brings use to 2 GiB of 5, and a new
-    // device's 3 GiB fits again.
     await after.engine.release(reused.lease.id, "explicit");
     await after.engine.settle();
     expect(after.engine.ramBudget?.overLimit).toBe(true);
@@ -1527,12 +1581,11 @@ describe("createLeasing RAM budget by mode", () => {
       await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
     }
     await after.engine.settle();
-    // why: the pool keeps the kind the reused lease taught it: the one slim device it made takes the 2 GiB the deletes freed.
-    expect(operations(driver, "makeReady")).toBe(boots + 1);
+    expect(operations(driver, "makeReady")).toBe(boots);
     expect(after.engine.ramBudget).toEqual({
       limitBytes: 5 * gibibyte,
       overLimit: false,
-      usedBytes: 4 * gibibyte,
+      usedBytes: 3 * gibibyte,
     });
   });
 });

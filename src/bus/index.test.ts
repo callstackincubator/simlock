@@ -65,6 +65,11 @@ const EVENT_NAMES: Record<EventName, true> = {
   "warm-pool.target-missed": true,
 };
 
+const CATALOGS = ["docs/internal/EVENTS.md", "website/src/content/docs/docs/reference/events.mdx"];
+
+// why: the facts whose past tense does not end in "ed"; a new one is a choice, so it is added here.
+const NOT_ED = new Set(["ready", "stopping", "shutdown"]);
+
 /** The first-column `` `subject.fact` `` of every catalog table row in an EVENTS.md, sorted. */
 function documentedEventNames(markdown: string): string[] {
   return [...markdown.matchAll(/^\| `([a-z-]+\.[a-z-]+)` \|/gm)]
@@ -273,13 +278,13 @@ describe("EventBus", () => {
     expect(bus.replay({ sinceTs: 110 }).map(({ seq }) => seq)).toEqual([3]);
   });
 
-  it.each(["docs/internal/EVENTS.md"])("has exactly the event names %s catalogs", (doc) => {
+  it.each(CATALOGS)("has exactly the event names %s catalogs", (doc) => {
     expect(documentedEventNames(readFileSync(join(REPO_ROOT, doc), "utf8"))).toEqual(
       Object.keys(EVENT_NAMES).sort(),
     );
   });
 
-  it.each(["docs/internal/EVENTS.md"])(
+  it.each(CATALOGS)(
     "lists lease-engine, cleanup-reaper and nuke among the device.deleted initiators in %s",
     (doc) => {
       const markdown = readFileSync(join(REPO_ROOT, doc), "utf8");
@@ -290,6 +295,17 @@ describe("EventBus", () => {
       }
     },
   );
+
+  it("names every event `subject.past-tense-fact`, lowercase and dot-separated", () => {
+    const misshapen = Object.keys(EVENT_NAMES).filter((name) => {
+      const fact = name.split(".")[1]?.split("-").at(-1) ?? "";
+      return (
+        !/^[a-z][a-z-]*\.[a-z][a-z-]*$/.test(name) || !(fact.endsWith("ed") || NOT_ED.has(fact))
+      );
+    });
+
+    expect(misshapen).toEqual([]);
+  });
 
   it("types every event's payload as an object", () => {
     expectTypeOf<EventMap>().toMatchTypeOf<Record<EventName, object>>();

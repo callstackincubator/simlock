@@ -50,7 +50,7 @@ A lease request that needs a new device or a boot does this, in order:
 5. At a running limit, it shuts down an idle booted device to make room.
 6. Otherwise it waits in the queue until a device frees up. With `--no-wait` it fails with `NO_CAPACITY` instead.
 
-A leased device is never shut down or deleted to make room. When the RAM budget is what blocks a request, Simlock does not shut anything down, because a shut-down device still counts against the budget. The request waits until a device is deleted.
+A leased device is never shut down or deleted to make room. When the RAM budget is what blocks a request, Simlock shuts nothing down for it: only a running limit makes it shut down an idle device. The request waits until enough RAM is free, for example when an idle device shuts down on its own or a device is deleted.
 
 ## Size by the machine: the `resource` strategy
 
@@ -69,7 +69,7 @@ A leased device is never shut down or deleted to make room. When the RAM budget 
 
 The defaults are computed from the machine, not from your other settings. If you raise `ios.maxDevices` and leave `ios.maxRunning` out, the running limit stays at the machine's default. Set the device, platform running and global running limits together.
 
-The RAM budget is the machine's total RAM minus 4 GiB kept for macOS or Linux. Every device that exists counts, booted or shut down, at its platform's size. Simlock refuses to create a device that would push the total over the budget. It does not measure the RAM a device really uses.
+The RAM budget is the machine's total RAM minus 4 GiB kept for macOS or Linux. Every device that exists and is not shut down counts at its platform's size; a shut-down device counts nothing against the budget, though it still counts against the device limit. Simlock refuses to create a device that would push the total over the budget. It does not measure the RAM a device really uses.
 
 This config lets an Apple silicon Mac run eight simulators and two emulators, ten at a time:
 
@@ -149,8 +149,8 @@ To fit more slim simulators in the RAM budget, give them a smaller size:
 
 - A device counts at the full size until it has booted, because a slim device boots full first. Creating any device needs room for the full size.
 - After it boots, a device counts by the mode it has. A slim request that got a full device counts as full.
-- Booting a shut-down slim device also needs room for the full size. If there is none, it stays shut down and the request waits.
-- If you restart with larger sizes than the devices were created under, the budget can show `(over limit)`. Until a device is deleted, no new device is created.
+- Booting a shut-down device, slim or full, needs room for its full size, since a shut-down device holds none. If there is none, it stays shut down and the request waits.
+- If you restart with larger sizes than the devices were created under, the budget can show `(over limit)`. Until enough RAM is free, no new device is created and no shut-down device boots if its full size does not fit.
 
 ## Keep devices booted: the warm pool
 

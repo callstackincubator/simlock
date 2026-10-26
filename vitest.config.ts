@@ -21,6 +21,10 @@ export default defineConfig({
           // why: the timing files measure throughput and latency of GiB transfers: they run one
           // at a time (`pnpm test:timing`) so another file's load cannot move a number.
           exclude: ["**/node_modules/**", "src/**/*.timing.test.ts"],
+          // why: the script tests under src/ spawn node, git and a fake gh per case; under a full
+          // parallel run the default five seconds times three of them out (lint-rules, claim,
+          // mutate) while each passes alone in under a second. A hang still fails within 20 s.
+          testTimeout: 20_000,
         },
       },
       {

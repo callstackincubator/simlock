@@ -126,6 +126,7 @@ export class AgentDeviceHost {
     return identity === undefined ? null : { tenantId: identity.principal };
   }
 
+  // fallow-ignore-next-line unused-class-member -- RoutedHostLink calls it as this.hosts[role].forward, a computed key Fallow does not follow.
   async forward(request: Request, identity: Identity): Promise<Response> {
     const status = await this.status();
     if (status.state === "unavailable") throw new Error(status.reason);

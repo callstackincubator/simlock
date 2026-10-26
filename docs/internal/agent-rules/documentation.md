@@ -75,5 +75,9 @@ grounds for rejecting a change even if the prose reads well.
    prerequisites and install steps. A change that adds, removes or alters
    any of it updates every website page that describes it — the guide
    that walks through it and the reference table that lists it — and adds
-   a page to the sidebar when a new task needs one. Nothing generates or
-   checks these pages: the author and the reviews keep them true.
+   a page to the sidebar when a new task needs one. Nothing generates
+   these pages: the author and the reviews keep them true. The push hook
+   and CI run `.agents/scripts/docs-surface-check.mjs`, which fails a
+   change to the surface files its header lists that changes no page under
+   `website/src/content/docs/`, unless a commit carries the trailer
+   `Docs: none (<reason>)`.

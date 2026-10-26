@@ -18,8 +18,18 @@ export function invalidValue(path: string, expected: string): ConfigError {
   return new ConfigError(`Invalid config value for "${path}": expected ${expected}`);
 }
 
+// why: a validator is a closure, so the keys it accepts are invisible from outside; the
+// configuration reference test walks them from here to hold the website's key list to them.
+const SHAPES = new WeakMap<Validator, Readonly<Record<string, Validator>>>();
+
+export function validatorShape(
+  validator: Validator,
+): Readonly<Record<string, Validator>> | undefined {
+  return SHAPES.get(validator);
+}
+
 export function objectValidator(shape: Record<string, Validator>): Validator {
-  return (value, path, warn) => {
+  const validate: Validator = (value, path, warn) => {
     const object = requireObject(value, path);
     const result: Record<string, unknown> = {};
 
@@ -37,6 +47,8 @@ export function objectValidator(shape: Record<string, Validator>): Validator {
 
     return result;
   };
+  SHAPES.set(validate, shape);
+  return validate;
 }
 
 export function requireObject(value: unknown, path: string): Record<string, unknown> {

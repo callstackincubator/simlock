@@ -62,6 +62,7 @@ import {
   deviceModeWiring,
   modelPreferenceWiring,
   discoverDrivers,
+  logAndroidDiagnostic,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -1522,6 +1523,242 @@ describe("startDaemon HTTP gateway startup readiness", () => {
   });
 });
 
+describe("startDaemon stop with a cleanup run in flight (#985)", () => {
+  const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it.each([
+    { name: "the run daemon.started began", request: undefined },
+    { name: "a dry run a client asked for", request: { dryRun: true } },
+    { name: "a rule-scoped run a client asked for", request: { rule: "idle-destroy" } },
+  ])(
+    "logs no warning or error once a stop lands while $name is still in flight",
+    async ({ request }) => {
+      // why: holds a cleanup run on its disk read, so the stop lands while the run is in flight,
+      // as an `http-start-failed` stop right after a start does.
+      class HeldDiskFree extends MemoryFilesystem {
+        readonly held: (() => void)[] = [];
+        override async diskFree(path: string): Promise<number> {
+          await new Promise<void>((resolve) => this.held.push(resolve));
+          return super.diskFree(path);
+        }
+      }
+      const filesystem = new HeldDiskFree();
+      const { daemon, sink } = await start({ filesystem });
+      await vi.waitFor(() => expect(filesystem.held).toHaveLength(1));
+      if (request !== undefined) {
+        // why: the run daemon.started began ends first, so the client's request is the only one held.
+        for (const release of filesystem.held.splice(0)) release();
+        for (let turn = 0; turn < 50; turn += 1) await turnOfTheEventLoop();
+        void daemon
+          .dispatch("cleanup.run", request, {
+            manageEventSubscription: () => undefined,
+            via: "socket",
+            principal: "admin",
+            role: "admin",
+          })
+          .catch(() => undefined);
+        await vi.waitFor(() => expect(filesystem.held).toHaveLength(1));
+      }
+
+      // why: the stop must wait for the held run, so the read is released only once the stop has
+      // either ended (a stop that did not wait has closed the state database by then) or sat
+      // pending through many event-loop turns. Turns, not milliseconds: a loaded machine runs the
+      // same turns, only slower.
+      const stopped = daemon.stop("http-start-failed");
+      let stopEnded = false;
+      void stopped.then(() => {
+        stopEnded = true;
+      });
+      for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+      for (const release of filesystem.held.splice(0)) release();
+      await stopped;
+      // why: a run that outlived the stop surfaces its failure a few turns after its read returns.
+      for (let turn = 0; turn < 50; turn += 1) await turnOfTheEventLoop();
+
+      const stopping = sink.records.findIndex((record) => record.message === "Daemon stopping");
+      expect(stopping).toBeGreaterThanOrEqual(0);
+      expect(
+        sink.records
+          .slice(stopping)
+          .filter((record) => record.level === "warn" || record.level === "error")
+          .map(({ message, module, fields }) => ({ message, module, fields })),
+      ).toEqual([]);
+    },
+  );
+
+  it("ends the device deletion a cleanup run has in flight before the driver is disposed", async () => {
+    // why: records the order of the driver's calls, and holds the deletion the cleanup run proposes mid-call.
+    class HeldDestroyDriver extends FakeDriver {
+      readonly order: string[] = [];
+      readonly held: (() => void)[] = [];
+      override async destroy(device: Parameters<FakeDriver["destroy"]>[0]): Promise<void> {
+        this.order.push("destroy started");
+        await new Promise<void>((resolve) => this.held.push(resolve));
+        await super.destroy(device);
+        this.order.push("destroy finished");
+      }
+      async dispose(): Promise<void> {
+        this.order.push("dispose");
+      }
+    }
+    const clock = new FakeClock(1_000);
+    const driver = new HeldDestroyDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon } = await start({ clock, drivers: [driver] });
+    const agent = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent",
+      role: "agent",
+    } as const;
+    const request = {
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+      requesterId: "agent-1",
+    };
+    const grant = (await daemon.dispatch("lease.request", request, agent)) as {
+      readonly lease: { readonly id: string };
+    };
+    await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    // why: the idle rules shut a released device down after 10 minutes and delete it after 60; each tick is the reaper's 60 s timer.
+    for (let minute = 0; minute < 70 && driver.held.length === 0; minute += 1) {
+      clock.advance(60_000);
+      for (let turn = 0; turn < 20; turn += 1) await turnOfTheEventLoop();
+    }
+    expect(driver.held).toHaveLength(1);
+
+    const stopped = daemon.stop("test-stop");
+    let stopEnded = false;
+    void stopped.then(() => {
+      stopEnded = true;
+    });
+    for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+    expect(driver.order).toEqual(["destroy started"]);
+    for (const release of driver.held.splice(0)) release();
+    await stopped;
+
+    expect(driver.order).toEqual(["destroy started", "destroy finished", "dispose"]);
+  });
+});
+
+describe("startDaemon stop with a health recovery in flight (#1000)", () => {
+  const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const turns = async (count: number) => {
+    for (let turn = 0; turn < count; turn += 1) await turnOfTheEventLoop();
+  };
+  const recovered = ["recover started", "recover finished", "dispose"];
+
+  it.each([
+    { name: "started before the stop", startsDuringStop: false, accepted: [recovered] },
+    // why: a stop may either wait for this recovery or keep it from starting; it may not leave it running.
+    {
+      name: "due while the stop waits for a cleanup run",
+      startsDuringStop: true,
+      accepted: [recovered, ["dispose"]],
+    },
+  ])(
+    "leaves no recovery reboot $name running once the drivers are disposed",
+    async ({ startsDuringStop, accepted }) => {
+      // why: records the order of the driver's recovery reboot and disposal, and holds the reboot mid-call.
+      class HeldRecoveryDriver extends FakeDriver {
+        readonly order: string[] = [];
+        readonly held: (() => void)[] = [];
+        override async makeReady(
+          device: Parameters<FakeDriver["makeReady"]>[0],
+          options: Parameters<FakeDriver["makeReady"]>[1],
+        ): ReturnType<FakeDriver["makeReady"]> {
+          if (options.purpose !== "recover") return super.makeReady(device, options);
+          this.order.push("recover started");
+          await new Promise<void>((resolve) => this.held.push(resolve));
+          const ready = await super.makeReady(device, options);
+          this.order.push("recover finished");
+          return ready;
+        }
+        async dispose(): Promise<void> {
+          this.order.push("dispose");
+        }
+      }
+      // why: holds a cleanup run on its disk read once asked to, so the stop waits on it.
+      class HeldDiskFree extends MemoryFilesystem {
+        holding = false;
+        readonly held: (() => void)[] = [];
+        override async diskFree(path: string): Promise<number> {
+          if (this.holding) await new Promise<void>((resolve) => this.held.push(resolve));
+          return super.diskFree(path);
+        }
+      }
+      const clock = new FakeClock(1_000);
+      const driver = new HeldRecoveryDriver({
+        availableOsVersions: ["26.5"],
+        clock,
+        platform: "ios",
+      });
+      const filesystem = new HeldDiskFree();
+      const { daemon } = await start({ clock, drivers: [driver], filesystem });
+      const agent = {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      } as const;
+      await daemon.dispatch(
+        "lease.request",
+        { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId: "agent-1" },
+        agent,
+      );
+      // why: the leased simulator dies outside simlock; the monitor recovers it on its second stopped reading, one 30 s tick apart.
+      const { devices } = await driver.listManaged();
+      expect(devices).toHaveLength(1);
+      driver.setManagedReality({
+        devices: devices.map((device) => ({ ...device, runState: "stopped" as const })),
+        processes: [],
+      });
+      clock.advance(30_000);
+      await turns(20);
+
+      if (startsDuringStop) {
+        filesystem.holding = true;
+        void daemon
+          .dispatch(
+            "cleanup.run",
+            { dryRun: true },
+            {
+              manageEventSubscription: () => undefined,
+              via: "socket",
+              principal: "admin",
+              role: "admin",
+            },
+          )
+          .catch(() => undefined);
+        await vi.waitFor(() => expect(filesystem.held).toHaveLength(1));
+      } else {
+        clock.advance(30_000);
+        await vi.waitFor(() => expect(driver.order).toEqual(["recover started"]));
+      }
+
+      const stopped = daemon.stop("test-stop");
+      let stopEnded = false;
+      void stopped.then(() => {
+        stopEnded = true;
+      });
+      if (startsDuringStop) {
+        await turns(20);
+        expect(stopEnded).toBe(false);
+        clock.advance(30_000);
+        await turns(50);
+        for (const release of filesystem.held.splice(0)) release();
+      }
+      for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+      for (const release of driver.held.splice(0)) release();
+      await stopped;
+      // why: a reboot that outlived the stop records its end a few turns after it is released.
+      await turns(50);
+
+      expect(accepted).toContainEqual(driver.order);
+    },
+  );
+});
+
 describe("startDaemon stop with a warm target", () => {
   it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
@@ -1833,6 +2070,58 @@ describe("startDaemon HTTP gateway bind failure", () => {
       expect(startedIndex).toBeLessThan(stoppingIndex);
     }
   });
+
+  // why: the bind is held until convergence has had every chance to finish, then fails, so a start that does not wait for the listener (either role's convergence) would already have logged "Daemon started".
+  it.each(["worker", "gateway"] as const)(
+    "fails a %s start whose HTTP listener cannot bind before it reports running, stopping with http-start-failed",
+    async (role) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-late-bind-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const sink = new MemoryLogSink();
+      const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+      const port = await freeLoopbackPort();
+      const occupier = createServer();
+      await new Promise<void>((resolve) => occupier.listen(port, "127.0.0.1", resolve));
+      const hold = holdTcpListen();
+      try {
+        const settled = startDaemon({
+          clock,
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+          dataDirectory: directory,
+          drivers: [new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" })],
+          deviceDataTables: fakeDeviceDataTables,
+          filesystem: new MemoryFilesystem(),
+          hostLoadProbe: null,
+          logger,
+          role,
+          version: "1.2.3",
+        } as StartDaemonOptions).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await hold.bindRequested;
+        // why: yields whole event-loop turns, not wall time: convergence is in-memory, so a start that does not wait for the bind logs "Daemon started" within them.
+        for (
+          let turn = 0;
+          turn < 200 && !sink.records.some((record) => record.message === "Daemon started");
+          turn += 1
+        ) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        hold.release();
+        expect(String(await settled)).toMatch(/EADDRINUSE|address already in use/i);
+      } finally {
+        hold.restore();
+        await new Promise((resolve) => occupier.close(resolve));
+      }
+
+      const messages = sink.records.map((record) => record.message);
+      expect(messages).not.toContain("Daemon started");
+      const stopping = sink.records.find((record) => record.message === "Daemon stopping");
+      expect(stopping?.fields?.reason).toBe("http-start-failed");
+    },
+  );
 });
 
 async function pollUntilListening(port: number, secret: string): Promise<unknown> {
@@ -2182,6 +2471,67 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     },
   );
 
+  it("logs a warning when the Android driver reports that devices.xml could not be read", async () => {
+    const filesystem = await androidSdk();
+    await filesystem.mkdirp(SIMLOCK_HOME);
+    await filesystem.writeFileAtomic(
+      join(SIMLOCK_HOME, "adb-server.json"),
+      JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+    );
+    const previousUserHome = process.env.ANDROID_USER_HOME;
+    process.env.ANDROID_USER_HOME = "/android-user";
+    try {
+      await filesystem.mkdirp("/android-user");
+      await filesystem.writeFileAtomic("/android-user/devices.xml", "not xml at all {{{");
+      const sink = new MemoryLogSink();
+      const processRunner = new ScriptedProcessRunner([
+        {
+          match: {
+            args: ["list", "device"],
+            command: "/android-sdk/cmdline-tools/latest/bin/avdmanager",
+          },
+          result: { code: 0, stderr: "", stdout: "Available devices:\n" },
+        },
+      ]);
+
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        logger: new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }),
+        processRunner,
+      });
+      await drivers.find((driver) => driver.platform === "android")?.listCatalog();
+
+      expect(sink.records.filter((record) => record.level === "warn")).toContainEqual(
+        expect.objectContaining({
+          fields: expect.objectContaining({ path: "/android-user/devices.xml" }),
+          message: "Android device profile source could not be read",
+        }),
+      );
+    } finally {
+      if (previousUserHome === undefined) {
+        delete process.env.ANDROID_USER_HOME;
+      } else {
+        process.env.ANDROID_USER_HOME = previousUserHome;
+      }
+    }
+  });
+
+  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+    const sink = new MemoryLogSink();
+
+    logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
+      avdName: "simlock_one",
+      kind: "snapshot-cold-boot",
+      readyAfterMs: 30_000,
+    });
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        level: "warn",
+      }),
+    ]);
+  });
+
   /** The minimum layout `discoverSdk` accepts, in memory. */
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
@@ -2203,7 +2553,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "processRunner">
+      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
     > = {},
   ) {
     return discoverDrivers({
@@ -2216,11 +2566,13 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       hostPlatform: "linux",
       idGenerator: new CryptoIdGenerator(),
       instanceId: INSTANCE_ID,
-      logger: new JsonLinesLogger({
-        clock: new FakeClock(),
-        level: "debug",
-        sink: new MemoryLogSink(),
-      }),
+      logger:
+        overrides.logger ??
+        new JsonLinesLogger({
+          clock: new FakeClock(),
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
       processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
       processSupervisor: new FakeProcessSupervisor(livePids),
       simlockHome: SIMLOCK_HOME,
@@ -2778,6 +3130,52 @@ function delayTcpListen(delayMs: number): () => void {
   } as typeof Server.prototype.listen;
   return () => {
     Server.prototype.listen = original;
+  };
+}
+
+/** why: holds every TCP `listen()` call (a numeric or options-object port, as HTTP servers use) until
+ * `release()`, then runs it for real; a Unix-socket `listen(path, callback)` call (a string first
+ * argument) passes straight through. `bindRequested` settles when the first TCP bind is asked for.
+ * Holds the HTTP gateway's own bind open without touching `src/http`: `@hono/node-server`'s
+ * `serve()` ultimately calls `http.Server#listen`, which is `net.Server`'s own method. Always
+ * call `restore`, even on failure. */
+function holdTcpListen(): {
+  readonly bindRequested: Promise<void>;
+  readonly release: () => void;
+  readonly restore: () => void;
+} {
+  const original = Server.prototype.listen;
+  type ListenFn = (...callArgs: unknown[]) => Server;
+  const held: Array<() => void> = [];
+  let released = false;
+  let requested: () => void = () => undefined;
+  const bindRequested = new Promise<void>((resolve) => {
+    requested = resolve;
+  });
+  Server.prototype.listen = function patchedListen(this: Server, ...args: unknown[]) {
+    const isTcp =
+      typeof args[0] === "number" ||
+      (typeof args[0] === "object" && args[0] !== null && !("path" in (args[0] as object)));
+    if (!isTcp) {
+      return (original as ListenFn).apply(this, args);
+    }
+    const run = (): void => {
+      (original as ListenFn).apply(this, args);
+    };
+    if (released) run();
+    else held.push(run);
+    requested();
+    return this;
+  } as typeof Server.prototype.listen;
+  return {
+    bindRequested,
+    release: () => {
+      released = true;
+      for (const run of held.splice(0)) run();
+    },
+    restore: () => {
+      Server.prototype.listen = original;
+    },
   };
 }
 

@@ -352,7 +352,7 @@ simlock daemon uninstall [--json]
 
 | Subcommand | What it does |
 | --- | --- |
-| `start` | Start the daemon if it is not running and print `Daemon running` with the console address. `simlock --gateway daemon start` creates the gateway on first run. |
+| `start` | Start the daemon if it is not running, wait until it has finished starting (up to 90 seconds), and print `Daemon running` with the console address. A start that fails (for example, the HTTP port is taken) exits 1 with `DAEMON_STARTUP_FAILED` and the daemon's own error; a daemon still starting after the wait is left running and reported as such. `simlock --gateway daemon start` creates the gateway on first run. |
 | `stop` | Ask the daemon to stop and print `Daemon stopping`. Needs the admin role. Never starts a daemon. |
 | `status` | Print the daemon's status, or `Daemon stopped` when none is running, then on macOS and Linux one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |

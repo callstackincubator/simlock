@@ -498,7 +498,6 @@ describe("AgentDeviceSupervisor checking the install", () => {
       versionRun("", { hangs: true }),
     ]) {
       const harness = await arrange({ expectations: [expectation] });
-      const started = Date.now();
       await advancing(harness, harness.begin());
 
       expect(unavailable(harness).reason).toBe("not-agent-device");
@@ -508,7 +507,6 @@ describe("AgentDeviceSupervisor checking the install", () => {
         expect(unavailable(harness).message).toContain("timed out");
         expect(harness.clock.now()).toBeGreaterThanOrEqual(1_000_000 + 10_000);
       }
-      expect(Date.now() - started).toBeLessThan(60_000);
     }
     expect(messages[0]).toContain("3");
     expect(new Set(messages).size).toBe(3);

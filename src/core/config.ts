@@ -1063,7 +1063,7 @@ const LEASE_IDENTITIES: readonly LeaseIdentity[] = ["reusable", "fresh"];
  * The `capacity.config` validator is the selected strategy's own, so a strategy
  * owns its options end to end and nothing here has to know their shape.
  */
-function configValidators(
+export function configValidators(
   strategy: CapacityStrategyName,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],

@@ -27,7 +27,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [start
 
 ## The update hold
 
-`holdForUpdate()` (on the `Leasing` handle, typed `UpdateHold`) closes admission and refuses every request not provisioning right now, whatever its state (`new`, queued, re-queued, or retrying after a failed provision), with `DaemonUpdatingError` (`DAEMON_UPDATING`, `lease.rejected` reason `updating`); `releaseUpdateHold()` reopens it. It is apart from `beginMaintenance` so the warm pool and reclaim go on: nuke stops them, an update does not. Renew and release never go through admission, so held leases work as usual. A request already provisioning when the hold begins is granted; the check is `#refuseUnderHold`, before every provision starts.
+`holdForUpdate()` (on the `Leasing` handle, typed `UpdateHold`) closes admission and refuses every request not provisioning right now, whatever its state (`new`, queued, re-queued, or retrying after a failed provision), with `DaemonUpdatingError` (`DAEMON_UPDATING`, `lease.rejected` reason `updating`); `releaseUpdateHold()` reopens it. It is apart from `beginMaintenance` so the warm pool and reclaim go on: nuke stops them, an update does not. Renew and release never go through admission, so held leases work as usual. A request already provisioning when the hold begins is granted; the check runs in `lease-acquisition-coordinator.ts` before every provision starts.
 
 ## How it works
 

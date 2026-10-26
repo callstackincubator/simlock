@@ -5,16 +5,20 @@ name: Issue state
 # - one <kind>:<state> label per issue (adding the next label drops the old);
 # - a task:ready task whose Technical spec is emptied goes back to task:draft
 #   (the spec session sets task:ready; Depends on is the deliver skill's order);
-# - a reporter's reply moves bug:needs-info back to bug:triage, reopening the
+# - a task that gets task:ready and fails .agents/scripts/spec-lint.mjs goes back to task:draft,
+#   with a comment listing the blocking lines;
+# - a reporter's reply moves bug:needs-info back to bug:new, reopening the
 #   issue if the stale job closed it (agents post under a maintainer's
 #   account, so comments carrying the agent footer from rule 12 do not count);
-# - a feature whose last sub-issue closed gets a note to check completion
-#   conditions and close;
-# - a feature closed as completed closes the request it came from;
+# - a feature whose last sub-issue closed is closed as completed, and so is
+#   the request it came from;
+# - a feature a person closes as completed closes the request it came from;
 # - a PR closed without merge releases the claim on the issue it would close;
 # - a claim with no activity for three days is released;
 # - bug:needs-info with no activity for two weeks closes as not planned;
-# - a PR from a <kind>/<n> branch must close issue <n> and no other;
+# - a PR from a <kind>/<n> branch must close issue <n> and no other; a branch starting with a
+#   kind prefix is exactly <kind>/<n> (or an ADR's feature/<n>-adr...), and a PR closing a task
+#   or a bug comes from that issue's <kind>/<n>;
 # - a PR body passes .agents/scripts/pr-body-check.mjs: warnings while it is a draft, a failed
 #   check once it is ready.
 # Actions taken with the workflow token do not trigger this workflow again,
@@ -97,6 +101,55 @@ jobs:
             });
             core.info(`#${issue_number}: task:ready -> task:draft`);
 
+  task-ready-lint:
+    name: Demote a task:ready task whose spec fails the lint
+    if: >-
+      github.event_name == 'issues' && github.event.action == 'labeled' &&
+      github.event.label.name == 'task:ready'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # why: the lint reads each path:line at the commit the body names, which may be any
+          # commit of main.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Lint the body, and demote it when a line blocks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          CLAIMED: ${{ join(github.event.issue.assignees.*.login, ',') }}
+        run: |
+          status=0
+          node .agents/scripts/spec-lint.mjs "$ISSUE" > lint.txt || status=$?
+          cat lint.txt
+          # why: exit 2 is a usage error or a missing issue, not a failed spec; it fails the job
+          # instead of moving the label.
+          if [ "$status" -ne 1 ]; then exit "$status"; fi
+          if [ -n "$CLAIMED" ]; then
+            echo "#$ISSUE fails the spec lint but is claimed by $CLAIMED; leaving it"
+            exit 0
+          fi
+          {
+            echo 'Back to `task:draft`: `.agents/scripts/spec-lint.mjs` found blocking lines. Fix them in the body, then set `task:ready` again.'
+            echo
+            echo '```'
+            grep '^B ' lint.txt
+            echo '```'
+          } > comment.md
+          gh issue edit "$ISSUE" --add-label task:draft --remove-label task:ready
+          gh issue comment "$ISSUE" --body-file comment.md
+          echo "#$ISSUE: task:ready -> task:draft"
+
   needs-info-reply:
     name: Reporter replied on bug:needs-info
     if: >-
@@ -118,12 +171,12 @@ jobs:
               await github.rest.issues.update({ ...context.repo, issue_number, state: "open" });
               core.info(`#${issue_number}: reopened`);
             }
-            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:triage"] });
+            await github.rest.issues.addLabels({ ...context.repo, issue_number, labels: ["bug:new"] });
             await github.rest.issues.removeLabel({ ...context.repo, issue_number, name: "bug:needs-info" });
-            core.info(`#${issue_number}: bug:needs-info -> bug:triage`);
+            core.info(`#${issue_number}: bug:needs-info -> bug:new`);
 
   feature-complete:
-    name: Last sub-issue closed
+    name: Last sub-issue closed, close its feature and request
     if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-24.04
     permissions:
@@ -136,7 +189,7 @@ jobs:
             const { repository } = await github.graphql(`
               query($owner:String!,$repo:String!,$number:Int!){
                 repository(owner:$owner,name:$repo){ issue(number:$number){
-                  parent{ number state labels(first:10){nodes{name}} subIssuesSummary{ total completed } }
+                  parent{ number state body labels(first:10){nodes{name}} subIssuesSummary{ total completed } }
                 }}}`, { ...context.repo, number: context.payload.issue.number });
             const parent = repository.issue.parent;
             if (!parent || parent.state !== "OPEN") return;
@@ -145,10 +198,29 @@ jobs:
             if (completed < total) return;
             await github.rest.issues.createComment({
               ...context.repo, issue_number: parent.number,
-              body: `All ${total} sub-issues are closed. If the completion conditions hold on \`main\`, close this feature and flip its ADRs to *Accepted*.`,
+              body: `Closing: all ${total} sub-issues are closed. The PR that closed the last one walks the completion conditions (delivery rule 9); reopen this if one does not hold on \`main\`. Flip its ADRs to *Accepted* if delivery has not.`,
             });
-            core.info(`#${parent.number}: all sub-issues closed`);
+            await github.rest.issues.update({
+              ...context.repo, issue_number: parent.number, state: "closed", state_reason: "completed",
+            });
+            core.info(`#${parent.number}: all sub-issues closed, closed as completed`);
+            // why: a close made with the workflow token starts no workflow run, so request-close never
+            // sees this one; this repeats its steps for the feature closed above.
+            const m = (parent.body ?? "").match(/^Request:\s*#(\d+)/im);
+            if (!m) return;
+            const issue_number = Number(m[1]);
+            const request = await github.rest.issues.get({ ...context.repo, issue_number });
+            if (request.data.state !== "open") return;
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number, body: `Shipped as #${parent.number}.`,
+            });
+            await github.rest.issues.update({
+              ...context.repo, issue_number, state: "closed", state_reason: "completed",
+            });
+            core.info(`#${issue_number}: closed, shipped as #${parent.number}`);
 
+  # why: only a feature a person closes reaches this job; feature-complete closes the request of
+  # a feature this workflow closed, since that close starts no run.
   request-close:
     name: Feature completed, close its request
     if: >-
@@ -272,20 +344,39 @@ jobs:
     name: Branch name closes its issue
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
     runs-on: ubuntu-24.04
+    permissions:
+      issues: read
     timeout-minutes: 5
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const pr = context.payload.pull_request;
-            const m = pr.head.ref.match(/^(bug|feature|task)\/(\d+)$/);
+            const head = pr.head.ref;
+            const closes = [...(pr.body ?? "").matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi)]
+              .map((x) => Number(x[1]));
+            // why: a slugged <kind>/ branch would skip every check below and in pr-body-check.mjs.
+            if (/^(bug|feature|task)\//.test(head) && !/^(bug|feature|task)\/\d+$/.test(head) && !/^feature\/\d+-adr[\w-]*$/.test(head)) {
+              const repro = /^bug\/\d+-repro$/.test(head) ? " A bug/<n>-repro branch opens no pull request (delivery rule 8)." : "";
+              core.setFailed(`Branch ${head} is not named from its issue: it is <kind>/<n>, no slug (coding rule 3).${repro}`);
+              return;
+            }
+            for (const n of closes) {
+              const { data: issue } = await github.rest.issues.get({ ...context.repo, issue_number: n });
+              const kind = issue.labels
+                .map((l) => /^(bug|task):/.exec(typeof l === "string" ? l : l.name)?.[1])
+                .find(Boolean);
+              if (kind !== undefined && head !== `${kind}/${n}`) {
+                core.setFailed(`#${n} is a ${kind}, so the PR that closes it comes from ${kind}/${n}, not ${head} (coding rule 3).`);
+                return;
+              }
+            }
+            const m = head.match(/^(bug|feature|task)\/(\d+)$/);
             if (!m) {
-              core.info(`${pr.head.ref} is not a <kind>/<n> branch; nothing to check`);
+              core.info(`${head} is not a <kind>/<n> branch; nothing more to check`);
               return;
             }
             const expected = Number(m[2]);
-            const closes = [...(pr.body ?? "").matchAll(/\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi)]
-              .map((x) => Number(x[1]));
             if (!closes.includes(expected)) {
               core.setFailed(`Branch ${pr.head.ref} must close #${expected}: add "Closes #${expected}" to the PR body.`);
               return;
@@ -301,12 +392,15 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # pr-body-check.mjs reads the diff's kind from the PR's base and head commits.
+          fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22

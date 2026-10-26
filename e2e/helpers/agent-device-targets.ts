@@ -57,14 +57,14 @@ export const ANDROID: Target = {
   ],
 };
 
-export interface DeviceRow {
+interface DeviceRow {
   readonly id: string;
   readonly driverDeviceId: string;
   // why: the address agent-device names the device by (an iOS UDID, an Android adb serial); on Android it is not the driver's device id.
   readonly address: string;
   readonly state: string;
 }
-export interface LeaseRow {
+interface LeaseRow {
   readonly id: string;
   readonly deviceId: string;
   readonly ownerId: string;

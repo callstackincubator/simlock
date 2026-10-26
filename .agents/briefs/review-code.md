@@ -24,7 +24,10 @@ code to see what a test catches: one edit, one run of its test file, then
 `git checkout .`. You may also write one new test file in the worktree to
 prove an interleaving or an input the suite does not cover, run it, and
 delete it. Probe budget: `lens: behaviour` four probes, `lens: tests` six,
-`lens: both` nine. Restore the tree before you report.
+`lens: both` nine. Restore the tree before you report. Every test run is a
+foreground Bash call with `timeout: 600000` set, never a background job or
+a loop that sleeps: the tool guard refuses those, because a background job
+holds your report until it ends.
 
 ## Lens: behaviour (`lens: behaviour` or `both`)
 

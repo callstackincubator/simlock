@@ -109,7 +109,8 @@ never enforce them only inside an individual rule or driver.
    `deviceSet: "default"` there is no root to validate; the driver instead
    refuses to start while devices remain in the other setting's location (ADR
    0048 §3).
-   Never fall back to the default device location, and never adopt or mark a
+   After a failed root validation, never fall back to the default device
+   location, and never adopt or mark a
    root Simlock did not create empty itself. The same applies to Simlock's adb
    server port: if it is occupied, the Android driver fails rather than
    attaching to whatever server is already listening there. Physical Android
