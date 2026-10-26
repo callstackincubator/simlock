@@ -3,7 +3,7 @@
 Does: taps, scrolls, keys and buttons on an Android emulator or a leased phone, through a control-only scrcpy server.
 Entry: `index.ts` → `createAndroidDeviceInput(options)`, built by `AndroidDriver` as its `input` when `create` got
 `scrcpyServerPath` and `tcpStreamConnector`. It is the implementation of core's `DeviceInputFactory` (`core/input.ts`).
-Uses: core (`DeviceInput`, `InputMessage`), ports (`Clock`), the [screen](../screen/AGENTS.md) module's `ScreenTarget`,
+Uses: core (`DeviceInput`, `InputMessage`), ports (`Clock`, `Logger`), the [screen](../screen/AGENTS.md) module's `ScreenTarget`,
 push, socket connect and exit wait. Parent: [Android driver](../AGENTS.md). Consumer: [input](../../../input/AGENTS.md).
 
 ## Files
@@ -26,7 +26,7 @@ push, socket connect and exit wait. Parent: [Android driver](../AGENTS.md). Cons
    `scrcpy_<scid>` (15 s from the spawn, retry 100 ms) and read the dummy byte. Past 15 s, a shell that exits or a push
    that fails rejects, after the close below.
 3. Every 2 s, one size read (the next is scheduled when one ends); a different size goes to `onConfig`. A failed read keeps
-   the last size. `onConfig` calls a listener at once with the current size; orientation is `landscape_left` when wider.
+   the last size and is logged once (a `warn` through the driver's `logger`) until a read succeeds. `onConfig` calls a listener at once with the current size; orientation is `landscape_left` when wider.
 4. `send`: a position is `round(fraction × size)` capped at `size - 1`, in a 32-byte touch packet (finger -2, pressure
    full except on `end`). Scroll: wheel units `clamp(round(d × 16), -16, 16)`, vertical `+dy`, horizontal `-dx`, at the
    given point or the centre. Buttons: Home 3, Recents 187, Power 26, Back 4, down then up. Keys: the HID table in
