@@ -204,10 +204,10 @@ async function openedChannel(connection: FakeLink): Promise<FakeChannel> {
   return connection.channels[0] as FakeChannel;
 }
 
-async function openTwoWay() {
+async function openTwoWay(signal?: AbortSignal) {
   const clock = new FakeClock();
   const { connection, relay } = await setup({ clock });
-  const pending = relay.relayTwoWay(WORKER_ID, call());
+  const pending = relay.relayTwoWay(WORKER_ID, call(undefined, signal));
   const request = await sentFrame(connection, "relay.request");
   const channel = await openedChannel(connection);
   connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
@@ -481,6 +481,27 @@ describe("GatewayRelay on a byte channel", () => {
 
     expect(failure).toMatchObject({ message: "caller left while waiting", state: "rejected" });
     expect(connection.sent.filter((frame) => frame.type === "relay.request")).toEqual([]);
+  });
+});
+
+describe("GatewayRelay finishing a two-way relay", () => {
+  it("sends relay.cancel for a caller abort while a direction is open and none once both directions have ended", async () => {
+    const openController = new AbortController();
+    const open = await openTwoWay(openController.signal);
+    open.channel.end();
+    await open.reader.read();
+    openController.abort(new Error("caller left"));
+    await vi.waitFor(() => expect(open.connection.lastSentOf("relay.cancel")).toBeDefined());
+
+    const doneController = new AbortController();
+    const done = await openTwoWay(doneController.signal);
+    done.channel.end();
+    await done.reader.read();
+    await done.writer.close();
+    doneController.abort(new Error("caller left late"));
+    await sleep(10);
+
+    expect(done.connection.lastSentOf("relay.cancel")).toBeUndefined();
   });
 });
 

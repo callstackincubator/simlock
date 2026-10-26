@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LinkChannelError, type LinkChannel } from "../link/index.js";
 
 import type { Logger } from "../ports/index.js";
 import { linkPair } from "../link/testing.js";
-import { RelayConnection, type RelayPush, type RelayTarget } from "./relay.js";
+import {
+  RelayConnection,
+  type RelayPush,
+  type RelayTarget,
+  type TwoWayPipe,
+  type TwoWayRelayTarget,
+} from "./relay.js";
 import { gate, relayInput, settleWithin } from "./test-relay-support.js";
 
 const logger: Logger = {
@@ -122,5 +128,69 @@ describe("a worker's relay connection", () => {
     expect(outcome).toEqual({ state: "fulfilled", value: { cancelled: true } });
     expect(signal?.aborted).toBe(true);
     expect(aborts).toBeGreaterThan(0);
+  });
+
+  it("answers a two-way request only once both directions have ended, and { cancelled: true } when it is cancelled before", async () => {
+    const pair = linkPair();
+    const pipes: TwoWayPipe[] = [];
+    const target: TwoWayRelayTarget = (_request, _tenant, _leaseId, pipe) => {
+      pipes.push(pipe);
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const relays = new RelayConnection({}, logger, { echo: target });
+    let heads = 0;
+    const push: RelayPush = {
+      head: () => {
+        heads += 1;
+        return Promise.resolve();
+      },
+    };
+    const start = async (input: Input) => {
+      const opened = await pair.gateway.openChannel({ signal: new AbortController().signal });
+      return {
+        gateway: opened,
+        result: relays.request(input, push, pair.worker.acceptChannel(opened.id)),
+      };
+    };
+
+    const both = await start(relayInput({ twoWay: true }) as Input);
+    await vi.waitFor(() => expect(pipes).toHaveLength(1));
+    const pipe = pipes[0] as TwoWayPipe;
+    await both.gateway.writable.getWriter().close();
+    const drained = pipe.readable.getReader();
+    while (!(await drained.read()).done) {
+      // why: the target reads the gateway's direction to its end.
+    }
+    const afterRead = await settleWithin(both.result, 50);
+    await pipe.writable.getWriter().close();
+    const afterWrite = await settleWithin(both.result);
+
+    const input = relayInput({ twoWay: true }) as Input;
+    const cancelled = await start(input);
+    await vi.waitFor(() => expect(heads).toBe(2));
+    relays.cancel(input.relayId);
+    const afterCancel = await settleWithin(cancelled.result);
+
+    expect(afterRead).toEqual({ state: "pending" });
+    expect(afterWrite).toEqual({ state: "fulfilled", value: {} });
+    expect(afterCancel).toEqual({ state: "fulfilled", value: { cancelled: true } });
+  });
+
+  it("aborts the channel, so the gateway's readable errors, when a two-way target aborts its writable", async () => {
+    const pair = linkPair();
+    const target: TwoWayRelayTarget = (_request, _tenant, _leaseId, pipe) => {
+      void pipe.writable.abort(new Error("target broke")).catch(() => undefined);
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const relays = new RelayConnection({}, logger, { echo: target });
+    const push: RelayPush = { head: () => Promise.resolve() };
+    const opened = await pair.gateway.openChannel({ signal: new AbortController().signal });
+    void relays
+      .request(relayInput({ twoWay: true }) as Input, push, pair.worker.acceptChannel(opened.id))
+      .catch(() => undefined);
+
+    const read = await settleWithin(opened.readable.getReader().read());
+
+    expect(read.state).toBe("rejected");
   });
 });
