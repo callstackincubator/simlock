@@ -5,7 +5,7 @@ import type {
   ModuleTwoWayRelay,
 } from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
-import { readFrames } from "./framing.js";
+import { encodeFrame, readFrames } from "./framing.js";
 import { unavailable } from "./refusal.js";
 
 export interface GatewayInputLinkOptions {
@@ -70,6 +70,12 @@ function refusalFor(error: unknown, workerId: string, leaseId: string): Response
 }
 
 function bridge(socket: LeaseSocket, relay: ModuleTwoWayRelay, controller: AbortController): void {
+  const writer = relay.writable.getWriter();
+  let writes: Promise<unknown> = Promise.resolve();
+  socket.onMessage((data) => {
+    const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
+    writes = writes.then(() => writer.write(frame)).catch(() => undefined);
+  });
   socket.onClose(() => controller.abort());
   void (async () => {
     for await (const frame of readFrames(relay.readable)) {
