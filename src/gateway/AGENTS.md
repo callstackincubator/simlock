@@ -1,10 +1,8 @@
 # Gateway
 
 Does: a daemon started with `--gateway` (it lives in `<root>/gateway`): owns no devices, fronts the workers that dial in.
-Entry: `index.ts`; `startGatewayDaemon` (`../daemon/main.ts`) wires `GatewayService`,
-`FleetLeaseCoordinator`, `GatewayDispatcher`, `GatewayRelay`, `GatewayOwnerRoutedFacts`.
-Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from
-core and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
+Entry: `index.ts`; `startGatewayDaemon` (`../daemon/main.ts`) wires `GatewayService`, `FleetLeaseCoordinator`, `GatewayDispatcher`, `GatewayRelay`, `GatewayOwnerRoutedFacts`.
+Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from core and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
 Never imports: drivers, the rest of daemon, core's registry, capacity or lifecycle.
 Imported by: `../daemon/main.ts`. This manual also covers the worker's end of the uplink.
 Flows: [device selection](../../docs/internal/flows/device-selection.md), [device.exec](../../docs/internal/flows/device-exec.md), [worker update](../../docs/internal/flows/worker-update.md), [leasing](../leasing/AGENTS.md).
@@ -33,8 +31,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 ## How it works
 
-**Uplink, worker side.** `../daemon/main.ts` builds `GatewayUplink` only when `gateway.url` and
-`gateway.token` are both set, and starts it after the socket is claimed and the first host load reading.
+**Uplink, worker side.** `../daemon/main.ts` builds `GatewayUplink` only when `gateway.url` and `gateway.token` are both set, and starts it after the socket is claimed and the first host load reading.
 
 1. Dial `<gateway.url>/v1/uplink` (`WebSocketUplinkConnector`): `Authorization: Bearer <join token>`,
    `x-simlock-worker-id` (the worker's `instance.json` id), `x-simlock-worker-label`.
@@ -49,27 +46,22 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 2. Upgrade auth (`../daemon/main.ts`, `authenticateUplink` with the claimed id, cut to `MAX_CLAIMED_FIELD_LENGTH`):
    unknown token `401`, non-`worker` role or `worker-mismatch` `403`. Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
 3. A new uplink under a live worker id (so with the token pinned to it) closes and replaces the old link.
-4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch →
-   view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
+4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch → view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
 5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure`,
    `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus `catalog.get` and `config.get` on the tick, after `component.installed`, or with no catalog yet. One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
-6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*`
-   and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
+6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*` and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped.
 
-**Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's
-`assess` and nine stages are in [routing](routing/AGENTS.md)):
+**Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's `assess` and nine stages are in [routing](routing/AGENTS.md)):
 
-1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs`
-   from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
+1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs` from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
 2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index (not counting a lease past its last reported deadline on a disconnected worker) plus a pending request
    (`already-leased`, `requesterLimitDecision`) → `leaseId` held by the index or an open request (`lease-id-taken`) →
    `requests.admit` stores it, creates the waiter. Emits `lease.requested`.
 3. Walk (on admit, on any view change, after each settled attempt), oldest first: `assess` the
    request over views minus workers that said cannot-serve. A reject ends the request. Else
    `select` over workers not claimed this pass and not refused at their current `viewLoadKey`.
-4. No pick: `noWait` → `NO_CAPACITY`; else queue (`lease.queued`). A walk also keeps a reason per
-   view (`routing.explain`, then the memos) as the entry's `workers`.
+4. No pick: `noWait` → `NO_CAPACITY`; else queue (`lease.queued`). A walk also keeps a reason per view (`routing.explain`, then the memos) as the entry's `workers`.
 5. Attempt: `requestLease` on the picked worker with `requesterId: gw:<id>:<requester>`, `owner`,
    `noWait: true`, `allowDownload: false`, `fleetRequestId`, the worker's own model name.
    Bounded by `gateway.leaseRequestTimeoutMs`. First progress push → `request.dispatched`.
@@ -79,12 +71,10 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
    a refusal; every worker that could take it failed so (one that is full, busy, not ready or unhealthy could, later) → reject
    with the last. After a progress push it is relayed as a failure after progress. Anything else,
    or a failure after progress → `lease.rejected` `worker-failed`. `DAEMON_UPDATING` is handled as `NO_CAPACITY` (the worker began an update the view did not show yet).
-7. Grant: a lease id unlike the forwarded `leaseId` → release it on the worker, retry. Gateway
-   lease id = the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. `leaseIndex.add`, then
+7. Grant: a lease id unlike the forwarded `leaseId` → release it on the worker, retry. Gateway lease id = the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. `leaseIndex.add`, then
    `request.granted`; a clash → release on worker, `LEASE_ID_TAKEN`.
 
-**After the grant.** Renew, release, release-all and exec go to the worker named by the index;
-no live link → `WORKER_UNREACHABLE`; a worker `UNKNOWN_LEASE` drops the entry. The gateway runs
+**After the grant.** Renew, release, release-all and exec go to the worker named by the index; no live link → `WORKER_UNREACHABLE`; a worker `UNKNOWN_LEASE` drops the entry. The gateway runs
 no TTL timer. Relayed `lease.expired`/`lease.released` remove the entry and push `lease-lost`.
 Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`.
 The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
