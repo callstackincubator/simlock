@@ -105,15 +105,13 @@ export {
 export {
   closeReason,
   type DeviceInput,
+  // fallow-ignore-next-line unused-type -- the port the Android and iOS drivers implement (#1018, #1019); no in-tree driver names it yet.
   type DeviceInputFactory,
   encodeInputMessage,
   INPUT_TAG,
   MAX_INPUT_MESSAGE_BYTES,
   isUnavailableInput,
   parseClientMessage,
-  type InputControlRequest,
-  type InputMessage,
-  type InputOrientation,
   type InputScreenConfig,
   type UnavailableDeviceInput,
   UNAVAILABLE_INPUT_CONFIG,

@@ -29,7 +29,7 @@ export function closeReason(reason: string): string {
   return cut;
 }
 
-export const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
+const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
 
 export type InputOrientation =
   | "portrait"

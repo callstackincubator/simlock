@@ -7,7 +7,7 @@ import type {
 } from "./input.js";
 
 // why: a device input for tests: it records what reached it and plays the device's changes.
-export class FakeDeviceInput implements DeviceInput {
+class FakeDeviceInput implements DeviceInput {
   readonly sent: InputMessage[] = [];
   closes = 0;
   readonly #configListeners = new Set<(config: InputScreenConfig) => void>();

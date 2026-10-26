@@ -38,7 +38,7 @@ import {
 } from "./uplink.js";
 
 // why: the daemon entry imports the router through this file, the one `ws` file it is already allowed to reach into.
-export { createUpgradeRouter, type LeaseSocketOutcome } from "./upgrade-router.js";
+export { createUpgradeRouter } from "./upgrade-router.js";
 
 /** why: a ping that finds no pong since the previous one terminates the link, so a gateway that
  * vanished without closing is noticed within two of these. */
