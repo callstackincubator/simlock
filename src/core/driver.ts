@@ -1,6 +1,7 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
+import type { DeviceInputFactory } from "./input.js";
 import type { ScreenCapture } from "./screen.js";
 import type {
   AbsentReason,
@@ -372,6 +373,9 @@ export interface Driver {
   // why: optional because a platform whose screen cannot be taken leaves it out, and the stream
   // module learns that from its absence rather than from a platform name.
   readonly screenCapture?: ScreenCapture | undefined;
+  // why: optional like `screenCapture`: a platform whose device takes no input leaves it out, and a
+  // lease's input socket then says the device is unavailable.
+  readonly input?: DeviceInputFactory | undefined;
   /** why: `device.exec` has no pseudo-terminal (ADR 0005 §19c), so a driver may refuse there what it allows locally. */
   passthrough?(
     tool: string,

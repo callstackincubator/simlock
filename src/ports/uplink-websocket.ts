@@ -20,6 +20,7 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import { subscribeListener } from "./ipc.js";
+import { respondAndDestroy } from "./upgrade-router.js";
 import {
   resolveUplinkUrl,
   uplinkOutcome,
@@ -35,6 +36,9 @@ import {
   type UplinkListenerFactory,
   type UplinkTransportConnection,
 } from "./uplink.js";
+
+// why: the daemon entry imports the router through this file, the one `ws` file it is already allowed to reach into.
+export { createUpgradeRouter, type LeaseSocketOutcome } from "./upgrade-router.js";
 
 /** why: a ping that finds no pong since the previous one terminates the link, so a gateway that
  * vanished without closing is noticed within two of these. */
@@ -203,7 +207,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   /** Wires this factory to a Node HTTP server's `upgrade` event. */
   attach(server: Server): void {
     const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
-      void this.#handleUpgrade(request, socket, head);
+      void this.handleUpgrade(request, socket, head);
     };
     server.on("upgrade", onUpgrade);
     this.#detach = () => {
@@ -211,7 +215,9 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     };
   }
 
-  async #handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+  // why: public so the upgrade router, which owns the server's one `upgrade` listener, hands this
+  // factory the requests for `/v1/uplink` exactly as `attach` does.
+  async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const handlers = this.#handlers;
     if (handlers === undefined) {
       // Nothing is listening for uplinks (a daemon mid-shutdown): refuse rather than leave the
@@ -434,9 +440,4 @@ function decodeLabel(value: string | undefined): string | undefined {
     // A label is cosmetic; a malformed encoding drops it rather than refusing the uplink.
     return undefined;
   }
-}
-
-function respondAndDestroy(socket: Duplex, status: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${String(status)} ${reason}\r\nConnection: close\r\n\r\n`);
-  socket.destroy();
 }

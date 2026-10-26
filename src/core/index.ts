@@ -103,6 +103,17 @@ export {
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
 export {
+  type DeviceInput,
+  type DeviceInputFactory,
+  encodeInputMessage,
+  INPUT_TAG,
+  isUnavailableInput,
+  type InputOrientation,
+  type InputScreenConfig,
+  type UnavailableDeviceInput,
+  UNAVAILABLE_INPUT_CONFIG,
+} from "./input.js";
+export {
   encodeScreenFrame,
   encodeScreenMeta,
   type ScreenCapture,

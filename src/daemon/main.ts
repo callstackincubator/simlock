@@ -130,6 +130,7 @@ import {
   type GatewayServiceOptions,
 } from "../gateway/index.js";
 import {
+  createUpgradeRouter,
   WebSocketUplinkConnector,
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
@@ -498,6 +499,7 @@ async function composeDaemon(
   );
   // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
+  const catalog = new DriverCatalog(drivers);
   const moduleHost = await createModuleHost({
     config,
     defaulted,
@@ -521,7 +523,8 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
-      screens: new DriverCatalog(drivers),
+      inputs: catalog,
+      screens: catalog,
       tcpProbe,
     },
     definitions: moduleDefinitions,
@@ -817,6 +820,10 @@ async function composeDaemon(
     const gateway = new HttpGateway(app, {
       host: config.http.host,
       logger: httpLogger,
+      onServerCreated: (server) =>
+        createUpgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(
+          server,
+        ),
       port: config.http.port,
     });
     await gateway.start();
@@ -1171,7 +1178,12 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       logger: httpLogger,
       // ADR 0005 §4: the uplink upgrades on this same listener, so the fleet has one inbound
       // port. The factory only needs the server's `upgrade` event, which is all it is given.
-      onServerCreated: (server) => uplinks.attach(server),
+      onServerCreated: (server) =>
+        createUpgradeRouter({
+          clock,
+          leaseSocket: (request) => app.leaseSocket(request),
+          uplinks,
+        }).attach(server),
       port: config.http.port,
     });
     await gateway.start();

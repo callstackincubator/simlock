@@ -10,7 +10,9 @@ import type {
 } from "../contract/index.js";
 import type {
   Config,
+  DeviceInput,
   DeviceRecord,
+  UnavailableDeviceInput,
   LeaseRecord,
   PhysicalDriverDevice,
   Platform,
@@ -22,6 +24,7 @@ import type {
 import type {
   Clock,
   Filesystem,
+  LeaseSocket,
   Logger,
   ProcessRunner,
   ProcessSupervisor,
@@ -124,9 +127,22 @@ export type ModuleLeaseHandler = (
   lease: ModuleLease,
 ) => Promise<Response>;
 
+// why: a lease socket handler has two steps so a refusal is a plain `Response` sent before the upgrade
+// (a gateway's 503 for a worker that cannot take the socket), and only an accept ever sees a socket.
+export type ModuleLeaseSocketAccept = (socket: LeaseSocket) => void;
+
+export interface ModuleLeaseSocketHandler {
+  open(
+    request: Request,
+    identity: ModuleIdentity,
+    lease: ModuleLease,
+  ): Promise<Response | ModuleLeaseSocketAccept>;
+}
+
 export interface ModuleLeaseRoute {
   readonly name: string;
   readonly handle: ModuleLeaseHandler;
+  readonly socket?: ModuleLeaseSocketHandler;
 }
 
 export interface MountDeps {
@@ -146,6 +162,7 @@ export interface WorkerModule {
   readonly relayTwoWay?: ModuleRelayTwoWayTarget;
   readonly mount?: (deps: MountDeps) => ModuleHandler;
   readonly leaseRoute?: ModuleLeaseHandler;
+  readonly socket?: ModuleLeaseSocketHandler;
   readonly findings?: () => readonly ModuleFinding[];
   readonly hooks?: WorkerHooks;
 }
@@ -170,6 +187,15 @@ export interface ModuleScreens {
   screenAvailability(): Promise<readonly ScreenAvailability[]>;
 }
 
+// why: the drivers' device input, routed by platform, without handing a module the drivers.
+export interface ModuleInputs {
+  openInput(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    signal: AbortSignal,
+  ): Promise<DeviceInput | UnavailableDeviceInput>;
+}
+
 export interface WorkerContext<C> {
   readonly name: string;
   readonly instanceId: string;
@@ -191,6 +217,7 @@ export interface WorkerContext<C> {
   readonly leaseEnvironment: Readonly<Record<string, string>>;
   readonly registry: ModuleRegistryView;
   readonly screens: ModuleScreens;
+  readonly inputs: ModuleInputs;
   cancelPending(requesterId: string): Promise<unknown>;
   readonly events: {
     subscribe<Event extends EventName>(event: Event, handler: EventHandler<Event>): () => void;
@@ -225,6 +252,7 @@ export interface GatewayHooks {
 export interface GatewayModule {
   readonly mount?: (deps: MountDeps) => ModuleHandler;
   readonly leaseRoute?: ModuleLeaseHandler;
+  readonly socket?: ModuleLeaseSocketHandler;
   readonly hooks?: GatewayHooks;
 }
 

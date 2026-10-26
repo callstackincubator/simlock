@@ -10,6 +10,7 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
+import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
 
@@ -104,6 +105,16 @@ export class DriverCatalog {
       throw new ScreenNotSupportedError(`A ${platform} device's screen cannot be streamed`);
     }
     return await capture.open(device, settings, signal);
+  }
+
+  async openInput(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    signal: AbortSignal,
+  ): Promise<DeviceInput | UnavailableDeviceInput> {
+    const factory = this.#drivers.get(platform)?.input;
+    if (factory === undefined) return { unavailable: `${platform} devices take no input` };
+    return await factory.open(device, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

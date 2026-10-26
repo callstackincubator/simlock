@@ -35,8 +35,12 @@ const agent: DispatchSession = {
   role: "agent",
 };
 
-const UNAVAILABLE_CONFIG =
-  '{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}';
+const UNAVAILABLE_CONFIG = {
+  height: 1,
+  inputUnavailable: true,
+  orientation: "portrait",
+  width: 1,
+};
 
 interface OpenedSocket {
   // why: 101 for an upgrade that was accepted, else the status the refusal answered.
@@ -147,7 +151,9 @@ describe("a lease's input socket", () => {
       await vi.waitFor(() => expect(own.messages).toHaveLength(2), { timeout: 10_000 });
       expect([...(own.messages[0] ?? [])]).toEqual([0x83]);
       expect(own.messages[1]?.[0]).toBe(0x82);
-      expect(own.messages[1]?.subarray(1).toString("utf8")).toBe(UNAVAILABLE_CONFIG);
+      expect(JSON.parse(own.messages[1]?.subarray(1).toString("utf8") ?? "")).toEqual(
+        UNAVAILABLE_CONFIG,
+      );
     },
   );
 });

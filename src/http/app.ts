@@ -14,7 +14,7 @@ import {
 } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
-import type { Clock, IdGenerator, Logger } from "../ports/index.js";
+import type { Clock, IdGenerator, LeaseSocket, Logger } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
 import {
@@ -131,16 +131,34 @@ export interface HttpGatewayDeps {
 // lease handler never checks who owns it; http knows a module only by its name.
 export interface HttpLeaseRoute {
   readonly name: string;
-  handle(
-    request: Request,
-    identity: Identity,
-    lease: {
-      readonly id: string;
-      readonly deviceId: string;
-      readonly workerId?: string;
-      readonly workerLeaseId?: string;
-    },
-  ): Promise<Response>;
+  // why: the module's two-step socket handler, run for a WebSocket upgrade of the same path.
+  readonly socket?: {
+    open(
+      request: Request,
+      identity: Identity,
+      lease: HttpLeaseSocketLease,
+    ): Promise<Response | HttpLeaseSocketAccept>;
+  };
+  handle(request: Request, identity: Identity, lease: HttpLeaseSocketLease): Promise<Response>;
+}
+
+interface HttpLeaseSocketLease {
+  readonly id: string;
+  readonly deviceId: string;
+  readonly workerId?: string;
+  readonly workerLeaseId?: string;
+}
+
+export type HttpLeaseSocketAccept = (socket: LeaseSocket) => void;
+
+// why: what the upgrade router needs of a lease socket request: the refusal to send before the
+// upgrade, or the accept to run on the upgraded socket.
+export type HttpLeaseSocketOutcome =
+  | { readonly response: Response }
+  | { readonly accept: HttpLeaseSocketAccept };
+
+interface LeaseSocketCapture {
+  accept?: HttpLeaseSocketAccept;
 }
 
 export interface HttpMount {
@@ -185,6 +203,9 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
 
 export interface HttpAppDisposable {
   readonly dispose: () => void;
+  // why: a WebSocket upgrade of a lease route goes through the app's own auth and lease resolution,
+  // so a refusal is the answer any request to the path would get; only the accept is new.
+  readonly leaseSocket: (request: Request) => Promise<HttpLeaseSocketOutcome>;
 }
 
 // fallow-ignore-next-line complexity -- route wiring for one focused resource surface; splitting it would scatter the shared closures (tracker, notices) across files for no clarity gain.
@@ -805,12 +826,19 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     app.all(`/v1/leases/:id/${route.name}`, agentAuth, async (c) => {
       const identity = c.get("identity");
       const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
-      return route.handle(c.req.raw, identity, {
+      const resolved = {
         deviceId: lease.deviceId,
         id: lease.id,
         ...(lease.workerId === undefined ? {} : { workerId: lease.workerId }),
         ...(lease.workerLeaseId === undefined ? {} : { workerLeaseId: lease.workerLeaseId }),
-      });
+      };
+      const capture = (c.env as { leaseSocket?: LeaseSocketCapture } | undefined)?.leaseSocket;
+      if (capture === undefined) return route.handle(c.req.raw, identity, resolved);
+      if (route.socket === undefined) return c.notFound();
+      const opened = await route.socket.open(c.req.raw, identity, resolved);
+      if (typeof opened !== "function") return opened;
+      capture.accept = opened;
+      return new Response(null, { status: 204 });
     });
   }
 
@@ -820,6 +848,11 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
   return Object.assign(app, {
     dispose: () => {
       notices.dispose();
+    },
+    leaseSocket: async (request: Request): Promise<HttpLeaseSocketOutcome> => {
+      const capture: LeaseSocketCapture = {};
+      const response = await app.fetch(request, { leaseSocket: capture });
+      return capture.accept === undefined ? { response } : { accept: capture.accept };
     },
   });
 }

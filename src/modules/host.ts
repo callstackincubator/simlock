@@ -296,7 +296,15 @@ async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayMo
       ),
     leaseRoutes: () =>
       started.flatMap(({ gateway, name }) =>
-        gateway.leaseRoute === undefined ? [] : [{ handle: gateway.leaseRoute, name }],
+        gateway.leaseRoute === undefined
+          ? []
+          : [
+              {
+                handle: gateway.leaseRoute,
+                name,
+                ...(gateway.socket === undefined ? {} : { socket: gateway.socket }),
+              },
+            ],
       ),
   };
 }
@@ -404,7 +412,15 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
     },
     leaseRoutes: () =>
       started.flatMap(({ name, worker }) =>
-        worker.leaseRoute === undefined ? [] : [{ handle: worker.leaseRoute, name }],
+        worker.leaseRoute === undefined
+          ? []
+          : [
+              {
+                handle: worker.leaseRoute,
+                name,
+                ...(worker.socket === undefined ? {} : { socket: worker.socket }),
+              },
+            ],
       ),
     relayTargets,
     relayTwoWayTargets,
