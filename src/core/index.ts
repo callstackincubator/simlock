@@ -105,11 +105,13 @@ export {
 export {
   closeReason,
   type DeviceInput,
+  type DeviceInputFactory,
   encodeInputMessage,
   INPUT_TAG,
   MAX_INPUT_MESSAGE_BYTES,
   isUnavailableInput,
   parseClientMessage,
+  type InputMessage,
   type InputScreenConfig,
   type UnavailableDeviceInput,
   UNAVAILABLE_INPUT_CONFIG,
