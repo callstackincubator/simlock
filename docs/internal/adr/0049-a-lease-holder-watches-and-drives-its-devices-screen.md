@@ -7,10 +7,12 @@
   §2 ("Operators only") and its rejected alternative "Keep the lease route
   beside the device route": a lease holder now streams its own lease. The
   device route, its operator-only rule and §4's lifetime stay.
-- **Extends:** [ADR 0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md)
-  (a relay may keep both directions of its byte channel open) and
-  [ADR 0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md)'s module
-  mounts (a module may own one route under a lease).
+- **Narrows:** [ADR 0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md)
+  §4 (a relay is one HTTP exchange; §5 here adds a two-way relay that keeps
+  both directions of its byte channel open) and
+  [ADR 0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md)
+  §3 (a module's routes sit under its name; §2 here lets a module own one
+  route under a lease).
 
 ## Context
 
@@ -54,7 +56,9 @@ flowchart LR
    the lease for the caller once, as `lease.get` does, and hands the module
    the lease; the module never checks ownership itself. `stream` owns
    `/stream`; a new optional module `input` owns `/input`. A segment no loaded
-   module owns answers 404.
+   module owns answers 404. The module host refuses to load a module whose name
+   is a core lease sub-route (`renew`, `exec`), as it refuses a name that
+   clashes with a core first segment: the core route wins.
 3. **Input speaks expo serve-sim's messages**, pinned at
    expo/expo-device-hub `1357114`: `0x03` touch, `0x04` button, `0x06` key,
    `0x0b` scroll in; `0x83` admitted, `0x82` screen config, `0x90` control
