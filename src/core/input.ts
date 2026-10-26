@@ -6,9 +6,17 @@ export const INPUT_TAG = {
   touch: 0x03,
   button: 0x04,
   key: 0x06,
+  scroll: 0x0b,
+  control: 0x10,
   config: 0x82,
   admitted: 0x83,
+  controlResult: 0x90,
 } as const;
+
+// why: a client message is at most this many bytes with its tag; a longer one is dropped and the socket stays open.
+export const MAX_INPUT_MESSAGE_BYTES = 64 * 1024;
+
+export const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
 
 export type InputOrientation =
   | "portrait"
@@ -43,7 +51,14 @@ export type InputMessage =
       readonly x: number;
       readonly y: number;
     }
-  | { readonly kind: "button"; readonly button: string }
+  | { readonly kind: "button"; readonly button: (typeof INPUT_BUTTONS)[number] }
+  | {
+      readonly kind: "scroll";
+      readonly dx: number;
+      readonly dy: number;
+      readonly x?: number;
+      readonly y?: number;
+    }
   | {
       readonly kind: "key";
       readonly type: "down" | "up";
@@ -88,31 +103,93 @@ export function encodeInputMessage(tag: number, body?: unknown): Uint8Array {
   return message;
 }
 
-// why: undefined for a message that is not one the device input takes, so the caller drops it and keeps the socket.
-export function parseInputMessage(bytes: Uint8Array): InputMessage | undefined {
-  let body: unknown;
+// why: a hinge control request (0x10) is the one message a client sends that wants an answer; the answer is `{ok:false}` on every platform here.
+export interface InputControlRequest {
+  readonly kind: "control";
+  readonly requestId: number | undefined;
+}
+
+type Fields = Readonly<Record<string, unknown>>;
+
+function fieldsOf(bytes: Uint8Array): Fields | undefined {
   try {
-    body = JSON.parse(new TextDecoder().decode(bytes.subarray(1)));
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes.subarray(1)));
+    return typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Fields)
+      : undefined;
   } catch {
     return undefined;
   }
-  const fields = body as Record<string, unknown>;
+}
+
+function fraction(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function delta(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= -1 && value <= 1;
+}
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return allowed.includes(value as T);
+}
+
+function touchOf(fields: Fields): InputMessage | undefined {
+  const { type, x, y } = fields;
+  if (!oneOf(type, ["begin", "move", "end"]) || !fraction(x) || !fraction(y)) return undefined;
+  return { kind: "touch", type, x, y };
+}
+
+function keyOf(fields: Fields): InputMessage | undefined {
+  const { type, usage } = fields;
+  if (!oneOf(type, ["down", "up"])) return undefined;
+  if (typeof usage !== "number" || !Number.isInteger(usage) || usage < 0 || usage > 0xff) {
+    return undefined;
+  }
+  return { kind: "key", type, usage };
+}
+
+function scrollOf(fields: Fields): InputMessage | undefined {
+  const { dx, dy, x, y } = fields;
+  if (!delta(dx) || !delta(dy)) return undefined;
+  if ((x !== undefined && !fraction(x)) || (y !== undefined && !fraction(y))) return undefined;
+  return {
+    dx,
+    dy,
+    kind: "scroll",
+    ...(x === undefined ? {} : { x }),
+    ...(y === undefined ? {} : { y }),
+  };
+}
+
+// why: undefined for a message that is not one the device input takes (bad JSON, an unknown tag, a position outside the screen, an orientation request), so the caller drops it and keeps the socket.
+export function parseClientMessage(
+  bytes: Uint8Array,
+): InputMessage | InputControlRequest | undefined {
+  if (bytes.length > MAX_INPUT_MESSAGE_BYTES) return undefined;
+  const fields = fieldsOf(bytes);
+  if (bytes[0] === INPUT_TAG.control) {
+    const requestId = fields?.["requestId"];
+    return {
+      kind: "control",
+      requestId:
+        Number.isSafeInteger(requestId) && (requestId as number) > 0
+          ? (requestId as number)
+          : undefined,
+    };
+  }
+  if (fields === undefined) return undefined;
   switch (bytes[0]) {
     case INPUT_TAG.touch:
-      return {
-        kind: "touch",
-        type: fields["type"] as "begin" | "move" | "end",
-        x: fields["x"] as number,
-        y: fields["y"] as number,
-      };
+      return touchOf(fields);
     case INPUT_TAG.button:
-      return { button: fields["button"] as string, kind: "button" };
+      return oneOf(fields["button"], INPUT_BUTTONS)
+        ? { button: fields["button"], kind: "button" }
+        : undefined;
     case INPUT_TAG.key:
-      return {
-        kind: "key",
-        type: fields["type"] as "down" | "up",
-        usage: fields["usage"] as number,
-      };
+      return keyOf(fields);
+    case INPUT_TAG.scroll:
+      return scrollOf(fields);
     default:
       return undefined;
   }

@@ -1,3 +1,4 @@
+import { MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
 import type {
   ModuleIdentity,
   ModuleLease,
@@ -73,6 +74,8 @@ function bridge(socket: LeaseSocket, relay: ModuleTwoWayRelay, controller: Abort
   const writer = relay.writable.getWriter();
   let writes: Promise<unknown> = Promise.resolve();
   socket.onMessage((data) => {
+    // why: a frame over the limit would end the channel for everyone on the lease, and a message that long is dropped on every door.
+    if (data.length > MAX_INPUT_MESSAGE_BYTES) return;
     const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
     writes = writes.then(() => writer.write(frame)).catch(() => undefined);
   });

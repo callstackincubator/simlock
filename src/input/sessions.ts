@@ -2,7 +2,7 @@ import {
   encodeInputMessage,
   INPUT_TAG,
   isUnavailableInput,
-  parseInputMessage,
+  parseClientMessage,
   toDriverDevice,
   UNAVAILABLE_INPUT_CONFIG,
   type DeviceInput,
@@ -80,8 +80,19 @@ export function createInputSessions(options: { readonly inputs: ModuleInputs }):
     attached.admitted = true;
     if (entry.config !== undefined) socket.send(encodeInputMessage(INPUT_TAG.config, entry.config));
     socket.onMessage((data) => {
-      const message = parseInputMessage(data);
-      if (message !== undefined) opened.send(message);
+      const message = parseClientMessage(data);
+      if (message === undefined) return;
+      if (message.kind === "control") {
+        socket.send(
+          encodeInputMessage(INPUT_TAG.controlResult, {
+            error: "This device cannot change its pose",
+            ok: false,
+            ...(message.requestId === undefined ? {} : { requestId: message.requestId }),
+          }),
+        );
+        return;
+      }
+      opened.send(message);
     });
   }
 

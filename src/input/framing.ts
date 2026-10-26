@@ -1,6 +1,6 @@
 // why: the channel framing of a two-way relay (ADR 0049 section 5): `[len u32 big-endian][tag u8][payload]`,
 // `len` counting the tag and the payload. Only the input module encodes and reads it; the relay moves bytes.
-export const MAX_MESSAGE_BYTES = 64 * 1024;
+import { MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
 
 export interface InputFrame {
   readonly tag: number;
@@ -33,7 +33,7 @@ export async function* readFrames(
     for (;;) {
       while (buffer.length >= 4) {
         const length = new DataView(buffer.buffer, buffer.byteOffset, buffer.length).getUint32(0);
-        if (length < 1 || length > MAX_MESSAGE_BYTES + 1) return;
+        if (length < 1 || length > MAX_INPUT_MESSAGE_BYTES + 1) return;
         if (buffer.length < 4 + length) break;
         yield { payload: buffer.slice(5, 4 + length), tag: buffer[4] ?? 0 };
         buffer = buffer.subarray(4 + length);

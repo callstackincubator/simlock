@@ -284,7 +284,7 @@ describe("a lease's input socket", () => {
   );
 
   it(
-    "drives a faked device through a gateway in T3 Code's order",
+    "drives a faked device through a gateway in T3 Code's order, and drops a message over 64 KiB",
     { timeout: 60_000 },
     async () => {
       const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
@@ -313,6 +313,11 @@ describe("a lease's input socket", () => {
       second.socket.send(message(0x04, { button: "back" }));
       await vi.waitFor(() => expect(input.opened[0]?.sent).toHaveLength(6), { timeout: 10_000 });
       expect(input.opened).toHaveLength(1);
+
+      second.socket.send(message(0x03, { pad: "a".repeat(70_000), type: "end", x: 0.5, y: 0.5 }));
+      second.socket.send(message(0x04, { button: "lock" }));
+      await vi.waitFor(() => expect(input.opened[0]?.sent).toHaveLength(7), { timeout: 10_000 });
+      expect(input.opened[0]?.sent.at(-1)).toEqual({ button: "lock", kind: "button" });
 
       input.opened[0]?.changeConfig({ height: 1179, orientation: "landscape_left", width: 2556 });
       for (const socket of [first, second]) {
