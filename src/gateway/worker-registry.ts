@@ -1,14 +1,3 @@
-/**
- * The gateway's picture of its fleet: one `WorkerView` per worker it has seen, and the facts it
- * emits as those views change (ADR 0005 §6, §8, §9, §22).
- *
- * Views are rebuilt over the uplink (§30: a gateway restart re-derives everything from the
- * workers that reconnect). Exactly one thing on them is persisted -- the drained set, which no
- * worker reports and which must survive both a worker reconnect and a gateway restart (Decision
- * 3, see `./drain-store.ts`). This class owns *what a view is and when it changes*; `WorkerLink`
- * owns the uplink that supplies the facts, and `GatewayDispatcher` owns answering operations
- * from them.
- */
 import type { z } from "zod";
 
 import type { EventBus, WorkerRejectedReason } from "../bus/index.js";
@@ -24,8 +13,6 @@ import type { DrainStore } from "./drain-store.js";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
 
-/** The fields a refresh over the uplink replaces. Everything else on a view -- identity, drain
- * state, connection state -- is this registry's own bookkeeping, never a worker's to report. */
 export type WorkerViewSnapshot = Pick<
   WorkerView,
   | "capabilities"
@@ -48,12 +35,12 @@ export type WorkerViewSnapshot = Pick<
   | "warmPool"
 >;
 
-/** A worker's device in the shape a grant carries it: what `GET /v1/leases/{id}` builds a lease
+/** why: A worker's device in the shape a grant carries it: what `GET /v1/leases/{id}` builds a lease
  * payload from. Kept beside a view, never on it, because a view is what `status.get` and
  * `worker.list` show every agent, and a virtual device's `driverDeviceId` is only the lease holder's to see. */
 export type WorkerGrantedDevice = z.infer<typeof grantedDeviceSchema>;
 
-/** What one refresh over the uplink commits: the view's fields, and the same devices in the
+/** why: What one refresh over the uplink commits: the view's fields, and the same devices in the
  * grant shape. Both come from one refresh and land in one call, so a lease the view reports is
  * never visible before the device it names. */
 export type WorkerRefresh = Partial<WorkerViewSnapshot> & {
@@ -63,15 +50,10 @@ export type WorkerRefresh = Partial<WorkerViewSnapshot> & {
 export interface WorkerRegistryOptions {
   readonly clock: Clock;
   readonly eventBus: EventBus;
-  /** `gateway.disconnectedRetentionMs` (ADR 0005 §6). */
   readonly retentionMs: number;
-  /**
-   * Where the drained set is kept across restarts (ADR 0005, Decision 3). Optional so a test
-   * that does not care about persistence need not fabricate one; a gateway always has one.
-   */
   readonly drainStore?: DrainStore;
   /**
-   * `gw:<this gateway's instance id>:` (ADR 0005 §14/§27) -- what marks a lease as *this*
+   * why: `gw:<this gateway's instance id>:` (ADR 0005 §14/§27) -- what marks a lease as *this*
    * gateway's own, rather than another gateway's or a worker's local one. Scopes the retention
    * hold (§6) to leases this gateway issued: a worker's own local lease is none of this
    * gateway's business to keep a view alive for, and holding one anyway would mean a machine
@@ -81,7 +63,7 @@ export interface WorkerRegistryOptions {
    */
   readonly gatewayRequesterPrefix?: string;
   /**
-   * Not optional: a real gateway always has a `lease.maxTtlMs`, and there is no safe placeholder
+   * why: Not optional: a real gateway always has a `lease.maxTtlMs`, and there is no safe placeholder
    * to compare a worker's cap against in its absence.
    */
   readonly leaseMaxTtlMs: number;
@@ -89,7 +71,7 @@ export interface WorkerRegistryOptions {
 }
 
 /**
- * A view without what a `status.get` read of a running worker fills in. A worker that answers
+ * why: A view without what a `status.get` read of a running worker fills in. A worker that answers
  * `starting` has had none of it checked, so what an earlier session saw is dropped rather than
  * shown as current: absent says "not known", where a stale or empty value would say "nothing
  * is leased".
@@ -115,22 +97,21 @@ function withoutReadFields(view: WorkerView): WorkerView {
 export class WorkerRegistry {
   readonly #workers = new Map<string, WorkerView>();
   readonly #grantedDevices = new Map<string, readonly WorkerGrantedDevice[]>();
-  /** A `starting` refresh leaves `catalog` off the view, but the gateway still knows what that
+  /** why: A `starting` refresh leaves `catalog` off the view, but the gateway still knows what that
    * worker listed when it last read it (ADR 0009 §4: a reconnecting worker stays known while its
    * new catalog is on the way). */
   readonly #lastCatalog = new Map<string, NonNullable<WorkerView["catalog"]>>();
   // why: a restarting worker stays known for its enrolled devices, as for its catalog (ADR 0009 §4).
   readonly #lastPhysicalDevices = new Map<string, NonNullable<WorkerView["devices"]>>();
-  /** A `starting` refresh leaves `leases` off the view, which is "not known", not "none". */
+  /** why: A `starting` refresh leaves `leases` off the view, which is "not known", not "none". */
   readonly #lastLeases = new Map<string, NonNullable<WorkerView["leases"]>>();
   /**
-   * Drained worker ids, including ids with no view yet. Kept beside the views rather than only
+   * why: Drained worker ids, including ids with no view yet. Kept beside the views rather than only
    * on them because drain outlives a view: an operator drains a machine, the machine is turned
    * off (its view eventually retired), and when it comes back it must still be drained. This
    * set is what `load()` restores and what `setDrained` writes back.
    */
   readonly #drained = new Set<string>();
-  /** `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- see that method's own doc comment. */
   readonly #viewsChangedListeners = new Set<() => void>();
   readonly #logger: Logger;
 
@@ -138,7 +119,7 @@ export class WorkerRegistry {
     this.#logger = options.logger ?? new NoopLogger();
   }
 
-  /** Restores the persisted drain set. Called once, before the uplink listener starts, so a
+  /** why: Restores the persisted drain set. Called once, before the uplink listener starts, so a
    * worker that reconnects in the first second is already drained when its view is built. */
   async load(): Promise<void> {
     for (const workerId of (await this.options.drainStore?.load()) ?? []) {
@@ -146,7 +127,6 @@ export class WorkerRegistry {
     }
   }
 
-  /** Every view, ordered by id so two calls in a row -- and two gateways -- agree. */
   views(): readonly WorkerView[] {
     return [...this.#workers.values()].sort((left, right) => left.id.localeCompare(right.id));
   }
@@ -162,7 +142,6 @@ export class WorkerRegistry {
    * Never shown to an operator: the view itself says "not read yet".
    */
   routingViews(): readonly WorkerView[] {
-    // A view that has a catalog holds the last one read, so only a starting view differs.
     return this.views().map((view) => {
       const catalog = this.#lastCatalog.get(view.id);
       const physical =
@@ -176,7 +155,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * Every worker's devices in the grant shape, each with the `workerId` it came from: what a
+   * why: Every worker's devices in the grant shape, each with the `workerId` it came from: what a
    * gateway's `GET /v1/leases/{id}` builds the lease payload from. Ordered by worker id, as
    * `views()` is. The caller matches a device by worker and id together, never by id alone.
    */
@@ -190,7 +169,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- #118's seam for running dispatch
+   * why: `./fleet-ports.ts`'s `FleetViews#onViewsChanged` -- #118's seam for running dispatch
    * whenever the fleet's queue or any worker view changes (ADR 0005 §11), without reaching into
    * this registry's internals or polling it. Called once per mutation this registry actually
    * commits (`connected`, `incompatible`, `refresh`, `disconnected`, `setDrained`, `remove`,
@@ -223,7 +202,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * A worker's uplink is open. A view that already exists keeps its drain state -- draining is
+   * why: A worker's uplink is open. A view that already exists keeps its drain state -- draining is
    * an operator's decision about a *machine*, and a worker that reconnects (a restart, a
    * flapping network) has not undone it. Everything the worker itself reports is left for the
    * first refresh; until then the view says `connected` and carries whatever the last session
@@ -239,7 +218,7 @@ export class WorkerRegistry {
     const view: WorkerView = {
       ...existing,
       connection: "connected",
-      // Read from the persisted set, not from the previous view: a worker connecting for the
+      // why: Read from the persisted set, not from the previous view: a worker connecting for the
       // first time after a gateway restart has no previous view, and must still be drained.
       drained: this.#drained.has(workerId),
       id: workerId,
@@ -247,7 +226,7 @@ export class WorkerRegistry {
       ...(label === undefined ? {} : { label }),
       ...(version === undefined ? {} : { version }),
     };
-    // A reconnect after an `incompatible` session must not keep the old ranges around.
+    // why: A reconnect after an `incompatible` session must not keep the old ranges around.
     const { protocol: _dropped, ...withoutProtocol } = view;
     this.#workers.set(workerId, withoutProtocol);
     this.options.eventBus.emit(
@@ -264,7 +243,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * ADR 0005 §31: the uplink is open but `hello` found no overlapping protocol version. The
+   * why: ADR 0005 §31: the uplink is open but `hello` found no overlapping protocol version. The
    * view records both ranges and nothing else -- the gateway asked the worker nothing, because
    * it cannot.
    *
@@ -292,7 +271,7 @@ export class WorkerRegistry {
       ...(label === undefined ? {} : { label }),
       ...(version === undefined ? {} : { version }),
     };
-    // ADR 0008 §8: host facts come from `status.get`, which an incompatible worker is never
+    // why: ADR 0008 §8: host facts come from `status.get`, which an incompatible worker is never
     // asked. A view left over from an earlier, compatible session must not keep showing them,
     // nor the installs or waiting requests that status listed (ADR 0010 §7).
     const {
@@ -364,7 +343,6 @@ export class WorkerRegistry {
       ...held,
       ...snapshot,
       lastSeenAt: now,
-      // ADR 0009 §4: a refresh that carries a catalog is a read of it.
       ...(snapshot.catalog === undefined ? {} : { catalogReadAt: now }),
     };
     const next = built.connection === "connected" ? built : withoutLoad(built);
@@ -395,7 +373,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * ADR 0005 §15: the gateway's own `lease.maxTtlMs` decides a fleet lease's width at
+   * why: ADR 0005 §15: the gateway's own `lease.maxTtlMs` decides a fleet lease's width at
    * admission, before any worker is chosen -- but what the gateway dispatches is an ordinary
    * `lease.request`, so a worker whose own cap is lower still refuses a request the gateway
    * already accepted. That mismatch becomes visible the moment this worker's `config.get`
@@ -415,8 +393,6 @@ export class WorkerRegistry {
    */
   #warnOnLowerMaxTtl(previous: WorkerView, next: WorkerView): void {
     const workerMaxTtlMs = next.lease?.maxTtlMs;
-    // No cap reported (an incompatible worker, a failed config.get, or one older than this
-    // field) is not a fact to warn about -- there is nothing to compare.
     if (workerMaxTtlMs === undefined || workerMaxTtlMs >= this.options.leaseMaxTtlMs) return;
     if (previous.lease?.maxTtlMs === workerMaxTtlMs) return;
     this.#logger.warn(
@@ -431,7 +407,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * ADR 0005 §6: the uplink is the reachability signal, and a closed one does not delete
+   * why: ADR 0005 §6: the uplink is the reachability signal, and a closed one does not delete
    * anything. The view keeps its last-known state -- capacity, devices, and above all the
    * leases the worker still holds -- until retention elapses or an operator removes it. A view
    * that disconnects while `starting` holds no capacity, devices or leases; the leases last read
@@ -440,7 +416,7 @@ export class WorkerRegistry {
   disconnected(workerId: string): void {
     const existing = this.#workers.get(workerId);
     if (existing === undefined || existing.connection === "disconnected") return;
-    // ADR 0010 §7: an install on a worker nobody can reach is not known to be in progress, so
+    // why: ADR 0010 §7: an install on a worker nobody can reach is not known to be in progress, so
     // the view stops listing it rather than showing it running for ever. The same goes for the
     // requests waiting in that worker's own queue.
     const {
@@ -456,7 +432,7 @@ export class WorkerRegistry {
     this.options.eventBus.emit(
       "worker.disconnected",
       {
-        // A view that went away while `starting` has no leases listed; what the gateway last
+        // why: A view that went away while `starting` has no leases listed; what the gateway last
         // read is what the worker still holds, which is what is stranded.
         leaseCount: (existing.leases ?? this.#lastLeases.get(workerId) ?? []).length,
         workerId,
@@ -468,7 +444,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * ADR 0005 §9. Idempotent by design: draining an already-drained worker succeeds and emits
+   * why: ADR 0005 §9. Idempotent by design: draining an already-drained worker succeeds and emits
    * nothing, because nothing changed and an event is a fact about a change. An operator
    * re-running a command should not have to care, and neither should a script.
    *
@@ -515,7 +491,7 @@ export class WorkerRegistry {
       if (this.#drained.delete(workerId)) {
         await this.options.drainStore?.save([...this.#drained]);
       }
-      // Unlike drain, an id with no view is not an error: "forget this worker" is already true
+      // why: Unlike drain, an id with no view is not an error: "forget this worker" is already true
       // of one the gateway has never heard of or has already retired, so it is an outcome to
       // report (`removed: false`) rather than a failure to raise.
       return false;
@@ -532,7 +508,7 @@ export class WorkerRegistry {
   }
 
   /**
-   * ADR 0005 §6's retention sweep, run from the gateway's periodic tick. Two conditions, both
+   * why: ADR 0005 §6's retention sweep, run from the gateway's periodic tick. Two conditions, both
    * required:
    *
    * 1. every *gateway-issued* lease the view shows, or the last leases read from it when it
@@ -565,7 +541,7 @@ export class WorkerRegistry {
       (view) =>
         view.connection === "disconnected" &&
         view.lastSeenAt <= cutoff &&
-        // A view with no `leases` field is "not read" (a worker never read, or one that went
+        // why: A view with no `leases` field is "not read" (a worker never read, or one that went
         // away while starting): the leases last read stand, and none when none ever were.
         !(view.leases ?? this.#lastLeases.get(view.id) ?? []).some(
           (lease) =>
