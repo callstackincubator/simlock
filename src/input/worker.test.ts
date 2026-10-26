@@ -189,4 +189,45 @@ describe("a worker's input socket", () => {
     expect(after.closed).toEqual({ code: 4001, reason: "lease ended" });
     expect(after.sent).toEqual([]);
   });
+
+  it("sends the gateway a heartbeat every 5 s while its channel is open and none after it closes", async () => {
+    const { clock, worker } = await setup();
+    const toGateway = new TransformStream<Uint8Array, Uint8Array>();
+    const fromGateway = new TransformStream<Uint8Array, Uint8Array>();
+    const written: number[] = [];
+    void toGateway.readable.pipeTo(
+      new WritableStream({
+        write: (chunk) => {
+          written.push(...chunk);
+        },
+      }),
+    );
+    const answer = await worker.relayTwoWay?.(new Request("http://simlock/input"), "gw:t", "L-1", {
+      readable: fromGateway.readable,
+      signal: new AbortController().signal,
+      writable: toGateway.writable,
+    });
+    expect(answer?.status).toBe(200);
+    const heartbeat = [0, 0, 0, 1, 0xf0];
+    const heartbeats = (): number => {
+      let count = 0;
+      for (let at = 0; at + 5 <= written.length; at += 1) {
+        if (heartbeat.every((byte, offset) => written[at + offset] === byte)) count += 1;
+      }
+      return count;
+    };
+    await vi.waitFor(() => expect(written.slice(0, 5)).toEqual([0, 0, 0, 1, 0x83]));
+
+    clock.advance(4_999);
+    expect(heartbeats()).toBe(0);
+    clock.advance(1);
+    await vi.waitFor(() => expect(heartbeats()).toBe(1));
+    clock.advance(5_000);
+    await vi.waitFor(() => expect(heartbeats()).toBe(2));
+
+    await endLease(worker, "explicit");
+    clock.advance(20_000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heartbeats()).toBe(2);
+  });
 });
