@@ -104,11 +104,11 @@ under leasing's signal (`lease.endWaitMs`).
 ## Flow: through a gateway
 
 1. Gateway front runs the same rules; its link is `RelayHostLink`.
-2. Allocate's `lease.request` adds `requires: ["agent-device"]`; the gateway places it on
-   a worker whose capability is available.
+2. Allocate's `lease.request` adds `requires: ["agent-device"]`; the gateway places it on a worker whose capability is available.
 3. Every later call is relayed to the lease's worker (`FleetPort.relay` → `GatewayRelay`,
    target `agent-device`) with tenant `gw.<gateway instance id>.<principal>`, cut to 128
-   chars with a hash. A lease not the token's → 403. No lease: only `GET /health`.
+   chars with a hash. A lease not the token's → 403. No lease: only `GET /health`, to the first undrained capable worker.
+   Relayed calls drop the client's `x-agent-device-(upstream-)instance` pins: they name the `/health` daemon, not the lease's (409).
 4. Worker: `agentDeviceRelayTarget` → `RoutedHostLink` (the lease id picks the phone daemon or the simulator daemon) → host, requester = tenant.
    No front rules run on the worker.
 5. Worker unreachable → "try again" reply; a command so answered ends its renewal
