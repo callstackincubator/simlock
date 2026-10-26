@@ -86,7 +86,7 @@ const isWebsiteAsset = (name: string): boolean =>
 describe("tracked files", () => {
   const trackedFiles = lsFiles([])
     .filter((name) => !isCommittedBinary(name))
-    // A submodule or a path deleted from the working tree is still listed by
+    // why: A submodule or a path deleted from the working tree is still listed by
     // `git ls-files`; only regular files can be read.
     .filter((name) => {
       try {
@@ -97,7 +97,7 @@ describe("tracked files", () => {
     });
 
   it("were enumerated from the git index", () => {
-    // Without this, an `execFileSync` that returned nothing would leave `it.each` with an
+    // why: Without this, an `execFileSync` that returned nothing would leave `it.each` with an
     // empty list and the suite would pass while checking no file at all.
     expect(trackedFiles.length).toBeGreaterThan(100);
   });
