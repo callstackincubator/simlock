@@ -18,15 +18,24 @@ import type {
   ProcessResult,
   TcpStream,
 } from "../../../ports/index.js";
-import { ChunkReader, openDeviceSocket } from "./adb-socket.js";
+import type { ChunkReader } from "./adb-socket.js";
 import { EnvelopeMapper } from "./envelope.js";
+import {
+  CLOSE_DEADLINE_MS,
+  connectScrcpySocket,
+  DEVICE_DIRECTORY,
+  errorMessage,
+  exitsWithin,
+  pushScrcpyServer,
+  REMOVE_TIMEOUT_MS,
+  SCRCPY_SERVER_VERSION,
+  SHELL_EXIT_GRACE_MS,
+  START_DEADLINE_MS,
+} from "./scrcpy-link.js";
+
+export { CLOSE_DEADLINE_MS, CONNECT_RETRY_MS, START_DEADLINE_MS } from "./scrcpy-link.js";
 import { ScrcpyVideoParser } from "./scrcpy-video.js";
 
-// why: the server refuses to start unless its first argument equals the version it was built as, so
-// this must match the vendored jar byte for byte.
-const SCRCPY_SERVER_VERSION = "5.0.1";
-const DEVICE_DIRECTORY = "/data/local/tmp";
-const PUSH_TIMEOUT_MS = 30_000;
 // why: a phone's screen state is read before anything is pushed, and read again only after a wake; a read that outlives this
 // goes on to the push rather than refusing, because only a read that says off is a fact about the screen.
 const SCREEN_READ_TIMEOUT_MS = 10_000;
@@ -34,16 +43,6 @@ const WAKEFULNESS_LINE = /^\s*mWakefulness=(\S+)\s*$/;
 const WAKE_TIMEOUT_MS = 10_000;
 const SCREEN_OFF_MESSAGE =
   "The phone's screen is off and did not turn on. Turn it on and ask for the stream again.";
-// why: measured from the moment the push returned, through every connect retry, to the first session
-// packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
-export const START_DEADLINE_MS = 15_000;
-// why: scrcpy's own client retries its connection every 100 ms while the server starts.
-export const CONNECT_RETRY_MS = 100;
-// why: scrcpy's own client gives the server one second to exit after its sockets close, then kills
-// the adb process that runs it.
-const SHELL_EXIT_GRACE_MS = 1_000;
-const REMOVE_TIMEOUT_MS = 3_000;
-export const CLOSE_DEADLINE_MS = 5_000;
 // why: scrcpy's encoder repeats a still picture once and then sends nothing until the screen changes,
 // so a still screen would look exactly like a dead capture to every silence bound downstream. While
 // the socket is open the session says so with an empty `alive` frame, well inside those bounds.
@@ -232,17 +231,10 @@ class ScrcpySession {
   }
 
   async #push(): Promise<void> {
-    const result = await this.#target.run(
-      ["push", this.#serverPath, this.#devicePath],
-      PUSH_TIMEOUT_MS,
-    );
-    // why: a push that timed out may still have written part of the file, so cleanup removes it too.
-    this.#pushed = true;
-    if (result.code !== 0) {
-      throw new ScreenUnavailableError(
-        `adb could not copy the screen server to ${this.#target.serial}: ${(result.stderr || result.stdout).trim()}`,
-      );
-    }
+    await pushScrcpyServer(this.#target, this.#serverPath, this.#devicePath, () => {
+      // why: a push that timed out may still have written part of the file, so cleanup removes it too.
+      this.#pushed = true;
+    });
   }
 
   // why: resolves with the moment the server's process started -- the 15 s budget begins there, so a
@@ -310,65 +302,16 @@ class ScrcpySession {
   }
 
   async #connect(deadlineAt: number): Promise<ChunkReader> {
-    const signal = this.#abort.signal;
-    let last = "no attempt finished";
-    for (;;) {
-      if (signal.aborted) throw this.#startFailure(`did not accept a connection (${last})`);
-      const attempt = await this.#attempt(deadlineAt, signal);
-      if (typeof attempt !== "string") return attempt;
-      last = attempt;
-      await this.#sleep(CONNECT_RETRY_MS, signal);
-    }
-  }
-
-  async #attempt(deadlineAt: number, signal: AbortSignal): Promise<ChunkReader | string> {
-    try {
-      const outcome = await openDeviceSocket({
-        connect: (timeoutMs) => this.#target.connect(timeoutMs),
-        serial: this.#target.serial,
-        signal,
-        socketName: `scrcpy_${this.#scidHex}`,
-        timeoutMs: Math.max(1, deadlineAt - this.#clock.now()),
-      });
-      if (outcome.kind === "no-transport") {
-        throw new ScreenUnavailableError(
-          `adb cannot reach ${this.#target.serial}: ${outcome.reason}`,
-        );
-      }
-      if (outcome.kind !== "open") return outcome.reason;
-      this.#stream = outcome.stream;
-      if (signal.aborted) outcome.stream.close();
-      else signal.addEventListener("abort", () => outcome.stream.close(), { once: true });
-      // why: the server writes one zero byte the moment it accepts, so a connection that ends
-      // before it is one that reached nothing and is retried.
-      const dummy = await outcome.reader.readExactly(1);
-      if (dummy?.[0] === 0) return outcome.reader;
-      outcome.stream.close();
-      return dummy === undefined
-        ? "the socket closed before the server spoke"
-        : "the socket is not scrcpy's";
-    } catch (error) {
-      if (error instanceof ScreenUnavailableError) throw error;
-      return errorMessage(error);
-    }
-  }
-
-  #sleep(delayMs: number, signal: AbortSignal): Promise<void> {
-    return new Promise<void>((resolve) => {
-      if (signal.aborted) {
-        resolve();
-        return;
-      }
-      const timer = this.#clock.setTimer(delayMs, () => {
-        signal.removeEventListener("abort", wake);
-        resolve();
-      });
-      const wake = () => {
-        this.#clock.cancel(timer);
-        resolve();
-      };
-      signal.addEventListener("abort", wake, { once: true });
+    const { reader, stream } = await connectScrcpySocket({
+      clock: this.#clock,
+      deadlineAt,
+      scidHex: this.#scidHex,
+      signal: this.#abort.signal,
+      stopped: (last) => this.#startFailure(`did not accept a connection (${last})`),
+      target: this.#target,
     });
+    this.#stream = stream;
+    return reader;
   }
 
   #startFailure(what: string): ScreenUnavailableError {
@@ -494,24 +437,6 @@ class ScrcpySession {
   }
 
   async #exitsWithin(shell: ProcessHandle, delayMs: number): Promise<boolean> {
-    if (this.#shellExited) return true;
-    let timer: ReturnType<Clock["setTimer"]> | undefined;
-    try {
-      return await Promise.race([
-        shell.wait().then(
-          () => true,
-          () => true,
-        ),
-        new Promise<boolean>((resolve) => {
-          timer = this.#clock.setTimer(delayMs, () => resolve(false));
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) this.#clock.cancel(timer);
-    }
+    return this.#shellExited || (await exitsWithin(this.#clock, shell, delayMs));
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
