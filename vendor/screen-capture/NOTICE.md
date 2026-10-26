@@ -21,9 +21,9 @@ per file, below.
 
 Upstream ships no `NOTICE` file, so Apache §4(d) is vacuous here, and none of the
 files we took carries a per-file license header, so §4(c) has no per-file text to
-retain. §4(b) asks every file we modified to say so prominently: each of the five
-below that is not upstream's unchanged — `FrameCapture.swift` and the four we
-rewrote — opens with a `MODIFIED FILE` header naming serve-sim, its license and
+retain. §4(b) asks every file we modified to say so prominently: each of the six
+below that is not upstream's unchanged — `FrameCapture.swift`, `HIDInjector.swift`
+and the four we rewrote — opens with a `MODIFIED FILE` header naming serve-sim, its license and
 this notice. The license text in `LICENSES/` is upstream's root `LICENSE`, byte for
 byte; it is named for the project it covers rather than plain `LICENSE` because
 this directory also holds code of ours that the file does not license.
@@ -51,10 +51,12 @@ per row.
 | `simlock-screen-capture/FramebufferSurfaceSelector.swift`                           | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                           |
 | `simlock-screen-capture/DeviceDisplaySizes.swift`                                   | `Sources/SimNativeSupport/` | theirs, unchanged                                                                                                                                           |
 | `simlock-screen-capture/FrameCapture.swift`                                         | `Sources/SimNative/`        | theirs, **one patch** (deviation 1)                                                                                                                         |
+| `simlock-screen-capture/HIDInjector.swift`                                          | `Sources/SimNative/`        | theirs, **modified by us** — Apache-2.0, `MODIFIED FILE` header; the Duo, Device Hub, pose, Home, app switcher and Lock paths are deleted (deviation 3)     |
 | `SimlockCapture/H264Encoder.swift`                                                  | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
 | `SimlockCapture/VideoEncoder.swift`                                                 | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
 | `SimlockCapture/PixelBufferUtils.swift`                                             | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
 | `SimlockCapture/Xcode.swift`                                                        | `Sources/SimNative/`        | theirs, **rewritten by us** — a modified file, Apache-2.0, `MODIFIED FILE` header                                                                           |
+| `simlock-screen-capture/InputMode.swift`                                            | —                           | ours, entirely: the `--input` mode that drives `HIDInjector` from stdin                                                                                     |
 | `SimlockCapture/Lifecycle.swift`, `SimlockCapture/Options.swift`                    | —                           | ours, entirely: the option parser, the envelope, the lifecycle, the scaler, the encode loop                                                                 |
 | `simlock-screen-capture/main.swift`, `simlock-screen-capture/SimulatorSource.swift` | —                           | ours, entirely: the simulator program and its framebuffer as a `ScreenSource`                                                                               |
 | `simlock-device-capture/*` (five files)                                             | —                           | ours, entirely: the iPhone program — the version gate, the CoreDevice source, the RTP receiver, the decoder — rewritten from this repo's own PoC (ADR 0031) |
@@ -63,7 +65,7 @@ per row.
 | `scripts/unframe.mjs`                                                               | —                           | ours, entirely: a hand-run diagnostic                                                                                                                       |
 | `Package.swift`                                                                     | —                           | ours, entirely                                                                                                                                              |
 
-To diff any of the eight serve-sim files, use the command at the end with the
+To diff any of the nine serve-sim files, use the command at the end with the
 upstream path from its row and the file's path under `Sources/`.
 
 Four files were rewritten rather than copied, and they are still serve-sim's files,
@@ -94,8 +96,8 @@ itself), `Sources/SimNativeSupport/DeviceHubKeyboardRouting.swift` and
 
 The whole of serve-sim's NodeAPI binding and everything behind it: the
 node-swift module `sim-module.swift`, the HID injection and accessibility
-bridges (`HIDInjector.swift`, `AccessibilityBridge.swift`,
-`DeviceHubKeyboardBridge.swift`, `DuoHIDBridge.swift`), the capture orchestration
+bridges (`AccessibilityBridge.swift`, `DeviceHubKeyboardBridge.swift`,
+`DuoHIDBridge.swift`; `HIDInjector.swift` was taken in part, deviation 3), the capture orchestration
 we replaced with `main.swift` (`CaptureEngine.swift`), the Duo hardware renderer
 (`SimDuoRenderer/*`), the Objective-C camera, accessibility and HID helpers
 (`SimCameraInjector/*`, `SimCameraHelper/*`, `SimAXSettings/*`, `SimDuoHID/*`),
@@ -104,7 +106,7 @@ from serve-sim: the framebuffer of a device nobody is looking at, encoded.
 
 ## Deviations
 
-Two that change behaviour, both deliberate. Each is here because a later reader
+Four that change behaviour, all deliberate. Each is here because a later reader
 must not "clean up" back to upstream's behaviour and silently break a simlock
 feature. The mechanical consequences of the package layout — the files not taken,
 the import that went away — are named where they show up, not counted here.
@@ -129,8 +131,22 @@ needs node-swift. We do not embed a Node module: the program writes frames to
 stdout, so the daemon supervises a capture exactly as it supervises every other
 tool it runs, and `sim-module.swift` was never taken.
 
+**3. `HIDInjector.swift` is serve-sim's file without the paths simlock does not
+use or does elsewhere.** The Duo hinge and cover paths (`DuoHIDBridge`), the Device
+Hub keyboard bridge (`DeviceHubKeyboardBridge`), the fold pose (`DevicePose`) and the
+`home`, `app_switcher` and `lock` buttons are deleted. Home is the daemon's
+`xcrun simctl --set <set> launch <udid> com.apple.springboard` (`src/drivers/ios/input/`),
+the way upstream does it on Xcode 26 and later ("Xcode 26+ silently drops the Indigo
+HID home-button press"), so it has one owner; the app switcher and Lock are Indigo
+button presses and are out of scope (#1024). Touch, scroll, key and the rest are
+upstream's. The file's own `MODIFIED FILE` header is the authoritative wording.
+
+**4. `FrameCapture.nativeScreenSizes(for:)` is internal, not private.** The input
+mode reads the device type's native pixel size from it, because
+`getScreenSize` answers only once frames arrive and the input mode captures none.
+
 One mechanical consequence of flattening two upstream targets into one:
-`FrameCapture.swift` no longer says `import SimNativeSupport`, because there is
+`FrameCapture.swift` and `HIDInjector.swift` no longer say `import SimNativeSupport`, because there is
 no second target to import. Nothing else differs.
 
 ## The maintenance risk, and the escape hatch
@@ -166,7 +182,7 @@ sources:
 | class       | `NSClassFromString("SimServiceContext")`                              | `PrivateHeaders/CoreSimulator/SimServiceContext.h`                                                |
 | file schema | `Contents/Resources/capabilities.plist` inside a device type's bundle | **not declared there**, and undocumented by Apple                                                 |
 
-That is twenty distinct private members: twelve selectors, six key-value-coding
+That is, for the framebuffer path, twenty distinct private members: twelve selectors, six key-value-coding
 keys, one class name and one plist schema. `facebook/idb` is MIT-licensed, and
 sixteen of the twenty are declared in its `PrivateHeaders/CoreSimulator/` and
 `PrivateHeaders/CoreSimDeviceIO/`.
@@ -181,6 +197,15 @@ so one fetch reads any of them:
 curl -sL https://raw.githubusercontent.com/facebook/idb/main/PrivateHeaders/CoreSimulator/SimServiceContext.h
 curl -sL https://raw.githubusercontent.com/facebook/idb/main/PrivateHeaders/CoreSimDeviceIO/SimScreen-Protocol.h
 ```
+
+The input mode (`HIDInjector.swift`) reaches a second surface the same way, as
+serve-sim's code does and without a second source cross-referenced here:
+`SimDeviceLegacyHIDClient` (`initWithDevice:error:`,
+`sendWithMessage:freeWhenDone:completionQueue:completion:`), found with
+`NSClassFromString` and `class_getMethodImplementation`, and the `IndigoHIDMessageFor…`
+C functions (`MouseNSEvent`, `Button`, `HIDArbitrary`, `KeyboardArbitrary`,
+`DigitalCrownEvent`), found with `dlsym`. The re-read when Apple moves one is the same
+diff of this file against upstream.
 
 What is _not_ in idb is the other half of the story, and it is where a break will
 land first: `portIdentifier`, the `bundlePath`/`bundleURL` pair on
@@ -201,11 +226,12 @@ curl -sL https://raw.githubusercontent.com/EvanBacon/serve-sim/6d009686ed08f7d8b
   | diff -u - Sources/simlock-screen-capture/FrameCapture.swift
 ```
 
-That prints four things and nothing else — the `MODIFIED FILE` header Apache §4(b)
-asks for, the device-set patch, the deleted `import SimNativeSupport`, and the
+That prints five things and nothing else — the `MODIFIED FILE` header Apache §4(b)
+asks for, the device-set patch, the `private` that became internal on
+`nativeScreenSizes`, the deleted `import SimNativeSupport`, and the
 `import SimlockCapture` that replaced it — which is the whole claim of this notice
 in one screenful. If that diff ever grows past those
-four, either someone edited upstream's capture logic or Apple moved something
+five, either someone edited upstream's capture logic or Apple moved something
 upstream, and both deserve to be noticed rather than committed. For any other file
 in the table, substitute its upstream path in both places — for the four rewritten
 ones it prints a whole-file rewrite, which is what their rows say:
@@ -245,11 +271,12 @@ URL either returns that commit's bytes or fails.
 `scripts/unframe.mjs`, the whole of `Sources/SimlockCapture/` but for the four
 encoder files (`Lifecycle.swift` and `Options.swift`: the option parser, the
 envelope, the lifecycle, the scaler, the encode loop), both programs'
-`main.swift` and `Sources/simlock-screen-capture/SimulatorSource.swift`, the
+`main.swift`, `Sources/simlock-screen-capture/SimulatorSource.swift` and
+`Sources/simlock-screen-capture/InputMode.swift`, the
 whole of `Sources/simlock-device-capture/` and `Sources/SimlockMediaBridge/`,
 and the three interfaces under `Stubs/`. Everything else is serve-sim's: three
-files unchanged, `FrameCapture.swift` with the one patch above, and the four
-rewritten files, which are serve-sim's files modified by us and are Apache-2.0
+files unchanged, `FrameCapture.swift` with the patches above, `HIDInjector.swift`
+with its deletions, and the four rewritten files, which are serve-sim's files modified by us and are Apache-2.0
 like the rest of serve-sim's code here.
 
 ### idevice (MIT): the HEVC capability string

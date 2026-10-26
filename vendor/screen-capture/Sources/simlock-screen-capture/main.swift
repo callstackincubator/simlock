@@ -3,6 +3,10 @@
 // Usage:
 //   simlock-screen-capture <UDID> [--codec avcc|mjpeg] [--fps N] [--bitrate BPS]
 //                              [--max-dimension PX] [--duration SEC]
+//   simlock-screen-capture <UDID> --input
+//
+// `--input` writes no picture: it injects the touches, scrolls and keys the daemon sends on stdin
+// into the simulator and says its native size once on stdout (see InputMode.swift).
 //
 // Environment:
 //   SIMLOCK_IOS_DEVICE_SET   the `simctl --set` root the device lives in (see FrameCapture)
@@ -39,8 +43,13 @@ import SimlockCapture
 // build: FrameCapture logs with `print` while it starts.
 Wire.claimStdout()
 
-guard let options = parseOptions(Array(CommandLine.arguments.dropFirst())) else {
-    log("usage: simlock-screen-capture <UDID> [--codec avcc|mjpeg] [--fps N] [--bitrate BPS] [--max-dimension PX] [--duration SEC]")
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments.count == 2, arguments[1] == "--input" {
+    await runInput(udid: arguments[0])
+}
+
+guard let options = parseOptions(arguments) else {
+    log("usage: simlock-screen-capture <UDID> [--codec avcc|mjpeg] [--fps N] [--bitrate BPS] [--max-dimension PX] [--duration SEC] | simlock-screen-capture <UDID> --input")
     exit(64)
 }
 

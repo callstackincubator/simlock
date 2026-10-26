@@ -1,7 +1,9 @@
 // MODIFIED FILE — this file is copied from serve-sim (Copyright 2026 Evan Bacon, Apache-2.0;
 // see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's change
 // is `deviceSetPath` and its use in `findSimDevice`, so that a simulator booted in a
-// simlock-owned `simctl --set` root can be found at all; everything else here is upstream's.
+// simlock-owned `simctl --set` root can be found at all, and `nativeScreenSizes` being internal
+// instead of private, so the input mode can report the device's size; everything else here is
+// upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -355,7 +357,7 @@ actor FrameCapture {
     /// Native pixel sizes for every integrated digitizer display on this device
     /// type. Foldables list more than one (iPhone Duo cover + inner). Falls back
     /// to `SimDeviceType.mainScreenSize` when the capabilities plist is missing.
-    private static func nativeScreenSizes(for device: NSObject) -> [FramebufferSurfaceSize] {
+    static func nativeScreenSizes(for device: NSObject) -> [FramebufferSurfaceSize] {
         if let fromCapabilities = sizesFromCapabilities(device), !fromCapabilities.isEmpty {
             return fromCapabilities
         }

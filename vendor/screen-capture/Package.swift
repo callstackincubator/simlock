@@ -20,6 +20,9 @@
 //     need it, and the daemon can then supervise the capture the same way it supervises every
 //     other tool it runs.
 //
+// Its input mode (`simlock-screen-capture <UDID> --input`) also carries serve-sim's `HIDInjector.swift`,
+// without the Duo, Device Hub, pose, Home, app switcher and Lock paths (NOTICE.md, deviations 3 and 4).
+//
 // The encoders are serve-sim's files rewritten here: `H264Encoder.swift`, `VideoEncoder.swift`,
 // `PixelBufferUtils.swift` and `Xcode.swift` now use public VideoToolbox, CoreVideo, CoreMedia and
 // ImageIO, and as modified files of serve-sim they stay under Apache-2.0 (see NOTICE.md).

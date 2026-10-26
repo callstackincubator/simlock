@@ -236,8 +236,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  // why: the input socket's iOS device input arrives with #1019, so the case waits for it there.
-  it.skipIf(platform === "ios")(
+  it(
     "an agent taps the centre of tab-status through the lease's input socket, as agent-device's snapshot places it, and the next snapshot shows the Status tab's screen",
     { timeout: 600_000 },
     async () => {

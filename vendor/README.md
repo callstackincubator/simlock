@@ -2,7 +2,7 @@
 
 | Directory         | Upstream                                                                                                                                                                | License                                                                     | Notice                                                 |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `screen-capture/` | `EvanBacon/serve-sim` — a capture and encode pipeline we patched, four files rewritten; plus one HEVC capability string from `jkcoxson/idevice` (MIT)                   | Apache-2.0 (our own files MIT, one MIT string from idevice)                 | [`screen-capture/NOTICE.md`](screen-capture/NOTICE.md) |
+| `screen-capture/` | `EvanBacon/serve-sim` — a capture, encode and HID-input pipeline we patched, four files rewritten; plus one HEVC capability string from `jkcoxson/idevice` (MIT)        | Apache-2.0 (our own files MIT, one MIT string from idevice)                 | [`screen-capture/NOTICE.md`](screen-capture/NOTICE.md) |
 | `scrcpy/`         | `Genymobile/scrcpy` — the server artifact, byte-identical, pushed unmodified to a leased emulator by the Android driver, whose client is ours in `src/drivers/android/` | Apache-2.0, plus BSD-3-Clause and BSL-1.0 code in the bundled Kotlin stdlib | [`scrcpy/NOTICE.md`](scrcpy/NOTICE.md)                 |
 
 A first-level directory here is third-party or derived-from-third-party code, and

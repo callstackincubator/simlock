@@ -16,6 +16,8 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `devicectl-exec.ts`       | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                           |
 | `slim-labels.ts`          | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                                                                                                        |
 | `prerequisites.ts`        | `iosPrerequisites`: Xcode selected, license accepted, first launch done                                                                                                         |
+| `input/`                  | `createIosDeviceInput`: the lease's input socket on a simulator, through `simlock-screen-capture --input`; a physical iPhone answers unavailable                                |
+| `runtime-version.ts`      | `iosRuntimeVersionFromId`: the iOS major and minor a runtime id names                                                                                                           |
 | `screen-capture.ts`       | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone                                                                                     |
 
 ## How it works
@@ -93,6 +95,15 @@ Programs: dist/bin from `pnpm build`, or `drivers.ios.screenCaptureCommand` and
 program enforces its pin: a CoreDevice major other than 642 exits 69 with the reason, a 503 for
 the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
 
+Input — `input` (offered with `screenCapture`, same launcher): `simlock-screen-capture <udid> --input`
+with the same `SIMLOCK_IOS_DEVICE_SET` rule. stdout: one `0x82` `{width,height}` (the device type's native
+size) within 10 s of spawn, else the open rejects (also for a missing program or an early exit; the helper is
+stopped). stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06` and scroll `0x0b`; a failed write or a later
+exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is
+logged); the app switcher, Lock and Back are dropped. The config is always `portrait`, with `keyboardUnavailable: true`
+when the runtime is iOS 27 or later or unreadable, and keys are then dropped. Close: stdin, 2 s, SIGKILL. A physical iPhone answers
+`{unavailable}` and starts nothing.
+
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
 
@@ -122,6 +133,7 @@ record of a device's mode; `driverData` holds the slim signature.
 
 ## Known gaps
 
+- **Input:** no app switcher, Lock, rotation or keys on iOS 27 runtimes (#1024). The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
 - **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Every reclaim erases, so the next boot re-slims: two boots each
