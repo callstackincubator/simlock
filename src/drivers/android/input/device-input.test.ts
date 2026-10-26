@@ -17,7 +17,7 @@ import {
   type ScriptedProcessExpectation,
   type TcpStream,
 } from "../../../ports/index.js";
-import type { ScreenTarget } from "../screen/index.js";
+import { START_DEADLINE_MS, type ScreenTarget } from "../screen/index.js";
 import { createAndroidDeviceInput } from "./index.js";
 
 const ADB = "/sdk/platform-tools/adb";
@@ -138,6 +138,8 @@ class FakeTarget implements ScreenTarget {
   display: ProcessResult = displays(1080, 2400);
   // why: stands in for a closed version check: every command and connection is refused as it refuses them.
   gateClosed = false;
+  // why: a server that never opens its socket, as one that failed to start leaves it: adb answers `closed`.
+  socketRefused = false;
 
   constructor(
     readonly serial: string,
@@ -166,19 +168,20 @@ class FakeTarget implements ScreenTarget {
   async connect(): Promise<TcpStream> {
     this.#check();
     const peer = new Peer();
-    peer.send("OKAY", "OKAY", new Uint8Array([0]));
+    if (this.socketRefused) peer.send("OKAY", "FAIL0006closed");
+    else peer.send("OKAY", "OKAY", new Uint8Array([0]));
     this.peers.push(peer);
     return peer.stream;
   }
 }
 
-function push(): ScriptedProcessExpectation {
+function push(code = 0): ScriptedProcessExpectation {
   return {
     match: {
       args: ["push", SERVER, /^\/data\/local\/tmp\/simlock-scrcpy-[0-9a-f]{8}\.jar$/],
       command: ADB,
     },
-    result: { code: 0, stderr: "", stdout: "" },
+    result: { code, stderr: code === 0 ? "" : "adb: 1 file pushed, 0 skipped", stdout: "" },
   };
 }
 
@@ -200,9 +203,12 @@ function remove(): ScriptedProcessExpectation {
 
 // why: both devices' worlds: the other device's target is here so "it went through this device's
 // target" can fail, since an input aimed at the wrong device would show up in the other's log.
-function setup(device: VirtualDriverDevice | PhysicalDriverDevice = DEVICE) {
+function setup(
+  device: VirtualDriverDevice | PhysicalDriverDevice = DEVICE,
+  expectations = [push(), shell(), remove()],
+) {
   const clock = new FakeClock(1_000);
-  const target = new FakeTarget(device.address, [push(), shell(), remove()]);
+  const target = new FakeTarget(device.address, expectations);
   const other = new FakeTarget("other", []);
   const factory = createAndroidDeviceInput({
     clock,
@@ -263,5 +269,23 @@ describe("Android device input: open", () => {
     await expect(open(closed)).resolves.toEqual({ unavailable: GATE_REFUSAL });
     expect(closed.target.log).toEqual([]);
     expect(closed.target.peers).toEqual([]);
+
+    const removal = `shell rm -f ${DEVICE_JAR}`;
+    const silent = setup();
+    silent.target.socketRefused = true;
+    const started = silent.clock.now();
+    await expect(open(silent)).rejects.toThrow("did not accept a connection");
+    expect(silent.clock.now() - started).toBeGreaterThanOrEqual(START_DEADLINE_MS);
+    expect(silent.clock.now() - started).toBeLessThan(START_DEADLINE_MS + 1_000);
+    expect(silent.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS, removal]);
+
+    const unpushed = setup(DEVICE, [push(1), remove()]);
+    await expect(open(unpushed)).rejects.toThrow("could not copy the screen server");
+    expect(unpushed.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, removal]);
+
+    const sizeless = setup();
+    sizeless.target.display = { code: 0, stderr: "", stdout: "Display: mDisplayId=0\n" };
+    await expect(open(sizeless)).rejects.toThrow("did not report its screen size");
+    expect(sizeless.target.log).toEqual([]);
   });
 });
