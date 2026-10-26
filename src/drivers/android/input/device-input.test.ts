@@ -385,6 +385,13 @@ describe("Android device input: open", () => {
     await settle(ended.clock, 6_000);
     expect(ended.target.reads).toBe(readsAtClose);
     expect(ended.target.peers[0]?.closed).toBe(true);
+    // why: handles are push, shell, rm in order; the scripted shell only ends when it is killed, so an ended wait proves the close killed it.
+    let shellEnded = false;
+    void ended.target.runner.handles[1]?.wait().then(() => {
+      shellEnded = true;
+    });
+    await flush();
+    expect(shellEnded).toBe(true);
     expect(ended.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS, removal]);
 
     const slow = setup();
