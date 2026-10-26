@@ -238,7 +238,7 @@ function defineSuite(target: Target): void {
 
   // why: the input socket's iOS device input arrives with #1019, so the case waits for it there.
   it.skipIf(platform === "ios")(
-    "an agent taps the centre of tab-status through the lease's input socket, as agent-device's snapshot places it, and the next snapshot shows another screen",
+    "an agent taps the centre of tab-status through the lease's input socket, as agent-device's snapshot places it, and the next snapshot shows the Status tab's screen",
     { timeout: 600_000 },
     async () => {
       const a = await agent("a");
@@ -247,6 +247,9 @@ function defineSuite(target: Target): void {
       ok(await a.run(["open", target.bundleId]));
       const before = await a.run(["snapshot", "--json"], FIRST_SNAPSHOT);
       ok(before);
+      // why: the fixture's Status screen alone carries `connection-state` and its Tools screen `call-count` (Appduct's playground contract, e2e/fixtures/appduct/README.md).
+      expect(before.stdout).toContain("call-count");
+      expect(before.stdout).not.toContain("connection-state");
       const { target: tab, screen } = findBoxes(before.json, "tab-status");
       expect(tab, "tab-status in the snapshot").toBeDefined();
       expect(screen, "the screen in the snapshot").toBeDefined();
@@ -265,9 +268,13 @@ function defineSuite(target: Target): void {
         await waitFor(
           async () => {
             const after = await a.run(["snapshot"]);
-            return after.code === 0 && after.stdout !== before.stdout;
+            return after.code === 0 && after.stdout.includes("connection-state");
           },
-          { interval: 2_000, label: "a snapshot that differs after the tap", timeout: 60_000 },
+          {
+            interval: 2_000,
+            label: "a snapshot of the Status screen after the tap",
+            timeout: 60_000,
+          },
         );
       } finally {
         socket.close();
