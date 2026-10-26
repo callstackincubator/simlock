@@ -108,6 +108,8 @@ export {
   encodeInputMessage,
   INPUT_TAG,
   isUnavailableInput,
+  parseInputMessage,
+  type InputMessage,
   type InputOrientation,
   type InputScreenConfig,
   type UnavailableDeviceInput,

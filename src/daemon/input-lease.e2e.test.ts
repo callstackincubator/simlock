@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
+import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
@@ -42,12 +42,25 @@ const UNAVAILABLE_CONFIG = {
   width: 1,
 };
 
+function message(tag: number, body: unknown): Buffer {
+  return Buffer.concat([Buffer.from([tag]), Buffer.from(JSON.stringify(body))]);
+}
+
+function tags(opened: OpenedSocket): number[] {
+  return opened.messages.map((entry) => entry[0] ?? -1);
+}
+
+function config(opened: OpenedSocket, index: number): unknown {
+  return JSON.parse(opened.messages[index]?.subarray(1).toString("utf8") ?? "");
+}
+
 interface OpenedSocket {
   // why: 101 for an upgrade that was accepted, else the status the refusal answered.
   readonly status: number;
   // why: the error code of a refusal's JSON body, when it has one.
   readonly code: string | undefined;
   readonly messages: Buffer[];
+  readonly socket: WebSocket;
 }
 
 async function openInput(url: string, token: string | undefined): Promise<OpenedSocket> {
@@ -78,7 +91,7 @@ async function openInput(url: string, token: string | undefined): Promise<Opened
       socket.once("error", reject);
     },
   );
-  return { ...outcome, messages };
+  return { ...outcome, messages, socket };
 }
 
 const sockets: WebSocket[] = [];
@@ -101,8 +114,9 @@ describe("a lease's input socket", () => {
     return path;
   }
 
-  function driver(): FakeDriver {
+  function driver(input?: FakeInputFactory): FakeDriver {
     return new FakeDriver({
+      ...(input === undefined ? {} : { input }),
       availableOsVersions: ["18.0"],
       clock: new SystemClock(),
       knownModels: ["Pixel-A"],
@@ -129,7 +143,11 @@ describe("a lease's input socket", () => {
     return (granted as { lease: { id: string } }).lease.id;
   }
 
-  async function fleet(options: { readonly gatewayInput: boolean; readonly workerInput: boolean }) {
+  async function fleet(options: {
+    readonly gatewayInput: boolean;
+    readonly workerInput: boolean;
+    readonly input?: FakeInputFactory;
+  }) {
     const port = await freeLoopbackPort();
     const gateway = await startDaemon({
       configOverrides: {
@@ -152,7 +170,7 @@ describe("a lease's input socket", () => {
       },
       dataDirectory: await directory("worker"),
       deviceDataTables: fakeDeviceDataTables,
-      drivers: [driver()],
+      drivers: [driver(options.input)],
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
       version: "1.0.0-e2e",
@@ -262,6 +280,59 @@ describe("a lease's input socket", () => {
         code: "INPUT_UNAVAILABLE",
         status: 503,
       });
+    },
+  );
+
+  it(
+    "drives a faked device through a gateway in T3 Code's order",
+    { timeout: 60_000 },
+    async () => {
+      const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
+      const { holder, inputUrl } = await fleet({ gatewayInput: true, workerInput: true, input });
+      const first = await openInput(inputUrl(), holder);
+      await vi.waitFor(() => expect(tags(first)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+      expect(config(first, 1)).toEqual({ height: 2556, orientation: "portrait", width: 1179 });
+
+      const touches = [
+        { type: "begin", x: 0.4, y: 0.7 },
+        { type: "move", x: 0.5, y: 0.6 },
+        { type: "end", x: 0.5, y: 0.6 },
+      ] as const;
+      for (const touch of touches) first.socket.send(message(0x03, touch));
+      first.socket.send(message(0x06, { type: "down", usage: 4 }));
+      first.socket.send(message(0x04, { button: "home" }));
+      await vi.waitFor(() => expect(input.opened[0]?.sent).toHaveLength(5), { timeout: 10_000 });
+      expect(input.opened[0]?.sent).toEqual([
+        ...touches.map((touch) => ({ kind: "touch", ...touch })),
+        { kind: "key", type: "down", usage: 4 },
+        { button: "home", kind: "button" },
+      ]);
+
+      const second = await openInput(inputUrl(), holder);
+      await vi.waitFor(() => expect(tags(second)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+      second.socket.send(message(0x04, { button: "back" }));
+      await vi.waitFor(() => expect(input.opened[0]?.sent).toHaveLength(6), { timeout: 10_000 });
+      expect(input.opened).toHaveLength(1);
+
+      input.opened[0]?.changeConfig({ height: 1179, orientation: "landscape_left", width: 2556 });
+      for (const socket of [first, second]) {
+        await vi.waitFor(() => expect(tags(socket).at(-1)).toBe(0x82), { timeout: 10_000 });
+        await vi.waitFor(
+          () =>
+            expect(config(socket, socket.messages.length - 1)).toEqual({
+              height: 1179,
+              orientation: "landscape_left",
+              width: 2556,
+            }),
+          { timeout: 10_000 },
+        );
+      }
+
+      first.socket.close();
+      await vi.waitFor(() => expect(second.socket.readyState).toBe(WebSocket.OPEN));
+      expect(input.opened[0]?.closes).toBe(0);
+      second.socket.close();
+      await vi.waitFor(() => expect(input.opened[0]?.closes).toBe(1), { timeout: 10_000 });
     },
   );
 });

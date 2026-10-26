@@ -32,6 +32,7 @@ export {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 export { readyTransitionUpdate } from "./driver.js";
+export { FakeDeviceInput, FakeInputFactory } from "./fake-device-input.js";
 export { FakeDriver, fakeDeviceDataTable } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 export { QuarantineCoordinator } from "./quarantine-coordinator.js";
