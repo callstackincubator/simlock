@@ -179,4 +179,24 @@ describe("iOS device input", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(failures).toEqual(["The input helper exited with code 1"]);
   });
+
+  it("a physical iPhone's device input is unavailable and no process is started", async () => {
+    const { clock, factory, launcher } = setup();
+    const pending = factory
+      .open(
+        {
+          address: "UDID-1",
+          deviceId: "UDID-1",
+          driverData: {},
+          enrolledApps: [],
+          physical: true,
+        },
+        new AbortController().signal,
+      )
+      .catch((error: unknown) => (error instanceof Error ? error.message : "not an error"));
+    clock.advance(10_000);
+    const opening = await pending;
+    expect(opening).toEqual({ unavailable: "Input is not supported on physical iPhones" });
+    expect(launcher.starts).toEqual([]);
+  });
 });
