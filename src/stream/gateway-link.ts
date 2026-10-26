@@ -50,32 +50,41 @@ async function serveDevice(
   if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
   const subject =
     target.leaseId === undefined ? `device ${target.deviceId}` : `lease ${target.leaseId}`;
-  const path =
-    target.leaseId === undefined
-      ? `/stream/devices/${encodeURIComponent(target.deviceId)}`
-      : `/stream/leases/${encodeURIComponent(target.workerLeaseId ?? target.leaseId)}`;
   const response = await relayed(workerId, subject, () =>
     options.fleet.relay(workerId, {
       leaseId: target.workerLeaseId,
-      request: new Request(`http://simlock-worker${path}`, { method: "GET", signal }),
+      request: new Request(`http://simlock-worker${relayPath(target)}`, {
+        method: "GET",
+        signal,
+      }),
       tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
     }),
   );
   try {
     return await fromResponse(workerId, subject, response);
   } catch (error) {
-    // why: the worker names the lease by its own id, which the caller never saw; the gateway puts
-    // back the id the caller asked for.
-    if (
-      target.leaseId !== undefined &&
-      error instanceof StreamRefusalError &&
-      error.status === 404 &&
-      error.code === "UNKNOWN_LEASE"
-    ) {
-      throw unknownLease(target.leaseId);
-    }
-    throw error;
+    throw withCallersLeaseId(target, error);
   }
+}
+
+function relayPath(target: StreamTarget): string {
+  return target.leaseId === undefined
+    ? `/stream/devices/${encodeURIComponent(target.deviceId)}`
+    : `/stream/leases/${encodeURIComponent(target.workerLeaseId ?? target.leaseId)}`;
+}
+
+// why: the worker names the lease by its own id, which the caller never saw; the gateway puts back
+// the id the caller asked for.
+function withCallersLeaseId(target: StreamTarget, error: unknown): unknown {
+  if (
+    target.leaseId !== undefined &&
+    error instanceof StreamRefusalError &&
+    error.status === 404 &&
+    error.code === "UNKNOWN_LEASE"
+  ) {
+    return unknownLease(target.leaseId);
+  }
+  return error;
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker

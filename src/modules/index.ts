@@ -14,8 +14,6 @@ export type {
   ModuleHttpResponse,
   ModuleLease,
   ModuleLeaseEndParticipant,
-  ModuleLeaseHandler,
-  ModuleLeaseRoute,
   ModuleMount,
   ModuleRegistryView,
   ModuleRelayTarget,
