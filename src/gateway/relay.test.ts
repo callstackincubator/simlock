@@ -546,6 +546,32 @@ describe("GatewayRelay when the worker stops reading a two-way relay", () => {
   );
 });
 
+describe("GatewayRelay when the worker resets a two-way relay's channel", () => {
+  it.each([
+    {
+      how: "a write",
+      end: (w: WritableStreamDefaultWriter<Uint8Array>) => w.write(new Uint8Array(1)),
+    },
+    { how: "a close", end: (w: WritableStreamDefaultWriter<Uint8Array>) => w.close() },
+  ])(
+    "rejects $how after the reset with the channel's own reason, not the stream's TypeError, and sends no relay.cancel",
+    async ({ end }) => {
+      const open = await openTwoWay(new AbortController().signal);
+      open.channel.fail("aborted");
+
+      const error = await end(open.writer).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      await sleep(10);
+
+      expect(error).toBeInstanceOf(LinkChannelError);
+      expect((error as LinkChannelError).reason).toBe("aborted");
+      expect(open.connection.lastSentOf("relay.cancel")).toBeUndefined();
+    },
+  );
+});
+
 describe("GatewayRelay bounding the head and the body", () => {
   it.each([
     { bound: "the deadline", deadlineMs: 100, idleMs: 10_000 },

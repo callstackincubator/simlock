@@ -321,14 +321,15 @@ class Exchange {
         try {
           await writer.close();
         } catch (error: unknown) {
-          // why: closing a writable the peer's STOP already errored rejects with a TypeError, so the stored reason on `closed` says whether it was a STOP.
-          const stored = await writer.closed.then(
+          // why: closing a writable the peer already errored rejects with a TypeError, so the stored reason on `closed` says whether it was a STOP or which failure it was.
+          const stored: unknown = await writer.closed.then(
             () => undefined,
             (reason: unknown) => reason,
           );
-          if (!isStopped(error) && !isStopped(stored)) {
-            this.#onChannelError(error);
-            throw error;
+          const reason = stored instanceof LinkChannelError ? stored : error;
+          if (!isStopped(reason)) {
+            this.#onChannelError(reason);
+            throw reason;
           }
         }
         this.#writeEnded = true;
