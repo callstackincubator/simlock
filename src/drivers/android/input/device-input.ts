@@ -9,7 +9,7 @@ import {
   ScreenUnavailableError,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
-import type { Clock, ProcessHandle, TcpStream } from "../../../ports/index.js";
+import type { Clock, Logger, ProcessHandle, TcpStream } from "../../../ports/index.js";
 import {
   type ChunkReader,
   CLOSE_DEADLINE_MS,
@@ -46,6 +46,7 @@ const SIZE_POLL_MS = 2_000;
 
 export interface AndroidDeviceInputOptions {
   readonly clock: Clock;
+  readonly logger?: Logger;
   readonly serverPath: string;
   readonly scid?: () => number;
   // why: where this device's input runs, built by the driver with the same targets as its screen

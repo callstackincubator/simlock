@@ -11,6 +11,7 @@ import {
 } from "../../../core/index.js";
 import {
   FakeClock,
+  type Logger,
   type ProcessHandle,
   type ProcessResult,
   ScriptedProcessRunner,
@@ -140,6 +141,22 @@ class FakeTarget implements ScreenTarget {
   gateClosed = false;
   // why: a server that never opens its socket, as one that failed to start leaves it: adb answers `closed`.
   socketRefused = false;
+  // why: how many size reads were asked, how many are running now, and a read that fails or waits for a test to release it.
+  reads = 0;
+  running = 0;
+  maxRunning = 0;
+  readFails = false;
+  releaseReads: (() => void) | undefined;
+  #hold: Promise<void> | undefined;
+
+  holdReads(): void {
+    this.#hold = new Promise<void>((resolve) => {
+      this.releaseReads = () => {
+        this.#hold = undefined;
+        resolve();
+      };
+    });
+  }
 
   constructor(
     readonly serial: string,
@@ -150,7 +167,7 @@ class FakeTarget implements ScreenTarget {
 
   async run(args: readonly string[]): Promise<ProcessResult> {
     this.#check();
-    if (args.join(" ") === "shell dumpsys window displays") return this.display;
+    if (args.join(" ") === "shell dumpsys window displays") return await this.#read();
     this.log.push(args.join(" "));
     return await this.runner.run(ADB, args);
   }
@@ -159,6 +176,19 @@ class FakeTarget implements ScreenTarget {
     this.#check();
     this.log.push(args.join(" "));
     return this.runner.spawn(ADB, args);
+  }
+
+  async #read(): Promise<ProcessResult> {
+    this.reads += 1;
+    this.running += 1;
+    this.maxRunning = Math.max(this.maxRunning, this.running);
+    try {
+      await this.#hold;
+      if (this.readFails) throw new Error("adb: device offline");
+      return this.display;
+    } finally {
+      this.running -= 1;
+    }
   }
 
   #check(): void {
@@ -203,6 +233,21 @@ function remove(): ScriptedProcessExpectation {
 
 // why: both devices' worlds: the other device's target is here so "it went through this device's
 // target" can fail, since an input aimed at the wrong device would show up in the other's log.
+class RecordingLogger implements Logger {
+  readonly lines: string[] = [];
+  debug(): void {}
+  info(): void {}
+  warn(message: string): void {
+    this.lines.push(message);
+  }
+  error(message: string): void {
+    this.lines.push(message);
+  }
+  child(): Logger {
+    return this;
+  }
+}
+
 function setup(
   device: VirtualDriverDevice | PhysicalDriverDevice = DEVICE,
   expectations = [push(), shell(), remove()],
@@ -210,13 +255,15 @@ function setup(
   const clock = new FakeClock(1_000);
   const target = new FakeTarget(device.address, expectations);
   const other = new FakeTarget("other", []);
+  const logger = new RecordingLogger();
   const factory = createAndroidDeviceInput({
     clock,
+    logger,
     scid: () => SCID,
     serverPath: SERVER,
     targetFor: async (asked) => (asked === device ? target : other),
   });
-  return { clock, device, factory, other, target };
+  return { clock, device, factory, logger, other, target };
 }
 
 async function drive<T>(clock: FakeClock, promise: Promise<T>, stepMs = 50): Promise<T> {
@@ -299,7 +346,7 @@ function configs(input: DeviceInput): InputScreenConfig[] {
 }
 
 describe("Android device input: open", () => {
-  it("starts a control-only scrcpy and reads the screen's size in its current rotation, a phone passes the adb check first, a start that fails is rejected, and a rotation is reported once", async () => {
+  it("starts a control-only scrcpy and reads the screen's size in its current rotation, a phone passes the adb check first, a start that fails is rejected, a rotation is reported once, a close stops the reads, reads never overlap, and a failing read is logged once", async () => {
     const world = setup();
     const input = opened(await open(world));
     expect(world.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS]);
@@ -330,6 +377,40 @@ describe("Android device input: open", () => {
     expect(seen).toHaveLength(2);
 
     const removal = `shell rm -f ${DEVICE_JAR}`;
+
+    const ended = setup();
+    const endedInput = opened(await open(ended));
+    await drive(ended.clock, endedInput.close());
+    const readsAtClose = ended.target.reads;
+    await settle(ended.clock, 6_000);
+    expect(ended.target.reads).toBe(readsAtClose);
+    expect(ended.target.peers[0]?.closed).toBe(true);
+    expect(ended.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS, removal]);
+
+    const slow = setup();
+    const slowInput = opened(await open(slow));
+    slow.target.holdReads();
+    await settle(slow.clock, 2_100);
+    await settle(slow.clock, 8_000);
+    expect(slow.target.reads).toBe(2);
+    expect(slow.target.maxRunning).toBe(1);
+    slow.target.releaseReads?.();
+    await settle(slow.clock, 2_100);
+    expect(slow.target.reads).toBeGreaterThan(2);
+    await drive(slow.clock, slowInput.close());
+
+    const failing = setup();
+    const failingInput = opened(await open(failing));
+    const kept = configs(failingInput);
+    failing.target.readFails = true;
+    await settle(failing.clock, 7_000);
+    expect(failing.target.reads).toBeGreaterThan(3);
+    expect(failing.logger.lines).toEqual(["Could not read the screen size"]);
+    expect(kept).toEqual([{ height: 2400, orientation: "portrait", width: 1080 }]);
+    failing.target.display = displays(2400, 1080);
+    failing.target.readFails = false;
+    await settle(failing.clock, 2_100);
+    expect(kept).toHaveLength(2);
     const silent = setup();
     silent.target.socketRefused = true;
     const started = silent.clock.now();
