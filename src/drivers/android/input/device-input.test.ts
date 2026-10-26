@@ -243,6 +243,44 @@ async function settle(clock: FakeClock, ms: number): Promise<void> {
   for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+// why: the first two writes on the connection are adb's `host:transport` and `localabstract` requests;
+// everything after them is scrcpy's control socket.
+function controlPackets(world: World): DataView[] {
+  const peer = world.target.peers[0];
+  return (peer?.written ?? [])
+    .slice(2)
+    .map((bytes) => new DataView(bytes.buffer, bytes.byteOffset));
+}
+
+// why: scrcpy's touch packet (type 2): action, pointer id, position (x, y, width, height), pressure, buttons.
+function touchOf(packet: DataView) {
+  return {
+    action: packet.getUint8(1),
+    height: packet.getUint16(20),
+    type: packet.getUint8(0),
+    width: packet.getUint16(18),
+    x: packet.getInt32(10),
+    y: packet.getInt32(14),
+  };
+}
+
+// why: scrcpy's scroll packet (type 3): position, then two i16 fixed-point values scaled to [-16, 16].
+function scrollOf(packet: DataView) {
+  return {
+    height: packet.getUint16(11),
+    horizontal: Math.round((packet.getInt16(13) / 0x8000) * 16),
+    type: packet.getUint8(0),
+    vertical: Math.round((packet.getInt16(15) / 0x8000) * 16),
+    width: packet.getUint16(9),
+    x: packet.getInt32(1),
+    y: packet.getInt32(5),
+  };
+}
+
 type World = ReturnType<typeof setup>;
 
 async function open(world: World): Promise<DeviceInput | UnavailableDeviceInput> {
@@ -308,5 +346,53 @@ describe("Android device input: open", () => {
     sizeless.target.display = { code: 0, stderr: "", stdout: "Display: mDisplayId=0\n" };
     await expect(open(sizeless)).rejects.toThrow("did not report its screen size");
     expect(sizeless.target.log).toEqual([]);
+  });
+});
+
+describe("Android device input: send", () => {
+  it("turns touches and scrolls into scrcpy packets at pixel positions for the device's size", async () => {
+    for (const [width, height] of [
+      [1080, 2400],
+      [2400, 1080],
+    ] as const) {
+      const world = setup();
+      world.target.display = displays(width, height);
+      const input = opened(await open(world));
+      input.send({ kind: "touch", type: "begin", x: 0.5, y: 0.25 });
+      input.send({ kind: "touch", type: "move", x: 0.5, y: 0.5 });
+      input.send({ kind: "touch", type: "end", x: 0.5, y: 0.5 });
+      input.send({ dx: 0, dy: 0.1, kind: "scroll" });
+      input.send({ dx: 0.1, dy: 0, kind: "scroll", x: 0.25, y: 0.75 });
+      await flush();
+      expect(controlPackets(world)).toHaveLength(5);
+      const [begin, move, end, down, right] = controlPackets(world);
+      const at = (fx: number, fy: number) => ({
+        height,
+        width,
+        x: Math.round(fx * width),
+        y: Math.round(fy * height),
+      });
+      const label = `${String(width)}x${String(height)}`;
+      expect(
+        [begin, move, end].map((packet) => touchOf(packet as DataView)),
+        label,
+      ).toEqual([
+        { ...at(0.5, 0.25), action: 0, type: 2 },
+        { ...at(0.5, 0.5), action: 2, type: 2 },
+        { ...at(0.5, 0.5), action: 1, type: 2 },
+      ]);
+      expect(scrollOf(down as DataView), label).toEqual({
+        ...at(0.5, 0.5),
+        horizontal: 0,
+        type: 3,
+        vertical: 2,
+      });
+      expect(scrollOf(right as DataView), label).toEqual({
+        ...at(0.25, 0.75),
+        horizontal: -2,
+        type: 3,
+        vertical: 0,
+      });
+    }
   });
 });
