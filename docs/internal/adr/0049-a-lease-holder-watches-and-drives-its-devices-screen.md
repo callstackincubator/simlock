@@ -64,14 +64,19 @@ flowchart LR
    serve-sim changes, Simlock adds a compatibility layer rather than
    following silently.
 4. **Input is its own capability**, `capabilities.input.enabled`, off by
-   default, and needs no open stream. Each socket opens its own device input:
-   a control-only scrcpy server on Android, a HID helper on an iOS simulator.
-   A physical iPhone has none and says `inputUnavailable`.
+   default, and needs no open stream. A lease has one device input, shared
+   by up to 8 sockets as serve-sim shares its injector; a 9th socket is
+   closed with 1013. On Android it is a control-only scrcpy server, on an
+   iOS simulator a HID helper; a physical iPhone has none and says
+   `inputUnavailable`. Where keys cannot be injected (an iOS 27 runtime),
+   `0x82` says `keyboardUnavailable`, as serve-sim does.
 5. **The relay gains a two-way mode.** A two-way relay keeps both directions
    of its link byte channel open until either side ends it, carries
    length-prefixed messages, and ends after 15 s with no bytes from the
    worker. The worker's input session sends a heartbeat every 5 s; the
-   gateway drops it. The client hop uses WebSocket ping and pong.
+   gateway drops it. Every input socket, on a gateway or a standalone
+   worker, pings its client every 15 s and ends when no pong comes within
+   15 s.
 6. **The worker ends both when the lease ends.** The stream's last frame is
    a new tag `0x07` with `{"reason"}`, on the device route too; readers that
    do not know it skip it. The input socket closes with 4001 and the reason.
@@ -104,9 +109,11 @@ sequenceDiagram
 - The HTTP layer gains a lease-route seam, the module host gains a socket
   handler and a two-way relay, and `ports` gains upgrade routing beside the
   uplink's. The protocol is bumped once for the relay.
-- iOS 27 simulators ignore injected hardware keys; on Xcode 27 keys are
+- iOS 27 simulator runtimes ignore injected hardware keys; there keys are
   dropped until a follow-up. Rotation on iOS needs Simulator.app; its task
-  starts with a check and drops rotation if the check fails.
+  starts with a one-off check. If it passes, the worker starts Simulator.app
+  on the first rotation and leaves it open; if not, rotation is dropped on
+  iOS.
 - Two viewers still run two captures (#602).
 
 ## Alternatives considered
