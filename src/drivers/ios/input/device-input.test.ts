@@ -137,4 +137,46 @@ describe("iOS device input", () => {
       ]);
     }
   });
+
+  it("an open rejects when the helper is missing, exits first or reports no size within 10 s, and a helper that exits later fails the input", async () => {
+    const missing = setup();
+    const missingOpen = missing.factory.open(simulator(), new AbortController().signal);
+    missing.launcher.last.exit({ code: null, error: "spawn ENOENT", signal: null });
+    await expect(missingOpen).rejects.toThrow(
+      "The input helper could not be started: spawn ENOENT",
+    );
+
+    const early = setup();
+    const earlyOpen = early.factory.open(simulator(), new AbortController().signal);
+    early.launcher.last.exit({ code: 1, signal: null });
+    await expect(earlyOpen).rejects.toThrow(
+      "The input helper exited with code 1 before it reported the screen size",
+    );
+
+    const silent = setup();
+    const silentOpen = silent.factory.open(simulator(), new AbortController().signal).then(
+      () => "opened",
+      (error: unknown) => (error instanceof Error ? error.message : "not an error"),
+    );
+    let settled = false;
+    void silentOpen.then(() => {
+      settled = true;
+    });
+    silent.clock.advance(9_900);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    silent.clock.advance(100);
+    expect(await silentOpen).toBe("The input helper reported no screen size within 10 s");
+    expect(silent.launcher.last.stdinClosed).toBe(true);
+
+    const later = setup();
+    const laterOpen = later.factory.open(simulator(), new AbortController().signal);
+    later.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    const input = (await laterOpen) as DeviceInput;
+    const failures: string[] = [];
+    input.onFailed((error) => failures.push(error.message));
+    later.launcher.last.exit({ code: 1, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(failures).toEqual(["The input helper exited with code 1"]);
+  });
 });
