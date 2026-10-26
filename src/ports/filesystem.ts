@@ -20,18 +20,12 @@ export interface FileStat {
   readonly kind: "file" | "directory";
   readonly size: number;
   readonly modifiedAtMs: number;
-  /** POSIX permission bits (e.g. `0o600`), masked to the low 9 bits. Not populated by every
-   * caller's needs -- only relevant for callers verifying a file's permissions after creation
-   * (e.g. the daemon's per-start admin secret, ADR 0003 §5). */
   readonly mode?: number;
-  /** Which file this is, stable across a rename and different for a new file at the same path
-   * (device and inode). Lets a reader that follows a rotating log tell a rotation apart from
-   * the same file growing. */
   readonly identity: string;
 }
 
 export interface WriteFileAtomicOptions {
-  /** POSIX permission bits the file is created with (e.g. `0o600` for owner-only). Set at
+  /** why: POSIX permission bits the file is created with (e.g. `0o600` for owner-only). Set at
    * creation via the temp file's own open flags -- never a separate `chmod` after the fact,
    * which would leave a window where the file exists world-readable. Omitted keeps Node's
    * default (governed by the process umask), unchanged from before this option existed. */
@@ -49,26 +43,18 @@ export interface MkdirpOptions {
   readonly mode?: number;
 }
 
-/**
- * What an un-followed `lstat` reports, narrowed to what ownership validation asks of a
- * path: what it really is, who owns it, and how exposed it is. Anything richer would be
- * a `fs.Stats` leak into the ports layer.
- */
 export interface PathDetails {
   readonly kind: "file" | "directory" | "symlink" | "other";
   readonly uid: number;
-  /** Permission bits only (`mode & 0o777`). */
   readonly mode: number;
 }
 
 export interface Filesystem {
   readFile(path: string): Promise<string>;
-  /** The file's contents from byte `offset` to its current end; empty past the end. `offset`
-   * must fall on a character boundary, as a line boundary always does. */
   readFileFrom(path: string, offset: number): Promise<string>;
   writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
   /**
-   * Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
+   * why: Writes a file only when nothing is there, failing `EEXIST` otherwise. The kernel
    * decides who wins, which is the only way two processes racing to write one file both
    * end up agreeing about what it says. The file appears with its full contents, never
    * empty, so a loser that reads it straight away reads what the winner wrote.
@@ -86,34 +72,22 @@ export interface Filesystem {
    */
   mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
-  /**
-   * Moves a path in one step, so what it names becomes visible complete or not at all.
-   * Fails when the destination is occupied by anything but an empty directory.
-   */
   rename(from: string, to: string): Promise<void>;
   rm(path: string): Promise<void>;
   stat(path: string): Promise<FileStat>;
-  /** Metadata read without following a final symlink, so a symlinked root is detectable. */
   lstat(path: string): Promise<PathDetails>;
   /**
-   * Creates exactly one directory and fails when the path already exists (no recursion).
+   * why: Creates exactly one directory and fails when the path already exists (no recursion).
    * Failing on an existing path is the point: it is what makes "Simlock created this root
    * itself, empty" provable rather than assumed.
    */
   mkdir(path: string, options?: { readonly mode?: number }): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
-  /** Fully resolved real path. Used for diagnostics, and to recognise one directory under two
-   * spellings -- never to reject a path that already matched without it. */
   realpath(path: string): Promise<string>;
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
   diskFree(path: string): Promise<number>;
   diskSpace(path: string): Promise<{ readonly freeBytes: number; readonly totalBytes: number }>;
-  /**
-   * The bytes the files under a directory hold, its subdirectories included. Symlinks are not
-   * followed, so nothing outside the directory is counted. Rejects when the directory, or
-   * anything under it, cannot be read.
-   */
   directorySize(path: string): Promise<number>;
 }
 
@@ -193,7 +167,7 @@ export class NodeFilesystem implements Filesystem {
     contents: string,
     options?: WriteFileExclusiveOptions,
   ): Promise<void> {
-    // `writeFile` with the `wx` flag creates the file empty and fills it a moment later, so a
+    // why: `writeFile` with the `wx` flag creates the file empty and fills it a moment later, so a
     // racer that loses the create can read it in between and find nothing. Write the contents
     // aside first and hard-link them into place: `link` fails `EEXIST` like `wx` does, but the
     // file it creates is already complete.
@@ -317,9 +291,7 @@ export class NodeFilesystem implements Filesystem {
   }
 }
 
-/** Attributes every in-memory entry carries, so callers can read them without a `kind` check. */
 interface MemoryAttributes {
-  /** Stands in for an inode: assigned on creation, carried by `rename`. */
   readonly identity: number;
   modifiedAtMs: number;
   uid: number;
@@ -334,12 +306,11 @@ type MemoryEntryKind =
 type MemoryEntry = MemoryAttributes & MemoryEntryKind;
 
 /**
- * Owner-only, matching the permissions Simlock demands of a device root, so a test that
+ * why: Owner-only, matching the permissions Simlock demands of a device root, so a test that
  * says nothing about permissions describes a healthy path rather than a rejected one.
  */
 const DEFAULT_MEMORY_MODE = 0o700;
 
-// A symlink cycle is a legitimate thing to model; resolving it forever is not.
 const MAX_SYMLINK_HOPS = 32;
 
 /** why: Node's default for a plain file, kept as the default both `writeFileAtomic` and
@@ -437,7 +408,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /**
-   * Publishes `from` at `to` the way POSIX does, because the create path in
+   * why: Publishes `from` at `to` the way POSIX does, because the create path in
    * `ensureOwnedRoot` branches on exactly the failures it reports: an occupied destination
    * is what tells it another process won the race.
    */
@@ -560,7 +531,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /**
-   * Follows symlinks, like the `stat` the Node implementation answers with: a dangling
+   * why: Follows symlinks, like the `stat` the Node implementation answers with: a dangling
    * link is absent, and a path whose parent is a file is a failure rather than a "no".
    * A double that answered from its raw key set would let code that only works against
    * the double pass for correct.
@@ -603,19 +574,17 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /**
-   * Test-only: makes every operation on `path` fail with `code`, which is the only way to
+   * why: Test-only: makes every operation on `path` fail with `code`, which is the only way to
    * reach the branches that turn an unexpected filesystem failure into a typed rejection.
    */
   defineFailure(path: string, code: string): void {
     this.#failures.set(path, code);
   }
 
-  /** Test-only: places a symlink at `path`, whether or not `target` exists. */
   defineSymlink(path: string, target: string): void {
     this.#entries.set(path, this.#newEntry({ kind: "symlink", target }));
   }
 
-  /** Test-only: rewrites an existing entry's ownership or permission bits. */
   defineAttributes(
     path: string,
     attributes: { readonly uid?: number; readonly mode?: number },
@@ -648,16 +617,14 @@ export class MemoryFilesystem implements Filesystem {
     };
   }
 
-  /** The entry a following call (`stat`, `readFile`) sees: symlinks resolved. */
   #entryAt(path: string): MemoryEntry {
     return this.#rawEntryAt(this.#resolveLinks(path, 0));
   }
 
-  /** The entry itself, symlink or not, as `lstat` and `chmod` address it. */
   #rawEntryAt(path: string): MemoryEntry {
     const entry = this.#entries.get(path);
     if (entry === undefined) {
-      // Carries `code: "ENOENT"` like Node's real fs errors, so callers that branch on
+      // why: Carries `code: "ENOENT"` like Node's real fs errors, so callers that branch on
       // `isMissingPathError` (rather than swallowing every read failure) behave the same
       // against this fake as they do against `NodeFilesystem`.
       throw enoent(path);
@@ -667,7 +634,7 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   /**
-   * Resolves symlinks in every component, not just the last one, because that is what
+   * why: Resolves symlinks in every component, not just the last one, because that is what
    * makes the "an ancestor symlink is normal, and not grounds for rejection" case
    * expressible in a test at all.
    */
@@ -681,7 +648,7 @@ export class MemoryFilesystem implements Filesystem {
     }
 
     const parent = this.#resolveLinks(parentPath(path), hops);
-    // A component that exists but is not a directory cannot be walked through. Node says
+    // why: A component that exists but is not a directory cannot be walked through. Node says
     // ENOTDIR here, and callers tell that apart from ENOENT -- "the path you configured
     // runs through a file" is a different problem from "it is not there yet".
     if (this.#entries.get(parent)?.kind === "file") {
@@ -729,7 +696,7 @@ function nodeKind(details: {
 }
 
 /**
- * Callers branch on `code` -- an existing root is only "somebody won the race" when the
+ * why: Callers branch on `code` -- an existing root is only "somebody won the race" when the
  * failure is `EEXIST`, and a path is only absent when the failure is `ENOENT` -- so the
  * in-memory double has to speak Node's errno vocabulary, not just fail.
  */

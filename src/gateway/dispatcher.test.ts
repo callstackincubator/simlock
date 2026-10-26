@@ -143,21 +143,14 @@ class FakeTokens implements TokenOperations {
 
   async revoke(id: string) {
     this.revoked.push(id);
-    // Only "tok_1" is ever actually minted by this fake -- anything else is the "already gone,
-    // or never real" case C-2's test below needs a real `false` for.
     return id === "tok_1";
   }
 }
 
-/** Matches `service.test.ts`'s `principal: "gw:instance-1"` -- ADR 0005 §14/§27's own-lease
- * prefix is that principal plus a trailing `:`, the same shape `worker-registry.test.ts` uses. */
 const GATEWAY_REQUESTER_PREFIX = "gw:instance-1:";
 
-/** The gateway's own machine, as the composition root hands it over: read once, no tools. */
 const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] };
 
-/** A `WorkerDirectory` a test populates by hand -- see `fleet-coordinator.test.ts`'s own copy
- * for the fuller doc comment; this file only ever needs one worker at a time. */
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
   readonly refreshCalls: string[] = [];
@@ -203,9 +196,7 @@ function harness(
     readonly historyPath?: string;
     readonly tokenRecords?: readonly { id: string; label?: string }[];
     readonly withoutTokens?: boolean;
-    /** The gateway's `http` block; enabled on 127.0.0.1:4700 by default. */
     readonly http?: (typeof gatewayConfig)["http"];
-    /** The gateway's own health; `running` by default. */
     readonly health?: "starting" | "running" | "failed";
     readonly load?: ConstructorParameters<typeof GatewayDispatcher>[0]["load"];
     /** why: real alerts over a fake poster, wired as `testDestination`; none leaves the option out. */
@@ -225,7 +216,6 @@ function harness(
     retentionMs: 24 * 60 * 60_000,
   });
   const tokens = new FakeTokens(options.tokenRecords);
-  /** C-2: every id `closeUplinksForToken` was actually called with, in call order. */
   const closedUplinkTokens: string[] = [];
   const directory = new FakeDirectory();
   const leaseIndex = new FleetLeaseIndex(GATEWAY_REQUESTER_PREFIX);
@@ -284,7 +274,6 @@ function harness(
     host: GATEWAY_HOST,
     ...(options.load === undefined ? {} : { load: options.load }),
     leaseIndex,
-    // `classifyError`'s answer for the errors this dispatcher throws itself.
     errorCode: (error) => (error instanceof DispatchError ? error.code : undefined),
     logger: new JsonLinesLogger({ clock, module: "gateway", sink: logSink }),
     ...(alerts === undefined ? {} : { testDestination: (name) => alerts.test(name) }),
@@ -318,7 +307,6 @@ function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
   };
 }
 
-/** Every operation the contract declares, minus `daemon.stop` (the transport answers it). */
 const EVERY_OPERATION = (Object.keys(OPERATIONS) as OperationName[]).filter(
   (name) => name !== "daemon.stop",
 );
@@ -351,8 +339,6 @@ describe("GatewayDispatcher", () => {
   it("The gateway dispatcher logs the same line for the same operation", async () => {
     const { clock, dispatcher, logSink, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
-    // The line `runDispatch` writes for the same call through any other dispatcher, a worker's
-    // included: only the module differs.
     const otherSink = new MemoryLogSink();
     const other = (role: "admin" | "agent") =>
       runDispatch("worker.drain", { workerId: "wrk_1" }, session({ role }), {
@@ -835,7 +821,7 @@ describe("GatewayDispatcher", () => {
     await expect(dispatcher.dispatch("list.get", { kind: "devices" }, session())).resolves.toEqual([
       expect.objectContaining({ id: "dev_1", workerId: "wrk_1" }),
     ]);
-    // Cleanup rules are a machine's own configuration, and a gateway runs no reaper.
+    // why: Cleanup rules are a machine's own configuration, and a gateway runs no reaper.
     await expect(dispatcher.dispatch("list.get", { kind: "rules" }, session())).resolves.toEqual(
       [],
     );
@@ -1017,7 +1003,7 @@ describe("GatewayDispatcher", () => {
       ttlMs: id === "lease_1" ? 111 : 222,
     });
     workers.refresh("wrk_1", { leases: [owned("lease_1", "dev_1"), owned("lease_2", "dev_2")] });
-    // An entry for a worker the gateway holds no view of, as a race with a removal leaves it.
+    // why: An entry for a worker the gateway holds no view of, as a race with a removal leaves it.
     leaseIndex.add({
       gatewayLeaseId: "wrk_gone.lease_9",
       grantedAt: 1,
@@ -1039,41 +1025,19 @@ describe("GatewayDispatcher", () => {
     ]);
   });
 
-  // P-1 (third review round): the previous version of `#leaseList` compared a namespaced form
-  // of the session's own principal to each lease's `ownerId` -- a comparison that was false by
-  // construction (see `#leaseList`'s own comment) and so, in practice, indistinguishable from
-  // simply returning `[]`.
-  //
-  // Round 6 review: this test's title used to claim a non-admin session sees "no fleet leases at
-  // all", which #118 -- this PR -- made false when it replaced the handler with `FleetLeaseIndex`:
-  // such a session now does see leases this gateway issued to it, as the third test below proves.
-  // What this one actually pins is the baseline the other two build on: a worker's *own local*
-  // lease is not a fleet lease and is never a candidate, whoever asks. The title says only that
-  // now (testing rule 1).
   it("shows a non-admin session none of a worker's own local leases", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
 
-    // The worker's lease is a worker-local one -- never indexed by this gateway (only
-    // `rebuildFromWorker`/an actual grant adds an entry) -- so a non-admin session holds none of
-    // it, exactly as an unrelated fleet client should.
     await expect(
       dispatcher.dispatch("lease.list", {}, session({ principal: "someone", role: "agent" })),
     ).resolves.toEqual({ leases: [] });
   });
 
-  // #118 replaced the P2 namespace-comparison this test used to pin with the lease index: a
-  // non-admin session's `lease.list` now iterates `leaseIndex.all()` rather than scanning every
-  // worker's raw leases, so a worker's own local lease is never even a candidate -- it cannot
-  // "match" a session by coincidence of principal spelling, because it is never looked up by
-  // principal at all. Still worth its own test: this is the case that would tell a correct
-  // implementation apart from a naive "compare raw principals" one.
   it("does not let a gateway session's raw principal match a worker's own local lease owner of the same name", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", undefined, undefined);
-    // `leaseFixture`'s ownerId ("agent-1") is an un-namespaced *local* principal -- exactly what
-    // a worker's own agent looks like, and never added to this gateway's lease index.
     workers.refresh("wrk_1", { leases: [leaseFixture("lease_1", "dev_1")] });
 
     await expect(
@@ -1081,11 +1045,6 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ leases: [] });
   });
 
-  // The positive match: a lease this gateway issued, rebuilt purely from a worker's reported
-  // view (§30's reconnect path -- see `fleet-coordinator.test.ts` for the admission-path
-  // equivalent), is rewritten to its gateway id and fleet-level requester and is visible to the
-  // owner that requested it (ADR §27a: `ownerId` is the real principal, round-tripped -- not
-  // namespaced, unlike `requesterId`).
   it("sees a gateway-issued lease rebuilt from a worker's view, rewritten to its gateway id", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);
@@ -1094,10 +1053,6 @@ describe("GatewayDispatcher", () => {
       ownerId: "agent-1",
       requesterId: `${GATEWAY_REQUESTER_PREFIX}agent-1`,
     };
-    // `workers.refresh` alone is enough: `FleetLeaseCoordinator` is subscribed to this same
-    // registry's `onViewsChanged` and rebuilds its lease index from every view it sees, exactly
-    // as it would from a real `WorkerLink`'s refresh -- nothing in this test drives the index by
-    // hand.
     workers.refresh("wrk_1", { leases: [lease] });
 
     await expect(
@@ -1341,11 +1296,6 @@ describe("GatewayDispatcher", () => {
     });
   });
 
-  // C-2, ADR 0005 §8 ("revoking closes the uplink"): `#tokenRevoke` used to only write the
-  // store -- the join token was checked once, at upgrade, and nothing ever re-verified a live
-  // link, so revoking a worker's token had no observable effect until that worker happened to
-  // reconnect on its own, possibly never. This asserts the actual wiring `main.ts` depends on:
-  // a successful revoke calls `closeUplinksForToken` with exactly the revoked id.
   it("closes the uplink a revoked token authorized, not merely the store entry (C-2)", async () => {
     const { closedUplinkTokens, dispatcher } = harness();
 
@@ -1356,8 +1306,6 @@ describe("GatewayDispatcher", () => {
     expect(closedUplinkTokens).toEqual(["tok_1"]);
   });
 
-  // The other half of the same wiring: revoking an id the store never had is not a live link to
-  // close either, and must not call the hook with a token id that authorized nothing.
   it("does not try to close an uplink for a token id that was never real (C-2)", async () => {
     const { closedUplinkTokens, dispatcher } = harness();
 
@@ -1591,7 +1539,6 @@ describe("GatewayDispatcher", () => {
   });
 
   describe("worker.install-component (ADR 0010 §7)", () => {
-    /** One connected worker whose config has been read, scripted behind the directory. */
     function withWorker() {
       const fixture = harness();
       const worker = new ScriptedWorkerClient();
@@ -1833,7 +1780,7 @@ describe("GatewayDispatcher", () => {
       });
     });
 
-    // ADR §27a's whole point: the owner a rebuilt lease authorizes against has to be the real
+    // why: ADR §27a's whole point: the owner a rebuilt lease authorizes against has to be the real
     // principal the worker round-tripped back, not this gateway's own uplink principal -- and it
     // has to work on an index built purely by `rebuildFromWorker` (a reconnect), never through
     // `coordinator.request` in this process. This is the one place a naive "derive ownerId from
@@ -2068,11 +2015,6 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
-    // C3 (round 3 review): exercises the gateway's *real* dispatcher end to end
-    // (`GatewayDispatcher` -> `FleetLeaseCoordinator#exec` -> a scripted worker), unlike
-    // `http/app.test.ts`'s own "opens the stream when the process starts" test, which drives
-    // `call.session.onStarted?.()` by hand and so cannot notice a dispatcher that stops calling
-    // it for a genuinely silent, long-running command.
     it("calls onStarted for a silent device.exec from the worker's own started push, with no output and no answer (ADR §19a/§19b/§19e)", async () => {
       const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
@@ -2091,7 +2033,7 @@ describe("GatewayDispatcher", () => {
         { model: "iPhone 17", platform: "ios" },
         { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
       );
-      // §19b's own worked example: `simctl install <path>` never writes anything while it runs,
+      // why: §19b's own worked example: `simctl install <path>` never writes anything while it runs,
       // and the worker here never answers at all -- but it does say the process exists, which is
       // the fact a transport needs to commit its 200. No clock is advanced below: this asserts
       // the relay, not a timer.
@@ -2207,15 +2149,11 @@ describe("GatewayDispatcher", () => {
   });
 
   it("has an answer for every operation the contract declares", async () => {
-    // Not one operation may fall through to `UNKNOWN_REQUEST` on a gateway: the contract is the
-    // same one every frontend renders, so "the gateway forgot about this operation" must be a
-    // failing test rather than a runtime surprise. Inputs here are only shaped well enough to
-    // reach the handler.
     const inputs: Partial<Record<OperationName, unknown>> = {
       "driver.passthrough": { args: [], tool: "adb" },
       "lease.release": { leaseId: "lease_1" },
       "lease.renew": { leaseId: "lease_1" },
-      // `noWait: true` matters here: with no worker connected, an ordinary "wait" request would
+      // why: `noWait: true` matters here: with no worker connected, an ordinary "wait" request would
       // sit in the fleet queue forever and hang this test rather than answer promptly.
       "lease.request": { model: "iPhone 17", noWait: true, platform: "ios" },
       "token.create": { role: "agent" },
@@ -2242,7 +2180,6 @@ describe("GatewayDispatcher", () => {
 describe("GatewayDispatcher: waiting requests", () => {
   const SPEC = { model: "iPhone 17", platform: "ios" as const };
 
-  /** A request a worker lists in its own `status.get`'s `waiting`. */
   function onWorker(
     id: string,
     requesterId: string,
@@ -2263,7 +2200,6 @@ describe("GatewayDispatcher: waiting requests", () => {
     };
   }
 
-  /** Lets the coordinator's admission and dispatch pass run. */
   async function settle(): Promise<void> {
     for (let count = 0; count < 20; count += 1) await Promise.resolve();
   }
@@ -2273,8 +2209,6 @@ describe("GatewayDispatcher: waiting requests", () => {
 
   it("list.get requests and status.get waiting on a gateway return the fleet queue with each worker's reason in workers, and each worker's waiting requests with their workerId and reason, a workers field a worker sends on its own entry dropped", async () => {
     const { coordinator, dispatcher, workers } = harness();
-    // Two workers that can serve the request and have no free slot, whose own queues hold their
-    // local agents' requests.
     const capacity = statusFixture().capacity;
     for (const [workerId, requestId] of [
       ["wrk_1", "req_w1"],
@@ -2298,7 +2232,6 @@ describe("GatewayDispatcher: waiting requests", () => {
         ],
       });
     }
-    // Both are busy, so the fleet request waits in the gateway's own queue.
     void dispatcher.dispatch(
       "lease.request",
       { ...SPEC, idempotencyKey: "key-1", requesterId: "fleet-agent" },
@@ -2327,7 +2260,6 @@ describe("GatewayDispatcher: waiting requests", () => {
     ]);
     expect(JSON.stringify(listed)).not.toContain("key-1");
     expect(JSON.stringify(listed)).not.toContain("fleet-owner");
-    // `status.get` carries the fleet queue only; each worker's own is on its view.
     const status = await dispatcher.dispatch("status.get", {}, session());
     expect(status.waiting).toEqual([listed[0]]);
   });
@@ -2397,7 +2329,6 @@ describe("GatewayDispatcher: waiting requests", () => {
     const { dispatcher, directory, workers } = harness();
     const client = new ScriptedWorkerClient();
     directory.add("wrk_1", client);
-    // The worker takes the request and never answers, so it stays mid-dispatch.
     client.requestLeaseQueue.push({ kind: "hang" });
     workers.connected("wrk_1", undefined, "0.3.0");
     workers.refresh("wrk_1", {
@@ -2417,8 +2348,6 @@ describe("GatewayDispatcher: waiting requests", () => {
     );
     await settle();
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
-    // The worker lists the request it was sent under the gateway's requester id, beside a
-    // local agent's own.
     workers.refresh("wrk_1", {
       waiting: [
         onWorker("req_from_gateway", `${GATEWAY_REQUESTER_PREFIX}fleet-agent`),

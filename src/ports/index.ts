@@ -53,7 +53,7 @@ export {
 } from "./service-manager.js";
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
- * ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
+ * why: ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
  * deliberately *not* re-exported here: they live in `./uplink-websocket.js`, the one module
  * that imports `ws`, and only the daemon entrypoint needs them -- so the CLI and the MCP
  * server, which import this barrel, never load a WebSocket implementation they never use.

@@ -1,12 +1,3 @@
-/**
- * Every daemon operation, declared once (ADR 0003 §1). Name, role, input schema, output
- * schema, optional `authorize` hook. Public TypeScript types are inferred from the zod
- * schemas, never hand-written in parallel -- see each operation's `Input`/`Output` export.
- *
- * `defineOperation` returning a typed record whose `role` may be a plain `Role` or a function
- * of the (already-validated) input is what lets `doctor.run` model an input-dependent role
- * honestly (see its declaration below) without a second gating mechanism next to `authorize`.
- */
 import { z } from "zod";
 
 import { CONSOLE_URL_MAX_LENGTH } from "./console-url.js";
@@ -68,15 +59,9 @@ export interface OperationDefinition<
 > {
   readonly name: Name;
   readonly role: Role | ((input: z.infer<InputSchema>) => Role);
-  /** Whether a call changes state. The daemon log records every `write` at its default level
-   * and a `read` only at `debug`. Never sent on the wire. Like `role`, it may depend on the
-   * already-validated input. */
   readonly effect: Effect | ((input: z.infer<InputSchema>) => Effect);
   readonly input: InputSchema;
   readonly output: OutputSchema;
-  /** Ownership/ownership-adjacent gating a session-aware dispatcher would run after the role
-   * check (ADR §1's `ownsLease` example). Declared for typing purposes only in this PR --
-   * nothing sets it, and nothing calls it; PR 2 adds both. */
   readonly authorize?: (input: z.infer<InputSchema>, context: AuthorizeContext) => boolean;
 }
 
@@ -90,8 +75,6 @@ function defineOperation<
   return definition;
 }
 
-// ---- catalog.get ------------------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const catalogGet = defineOperation({
   name: "catalog.get",
@@ -101,31 +84,23 @@ export const catalogGet = defineOperation({
   output: z.object({ platforms: z.array(platformCatalogSchema) }),
 });
 
-// ---- status.get ---------------------------------------------------------------------------
-
 export const statusGet = defineOperation({
   name: "status.get",
   role: "agent",
   effect: "read",
   input: z.object({}),
   output: z.object({
-    // `devices`, `leases`, `capacity` and `queueDepth` are absent while `daemon.health` is
+    // why: `devices`, `leases`, `capacity` and `queueDepth` are absent while `daemon.health` is
     // `starting`: the registry has not been checked yet, so a reader sees a daemon that says
     // it is starting and what host it runs on, and nothing it could mistake for an empty fleet.
     devices: z.array(statusDeviceSchema).optional(),
     leases: z.array(statusLeaseSchema).optional(),
     capacity: statusCapacitySchema.optional(),
-    /**
-     * The warm pool as its last pass left it: whether it is on, the reserve, and each kind of device
-     * the targets name with how many are ready and booting and why it is short. Absent only while `daemon.health`
-     * is `starting`, like the fields above: a started worker and a gateway always send it.
-     */
     warmPool: statusWarmPoolSchema.optional(),
     capabilities: capabilityListSchema.optional(),
     daemon: z.object({
       health: daemonHealthSchema,
       mode: daemonModeSchema,
-      // Bounded: a gateway parses every worker's answer (safety rule 10).
       consoleUrl: z.string().max(CONSOLE_URL_MAX_LENGTH).optional(),
       ...daemonUpdateFields,
     }),
@@ -136,7 +111,7 @@ export const statusGet = defineOperation({
     physicalQueueDepth: z.number().optional(),
     installs: statusInstallsSchema.optional(),
     waiting: z.array(waitingRequestSchema).optional(),
-    /** Absent, not empty, from a worker: an empty array would read as a gateway with no workers. */
+    /** why: Absent, not empty, from a worker: an empty array would read as a gateway with no workers. */
     workers: z.array(workerViewSchema).optional(),
   }),
 });
@@ -172,7 +147,7 @@ const leaseRequestBaseSchema = z
     model: z.string().min(1).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
-    // A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
+    // why: A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
     // before the handler, and its error would stand in for `BAD_REQUEST`.
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
@@ -182,35 +157,11 @@ const leaseRequestBaseSchema = z
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
-    /** Capped by the dispatcher's handler, not here: the cap is daemon config this module cannot see. */
+    /** why: Capped by the dispatcher's handler, not here: the cap is daemon config this module cannot see. */
     ttlMs: z.number().finite().positive().optional(),
     owner: z.string().optional(),
-    /**
-     * Makes this request repeatable: the daemon stores it under `(requesterId, idempotencyKey)`,
-     * and the same request sent again returns the stored result instead of a second lease --
-     * the way a client that lost its answer, to a disconnect or a daemon restart, gets it back.
-     * The same key naming a different device, or a different `leaseId` (a missing one on either
-     * side counts as different), is `IDEMPOTENCY_CONFLICT`; a repeat from another
-     * principal is `FORBIDDEN`. Optional: a request without one is still stored, it just cannot
-     * be repeated. Bounded because the daemon stores it.
-     */
     idempotencyKey: z.string().min(1).max(200).optional(),
-    /**
-     * ADR 0020: the ID the granted lease gets, instead of one simlock generates. The requester
-     * guarantees it is unique for all time; simlock refuses one an active lease or a waiting
-     * request holds (`LEASE_ID_TAKEN`) and keeps no record of IDs already used. A request
-     * without one works as before. Like `idempotencyKey` it is an option of the request, not
-     * part of the device it names. Anything outside the pattern is `BAD_REQUEST`.
-     */
     leaseId: leaseIdSchema.optional(),
-    /**
-     * ADR 0021: the gateway's own request id, sent on every dispatch to a worker. A request that
-     * carries it is a probe: the worker declines it (`lease.declined`) rather than rejecting it,
-     * never queues it, and names the id on the request's lease events. Only the gateway's uplink
-     * session may send it, and only with `noWait: true`; the dispatcher refuses it otherwise
-     * (`FORBIDDEN`, then `BAD_REQUEST`). Not part of the MCP lease tool or the HTTP lease body.
-     * Bounded as `idempotencyKey` is, because the worker stores it.
-     */
     fleetRequestId: z.string().min(1).max(200).optional(),
     requires: z
       .array(capabilityNameSchema)
@@ -237,7 +188,7 @@ export function refuseModelWithClass(
   };
 }
 
-/** `allowDownload: false` passes because the CLI always sends it. */
+/** why: `allowDownload: false` passes because the CLI always sends it. */
 function refusePhysicalWithImageFields(): <
   T extends {
     readonly physical?: boolean | undefined;
@@ -327,7 +278,7 @@ export const leaseRequest = defineOperation({
   effect: "write",
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
-  // No `authorize` hook on purpose: any agent session may request under an arbitrary
+  // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
   // `requesterId`, and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
@@ -367,7 +318,7 @@ export const leaseCancel = defineOperation({
   input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
-   * ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
+   * why: ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
    * request's *recorded owner* (`pendingRequestOwner`, ADR §4's `ownerId` -- always the
    * creating session's principal, never the caller-suppliable `requesterId`), not on comparing
    * `requesterId` to the principal directly -- that comparison would forbid exactly the case
@@ -391,8 +342,6 @@ export const leaseCancel = defineOperation({
   },
 });
 
-// ---- lease.renew ----------------------------------------------------------------------------
-
 /**
  * ADR 0004 §1: the only thing that keeps a lease alive, on every transport. An omitted `ttlMs`
  * re-applies the lease's own stored width -- never `lease.defaultTtlMs` -- so a lease granted
@@ -410,8 +359,6 @@ export const leaseRenew = defineOperation({
   authorize: ownsLease((input) => input.leaseId),
 });
 
-// ---- lease.release --------------------------------------------------------------------------
-
 export const leaseRelease = defineOperation({
   name: "lease.release",
   role: "agent",
@@ -420,8 +367,6 @@ export const leaseRelease = defineOperation({
   output: z.object({ leaseId: z.string() }),
   authorize: ownsLease((input) => input.leaseId),
 });
-
-// ---- driver.passthrough (ADR 0001, decision 7) -----------------------------------------------
 
 /**
  * Builds the scoped command behind `simlock simctl` / `simlock adb`. It lives in the daemon
@@ -443,8 +388,6 @@ export const driverPassthrough = defineOperation({
   input: z.object({ args: z.array(z.string()), tool: z.string().min(1) }),
   output: passthroughCommandSchema,
 });
-
-// ---- device.exec (ADR 0005 §19a) -------------------------------------------------------------
 
 /**
  * Runs `simctl`, `adb` or `devicectl` **on the machine that owns the device** and streams the output back
@@ -494,7 +437,7 @@ export const deviceExec = defineOperation({
       args: z.array(z.string()),
       stdin: z.string().optional(),
       /**
-       * Who this command is being run *for* -- the requester the lease is attributed to (ADR
+       * why: Who this command is being run *for* -- the requester the lease is attributed to (ADR
        * 0003 §4), not the connection's principal. Read **only on an admin session**, where it
        * is the gateway case: a gateway holds one admin session over its uplink and proxies
        * many agents through it, each under its own namespaced requester id (ADR 0005
@@ -508,14 +451,14 @@ export const deviceExec = defineOperation({
     })
     .strict(),
   /**
-   * Only the exit code: every byte the command wrote already left as `output` pushes while it
+   * why: Only the exit code: every byte the command wrote already left as `output` pushes while it
    * ran (see `pushes.ts`), so an answer that also carried the output would mean the daemon had
    * buffered all of it -- which ADR §19e forbids, and which is why there is no size cap here
    * to speak of either.
    */
   output: z.object({ exitCode: z.number() }),
   /**
-   * `ownsLease` for an agent, and something stricter for an admin.
+   * why: `ownsLease` for an agent, and something stricter for an admin.
    *
    * An **agent** session is gated exactly like `lease.renew`: its principal against the
    * lease's `ownerId`. It may not supply `requesterId` at all -- round 4, F4: this used to be
@@ -552,8 +495,6 @@ export const deviceExec = defineOperation({
   },
 });
 
-// ---- lease.list (new, ADR §9) -----------------------------------------------------------------
-
 /**
  * ADR 0005 §20: the element carries an optional `workerId` -- absent from a worker's own
  * answer, set by a gateway, which lists the leases its worker views report. Additive, so a
@@ -578,12 +519,10 @@ export const leaseGet = defineOperation({
   output: z.object({ lease: statusLeaseSchema }),
 });
 
-// ---- doctor.run -------------------------------------------------------------------------------
-
 const doctorRunInputSchema = z.object({
   fix: z.boolean().optional(),
   /**
-   * Destroys every orphan the run finds (ADR 0001, decision 5) -- the single opt-in exception
+   * why: Destroys every orphan the run finds (ADR 0001, decision 5) -- the single opt-in exception
    * to registry-only destruction (safety rule 1). Its own flag rather than part of `fix`, so a
    * `doctor --fix` already running unattended in CI does not acquire a destructive behaviour on
    * upgrade.
@@ -595,7 +534,7 @@ const doctorRunInputSchema = z.object({
 export const doctorRun = defineOperation({
   name: "doctor.run",
   /**
-   * The role genuinely depends on the input: `fix: false` (read-only, shells out per device)
+   * why: The role genuinely depends on the input: `fix: false` (read-only, shells out per device)
    * is agent-visible; `fix: true` (applies safe fixes to registry-owned devices) is admin
    * only -- see ADR §3's matrix, which lists `doctor.run` twice for exactly this reason. A
    * function-of-input role, rather than an `authorize` hook, is the right tool here: `authorize`
@@ -613,8 +552,6 @@ export const doctorRun = defineOperation({
   input: doctorRunInputSchema,
   output: doctorReportSchema,
 });
-
-// ---- lease.release-all ------------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const leaseReleaseAll = defineOperation({
@@ -641,8 +578,6 @@ export const listGet = defineOperation({
   ]),
 });
 
-// ---- cleanup.run --------------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const cleanupRun = defineOperation({
   name: "cleanup.run",
@@ -651,8 +586,6 @@ export const cleanupRun = defineOperation({
   input: z.object({ dryRun: z.boolean().optional(), rule: z.string().optional() }),
   output: z.array(proposalSchema),
 });
-
-// ---- nuke.run -----------------------------------------------------------------------------
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const nukeRun = defineOperation({
@@ -663,8 +596,6 @@ export const nukeRun = defineOperation({
   output: nukeReportSchema,
 });
 
-// ---- config.get ---------------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
@@ -673,13 +604,6 @@ export const configGet = defineOperation({
   input: z.object({}),
   output: configSchema,
 });
-
-// ---- daemon.stop --------------------------------------------------------------------------
-//
-// Part of the closed OPERATIONS registry (ADR §3); `daemon.stop` is handled as a
-// frozen-exception special case in `DaemonServer#dispatchLine` rather than through the normal
-// dispatch switch, so nothing imports this declaration by name yet. Declared here because the
-// contract must still describe its input/output/role.
 
 // fallow-ignore-next-line unused-export -- see the comment above.
 export const daemonStop = defineOperation({
@@ -720,8 +644,6 @@ export const daemonUpdate = defineOperation({
   }),
 });
 
-// ---- events.replay ------------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsReplay = defineOperation({
   name: "events.replay",
@@ -747,8 +669,6 @@ export const usageGet = defineOperation({
   output: usageOutputSchema,
 });
 
-// ---- events.subscribe ---------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsSubscribe = defineOperation({
   name: "events.subscribe",
@@ -758,8 +678,6 @@ export const eventsSubscribe = defineOperation({
   output: z.object({ subscribed: z.literal(true), subscriptionId: z.string() }),
 });
 
-// ---- events.unsubscribe -------------------------------------------------------------------
-
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const eventsUnsubscribe = defineOperation({
   name: "events.unsubscribe",
@@ -768,8 +686,6 @@ export const eventsUnsubscribe = defineOperation({
   input: z.object({}),
   output: z.object({ subscribed: z.literal(false) }),
 });
-
-// ---- token.create / token.list / token.revoke --------------------------------------------
 
 // why: ADR §11 makes the daemon the only owner of the tokens, and that move has landed: both
 // dispatchers handle these three, the CLI reaches them as admin round-trips from
@@ -802,17 +718,6 @@ export const tokenRevoke = defineOperation({
   input: z.object({ id: z.string() }),
   output: z.object({ revoked: z.boolean() }),
 });
-
-// ---- worker.list / worker.drain / worker.undrain / worker.remove (ADR 0005 §8, §23) ---------
-//
-// They act on the gateway's worker registry. A worker answers them as a fleet of one (ADR
-// 0012): `worker.list` returns one view, the worker itself, and `worker.drain`,
-// `worker.undrain` and `worker.remove` answer `UNSUPPORTED_IN_WORKER_MODE`, since a single host
-// has no gateway to drain it or forget it.
-//
-// `admin` throughout: these are operator tools (drain a machine for maintenance, forget a
-// machine that is gone), and ADR 0003 §3's matrix puts every daemon-wide administrative
-// operation at that role.
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const workerList = defineOperation({
@@ -885,8 +790,6 @@ export const workerUpdate = defineOperation({
   output: daemonUpdate.output.extend({ workerId: z.string() }),
 });
 
-// ---- component.install (ADR 0010 §6) --------------------------------------------------------
-
 /**
  * Installs one iOS simulator runtime or Android system image without leasing a device (ADR 0010
  * §6). Admin-only: the command is an operator's consent to a multi-GB download, which
@@ -907,8 +810,6 @@ export const componentInstall = defineOperation({
     version: z.string(),
   }),
 });
-
-// ---- component.list (ADR 0010 §8) -----------------------------------------------------------
 
 /**
  * Every installed iOS simulator runtime and Android system image on this machine, ordered by
@@ -941,9 +842,6 @@ export const componentList = defineOperation({
   }),
 });
 
-// ---- worker.install-component (ADR 0010 §7) -------------------------------------------------
-
-/** The longest worker id a gateway accepts at the uplink, and so the longest one it can name. */
 const WORKER_ID_MAX_LENGTH = 128;
 
 /** The longest error message a relayed result carries. A worker's message is a claim, cut to
@@ -959,14 +857,6 @@ const workerInstallTargetsSchema = z.union([
     .refine((ids) => new Set(ids).size === ids.length, "worker ids must be distinct"),
 ]);
 
-/**
- * One worker's answer to a relayed install. `installed` and `already-installed` are the worker's
- * own outcome, with the version it installed or found. `refused` is the worker's
- * `DOWNLOADS_DISABLED`; `failed` is any other error the worker answered; `skipped` is a worker
- * the gateway did not ask; `unknown` is a worker whose uplink closed, or that did not answer
- * within its own `downloads.timeoutMs` plus a minute. Every outcome but the first two carries
- * `error`.
- */
 const workerInstallResultSchema = z.object({
   workerId: z.string(),
   label: z.string().optional(),

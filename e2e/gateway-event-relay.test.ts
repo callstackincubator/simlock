@@ -10,12 +10,6 @@ import { SimlockWire } from "../src/simlock-client/wire.js";
 import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { RecordedEvent } from "./helpers/events.js";
 
-/**
- * ADR 0014 §2 and §5 with real processes: a gateway and one worker, the CLI an operator uses.
- * A worker's event keeps its `id` and `timestamp` on the gateway, which is what lets the two
- * event files be joined; `workerId` and the gateway's own `seq` are the only marks of the relay.
- */
-
 async function gatewayWithWorker() {
   const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { host: "127.0.0.1", port } },
@@ -49,7 +43,6 @@ function leaseArgs(agentId: string): string[] {
   ];
 }
 
-/** The lines of a stream: a replayed event is printed as itself, a pushed one inside its push. */
 function parse(stdout: string): RecordedEvent[] {
   return stdout
     .split("\n")
@@ -281,11 +274,8 @@ describe("gateway event relay", () => {
       const follower = gateway.cliBackground(["events", "--follow", "--since", "1h"], {
         env: { SIMLOCK_ADMIN_TOKEN: adminToken, SIMLOCK_HOME: gate.home },
       });
-      // The follower has subscribed and asked for the replay; the gate holds that request.
       await waitFor(() => gate.replayHeld(), { label: "the replay request reached the gate" });
 
-      // A lease is granted while the replay is pending: its push reaches the follower, and the
-      // replay, released only afterwards, is taken after the grant and holds it too.
       const holder = worker.cliBackground(leaseArgs("relay-follow"));
       const grant = JSON.parse(await holder.firstStdoutLine()) as { lease: { id: string } };
       const isGrant = (event: RecordedEvent) =>
@@ -364,12 +354,6 @@ async function gatewayWithTwoWorkers() {
 
 const idsOf = (events: readonly RecordedEvent[]) => events.map((event) => event.id);
 
-/**
- * A unix-socket proxy in front of the gateway's daemon socket that holds the follower's
- * `events.replay` request until `release()`. Everything else, pushes included, passes through, so
- * an event emitted while the request is held reaches the follower as a push and is then also in
- * the replay taken after the release.
- */
 async function gateReplay(upstreamSocket: string) {
   const home = await mkdtemp(join(tmpdir(), "sl-gate-"));
   // why: the follower runs with `--gateway`, which looks for a gateway folder under this root.
@@ -424,7 +408,7 @@ async function gateReplay(upstreamSocket: string) {
       held?.();
     },
     async close() {
-      // `server.close` waits for every open connection; destroy them so a failed assertion in
+      // why: `server.close` waits for every open connection; destroy them so a failed assertion in
       // the test body is reported, not replaced by a timeout here.
       for (const socket of open) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

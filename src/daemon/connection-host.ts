@@ -64,7 +64,6 @@ export interface DaemonEndpointHostOptions {
   readonly logger?: Logger;
 }
 
-/** Owns endpoint claiming, stale-entry recovery, and listener lifecycle. */
 export class DaemonEndpointHost implements ConnectionHost {
   readonly endpoint: string;
   readonly #logger: Logger;
