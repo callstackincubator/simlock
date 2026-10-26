@@ -5,6 +5,7 @@ import {
   type InputScreenConfig,
   isUnavailableInput,
   type PhysicalDriverDevice,
+  ScreenUnavailableError,
   type UnavailableDeviceInput,
   type VirtualDriverDevice,
 } from "../../../core/index.js";
@@ -30,6 +31,39 @@ const DEVICE: VirtualDriverDevice = {
   driverData: {},
   physical: false,
 };
+
+const PHONE: PhysicalDriverDevice = {
+  address: "R58M123ABC",
+  deviceId: "R58M123ABC",
+  driverData: {},
+  enrolledApps: [],
+  physical: true,
+};
+
+// why: the reason a phone's target gives when the shared adb server's version check is closed; the
+// input is expected to pass it through as its own, unchanged, and to send nothing after it.
+const GATE_REFUSAL =
+  "the adb server on port 5037 speaks protocol 40 and Simlock's adb speaks 41. " +
+  "No command goes to physical Android devices until they match, and Simlock will not restart that server.";
+
+const SERVER_ARGS = [
+  "shell",
+  `CLASSPATH=${DEVICE_JAR}`,
+  "app_process",
+  "/",
+  "com.genymobile.scrcpy.Server",
+  "5.0.1",
+  "scid=1234abcd",
+  "log_level=info",
+  "tunnel_forward=true",
+  "video=false",
+  "audio=false",
+  "control=true",
+  "power_on=false",
+  "send_device_meta=false",
+  "send_dummy_byte=true",
+  "cleanup=true",
+].join(" ");
 
 function displays(width: number, height: number): ProcessResult {
   return {
@@ -102,6 +136,8 @@ class FakeTarget implements ScreenTarget {
   readonly peers: Peer[] = [];
   readonly runner: ScriptedProcessRunner;
   display: ProcessResult = displays(1080, 2400);
+  // why: stands in for a closed version check: every command and connection is refused as it refuses them.
+  gateClosed = false;
 
   constructor(
     readonly serial: string,
@@ -111,17 +147,24 @@ class FakeTarget implements ScreenTarget {
   }
 
   async run(args: readonly string[]): Promise<ProcessResult> {
+    this.#check();
     if (args.join(" ") === "shell dumpsys window displays") return this.display;
     this.log.push(args.join(" "));
     return await this.runner.run(ADB, args);
   }
 
   async spawn(args: readonly string[]): Promise<ProcessHandle> {
+    this.#check();
     this.log.push(args.join(" "));
     return this.runner.spawn(ADB, args);
   }
 
+  #check(): void {
+    if (this.gateClosed) throw new ScreenUnavailableError(GATE_REFUSAL);
+  }
+
   async connect(): Promise<TcpStream> {
+    this.#check();
     const peer = new Peer();
     peer.send("OKAY", "OKAY", new Uint8Array([0]));
     this.peers.push(peer);
@@ -155,19 +198,19 @@ function remove(): ScriptedProcessExpectation {
   };
 }
 
+// why: both devices' worlds: the other device's target is here so "it went through this device's
+// target" can fail, since an input aimed at the wrong device would show up in the other's log.
 function setup(device: VirtualDriverDevice | PhysicalDriverDevice = DEVICE) {
   const clock = new FakeClock(1_000);
   const target = new FakeTarget(device.address, [push(), shell(), remove()]);
+  const other = new FakeTarget("other", []);
   const factory = createAndroidDeviceInput({
     clock,
     scid: () => SCID,
     serverPath: SERVER,
-    targetFor: async (asked) => {
-      expect(asked).toBe(device);
-      return target;
-    },
+    targetFor: async (asked) => (asked === device ? target : other),
   });
-  return { clock, device, factory, target };
+  return { clock, device, factory, other, target };
 }
 
 async function drive<T>(clock: FakeClock, promise: Promise<T>, stepMs = 50): Promise<T> {
@@ -206,27 +249,19 @@ describe("Android device input: open", () => {
   it("starts a control-only scrcpy and reads the screen's size in its current rotation", async () => {
     const world = setup();
     const input = opened(await open(world));
-    expect(world.target.log[0]).toBe(`push ${SERVER} ${DEVICE_JAR}`);
-    expect(world.target.log[1]).toBe(
-      [
-        "shell",
-        `CLASSPATH=${DEVICE_JAR}`,
-        "app_process",
-        "/",
-        "com.genymobile.scrcpy.Server",
-        "5.0.1",
-        "scid=1234abcd",
-        "log_level=info",
-        "tunnel_forward=true",
-        "video=false",
-        "audio=false",
-        "control=true",
-        "power_on=false",
-        "send_device_meta=false",
-        "send_dummy_byte=true",
-        "cleanup=true",
-      ].join(" "),
-    );
+    expect(world.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS]);
     expect(configs(input)).toEqual([{ height: 2400, orientation: "portrait", width: 1080 }]);
+
+    const phone = setup(PHONE);
+    const phoneInput = opened(await open(phone));
+    expect(phone.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS]);
+    expect(configs(phoneInput)).toEqual([{ height: 2400, orientation: "portrait", width: 1080 }]);
+    expect(phone.other.log).toEqual([]);
+
+    const closed = setup(PHONE);
+    closed.target.gateClosed = true;
+    await expect(open(closed)).resolves.toEqual({ unavailable: GATE_REFUSAL });
+    expect(closed.target.log).toEqual([]);
+    expect(closed.target.peers).toEqual([]);
   });
 });
