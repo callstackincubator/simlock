@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LinkChannelError } from "../link/index.js";
 import type { LinkChannel, LinkChannelErrorReason, LinkConnection } from "../link/index.js";
+import { FakeClock, type Clock } from "../ports/index.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import { completeHello, ScriptedConnection } from "../simlock-client/test-support.js";
 import type { SentFrame } from "../simlock-client/test-support.js";
 import type { WorkerDirectory } from "./fleet-ports.js";
-import { GatewayRelay } from "./relay.js";
+import { GatewayRelay, type TwoWayRelay } from "./index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
 
 const WORKER_ID = "wrk_a";
@@ -113,6 +114,7 @@ async function setup(
     readonly deadlineMs?: number;
     readonly holdOpen?: boolean;
     readonly idleMs?: number;
+    readonly clock?: Clock;
   } = {},
 ) {
   const connection = new FakeLink();
@@ -133,6 +135,7 @@ async function setup(
       directory,
       ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
       ...(options.idleMs === undefined ? {} : { idleMs: options.idleMs }),
+      ...(options.clock === undefined ? {} : { clock: options.clock }),
     }),
   };
 }
@@ -199,6 +202,23 @@ async function readAll(response: Response) {
 async function openedChannel(connection: FakeLink): Promise<FakeChannel> {
   await vi.waitFor(() => expect(connection.channels).toHaveLength(1));
   return connection.channels[0] as FakeChannel;
+}
+
+async function openTwoWay() {
+  const clock = new FakeClock();
+  const { connection, relay } = await setup({ clock });
+  const pending = relay.relayTwoWay(WORKER_ID, call());
+  const request = await sentFrame(connection, "relay.request");
+  const channel = await openedChannel(connection);
+  connection.push("relay-head", { headers: [], requestId: request.id, status: 200 });
+  const opened = (await pending) as TwoWayRelay;
+  return {
+    channel,
+    clock,
+    connection,
+    reader: opened.readable.getReader(),
+    writer: opened.writable.getWriter(),
+  };
 }
 
 describe("GatewayRelay on a byte channel", () => {
@@ -530,6 +550,55 @@ describe("GatewayRelay bounding the head and the body", () => {
       state: "rejected",
     });
     expect(channel.aborted).toBe(true);
+  });
+
+  it("ends a two-way relay with WORKER_UNREACHABLE after 15 s with no byte from the worker, however much the gateway writes, and keeps it open while bytes come or the worker's direction is ended", async () => {
+    const silent = await openTwoWay();
+    await silent.writer.write(new Uint8Array(8));
+    silent.clock.advance(14_999);
+    const openAt14 = silent.channel.aborted;
+    silent.clock.advance(1);
+    const silentRead = await outcome(silent.reader.read());
+    const writeFailure = await outcome(silent.writer.write(new Uint8Array(1)));
+
+    const chatty = await openTwoWay();
+    const steps: number[] = [];
+    for (let at = 0; at < 12; at += 1) {
+      chatty.clock.advance(5_000);
+      chatty.channel.feed(new Uint8Array(1));
+      steps.push((await chatty.reader.read()).value?.length ?? 0);
+    }
+    const chattyAborted = chatty.channel.aborted;
+
+    const ended = await openTwoWay();
+    ended.channel.end();
+    const endStep = await ended.reader.read();
+    ended.clock.advance(60_000);
+    await ended.writer.write(new Uint8Array(3));
+
+    const slowReader = await openTwoWay();
+    slowReader.channel.feed(new Uint8Array(70 * KIB));
+    await vi.waitFor(() => expect(slowReader.clock.pendingTimerCount).toBe(0));
+    slowReader.clock.advance(60_000);
+    const slowAborted = slowReader.channel.aborted;
+    const slowStep = await slowReader.reader.read();
+    slowReader.clock.advance(15_000);
+    const slowFailure = await outcome(slowReader.reader.read());
+
+    const message = `worker ${WORKER_ID} sent nothing on the relayed response for 15000 ms`;
+    expect(openAt14).toBe(false);
+    expect(silentRead).toMatchObject({ code: "WORKER_UNREACHABLE", message, state: "rejected" });
+    expect(writeFailure).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
+    expect(silent.channel.aborted).toBe(true);
+    expect(silent.connection.lastSentOf("relay.cancel")).toBeDefined();
+    expect(steps).toEqual(Array.from({ length: 12 }, () => 1));
+    expect(chattyAborted).toBe(false);
+    expect(endStep.done).toBe(true);
+    expect(ended.channel.aborted).toBe(false);
+    expect(ended.channel.written.map((chunk) => chunk.length)).toEqual([3]);
+    expect(slowAborted).toBe(false);
+    expect(slowStep.value?.length).toBe(70 * KIB);
+    expect(slowFailure).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
   });
 });
 
