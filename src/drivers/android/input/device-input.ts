@@ -22,9 +22,23 @@ import {
   SHELL_EXIT_GRACE_MS,
   START_DEADLINE_MS,
 } from "../screen/index.js";
-import { scrollPacket, touchPacket } from "./packets.js";
+import {
+  keycodeOf,
+  KEYCODE_APP_SWITCH,
+  KEYCODE_BACK,
+  KEYCODE_HOME,
+  KEYCODE_POWER,
+  modifierOf,
+} from "./keycodes.js";
+import { keycodePacket, scrollPacket, touchPacket } from "./packets.js";
 import { readScreenSize, type ScreenSize } from "./display-size.js";
 
+const BUTTON_KEYCODES = {
+  app_switcher: KEYCODE_APP_SWITCH,
+  back: KEYCODE_BACK,
+  home: KEYCODE_HOME,
+  lock: KEYCODE_POWER,
+} as const;
 const SCID_LIMIT = 2 ** 31;
 // why: an agent that rotates the device is followed within this long.
 const SIZE_POLL_MS = 2_000;
@@ -76,6 +90,7 @@ class AndroidDeviceInput implements DeviceInput {
   #stream: TcpStream | undefined;
   readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
   #poll: ReturnType<Clock["setTimer"]> | undefined;
+  #meta = 0;
   #pushed = false;
   #shellExited = false;
   #closing: Promise<void> | undefined;
@@ -170,6 +185,25 @@ class AndroidDeviceInput implements DeviceInput {
     if (size === undefined) return;
     if (message.kind === "touch") this.#write(touchPacket(message, size));
     else if (message.kind === "scroll") this.#write(scrollPacket(message, size));
+    else if (message.kind === "button") this.#press(BUTTON_KEYCODES[message.button]);
+    else this.#key(message.type, message.usage);
+  }
+
+  #press(keycode: number): void {
+    this.#write(keycodePacket("down", keycode, this.#meta));
+    this.#write(keycodePacket("up", keycode, this.#meta));
+  }
+
+  // why: a modifier is held in the meta state of every later key until its `up`; it joins the state
+  // before its own down and leaves it before its own up, as Android's events carry it.
+  #key(type: "down" | "up", usage: number): void {
+    const keycode = keycodeOf(usage);
+    if (keycode === undefined) return;
+    const modifier = modifierOf(usage);
+    if (modifier !== undefined) {
+      this.#meta = type === "down" ? this.#meta | modifier.meta : this.#meta & ~modifier.meta;
+    }
+    this.#write(keycodePacket(type, keycode, this.#meta));
   }
 
   #write(packet: Uint8Array): void {

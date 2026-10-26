@@ -3,6 +3,7 @@ import type { ScreenSize } from "./display-size.js";
 
 // why: scrcpy's control message types and Android's MotionEvent actions, as the server reads them
 // (scrcpy v5.0.1, ControlMessage.java and ControlMessageReader.java).
+const TYPE_KEYCODE = 0;
 const TYPE_TOUCH = 2;
 const TYPE_SCROLL = 3;
 const ACTION_DOWN = 0;
@@ -61,5 +62,15 @@ export function scrollPacket(message: Scroll, size: ScreenSize): Uint8Array {
   writePosition(view, 1, message.x ?? 0.5, message.y ?? 0.5, size);
   view.setInt16(13, fixedPoint(0 - wheelUnits(message.dx)));
   view.setInt16(15, fixedPoint(wheelUnits(message.dy)));
+  return out;
+}
+
+export function keycodePacket(action: "down" | "up", keycode: number, meta: number): Uint8Array {
+  const out = new Uint8Array(14);
+  const view = new DataView(out.buffer);
+  view.setUint8(0, TYPE_KEYCODE);
+  view.setUint8(1, action === "down" ? ACTION_DOWN : ACTION_UP);
+  view.setInt32(2, keycode);
+  view.setInt32(10, meta);
   return out;
 }
