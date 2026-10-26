@@ -21,7 +21,6 @@ class FakeChannel implements LinkChannel {
   readonly readable: ReadableStream<Uint8Array>;
   readonly writable: WritableStream<Uint8Array>;
   readonly written: Uint8Array[] = [];
-  #stopped = false;
   readonly credit = 0;
   writableClosed = false;
   aborted = false;
@@ -37,14 +36,12 @@ class FakeChannel implements LinkChannel {
     });
     this.writable = new WritableStream<Uint8Array>({
       close: () => {
-        if (this.#stopped) throw new LinkChannelError("stopped");
         this.writableClosed = true;
       },
       start: (controller) => {
         this.#writeController = controller;
       },
       write: (chunk) => {
-        if (this.#stopped) throw new LinkChannelError("stopped");
         this.written.push(chunk);
       },
     });
@@ -85,9 +82,9 @@ class FakeChannel implements LinkChannel {
     }
   }
 
-  // why: the real channel reports a peer's STOP on the next write or close, not by erroring the stream at once.
+  // why: the real channel errors its writable at once on a peer's STOP (src/link/channel.ts onStop → #failOutgoing).
   stopWriting(): void {
-    this.#stopped = true;
+    this.#writeController.error(new LinkChannelError("stopped"));
   }
 
   failWritable(reason: LinkChannelErrorReason): void {
@@ -528,7 +525,8 @@ describe("GatewayRelay when the worker stops reading a two-way relay", () => {
   ])(
     "ends only the gateway's direction on $how after the stop: the worker's bytes still arrive and its end finishes the relay",
     async ({ end, settles }) => {
-      const open = await openTwoWay();
+      const caller = new AbortController();
+      const open = await openTwoWay(caller.signal);
       open.channel.stopWriting();
 
       const ended = await outcome(end(open.writer));
@@ -536,6 +534,8 @@ describe("GatewayRelay when the worker stops reading a two-way relay", () => {
       const first = await open.reader.read();
       open.channel.end();
       const last = await open.reader.read();
+      caller.abort(new Error("caller left late"));
+      await sleep(10);
 
       expect(ended.state).toBe(settles);
       expect(first.value?.length).toBe(2);
