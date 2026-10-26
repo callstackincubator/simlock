@@ -55,7 +55,15 @@ export class NodeBytePipeLauncher implements BytePipeLauncher {
         child.stdin.end();
       },
       exited,
-      writeStdin: () => Promise.resolve(),
+      // why: unlike the stop, a write that fails is the caller's to learn about, so the error
+      // reaches the promise (the listener above only keeps it from being thrown).
+      writeStdin: (bytes) =>
+        new Promise<void>((resolve, reject) => {
+          child.stdin.write(bytes, (error) => {
+            if (error === null || error === undefined) resolve();
+            else reject(error);
+          });
+        }),
       kill: (signal) => {
         if (child.exitCode === null && child.signalCode === null) child.kill(signal);
       },
