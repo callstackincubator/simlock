@@ -234,6 +234,15 @@ async function drive<T>(clock: FakeClock, promise: Promise<T>, stepMs = 50): Pro
   throw new Error("did not settle within two fake minutes");
 }
 
+async function settle(clock: FakeClock, ms: number): Promise<void> {
+  for (let spent = 0; spent < ms; spent += 50) {
+    for (let flush = 0; flush < 10; flush += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    clock.advance(50);
+  }
+  for (let flush = 0; flush < 10; flush += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
 type World = ReturnType<typeof setup>;
 
 async function open(world: World): Promise<DeviceInput | UnavailableDeviceInput> {
@@ -269,6 +278,18 @@ describe("Android device input: open", () => {
     await expect(open(closed)).resolves.toEqual({ unavailable: GATE_REFUSAL });
     expect(closed.target.log).toEqual([]);
     expect(closed.target.peers).toEqual([]);
+
+    const seen = configs(input);
+    await settle(world.clock, 2_000);
+    expect(seen).toHaveLength(1);
+    world.target.display = displays(2400, 1080);
+    await settle(world.clock, 2_000);
+    expect(seen).toEqual([
+      { height: 2400, orientation: "portrait", width: 1080 },
+      { height: 1080, orientation: "landscape_left", width: 2400 },
+    ]);
+    await settle(world.clock, 4_000);
+    expect(seen).toHaveLength(2);
 
     const removal = `shell rm -f ${DEVICE_JAR}`;
     const silent = setup();
