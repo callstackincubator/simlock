@@ -11,6 +11,7 @@ export class FakeDeviceInput implements DeviceInput {
   readonly sent: InputMessage[] = [];
   closes = 0;
   readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
+  readonly #failedListeners = new Set<(error: Error) => void>();
   #config: InputScreenConfig;
 
   constructor(config: InputScreenConfig) {
@@ -27,13 +28,18 @@ export class FakeDeviceInput implements DeviceInput {
     return () => this.#configListeners.delete(listener);
   }
 
-  onFailed(): () => void {
-    return () => undefined;
+  onFailed(listener: (error: Error) => void): () => void {
+    this.#failedListeners.add(listener);
+    return () => this.#failedListeners.delete(listener);
   }
 
   close(): Promise<void> {
     this.closes += 1;
     return Promise.resolve();
+  }
+
+  fail(error: Error): void {
+    for (const listener of this.#failedListeners) listener(error);
   }
 
   changeConfig(config: InputScreenConfig): void {
@@ -46,10 +52,15 @@ export class FakeDeviceInput implements DeviceInput {
 // can tell one shared device input from one per socket.
 export class FakeInputFactory implements DeviceInputFactory {
   readonly opened: FakeDeviceInput[] = [];
+  // why: a test sets this to make the next opens fail, as a controller that cannot start does.
+  failWith: Error | undefined;
+  opens = 0;
 
   constructor(private readonly config: InputScreenConfig) {}
 
   open(): Promise<FakeDeviceInput | UnavailableDeviceInput> {
+    this.opens += 1;
+    if (this.failWith !== undefined) return Promise.reject(this.failWith);
     const input = new FakeDeviceInput(this.config);
     this.opened.push(input);
     return Promise.resolve(input);

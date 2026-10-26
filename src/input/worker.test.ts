@@ -4,7 +4,7 @@ import type { DeviceRecord, LeaseRecord } from "../core/index.js";
 import { FakeInputFactory } from "../core/testing.js";
 import type { WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
-import { MemoryLeaseSocket } from "../ports/index.js";
+import { type FakeClock, MemoryLeaseSocket } from "../ports/index.js";
 import { inputModule } from "./index.js";
 
 const IDENTITY = { principal: "tok_holder", role: "agent" } as const;
@@ -17,8 +17,9 @@ function message(tag: number, body: unknown): Uint8Array {
 async function setup(): Promise<{
   readonly worker: WorkerModule;
   readonly factory: FakeInputFactory;
+  readonly clock: FakeClock;
 }> {
-  const { ctx } = await fakeWorkerContext("input", {});
+  const { clock, ctx } = await fakeWorkerContext("input", {});
   const factory = new FakeInputFactory(SCREEN);
   const registry = {
     snapshot: {
@@ -32,10 +33,10 @@ async function setup(): Promise<{
     inputs: { openInput: () => factory.open() },
     registry,
   });
-  return { factory, worker };
+  return { clock, factory, worker };
 }
 
-async function admitted(worker: WorkerModule): Promise<MemoryLeaseSocket> {
+async function attach(worker: WorkerModule): Promise<MemoryLeaseSocket> {
   const opened = await worker.socket?.open(new Request("http://simlock/input"), IDENTITY, {
     deviceId: "dev_1",
     id: "L-1",
@@ -43,9 +44,16 @@ async function admitted(worker: WorkerModule): Promise<MemoryLeaseSocket> {
   if (typeof opened !== "function") throw new Error("the socket was refused");
   const socket = new MemoryLeaseSocket();
   opened(socket);
+  return socket;
+}
+
+async function admitted(worker: WorkerModule): Promise<MemoryLeaseSocket> {
+  const socket = await attach(worker);
   await vi.waitFor(() => expect(socket.sent.map((sent) => sent[0])).toEqual([0x83, 0x82]));
   return socket;
 }
+
+const REFUSED = { code: 1013, reason: "Input is unavailable for this lease" };
 
 describe("a worker's input socket", () => {
   it("keeps the socket and sends nothing to the device when a client sends a bad message", async () => {
@@ -98,5 +106,37 @@ describe("a worker's input socket", () => {
       requestId: 7,
     });
     expect(device?.sent).toHaveLength(valid.length);
+  });
+
+  it("closes a 9th socket and a failed device input's sockets with 1013, and refuses a reconnect within 10 s of a failed open without a new open", async () => {
+    const { clock, factory, worker } = await setup();
+    const sockets: MemoryLeaseSocket[] = [];
+    for (let count = 0; count < 8; count += 1) sockets.push(await admitted(worker));
+    const ninth = await attach(worker);
+    await vi.waitFor(() => expect(ninth.closed).toEqual(REFUSED));
+    expect(ninth.sent).toEqual([]);
+    expect(sockets.map((socket) => socket.closed)).toEqual(Array(8).fill(undefined));
+    expect(factory.opened).toHaveLength(1);
+
+    factory.opened[0]?.fail(new Error("the controller died"));
+    expect(sockets.map((socket) => socket.closed)).toEqual(Array(8).fill(REFUSED));
+    expect(factory.opened[0]?.closes).toBe(1);
+
+    factory.failWith = new Error("the controller cannot start");
+    const opensBefore = factory.opens;
+    const failed = await attach(worker);
+    await vi.waitFor(() => expect(failed.closed).toEqual(REFUSED));
+    expect(failed.sent).toEqual([]);
+    expect(factory.opens).toBe(opensBefore + 1);
+
+    clock.advance(9_999);
+    const retry = await attach(worker);
+    await vi.waitFor(() => expect(retry.closed).toEqual(REFUSED));
+    expect(factory.opens).toBe(opensBefore + 1);
+
+    clock.advance(1);
+    const later = await attach(worker);
+    await vi.waitFor(() => expect(later.closed).toEqual(REFUSED));
+    expect(factory.opens).toBe(opensBefore + 2);
   });
 });
