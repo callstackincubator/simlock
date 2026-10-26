@@ -20,13 +20,8 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## How it works
 
-Under `drivers.ios.deviceSet` `simlock` (the default) every simulator command is `xcrun simctl --set <root> …`. Unscoped only: `findLegacy`,
-`destroyLegacy`, and the read-only `simctl list -j devices` `listComponents` runs.
-Under `default` (ADR 0048) the set is Xcode's own, `<coreSimulatorRoot>/Devices`, and no call carries `--set`:
-there is no owned root, `listManaged` lists only devices whose durable mark names this instance's `instanceId`,
-and `findLegacy` answers `undefined`. A value other than `simlock` or `default`, or `default` with
-`drivers.ios.deviceRoot`, refuses iOS (`invalid-device-set`); simulators left in the set being given up
-refuse it too (`device-set-changed`), found by reading files only.
+Under `drivers.ios.deviceSet` `simlock` (the default) every simulator command is `xcrun simctl --set <root> …`. Unscoped only: `findLegacy`, `destroyLegacy`, and the read-only `simctl list -j devices` `listComponents` runs.
+Under `default` (ADR 0048) the set is Xcode's own, `<coreSimulatorRoot>/Devices`, and no call carries `--set`: there is no owned root, `listManaged` lists only devices whose durable mark names this instance's `instanceId`, and `findLegacy` answers `undefined`. A value other than `simlock` or `default`, or `default` with `drivers.ios.deviceRoot`, refuses iOS (`invalid-device-set`); simulators left in the set being given up refuse it too (`device-set-changed`), found by reading files only.
 
 Resolve — `resolveSpec` (reads `simctl list -j devicetypes runtimes` on every call):
 
@@ -127,33 +122,19 @@ record of a device's mode; `driverData` holds the slim signature.
 
 ## Known gaps
 
-- **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted
-  `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
-- **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB
-  asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and
-  `component remove` report it. Reclaim in Xcode → Settings → Platforms.
+- **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
+- **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Every reclaim erases, so the next boot re-slims: two boots each
   time. Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight,
   StoreKit, universal links, Siri, iCloud sync. Use `--mode full` when a test needs them.
 - **Slim drift is invisible.** `launchctl disable` accepts labels that do not exist. Narrowing
   `ios.slim.categories` never re-enables a daemon: reclaim or destroy old devices first.
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
-- **A screen stream can freeze after a reboot under its lease.** The capture program checks the
-  simulator is booted only when it starts, then repaints its last surface every 200 ms, so after
-  the health monitor reboots a crashed simulator the viewer can see the old picture until they
-  leave the Screen tab and open it again. A lease ending stops it as usual.
-- **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does today: the
-  scaler is sized once, from the first picture. An iPhone that stays connected and unlocked but
-  stops sending video, or a decoder that stops producing pictures, shows the last picture until
-  the lease ends.
+- **A screen stream can freeze after a reboot under its lease.** The capture program checks the simulator is booted only when it starts, then repaints its last surface every 200 ms, so after the health monitor reboots a crashed simulator the viewer can see the old picture until they leave the Screen tab and open it again. A lease ending stops it as usual.
+- **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does today: the scaler is sized once, from the first picture. An iPhone that stays connected and unlocked but stops sending video, or a decoder that stops producing pictures, shows the last picture until the lease ends.
 - **A capture killed by SIGKILL cannot stop its CoreDevice stream**; CoreDevice is left to notice
   its client is gone. The same for a stop while `startMediaStream` is still running past 1.5 s.
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked
   against that release and the pin moves.
-- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the lease
-  holder's `devicectl` commands during one; the source ending after the first picture; `stop()`
-  really stopping the stream. Nothing can observe CoreDevice's state, and a device that serves two
-  streams at once lets a new lease stream even after a leaked one, so the slow lane proves only
-  that the process is gone and that the device streams again. Two viewers of one lease ask for two
-  streams; the two-viewer case finds out whether it serves both (#602 would remove the second).
+- **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the lease holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Nothing can observe CoreDevice's state, and a device that serves two streams at once lets a new lease stream even after a leaked one, so the slow lane proves only that the process is gone and that the device streams again. Two viewers of one lease ask for two streams; the two-viewer case finds out whether it serves both (#602 would remove the second).
 - **A cold slim lease takes ~160 s.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
