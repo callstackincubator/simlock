@@ -1,8 +1,7 @@
 # HTTP frontend
 
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
-Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway`
-(`server.ts`).
+Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway` (`server.ts`).
 Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), modules (types), ports. Never imports: drivers, gateway.
 Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/remote-agents.mdx), [console.mdx](../../website/src/content/docs/docs/worker/console.mdx).
@@ -34,8 +33,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    with CSP, `nosniff` and `no-referrer`; a page path (no extension, not `/assets/`)
    falls back to `index.html`. An unbuilt console answers 404 and logs one warning.
 2. Log middleware — one `request` line per answer (method, path, status, `durationMs`,
-   `requesterId`). Not for `/v1/healthz`.
-   Inside it, a JSON `200` to a `GET` gets an `ETag`, and a matching `If-None-Match` turns it
+   `requesterId`). Not for `/v1/healthz`. Inside it, a JSON `200` to a `GET` gets an `ETag`, and a matching `If-None-Match` turns it
    into `304` with no body. Streams and mounts are skipped, so their bodies are never read.
 3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
    headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
@@ -106,8 +104,7 @@ stream (`/v1/leases/{id}/stream`).
   `workers`. Events: `progress`, then `result` or `error`.
 
 `OutputRelay` states: starting (chunk held; its `push` promise resolves once flushed),
-streaming (straight to the wire; the write promise is the backpressure), dropped (client
-gone; the command runs on; nothing is kept).
+streaming (straight to the wire; the write promise is the backpressure), dropped (client gone; the command runs on; nothing is kept).
 
 `LeaseNoticeBuffer` takes `device_unhealthy`, `device_recovered` and `lease_lost` from the
 daemon's `OwnerRoutedFacts`, per lease. It pushes live to SSE listeners and keeps them
@@ -124,8 +121,7 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
 | `NO_CAPACITY` `Retry-After` | 5 s                                                             | fixed, `errors.ts`       |
 
 - The listener starts right after the socket claim (`onSocketClaimed`), before startup
-  convergence. Early requests park in the dispatcher. On a gateway the worker uplink
-  upgrades on the same listener (`onServerCreated`).
+  convergence. Early requests park in the dispatcher. On a gateway the worker uplink upgrades on the same listener (`onServerCreated`).
 - `tokens` table of `state.db`: `id` (`tok_…`), `hash`, `role`, `label` (NULL when absent), `created_at`.
   `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
   and every verify reads the table. The secret is shown once, by `token.create`.
@@ -144,12 +140,10 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
 ## Known gaps
 
 - **The notice buffer is the last frontend-held state.** It is in memory and resets on a
-  daemon restart, so a polling client loses the health facts it had not drained. It needs
-  a durable record of why a lease ended first.
+  daemon restart, so a polling client loses the health facts it had not drained. It needs a durable record of why a lease ended first.
 - **Single-lease reads answer 404, not 403, for an unowned lease.** `GET /v1/leases/{id}`
   and its `/events` dispatch `lease.get` (`findOwnedLease`), which answers `UNKNOWN_LEASE` for a
-  lease that is not there and for one the caller does not own alike.
-  Renew and release dispatch directly and answer 403.
+  lease that is not there and for one the caller does not own alike. Renew and release dispatch directly and answer 403.
 - **Error codes outside the contract union.** `UNAUTHENTICATED`, `UNKNOWN_LEASE_REQUEST`,
   `REQUEST_NOT_CANCELLABLE`, `REQUEST_CANCELLED` (`errors.ts`) have no `ERROR_TABLE` row, so
   a typed client sees `UNKNOWN_DAEMON_ERROR`.
