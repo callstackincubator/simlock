@@ -22,6 +22,7 @@ import {
   SHELL_EXIT_GRACE_MS,
   START_DEADLINE_MS,
 } from "../screen/index.js";
+import { scrollPacket, touchPacket } from "./packets.js";
 import { readScreenSize, type ScreenSize } from "./display-size.js";
 
 const SCID_LIMIT = 2 ** 31;
@@ -164,7 +165,16 @@ class AndroidDeviceInput implements DeviceInput {
     ];
   }
 
-  send(_message: InputMessage): void {}
+  send(message: InputMessage): void {
+    const size = this.#config;
+    if (size === undefined) return;
+    if (message.kind === "touch") this.#write(touchPacket(message, size));
+    else if (message.kind === "scroll") this.#write(scrollPacket(message, size));
+  }
+
+  #write(packet: Uint8Array): void {
+    void this.#stream?.write(packet).catch(() => undefined);
+  }
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
     this.#configListeners.add(listener);
