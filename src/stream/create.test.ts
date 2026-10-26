@@ -99,6 +99,19 @@ describe("createWorkerStream", () => {
     }
   });
 
+  it("a relayed lease route answers 404 UNKNOWN_LEASE for a lease the worker does not hold", async () => {
+    const { opened, stream } = worker();
+    const answer = await stream.relayTarget(
+      new Request("http://simlock-worker/stream/leases/lse_gone"),
+      "gw:inst:agent-1",
+    );
+    expect(answer.status).toBe(404);
+    expect(await answer.json()).toEqual({
+      error: { code: "UNKNOWN_LEASE", message: "Unknown lease: lse_gone" },
+    });
+    expect(opened()).toBe(0);
+  });
+
   it("gives a capture 30 s to send its first frame", async () => {
     const { clock, feeds, stream } = worker([], false);
     const served = stream.relayTarget(relayed(), "gw:inst:agent-1");
@@ -429,6 +442,19 @@ describe("createWorkerStream", () => {
       { ended: "device-lost", how: "health monitor" },
       { ended: "device-lost", how: "absence" },
     ] as const;
+    // why: a device that was not leased going absent ends no lease, so no 0x07 frame is written.
+    for (const [route, open] of Object.entries(routes)) {
+      const { emit, stream } = worker();
+      const reader = (await open(stream)).body!.getReader();
+      expect((await reader.read()).value?.[4], route).toBe(SCREEN_FRAME_TAG.meta);
+      emit("device.absence-detected", "dev_leased", { previousState: "ready" });
+      await settledWithin(Promise.resolve());
+      const last = await reader.read();
+      expect([last.done, last.value], `${route} route, unleased absence`).toEqual([
+        true,
+        undefined,
+      ]);
+    }
     for (const [route, open] of Object.entries(routes)) {
       for (const { ended, how } of cases) {
         const label = `${route} route, ${how}`;
