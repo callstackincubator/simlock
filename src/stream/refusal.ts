@@ -5,7 +5,7 @@
 export class StreamRefusalError extends Error {
   // why: `code` is a free string rather than a closed union, because a gateway forwards the code its
   // worker answered with and that worker may be a build this one has never seen. The codes this
-  // service raises itself are `UNKNOWN_DEVICE`, `UNKNOWN_WORKER`, `DEVICE_NOT_RUNNING`,
+  // service raises itself are `UNKNOWN_DEVICE`, `UNKNOWN_LEASE`, `UNKNOWN_WORKER`, `DEVICE_NOT_RUNNING`,
   // `BAD_REQUEST`, `STREAM_NOT_SUPPORTED`, `STREAM_UNAVAILABLE` and `INTERNAL`, and the HTTP API promises exactly these.
   constructor(
     readonly status: number,

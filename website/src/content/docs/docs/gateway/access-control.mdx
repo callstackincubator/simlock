@@ -13,7 +13,7 @@ This page uses the gateway in its examples. Tokens work the same way on a worker
 
 | Role | Made for | May |
 | --- | --- | --- |
-| `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status (only its own leases and waiting requests), list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, and run commands on the devices it leases. |
+| `agent` | A coding agent that leases devices over HTTP. | Read the catalog and status (only its own leases and waiting requests), list installed runtimes, request, renew and release its own leases, cancel its own waiting requests, run commands on the devices it leases, and watch the screen of its own leases (see [Watching the screen](/simlock/docs/using-devices/watching-the-screen#stream-from-your-own-tool)). |
 | `operator` | A person, or a script that manages the fleet. | Everything an agent may, for every requester's leases, plus the console, events, usage figures, tokens, worker commands and component installs. |
 | `worker` | A worker machine joining a gateway. | Open one worker's connection to the gateway, and nothing else. The first worker that joins with it is paired with it; another worker with the same token, and any other request with it, is refused with `403`. |
 
