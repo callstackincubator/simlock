@@ -33,7 +33,8 @@ Worker — `worker-link.ts` `createWorkerStreamLink`:
 1. Operator only (an agent gets 404 `UNKNOWN_DEVICE`, as for any device), the path's worker id
    must be this worker's own (404 `UNKNOWN_WORKER`), the device must exist (404 `UNKNOWN_DEVICE`)
    and be `ready` or `leased` (409 `DEVICE_NOT_RUNNING`); nothing is opened first. A relayed
-   request is served whatever the tenant: the gateway has already refused non-operators. Any other
+   request is served whatever the tenant: the gateway has already refused a non-operator on a device path
+   and a non-owner on a lease path. Any other
    stream path answers 404 `UNKNOWN_DEVICE` "This path names no stream".
    The lease route (`GET /v1/leases/{id}/stream`, the module's `leaseRoute`) is a different door: the HTTP layer
    has already resolved the lease for the caller (owner or operator; else 404 `UNKNOWN_LEASE`), so the link
@@ -60,8 +61,8 @@ runs before the lease-end participants; the lease end after it finds no capture 
 other stop, and a viewer that leaves, ends with no frame. A capture that fails or is stopped before its first
 frame has no body to carry it (409 `DEVICE_NOT_RUNNING`).
 
-Gateway — `gateway-link.ts`: not an operator → 404 `UNKNOWN_DEVICE`; a worker not in the fleet →
-404 `UNKNOWN_WORKER`; else relays `GET /stream/devices/<device>` with tenant
+Gateway — `gateway-link.ts`: on the device route, not an operator → 404 `UNKNOWN_DEVICE`; a worker not in the
+fleet → 404 `UNKNOWN_WORKER`; else relays `GET /stream/devices/<device>` (the lease route, `/stream/leases/<id>`) with tenant
 `<requesterPrefix><principal>`. A refusal
 body is read to 16 KiB; its code and message are forwarded only if the code matches
 `^[A-Z][A-Z0-9_]{0,63}$`, else the code becomes `STREAM_UNAVAILABLE`. The worker's 4xx or 5xx
