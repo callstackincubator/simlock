@@ -134,10 +134,16 @@ describe("a screen stream through a gateway", () => {
       },
       { timeout: 10_000 },
     );
+    const holder = await gateway.dispatch(
+      "token.create",
+      { label: "holder", role: "agent" },
+      admin,
+    );
+    const owner: DispatchSession = { ...agent, principal: holder.token.id };
     const granted = await gateway.dispatch(
       "lease.request",
       { model: "Pixel-A", platform: "android" },
-      agent,
+      owner,
     );
     const leaseId = (granted as { lease: { id: string } }).lease.id;
     const deviceId = (granted as { lease: { deviceId: string } }).lease.deviceId;
@@ -148,14 +154,18 @@ describe("a screen stream through a gateway", () => {
         headers: { authorization: `Bearer ${operator}` },
         ...(signal === undefined ? {} : { signal }),
       });
-    return { gateway, leaseId, screen, stream };
+    const leaseStream = (token: string, id = leaseId) =>
+      fetch(`http://127.0.0.1:${String(port)}/v1/leases/${id}/stream`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    return { gateway, holder: holder.secret, leaseId, leaseStream, owner, screen, stream };
   }
 
   it(
     "relays the worker's picture, and the lease ending on the gateway stops the capture on the worker",
     { timeout: 30_000 },
     async () => {
-      const { gateway, leaseId, screen, stream } = await fleet(true);
+      const { gateway, leaseId, owner, screen, stream } = await fleet(true);
       const response = await stream();
       expect(response.status).toBe(200);
       expect(response.headers.get("simlock-stream-codec")).toBe("h264");
@@ -165,7 +175,7 @@ describe("a screen stream through a gateway", () => {
       const first = await reader.read();
       expect(first.value?.[4]).toBe(SCREEN_FRAME_TAG.meta);
 
-      await gateway.dispatch("lease.release", { leaseId }, agent);
+      await gateway.dispatch("lease.release", { leaseId }, owner);
       await vi.waitFor(() => expect(screen.closes()).toBe(1), { timeout: 10_000 });
       await vi.waitFor(
         async () => {
@@ -203,6 +213,22 @@ describe("a screen stream through a gateway", () => {
       const body = (await response.json()) as { error: { code: string; message: string } };
       expect(body.error.code).toBe("STREAM_UNAVAILABLE");
       expect(body.error.message).toMatch(/^Worker /u);
+    },
+  );
+
+  it(
+    "a caller GETs /v1/leases/{id}/stream on a gateway and gets the lease's worker's picture or a refusal",
+    { timeout: 30_000 },
+    async () => {
+      const { holder, leaseStream } = await fleet(true);
+      const own = await leaseStream(holder);
+      expect(own.status).toBe(200);
+      expect(own.headers.get("simlock-stream-codec")).toBe("h264");
+      const reader = own.body?.getReader();
+      if (reader === undefined) throw new Error("no body");
+      const first = await reader.read();
+      expect(first.value?.[4]).toBe(SCREEN_FRAME_TAG.meta);
+      await reader.cancel();
     },
   );
 });
