@@ -31,7 +31,15 @@ function simulator(runtimeId = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"): V
 function setup() {
   const launcher = new FakeBytePipeLauncher();
   const clock = new FakeClock();
-  const processRunner = new ScriptedProcessRunner([]);
+  const processRunner = new ScriptedProcessRunner([
+    {
+      match: {
+        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
+        command: "xcrun",
+      },
+      result: { code: 0, stderr: "", stdout: "" },
+    },
+  ]);
   const factory = createIosDeviceInput({
     baseEnvironment: { PATH: "/usr/bin" },
     clock,
@@ -56,7 +64,7 @@ function decoded(writes: readonly Uint8Array[]): { tag: number; body: unknown }[
 
 describe("iOS device input", () => {
   it("touches, buttons, scrolls and keys on an iOS simulator reach the HID helper", async () => {
-    const { factory, launcher } = setup();
+    const { factory, launcher, processRunner } = setup();
     const opening = factory.open(simulator(), new AbortController().signal);
     expect(launcher.starts).toEqual([
       {
@@ -79,6 +87,22 @@ describe("iOS device input", () => {
       { body: { type: "move", x: 0.5, y: 0.5 }, tag: INPUT_TAG.touch },
       { body: { type: "end", x: 0.5, y: 0.5 }, tag: INPUT_TAG.touch },
     ]);
+    const writtenBefore = launcher.last.stdinWrites.length;
+
+    input.send({ button: "app_switcher", kind: "button" });
+    input.send({ button: "lock", kind: "button" });
+    input.send({ button: "back", kind: "button" });
+    expect(processRunner.calls).toEqual([]);
+    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
+    input.send({ button: "home", kind: "button" });
+    expect(processRunner.calls).toEqual([
+      {
+        args: ["simctl", "--set", DEVICE_SET, "launch", "UDID-1", "com.apple.springboard"],
+        command: "xcrun",
+        options: { timeoutMs: 10_000 },
+      },
+    ]);
+    expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
     expect(isUnavailableInput(input)).toBe(false);
   });
 });
