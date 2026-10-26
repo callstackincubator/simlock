@@ -9,14 +9,15 @@ Parent: [Android driver](../AGENTS.md). Consumer: [stream](../../../stream/AGENT
 
 ## Files
 
-| File              | Role                                                                           |
-| ----------------- | ------------------------------------------------------------------------------ |
-| `index.ts`        | `createAndroidScreenCapture`: the driver's `ScreenCapture`, entered only here  |
-| `session.ts`      | One stream: screen read, push, server, socket, body, close; the `ScreenTarget` |
-| `adb-socket.ts`   | `openDeviceSocket`: `host:transport` + `localabstract` on the target's server  |
-| `scrcpy-video.ts` | `ScrcpyVideoParser`: scrcpy's video socket (codec id, session, media packets)  |
-| `h264.ts`         | Annex-B split, AVCC, the `avcC` record                                         |
-| `envelope.ts`     | `EnvelopeMapper`: scrcpy events → core's screen frames                         |
+| File              | Role                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `index.ts`        | `createAndroidScreenCapture`: the driver's `ScreenCapture`, entered only here           |
+| `session.ts`      | One stream: screen read, push, server, socket, body, close; the `ScreenTarget`          |
+| `scrcpy-link.ts`  | Push, socket connect and exit wait the stream and the [input](../input/AGENTS.md) share |
+| `adb-socket.ts`   | `openDeviceSocket`: `host:transport` + `localabstract` on the target's server           |
+| `scrcpy-video.ts` | `ScrcpyVideoParser`: scrcpy's video socket (codec id, session, media packets)           |
+| `h264.ts`         | Annex-B split, AVCC, the `avcC` record                                                  |
+| `envelope.ts`     | `EnvelopeMapper`: scrcpy events → core's screen frames                                  |
 
 ## Where a session runs: the target
 
@@ -45,7 +46,7 @@ the iOS driver, not here.
    closed check at the wake still refuses), then the same read again. A second read of `Asleep` or `Dozing` →
    `ScreenUnavailableError("The phone's screen is off and did not turn on. …")`, and nothing is pushed. Anything
    else — `Awake`, `Dreaming`, a word that is not one, no line, a non-zero exit, a timed-out read — goes on, with no
-   wake after a first read of those. Emulators skip the read and the wake. The wake is the only key sent.
+   wake after a first read of those. Emulators skip the read and the wake. The wake is the only key this stream sends (the device input sends the rest).
 2. `scid`: random 31-bit, written `%08x`. `<target> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar` (40 s: the
    phone's own check plus the 30 s push).
 3. `<target> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>

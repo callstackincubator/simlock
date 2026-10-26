@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  openInputSocket,
+  waitFor,
+  withDaemon,
+  type TestEnv,
+} from "./helpers/index.js";
 
 const SERIAL = process.env["SIMLOCK_PHYSICAL_ANDROID"];
 const APK = process.env["SIMLOCK_PHYSICAL_ANDROID_APK"];
@@ -24,15 +30,17 @@ interface StatusDevice {
   readonly absentReason?: string;
 }
 
-async function startDaemon(): Promise<TestEnv> {
+async function startDaemon(): Promise<TestEnv & { readonly port: number }> {
   const port = await freeLoopbackPort();
-  return withDaemon({
+  const env = await withDaemon({
     configOverrides: {
+      capabilities: { input: { enabled: true } },
       health: { probeIntervalMs: 2_000, stableObservations: 2 },
       http: { enabled: true, host: "127.0.0.1", port },
     },
     driver: "real",
   });
+  return Object.assign(env, { port });
 }
 
 async function deviceOf(env: TestEnv, serial: string): Promise<StatusDevice | undefined> {
@@ -89,6 +97,50 @@ describe.skipIf(missing !== undefined)(
         await expectAfterPrompt(env, serial, "UNPLUG the phone now", "absent", "not-present");
 
         await expectAfterPrompt(env, serial, "PLUG the phone back in now", "ready");
+      },
+    );
+
+    it(
+      "a tap sent through the lease's input socket lands on the phone, which the person confirms",
+      { timeout: 10 * MINUTE },
+      async () => {
+        const env = await startDaemon();
+        const added = await env.cli(["device", "add", "--platform", "android", serial, "--json"], {
+          timeout: 2 * MINUTE,
+        });
+        expect(added.code, `device add failed: ${added.stderr}`).toBe(0);
+        await expectAfterPrompt(env, serial, "unlock the phone and keep it plugged in", "ready");
+        const created = await env.cli(["token", "create", "--role", "agent"]);
+        const { secret } = created.json as { secret: string };
+        const leased = await env.cli(
+          [
+            "lease",
+            "--platform",
+            "android",
+            "--physical",
+            "--agent-id",
+            "manual-input",
+            "--detach",
+          ],
+          { timeout: 5 * MINUTE },
+        );
+        expect(leased.code, `lease failed: ${leased.stderr}`).toBe(0);
+        const leaseId = (leased.json as { lease: { id: string } }).lease.id;
+        const socket = await openInputSocket(env.port, leaseId, secret);
+        try {
+          const config = (await socket.waitForTag(0x82)) as { inputUnavailable?: true };
+          expect(config.inputUnavailable).toBeUndefined();
+          console.info(
+            `\n>>> WATCH THE PHONE: a tap lands at the centre of its screen in 10 s (confirm by eye)\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 10_000));
+          socket.send(0x03, { type: "begin", x: 0.5, y: 0.5 });
+          socket.send(0x03, { type: "end", x: 0.5, y: 0.5 });
+          await new Promise((resolve) => setTimeout(resolve, PERSON_STEP_MS / 3));
+        } finally {
+          socket.close();
+          await env.cli(["release", leaseId]);
+        }
       },
     );
   },

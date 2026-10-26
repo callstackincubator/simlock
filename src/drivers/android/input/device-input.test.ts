@@ -299,7 +299,7 @@ function configs(input: DeviceInput): InputScreenConfig[] {
 }
 
 describe("Android device input: open", () => {
-  it("starts a control-only scrcpy and reads the screen's size in its current rotation", async () => {
+  it("starts a control-only scrcpy and reads the screen's size in its current rotation, a phone passes the adb check first, a start that fails is rejected, and a rotation is reported once", async () => {
     const world = setup();
     const input = opened(await open(world));
     expect(world.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS]);

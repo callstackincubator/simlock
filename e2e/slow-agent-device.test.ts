@@ -19,6 +19,7 @@ import {
   freeLoopbackPort,
   makeAgent,
   makeProfileAgent,
+  openInputSocket,
   newAgentToken,
   waitForAgentDevice,
   waitFor,
@@ -54,6 +55,43 @@ const androidAvailable = succeeds("sh", ["-c", "command -v emulator && command -
 function refused(result: AgentDeviceResult): void {
   expect(result.code, "the command was accepted").not.toBe(0);
   expect(failureText(result)).toContain("refused:");
+}
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+// why: agent-device's snapshot JSON is read for the node whose identifier is `id` and for the largest
+// box in it, which is the screen; both are read from the one snapshot so the tap's fraction is
+// measured against the size the same snapshot placed the node in.
+function boxOf(node: unknown): Box | undefined {
+  const rect = (node as { rect?: Box } | null)?.rect;
+  return rect !== undefined && typeof rect.width === "number" ? rect : undefined;
+}
+
+function findBoxes(json: unknown, id: string): { target?: Box; screen?: Box } {
+  const found: { target?: Box; screen?: Box } = {};
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (typeof node !== "object" || node === null) return;
+    const box = boxOf(node);
+    const record = node as Record<string, unknown>;
+    if (box !== undefined) {
+      if (record["identifier"] === id || record["id"] === id) found.target ??= box;
+      if (
+        found.screen === undefined ||
+        box.width * box.height > found.screen.width * found.screen.height
+      ) {
+        found.screen = box;
+      }
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(json);
+  return found;
 }
 
 function listField(result: AgentDeviceResult, key: string): unknown[] {
@@ -140,7 +178,10 @@ function defineSuite(target: Target): void {
       driver: "real",
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-        capabilities: { "agent-device": { enabled: true, command: pinned } },
+        capabilities: {
+          "agent-device": { enabled: true, command: pinned },
+          input: { enabled: true },
+        },
         capacity: {
           config: { limits: { [platform]: { maxDevices: 1, maxRunning: 1 } } },
         },
@@ -190,6 +231,47 @@ function defineSuite(target: Target): void {
       const png = join(dir, "shot.png");
       ok(await a.run(["screenshot", png]));
       expect((await readFile(png)).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      ok(await a.run(["close"]));
+      await waitForFree(env);
+    },
+  );
+
+  // why: the input socket's iOS device input arrives with #1019, so the case waits for it there.
+  it.skipIf(platform === "ios")(
+    "an agent taps the centre of tab-status through the lease's input socket, as agent-device's snapshot places it, and the next snapshot shows another screen",
+    { timeout: 600_000 },
+    async () => {
+      const a = await agent("a");
+      ok(await open(a));
+      ok(await a.run(["install", "Appduct", target.app]));
+      ok(await a.run(["open", target.bundleId]));
+      const before = await a.run(["snapshot", "--json"], FIRST_SNAPSHOT);
+      ok(before);
+      const { target: tab, screen } = findBoxes(before.json, "tab-status");
+      expect(tab, "tab-status in the snapshot").toBeDefined();
+      expect(screen, "the screen in the snapshot").toBeDefined();
+      const lease = (await listLeases(env))[0];
+      const socket = await openInputSocket(env.httpPort, lease?.id ?? "", a.token);
+      try {
+        await socket.waitForTag(0x83);
+        const config = (await socket.waitForTag(0x82)) as { width: number; height: number };
+        expect(config.width).toBeGreaterThan(1);
+        const x =
+          ((tab as Box).x + (tab as Box).width / 2 - (screen as Box).x) / (screen as Box).width;
+        const y =
+          ((tab as Box).y + (tab as Box).height / 2 - (screen as Box).y) / (screen as Box).height;
+        socket.send(0x03, { type: "begin", x, y });
+        socket.send(0x03, { type: "end", x, y });
+        await waitFor(
+          async () => {
+            const after = await a.run(["snapshot"]);
+            return after.code === 0 && after.stdout !== before.stdout;
+          },
+          { interval: 2_000, label: "a snapshot that differs after the tap", timeout: 60_000 },
+        );
+      } finally {
+        socket.close();
+      }
       ok(await a.run(["close"]));
       await waitForFree(env);
     },

@@ -14,6 +14,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `adb-server.ts`            | `AdbServerSupervisor`: start, adopt, reap Simlock's adb server                                                                                                        |
 | `adb-registrar.ts`         | `AdbRegistrar`: announces an emulator (`host:emulator:<adbPort>`)                                                                                                     |
 | `screen/`                  | Screen capture: scrcpy client ([screen](screen/AGENTS.md))                                                                                                            |
+| `input/`                   | Device input: control-only scrcpy ([input](input/AGENTS.md))                                                                                                          |
 | `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers                                                                                         |
 | `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
 | `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
@@ -111,7 +112,7 @@ Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical `ANDROID_A
 
 No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's.
 
-Screen — `screenCapture`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md).
+Screen — `screenCapture` and `input`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
 Plain facts: `avdmanager list device` runs on every `listCatalog`, resolve of a model the library lacks,
 and library provision (seed); nothing is cached. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
