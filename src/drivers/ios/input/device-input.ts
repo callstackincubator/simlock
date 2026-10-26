@@ -162,9 +162,7 @@ class IosDeviceInput implements DeviceInput {
   ) {
     this.#keys = keys;
     void child.exited.then((exit) => {
-      if (this.#closing !== undefined) return;
-      const error = new Error(`The input helper ${describeExit(exit)}`);
-      for (const listener of this.#failedListeners) listener(error);
+      this.#fail(new Error(`The input helper ${describeExit(exit)}`));
     });
     this.#options = options;
     this.#udid = udid;
@@ -178,7 +176,13 @@ class IosDeviceInput implements DeviceInput {
       return;
     }
     if (message.kind === "key" && !this.#keys) return;
-    void this.#child.writeStdin(frameOfMessage(message));
+    this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
+      this.#fail(
+        new Error(
+          `The input helper stopped taking input: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    });
   }
 
   // why: Xcode 26 and later silently drop the HID home-button press, so Home brings SpringBoard
@@ -206,6 +210,14 @@ class IosDeviceInput implements DeviceInput {
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
     listener(this.#config);
     return () => undefined;
+  }
+
+  // why: a helper that is closing, or already failed, has told its listeners; a second word would
+  // close a socket that is already closed.
+  #fail(error: Error): void {
+    if (this.#closing !== undefined) return;
+    void this.close();
+    for (const listener of this.#failedListeners) listener(error);
   }
 
   onFailed(listener: (error: Error) => void): () => void {
