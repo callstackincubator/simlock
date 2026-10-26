@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../bus/index.js";
+import { DRIVER_DETAIL_MAX } from "../contract/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { FakeSystemStats } from "../ports/index.js";
 import type { Config } from "./config.js";
@@ -1637,7 +1638,21 @@ describe("Doctor", () => {
       eventBus,
       registry,
     }).reconcile();
+    const long = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [],
+      driverRejections: [{ ...rootRejection(), summary: "x".repeat(5000) }],
+      eventBus,
+      registry,
+    }).reconcile();
 
+    const longDetail = (long.findings[0] as { detail: string }).detail;
+    expect(longDetail.length).toBeLessThanOrEqual(DRIVER_DETAIL_MAX);
+    expect(longDetail).toMatch(
+      /…\. Driver discovery runs once.*restart the daemon.*unavailable\.$/,
+    );
     expect(report.findings.map((finding) => finding.kind)).toEqual(["driver-unavailable"]);
     expect(report.findings[0]).toMatchObject({
       // Discovery happens once, at startup, so the finding has to say what actually
