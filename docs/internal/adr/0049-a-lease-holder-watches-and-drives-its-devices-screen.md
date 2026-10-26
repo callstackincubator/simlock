@@ -57,10 +57,13 @@ flowchart LR
    module owns answers 404.
 3. **Input speaks expo serve-sim's messages**, pinned at
    expo/expo-device-hub `1357114`: `0x03` touch, `0x04` button, `0x06` key,
-   `0x07` orientation, `0x0b` scroll in; `0x83` admitted, `0x82` screen
-   config, `0x90` control reply out. Positions are fractions of the screen.
-   The same messages serve iOS and Android; Simlock adds the button `back`
-   for Android. A broken message is dropped, as serve-sim drops it. When
+   `0x0b` scroll in; `0x83` admitted, `0x82` screen config, `0x90` control
+   reply out. Positions are fractions of the screen. The same messages serve
+   iOS and Android; Simlock adds the button `back` for Android. Rotation
+   (`0x07`) is dropped on every platform: agents rotate through
+   agent-device, and the device input re-reads the screen size every 2 s so
+   taps stay right after they do. A broken message is dropped, as serve-sim
+   drops it. When
    serve-sim changes, Simlock adds a compatibility layer rather than
    following silently.
 4. **Input is its own capability**, `capabilities.input.enabled`, off by
@@ -69,7 +72,9 @@ flowchart LR
    closed with 1013. On Android it is a control-only scrcpy server, on an
    iOS simulator a HID helper; a physical iPhone has none and says
    `inputUnavailable`. Where keys cannot be injected (an iOS 27 runtime),
-   `0x82` says `keyboardUnavailable`, as serve-sim does.
+   `0x82` says `keyboardUnavailable`, as serve-sim does. On an iOS
+   simulator only Home is pressed (through `simctl`); the app switcher and
+   Lock are dropped.
 5. **The relay gains a two-way mode.** A two-way relay keeps both directions
    of its link byte channel open until either side ends it, carries
    length-prefixed messages, and ends after 15 s with no bytes from the
@@ -109,11 +114,12 @@ sequenceDiagram
 - The HTTP layer gains a lease-route seam, the module host gains a socket
   handler and a two-way relay, and `ports` gains upgrade routing beside the
   uplink's. The protocol is bumped once for the relay.
-- iOS 27 simulator runtimes ignore injected hardware keys; there keys are
-  dropped until a follow-up. Rotation on iOS needs Simulator.app; its task
-  starts with a one-off check. If it passes, the worker starts Simulator.app
-  on the first rotation and leaves it open; if not, rotation is dropped on
-  iOS.
+- A person cannot rotate a device through Simlock. On iOS simulators they
+  also cannot type hardware keys on iOS 27 runtimes or press the app
+  switcher or Lock. On 2026-10-26, on Xcode 27, neither serve-sim's
+  GSEvent, nor Simulator.app (Xcode 27 ships none), nor CoreDevice's vendor
+  channel (it cannot see a custom device set, and does not rotate a
+  non-foldable iPhone) rotated a Simlock simulator. #1024 follows up.
 - Two viewers still run two captures (#602).
 
 ## Alternatives considered
@@ -127,6 +133,10 @@ sequenceDiagram
 - **Routes under the module prefixes** (`/v1/stream/leases/{id}`,
   `/v1/input/leases/{id}`). Fits the one-prefix rule with no new seam.
   Rejected: the maintainer chose the lease-scoped paths.
+- **Rotation through Simulator.app or CoreDevice on iOS, and through
+  `user_rotation` on Android.** Rejected: the iOS paths do not work on
+  Xcode 27 (see Consequences), and rotating Android alone would give the
+  two platforms different input.
 - **A heartbeat in the link layer.** It proves only that the worker process
   runs, which the uplink already proves. Rejected for one sent by the input
   session.
