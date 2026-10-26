@@ -17,7 +17,7 @@ import {
   type ScriptedProcessExpectation,
   type TcpStream,
 } from "../../../ports/index.js";
-import { START_DEADLINE_MS, type ScreenTarget } from "../screen/index.js";
+import { CLOSE_DEADLINE_MS, START_DEADLINE_MS, type ScreenTarget } from "../screen/index.js";
 import { createAndroidDeviceInput } from "./index.js";
 
 const ADB = "/sdk/platform-tools/adb";
@@ -276,7 +276,7 @@ describe("Android device input: open", () => {
     const started = silent.clock.now();
     await expect(open(silent)).rejects.toThrow("did not accept a connection");
     expect(silent.clock.now() - started).toBeGreaterThanOrEqual(START_DEADLINE_MS);
-    expect(silent.clock.now() - started).toBeLessThan(START_DEADLINE_MS + 1_000);
+    expect(silent.clock.now() - started).toBeLessThanOrEqual(START_DEADLINE_MS + CLOSE_DEADLINE_MS);
     expect(silent.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS, removal]);
 
     const unpushed = setup(DEVICE, [push(1), remove()]);
