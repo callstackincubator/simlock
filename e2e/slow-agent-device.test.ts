@@ -247,7 +247,7 @@ function defineSuite(target: Target): void {
       ok(await a.run(["open", target.bundleId]));
       const before = await a.run(["snapshot", "--json"], FIRST_SNAPSHOT);
       ok(before);
-      // why: the fixture's Status screen alone carries `connection-state` and its Tools screen `call-count` (Appduct's playground contract, e2e/fixtures/appduct/README.md).
+      // why: the fixture's Status screen alone carries `connection-state` and its Tools screen `call-count` (Appduct at the pin in e2e/fixtures/appduct/README.md:8: playground-native/ios/AppductPlayground/ContentView.swift:61 and :82, playground-native/android/app/src/main/java/com/callstack/appduct/playground/MainActivity.kt:102 and :109).
       expect(before.stdout).toContain("call-count");
       expect(before.stdout).not.toContain("connection-state");
       const { target: tab, screen } = findBoxes(before.json, "tab-status");
