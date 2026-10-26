@@ -1,5 +1,5 @@
 /**
- * P3: `WebSocketUplinkListenerFactory#handleUpgrade` reads `x-simlock-worker-id` and the
+ * why: P3: `WebSocketUplinkListenerFactory#handleUpgrade` reads `x-simlock-worker-id` and the
  * URI-decoded `x-simlock-worker-label` *before* `authenticate` runs -- so anyone who can reach
  * the gateway's HTTP port, with no credential at all, can make it claim an arbitrary worker id
  * and a label up to Node's header budget (~16 KB). Both reach `authenticate`'s `claimed`
@@ -44,8 +44,6 @@ afterEach(async () => {
   server = undefined;
 });
 
-/** Starts a real gateway-side listener whose `authenticate` always refuses (recording every
- * `claimed` it was handed) and returns the base URL to dial it at. */
 async function startRefusingGateway(
   outcome: Exclude<UplinkAuthOutcome, "accept"> = "unauthenticated",
 ): Promise<{
@@ -72,8 +70,6 @@ async function startRefusingGateway(
   return { claims, url: `ws://127.0.0.1:${port}` };
 }
 
-/** Dials with no credential the gateway will accept, and swallows the resulting refusal -- every
- * test here is about what `authenticate` was handed, not about the connection succeeding. */
 async function dialAndIgnoreRefusal(url: string, workerId: string, label?: string): Promise<void> {
   await new WebSocketUplinkConnector()
     .connect({ token: "irrelevant", url, workerId, ...(label === undefined ? {} : { label }) })
@@ -106,7 +102,7 @@ describe("WebSocketUplinkListenerFactory / P3", () => {
   it("drops a claimed label containing a control character instead of passing it through", async () => {
     const { claims, url } = await startRefusingGateway();
 
-    // A worker's own label never contains one; an attacker's header can claim anything.
+    // why: A worker's own label never contains one; an attacker's header can claim anything.
     await dialAndIgnoreRefusal(url, "wrk_1", "mac-mini-evil\ntitle");
 
     expect(claims).toHaveLength(1);
