@@ -395,7 +395,21 @@ describe("buildOpenApiDocument with a module that carries http", () => {
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
       ),
     ).toEqual([]);
-    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["stream"]);
+    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["input", "stream"]);
+  });
+});
+
+describe("buildOpenApiDocument with the input module", () => {
+  it("an integrator reads GET /v1/leases/{id}/input under input with 101, 401, 404, 426 and 503 and their codes", () => {
+    const document = buildOpenApiDocument(optionalModules);
+    const input = document.paths?.["/v1/leases/{id}/input"]?.get;
+
+    expect(input?.tags).toEqual(["input"]);
+    expect(sortedKeys(input?.responses)).toEqual(["101", "401", "403", "404", "426", "503"]);
+    expect(errorCodes(input, "401")).toEqual(["UNAUTHENTICATED"]);
+    expect(errorCodes(input, "404")).toEqual(["UNKNOWN_LEASE"]);
+    expect(errorCodes(input, "426")).toEqual(["BAD_REQUEST"]);
+    expect(errorCodes(input, "503")).toEqual(["INPUT_UNAVAILABLE", "WORKER_UNREACHABLE"]);
   });
 });
 

@@ -139,6 +139,18 @@ export default {
       { path: "^src/(http|gateway|drivers|daemon|cli|mcp|leasing)/" },
     ),
     direction(
+      "not-input",
+      "core, leasing, the drivers, the gateway and the contract import nothing from the input module",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/input/" },
+    ),
+    direction(
+      "input-not-edges",
+      "the input module is a module the host loads: it imports no frontend, gateway, driver or leasing",
+      "^src/input/",
+      { path: "^src/(http|gateway|drivers|daemon|cli|mcp|leasing)/" },
+    ),
+    direction(
       "host-load-imports-ports-only",
       "host-load reads the machine through the HostLoadProbe port and imports no other component",
       "^src/host-load/",

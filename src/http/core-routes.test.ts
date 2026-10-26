@@ -58,7 +58,7 @@ describe("the routes createHttpApp registers", () => {
     expect(segments.filter((segment) => !CORE_ROUTE_SEGMENTS.includes(segment))).toEqual([]);
   });
 
-  it("the stream mount counts as covered because its definition carries http, the agent-device mount as left out because it does not, and no undeclared list remains", () => {
+  it("the stream mount and the input socket count as covered because their definitions carry http, the agent-device mount as left out because it does not, and no undeclared list remains", () => {
     const mounts = optionalModules.map((definition) => ({
       prefix: definition.name,
       handle: () => Promise.resolve(new Response()),
@@ -86,6 +86,7 @@ describe("the routes createHttpApp registers", () => {
     expect(registered.some((route) => route.path.startsWith("/v1/agent-device"))).toBe(true);
     expect(coverageProblems(core, declared)).toEqual([]);
     expect(moduleRoutes).toEqual([
+      "GET /v1/leases/{id}/input",
       "GET /v1/stream/workers/{workerId}/devices/{deviceId}",
       "GET /v1/leases/{id}/stream",
     ]);

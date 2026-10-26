@@ -5,7 +5,7 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
 
 ## Before you start
 
@@ -105,6 +105,25 @@ Anything with an operator token can read the screen of a running device, leased 
 A lease's holder can read its own lease's screen at `GET /v1/leases/<lease-id>/stream`, on a worker or on a gateway, with the same frames. An operator token can read any lease's. A lease that is not the caller's, or does not exist, answers 404 `UNKNOWN_LEASE`. With streaming off on the daemon that answers, the path is a plain 404; through a gateway, streaming must be on for the lease's worker too, or the answer is 503 `STREAM_UNAVAILABLE`.
 
 The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. When a lease end stops a stream, its last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Any other end sends no such frame. Most users watch in the console instead.
+
+## Send input to your own lease
+
+A lease's holder can open a WebSocket for its lease at `GET /v1/leases/<lease-id>/input` (with an `Upgrade: websocket` request), on a worker or on a gateway, with its agent token in an `Authorization: Bearer` header. An operator token can open any lease's. Turn it on with `capabilities.input.enabled` (off by default; see [Configuration reference](/simlock/docs/reference/configuration)); through a gateway, the gateway and the lease's worker both need it on.
+
+The messages are expo serve-sim's: each is one tag byte and UTF-8 JSON, so a client that already drives serve-sim (T3 Code's device panel) needs nothing Simlock-specific. The server sends `0x83` (input is accepted from now on), then `0x82` with the screen as it is now, `{"width":1179,"height":2556,"orientation":"portrait"}`, and again whenever the size changes. A device that takes no input gets `0x82` `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}`, and the socket stays open. At this release no device takes input, so every socket gets that answer.
+
+The client sends `0x03` touch (`{"type":"begin","x":0.4,"y":0.7}`, `type` is `begin`, `move` or `end`, positions are fractions from 0 to 1), `0x04` button (`home`, `app_switcher`, `lock` or `back`), `0x06` key (`{"type":"down","usage":4}`, a USB HID usage from 0 to 255) and `0x0b` scroll. A message that is not valid JSON, has an unknown tag, a position outside 0 to 1, or is over 64 KiB is dropped and the socket stays open. `0x07` (orientation) is always dropped. `0x10` is answered `0x90` `{"requestId":7,"ok":false}`.
+
+Up to 8 sockets share one lease's device input. The socket closes with:
+
+| Code | Reason | When |
+| --- | --- | --- |
+| 4001 | `explicit`, `killed`, `expired` or `device-lost` | The lease ended. Through a gateway, `lease ended` if the worker did not say why within 2 seconds. |
+| 1011 | `Worker <id> stopped answering` | Through a gateway, the worker stopped answering for 15 seconds or its uplink dropped. |
+| 1001 | `Simlock is stopping` | The daemon is stopping. |
+| 1013 | `Input is unavailable for this lease` | A 9th socket, a device input that failed, or a reconnect within 10 seconds of a failed open. |
+
+A socket that answers no ping within 15 seconds is closed. A lease that is not the caller's, or does not exist, answers 404 `UNKNOWN_LEASE`, no token answers 401, and a plain `GET` without an upgrade answers 426. With input off on the daemon that answers, the path is a plain 404. Through a gateway, a worker with input off answers 503 `INPUT_UNAVAILABLE` ("Worker w1 does not take input for lease L-42; turn on capabilities.input.enabled there"), and a worker that gives no answer within 10 seconds answers 503 `WORKER_UNREACHABLE`.
 
 ## When it does not work
 

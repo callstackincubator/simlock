@@ -43,7 +43,7 @@ The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through
   (requester prefix `gw:<instanceId>:`) → `GatewayService` (uplink listener, drained workers in `state.db`)
   → `FleetLeaseCoordinator` → `createAlerts` when `gateway.alerts.destinations` is not empty
   (before `start()`; stopped first in `stopAuxiliary`) → `DaemonServer` with `GatewayDispatcher`.
-  HTTP always starts; the uplink upgrades on the same listener.
+  HTTP always starts; the uplink and lease input sockets upgrade on the same listener, through one upgrade router.
 
 Startup waits for the HTTP listener: a bind failure fails the start (health `failed`, no `daemon.started`) and stops the daemon with `http-start-failed`.
 

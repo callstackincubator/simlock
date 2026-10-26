@@ -72,7 +72,11 @@ agent-device front and the stream (`/v1/stream`).
 auth. The route resolves the lease with `lease.get` (the owner or an operator; anyone else, and an unknown id, get
 404 `UNKNOWN_LEASE`), then calls the handler with `(request, identity, lease)`; the lease carries `workerId` and
 `workerLeaseId` on a gateway. The module never checks an owner, and http knows a module only by its name. Today: the
-stream (`/v1/leases/{id}/stream`).
+stream (`/v1/leases/{id}/stream`) and the input module's plain GET (426).
+
+A route with a `socket` handler also takes a WebSocket upgrade: `app.leaseSocket(request)` (called by the ports
+upgrade router with the upgrade request) runs the same auth and lease resolution, then `socket.open`, and answers the refusal
+`Response` or the accept the router runs on the upgraded socket. A route with no `socket` answers 404 to an upgrade.
 
 ## Lease requests
 
@@ -125,7 +129,7 @@ until `POST /v1/leases/{id}/renew` drains them into `notices`. `lease_lost` clea
 
 - The listener starts right after the socket claim (`onSocketClaimed`), before startup
   convergence. Early requests park in the dispatcher. On a gateway the worker uplink
-  upgrades on the same listener (`onServerCreated`).
+  upgrades on the same listener (`onServerCreated`), and a lease's input socket upgrades there on both a gateway and a worker.
 - `tokens` table of `state.db`: `id` (`tok_…`), `hash`, `role`, `label` (NULL when absent), `created_at`.
   `src/auth` owns it: the dispatcher's `token.*` handlers write it through `Auth.tokens`,
   and every verify reads the table. The secret is shown once, by `token.create`.

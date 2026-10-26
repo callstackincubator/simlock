@@ -49,6 +49,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
 | agent-device | Optional edge: the two agent-device daemons (simulators, phones) beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
 | stream | Optional edge: a running device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
+| input | Optional edge: a lease holder's taps and keys over a WebSocket, relayed by a gateway | [input](../../src/input/AGENTS.md) |
 | auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
 | http | HTTP frontend: routes, SSE | [http](../../src/http/AGENTS.md) |
 | cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |
@@ -86,6 +87,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `host-load-imports-ports-only`, `not-host-load` | host-load stands alone |
 | `alerts-imports-bus-ports-core-only`, `not-alerts` | alerts imports the bus, ports and core only; only `src/daemon/main.ts` imports it |
 | `not-stream`, `stream-not-edges` | Nothing required imports stream; stream imports no frontend, gateway or driver |
+| `not-input`, `input-not-edges` | Nothing required imports input; input imports no frontend, gateway or driver |
 | `gateway-not-edges`, `gateway-only-dispatch` | Gateway imports no driver or frontend, and from daemon only `src/daemon/dispatch.ts` |
 | `only-main-knows-gateway` | In daemon, only `src/daemon/main.ts` imports the gateway |
 | `link-is-portable`, `link-imports-port-types-only` | The link uses no Node module or package, and only the types of ports |
@@ -105,6 +107,7 @@ never import each other, directly or through a third.
 | `device.exec`, local and through a gateway | [device-exec](flows/device-exec.md) |
 | agent-device through simlock | [agent-device](../../src/agent-device/AGENTS.md) |
 | A screen stream, local and through a gateway | [stream](../../src/stream/AGENTS.md) |
+| A lease's input socket, local and through a gateway | [input](../../src/input/AGENTS.md) |
 
 ## Rules that cut across modules
 
