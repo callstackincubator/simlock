@@ -63,6 +63,14 @@ interface ActiveRelay {
   readonly writer: WritableStreamDefaultWriter<Uint8Array>;
 }
 
+// why: a two-way relay is done when the target has read the gateway's direction to its end (or stopped reading it) and has closed its own.
+interface PipeEnds {
+  readonly read: Promise<void>;
+  readonly write: Promise<void>;
+}
+
+type TargetCall = (request: Request, pipe: TwoWayPipe | undefined) => Promise<Response>;
+
 export class RelayConnection {
   readonly #active = new Map<string, ActiveRelay>();
   // why: an id is taken from the duplicate check until the call ends, so two lines with one id in one read cannot both run their target while the first waits for credit.
@@ -72,6 +80,7 @@ export class RelayConnection {
   constructor(
     private readonly targets: RelayTargets,
     private readonly logger: Logger,
+    private readonly twoWayTargets: TwoWayRelayTargets = {},
   ) {}
 
   // why: every way the call fails or is cancelled aborts the channel it owns; only a `{}` answer leaves it to end on its own.
@@ -113,10 +122,8 @@ export class RelayConnection {
     push: RelayPush,
     channel: LinkChannel,
   ): Promise<RelayResult> {
-    const target = Object.hasOwn(this.targets, input.target)
-      ? this.targets[input.target]
-      : undefined;
-    if (target === undefined) {
+    const call = this.#targetCall(input);
+    if (call === undefined) {
       throw new DispatchError(
         "RELAY_TARGET_MISSING",
         `No module on this worker serves ${input.target}`,
@@ -146,10 +153,26 @@ export class RelayConnection {
     controller.signal.addEventListener("abort", () => channel.abort(), { once: true });
     this.#active.set(input.relayId, active);
     try {
-      return await this.#run(input, target, active, push);
+      return await this.#run(input, call, active, push);
     } finally {
       this.#active.delete(input.relayId);
     }
+  }
+
+  #targetCall(input: RelayRequestInput): TargetCall | undefined {
+    const { leaseId, tenant } = input;
+    if (input.twoWay === true) {
+      const twoWay = Object.hasOwn(this.twoWayTargets, input.target)
+        ? this.twoWayTargets[input.target]
+        : undefined;
+      return twoWay === undefined
+        ? undefined
+        : (request, pipe) => twoWay(request, tenant, leaseId, pipe as TwoWayPipe);
+    }
+    const target = Object.hasOwn(this.targets, input.target)
+      ? this.targets[input.target]
+      : undefined;
+    return target === undefined ? undefined : (request) => target(request, tenant, leaseId);
   }
 
   cancel(relayId: string): void {
@@ -205,9 +228,55 @@ export class RelayConnection {
     );
   }
 
+  // why: the target's end of both directions; every end it reaches (or gives up on) is recorded in `ends`.
+  #pipe(active: ActiveRelay): { readonly pipe: TwoWayPipe; readonly ends: PipeEnds } {
+    const reader = active.channel.readable.getReader();
+    active.reader = reader;
+    let readEnded!: () => void;
+    let writeEnded!: () => void;
+    const ends: PipeEnds = {
+      read: new Promise<void>((resolve) => {
+        readEnded = resolve;
+      }),
+      write: new Promise<void>((resolve) => {
+        writeEnded = resolve;
+      }),
+    };
+    const readable = new ReadableStream<Uint8Array>(
+      {
+        cancel: () => {
+          readEnded();
+          return reader.cancel().catch(() => undefined);
+        },
+        pull: async (controller) => {
+          try {
+            const step = await reader.read();
+            if (step.done) {
+              controller.close();
+              readEnded();
+            } else controller.enqueue(step.value);
+          } catch (error: unknown) {
+            this.#note(active, error);
+            controller.error(error);
+          }
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const writable = new WritableStream<Uint8Array>({
+      abort: (reason) => active.writer.abort(reason).catch(() => undefined),
+      close: async () => {
+        await active.writer.close();
+        writeEnded();
+      },
+      write: (chunk) => active.writer.write(chunk),
+    });
+    return { ends, pipe: { readable, signal: active.controller.signal, writable } };
+  }
+
   async #run(
     input: RelayRequestInput,
-    target: RelayTarget,
+    target: TargetCall,
     active: ActiveRelay,
     push: RelayPush,
   ): Promise<RelayResult> {
@@ -217,10 +286,13 @@ export class RelayConnection {
       signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
     });
     let request: Request;
+    const twoWay = input.twoWay === true ? this.#pipe(active) : undefined;
     try {
       const body = input.hasBody ? this.#requestBody(active) : undefined;
-      // why: a relay with no body reads nothing, so the peer is told to stop that direction at once.
-      if (body === undefined) void active.channel.readable.cancel().catch(() => undefined);
+      // why: a relay with no body reads nothing, so the peer is told to stop that direction at once; a two-way relay reads it through its pipe.
+      if (body === undefined && twoWay === undefined) {
+        void active.channel.readable.cancel().catch(() => undefined);
+      }
       request = new Request(input.url, {
         headers: new Headers(input.headers.filter(([name]) => !isRelayFramingHeader(name))),
         method: input.method,
@@ -234,7 +306,7 @@ export class RelayConnection {
       );
     }
     active.request = request;
-    const answered = target(request, input.tenant, input.leaseId).then(
+    const answered = target(request, twoWay?.pipe).then(
       (response) => ({ response }),
       (error: unknown) => ({ error }),
     );
@@ -253,10 +325,14 @@ export class RelayConnection {
       });
       throw new Error("The relay target failed");
     }
-    // why: the target has answered, so the unread rest of the request body is stopped on the channel.
-    active.abandoned = true;
-    void active.reader?.cancel().catch(() => undefined);
-    return this.#respond(input, first.response, active, push);
+    const piped =
+      twoWay !== undefined && first.response.status >= 200 && first.response.status < 300;
+    // why: the target has answered, so the unread rest of the request body is stopped on the channel; a two-way relay that was accepted keeps reading it.
+    if (!piped) {
+      active.abandoned = true;
+      void active.reader?.cancel().catch(() => undefined);
+    }
+    return this.#respond(input, first.response, active, push, piped ? twoWay.ends : undefined);
   }
 
   async #respond(
@@ -264,6 +340,7 @@ export class RelayConnection {
     response: Response,
     active: ActiveRelay,
     push: RelayPush,
+    ends: PipeEnds | undefined,
   ): Promise<RelayResult> {
     const { signal } = active.controller;
     const headers = relayHeaderPairs(response.headers, { dropCredentials: false });
@@ -286,6 +363,10 @@ export class RelayConnection {
       void response.body?.cancel().catch(() => undefined);
       throw error;
     }
+    if (ends !== undefined) {
+      void response.body?.cancel().catch(() => undefined);
+      return this.#bothEnded(active, ends);
+    }
     const { writer } = active;
     const noBody =
       input.method === "HEAD" || NO_BODY_STATUSES.has(response.status) || response.body === null;
@@ -294,6 +375,17 @@ export class RelayConnection {
       return this.#close(active, writer);
     }
     return this.#stream(input, response.body, active, writer);
+  }
+
+  async #bothEnded(active: ActiveRelay, ends: PipeEnds): Promise<RelayResult> {
+    const { signal } = active.controller;
+    const aborted = new Promise<"aborted">((resolve) => {
+      if (signal.aborted) resolve("aborted");
+      else signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+    });
+    const both = Promise.all([ends.read, ends.write]).then(() => "ended" as const);
+    const outcome = await Promise.race([both, aborted]);
+    return outcome === "ended" && !signal.aborted ? {} : this.#finished(active);
   }
 
   async #close(

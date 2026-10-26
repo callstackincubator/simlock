@@ -64,7 +64,7 @@ import {
 } from "./dispatcher.js";
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
-import { RelayConnection, type RelayTargets } from "./relay.js";
+import { RelayConnection, type RelayTargets, type TwoWayRelayTargets } from "./relay.js";
 import type { UpdateCoordinator } from "./update-coordinator.js";
 
 type RequestId = string | number;
@@ -163,6 +163,7 @@ export interface DaemonServerEngineOptions {
   readonly passthrough?: PassthroughResolver;
   readonly processRunner?: ProcessRunner;
   readonly relayTargets?: RelayTargets;
+  readonly relayTwoWayTargets?: TwoWayRelayTargets;
   readonly execEnv?: NodeJS.ProcessEnv;
   readonly registry: Registry;
   readonly stalls?: DispatcherOptions["stalls"];
@@ -702,7 +703,11 @@ export class DaemonServer {
       role: "agent",
       progressDisposers: new Set(),
       protocolMismatch: undefined,
-      relays: new RelayConnection(this.#engine?.relayTargets ?? {}, this.#logger),
+      relays: new RelayConnection(
+        this.#engine?.relayTargets ?? {},
+        this.#logger,
+        this.#engine?.relayTwoWayTargets ?? {},
+      ),
       selfInitiatedReleases: new Set(),
       socket,
       subscriptionId: undefined,

@@ -13,6 +13,7 @@ import type {
   ModuleLocalProfile,
   ModuleMount,
   ModuleRelayTarget,
+  ModuleRelayTwoWayTarget,
   ModuleTokens,
   MountDeps,
   OptionalModuleDefinition,
@@ -227,6 +228,13 @@ async function createGatewaySide(
             tenant,
             ...(leaseId === undefined ? {} : { leaseId }),
           }),
+        relayTwoWay: (workerId, request, tenant, leaseId) =>
+          parts.relayTwoWay(workerId, {
+            request,
+            target: name,
+            tenant,
+            ...(leaseId === undefined ? {} : { leaseId }),
+          }),
         requesterPrefix: parts.requesterPrefix,
         serving: () =>
           parts
@@ -305,8 +313,10 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
   }
 
   const relayTargets: Record<string, ModuleRelayTarget> = {};
+  const relayTwoWayTargets: Record<string, ModuleRelayTwoWayTarget> = {};
   for (const { name, worker } of started) {
     if (worker.relayTarget !== undefined) relayTargets[name] = worker.relayTarget;
+    if (worker.relayTwoWay !== undefined) relayTwoWayTargets[name] = worker.relayTwoWay;
   }
 
   const leaseEndParticipants: ModuleLeaseEndParticipant[] = [];
@@ -380,5 +390,6 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
       );
     },
     relayTargets,
+    relayTwoWayTargets,
   };
 }

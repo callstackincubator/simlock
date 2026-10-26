@@ -242,6 +242,7 @@ export async function fakeGatewayContext<C>(
         relayed.push({ tenant, url: request.url, workerId });
         return Promise.resolve(facts.relay?.(request) ?? new Response("{}"));
       },
+      relayTwoWay: () => Promise.resolve(new Response(null, { status: 501 })),
       requesterPrefix: "gw:gw-test:",
       serving: () => serving,
       startedAt: clock.now(),

@@ -1082,7 +1082,8 @@ const relayUrlSchema = z
  * request body arrives, and the response body leaves, on the byte channel `channel` names (ADR 0028);
  * the head leaves as a `relay-head` push keyed by this call's frame id. The
  * answer comes once the response body has ended, or `{ cancelled: true }` once a `relay.cancel` took
- * effect. Admin only, and on a worker only the gateway's own uplink session may call it.
+ * effect. With `twoWay` (GET, no body) both directions of the channel stay open: the answer comes once
+ * both have ended. Admin only, and on a worker only the gateway's own uplink session may call it.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const relayRequest = defineOperation({
@@ -1099,11 +1100,15 @@ export const relayRequest = defineOperation({
       tenant: z.string().min(1).max(300),
       leaseId: leaseIdSchema.optional(),
       hasBody: z.boolean(),
+      twoWay: z.literal(true).optional(),
       channel: relayChannelSchema,
     })
     .strict()
     .refine((input) => !input.hasBody || (input.method !== "GET" && input.method !== "HEAD"), {
       message: "hasBody is not allowed with GET or HEAD",
+    })
+    .refine((input) => input.twoWay !== true || (input.method === "GET" && !input.hasBody), {
+      message: "twoWay needs GET and no body",
     }),
   output: z.object({ cancelled: z.literal(true).optional() }),
 });

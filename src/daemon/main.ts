@@ -684,6 +684,10 @@ async function composeDaemon(
       ...moduleHost.relayTargets,
       ...options.relayTargets,
     },
+    relayTwoWayTargets: {
+      ...moduleHost.relayTwoWayTargets,
+      ...options.relayTwoWayTargets,
+    },
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
     nuke,
     registry,
@@ -984,6 +988,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       instanceId,
       leases: leaseIndex,
       relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+      relayTwoWay: (workerId, call) => gatewayRelay.relayTwoWay(workerId, call),
       requesterPrefix: gatewayRequesterPrefix,
       startedAt: clock.now(),
       worker: (id) => gatewayService.workers.view(id),

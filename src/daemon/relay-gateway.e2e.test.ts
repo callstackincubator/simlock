@@ -238,7 +238,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
           if (step.done) return;
           await writer.write(step.value);
         }
-      })();
+      })().catch(() => undefined);
       return Promise.resolve(new Response(null, { status: 200 }));
     };
     const { relay, workerId } = await startFleet();
