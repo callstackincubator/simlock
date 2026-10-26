@@ -285,26 +285,8 @@ export class RelayConnection {
     const cancelled = new Promise<"cancelled">((resolve) => {
       signal.addEventListener("abort", () => resolve("cancelled"), { once: true });
     });
-    let request: Request;
     const twoWay = input.twoWay === true ? this.#pipe(active) : undefined;
-    try {
-      const body = input.hasBody ? this.#requestBody(active) : undefined;
-      // why: a relay with no body reads nothing, so the peer is told to stop that direction at once; a two-way relay reads it through its pipe.
-      if (body === undefined && twoWay === undefined) {
-        void active.channel.readable.cancel().catch(() => undefined);
-      }
-      request = new Request(input.url, {
-        headers: new Headers(input.headers.filter(([name]) => !isRelayFramingHeader(name))),
-        method: input.method,
-        signal,
-        ...(body === undefined ? {} : { body, duplex: "half" }),
-      } as RequestInit);
-    } catch (error: unknown) {
-      throw new DispatchError(
-        "BAD_REQUEST",
-        `The relayed request cannot be built: ${describe(error)}`,
-      );
-    }
+    const request = this.#buildRequest(input, active, twoWay !== undefined);
     active.request = request;
     const answered = target(request, twoWay?.pipe).then(
       (response) => ({ response }),
@@ -325,14 +307,34 @@ export class RelayConnection {
       });
       throw new Error("The relay target failed");
     }
-    const piped =
-      twoWay !== undefined && first.response.status >= 200 && first.response.status < 300;
+    const piped = twoWay !== undefined && isSuccess(first.response.status);
     // why: the target has answered, so the unread rest of the request body is stopped on the channel; a two-way relay that was accepted keeps reading it.
     if (!piped) {
       active.abandoned = true;
       void active.reader?.cancel().catch(() => undefined);
     }
     return this.#respond(input, first.response, active, push, piped ? twoWay.ends : undefined);
+  }
+
+  #buildRequest(input: RelayRequestInput, active: ActiveRelay, twoWay: boolean): Request {
+    try {
+      const body = input.hasBody ? this.#requestBody(active) : undefined;
+      // why: a relay with no body reads nothing, so the peer is told to stop that direction at once; a two-way relay reads it through its pipe.
+      if (body === undefined && !twoWay) {
+        void active.channel.readable.cancel().catch(() => undefined);
+      }
+      return new Request(input.url, {
+        headers: new Headers(input.headers.filter(([name]) => !isRelayFramingHeader(name))),
+        method: input.method,
+        signal: active.controller.signal,
+        ...(body === undefined ? {} : { body, duplex: "half" }),
+      } as RequestInit);
+    } catch (error: unknown) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `The relayed request cannot be built: ${describe(error)}`,
+      );
+    }
   }
 
   async #respond(
@@ -437,6 +439,10 @@ export class RelayConnection {
     }
     return this.#close(active, writer);
   }
+}
+
+function isSuccess(status: number): boolean {
+  return status >= 200 && status < 300;
 }
 
 function headerViolation(headers: readonly (readonly [string, string])[]): string | undefined {

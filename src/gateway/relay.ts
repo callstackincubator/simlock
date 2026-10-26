@@ -94,6 +94,21 @@ interface ExchangeInit {
   readonly workerId: string;
 }
 
+function callerHeaders(headers: readonly (readonly [string, string])[]): Headers | undefined {
+  const result = new Headers();
+  try {
+    for (const [name, value] of headers) {
+      // why: the gateway frames its own response, so a worker's framing headers must not reach the caller.
+      if (isRelayFramingHeader(name)) continue;
+      result.append(name, value);
+    }
+  } catch {
+    // why: `Headers` refuses a value above U+00FF that the push schema lets through.
+    return undefined;
+  }
+  return result;
+}
+
 class Exchange {
   readonly #relayId = crypto.randomUUID();
   readonly #opening = new AbortController();
@@ -238,32 +253,15 @@ class Exchange {
       this.#invalid();
       return;
     }
-    const responseHeaders = new Headers();
-    try {
-      for (const [name, value] of headers) {
-        // why: the gateway frames its own response, so a worker's framing headers must not reach the caller.
-        if (isRelayFramingHeader(name)) continue;
-        responseHeaders.append(name, value);
-      }
-    } catch {
-      // why: `Headers` refuses a value above U+00FF that the push schema lets through.
+    const responseHeaders = callerHeaders(headers);
+    if (responseHeaders === undefined) {
       this.#invalid();
       return;
     }
     this.#headed = true;
     // why: once the head is in, the body is bounded by silence, not by the deadline, so a live stream is not cut.
     if (this.#timer !== undefined) this.init.clock.cancel(this.#timer);
-    if (this.init.twoWay) {
-      if (status >= 200 && status < 300) {
-        this.#openTwoWay(status, responseHeaders);
-        return;
-      }
-      // why: a refused two-way relay has no writer, so the gateway's direction ends here.
-      void this.#channel?.writable
-        .getWriter()
-        .close()
-        .catch(() => undefined);
-    }
+    if (this.init.twoWay && this.#openOrRefuse(status, responseHeaders)) return;
     this.#armIdle();
     const method = this.init.call.request.method;
     if (method === "HEAD" || NO_BODY_STATUSES.has(status)) {
@@ -282,6 +280,19 @@ class Exchange {
       { highWaterMark: 0 },
     );
     this.init.resolve(new Response(stream, { headers: responseHeaders, status }));
+  }
+
+  // why: a 2xx head opens the two directions; a refusal has no writer, so the gateway's direction ends here and the refusal is answered as a one-way body.
+  #openOrRefuse(status: number, headers: Headers): boolean {
+    if (status >= 200 && status < 300) {
+      this.#openTwoWay(status, headers);
+      return true;
+    }
+    void this.#channel?.writable
+      .getWriter()
+      .close()
+      .catch(() => undefined);
+    return false;
   }
 
   #openTwoWay(status: number, headers: Headers): void {

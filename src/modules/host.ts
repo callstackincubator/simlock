@@ -12,8 +12,6 @@ import type {
   ModuleLeaseEndParticipant,
   ModuleLocalProfile,
   ModuleMount,
-  ModuleRelayTarget,
-  ModuleRelayTwoWayTarget,
   ModuleTokens,
   MountDeps,
   OptionalModuleDefinition,
@@ -98,6 +96,18 @@ const HOOK_DEADLINE_MS = 30_000;
 interface Started {
   readonly name: string;
   readonly worker: WorkerModule;
+}
+
+function targetsByName<T>(
+  started: readonly Started[],
+  pick: (worker: WorkerModule) => T | undefined,
+): Record<string, T> {
+  const targets: Record<string, T> = {};
+  for (const { name, worker } of started) {
+    const target = pick(worker);
+    if (target !== undefined) targets[name] = target;
+  }
+  return targets;
 }
 
 type StopHook = "beforeDrain" | "beforeDriversDispose";
@@ -312,12 +322,8 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
     capabilitySources.push(worker.capability);
   }
 
-  const relayTargets: Record<string, ModuleRelayTarget> = {};
-  const relayTwoWayTargets: Record<string, ModuleRelayTwoWayTarget> = {};
-  for (const { name, worker } of started) {
-    if (worker.relayTarget !== undefined) relayTargets[name] = worker.relayTarget;
-    if (worker.relayTwoWay !== undefined) relayTwoWayTargets[name] = worker.relayTwoWay;
-  }
+  const relayTargets = targetsByName(started, (worker) => worker.relayTarget);
+  const relayTwoWayTargets = targetsByName(started, (worker) => worker.relayTwoWay);
 
   const leaseEndParticipants: ModuleLeaseEndParticipant[] = [];
   for (const { worker } of started) {
