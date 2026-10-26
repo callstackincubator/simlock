@@ -72,26 +72,26 @@ function boxOf(node: unknown): Box | undefined {
   return rect !== undefined && typeof rect.width === "number" ? rect : undefined;
 }
 
+function* nodesOf(node: unknown): Generator<Record<string, unknown>> {
+  if (typeof node !== "object" || node === null) return;
+  if (!Array.isArray(node)) yield node as Record<string, unknown>;
+  for (const child of Object.values(node)) yield* nodesOf(child);
+}
+
 function findBoxes(json: unknown, id: string): { target?: Box; screen?: Box } {
-  const found: { target?: Box; screen?: Box } = {};
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) return node.forEach(visit);
-    if (typeof node !== "object" || node === null) return;
+  const boxed = [...nodesOf(json)].flatMap((node) => {
     const box = boxOf(node);
-    const record = node as Record<string, unknown>;
-    if (box !== undefined) {
-      if (record["identifier"] === id || record["id"] === id) found.target ??= box;
-      if (
-        found.screen === undefined ||
-        box.width * box.height > found.screen.width * found.screen.height
-      ) {
-        found.screen = box;
-      }
-    }
-    Object.values(record).forEach(visit);
+    return box === undefined
+      ? []
+      : [{ box, named: node["identifier"] === id || node["id"] === id }];
+  });
+  const area = (box: Box) => box.width * box.height;
+  const screen = boxed.map((entry) => entry.box).sort((left, right) => area(right) - area(left))[0];
+  const target = boxed.find((entry) => entry.named)?.box;
+  return {
+    ...(screen === undefined ? {} : { screen }),
+    ...(target === undefined ? {} : { target }),
   };
-  visit(json);
-  return found;
 }
 
 function listField(result: AgentDeviceResult, key: string): unknown[] {

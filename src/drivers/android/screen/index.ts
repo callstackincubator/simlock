@@ -5,7 +5,6 @@ export {
   CLOSE_DEADLINE_MS,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
-  errorMessage,
   exitsWithin,
   pushScrcpyServer,
   REMOVE_TIMEOUT_MS,

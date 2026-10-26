@@ -7,7 +7,7 @@ import type { ScreenTarget } from "./session.js";
 // this must match the vendored jar byte for byte.
 export const SCRCPY_SERVER_VERSION = "5.0.1";
 export const DEVICE_DIRECTORY = "/data/local/tmp";
-export const PUSH_TIMEOUT_MS = 30_000;
+const PUSH_TIMEOUT_MS = 30_000;
 // why: measured from the moment the push returned, through every connect retry, to the first session
 // packet; the budget never restarts, so a server that keeps refusing cannot hold a viewer longer.
 export const START_DEADLINE_MS = 15_000;

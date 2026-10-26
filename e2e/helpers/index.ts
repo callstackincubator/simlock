@@ -14,7 +14,7 @@ export { withHttpDaemon } from "./http-daemon.js";
 export { mintJoinToken } from "./join-token.js";
 export type { SharedTestEnv, TestEnv } from "./env.js";
 export { DEVICE_READY_MS, waitFor } from "./wait.js";
-export { openInputSocket, type InputSocket } from "./input-socket.js";
+export { openInputSocket } from "./input-socket.js";
 export { events } from "./events.js";
 export type { RecordedEvent } from "./events.js";
 export { waitForDeviceState, waitForLeaseCount } from "./status.js";
