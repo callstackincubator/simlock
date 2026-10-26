@@ -143,6 +143,7 @@ import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
   DaemonEndpointHost,
+  prepareDataDirectory,
   refuseWhenDaemonAnswers,
 } from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
@@ -279,6 +280,7 @@ async function composeDaemon(
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
+  const dataDirectoryWarning = await prepareDataDirectory(filesystem, dataDirectory);
   const configWarnings: string[] = [];
   const moduleDefinitions = options.optionalModules ?? optionalModules;
   const { config, defaulted } = await loadConfigWithDefaults({
@@ -306,6 +308,7 @@ async function composeDaemon(
     });
   // why: the logger needs the config's log level, so what the config load found to warn about is told once the logger exists.
   for (const message of configWarnings) logger.warn(message);
+  if (dataDirectoryWarning !== undefined) logger.warn(dataDirectoryWarning);
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
   // ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
   // missing `sw_vers` costs a fallback value, not the daemon.

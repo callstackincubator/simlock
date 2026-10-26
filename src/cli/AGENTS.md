@@ -96,8 +96,8 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
 7. **`simlock daemon logs --follow`** — `followLog` polls every 250 ms from a byte offset.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
-8. **`simlock config set`** — validates the merged file with `loadConfig`, writes
-   `config.json` atomically, mode `0600`.
+8. **`simlock config set`** — validates the merged file with `loadConfig`, creates the
+   data directory `0700` when missing, writes `config.json` atomically, mode `0600`.
 9. **`simlock mcp`** — imports `src/mcp/main.ts` and runs it, passing the global flag as `{ daemonFlag }`.
 10. **`simlock instructions [--json]`** — prints the static rules text from `src/instructions`, or
     one JSON object `{ instructions }`; never connects to a daemon.

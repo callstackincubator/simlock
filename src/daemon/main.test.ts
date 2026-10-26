@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
@@ -53,6 +53,7 @@ import {
   JsonLinesLogger,
   MemoryFilesystem,
   MemoryLogSink,
+  NodeFilesystem,
   NodeSqliteOpener,
   NoopLogger,
   ScriptedProcessRunner,
@@ -299,6 +300,75 @@ const hasEvent =
   (name: string) =>
   (events: readonly EventEnvelope[]): boolean =>
     events.some((event) => event.event === name);
+
+describe("the data directory", () => {
+  it("creates a missing data directory owner-only, and for one other users can reach logs one warning at start and leaves its mode", async () => {
+    // why: under the umask every real host starts from, a directory made without a mode comes
+    // out 0755, so only the daemon asking for 0700 ends there.
+    const previousUmask = process.umask(0o022);
+    try {
+      const base = await mkdtemp(join(tmpdir(), "simlock-dd-"));
+      temporaryDirectories.push(base);
+      const cases = [
+        { name: "new", existing: undefined, mode: 0o700, warned: undefined },
+        { name: "700", existing: 0o700, mode: 0o700, warned: undefined },
+        { name: "750", existing: 0o750, mode: 0o750, warned: "750" },
+        { name: "755", existing: 0o755, mode: 0o755, warned: "755" },
+      ];
+
+      for (const testCase of cases) {
+        const dataDirectory = join(base, testCase.name);
+        if (testCase.existing !== undefined) {
+          await mkdir(dataDirectory);
+          await chmod(dataDirectory, testCase.existing);
+        }
+
+        const { sink } = await start({ dataDirectory, filesystem: new NodeFilesystem() });
+
+        expect(
+          {
+            mode: (await stat(dataDirectory)).mode & 0o777,
+            warnings: sink.records
+              .filter((record) => record.message.startsWith("data directory"))
+              .map((record) => [record.level, record.message]),
+          },
+          testCase.name,
+        ).toEqual({
+          mode: testCase.mode,
+          warnings:
+            testCase.warned === undefined
+              ? []
+              : [
+                  [
+                    "warn",
+                    `data directory ${dataDirectory} is accessible to other users (mode ${testCase.warned}); run chmod 700 ${dataDirectory}`,
+                  ],
+                ],
+        });
+      }
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+});
+
+describe("the data directory", () => {
+  it("makes the parent of a gateway's data directory owner-only too when it creates it", async () => {
+    // why: a gateway started first creates `<root>`, which is the worker's data directory later.
+    const previousUmask = process.umask(0o022);
+    try {
+      const root = join(await mkdtemp(join(tmpdir(), "simlock-dd-")), "home");
+      temporaryDirectories.push(join(root, ".."));
+
+      await start({ dataDirectory: join(root, "gateway"), filesystem: new NodeFilesystem() });
+
+      expect((await stat(root)).mode & 0o777).toBe(0o700);
+      expect((await stat(join(root, "gateway"))).mode & 0o777).toBe(0o700);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+});
 
 describe("the version a daemon reports", () => {
   it("is the version in package.json when the caller names none", async () => {
