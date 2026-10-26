@@ -1,4 +1,4 @@
-import { MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
+import { closeReason, MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
 import type {
   ModuleIdentity,
   ModuleLease,
@@ -6,7 +6,7 @@ import type {
   ModuleTwoWayRelay,
 } from "../modules/index.js";
 import type { Clock, LeaseSocket } from "../ports/index.js";
-import { encodeFrame, readFrames } from "./framing.js";
+import { CHANNEL_TAG, encodeFrame, readFrames } from "./framing.js";
 import { unavailable } from "./refusal.js";
 
 export interface GatewayInputLinkOptions {
@@ -100,10 +100,30 @@ function bridge(socket: LeaseSocket, relay: ModuleTwoWayRelay, controller: Abort
   socket.onClose(() => controller.abort());
   void (async () => {
     for await (const frame of readFrames(relay.readable)) {
+      if (frame.tag === CHANNEL_TAG.close) {
+        const ended = closeOf(frame.payload);
+        if (ended !== undefined) socket.close(ended.code, ended.reason);
+        return;
+      }
       const message = new Uint8Array(1 + frame.payload.length);
       message[0] = frame.tag;
       message.set(frame.payload, 1);
       socket.send(message);
     }
   })();
+}
+
+// why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
+function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
+  try {
+    const { code, reason } = JSON.parse(new TextDecoder().decode(payload)) as Record<
+      string,
+      unknown
+    >;
+    if (typeof code !== "number" || !Number.isInteger(code)) return undefined;
+    if (code !== 1013 && (code < 4000 || code > 4999)) return undefined;
+    return typeof reason === "string" ? { code, reason: closeReason(reason) } : undefined;
+  } catch {
+    return undefined;
+  }
 }

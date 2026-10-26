@@ -2,6 +2,10 @@
 // `len` counting the tag and the payload. Only the input module encodes and reads it; the relay moves bytes.
 import { MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
 
+// why: the two channel-only tags: a heartbeat the worker sends while it is alive, and the worker's close
+// `{code, reason}`; neither reaches a client, and a client's tags are serve-sim's.
+export const CHANNEL_TAG = { close: 0xf1, heartbeat: 0xf0 } as const;
+
 export interface InputFrame {
   readonly tag: number;
   readonly payload: Uint8Array;

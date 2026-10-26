@@ -1,5 +1,6 @@
 import type { DeviceRecord, LeaseRecord } from "../core/index.js";
 import type {
+  ModuleEndedLease,
   ModuleInputs,
   ModuleLeaseSocketHandler,
   ModuleRelayTwoWayTarget,
@@ -27,12 +28,21 @@ export interface WorkerInputLinkOptions {
 export function createWorkerInputLink(base: WorkerInputLinkOptions): {
   readonly relayTwoWay: ModuleRelayTwoWayTarget;
   readonly socket: ModuleLeaseSocketHandler;
+  readonly leaseEnded: (ended: ModuleEndedLease) => Promise<void>;
 } {
   const options = {
     ...base,
-    sessions: createInputSessions({ clock: base.clock, inputs: base.inputs }),
+    sessions: createInputSessions({
+      clock: base.clock,
+      inputs: base.inputs,
+      leaseExists: (leaseId) => base.registry.snapshot.leases.some((entry) => entry.id === leaseId),
+    }),
   };
   return {
+    leaseEnded: (ended) => {
+      options.sessions.end(ended.leaseId, ended.reason);
+      return Promise.resolve();
+    },
     socket: {
       open: (_request, _identity, held) => {
         const lease = options.registry.snapshot.leases.find((entry) => entry.id === held.id);

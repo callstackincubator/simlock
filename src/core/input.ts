@@ -16,6 +16,19 @@ export const INPUT_TAG = {
 // why: a client message is at most this many bytes with its tag; a longer one is dropped and the socket stays open.
 export const MAX_INPUT_MESSAGE_BYTES = 64 * 1024;
 
+// why: `ws` throws on a close reason over 123 bytes, and a client may be shown one a peer chose; cut at a character boundary, never in the middle of one.
+export function closeReason(reason: string): string {
+  const encoder = new TextEncoder();
+  let cut = "";
+  let bytes = 0;
+  for (const character of reason) {
+    bytes += encoder.encode(character).length;
+    if (bytes > 123) break;
+    cut += character;
+  }
+  return cut;
+}
+
 export const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
 
 export type InputOrientation =

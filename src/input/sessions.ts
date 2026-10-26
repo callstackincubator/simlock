@@ -18,6 +18,7 @@ const MAX_SOCKETS_PER_LEASE = 8;
 // reconnects every second does not start a controller on a broken device every second.
 const FAILED_OPEN_MEMORY_MS = 10_000;
 const CLOSE_FAILED = 1013;
+const CLOSE_LEASE_ENDED = 4001;
 const REASON_FAILED = "Input is unavailable for this lease";
 
 interface Attached {
@@ -28,6 +29,8 @@ interface Attached {
 // why: one device input per lease, shared by every socket of it, so two people on one lease do not
 // start two controllers on one device.
 interface LeaseInput {
+  // why: set once the device input has opened, so an end that finds it open closes it at once instead of after a wait.
+  device: DeviceInput | undefined;
   readonly opening: Promise<DeviceInput | UnavailableDeviceInput>;
   readonly sockets: Set<Attached>;
   config: InputScreenConfig | undefined;
@@ -36,11 +39,13 @@ interface LeaseInput {
 
 export interface InputSessions {
   attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void;
+  end(leaseId: string, reason: string): void;
 }
 
 export function createInputSessions(options: {
   readonly inputs: ModuleInputs;
   readonly clock: Clock;
+  readonly leaseExists: (leaseId: string) => boolean;
 }): InputSessions {
   const leases = new Map<string, LeaseInput>();
   const failedOpens = new Map<string, number>();
@@ -53,6 +58,24 @@ export function createInputSessions(options: {
     void opened.close();
   }
 
+  function releaseWhenOpen(leaseId: string, entry: LeaseInput): void {
+    if (entry.device !== undefined) {
+      release(leaseId, entry, entry.device);
+      return;
+    }
+    void entry.opening.then(
+      (opened) => (isUnavailableInput(opened) ? undefined : release(leaseId, entry, opened)),
+      () => undefined,
+    );
+  }
+
+  function end(leaseId: string, reason: string): void {
+    const entry = leases.get(leaseId);
+    if (entry === undefined) return;
+    for (const attached of entry.sockets) attached.socket.close(CLOSE_LEASE_ENDED, reason);
+    releaseWhenOpen(leaseId, entry);
+  }
+
   function openFor(leaseId: string, device: DeviceRecord): LeaseInput {
     const existing = leases.get(leaseId);
     if (existing !== undefined) return existing;
@@ -60,11 +83,15 @@ export function createInputSessions(options: {
     const entry: LeaseInput = {
       closed: false,
       config: undefined,
+      device: undefined,
       opening: options.inputs
         .openInput(device.spec.platform, toDriverDevice(device), new AbortController().signal)
         .then(
           (opened) => {
-            if (!isUnavailableInput(opened)) wire(leaseId, entry, opened);
+            if (!isUnavailableInput(opened)) {
+              entry.device = opened;
+              wire(leaseId, entry, opened);
+            }
             return opened;
           },
           (error: unknown) => {
@@ -93,6 +120,11 @@ export function createInputSessions(options: {
   }
 
   async function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): Promise<void> {
+    // why: the lease can end between the HTTP layer's check and this socket's upgrade; the worker's own record decides.
+    if (!options.leaseExists(leaseId)) {
+      socket.close(CLOSE_LEASE_ENDED, "lease ended");
+      return;
+    }
     const failedAt = failedOpens.get(leaseId);
     if (failedAt !== undefined && options.clock.now() - failedAt < FAILED_OPEN_MEMORY_MS) {
       socket.close(CLOSE_FAILED, REASON_FAILED);
@@ -107,12 +139,7 @@ export function createInputSessions(options: {
     entry.sockets.add(attached);
     socket.onClose(() => {
       entry.sockets.delete(attached);
-      if (entry.sockets.size === 0) {
-        void entry.opening.then(
-          (opened) => (isUnavailableInput(opened) ? undefined : release(leaseId, entry, opened)),
-          () => undefined,
-        );
-      }
+      if (entry.sockets.size === 0) releaseWhenOpen(leaseId, entry);
     });
     let opened: DeviceInput | UnavailableDeviceInput;
     try {
@@ -145,5 +172,8 @@ export function createInputSessions(options: {
     });
   }
 
-  return { attach: (leaseId, device, socket) => void attach(leaseId, device, socket) };
+  return {
+    attach: (leaseId, device, socket) => void attach(leaseId, device, socket),
+    end,
+  };
 }
