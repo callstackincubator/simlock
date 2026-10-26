@@ -449,3 +449,23 @@ describe("Android device input: keys", () => {
     ]);
   });
 });
+
+describe("Android device input: failure", () => {
+  it("reports a control socket that closes mid-session as failed, and not one the input closed itself", async () => {
+    const world = setup();
+    const input = opened(await open(world));
+    const failures: string[] = [];
+    input.onFailed((error) => failures.push(error.message));
+    world.target.peers[0]?.close();
+    await flush();
+    expect(failures).toEqual(["The input server on emulator-5586 closed its control socket"]);
+
+    const quiet = setup();
+    const closing = opened(await open(quiet));
+    const none: string[] = [];
+    closing.onFailed((error) => none.push(error.message));
+    await drive(quiet.clock, closing.close());
+    await flush();
+    expect(none).toEqual([]);
+  });
+});
