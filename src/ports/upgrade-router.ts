@@ -64,6 +64,8 @@ async function leaseUpgrade(
   socket: Duplex,
   head: Buffer,
 ): Promise<void> {
+  // why: a client that resets while the module resolves would emit an `error` on a raw socket nothing listens to yet, and that ends the process; `ws` takes the socket's errors over once it upgrades.
+  socket.on("error", () => undefined);
   let outcome: LeaseSocketOutcome;
   try {
     outcome = await options.leaseSocket(toRequest(request));

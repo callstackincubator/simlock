@@ -1,5 +1,5 @@
 import { createServer, request, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -16,12 +16,31 @@ afterEach(async () => {
   await new Promise<void>((resolve) => closing?.close(() => resolve()));
 });
 
-async function listen(accept: LeaseSocketAccept): Promise<number> {
+// why: `ended` settles when each connection the server saw has closed, so a test reads what the router did on the close after it fired, not before.
+const ended: Promise<void>[] = [];
+
+async function listen(
+  accept: LeaseSocketAccept,
+  gate: Promise<void> = Promise.resolve(),
+): Promise<number> {
   const listening = createServer();
-  createUpgradeRouter({ leaseSocket: () => Promise.resolve({ accept }) }).attach(listening);
+  listening.on("connection", (connection) => {
+    ended.push(new Promise<void>((resolve) => connection.once("close", () => resolve())));
+  });
+  createUpgradeRouter({ leaseSocket: () => gate.then(() => ({ accept })) }).attach(listening);
   server = listening;
   await new Promise<void>((resolve) => listening.listen(0, "127.0.0.1", resolve));
   return (listening.address() as AddressInfo).port;
+}
+
+function rawUpgrade(port: number): Socket {
+  const raw = connect(port, "127.0.0.1");
+  raw.on("error", () => undefined);
+  raw.write(
+    "GET /v1/leases/L-1/input HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+  );
+  return raw;
 }
 
 function upgradeWithVersion(port: number, version: string): Promise<number> {
@@ -60,7 +79,36 @@ describe("the upgrade router's lease socket", () => {
     await new Promise((resolve) => client.once("open", resolve));
     client.close();
     await new Promise((resolve) => client.once("close", resolve));
+    await Promise.all(ended);
     expect(accepted).toHaveBeenCalledTimes(1);
     expect(abandon).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons what the module opened, and survives, when the client resets before the module answers", async () => {
+    const abandon = vi.fn();
+    let release: () => void = () => undefined;
+    const port = await listen(
+      Object.assign(vi.fn(), { abandon }),
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const crashes: unknown[] = [];
+    const saved = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    process.on("uncaughtException", (error) => crashes.push(error));
+    try {
+      const raw = rawUpgrade(port);
+      await new Promise((resolve) => raw.once("connect", resolve));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      raw.resetAndDestroy();
+      await Promise.all(ended);
+      release();
+      await vi.waitFor(() => expect(abandon).toHaveBeenCalledTimes(1));
+      expect(crashes).toEqual([]);
+    } finally {
+      process.removeAllListeners("uncaughtException");
+      for (const listener of saved) process.on("uncaughtException", listener);
+    }
   });
 });

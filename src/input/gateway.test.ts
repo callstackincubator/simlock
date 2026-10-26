@@ -139,4 +139,21 @@ describe("a gateway's input socket", () => {
     silent.clock.advance(1);
     expect(silent.client.closed).toEqual({ code: 4001, reason: "lease ended" });
   });
+
+  it("aborts the worker relay of a socket that never reaches the client", async () => {
+    const pair = relayPair();
+    let signal: AbortSignal | undefined;
+    const { socket } = await gatewayWith({
+      relayTwoWay: (request) => {
+        signal = request.signal;
+        return Promise.resolve(pair.relay);
+      },
+    });
+    const accept = await socket.open(new Request("http://simlock/input"), IDENTITY, LEASE);
+    if (typeof accept !== "function") throw new Error("the socket was refused");
+    expect(signal?.aborted).toBe(false);
+
+    accept.abandon?.();
+    expect(signal?.aborted).toBe(true);
+  });
 });
