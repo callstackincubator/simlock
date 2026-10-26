@@ -142,10 +142,12 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   async function startPair(
     options: { readonly deadlineMs?: number; readonly idleMs?: number } = {},
   ) {
-    const fixture: WorkerFixture = await startWorker(directories, daemons, {
-      "agent-device": target,
-      echo: target,
-    });
+    const fixture: WorkerFixture = await startWorker(
+      directories,
+      daemons,
+      { "agent-device": target, echo: target },
+      { relayTwoWayTargets: { echo: twoWayTarget } },
+    );
     const pair = linkPair();
     const gatewayEnd = pair.gatewayEnd;
     fixture.worker.acceptUplink(pair.worker);
@@ -746,6 +748,35 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(noHeadOutcome).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
     expect(bodyOutcome).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
     await poll(() => signal?.aborted).toBe(true);
+  }, 30_000);
+
+  it("closing the uplink ends every two-way relay: the gateway side gets WORKER_UNREACHABLE and the target's signal aborts", async () => {
+    const signals: AbortSignal[] = [];
+    twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
+      signals.push(pipe.signal);
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const { gatewayEnd, relay } = await startPair();
+    const open = async () => {
+      const opened = (await relay.relayTwoWay(WORKER_ID, buildCall({}))) as TwoWayRelay;
+      return { reader: opened.readable.getReader(), writer: opened.writable.getWriter() };
+    };
+    const first = await open();
+    const second = await open();
+    await poll(() => signals.map((signal) => signal.aborted)).toEqual([false, false]);
+
+    await gatewayEnd.close();
+    const outcomes = await Promise.all([
+      settleWithin(first.reader.read()),
+      settleWithin(first.writer.write(new Uint8Array(1))),
+      settleWithin(second.reader.read()),
+      settleWithin(second.writer.write(new Uint8Array(1))),
+    ]);
+
+    for (const settled of outcomes) {
+      expect(settled).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
+    }
+    await poll(() => signals.map((signal) => signal.aborted)).toEqual([true, true]);
   }, 30_000);
 
   it("a relay to a worker with no uplink fails with WORKER_UNREACHABLE and the target sees nothing", async () => {
