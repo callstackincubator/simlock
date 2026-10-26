@@ -29,6 +29,19 @@ describe("NodeBytePipeLauncher", () => {
     expect(await child.exited).toEqual({ code: 7, signal: null });
   });
 
+  it("writeStdin delivers the exact bytes to the child's stdin and rejects once stdin is closed", async () => {
+    const child = new NodeBytePipeLauncher().start(
+      process.execPath,
+      ["-e", "process.stdin.pipe(process.stdout)"],
+      { env: process.env },
+    );
+    await child.writeStdin(Uint8Array.from([0, 255, 10]));
+    await child.writeStdin(Uint8Array.from([128, 1]));
+    child.closeStdin();
+    expect([...(await readAll(child.stdout))]).toEqual([0, 255, 10, 128, 1]);
+    await expect(child.writeStdin(Uint8Array.from([7]))).rejects.toThrow(/write after end/i);
+  });
+
   it("reports each stderr line once it is complete", async () => {
     const lines: string[] = [];
     const child = new NodeBytePipeLauncher().start(
