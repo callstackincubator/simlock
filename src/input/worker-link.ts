@@ -4,7 +4,7 @@ import type {
   ModuleLeaseSocketHandler,
   ModuleRelayTwoWayTarget,
 } from "../modules/index.js";
-import type { LeaseSocket } from "../ports/index.js";
+import type { Clock, LeaseSocket } from "../ports/index.js";
 import { channelSocket } from "./channel.js";
 import { unknownLease } from "./refusal.js";
 import { createInputSessions, type InputSessions } from "./sessions.js";
@@ -17,6 +17,7 @@ export interface InputRegistry {
 }
 
 export interface WorkerInputLinkOptions {
+  readonly clock: Clock;
   readonly inputs: ModuleInputs;
   readonly registry: InputRegistry;
 }
@@ -27,7 +28,10 @@ export function createWorkerInputLink(base: WorkerInputLinkOptions): {
   readonly relayTwoWay: ModuleRelayTwoWayTarget;
   readonly socket: ModuleLeaseSocketHandler;
 } {
-  const options = { ...base, sessions: createInputSessions({ inputs: base.inputs }) };
+  const options = {
+    ...base,
+    sessions: createInputSessions({ clock: base.clock, inputs: base.inputs }),
+  };
   return {
     socket: {
       open: (_request, _identity, held) => {

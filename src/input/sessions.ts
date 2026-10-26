@@ -11,7 +11,14 @@ import {
   type UnavailableDeviceInput,
 } from "../core/index.js";
 import type { ModuleInputs } from "../modules/index.js";
-import type { LeaseSocket } from "../ports/index.js";
+import type { Clock, LeaseSocket } from "../ports/index.js";
+
+const MAX_SOCKETS_PER_LEASE = 8;
+// why: a device input that failed to open is not tried again for this long, so a client that
+// reconnects every second does not start a controller on a broken device every second.
+const FAILED_OPEN_MEMORY_MS = 10_000;
+const CLOSE_FAILED = 1013;
+const REASON_FAILED = "Input is unavailable for this lease";
 
 interface Attached {
   readonly socket: LeaseSocket;
@@ -24,54 +31,96 @@ interface LeaseInput {
   readonly opening: Promise<DeviceInput | UnavailableDeviceInput>;
   readonly sockets: Set<Attached>;
   config: InputScreenConfig | undefined;
+  closed: boolean;
 }
 
 export interface InputSessions {
   attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void;
 }
 
-export function createInputSessions(options: { readonly inputs: ModuleInputs }): InputSessions {
+export function createInputSessions(options: {
+  readonly inputs: ModuleInputs;
+  readonly clock: Clock;
+}): InputSessions {
   const leases = new Map<string, LeaseInput>();
+  const failedOpens = new Map<string, number>();
+
+  // why: every end of a lease's device input -- its last socket leaving, its own failure -- goes through here, so it closes once.
+  function release(leaseId: string, entry: LeaseInput, opened: DeviceInput): void {
+    if (entry.closed) return;
+    entry.closed = true;
+    if (leases.get(leaseId) === entry) leases.delete(leaseId);
+    void opened.close();
+  }
 
   function openFor(leaseId: string, device: DeviceRecord): LeaseInput {
     const existing = leases.get(leaseId);
     if (existing !== undefined) return existing;
     const sockets = new Set<Attached>();
     const entry: LeaseInput = {
+      closed: false,
       config: undefined,
       opening: options.inputs
         .openInput(device.spec.platform, toDriverDevice(device), new AbortController().signal)
-        .then((opened) => {
-          if (!isUnavailableInput(opened)) {
-            opened.onConfig((config) => {
-              entry.config = config;
-              for (const attached of sockets) {
-                if (attached.admitted)
-                  attached.socket.send(encodeInputMessage(INPUT_TAG.config, config));
-              }
-            });
-          }
-          return opened;
-        }),
+        .then(
+          (opened) => {
+            if (!isUnavailableInput(opened)) wire(leaseId, entry, opened);
+            return opened;
+          },
+          (error: unknown) => {
+            failedOpens.set(leaseId, options.clock.now());
+            if (leases.get(leaseId) === entry) leases.delete(leaseId);
+            throw error;
+          },
+        ),
       sockets,
     };
     leases.set(leaseId, entry);
     return entry;
   }
 
+  function wire(leaseId: string, entry: LeaseInput, opened: DeviceInput): void {
+    opened.onConfig((config) => {
+      entry.config = config;
+      for (const attached of entry.sockets) {
+        if (attached.admitted) attached.socket.send(encodeInputMessage(INPUT_TAG.config, config));
+      }
+    });
+    opened.onFailed(() => {
+      release(leaseId, entry, opened);
+      for (const attached of entry.sockets) attached.socket.close(CLOSE_FAILED, REASON_FAILED);
+    });
+  }
+
   async function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): Promise<void> {
+    const failedAt = failedOpens.get(leaseId);
+    if (failedAt !== undefined && options.clock.now() - failedAt < FAILED_OPEN_MEMORY_MS) {
+      socket.close(CLOSE_FAILED, REASON_FAILED);
+      return;
+    }
+    if ((leases.get(leaseId)?.sockets.size ?? 0) >= MAX_SOCKETS_PER_LEASE) {
+      socket.close(CLOSE_FAILED, REASON_FAILED);
+      return;
+    }
     const entry = openFor(leaseId, device);
     const attached: Attached = { admitted: false, socket };
     entry.sockets.add(attached);
     socket.onClose(() => {
       entry.sockets.delete(attached);
-      if (entry.sockets.size > 0) return;
-      leases.delete(leaseId);
-      void entry.opening.then((opened) =>
-        isUnavailableInput(opened) ? undefined : opened.close(),
-      );
+      if (entry.sockets.size === 0) {
+        void entry.opening.then(
+          (opened) => (isUnavailableInput(opened) ? undefined : release(leaseId, entry, opened)),
+          () => undefined,
+        );
+      }
     });
-    const opened = await entry.opening;
+    let opened: DeviceInput | UnavailableDeviceInput;
+    try {
+      opened = await entry.opening;
+    } catch {
+      socket.close(CLOSE_FAILED, REASON_FAILED);
+      return;
+    }
     socket.send(encodeInputMessage(INPUT_TAG.admitted));
     if (isUnavailableInput(opened)) {
       socket.send(encodeInputMessage(INPUT_TAG.config, UNAVAILABLE_INPUT_CONFIG));

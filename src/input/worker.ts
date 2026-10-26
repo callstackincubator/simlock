@@ -4,6 +4,7 @@ import { createWorkerInput } from "./create.js";
 
 export function createWorker(ctx: WorkerContext<InputModuleConfig>): WorkerModule {
   const input = createWorkerInput({
+    clock: ctx.clock,
     inputs: ctx.inputs,
     logger: ctx.logger,
     name: ctx.name,

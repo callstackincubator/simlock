@@ -4,12 +4,13 @@ import type {
   ModuleRelayTwoWayTarget,
   WorkerContext,
 } from "../modules/index.js";
-import type { Logger } from "../ports/index.js";
+import type { Clock, Logger } from "../ports/index.js";
 import { createGatewayInputLink, type GatewayInputLinkOptions } from "./gateway-link.js";
 import { upgradeRequired } from "./refusal.js";
 import { createWorkerInputLink, type InputRegistry } from "./worker-link.js";
 
 export interface WorkerInputOptions {
+  readonly clock: Clock;
   readonly name: string;
   readonly logger: Logger;
   readonly inputs: WorkerContext<unknown>["inputs"];
@@ -29,7 +30,11 @@ export interface WorkerInput {
 const leaseRoute: ModuleLeaseHandler = () => Promise.resolve(upgradeRequired());
 
 export function createWorkerInput(options: WorkerInputOptions): WorkerInput {
-  const link = createWorkerInputLink({ inputs: options.inputs, registry: options.registry });
+  const link = createWorkerInputLink({
+    clock: options.clock,
+    inputs: options.inputs,
+    registry: options.registry,
+  });
   return {
     capability: { name: options.name, read: () => Promise.resolve({ state: "available" }) },
     leaseRoute,
