@@ -122,8 +122,8 @@ function within<T>(milliseconds: number, clock: Clock, work: Promise<T>): Promis
   });
 }
 
-// why: the helper reads serve-sim's JSON for each tag; a scroll's position is left out when the
-// client sent none, so the helper scrolls under the centre.
+// why: the helper reads serve-sim's JSON for each tag; JSON leaves out a scroll position the client
+// sent none of, so the helper scrolls under the centre.
 function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uint8Array {
   switch (message.kind) {
     case "touch":
@@ -132,8 +132,8 @@ function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uin
       return frameOf(INPUT_TAG.scroll, {
         dx: message.dx,
         dy: message.dy,
-        ...(message.x === undefined ? {} : { x: message.x }),
-        ...(message.y === undefined ? {} : { y: message.y }),
+        x: message.x,
+        y: message.y,
       });
     case "key":
       return frameOf(INPUT_TAG.key, { type: message.type, usage: message.usage });

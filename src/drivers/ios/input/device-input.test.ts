@@ -28,7 +28,7 @@ function simulator(runtimeId?: string): VirtualDriverDevice {
   };
 }
 
-function setup() {
+function setup(inOwnSet = true) {
   const launcher = new FakeBytePipeLauncher();
   const clock = new FakeClock();
   const processRunner = new ScriptedProcessRunner([
@@ -41,10 +41,10 @@ function setup() {
     },
   ]);
   const factory = createIosDeviceInput({
-    baseEnvironment: { PATH: "/usr/bin" },
+    baseEnvironment: { PATH: "/usr/bin", SIMLOCK_IOS_DEVICE_SET: "/daemon/own-set" },
     clock,
     command: COMMAND,
-    deviceSet: DEVICE_SET,
+    ...(inOwnSet ? { deviceSet: DEVICE_SET } : {}),
     launcher,
     processRunner,
   });
@@ -116,6 +116,12 @@ describe("iOS device input", () => {
     ]);
     expect(isUnavailableInput(input)).toBe(false);
 
+    const inXcodeSet = setup(false);
+    const xcodeOpen = inXcodeSet.factory.open(simulator(), new AbortController().signal);
+    expect(inXcodeSet.launcher.starts.map((start) => start.env)).toEqual([{ PATH: "/usr/bin" }]);
+    inXcodeSet.launcher.last.write(envelope(INPUT_TAG.config, { height: 2556, width: 1179 }));
+    await xcodeOpen;
+
     for (const runtimeId of [
       "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
       "com.apple.CoreSimulator.SimRuntime.iOS-28-1",
@@ -166,6 +172,8 @@ describe("iOS device input", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     silent.clock.advance(100);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(true);
     expect(await silentOpen).toBe("The input helper reported no screen size within 10 s");
     expect(silent.launcher.last.stdinClosed).toBe(true);
 

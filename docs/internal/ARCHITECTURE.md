@@ -43,7 +43,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
 | core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |
-| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [android input](../../src/drivers/android/input/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) |
+| drivers | The `Driver` port's two implementations | [drivers](../../src/drivers/AGENTS.md) · [android](../../src/drivers/android/AGENTS.md) · [android screen](../../src/drivers/android/screen/AGENTS.md) · [android input](../../src/drivers/android/input/AGENTS.md) · [ios](../../src/drivers/ios/AGENTS.md) · [ios input](../../src/drivers/ios/input/AGENTS.md) |
 | gateway | Fleet queue, routing, forwarding to workers, relay | [gateway](../../src/gateway/AGENTS.md) · [routing](../../src/gateway/routing/AGENTS.md) |
 | alerts | Gateway only: chosen fleet events POSTed to webhook destinations | [alerts](../../src/alerts/AGENTS.md) |
 | link | Byte channels over the uplink | [link](../../src/link/AGENTS.md) |
