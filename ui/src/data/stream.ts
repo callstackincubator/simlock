@@ -127,6 +127,16 @@ export async function readStream(
     sink.onEnd(counters.error);
   };
 
+  // why: a lease that ended is not a fault, so its words go to the viewer without becoming the
+  // stream's error, which the figures and the next stream would carry as one.
+  const endedBy = (payload: Uint8Array) => {
+    if (ended) return;
+    ended = true;
+    report();
+    sink.onEnd(endedText(payload));
+    void reader.cancel().catch(() => undefined);
+  };
+
   const fail = (reason: string) => {
     end(reason);
     void reader.cancel(reason).catch(() => undefined);
@@ -235,6 +245,7 @@ export async function readStream(
     [TAG.delta]: (payload) =>
       meta?.codec === "mjpeg" ? paintJpeg(copy(payload)) : decode(copy(payload), "delta"),
     [TAG.seed]: (payload) => paintJpeg(copy(payload)),
+    [TAG.ended]: endedBy,
   };
 
   // why: frames are taken off the front of everything read so far, one at a time, because one read
@@ -290,6 +301,26 @@ export async function readStream(
       // is left running either way.
     }
     if (!ended) void reader.cancel().catch(() => undefined);
+  }
+}
+
+const ENDED_TEXT: Readonly<Record<string, string>> = {
+  "device-lost": "The device was lost.",
+  expired: "The lease expired.",
+  explicit: "The lease was released.",
+  killed: "The lease was ended by an operator.",
+};
+
+// why: a payload this reader cannot read, or a reason it has no words for, ends the stream with no
+// reason shown rather than with a guess; the daemon's own words are never shown from here.
+function endedText(payload: Uint8Array): string | undefined {
+  try {
+    const reason = (JSON.parse(new TextDecoder().decode(payload)) as { reason?: unknown }).reason;
+    return typeof reason === "string" && Object.hasOwn(ENDED_TEXT, reason)
+      ? ENDED_TEXT[reason]
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
