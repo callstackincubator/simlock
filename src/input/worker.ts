@@ -12,7 +12,10 @@ export function createWorker(ctx: WorkerContext<InputModuleConfig>): WorkerModul
   });
   return {
     capability: input.capability,
-    hooks: { beforeDeviceReclaim: (ended) => input.leaseEnded(ended) },
+    hooks: {
+      beforeDeviceReclaim: (ended) => input.leaseEnded(ended),
+      beforeDrain: () => input.drain(),
+    },
     leaseRoute: input.leaseRoute,
     relayTwoWay: input.relayTwoWay,
     socket: input.socket,

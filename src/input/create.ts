@@ -25,6 +25,7 @@ export interface WorkerInput {
   };
   readonly leaseRoute: ModuleLeaseHandler;
   readonly leaseEnded: (ended: ModuleEndedLease) => Promise<void>;
+  readonly drain: () => Promise<void>;
   readonly relayTwoWay: ModuleRelayTwoWayTarget;
   readonly socket: ModuleLeaseSocketHandler;
 }
@@ -39,6 +40,7 @@ export function createWorkerInput(options: WorkerInputOptions): WorkerInput {
   });
   return {
     capability: { name: options.name, read: () => Promise.resolve({ state: "available" }) },
+    drain: link.drain,
     leaseEnded: link.leaseEnded,
     leaseRoute,
     relayTwoWay: link.relayTwoWay,

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -65,8 +65,13 @@ interface OpenedSocket {
   readonly closed: { code: number; reason: string } | undefined;
 }
 
-async function openInput(url: string, token: string | undefined): Promise<OpenedSocket> {
+async function openInput(
+  url: string,
+  token: string | undefined,
+  options: { readonly autoPong?: boolean } = {},
+): Promise<OpenedSocket> {
   const socket = new WebSocket(url, {
+    autoPong: options.autoPong ?? true,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
   sockets.push(socket);
@@ -205,6 +210,7 @@ describe("a lease's input socket", () => {
     return {
       gateway,
       holder: holder.secret,
+      worker,
       inputUrl: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/input`,
       leaseId,
       operator: operator.secret,
@@ -214,9 +220,10 @@ describe("a lease's input socket", () => {
     };
   }
 
-  async function standalone() {
+  async function standalone(clock?: FakeClock) {
     const port = await freeLoopbackPort();
     const worker = await startDaemon({
+      ...(clock === undefined ? {} : { clock }),
       configOverrides: {
         capabilities: { input: { enabled: true } },
         http: { enabled: true, host: "127.0.0.1", port },
@@ -232,6 +239,7 @@ describe("a lease's input socket", () => {
     const { holder, operator, other } = await tokens(worker);
     const leaseId = await lease(worker, holder.token.id);
     return {
+      daemon: worker,
       holder: holder.secret,
       inputUrl: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/input`,
       leaseId,
@@ -372,6 +380,53 @@ describe("a lease's input socket", () => {
         timeout: 10_000,
       });
       await expectRefused(inputUrl(), holder, { code: "UNKNOWN_LEASE", status: 404 });
+    },
+  );
+
+  it(
+    "closes the socket when the client misses its pong, the worker stops, or the daemon stops",
+    { timeout: 60_000 },
+    async () => {
+      const clock = new FakeClock();
+      const direct = await standalone(clock);
+      const quiet = await openInput(direct.inputUrl(), direct.holder, { autoPong: false });
+      const alive = await openInput(direct.inputUrl(), direct.holder);
+      await vi.waitFor(() => expect(tags(alive)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+      clock.advance(15_000);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(quiet.closed).toBeUndefined();
+      clock.advance(15_000);
+      await vi.waitFor(() => expect(quiet.closed?.code).toBe(1006), { timeout: 10_000 });
+      expect(alive.closed).toBeUndefined();
+
+      await direct.daemon.stop("test");
+      await vi.waitFor(
+        () => expect(alive.closed).toEqual({ code: 1001, reason: "Simlock is stopping" }),
+        { timeout: 10_000 },
+      );
+
+      const through = await fleet({ gatewayInput: true, workerInput: true });
+      const viaGateway = await openInput(through.inputUrl(), through.holder);
+      await vi.waitFor(() => expect(tags(viaGateway)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+      const { workers } = await through.gateway.dispatch("worker.list", {}, admin);
+      await through.worker.stop("test");
+      await vi.waitFor(
+        () =>
+          expect(viaGateway.closed).toEqual({
+            code: 1011,
+            reason: `Worker ${workers[0]?.id ?? ""} stopped answering`,
+          }),
+        { timeout: 10_000 },
+      );
+
+      const second = await fleet({ gatewayInput: true, workerInput: true });
+      const stopped = await openInput(second.inputUrl(), second.holder);
+      await vi.waitFor(() => expect(tags(stopped)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+      await second.gateway.stop("test");
+      await vi.waitFor(
+        () => expect(stopped.closed).toEqual({ code: 1001, reason: "Simlock is stopping" }),
+        { timeout: 10_000 },
+      );
     },
   );
 });

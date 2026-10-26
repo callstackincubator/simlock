@@ -19,6 +19,7 @@ const MAX_SOCKETS_PER_LEASE = 8;
 const FAILED_OPEN_MEMORY_MS = 10_000;
 const CLOSE_FAILED = 1013;
 const CLOSE_LEASE_ENDED = 4001;
+const CLOSE_GOING_AWAY = 1001;
 const REASON_FAILED = "Input is unavailable for this lease";
 
 interface Attached {
@@ -40,6 +41,7 @@ interface LeaseInput {
 export interface InputSessions {
   attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void;
   end(leaseId: string, reason: string): void;
+  drain(): void;
 }
 
 export function createInputSessions(options: {
@@ -74,6 +76,14 @@ export function createInputSessions(options: {
     if (entry === undefined) return;
     for (const attached of entry.sockets) attached.socket.close(CLOSE_LEASE_ENDED, reason);
     releaseWhenOpen(leaseId, entry);
+  }
+
+  function drain(): void {
+    for (const [leaseId, entry] of leases) {
+      for (const attached of entry.sockets)
+        attached.socket.close(CLOSE_GOING_AWAY, "Simlock is stopping");
+      releaseWhenOpen(leaseId, entry);
+    }
   }
 
   function openFor(leaseId: string, device: DeviceRecord): LeaseInput {
@@ -174,6 +184,7 @@ export function createInputSessions(options: {
 
   return {
     attach: (leaseId, device, socket) => void attach(leaseId, device, socket),
+    drain,
     end,
   };
 }

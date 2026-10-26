@@ -29,6 +29,7 @@ export function createWorkerInputLink(base: WorkerInputLinkOptions): {
   readonly relayTwoWay: ModuleRelayTwoWayTarget;
   readonly socket: ModuleLeaseSocketHandler;
   readonly leaseEnded: (ended: ModuleEndedLease) => Promise<void>;
+  readonly drain: () => Promise<void>;
 } {
   const options = {
     ...base,
@@ -39,6 +40,10 @@ export function createWorkerInputLink(base: WorkerInputLinkOptions): {
     }),
   };
   return {
+    drain: () => {
+      options.sessions.drain();
+      return Promise.resolve();
+    },
     leaseEnded: (ended) => {
       options.sessions.end(ended.leaseId, ended.reason);
       return Promise.resolve();

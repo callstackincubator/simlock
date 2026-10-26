@@ -62,6 +62,9 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
     const set = bridges.get(lease.id) ?? new Set<Bridge>();
     set.add(mine);
     bridges.set(lease.id, set);
+    function stopped(): void {
+      stop(1011, `Worker ${lease.workerId ?? ""} stopped answering`);
+    }
     function stop(code: number, reason: string): void {
       if (ended) return;
       ended = true;
@@ -87,7 +90,9 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
       for await (const frame of readFrames(relay.readable)) {
         if (frame.tag === CHANNEL_TAG.close) {
           const closing = closeOf(frame.payload);
-          if (closing !== undefined) stop(closing.code, closing.reason);
+          // why: a worker that is stopping says 1001, which is a statement about the gateway to a client; to the client the worker is gone.
+          if (closing === undefined || closing.code === 1001) stopped();
+          else stop(closing.code, closing.reason);
           return;
         }
         if (frame.tag === CHANNEL_TAG.heartbeat) continue;
@@ -97,7 +102,7 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
         socket.send(message);
       }
       // why: the worker's direction ended with no close frame, or broke: it is gone, and the relay's own silence limit and an uplink that dropped end up here too.
-      stop(1011, `Worker ${lease.workerId ?? ""} stopped answering`);
+      stopped();
     })();
   }
 
@@ -176,7 +181,7 @@ function closeOf(payload: Uint8Array): { code: number; reason: string } | undefi
       unknown
     >;
     if (typeof code !== "number" || !Number.isInteger(code)) return undefined;
-    if (code !== 1013 && (code < 4000 || code > 4999)) return undefined;
+    if (code !== 1001 && code !== 1013 && (code < 4000 || code > 4999)) return undefined;
     return typeof reason === "string" ? { code, reason: closeReason(reason) } : undefined;
   } catch {
     return undefined;
