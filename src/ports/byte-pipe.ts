@@ -17,6 +17,9 @@ export interface BytePipeProcess {
   // why: never rejects -- a program the OS refused to start resolves with `error` set, so a caller
   // has one place to learn how it ended.
   readonly exited: Promise<BytePipeExit>;
+  // why: a capture program in input mode reads its commands on stdin; rejects when the write fails,
+  // so a caller learns the program is gone.
+  writeStdin(bytes: Uint8Array): Promise<void>;
   closeStdin(): void;
   kill(signal: "SIGTERM" | "SIGKILL"): void;
 }
@@ -52,6 +55,7 @@ export class NodeBytePipeLauncher implements BytePipeLauncher {
         child.stdin.end();
       },
       exited,
+      writeStdin: () => Promise.resolve(),
       kill: (signal) => {
         if (child.exitCode === null && child.signalCode === null) child.kill(signal);
       },
@@ -72,6 +76,7 @@ export class FakeBytePipeProcess implements BytePipeProcess {
   readonly exited: Promise<BytePipeExit>;
   stdinClosed = false;
   stdinCloses = 0;
+  readonly stdinWrites: Uint8Array[] = [];
   readonly kills: string[] = [];
   exitOnStdinClose = true;
   readonly #onStderrLine: ((line: string) => void) | undefined;
@@ -108,6 +113,11 @@ export class FakeBytePipeProcess implements BytePipeProcess {
       // why: a reader that already cancelled the stream has closed it; the exit still settles.
     }
     this.#resolveExit(exit);
+  }
+
+  writeStdin(bytes: Uint8Array): Promise<void> {
+    this.stdinWrites.push(bytes);
+    return Promise.resolve();
   }
 
   closeStdin(): void {
