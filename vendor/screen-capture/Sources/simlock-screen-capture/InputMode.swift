@@ -78,10 +78,15 @@ func runInput(udid: String) async -> Never {
         case tagScroll:
             guard let dx = fields["dx"] as? Double, let dy = fields["dy"] as? Double else { continue }
             // The injector takes pixel deltas; the daemon sends fractions of the screen.
-            await injector.sendScroll(
-                dx: dx * Double(size.width), dy: dy * Double(size.height),
-                anchorX: fields["x"] as? Double, anchorY: fields["y"] as? Double,
-                screenWidth: size.width, screenHeight: size.height)
+            // why: sendScroll sleeps to end the drag after the wheel idles; awaiting it would
+            // make every message its own drag and hold stdin, so calls overlap on the actor.
+            let anchorX = fields["x"] as? Double, anchorY = fields["y"] as? Double
+            Task {
+                await injector.sendScroll(
+                    dx: dx * Double(size.width), dy: dy * Double(size.height),
+                    anchorX: anchorX, anchorY: anchorY,
+                    screenWidth: size.width, screenHeight: size.height)
+            }
         default:
             continue
         }
