@@ -17,6 +17,7 @@ export const TAG = {
   seed: 0x04,
   meta: 0x05,
   alive: 0x06,
+  ended: 0x07,
 } as const;
 
 // why: the capture tool refuses a frame longer than 8 MiB, so a header claiming more than that is not a

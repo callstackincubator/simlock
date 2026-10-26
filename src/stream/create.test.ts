@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { type ScreenAvailability, ScreenNotSupportedError } from "../core/index.js";
+import {
+  type ScreenAvailability,
+  SCREEN_FRAME_TAG,
+  ScreenNotSupportedError,
+} from "../core/index.js";
 import { FakeClock, NoopLogger } from "../ports/index.js";
 import { createGatewayStream, createWorkerStream } from "./create.js";
 import { ScriptedFeed, TestRegistry } from "./test-fixtures.js";
@@ -12,16 +16,19 @@ function worker(
   openGate: Promise<void> = Promise.resolve(),
 ) {
   const clock = new FakeClock();
-  const registry = new TestRegistry([
-    { id: "dev_1", platform: "ios" },
-    { id: "dev_ready", platform: "ios", state: "ready" },
-    { id: "dev_leased", platform: "ios", state: "leased" },
-    { id: "dev_shutdown", platform: "ios", state: "shutdown" },
-    { id: "dev_provisioning", platform: "ios", state: "provisioning" },
-    { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
-    { id: "dev_quarantined", platform: "ios", state: "quarantined" },
-    { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
-  ]);
+  const registry = new TestRegistry(
+    [
+      { id: "dev_1", platform: "ios" },
+      { id: "dev_ready", platform: "ios", state: "ready" },
+      { id: "dev_leased", platform: "ios", state: "leased" },
+      { id: "dev_shutdown", platform: "ios", state: "shutdown" },
+      { id: "dev_provisioning", platform: "ios", state: "provisioning" },
+      { id: "dev_reclaiming", platform: "ios", state: "reclaiming" },
+      { id: "dev_quarantined", platform: "ios", state: "quarantined" },
+      { id: "dev_absent", physical: true, platform: "ios", state: "absent" },
+    ],
+    [{ deviceId: "dev_leased", id: "lse_1" }],
+  );
   const feeds: ScriptedFeed[] = [];
   let opened = 0;
   const handlers = new Map<string, ((envelope: { payload: { deviceId: string } }) => void)[]>();
@@ -53,8 +60,10 @@ function worker(
     },
     settings: { bitrateKbps: 1500, fps: 30, maxDimension: 720 },
   });
-  const emit = (event: string, deviceId: string) => {
-    for (const handler of handlers.get(event) ?? []) handler({ payload: { deviceId } });
+  const emit = (event: string, deviceId: string, payload: Record<string, unknown> = {}) => {
+    for (const handler of handlers.get(event) ?? []) {
+      handler({ payload: { deviceId, ...payload } } as Parameters<typeof handler>[0]);
+    }
   };
   return { clock, emit, feeds, opened: () => opened, registry, stream };
 }
@@ -395,6 +404,50 @@ describe("createWorkerStream", () => {
       const refused = await asked;
       expect(refused.status).toBe(409);
       expect(feeds[0]?.closes).toBe(1);
+    }
+  });
+
+  it("a viewer of either stream route sees a 0x07 frame with the reason, then the end, when the lease ends", async () => {
+    const routes = {
+      device: (stream: ReturnType<typeof worker>["stream"]) =>
+        stream.mount.handle(deviceRequest("w1", "dev_leased"), OPERATOR),
+      lease: (stream: ReturnType<typeof worker>["stream"]) =>
+        stream.leaseRoute(
+          new Request("http://daemon/v1/leases/lse_1/stream"),
+          { principal: "tok_agent", role: "agent" },
+          { deviceId: "dev_leased", id: "lse_1" },
+        ),
+    };
+    const ending = (reason: string) =>
+      ({ deviceId: "dev_leased", leaseId: "lse_1", reason }) as Parameters<
+        ReturnType<typeof worker>["stream"]["leaseEnd"]["leaseEnded"]
+      >[0];
+    const cases = [
+      { ended: "explicit", how: "released" },
+      { ended: "expired", how: "expired" },
+      { ended: "killed", how: "killed" },
+      { ended: "device-lost", how: "health monitor" },
+      { ended: "device-lost", how: "absence" },
+    ] as const;
+    for (const [route, open] of Object.entries(routes)) {
+      for (const { ended, how } of cases) {
+        const label = `${route} route, ${how}`;
+        const { emit, stream } = worker();
+        const reader = (await open(stream)).body!.getReader();
+        expect((await reader.read()).value?.[4], label).toBe(SCREEN_FRAME_TAG.meta);
+        if (how === "absence") {
+          emit("device.absence-detected", "dev_leased", { previousState: "leased" });
+          await settledWithin(Promise.resolve());
+        }
+        await stream.leaseEnd.leaseEnded(ending(ended), new AbortController().signal);
+        const last = await reader.read();
+        expect(last.value?.[4], label).toBe(SCREEN_FRAME_TAG.ended);
+        expect(
+          JSON.parse(new TextDecoder().decode(last.value?.subarray(5))) as unknown,
+          label,
+        ).toEqual({ reason: ended });
+        expect((await reader.read()).done, label).toBe(true);
+      }
     }
   });
 });

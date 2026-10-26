@@ -1,3 +1,4 @@
+import type { ModuleLease } from "../modules/index.js";
 import {
   handleStreamRequest,
   relayedDeviceTargetOf,
@@ -24,7 +25,7 @@ export interface StreamLeaseHandler {
   (
     request: Request,
     identity: { readonly principal: string; readonly role: string },
-    lease: { readonly id: string; readonly workerId?: string; readonly workerLeaseId?: string },
+    lease: ModuleLease,
   ): Promise<Response>;
 }
 

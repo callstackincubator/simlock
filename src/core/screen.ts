@@ -13,6 +13,8 @@ export const SCREEN_FRAME_TAG = {
   // why: an empty frame a capture sends when it is alive with nothing new to paint, so a reader's
   // silence bound tells a still screen from a dead capture; a reader that has no use for it skips it.
   alive: 0x06,
+  // why: the last frame of a stream a lease end stopped, carrying JSON `{"reason"}`: why the picture ended.
+  ended: 0x07,
 } as const;
 
 export const SCREEN_FRAME_HEADER_BYTES = 5;
