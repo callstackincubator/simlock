@@ -103,6 +103,17 @@ describe("iOS device input", () => {
       },
     ]);
     expect(launcher.last.stdinWrites).toHaveLength(writtenBefore);
+
+    input.send({ dx: 0, dy: 0.5, kind: "scroll", x: 0.5, y: 0.25 });
+    input.send({ dx: -0.25, dy: 0, kind: "scroll" });
+    input.send({ kind: "key", type: "down", usage: 0x04 });
+    input.send({ kind: "key", type: "up", usage: 0x04 });
+    expect(decoded(launcher.last.stdinWrites.slice(writtenBefore))).toEqual([
+      { body: { dx: 0, dy: 0.5, x: 0.5, y: 0.25 }, tag: INPUT_TAG.scroll },
+      { body: { dx: -0.25, dy: 0 }, tag: INPUT_TAG.scroll },
+      { body: { type: "down", usage: 0x04 }, tag: INPUT_TAG.key },
+      { body: { type: "up", usage: 0x04 }, tag: INPUT_TAG.key },
+    ]);
     expect(isUnavailableInput(input)).toBe(false);
   });
 });
