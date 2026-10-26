@@ -54,15 +54,18 @@ export class FakeInputFactory implements DeviceInputFactory {
   readonly opened: FakeDeviceInput[] = [];
   // why: a test sets this to make the next opens fail, as a controller that cannot start does.
   failWith: Error | undefined;
+  // why: a test sets this to hold every open until it resolves, to end a lease while a socket is still opening.
+  gate: Promise<void> | undefined;
   opens = 0;
 
   constructor(private readonly config: InputScreenConfig) {}
 
-  open(): Promise<FakeDeviceInput | UnavailableDeviceInput> {
+  async open(): Promise<FakeDeviceInput | UnavailableDeviceInput> {
     this.opens += 1;
-    if (this.failWith !== undefined) return Promise.reject(this.failWith);
+    await this.gate;
+    if (this.failWith !== undefined) throw this.failWith;
     const input = new FakeDeviceInput(this.config);
     this.opened.push(input);
-    return Promise.resolve(input);
+    return input;
   }
 }

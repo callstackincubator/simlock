@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DeviceRecord, LeaseRecord } from "../core/index.js";
 import { FakeInputFactory } from "../core/testing.js";
-import type { WorkerModule } from "../modules/index.js";
+import type { ModuleEndedLease, WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
 import { type FakeClock, MemoryLeaseSocket } from "../ports/index.js";
 import { inputModule } from "./index.js";
@@ -18,13 +18,15 @@ async function setup(): Promise<{
   readonly worker: WorkerModule;
   readonly factory: FakeInputFactory;
   readonly clock: FakeClock;
+  readonly leases: LeaseRecord[];
 }> {
   const { clock, ctx } = await fakeWorkerContext("input", {});
   const factory = new FakeInputFactory(SCREEN);
+  const leases = [{ deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord];
   const registry = {
     snapshot: {
       devices: [{ id: "dev_1", spec: { platform: "android" } } as unknown as DeviceRecord],
-      leases: [{ deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord],
+      leases,
     },
   };
   const loaded = await inputModule.loadWorker();
@@ -33,7 +35,7 @@ async function setup(): Promise<{
     inputs: { openInput: () => factory.open() },
     registry,
   });
-  return { clock, factory, worker };
+  return { clock, factory, leases, worker };
 }
 
 async function attach(worker: WorkerModule): Promise<MemoryLeaseSocket> {
@@ -51,6 +53,17 @@ async function admitted(worker: WorkerModule): Promise<MemoryLeaseSocket> {
   const socket = await attach(worker);
   await vi.waitFor(() => expect(socket.sent.map((sent) => sent[0])).toEqual([0x83, 0x82]));
   return socket;
+}
+
+function ended(reason: ModuleEndedLease["reason"]): ModuleEndedLease {
+  return { deviceId: "dev_1", leaseId: "L-1", ownerId: "tok_holder", platform: "android", reason };
+}
+
+function endLease(
+  worker: WorkerModule,
+  reason: ModuleEndedLease["reason"],
+): Promise<void> | undefined {
+  return worker.hooks?.beforeDeviceReclaim?.(ended(reason), new AbortController().signal);
 }
 
 const REFUSED = { code: 1013, reason: "Input is unavailable for this lease" };
@@ -138,5 +151,42 @@ describe("a worker's input socket", () => {
     const later = await attach(worker);
     await vi.waitFor(() => expect(later.closed).toEqual(REFUSED));
     expect(factory.opens).toBe(opensBefore + 2);
+  });
+
+  it("closes with 4001 and the reason when its lease ends, whether the socket is admitted, still opening or opens after the end", async () => {
+    for (const reason of ["explicit", "killed", "expired", "device-lost"] as const) {
+      const { factory, worker } = await setup();
+      const sockets = [await admitted(worker), await admitted(worker)];
+      await endLease(worker, reason);
+      expect(sockets.map((socket) => socket.closed)).toEqual([
+        { code: 4001, reason },
+        { code: 4001, reason },
+      ]);
+      expect(factory.opened[0]?.closes).toBe(1);
+    }
+
+    const opening = await setup();
+    let open!: () => void;
+    opening.factory.gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const pending = await attach(opening.worker);
+    await endLease(opening.worker, "expired");
+    expect(pending.closed).toEqual({ code: 4001, reason: "expired" });
+    open();
+    await vi.waitFor(() => expect(opening.factory.opened[0]?.closes).toBe(1));
+    expect(pending.sent).toEqual([]);
+
+    const late = await setup();
+    const accept = await late.worker.socket?.open(new Request("http://simlock/input"), IDENTITY, {
+      deviceId: "dev_1",
+      id: "L-1",
+    });
+    late.leases.splice(0);
+    const after = new MemoryLeaseSocket();
+    if (typeof accept !== "function") throw new Error("the socket was refused");
+    accept(after);
+    expect(after.closed).toEqual({ code: 4001, reason: "lease ended" });
+    expect(after.sent).toEqual([]);
   });
 });
