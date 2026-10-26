@@ -3,6 +3,7 @@ import {
   type DeviceInputFactory,
   encodeScreenFrame,
   INPUT_TAG,
+  isPhysicalDriverDevice,
   type InputMessage,
   type InputScreenConfig,
   type PhysicalDriverDevice,
@@ -40,6 +41,10 @@ const SPRINGBOARD = "com.apple.springboard";
 export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInputFactory {
   return {
     open: async (device: VirtualDriverDevice | PhysicalDriverDevice) => {
+      // why: nothing on a physical iPhone injects input (F23); only a simulator has a HID helper.
+      if (isPhysicalDriverDevice(device)) {
+        return { unavailable: "Input is not supported on physical iPhones" };
+      }
       const child = options.launcher.start(options.command, [device.deviceId, "--input"], {
         env: environmentFor(options),
       });
