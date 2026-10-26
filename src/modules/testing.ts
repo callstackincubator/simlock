@@ -17,6 +17,7 @@ import type {
   ModuleFinding,
   ModuleTokenRecord,
   ModuleTokens,
+  ModuleTwoWayRelay,
   OptionalModuleDefinition,
   WorkerContext,
   WorkerHooks,
@@ -213,6 +214,10 @@ export async function fakeGatewayContext<C>(
   facts: {
     readonly serving?: readonly WorkerView[];
     readonly relay?: (request: Request) => Response;
+    readonly relayTwoWay?: (
+      request: Request,
+      workerId: string,
+    ) => Promise<Response | ModuleTwoWayRelay>;
   } = {},
 ): Promise<FakeGatewayContext<C>> {
   const clock = new FakeClock(1_000);
@@ -243,7 +248,9 @@ export async function fakeGatewayContext<C>(
         relayed.push({ tenant, url: request.url, workerId });
         return Promise.resolve(facts.relay?.(request) ?? new Response("{}"));
       },
-      relayTwoWay: () => Promise.resolve(new Response(null, { status: 501 })),
+      relayTwoWay: (workerId, request) =>
+        facts.relayTwoWay?.(request, workerId) ??
+        Promise.resolve(new Response(null, { status: 501 })),
       requesterPrefix: "gw:gw-test:",
       serving: () => serving,
       startedAt: clock.now(),
