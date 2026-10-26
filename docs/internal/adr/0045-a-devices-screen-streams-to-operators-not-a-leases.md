@@ -1,6 +1,6 @@
 # 0045. A device's screen streams to operators, not a lease's
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted; §2 narrowed by 0049 (a lease holder streams its own lease)
 - **Date:** 2026-10-23
 - **Issue:** [#906](https://github.com/callstackincubator/simlock/issues/906)
 - **Depends on:** ADR 0012 (a worker answers fleet routes as a fleet of one), ADR 0030 (stream is an optional module), ADR 0031 (screen-source seam), ADR 0039 (joined workers serve no HTTP of their own).
