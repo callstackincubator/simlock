@@ -1,1 +1,1 @@
-export { createIosDeviceInput, type IosDeviceInputOptions } from "./device-input.js";
+export { createIosDeviceInput } from "./device-input.js";

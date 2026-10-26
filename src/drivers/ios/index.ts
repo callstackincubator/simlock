@@ -355,19 +355,7 @@ export class IosSimctlDriver implements Driver {
               ? {}
               : { onLog: options.screenCapture.onLog }),
           });
-    // why: the input is offered exactly when the screen capture is, because both are the one program.
-    this.input =
-      options.screenCapture === undefined
-        ? undefined
-        : createIosDeviceInput({
-            baseEnvironment: options.screenCapture.baseEnvironment,
-            clock: options.clock,
-            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
-            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
-            ...(options.logger === undefined ? {} : { logger: options.logger }),
-            launcher: options.screenCapture.launcher,
-            processRunner: options.processRunner,
-          });
+    this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
   }
 
   readonly screenCapture: ScreenCapture | undefined;
@@ -1796,6 +1784,24 @@ class IosRuntimeUnavailableForDownloadError extends RuntimeMissingError {
       `iOS ${requested} is not currently offered for download by Apple (likely superseded by a ` +
       `newer point release); request a different --os, or omit --os for the newest available runtime`;
   }
+}
+
+// why: the input is offered exactly when the screen capture is, because both are the one program.
+function createInputFor(
+  options: IosSimctlDriverOptions,
+  deviceRoot: string,
+  ownedRoot: boolean,
+): DeviceInputFactory | undefined {
+  if (options.screenCapture === undefined) return undefined;
+  return createIosDeviceInput({
+    baseEnvironment: options.screenCapture.baseEnvironment,
+    clock: options.clock,
+    command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
+    ...(ownedRoot ? { deviceSet: deviceRoot } : {}),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    launcher: options.screenCapture.launcher,
+    processRunner: options.processRunner,
+  });
 }
 
 function configuredScreenCaptureCommand(options: IosSimctlDriverOptions): string | undefined {
