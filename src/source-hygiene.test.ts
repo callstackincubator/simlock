@@ -340,3 +340,66 @@ describe("the vendored inventory", () => {
     expect(gone).toEqual([]);
   });
 });
+
+const workflowFiles = lsFiles([".github/workflows/"]).filter((name) => /\.ya?ml$/.test(name));
+
+function workflowLines(pattern: RegExp): string[] {
+  return workflowFiles.flatMap((name) =>
+    readFileSync(join(REPO_ROOT, name), "utf8")
+      .split("\n")
+      .flatMap((line, index) =>
+        pattern.test(line) ? [`${name}:${index + 1}: ${line.trim()}`] : [],
+      ),
+  );
+}
+
+/**
+ * why: a dependency's lifecycle script runs arbitrary code inside a job that may hold a token, and
+ * a credential written into a URL lands in the process list and in any log that echoes the remote.
+ */
+describe("a GitHub workflow", () => {
+  it("was enumerated from the git index", () => {
+    expect(workflowFiles).toContain(".github/workflows/release.yml");
+    expect(workflowFiles).toContain(".github/workflows/website.yml");
+  });
+
+  it("passes --ignore-scripts to every pnpm install", () => {
+    const installs = workflowLines(/\bpnpm install\b/);
+    expect(installs.length).toBeGreaterThan(1);
+    expect(installs.filter((line) => !line.includes("--ignore-scripts"))).toEqual([]);
+  });
+
+  it("writes no credential into a URL", () => {
+    expect(workflowLines(/https?:\/\/[^/"'\n]*@/)).toEqual([]);
+  });
+});
+
+describe("the Release workflow's push (.github/workflows/release.yml)", () => {
+  const release = readFileSync(join(REPO_ROOT, ".github/workflows/release.yml"), "utf8");
+  const step = /\n {6}- name: Push\n[\s\S]*?(?=\n {6}- |\n\n)/.exec(release)?.[0] ?? "";
+  const push = /git push(?:[^\n]*\\\n)*[^\n]*/.exec(step)?.[0] ?? "";
+
+  it("sends the token as the extraheader actions/checkout sets, through git's GIT_CONFIG_* environment, so it is in neither the remote URL nor git's arguments", () => {
+    expect(step).toContain(
+      `auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\\n')`,
+    );
+    expect(step).toContain(`echo "::add-mask::$auth"`);
+    const exported = [
+      `export GIT_CONFIG_COUNT=1`,
+      `export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"`,
+      `export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"`,
+    ];
+    for (const line of exported) {
+      expect(step).toContain(line);
+      expect(step.indexOf(line)).toBeLessThan(step.indexOf("git push"));
+    }
+    expect(push).toContain(`"https://github.com/\${GITHUB_REPOSITORY}.git"`);
+    expect(push).not.toMatch(/GITHUB_TOKEN|\$auth|\s-c\s/);
+  });
+
+  it("still pushes the release commit and its tag atomically, leased on the commit the plan checked", () => {
+    expect(push).toContain("--atomic");
+    expect(push).toContain(`--force-with-lease="refs/heads/main:$GITHUB_SHA"`);
+    expect(push).toContain(`HEAD:refs/heads/main "refs/tags/$TAG"`);
+  });
+});
