@@ -1401,6 +1401,7 @@ async function discoverAndroidDriver(
       hostAbi: hostAbiFor(options.hostArch),
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
+      logger: logger.child("android"),
       onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,

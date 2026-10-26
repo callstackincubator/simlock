@@ -52,6 +52,7 @@ import {
   type Clock,
   type Filesystem,
   type IdGenerator,
+  type Logger,
   type ProcessHandle,
   type ProcessResult,
   type ProcessRunner,
@@ -191,6 +192,8 @@ export interface AndroidDriverOptions {
   readonly hostAbi: string;
   readonly idGenerator?: IdGenerator;
   readonly instanceId: string;
+  // why: the input logs a device whose screen size it cannot read; nothing else in the driver logs through it.
+  readonly logger?: Logger | undefined;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
@@ -631,6 +634,7 @@ export class AndroidDriver implements Driver {
     if (options.scrcpyServerPath === undefined || targetFor === undefined) return undefined;
     return createAndroidDeviceInput({
       clock: options.clock,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       serverPath: options.scrcpyServerPath,
       targetFor,
     });

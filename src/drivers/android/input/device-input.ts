@@ -96,6 +96,7 @@ class AndroidDeviceInput implements DeviceInput {
   #meta = 0;
   #pushed = false;
   #shellExited = false;
+  #sizeFailing = false;
   #closing: Promise<void> | undefined;
 
   constructor(options: AndroidDeviceInputOptions, target: ScreenTarget, scid: number) {
@@ -248,13 +249,22 @@ class AndroidDeviceInput implements DeviceInput {
   async #readAgain(): Promise<void> {
     try {
       const config = configOf(await readScreenSize(this.#target));
+      this.#sizeFailing = false;
       const last = this.#config;
       if (last === undefined || config.width !== last.width || config.height !== last.height) {
         this.#config = config;
         for (const listener of this.#configListeners) listener(config);
       }
-    } catch {
-      // why: a failed read leaves the last size in force; the next read tries again.
+    } catch (error) {
+      // why: a failed read leaves the last size in force and the next read tries again; a device that
+      // stays unreadable is logged once, not every 2 s, until a read succeeds.
+      if (!this.#sizeFailing) {
+        this.#sizeFailing = true;
+        this.#options.logger?.warn("Could not read the screen size", {
+          reason: error instanceof Error ? error.message : String(error),
+          serial: this.#target.serial,
+        });
+      }
     }
     if (!this.#abort.signal.aborted) this.#pollSize();
   }
