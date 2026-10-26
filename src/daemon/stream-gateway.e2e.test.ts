@@ -139,6 +139,7 @@ describe("a screen stream through a gateway", () => {
       { label: "holder", role: "agent" },
       admin,
     );
+    const other = await gateway.dispatch("token.create", { label: "other", role: "agent" }, admin);
     const owner: DispatchSession = { ...agent, principal: holder.token.id };
     const granted = await gateway.dispatch(
       "lease.request",
@@ -159,7 +160,17 @@ describe("a screen stream through a gateway", () => {
       fetch(`http://127.0.0.1:${String(port)}/v1/leases/${id}/stream`, {
         headers: { authorization: `Bearer ${token}` },
       });
-    return { gateway, holder: holder.secret, leaseId, leaseStream, owner, screen, stream };
+    return {
+      gateway,
+      holder: holder.secret,
+      leaseId,
+      leaseStream,
+      other: other.secret,
+      owner,
+      screen,
+      stream,
+      worker,
+    };
   }
 
   it(
@@ -221,7 +232,7 @@ describe("a screen stream through a gateway", () => {
     "a caller GETs /v1/leases/{id}/stream on a gateway and gets the lease's worker's picture or a refusal",
     { timeout: 30_000 },
     async () => {
-      const { holder, leaseStream } = await fleet(true);
+      const { holder, leaseStream, other, worker } = await fleet(true);
       const own = await leaseStream(holder);
       expect(own.status).toBe(200);
       expect(own.headers.get("simlock-stream-codec")).toBe("h264");
@@ -230,6 +241,26 @@ describe("a screen stream through a gateway", () => {
       const first = await reader.read();
       expect(first.value?.[4]).toBe(SCREEN_FRAME_TAG.meta);
       await reader.cancel();
+
+      const another = await leaseStream(other);
+      expect(another.status).toBe(404);
+      expect(((await another.json()) as { error: { code: string } }).error.code).toBe(
+        "UNKNOWN_LEASE",
+      );
+
+      await worker.stop("test");
+      const unreachable = await leaseStream(holder);
+      expect(unreachable.status).toBe(503);
+      expect(((await unreachable.json()) as { error: { code: string } }).error.code).toBe(
+        "WORKER_UNREACHABLE",
+      );
+
+      const silent = await fleet(false);
+      const refused = await silent.leaseStream(silent.holder);
+      expect(refused.status).toBe(503);
+      const body = (await refused.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("STREAM_UNAVAILABLE");
+      expect(body.error.message).toMatch(/^Worker /u);
     },
   );
 });
