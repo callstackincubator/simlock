@@ -4,14 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./index.js";
 
-// Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
+// why: Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
 // one checkout, Stryker's runners in one sandbox) delete each other's files mid-test.
 const temporaryDirectory = `${process.cwd()}/.simlock-ports-test-${process.pid}`;
 
 const implementations: Array<{
   name: string;
   create(): Filesystem;
-  /** Neither implementation creates symlinks through the port, and both have to be asked. */
   link(filesystem: Filesystem, path: string, target: string): Promise<void>;
 }> = [
   {
@@ -67,7 +66,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
     await filesystem.mkdirp(temporaryDirectory);
     await filesystem.writeFileAtomic(file, "é line one\nline two\n");
 
-    // "é" is two bytes: the offset counts bytes, not characters.
+    // why: "é" is two bytes: the offset counts bytes, not characters.
     await expect(filesystem.readFileFrom(file, 12)).resolves.toBe("line two\n");
     await expect(filesystem.readFileFrom(file, 0)).resolves.toBe("é line one\nline two\n");
     await expect(filesystem.readFileFrom(file, 21)).resolves.toBe("");
@@ -226,7 +225,7 @@ describe.each(implementations)("Filesystem contract: $name", ({ create, link }) 
   });
 
   it("refuses to answer for a path that runs through a file", async () => {
-    // A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
+    // why: A mistyped device root -- `<home>/notes.txt/ios` -- is a different problem from one
     // that is simply not there yet, and callers can only tell them apart by the errno.
     const filesystem = create();
 
@@ -346,7 +345,7 @@ describe("MemoryFilesystem", () => {
   });
 
   it("fails at a path a test declared broken, with the errno it declared", async () => {
-    // The only way to reach the branches that turn a filesystem failure into a typed
+    // why: The only way to reach the branches that turn a filesystem failure into a typed
     // rejection: an EACCES on a device root cannot be produced by writing to the double.
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/devices/ios");

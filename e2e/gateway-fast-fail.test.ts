@@ -4,16 +4,6 @@ import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/in
 import type { CliResult, TestEnv } from "./helpers/index.js";
 import type { FakeDriverScript } from "./fake-driver/types.js";
 
-/**
- * ADR 0009 §4 end to end, with real processes: a gateway daemon, worker daemons that dial it
- * over a real WebSocket, and the CLI an agent would use. A request no worker can serve fails at
- * once with the right code instead of waiting.
- *
- * Every request below has no `--no-wait` and no `--timeout`, the case that used to wait for ever.
- * The CLI call carries a deadline of its own, so a request that waits fails here by name instead
- * of hanging the suite.
- */
-
 const FAST = { timeout: 20_000 };
 const EXIT_NO_CAPACITY = 11;
 const EXIT_UNSERVABLE = 12;
@@ -26,7 +16,6 @@ interface WorkerView {
 }
 
 async function startGateway() {
-  // `driver: "none"`: a gateway starts no drivers (ADR 0005 §2).
   const { env: gateway, port } = await withHttpDaemon((port) => ({
     configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
     role: "gateway",
@@ -40,7 +29,7 @@ async function startGateway() {
       script: FakeDriverScript,
       extraConfig: Record<string, unknown> = {},
     ) =>
-      // Seeded before the daemon starts: a worker reports its catalog as its uplink opens.
+      // why: Seeded before the daemon starts: a worker reports its catalog as its uplink opens.
       withDaemon({
         configOverrides: {
           gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
@@ -58,7 +47,6 @@ async function workersOf(gateway: TestEnv): Promise<WorkerView[]> {
   return (listed.json as { workers: WorkerView[] }).workers;
 }
 
-/** Waits until `labels` are all connected with a catalog read, and returns their ids by label. */
 async function waitForWorkers(
   gateway: TestEnv,
   labels: readonly string[],
@@ -118,7 +106,6 @@ function expectFailure(result: CliResult, code: string, exit: number): void {
 describe("a gateway fails a request no worker can serve at once", () => {
   it("fails a request for a model, a runtime, or a platform no worker has, and lets the same requester ask again", async () => {
     const { gateway, join } = await startGateway();
-    // 27.0 is installed, but iPhone 17 pairs with 26.0 only.
     await join("worker-a", {
       ios: {
         ...IPHONE_17,
@@ -128,20 +115,17 @@ describe("a gateway fails a request no worker can serve at once", () => {
     });
     await waitForWorkers(gateway, ["worker-a"]);
 
-    // A model no worker lists.
     expectFailure(
       await lease(gateway, "agent-1", "iPhone 99", ["--detach"]),
       "UNKNOWN_MODEL",
       EXIT_UNSERVABLE,
     );
-    // The same requester asks again at once: another answer, not REQUESTER_ALREADY_LEASED.
     expectFailure(
       await lease(gateway, "agent-1", "iPhone 99", ["--detach"]),
       "UNKNOWN_MODEL",
       EXIT_UNSERVABLE,
     );
 
-    // A runtime no worker has, and, with --allow-download, still none: only installed runtimes count.
     const runtime = [
       "--platform",
       "ios",
@@ -157,7 +141,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
     const download = await gateway.cli(["lease", ...runtime, "--detach", "--allow-download"], FAST);
     expectFailure(download, "RUNTIME_MISSING", EXIT_UNSERVABLE);
 
-    // A runtime a worker has, that no worker pairs with the model asked for.
     const unpaired = await gateway.cli(
       [
         "lease",
@@ -175,7 +158,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
     );
     expectFailure(unpaired, "RUNTIME_MISSING", EXIT_UNSERVABLE);
 
-    // A platform no worker has a driver for.
     const android = await gateway.cli(
       [
         "lease",
@@ -191,7 +173,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
     );
     expectFailure(android, "NO_DRIVER", EXIT_UNSERVABLE);
 
-    // The fleet still serves what it has, to the requester that was refused five times.
     const granted = await lease(gateway, "agent-1", "iPhone 17", ["--detach"]);
     expect(granted.code, granted.stderr).toBe(0);
     const { lease: held } = granted.json as { lease: { id: string } };
@@ -215,11 +196,9 @@ describe("a gateway fails a request no worker can serve at once", () => {
         FAST,
       );
 
-    // No worker lists a model of the class.
     const watch = await ask("--class", "watch");
     expectFailure(watch, "UNKNOWN_MODEL", EXIT_UNSERVABLE);
     expect(watch.stderr).toContain("watch");
-    // Every model of the class pairs with a runtime outside the range, with or without a download.
     expectFailure(
       await ask("--class", "phone", "--os", "<=17"),
       "RUNTIME_MISSING",
@@ -230,7 +209,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
       "RUNTIME_MISSING",
       EXIT_UNSERVABLE,
     );
-    // A request that names neither model nor class means phone, and the fleet has one.
     const granted = await ask();
     expect(granted.code, granted.stderr).toBe(0);
     const { lease: held } = granted.json as { lease: { id: string } };
@@ -268,7 +246,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
     const away = await join("worker-16", { ios: IPHONE_16 });
     const ids = await waitForWorkers(gateway, ["worker-17", "worker-16"]);
 
-    // worker-17 drained: the only worker that lists iPhone 17 is not taking requests.
     expect((await gateway.cli(["worker", "drain", ids["worker-17"] ?? ""])).code).toBe(0);
     expectFailure(
       await lease(gateway, "agent-1", "iPhone 17", ["--detach"]),
@@ -277,8 +254,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
     );
     expect((await gateway.cli(["worker", "undrain", ids["worker-17"] ?? ""])).code).toBe(0);
 
-    // worker-16 gone: a request only it lists fails with NO_CAPACITY, not UNKNOWN_MODEL, while
-    // worker-17 still takes requests.
     await away.killDaemon();
     await waitFor(
       async () =>
@@ -322,7 +297,6 @@ describe("a gateway fails a request no worker can serve at once", () => {
       const held = await lease(gateway, "agent-holder", "iPhone 17", ["--detach"]);
       expect(held.code, held.stderr).toBe(0);
 
-      // A second requester waits: the worker can serve it and is busy.
       const waiting = gateway.cliBackground([
         "lease",
         "--platform",

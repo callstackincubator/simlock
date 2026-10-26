@@ -5,14 +5,8 @@ import type { Platform } from "./domain.js";
 
 export const OWNED_ROOT_MARKER_FILE = ".simlock-owned.json";
 
-/** Owner-only. Group or other bits on a device root are grounds for refusing it. */
 const ROOT_MODE = 0o700;
 
-/**
- * Why a root was refused. These strings are wire-visible: they travel in the
- * `driver.root-rejected` event payload and are listed in `docs/internal/EVENTS.md`, so the
- * vocabulary is fixed and a new one cannot be invented here alone.
- */
 export type RootRejectionReason =
   | "not-absolute"
   | "missing-marker"
@@ -47,34 +41,20 @@ export class OwnedRootError extends Error {
 
 export interface EnsureOwnedRootOptions {
   readonly filesystem: Filesystem;
-  /** Names the staging directory a root is assembled in, so two racing daemons never share one. */
   readonly idGenerator: IdGenerator;
   readonly instanceId: string;
   readonly path: string;
   /** why: staging directories carry the writer's pid so startup can tell a dead writer's leftover from a live one's. */
   readonly pid?: number;
   readonly platform: Platform;
-  /** `process.getuid?.()`; `undefined` skips the ownership check on platforms without uids. */
   readonly uid?: number;
 }
 
 type RootContext = Omit<EnsureOwnedRootOptions, "path"> & { readonly root: string };
 
-/**
- * Establishes that `path` is a device root this Simlock instance owns, creating it when
- * nothing is there, and returns its resolved path.
- *
- * This is the whole of Simlock's structural ownership proof, and it is deliberately
- * platform-agnostic: a driver supplies a path and nothing else. It fails closed in every
- * ambiguous case -- there is no fallback to a default device location and no adoption of
- * a directory Simlock did not create empty itself, because "empty right now" is not proof
- * of "empty when marked" (ADR 0001, decision 2). Every refusal is an `OwnedRootError`,
- * including one that comes out of an unexpected filesystem failure, because the caller
- * skips a single platform on this error and stops the whole daemon on any other.
- */
 export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<string> {
   if (!isAbsolute(options.path)) {
-    // `resolve` would make one up: a relative path lands wherever the process that
+    // why: `resolve` would make one up: a relative path lands wherever the process that
     // launched the daemon happened to be standing, which for an auto-launched daemon is
     // some agent's working directory rather than a place anyone chose to put tens of
     // gigabytes of device data -- and in CP5 it is what `--purge-orphans` is aimed at.
@@ -90,7 +70,7 @@ export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<
   const context: RootContext = { ...options, root: resolve(options.path) };
 
   if (await createRoot(context)) {
-    // A root is never trusted on the strength of "we think we just made it": the checks
+    // why: A root is never trusted on the strength of "we think we just made it": the checks
     // cost one `lstat`, and they close the window in which what was published is not what
     // is about to be used.
     await validateRootDirectory(context);
@@ -102,10 +82,7 @@ export async function ensureOwnedRoot(options: EnsureOwnedRootOptions): Promise<
 }
 
 /**
- * Creates the root with its marker, or reports `false` when something already occupies the
- * path and validation has to decide about it instead.
- *
- * The root is assembled under a sibling staging name and published with a single `rename`,
+ * why: The root is assembled under a sibling staging name and published with a single `rename`,
  * so neither another daemon nor a crash can observe it half-made. Creating it in place
  * would publish an unmarked directory first: every later start would refuse that as
  * `non-empty-unowned-root` -- the temporary file `writeFileAtomic` leaves beside the marker
@@ -132,7 +109,7 @@ async function createRoot(context: RootContext): Promise<boolean> {
   const staging = stagingPath(root, context.idGenerator, context.pid);
   try {
     await filesystem.mkdir(staging, { mode: ROOT_MODE });
-    // `mkdir`'s mode is a request the process umask can only subtract from: under a
+    // why: `mkdir`'s mode is a request the process umask can only subtract from: under a
     // restrictive one (`0o277`, say) the root comes back read-only to its own owner and
     // every device written into it afterwards fails. `chmod` is the only way to end at the
     // permissions validation demands of this root on the next start, and it cannot
@@ -140,8 +117,6 @@ async function createRoot(context: RootContext): Promise<boolean> {
     await filesystem.chmod(staging, ROOT_MODE);
     await filesystem.writeFileAtomic(markerPath(staging), serializeMarker(context));
   } catch (error: unknown) {
-    // Nothing partial may survive anywhere near the real path, so the staging directory
-    // goes before the failure is reported.
     await discard(filesystem, staging);
     throw unexpected(context, "it could not be assembled", error);
   }
@@ -151,9 +126,6 @@ async function createRoot(context: RootContext): Promise<boolean> {
   } catch (error: unknown) {
     await discard(filesystem, staging);
 
-    // Something occupies the path now: another daemon published its root there first, or a
-    // directory of the user's appeared. Either way it is an existing root like any other,
-    // and validation -- which never creates -- is what decides about it.
     if (isOccupiedPathError(error)) {
       return false;
     }
@@ -171,14 +143,14 @@ async function validateExistingRoot(context: RootContext): Promise<void> {
 
 async function validateRootDirectory(context: RootContext): Promise<void> {
   const { root, uid } = context;
-  // Only the root itself is read without following links. An *ancestor* symlink is
+  // why: Only the root itself is read without following links. An *ancestor* symlink is
   // ordinary -- `/tmp` is a link to `/private/tmp` on macOS, and every test home created
   // with `mkdtemp` sits under it -- so comparing `realpath(root)` against `root` would
   // fail closed on perfectly healthy machines. Do not "harden" this into a realpath check.
   const details = await pathDetails(context, root, "it");
 
   if (details === undefined) {
-    // The root existed a moment ago (that is why creation stood down, or the rename that
+    // why: The root existed a moment ago (that is why creation stood down, or the rename that
     // published it succeeded) and is gone now. Creating it here would be the second
     // attempt this function promises never to make.
     throw rejected(context, "missing-marker", "it disappeared while it was being validated");
@@ -189,7 +161,7 @@ async function validateRootDirectory(context: RootContext): Promise<void> {
   }
 
   if (details.kind !== "directory") {
-    // The reason vocabulary is fixed by the docs and has no separate "not a directory"
+    // why: The reason vocabulary is fixed by the docs and has no separate "not a directory"
     // member. This is the closest true statement it can make: something Simlock did not
     // create is sitting where the root belongs.
     throw rejected(context, "non-empty-unowned-root", "it is not a directory");
@@ -235,11 +207,6 @@ async function validateMarker(context: RootContext): Promise<void> {
   }
 }
 
-/**
- * An unmarked root is refused either way; the two reasons differ only in what they tell
- * the user. An empty one is most likely a path they created for Simlock by hand, and the
- * fix is to remove it and let Simlock create it. A populated one holds someone's data.
- */
 async function missingMarkerRejection(context: RootContext): Promise<OwnedRootError> {
   const entries = await attempt(context, "its contents could not be listed", () =>
     context.filesystem.readdir(context.root),
@@ -258,12 +225,11 @@ async function missingMarkerRejection(context: RootContext): Promise<OwnedRootEr
       );
 }
 
-/** `undefined` for anything that is not this instance's marker shape -- see `invalid-marker`. */
 async function readMarker(
   context: RootContext,
   path: string,
 ): Promise<OwnedRootMarker | undefined> {
-  // A marker that cannot be read and one that cannot be parsed are the same answer: this
+  // why: A marker that cannot be read and one that cannot be parsed are the same answer: this
   // is not a root whose ownership Simlock can vouch for. This catch stays narrow on
   // purpose -- widening it to `unreadable` would demote a deliberate refusal to a
   // filesystem accident.
@@ -278,7 +244,7 @@ async function readMarker(
 }
 
 /**
- * The platform is part of the identity check, not just of the payload: swapping the iOS
+ * why: The platform is part of the identity check, not just of the payload: swapping the iOS
  * and Android roots in config would otherwise hand each driver the other's devices.
  */
 function isOwnedRootMarker(value: unknown, platform: Platform): value is OwnedRootMarker {
@@ -313,7 +279,7 @@ function markerPath(root: string): string {
 }
 
 /**
- * Hidden, and unique to this attempt: two daemons racing to create one root must not land
+ * why: Hidden, and unique to this attempt: two daemons racing to create one root must not land
  * on the same staging directory, or the loser's cleanup would delete the winner's work
  * mid-flight. The uniqueness comes from the injected generator rather than an ambient
  * `randomUUID`, because this is core code and rule 9 admits no exception for entropy.
@@ -323,7 +289,7 @@ function stagingPath(root: string, idGenerator: IdGenerator, pid: number | undef
   return join(dirname(root), `.${basename(root)}.${writer}${idGenerator.generate()}.staging`);
 }
 
-/** Best effort: the failure that brought us here is the one worth reporting. */
+/** why: Best effort: the failure that brought us here is the one worth reporting. */
 async function discard(filesystem: Filesystem, path: string): Promise<void> {
   try {
     await filesystem.rm(path);
@@ -334,7 +300,6 @@ async function discard(filesystem: Filesystem, path: string): Promise<void> {
   }
 }
 
-/** `undefined` for a path that is absent; anything else that goes wrong is `unreadable`. */
 async function pathDetails(
   context: RootContext,
   path: string,
@@ -364,7 +329,7 @@ async function attempt<T>(
 }
 
 /**
- * A filesystem failure the validator has no answer for is still a refused root, never a
+ * why: A filesystem failure the validator has no answer for is still a refused root, never a
  * raw errno escaping to the caller: the daemon skips one platform on an `OwnedRootError`
  * and dies on anything else, so a mistyped `deviceRoot` whose parent is a file (`ENOTDIR`)
  * would otherwise take down every driver instead of one (safety rule 9).
@@ -395,7 +360,6 @@ function refusal(
   );
 }
 
-/** The errno matters as much as the message: it is what tells a user what to go and fix. */
 function describeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const code = errorCode(error);
@@ -412,7 +376,7 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 /**
- * `rename` reports an occupied destination three ways depending on the kernel and on what
+ * why: `rename` reports an occupied destination three ways depending on the kernel and on what
  * is sitting there: a non-empty directory, a directory replaced by a file, or a plain
  * refusal to clobber.
  */

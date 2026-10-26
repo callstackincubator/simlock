@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, open, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
-/** Starts the detached daemon owned by the operating system rather than the CLI. */
 export interface DaemonLauncher {
   launch(): Promise<LaunchedDaemon>;
 }
@@ -74,7 +73,7 @@ export interface NodeDaemonLauncherOptions {
   readonly command: string;
   readonly logPath: string;
   /**
-   * The *resolved* `SIMLOCK_HOME` the launching process is using. It is exported into the
+   * why: The *resolved* `SIMLOCK_HOME` the launching process is using. It is exported into the
    * daemon's environment rather than left to be inherited, because a relative
    * `SIMLOCK_HOME` resolves against whatever directory the process reading it happens to
    * be standing in -- and the two processes agreeing only because one spawned the other
@@ -117,7 +116,7 @@ export class NodeDaemonLauncher implements DaemonLauncher {
     try {
       const child = spawn(this.options.command, this.options.args, {
         detached: true,
-        // Explicit rather than relying on spawn's default: the daemon must inherit
+        // why: Explicit rather than relying on spawn's default: the daemon must inherit
         // overrides like SIMLOCK_DRIVERS_MODULE from whichever frontend (CLI/MCP)
         // auto-launched it, and must be told the home this one already resolved.
         env: { ...process.env, SIMLOCK_HOME: this.options.simlockHome },

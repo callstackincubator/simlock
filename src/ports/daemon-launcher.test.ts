@@ -29,7 +29,7 @@ describe("NodeDaemonLauncher", () => {
   it("hands the daemon the home the launching process already resolved", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
     const logPath = join(directory, "daemon.log");
-    // A relative SIMLOCK_HOME resolves against whatever directory reads it, so passing the
+    // why: A relative SIMLOCK_HOME resolves against whatever directory reads it, so passing the
     // variable through unresolved would let the daemon build its device roots somewhere the
     // process that launched it never looks.
     const launcher = new NodeDaemonLauncher({
