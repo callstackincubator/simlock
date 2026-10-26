@@ -28,6 +28,8 @@ export interface IosDeviceInputOptions {
 }
 
 const FRAME_HEADER_BYTES = 4;
+const HOME_TIMEOUT_MS = 10_000;
+const SPRINGBOARD = "com.apple.springboard";
 
 export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInputFactory {
   return {
@@ -36,7 +38,7 @@ export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInpu
         env: environmentFor(options),
       });
       const config = await readConfig(child);
-      return new IosDeviceInput(child, config);
+      return new IosDeviceInput(options, device.deviceId, child, config);
     },
   };
 }
@@ -76,18 +78,53 @@ function frameOf(tag: number, body: unknown): Uint8Array {
 }
 
 class IosDeviceInput implements DeviceInput {
+  readonly #options: IosDeviceInputOptions;
+  readonly #udid: string;
   readonly #child: BytePipeProcess;
   readonly #config: InputScreenConfig;
 
-  constructor(child: BytePipeProcess, config: InputScreenConfig) {
+  constructor(
+    options: IosDeviceInputOptions,
+    udid: string,
+    child: BytePipeProcess,
+    config: InputScreenConfig,
+  ) {
+    this.#options = options;
+    this.#udid = udid;
     this.#child = child;
     this.#config = config;
   }
 
   send(message: InputMessage): void {
+    if (message.kind === "button") {
+      if (message.button === "home") this.#home();
+      return;
+    }
     if (message.kind !== "touch") return;
     const { type, x, y } = message;
     void this.#child.writeStdin(frameOf(INPUT_TAG.touch, { type, x, y }));
+  }
+
+  // why: Xcode 26 and later silently drop the HID home-button press, so Home brings SpringBoard
+  // forward the way serve-sim does; the app switcher and Lock have no such way and are dropped.
+  #home(): void {
+    const { deviceSet, logger, processRunner } = this.#options;
+    const args = [
+      "simctl",
+      ...(deviceSet === undefined ? [] : ["--set", deviceSet]),
+      "launch",
+      this.#udid,
+      SPRINGBOARD,
+    ];
+    void processRunner.run("xcrun", args, { timeoutMs: HOME_TIMEOUT_MS }).then(
+      (result) => {
+        if (result.code !== 0)
+          logger?.warn("Home did nothing", { stderr: result.stderr, udid: this.#udid });
+      },
+      (error: unknown) => {
+        logger?.warn("Home did nothing", { reason: String(error), udid: this.#udid });
+      },
+    );
   }
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
