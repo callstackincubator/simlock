@@ -523,7 +523,9 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
-      inputs: catalog,
+      inputs: {
+        openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+      },
       screens: catalog,
       tcpProbe,
     },
