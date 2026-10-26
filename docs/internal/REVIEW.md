@@ -131,7 +131,10 @@ fix commit, once fixed) and `canonicalId` for a duplicate. Before the gate,
 post one PR comment headed `## Review ledger`: one line `Round <r>:
 <full commit>` per check in order, the output of `review-metrics.mjs --pr
 <M> --issue <N> --findings <file>`, then the findings file in a `json`
-code block. The round lines are what lets a check be frozen and replayed
+code block. `node .agents/scripts/review-ledger.mjs <M> --issue <N>
+--findings <file> --round <r>:<commit> [--round ...]` builds the comment in
+exactly this shape, posts it or updates the existing one, and then runs
+`pr-body-check.mjs <M>`; nobody writes the comment by hand. The round lines are what lets a check be frozen and replayed
 later (`replay-freeze.mjs`). The
 weekly `recurring-findings` routine reads these comments. Record escaped
 defects after merge. Do not call raised-minus-fixed a false-positive rate.

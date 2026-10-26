@@ -78,6 +78,11 @@ edited after its `test:` commit:
 
 Run the "Project checks" in `toolchain.md` that the diff triggers. Then the
 tests from mode `build` pass, and you push.
+Every test command runs in the foreground with `timeout: 600000` set on
+the Bash call, and nothing is left running: no `run_in_background`, no
+trailing `&`, no loop that sleeps, no bare `cat > file`. The tool guard
+refuses each; a background job would hold your report until it ends or
+hits its 30-minute cap, which stalls the whole delivery.
 
 **A failing test you did not touch**, locally or in a failed CI run
 (`gh run view <id> --log-failed`):

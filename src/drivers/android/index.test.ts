@@ -799,11 +799,12 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("boots a shutdown device from its persisted clean baseline after a driver restart", async () => {
+  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, wipe-pending and physical boots at 70 s", async () => {
     const harness = await provisionedHarness();
     const booted = await harness.driver.makeReady(harness.device);
 
     const restartedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       processResult(binaries.adb, ["devices"], "List of devices attached\n"),
       {
@@ -835,11 +836,24 @@ describe("AndroidDriver", () => {
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    // why: Proposed per-device estimate input for #778: the current operation-only input
+    // cannot distinguish this persisted baseline from a cold boot of the same spec.
+    const prepareEstimate = { device: booted, operation: "boot", purpose: "prepare" } as const;
+    const recoveryEstimate = { ...prepareEstimate, purpose: "recover" } as const;
+    expect(await restartedDriver.estimate({ operation: "boot" }, spec)).toBe(70_000);
+    expect(await restartedDriver.estimate(recoveryEstimate, spec)).toBe(70_000);
+    const estimatedBootMs = await restartedDriver.estimate(prepareEstimate, spec);
 
     await expect(restartedDriver.makeReady(booted)).resolves.toMatchObject({
       address: "emulator-5586",
     });
-    expect(restartedRunner.calls[2]).toMatchObject({
+    expect(restartedRunner.calls[3]).toMatchObject({
       args: [
         "-avd",
         "simlock_one",
@@ -851,6 +865,32 @@ describe("AndroidDriver", () => {
       ],
       command: binaries.emulator,
     });
+    expect(estimatedBootMs).toBe(4_000);
+
+    // why: Each row is a prepare boot that `makeReady` would not load the baseline for, so it keeps the cold figure.
+    const mismatchedRunner = new ScriptedProcessRunner([
+      processResult(binaries.emulator, ["-version"], "Android emulator version 37.0.0"),
+    ]);
+    const mismatchedDriver = await createDriver(harness.filesystem, mismatchedRunner);
+    // why: A full reclaim leaves the baseline hash matching but flags the next boot to wipe data.
+    const wipePendingRunner = new ScriptedProcessRunner([
+      avdPathExpectation("emulator-5586"),
+      processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+    ]);
+    const wipePendingDriver = await createDriver(harness.filesystem, wipePendingRunner);
+    await wipePendingDriver.reclaim(booted, { clean: "full" });
+    expect({
+      mismatchedBaselineHash: await mismatchedDriver.estimate(prepareEstimate, spec),
+      physicalSpec: await restartedDriver.estimate(prepareEstimate, {
+        class: "phone",
+        model: "Pixel 5",
+        osVersion: "34",
+        physical: true,
+        platform: "android",
+      }),
+      wipePending: await wipePendingDriver.estimate(prepareEstimate, spec),
+    }).toEqual({ mismatchedBaselineHash: 70_000, physicalSpec: 70_000, wipePending: 70_000 });
   });
 
   describe("android.emulator launch options", () => {

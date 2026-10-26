@@ -369,7 +369,7 @@ describe("AcquisitionPlanner", () => {
       };
       const leases = [leaseOn(android)];
 
-      // 6 GiB used of 8: the boot adds the 2.5 GiB between the slim and the full size.
+      // why: 5 GiB used of 8: the boot adds the shut-down device's full 3.5 GiB.
       const devices = [android, idleOther, shutdownSlim];
       expect(plan(acquisitionPlanner, devices, { leases, spec: slimSpec })).toEqual({
         kind: "wait",
@@ -382,12 +382,12 @@ describe("AcquisitionPlanner", () => {
       expect(claims.isClaimed(idleOther.id)).toBe(false);
       expect(claims.isClaimed(shutdownSlim.id)).toBe(false);
 
-      // Without the idle device, 5 GiB is used and the boot fits.
+      // why: Without the idle device, 4 GiB is used and the boot fits.
       const boot = plan(acquisitionPlanner, [android, shutdownSlim], { leases, spec: slimSpec });
       expect(boot).toMatchObject({ device: shutdownSlim, kind: "boot-shutdown" });
     });
 
-    it("evicts an idle slim device for a full request at the device limit, then waits when the freed RAM is not enough", () => {
+    it("evicts an idle shut-down slim device for a full request at the device limit, then waits when the RAM is still not enough", () => {
       const { planner: acquisitionPlanner } = sizedPlanner(2);
       const android = device("android", "leased", {
         physical: false,

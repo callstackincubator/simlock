@@ -71,9 +71,9 @@ export interface CapacityStrategy {
   canProvision(device: PlannedCapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision;
 
   /**
-   * Whether the shut-down `device`, already among `devices`, may boot. A device
-   * boots at its platform's full size before any slim pass, so a boot needs room
-   * for the difference between that and the size the device counts at.
+   * why: Whether the shut-down `device`, already among `devices`, may boot. A device
+   * boots at its platform's full size before any slim pass. A shut-down device holds
+   * no RAM, so a boot needs room for that whole size; a running one needs the difference.
    */
   canBoot(device: CapacityDevice, devices: readonly CapacityDevice[]): CapacityDecision;
 

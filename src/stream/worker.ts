@@ -2,7 +2,6 @@ import type { WorkerContext, WorkerModule } from "../modules/index.js";
 import { createWorkerStream } from "./create.js";
 import type { StreamModuleConfig } from "./definition.js";
 
-// fallow-ignore-next-line unused-export -- reached through the namespace of definition.ts's dynamic import.
 export function createWorker(ctx: WorkerContext<StreamModuleConfig>): WorkerModule {
   const stream = createWorkerStream({
     clock: ctx.clock,

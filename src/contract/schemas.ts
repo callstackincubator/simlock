@@ -506,8 +506,8 @@ export const statusCapacitySchema = z.object({
   ios: platformCapacityEntrySchema,
   android: platformCapacityEntrySchema,
   global: runningCapacityEntrySchema.extend({ warm: z.number() }),
-  /** Present only under a strategy that keeps a RAM budget. `usedBytes` counts every
-   * non-deleted device by the mode it reports, without in-flight provisioning. */
+  /** why: present only under a strategy that keeps a RAM budget. `usedBytes` counts every
+   * device neither deleted nor shut down, by the mode it reports, without in-flight provisioning. */
   ramBudget: z
     .object({
       limitBytes: z.number().finite(),

@@ -301,7 +301,6 @@ export class ComponentInstaller {
    * reads the registry, and writes nothing. A driver whose listing rejects is left out and
    * logged, and the other platforms are still listed.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through the Dispatcher's `components` option, typed as a Pick of this class.
   async list(platform?: Platform): Promise<readonly InstalledComponentListing[]> {
     const listed = await Promise.all(
       this.options.drivers.select(platform).map(async (driver) => {
@@ -466,7 +465,6 @@ export class ComponentInstaller {
    * Simlock device in `list` and in a removal's checks, so a removal cannot start under a
    * device the registry does not hold yet (ADR 0010 §8).
    */
-  // fallow-ignore-next-line unused-class-member -- reached through DeviceProvisioner's `components` option, typed as a Pick of this class.
   claimProvision(spec: Pick<DeviceSpec, "osVersion" | "platform">): () => void {
     const key = componentKey(spec.platform, spec.osVersion);
     const removal = this.#removals.get(spec.platform);

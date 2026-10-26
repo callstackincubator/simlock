@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { blankSource } from "./test-support/source-text.js";
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Every tracked path, from the git index, so no doc escapes by sitting in a directory the test did not name. */
@@ -110,6 +112,55 @@ describe("the markdown files under docs/", () => {
       trackedFiles.filter(
         (name) =>
           name.startsWith("docs/") && !name.startsWith("docs/internal/") && isMarkdown(name),
+      ),
+    ).toEqual([]);
+  });
+});
+
+// why: what documentation rule 3 forbids the running tool to print: a maintainer doc, or a path
+// into this checkout. `SKILL.md` alone is a file `simlock setup` writes, so it is no repo path.
+const REPO_PATH =
+  /docs\/internal|agent-rules|\bAGENTS\.md|\bCLAUDE\.md|\b(?:src|docs|e2e|scripts)\/[\w/.-]+\.(?:md|ts)\b/;
+
+const printingSources = trackedFiles.filter(
+  (name) =>
+    /^(?:src|ui\/src)\/.+\.tsx?$/.test(name) &&
+    !/\.test\.tsx?$|(?:^|\/)testing\.ts$|(?:^|\/)test-[^/]*$/.test(name),
+);
+
+function repoPaths(name: string, text: string): string[] {
+  return blankSource(text)
+    .split("\n")
+    .flatMap((line, index) => {
+      const match = REPO_PATH.exec(line);
+      return match === null ? [] : [`${name}:${index + 1}: ${match[0]}`];
+    });
+}
+
+describe("the source of what the tool prints", () => {
+  it("is every non-test source file under src/ and ui/src/", () => {
+    expect(printingSources).toEqual(
+      expect.arrayContaining(["src/cli/tree.ts", "src/instructions/setup.ts", "ui/src/main.tsx"]),
+    );
+    expect(printingSources.filter((name) => /\.test\.|testing\.ts$/.test(name))).toEqual([]);
+  });
+
+  it("names no file path in this repository in a string, a template or JSX text", () => {
+    const sample = [
+      "// why: docs/internal/EVENTS.md says so",
+      'throw usage("see docs/internal/EVENTS.md");',
+      "const url = `${base}/simlock/docs/reference/events/`; /* src/a.ts */",
+      "const re = /\\//; const skill = 'SKILL.md';",
+      "return <p>read src/core/AGENTS.md</p>;",
+    ].join("\n");
+    expect(repoPaths("sample.tsx", sample)).toEqual([
+      "sample.tsx:2: docs/internal",
+      "sample.tsx:5: src/core/AGENTS.md",
+    ]);
+
+    expect(
+      printingSources.flatMap((name) =>
+        repoPaths(name, readFileSync(join(REPO_ROOT, name), "utf8")),
       ),
     ).toEqual([]);
   });

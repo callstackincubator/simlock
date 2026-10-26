@@ -1,6 +1,6 @@
 ---
 name: triage-bug
-description: Triage a bug:triage issue — reproduce it as a failing test, find the root cause, and post a report proposing the simplest fix, without fixing it. Use when the user says "triage #N" or "triage the next bug".
+description: Triage a bug:new issue — reproduce it as a failing test, find the root cause, and post a report proposing the simplest fix, without fixing it. Use when the user says "triage #N" or "triage the next bug".
 ---
 
 Arguments: $ARGUMENTS

@@ -182,7 +182,6 @@ export class LeaseReleaseCoordinator
   }
 
   /** why: the reclaim joins the background reclaims, so nuke's `beginMaintenance` and a graceful stop wait for it. */
-  // fallow-ignore-next-line unused-class-member -- called through PhysicalDeviceWatcher's releaser port.
   async reclaimReturned(
     deviceId: string,
     osVersion?: string,
@@ -219,7 +218,6 @@ export class LeaseReleaseCoordinator
     );
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through LeaseMaintenance by NukeService.
   async beginMaintenance(): Promise<void> {
     await this.options.decisions.run(() => {
       this.#maintenanceDepth += 1;
@@ -234,7 +232,6 @@ export class LeaseReleaseCoordinator
     }
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through LeaseMaintenance by NukeService.
   async releaseAllDuringMaintenance(reason: "killed"): Promise<readonly string[]> {
     await this.options.decisions.run(() => {
       if (this.#maintenanceDepth === 0) {
@@ -247,7 +244,6 @@ export class LeaseReleaseCoordinator
     return this.#releaseAll(reason, "await");
   }
 
-  // fallow-ignore-next-line unused-class-member -- called through LeaseMaintenance by NukeService.
   async endMaintenance(): Promise<void> {
     const waiters = await this.options.decisions.run(() => {
       this.#maintenanceDepth = Math.max(0, this.#maintenanceDepth - 1);

@@ -29,17 +29,13 @@ import {
 import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
 const RETENTION_MS = 24 * 60 * 60_000;
-/** A worker one protocol version behind this gateway (ADR 0007 §12: no shim, no widened range). */
 const previousProtocol = {
   min: PROTOCOL_VERSION_RANGE.min - 1,
   max: PROTOCOL_VERSION_RANGE.max - 1,
 };
 const REFRESH_MS = 30_000;
-/** Matches `core/config.ts`'s own default (ADR 0005 §15's own cap). */
 const DEFAULT_LEASE_MAX_TTL_MS = 4 * 60 * 60_000;
 
-/** H4: records every line at `warn` and `error` (the levels a link's own failure paths use), so
- * a test can assert what a failure was actually logged *as* -- not just that something failed. */
 class RecordingLogger implements Logger {
   readonly warnings: Array<{ message: string; fields?: Record<string, unknown> }> = [];
 
@@ -69,10 +65,7 @@ function fleet(
   const events: EventEnvelope[] = [];
   eventBus.subscribeAll((envelope) => events.push(envelope));
   const transport = new MemoryUplinkTransport();
-  /** The scripted worker each uplink resolves to, keyed by the principal-free order they join. */
   const clients: ScriptedWorkerClient[] = [];
-  // C3: set to make the *next* `connect()` -- the `hello` round trip itself -- never resolve,
-  // the way a peer that completes the WebSocket upgrade and then falls silent would.
   const connectState = { hangNext: false };
   const service = new GatewayService({
     authenticate: async (credential) => options.authenticate?.(credential) ?? "accept",
@@ -102,9 +95,6 @@ function fleet(
     events,
     service,
     transport,
-    /** Queues the worker the next uplink resolves to, then dials it. `token` defaults to the
-     * fixed secret every other test relies on; C-2's test overrides it per worker so a custom
-     * `authenticate` can hand back a distinct `tokenId` for each. */
     join: async (
       workerId: string,
       client: ScriptedWorkerClient,
@@ -119,8 +109,6 @@ function fleet(
         ...(label === undefined ? {} : { label }),
       });
     },
-    /** Dials an uplink whose `hello` never answers -- no `ScriptedWorkerClient` is ever built,
-     * since C3's whole point is that the handshake itself must not be able to hang forever. */
     joinSilent: async (workerId: string, label?: string) => {
       connectState.hangNext = true;
       return transport.connect({
@@ -202,7 +190,6 @@ describe("GatewayService", () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
-    // A starting worker answers `status.get` with `daemon` and `host` only.
     worker.status = {
       daemon: {
         health: "starting",
@@ -232,7 +219,6 @@ describe("GatewayService", () => {
     ]) {
       expect(Object.keys(view ?? {})).not.toContain(field);
     }
-    // Nothing but the status read, and the event subscription, was asked of it.
     expect(
       worker.calls.filter((call) => !["status.get", "events.subscribe"].includes(call)),
     ).toEqual([]);
@@ -242,8 +228,6 @@ describe("GatewayService", () => {
     worker.pushEvent({ event: "lease.granted" });
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("running"));
 
-    // The refresh a lease event asks for reads no catalog of its own, but the starting answer
-    // dropped the last one, so this refresh reads it: the worker takes requests again at once.
     expect(harness.service.workers.view("wrk_1")).toMatchObject({
       catalog: [],
       catalogReadAt: harness.clock.now(),
@@ -253,11 +237,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // #414, modelled on a real worker: its `events.subscribe` parks until startup ends (only
-  // `status.get` answers while it is `starting`), and it emits `daemon.started` before that parked
-  // call subscribes, so the gateway never hears it. A startup longer than `WORKER_CALL_TIMEOUT_MS`
-  // times the subscription out, and the refresh after it reads a `starting` answer. The clock
-  // stops there, short of the periodic tick.
   it("builds the full view of a worker that was starting when first read, once its startup ends, before the next tick", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -295,7 +274,6 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.health).toBe("starting"));
     const startedAt = harness.clock.now();
 
-    // Startup ends: `status.get` answers in full, and the parked subscription is answered.
     worker.status = statusFixture({ leases: [leaseFixture("lease_1", "dev_1")], queueDepth: 1 });
     endStartup();
 
@@ -357,7 +335,6 @@ describe("GatewayService", () => {
     const catalogReads = () => worker.calls.filter((call) => call === "catalog.get").length;
     expect(catalogReads()).toBe(1);
 
-    // A refresh with no catalog is in flight, held at its first call, when a catalog refresh asks.
     const release = worker.holdStatus();
     worker.pushEvent({ event: "device.state-changed" });
     await vi.waitFor(() => expect(worker.calls.at(-1)).toBe("status.get"));
@@ -366,7 +343,6 @@ describe("GatewayService", () => {
     release();
 
     await vi.waitFor(() => expect(catalogReads()).toBe(2));
-    // The view says so too: the catalog was read after the clock moved.
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_a")?.catalogReadAt).toBe(harness.clock.now()),
     );
@@ -374,11 +350,6 @@ describe("GatewayService", () => {
   });
 
   it("the worker view builder gives a gateway the view it built before the builder moved, plus when it read the catalog", async () => {
-    // Every field a refresh fills, set to a value that is not a default, and the whole view
-    // compared as one literal: the expected value is what the gateway built before the view
-    // builder moved into the contract, so any field the move dropped, renamed or reshaped
-    // fails here by name. `catalogReadAt` is the registry's own record of the read (ADR 0009
-    // §4), not the builder's.
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient("admin", "9.8.7");
@@ -762,8 +733,6 @@ describe("GatewayService", () => {
     const callsBefore = worker.calls.length;
 
     worker.pushEvent({ event: "doctor.reconciled" });
-    // Still republished -- every worker fact reaches the gateway's buffer -- just not a reason
-    // to re-read anything.
     await vi.waitFor(() => expect(eventNames(harness.events)).toContain("doctor.reconciled"));
 
     expect(worker.calls).toHaveLength(callsBefore);
@@ -870,7 +839,6 @@ describe("GatewayService", () => {
         "iPhone 17": ["26.0"],
       }),
     );
-    // Same models and runtimes; only the pairing moved, as when a runtime gains support.
     worker.catalog = catalogFixture([
       {
         modelRuntimes: { "iPhone 17": ["25.4", "26.0"] },
@@ -954,7 +922,6 @@ describe("GatewayService", () => {
       worker.status = statusFixture({ queueDepth: 1, waiting: [queued] });
       worker.pushEvent({ event: "lease.queued" });
 
-      // Well inside the periodic refresh, which this test never lets come round.
       await vi.waitFor(() =>
         expect(harness.service.workers.view("wrk_1")?.waiting).toEqual([queued]),
       );
@@ -1079,8 +1046,6 @@ describe("GatewayService", () => {
       worker.catalog = catalogFixture([
         { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0", "26.4"] },
       ]);
-      // The first starts a refresh without the catalog; the other two share the one queued
-      // behind it, and the last does not ask for the catalog.
       worker.pushEvent({ event: "lease.granted" });
       worker.pushEvent({ event: "component.installed" });
       worker.pushEvent({ event: "lease.released" });
@@ -1182,9 +1147,6 @@ describe("GatewayService", () => {
       ).length;
       expect(warningsAfterJoin).toBe(1);
 
-      // The periodic backstop tick re-reads config.get alongside the catalog
-      // (`#runTick` -> `link.refresh({ includeCatalog: true })`) -- the worker's cap has not
-      // moved, so this must not warn again.
       const callsBefore = worker.calls.filter((call) => call === "config.get").length;
       harness.clock.advance(REFRESH_MS);
       await vi.waitFor(() =>
@@ -1217,7 +1179,6 @@ describe("GatewayService", () => {
   });
 
   it("marks a worker that speaks only the previous protocol version incompatible with both ranges, and asks it nothing else", async () => {
-    // Protocol 5 is the version before ADR 0008 made `modelRuntimes` required.
     const previous = { min: 5, max: 5 };
     expect(negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, previous)).toBeUndefined();
     const harness = fleet();
@@ -1380,7 +1341,6 @@ describe("GatewayService", () => {
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
     worker.failWith = protocolMismatchError(worker10);
-    // A gateway that subscribed anyway would get a live listener, so the push below could reach it.
     worker.subscribeDespiteFailure = true;
 
     await harness.join("wrk_1", worker);
@@ -1402,8 +1362,6 @@ describe("GatewayService", () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
-    // What `connectSimlockAdmin`'s degraded client does after a failed negotiation: every call
-    // rejects with the captured error, carrying both ranges.
     worker.failWith = protocolMismatchError(previousProtocol);
 
     await harness.join("wrk_1", worker);
@@ -1416,8 +1374,6 @@ describe("GatewayService", () => {
     });
     expect(worker.calls).toEqual(["status.get"]);
     expect(worker.subscribed).toBe(false);
-    // ADR 0005 §31: that uplink authenticated, so it is not a `worker.rejected` -- and there
-    // is no `worker.connected` either, because nothing usable connected.
     expect(eventNames(harness.events)).not.toContain("worker.rejected");
     expect(eventNames(harness.events)).not.toContain("worker.connected");
 
@@ -1433,7 +1389,6 @@ describe("GatewayService", () => {
 
     await workerEnd.close();
 
-    // Not on the next tick: the uplink is the reachability signal (ADR 0005 §6).
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("disconnected"),
     );
@@ -1442,11 +1397,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // D1: `WorkerRegistry` is keyed by worker id, not by link, and a stale link's own close used
-  // to call `registry.disconnected` with no check at all -- so a socket the OS had not yet
-  // reported dead could mark the *live* successor's view disconnected, permanently (`refresh()`
-  // never touches `connection`). Against the code before this fix, no test joined the same
-  // worker id twice against a live service; this is that test.
   it("does not let a stale link's late close mark a reconnected worker disconnected (D1)", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1457,22 +1407,12 @@ describe("GatewayService", () => {
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected"),
     );
 
-    // A's own close, once the reconnect below triggers it, must never actually complete during
-    // this test: a hung `events.unsubscribe` (D2) is exactly what stretches a stale link's close
-    // from microseconds to minutes in the wild, and here it lets the test control precisely
-    // when A's connection actually goes away.
     clientA.hangUnsubscribe = true;
 
-    // The same worker id redials with a new connection -- a restart, or a new TCP path after a
-    // NAT rebind. The service replaces the link; A's old one is asked to close but (per above)
-    // never gets there.
     const clientB = new ScriptedWorkerClient("admin", "9.9.9");
     await harness.join("wrk_1", clientB);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
 
-    // Only now does the OS finally report the stale socket dead. Closing the worker's own end
-    // fires the connection's real close event directly, bypassing A's still-stuck `close()`
-    // chain -- exactly what a genuinely half-open socket closing on its own would do.
     await workerEndA.close();
 
     expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
@@ -1482,9 +1422,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // D2: `close()` awaited `events.unsubscribe` -- a real round trip -- with nothing bounding it.
-  // On a half-open socket that promise never settled, so `close()` never reached
-  // `connection.close()` and the link (and its WebSocket) leaked for the life of the process.
   it("does not hang close() forever behind an events.unsubscribe that never answers (D2)", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1495,20 +1432,14 @@ describe("GatewayService", () => {
 
     const stopped = harness.service.stop();
     const stoppedState = promiseState(stopped);
-    // `stop()` is now blocked inside `link.close()`, awaiting the bounded wrapper around the
-    // hung unsubscribe -- wait for that timer to actually be armed before advancing past it.
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
     harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
 
-    // Settled by the timer, not merely eventually: a broken bound fails here, by name.
     await vi.waitFor(() => expect(stoppedState.state).toBe("fulfilled"));
     await expect(stopped).resolves.toBeUndefined();
     expect(worker.closed).toBe(true);
   });
 
-  // D3: a hung round trip inside `#rebuildView` used to latch `#refreshing` forever, since it
-  // was cleared only in a `finally` on a promise that never settled -- freezing the view while
-  // it still reported `connected`.
   it("does not latch refreshing forever when a round trip hangs, and recovers past the timeout (D3)", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1520,12 +1451,9 @@ describe("GatewayService", () => {
     worker.status = statusFixture({ leases: [leaseFixture("lease_9", "dev_9")] });
     worker.pushEvent({ event: "lease.granted" });
 
-    // The refresh this event triggered is now stuck inside `#rebuildView`'s bounded wait.
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
     harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
 
-    // Once the hung refresh times out and un-latches `#refreshing`, a later event must still be
-    // able to trigger a real one -- proving the latch did not stay stuck.
     worker.hangingCalls.delete("status.get");
     worker.pushEvent({ event: "lease.granted" });
 
@@ -1538,11 +1466,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // H2: the same asymmetry D1 fixed in `#handleClosed`, one write later -- `#rebuildView` wrote
-  // to `registry.refresh` after its own `await` with no re-check of `#closed` or
-  // `isCurrentLink`. A stale link's in-flight refresh, started before a reconnect replaced it,
-  // could land after its successor's fresher one and overwrite it with stale data for up to
-  // `WORKER_CALL_TIMEOUT_MS`.
   it("does not let a stale link's late-arriving refresh overwrite its successor's fresher view (H2)", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1551,8 +1474,6 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", clientA);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("0.1.0"));
 
-    // A's refresh, triggered by a worker event, is in flight but held open by hand -- long
-    // enough for a reconnect to fully replace this link before it ever answers.
     let resolveStatus: ((status: ReturnType<typeof statusFixture>) => void) | undefined;
     clientA.getStatus = () =>
       new Promise((resolve) => {
@@ -1561,16 +1482,12 @@ describe("GatewayService", () => {
     clientA.pushEvent({ event: "lease.granted" });
     await vi.waitFor(() => expect(resolveStatus).toBeDefined());
 
-    // The same worker id redials with a new connection -- service.ts replaces A's link with B's,
-    // which builds its own, current view.
     const clientB = new ScriptedWorkerClient("admin", "9.9.9");
     await harness.join("wrk_1", clientB);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
 
-    // Only now does A's stale round trip finally answer -- exactly what a slow or half-open path
-    // answering late would do, well after B has already built the current view.
     resolveStatus?.(statusFixture());
-    // A few real event-loop turns for A's now-resolved promise chain to run to completion (or,
+    // why: A few real event-loop turns for A's now-resolved promise chain to run to completion (or,
     // with the fix, to stop itself before writing) -- nothing here is clock-scheduled, so there
     // is no fake-clock timer to advance instead.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1580,8 +1497,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // H2's case again, for the answer a starting worker gives: a replaced link's late `starting`
-  // must not strip the successor's view of its devices and leases.
   it("does not let a stale link's late starting answer overwrite its successor's view", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1596,7 +1511,6 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", clientB);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.version).toBe("9.9.9"));
 
-    // A's held `status.get` now answers `starting`, after B built the current view.
     clientA.status = {
       daemon: {
         health: "starting",
@@ -1619,12 +1533,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // P1: a refresh timeout used to be swallowed into a debug log with nothing acting on it, so a
-  // half-open uplink (NAT rebind, cable pull, kernel panic -- no FIN) had `connection` report
-  // `connected` forever with a `lastSeenAt` that never moved again. One timeout recovering on
-  // the very next attempt (D3, above) must still not disconnect a worker -- that is a real, slow
-  // response, not a dead link -- but the same failure MAX_CONSECUTIVE_REFRESH_TIMEOUTS times in a
-  // row, with nothing in between, must make the gateway give up and close the uplink.
   it("closes the uplink once refreshes keep timing out, so a half-open worker stops reporting connected (P1)", async () => {
     expect(MAX_CONSECUTIVE_REFRESH_TIMEOUTS).toBeGreaterThan(1);
     const harness = fleet();
@@ -1633,26 +1541,22 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
 
-    // Never un-hung, unlike D3's test: this is the half-open case, not a briefly slow one.
     worker.hangingCalls.add("status.get");
 
     for (let attempt = 1; attempt < MAX_CONSECUTIVE_REFRESH_TIMEOUTS; attempt++) {
       harness.clock.advance(REFRESH_MS);
       await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
       harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
-      // Wait for the *next* tick to actually be armed, not just for the (already, trivially
+      // why: Wait for the *next* tick to actually be armed, not just for the (already, trivially
       // true) `connected` check to pass -- that value never changes on a timeout, so checking
       // it alone would resolve before the tick's own promise chain (refresh's catch, then
       // `pruneExpired`, then rescheduling) has actually finished, and the next iteration's
       // `advance(REFRESH_MS)` would fast-forward the clock past a timer that has not been
       // registered yet -- silently skipping a whole tick instead of exercising it.
       await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
-      // Below the threshold, the view must still say `connected` -- exactly D3's guarantee,
-      // repeated for every attempt short of the last one.
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
     }
 
-    // The attempt that crosses the threshold.
     harness.clock.advance(REFRESH_MS);
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
     harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
@@ -1665,15 +1569,8 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // C-1: P1's counter used to be driven by the whole bundled refresh timing out, which conflated
-  // a dead transport with a merely busy dispatcher -- on a worker mid-`converge`, `runDispatch`
-  // parks every call except `status.get` behind the startup-readiness gate, so `list.get` can
-  // legitimately hang for tens of seconds while the socket is completely healthy. Reproduces the
-  // reviewer's repro: `status.get` keeps answering, `list.get` never does, for well more than
-  // `MAX_CONSECUTIVE_REFRESH_TIMEOUTS` refresh cycles in a row. A gateway that still infers
-  // transport death from this would flip the link to `disconnected` long before this loop ends.
   it("does not close the link when status.get keeps answering but the dispatcher is busy (C-1)", async () => {
-    // A refreshIntervalMs far outside this test's clock advances: `#runTick` only reschedules
+    // why: A refreshIntervalMs far outside this test's clock advances: `#runTick` only reschedules
     // its own timer once a refresh settles (`service.ts`'s `.finally(() => this.#scheduleTick())`),
     // so on a link whose refresh keeps timing out the tick's real cadence drifts to roughly
     // `refreshIntervalMs + WORKER_CALL_TIMEOUT_MS` per cycle -- exercising this via event-driven
@@ -1685,17 +1582,12 @@ describe("GatewayService", () => {
     await harness.join("wrk_1", worker);
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
 
-    // Unlike P1's test (which hangs `status.get` itself), the worker answers `status.get` on
-    // every single call -- only the readiness-gated `list.get` never returns, exactly what a
-    // worker stuck in a long `converge` looks like from the gateway's side.
     worker.hangingCalls.add("list.get:devices");
 
     for (let attempt = 1; attempt <= MAX_CONSECUTIVE_REFRESH_TIMEOUTS + 2; attempt++) {
       const listCallsBefore = worker.calls.filter((call) => call === "list.get:devices").length;
-      // A worker event, not the tick, triggers each refresh here -- `#onWorkerEvent` calls
-      // `refresh()` directly, with none of the tick's own scheduling drift.
       worker.pushEvent({ event: "lease.granted" });
-      // Waits for `list.get` to have actually been called -- proof `status.get`'s real promise
+      // why: Waits for `list.get` to have actually been called -- proof `status.get`'s real promise
       // was given a genuine chance to settle and `#rebuildView` moved on to the hung batch.
       // Waiting on `pendingTimerCount` instead would be a false positive: `status.get`'s own
       // bounded wait registers a timer *synchronously*, before its real response has had any
@@ -1709,11 +1601,7 @@ describe("GatewayService", () => {
         ),
       );
       harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
-      // Real microtask turns for the timeout rejection to propagate through `#rebuildView` and
-      // `refresh()`'s catch/finally -- nothing here is clock-scheduled once the timer fires.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      // `status.get` answered this round, so liveness holds no matter how many cycles the
-      // dispatcher stays busy -- unlike P1's test, this must stay true past the threshold.
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected");
     }
     expect(eventNames(harness.events)).not.toContain("worker.disconnected");
@@ -1721,16 +1609,8 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // C-2, ADR 0005 §8 ("revoking closes the uplink"): a join token was checked once, at upgrade,
-  // and nothing ever re-verified a live link -- so revoking a worker's token used to have no
-  // observable effect on an already-open uplink at all. `closeLinksForToken` is what
-  // `GatewayDispatcher#tokenRevoke` calls after a successful revoke; this exercises it end to
-  // end against real `WorkerLink`s, matched by the exact token each authenticated with, so a
-  // shared or reused credential (however unlikely) cannot silently take out an unrelated worker.
   it("closes exactly the link a token authorized, and leaves every other link alone (C-2)", async () => {
     const harness = fleet({
-      // Mirrors `main.ts`'s real `authenticate`: `accept` names the token id that authorized
-      // it, which is the whole plumbing this fix adds.
       authenticate: (credential) =>
         credential === undefined
           ? "unauthenticated"
@@ -1754,7 +1634,6 @@ describe("GatewayService", () => {
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_a")?.connection).toBe("disconnected"),
     );
-    // B authenticated with a different token entirely -- revoking A's must not touch it.
     expect(harness.service.workers.view("wrk_b")?.connection).toBe("connected");
     expect(eventNames(harness.events)).toEqual(
       expect.arrayContaining(["worker.connected", "worker.connected", "worker.disconnected"]),
@@ -1763,12 +1642,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // C3: `hello` -- inside `connect()`, the first round trip `start()` makes -- had no timeout
-  // at all, unlike every call after it. A peer that completes the WebSocket upgrade with a
-  // valid join token and then never answers `hello` (a half-open TCP right after upgrade, or a
-  // deliberately silent client) used to hang `start()` forever: the link stayed in `#links`
-  // (registered before `start()` even runs), holding an open socket and no view, invisible in
-  // `simlock worker list` while consuming a slot -- D2's exact failure mode, one call earlier.
   it("does not hang the handshake forever when hello itself never answers (C3)", async () => {
     const harness = fleet();
     await harness.service.start();
@@ -1777,21 +1650,11 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
     harness.clock.advance(WORKER_CALL_TIMEOUT_MS);
 
-    // The decisive check: a timed-out hello must make the link actually give up and close its
-    // end of the socket -- closing either end of an in-memory pair closes both, so this is only
-    // true once the gateway's side has been closed. Against the unbounded `connect()` this
-    // never happens: nothing ever times out, so nothing ever closes, and this assertion is what
-    // tells the two apart (a looser "no view was built" check passes either way, since a
-    // permanently-hung connect() also never builds one).
     await vi.waitFor(() => expect(workerEnd.closed).toBe(true));
 
-    // Timing out must not fabricate a view for a worker the gateway never actually spoke to.
     expect(eventNames(harness.events)).not.toContain("worker.connected");
     expect(harness.service.workers.view("wrk_1")).toBeUndefined();
 
-    // And the slot must actually be freed: the same worker id reconnecting for real (a client
-    // that does answer) must build a normal view rather than being shut out by a link that
-    // leaked past its timeout.
     const worker = new ScriptedWorkerClient();
     await harness.join("wrk_1", worker);
     await vi.waitFor(() =>
@@ -1820,8 +1683,6 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  // The two refusals reach the event stream apart, because they point at different fixes:
-  // the join token itself, or the role it was minted with (ADR 0005 §4).
   it.each(["unauthenticated", "forbidden"] as const)(
     "reports a %s uplink it turned away, without inventing a worker for it",
     async (reason) => {
@@ -1835,9 +1696,6 @@ describe("GatewayService", () => {
       });
 
       expect(harness.service.workers.views()).toEqual([]);
-      // M3: `workerId`/`label` are whatever the dial *claimed* in its headers -- never verified
-      // (a refused peer proves no identity), but still worth an operator's while, and something
-      // this event used to always report as `undefined` regardless of what the dial sent.
       expect(harness.events.at(-1)).toMatchObject({
         event: "worker.rejected",
         payload: { label: "mac-mini-1", reason, workerId: "wrk_1" },
@@ -1847,13 +1705,6 @@ describe("GatewayService", () => {
     },
   );
 
-  // P-2: `GET /v1/uplink` needs no credential to reach `authenticate`, and before this fix every
-  // refusal emitted its own `worker.rejected` -- so a flood of refused dials (deliberate, or a
-  // misconfigured worker retrying fast) could fill the event bus's ring buffer, bounded by count
-  // and not bytes, with nothing but refusals, evicting everything else in it. No test dialed
-  // twice before this round. This asserts the coalescing itself: two dials with the same claimed
-  // id and reason inside one window produce exactly one event, and the first dial after the
-  // window closes reports the closed window's total as `count`.
   it("coalesces a flood of identical refusals into one event per window, with a count only above one (P-2)", async () => {
     const harness = fleet({ authenticate: () => "unauthenticated" });
     await harness.service.start();
@@ -1867,14 +1718,10 @@ describe("GatewayService", () => {
       harness.join("wrk_flood", new ScriptedWorkerClient(), "mac-mini-1"),
     ).rejects.toMatchObject({ code: "rejected" });
 
-    // Both refusals were real (each dial above genuinely rejected), but only the first became
-    // an event -- and it carries no `count` at all, the exact pre-P-2 payload shape.
     expect(rejectedEvents()).toHaveLength(1);
     expect(rejectedEvents()[0]?.payload).toMatchObject({ workerId: "wrk_flood" });
     expect(rejectedEvents()[0]?.payload).not.toHaveProperty("count");
 
-    // Past the window: the next matching refusal is reported on its own, carrying the tally the
-    // just-closed window absorbed (both dials above).
     harness.clock.advance(REJECTION_COALESCE_WINDOW_MS);
     await expect(
       harness.join("wrk_flood", new ScriptedWorkerClient(), "mac-mini-1"),
@@ -1883,8 +1730,6 @@ describe("GatewayService", () => {
     expect(rejectedEvents()).toHaveLength(2);
     expect(rejectedEvents()[1]?.payload).toMatchObject({ count: 2, workerId: "wrk_flood" });
 
-    // A different claimed id is its own window from the start -- coalescing must not blend
-    // unrelated identities together into one gate.
     await expect(
       harness.join("wrk_other", new ScriptedWorkerClient(), "mac-mini-2"),
     ).rejects.toMatchObject({ code: "rejected" });
@@ -1909,8 +1754,6 @@ describe("GatewayService", () => {
   it("closes the uplink when a worker does not grant the gateway admin", async () => {
     const harness = fleet();
     await harness.service.start();
-    // A worker older than #117, or one that resolved the session some other way: nothing the
-    // gateway asks would be answered, so there is no view worth keeping.
     const worker = new ScriptedWorkerClient("agent");
 
     const workerEnd = await harness.join("wrk_1", worker);
@@ -1937,9 +1780,6 @@ describe("GatewayService", () => {
     expect(worker.calls).toHaveLength(callsAfterStop);
   });
 
-  // `./fleet-ports.ts`'s WorkerDispatchTarget#client -- #118's seam. Both halves of the
-  // contract: undefined before start() has completed the handshake, and undefined again once
-  // the link has closed.
   describe("target() / WorkerDispatchTarget (fleet-ports)", () => {
     it("has no client before the handshake completes", async () => {
       const harness = fleet();

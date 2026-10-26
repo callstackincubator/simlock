@@ -211,7 +211,7 @@ describe("CapacityCoordinator", () => {
       ),
     );
     const slim = iosDevice("slim-1", "slim", "shutdown");
-    // 8 GiB used of 8, and the one iOS running slot taken: both would refuse; RAM is named.
+    // why: 7 GiB used of 8, the boot would add 3 GiB, and the one iOS running slot taken: both would refuse; RAM is named.
     const devices: CapacityDevice[] = [
       slim,
       iosDevice("ready-1", "full", "ready"),
@@ -224,7 +224,7 @@ describe("CapacityCoordinator", () => {
   it("holds a boot's extra size until the boot reservation is released", () => {
     const capacity = sizedCoordinator();
     const slim = iosDevice("slim-1", "slim", "shutdown");
-    // 5 GiB used of 8: booting the slim device adds 2 GiB, leaving 1.
+    // why: 4 GiB used of 8: booting the shut-down slim device adds its full 3 GiB, leaving 1.
     const devices = [
       slim,
       iosDevice("ready-1", "full", "ready"),
@@ -233,7 +233,7 @@ describe("CapacityCoordinator", () => {
 
     const boot = capacity.tryReserveBoot(slim, devices);
     if (!boot.ok) throw new Error("expected a boot reservation");
-    // 7 GiB counted: no room for a new device's 3 GiB, nor for a second slim boot's 2 GiB.
+    // why: 7 GiB counted: no room for a new device's 3 GiB, nor for a second slim boot's 3 GiB.
     expect(capacity.tryReserveProvisioning({ mode: "full", platform: "ios" }, devices)).toEqual({
       ok: false,
       reason: "ram-budget",
@@ -301,7 +301,7 @@ describe("CapacityCoordinator", () => {
     expect(capacity.ramBudget([slim, iosDevice("ready-1", "full", "ready")])).toEqual({
       limitBytes: 8 * gibibyte,
       overLimit: false,
-      usedBytes: 4 * gibibyte,
+      usedBytes: 3 * gibibyte,
     });
   });
 

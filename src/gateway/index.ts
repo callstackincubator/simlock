@@ -17,14 +17,11 @@ export { drainedWorkersOwner, StateDrainStore } from "./drain-store.js";
 export type { DrainStore } from "./drain-store.js";
 export { GatewayDispatcher } from "./dispatcher.js";
 export { GatewayService, type GatewayServiceOptions } from "./service.js";
-export type { FleetViews } from "./fleet-ports.js";
-export type { WorkerRegistry } from "./worker-registry.js";
 export type { WorkerDirectory } from "./fleet-ports.js";
-// fallow-ignore-next-line unused-type -- see FleetViews above.
+// fallow-ignore-next-line unused-type -- public port shape: what a WorkerDirectory resolves a worker id to, for anyone supplying their own directory.
 export type { WorkerDispatchTarget } from "./fleet-ports.js";
 export { FleetLeaseCoordinator } from "./fleet-coordinator.js";
 export { FleetLeaseIndex } from "./lease-index.js";
-// fallow-ignore-next-line unused-type -- public record shape for FleetLeaseIndex's own consumers; no current caller outside src/gateway needs the type by name.
 export type { FleetLeaseEntry } from "./lease-index.js";
 export { createRoutingPolicy } from "./routing.js";
 // fallow-ignore-next-line unused-type -- public shape for a caller implementing its own routing policy; no current one exists outside routing.ts.

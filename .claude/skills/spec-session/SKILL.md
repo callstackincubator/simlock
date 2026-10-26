@@ -267,6 +267,9 @@ the body:
 - Every sentence in any section that says what code, a tool or a browser
   does today names its Facts row; every list given as complete names the
   search that found it.
+- `node .agents/scripts/spec-lint.mjs --body-file <file>` (add `--feature`
+  for the feature) on each drafted body. Fix every `B` line before
+  posting; its header lists what it checks.
 
 **Post.** Do not ask first: a `task:draft` body is safe to post, and the
 maintainer approves everything in step 9. Edit the feature in place,
@@ -290,6 +293,12 @@ writing it. An overlap with one goes under Depends on in this feature's
 task.
 
 ## 8. Check the spec
+
+**Lint before any checker.** Run `node .agents/scripts/spec-lint.mjs <n>`
+on each posted body (`--feature` for the feature, which also lints its
+Behaviours rows against each task's Tests lines and its Depends on graph)
+and fix every `B` line before a checker starts; a checker never spends a
+round on what the lint finds.
 
 **Round 0, the feature first.** Post the feature body (Decisions, Shared
 values, Behaviours, Tasks as a list) before any task body, and start one
@@ -341,6 +350,7 @@ ADR <nnnn> (PR #<n>): <what it decides, one or two lines>
 | #<n> | <one line>       | #<n> or —  |
 
 Check: ready | <n> open findings, one line each
+<the chain line of `node .agents/scripts/runnable.mjs <feature>`, e.g. chain 3 of 4 tasks>
 ```
 
 The options: approve; approve and accept the open findings listed; or

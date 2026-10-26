@@ -7,22 +7,12 @@
   {
     "name": "bug:new",
     "color": "d73a4a",
-    "description": "Reported. Nobody has looked yet."
-  },
-  {
-    "name": "bug:triage",
-    "color": "d73a4a",
-    "description": "An agent may reproduce it and write the triage report."
+    "description": "Reported. An agent may triage it (rule 8), and nothing more."
   },
   {
     "name": "bug:needs-info",
     "color": "d73a4a",
     "description": "Could not reproduce. Waiting on the reporter."
-  },
-  {
-    "name": "bug:triaged",
-    "color": "d73a4a",
-    "description": "Triage report posted. Waiting on the maintainer to accept or send back."
   },
   {
     "name": "bug:ready",

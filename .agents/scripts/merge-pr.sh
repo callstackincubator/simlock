@@ -8,7 +8,14 @@
 # nothing. Gates, in order, for each: the PR is open and not a draft; it carries no needs-hardware label; its body
 # passes pr-body-check.mjs (a `## Review` section with its counts line, no "spec needs" line,
 # the agent footer); every CI check passed or was skipped; and GitHub calls it mergeable. Waits up to 30 minutes for pending checks. Prints the first gate
-# that fails and exits 1, or exits 2 when checks are still pending at the deadline.
+# that fails and exits 1, or exits 2 when checks are still pending at the deadline. While it
+# waits it prints one line per poll to stderr, `merge-pr: #<pr> pending <n> check(s) (<up to 3
+# names>), <m> min waited`, and `merge-pr: #<pr> re-running the failed jobs of run <id>: <jobs>`
+# for each run it re-runs.
+#
+# When the PRs it merges close the last open sub-issues of the top PR's feature, every
+# `docs/internal/adr/NNNN-*.md` they add or change must read `**Status:** Accepted` (not
+# Proposed, not "not yet implemented") at the top PR's head (delivery rule 10), checked first.
 #
 # Red CI gets one re-run of its failed jobs when no failure is this PR's to fix: every red
 # check is a job GitHub cancelled (no runner came), or every test that failed is named by an
@@ -64,7 +71,8 @@ checks() {
 # Waits for every check to settle, then sets `bad` to the ones that did not pass or skip.
 # Called directly, never in $( ), so its exits end the script.
 red_checks() {
-  deadline=$(($(date +%s) + 1800))
+  started=$(date +%s)
+  deadline=$((started + 1800))
   while :; do
     all=$(checks)
     checks=$(printf '%s' "$all" | sed 's/^\([^ ]*\) [^ ]* /\1 /')
@@ -74,6 +82,9 @@ red_checks() {
       echo "not merged: checks still pending after 30 minutes" >&2
       exit 2
     }
+    pending=$(echo "$checks" | sed -n 's/^pending //p')
+    echo "merge-pr: #$pr pending $(echo "$pending" | grep -c '') check(s) ($(echo "$pending" |
+      head -n 3 | paste -sd , - | sed 's/,/, /g')), $((($(date +%s) - started) / 60)) min waited" >&2
     sleep "$poll"
   done
   bad=$(echo "$checks" | grep -v -e '^pass ' -e '^skipping ' || true)
@@ -119,7 +130,12 @@ gates() {
     runs=$(rerunnable_runs)
     if [ -n "$runs" ] && ! echo "$runs" | grep -qx none; then
       echo "PR #$pr: re-running the failed jobs once: cancelled, or failed only on open flaky-test issues"
-      for run in $runs; do gh run rerun "$run" --failed; done
+      for run in $runs; do
+        jobs=$(echo "$all" | grep -e '^fail ' -e '^cancel ' | grep "/actions/runs/$run/" |
+          sed 's/^[^ ]* [^ ]* //' | paste -sd , - | sed 's/,/, /g')
+        echo "merge-pr: #$pr re-running the failed jobs of run $run: $jobs" >&2
+        gh run rerun "$run" --failed
+      done
       sleep "$poll"
       red_checks
     fi
@@ -139,10 +155,38 @@ gates() {
   esac
 }
 
+# why: a feature's ADRs flip to Accepted when it closes (delivery rule 10), and the stack that
+# closes its last open sub-issue is the last chance to see that they did.
+adr_status() {
+  closing='(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[0-9]+'
+  closed=$(for p in $members; do api "pulls/$p" -q '.body // ""' | grep -oiE "$closing" || true; done |
+    grep -oE '[0-9]+$' | sort -u)
+  issue=$(api "pulls/$target" -q '.body // ""' | grep -oiE "$closing" | grep -oE '[0-9]+$' | head -n 1 || true)
+  [ -n "$issue" ] || return 0
+  feature=$(api "issues/$issue/parent" -q .number 2>/dev/null) || return 0
+  for n in $(paged "issues/$feature/sub_issues" '.[] | select(.state == "open") | .number'); do
+    echo "$closed" | grep -qx "$n" || return 0
+  done
+  head=$(api "pulls/$target" -q .head.sha)
+  adrs=$(for p in $members; do paged "pulls/$p/files" '.[] | select(.status != "removed") | .filename'; done |
+    grep -E '^docs/internal/adr/[0-9]{4}-[^/]*\.md$' | sort -u || true)
+  for adr in $adrs; do
+    status=$(api "contents/$adr" -f ref="$head" -H 'Accept: application/vnd.github.raw' |
+      awk '/^- \*\*Status:\*\*/ { on = 1; printf "%s", $0; next }
+        on && /^[[:space:]]+[^[:space:]]/ { printf " %s", $0; next } { on = 0 }')
+    case $status in
+      *"not yet implemented"*) ;;
+      "- **Status:** Accepted"*) continue ;;
+    esac
+    fail "#$target closes the last open sub-issue of #$feature, and $adr reads \"$(echo "${status:-no Status line}" | cut -c1-80)\"; flip it to Accepted first (delivery rule 10)"
+  done
+}
+
 stack=$(api "stacks?pull_request=$target" \
   -q '[.[] | select(.open)][0].pull_requests // [] | .[] | select(.state == "open") | .number')
 members=$(echo "$stack" | sed "/^$target\$/q")
 [ -n "$members" ] || members=$target
+adr_status
 for pr in $members; do gates; done
 
 if [ "$members" = "$target" ]; then

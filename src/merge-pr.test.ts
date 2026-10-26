@@ -48,6 +48,17 @@ interface Fleet {
   }[];
   readonly runsByPr?: Readonly<Record<number, readonly CheckRun[]>>;
   readonly target?: number;
+  readonly feature?: Feature;
+}
+
+// why: the feature behind the PRs' `Closes #<n>`: its parent link, sub-issues, the files each
+// PR changes, and each ADR file's text at the top PR's head.
+interface Feature {
+  readonly issue: number;
+  readonly parent: number;
+  readonly subIssues: readonly { number: number; state: string }[];
+  readonly files: Readonly<Record<number, readonly string[]>>;
+  readonly adrs: Readonly<Record<string, string>>;
 }
 
 const VALID_BODY =
@@ -101,7 +112,7 @@ let filter;
 for (let i = 4; i < args.length; i += 2) {
   if (args[i] === "-f") fields[args[i + 1].split("=")[0]] = args[i + 1].split("=").slice(1).join("=");
   else if (args[i] === "-q") filter = args[i + 1];
-  else fail();
+  else if (args[i] !== "-H") fail();
 }
 const page = (items) => {
   const p = Number(fields.page);
@@ -144,6 +155,19 @@ if (method === "PUT" && path === "repos/o/r/pulls/" + fleet.target + "/merge" &&
   value = { state: "pending", statuses: page(shown) };
 } else if (path === "repos/o/r/issues" && fields.labels === "flaky-test" && fields.state === "open") {
   value = fleet.flakyIssues;
+} else if (fleet.feature !== null && path === "repos/o/r/issues/" + fleet.feature.issue + "/parent") {
+  value = { number: fleet.feature.parent };
+} else if (/^repos\\/o\\/r\\/issues\\/\\d+\\/parent$/.test(path)) {
+  process.stderr.write("gh: Not Found (HTTP 404)\\n");
+  process.exit(1);
+} else if (fleet.feature !== null && path === "repos/o/r/issues/" + fleet.feature.parent + "/sub_issues") {
+  value = page(fleet.feature.subIssues);
+} else if (/^repos\\/o\\/r\\/pulls\\/\\d+\\/files$/.test(path)) {
+  const files = fleet.feature === null ? [] : (fleet.feature.files[pr] ?? []);
+  value = page(files.map((filename) => ({ filename, status: "modified" })));
+} else if (fleet.feature !== null && path.startsWith("repos/o/r/contents/") && fields.ref === "abc" + fleet.target) {
+  process.stdout.write(fleet.feature.adrs[path.slice("repos/o/r/contents/".length)] ?? "");
+  process.exit(0);
 } else {
   fail();
 }
@@ -187,6 +211,7 @@ function fleetFile(fleet: Fleet) {
     stacks: f.stacks,
     runsByPr: f.runsByPr,
     target: f.target,
+    feature: f.feature ?? null,
   };
 }
 
@@ -496,5 +521,46 @@ describe("merge-pr.sh on a stacked PR", { timeout: 20_000 }, () => {
     expect(result.status).toBe(1);
     expect(result.merged).toBe(false);
     expect(result.output).toContain("CI not green on PR #11");
+  });
+
+  const ADR = "docs/internal/adr/0048-keep-simulators.md";
+  const lastTask = (status: string, subIssues = [{ number: 21, state: "open" }]): Fleet => ({
+    target: 12,
+    stacks: [{ open: true, pull_requests: [11, 12].map((number) => ({ number, state: "open" })) }],
+    body: `Closes #21\n\n${VALID_BODY}`,
+    feature: {
+      issue: 21,
+      parent: 20,
+      subIssues,
+      files: { 11: [ADR, "docs/internal/adr/README.md"], 12: ["src/a.ts"] },
+      adrs: {
+        [ADR]: `# 0048. Keep simulators\n\n- **Status:** ${status}\n  for a worker\n- **Date:** x\n`,
+      },
+    },
+  });
+
+  it("merges nothing when the stack closes its feature's last open sub-issue and an ADR it changes is not Accepted", () => {
+    for (const status of ["Accepted — not yet implemented", "Proposed"]) {
+      const result = gate(lastTask(status));
+
+      expect(result.status).toBe(1);
+      expect(result.merged).toBe(false);
+      expect(result.gated).toEqual([]);
+      expect(result.output).toContain(
+        `#12 closes the last open sub-issue of #20, and ${ADR} reads "- **Status:** ${status}`,
+      );
+    }
+  });
+
+  it("merges the stack whose ADRs read Accepted, or that leaves a sub-issue of its feature open", () => {
+    expect(gate(lastTask("Accepted")).merged).toBe(true);
+    expect(
+      gate(
+        lastTask("Accepted — not yet implemented", [
+          { number: 21, state: "open" },
+          { number: 22, state: "open" },
+        ]),
+      ).merged,
+    ).toBe(true);
   });
 });

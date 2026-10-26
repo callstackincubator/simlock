@@ -123,7 +123,6 @@ function leaseFacts(ctx: Context, entry: FleetLease): FleetLeaseFacts {
   };
 }
 
-// fallow-ignore-next-line unused-export -- reached through the namespace of definition.ts's dynamic import.
 export function createGateway(ctx: Context): GatewayModule {
   const parts = createGatewayAgentDeviceFrontParts(
     fleetPort(ctx),

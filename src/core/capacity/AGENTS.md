@@ -34,7 +34,7 @@ Callers: leasing's `AcquisitionPlanner`, the warm pool, `status.get`. Parent: [c
    - `tryReserveProvisioning(planned, devices)` — `canProvision`, then a running slot. Counts as a
      device and a running slot until released.
    - `tryReserveBoot(device, devices)` — `canBoot` (RAM first), then a running slot. The device
-     counts `full` in every decision until released.
+     counts `full` and no longer `shutdown` (so it holds RAM) in every decision until released.
    - Release is idempotent. Every take and release calls the observer.
 6. **Read** — `runningCapacity` (running, reserved, max, `overLimit` per platform and global),
    `deviceLimit`, `ramBudget` (devices only, reservations left out), `atRamBudget(platform)`: would
@@ -49,10 +49,10 @@ Callers: leasing's `AcquisitionPlanner`, the warm pool, `status.get`. Parent: [c
 
 **`resource`** (default). Limits from the machine, plus a RAM budget.
 
-- Limit = `totalRamBytes` − 4 GiB. Used = sum over every device not `deleted` (shut down
-  included), each by platform and mode; a slim size left unset is the full size.
+- Limit = `totalRamBytes` − 4 GiB. Used = sum over every device neither `deleted` nor
+  `shutdown`, each by platform and mode; a slim size left unset is the full size.
 - `canProvision`: device limit, then used + new device's size > limit → `ram-budget`.
-- `canBoot`: extra = full size − own size; refused `ram-budget` when used + extra > limit.
+- `canBoot`: extra = full size for a shut-down device (it holds none), else full size − own size; refused `ram-budget` when used + extra > limit.
 - Over the limit (sizes raised by a restart): every create and every boot that adds RAM is
   refused. Nothing is stopped or reclaimed for it.
 

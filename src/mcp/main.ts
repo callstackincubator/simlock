@@ -71,7 +71,6 @@ export interface McpStdioRunner {
  * Connects the MCP server to stdio and remains pending until the connection closes.
  * The caller owns process exit status and any fatal diagnostic rendering.
  */
-// fallow-ignore-next-line unused-export -- CLI routing invokes this public frontend entrypoint.
 export async function runMcpStdio(environment: McpStdioEnvironment = {}): Promise<void> {
   const runner = await startMcpStdio(environment);
   await runner.finished;

@@ -77,7 +77,7 @@ Arrows point from the optional to the required (architecture rule 15).
 | `past-index` | Outside a component, import only its index file (tests may also import its testing file) |
 | `core-not-leasing` | Core declares a port; the composition root connects leasing to it |
 | `core-not-drivers` | Core and leasing reach a platform only through the `Driver` interface |
-| `no-fs-or-process` | Core, leasing, agent-device, host-load, stream and alerts use ports, never `fs` or `child_process` |
+| `no-fs-or-process` | Everything under `src/` but `ports/` uses ports, never `fs` or `child_process` |
 | `definition-is-light` | A module's definition file imports its own module only for types or by dynamic import |
 | `auth-imports-little` | `src/auth` imports only ports and contract |
 | `modules-imports-little`, `modules-imports-bus-types-only` | `src/modules` imports only ports, contract and core, and the bus for types |

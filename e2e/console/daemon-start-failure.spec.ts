@@ -55,6 +55,9 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict", 
         `premise: the daemon bound port ${String(daemon.port)}, which this test holds`,
       );
     }
+    // why: `daemon start` waits for the daemon to leave `starting` and exits 1 when it stopped (#981),
+    // so the failure is the CLI's own exit, not a clean exit followed by a log wait.
+    expect(reported(failure)).toContain("daemon start failed (exit code 1)");
     expect(reported(failure)).toContain("EADDRINUSE");
     expect(reported(failure)).toContain(String(daemon.port));
   } finally {

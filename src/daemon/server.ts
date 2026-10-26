@@ -612,6 +612,8 @@ export class DaemonServer {
     } catch {
       throw new StartupFailedError();
     }
+    // why: a request parked before the stop passed the entry gates already; releasing it would start work after `settle()` took its snapshot.
+    if (this.#stopping) throw new DispatchError("DAEMON_STOPPING", "Daemon is stopping");
   }
 
   stop(reason = "requested"): Promise<void> {
@@ -638,6 +640,11 @@ export class DaemonServer {
     this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
+    // why: every cleanup run in flight (scheduled, dry-run or rule-scoped) still reads the registry
+    // and calls drivers; each ends before anything below closes them.
+    await this.#engine?.reaper.settle();
+    // why: a health tick or recovery reboot already running still acts on a device; it ends before the drivers are disposed.
+    await this.#engine?.healthMonitor?.settle();
     this.#engine?.physicalDeviceWatcher?.dispose();
     // why: a stop releases nothing; leases persist with their deadline. Only work already in
     // flight is drained, so `daemon stop` finishes on a settled pool. Disposal follows rather than

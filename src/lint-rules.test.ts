@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { blankSource } from "./test-support/source-text.js";
+
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const oxlint = join(repoRoot, "node_modules", ".bin", "oxlint");
 const depcruise = join(repoRoot, "node_modules", ".bin", "depcruise");
@@ -183,11 +185,14 @@ const pathCases: readonly (readonly [string, readonly Expectation[]])[] = [
     ],
   ],
   [
-    "passes a core or agent-device test file importing node:fs, and fails the same import in a core file",
+    "passes a test file or a ports adapter importing node:fs, and fails the same import anywhere else in src/",
     [
       ["passes", "src/core/x.test.ts", "node:fs/promises"],
       ["fails", "src/core/x.ts", "node:fs/promises"],
       ["passes", "src/agent-device/host/x.test.ts", "node:fs"],
+      ["fails", "src/gateway/x.ts", "node:fs"],
+      ["fails", "src/cli/x.ts", "node:child_process"],
+      ["passes", "src/ports/x.ts", "node:fs"],
     ],
   ],
   [
@@ -786,11 +791,51 @@ describe("the repo's known violations", () => {
     expect(found.map(key).sort()).toEqual(
       read(".dependency-cruiser-known-cycles.json").map(key).sort(),
     );
-  });
+  }, 60_000);
+
+  it("lists every file outside src/ports/ that imports fs or child_process, and no file that stopped", () => {
+    const rule = (v: Violation) => v.rule.name === "no-fs-or-process";
+    expect(cruise(repoRoot, ["src"]).filter(rule).map(key).sort()).toEqual(
+      read(".dependency-cruiser-known-violations.json").filter(rule).map(key).sort(),
+    );
+  }, 60_000);
 
   it("never grows past what the repo had when dependency-cruiser was adopted", () => {
     expect(read(".dependency-cruiser-known-violations.json").length).toBeLessThanOrEqual(24);
     // why: two of the eight are the registry joining the existing daemon, http, agent-device cycle; they go when agent-device stops importing http.
     expect(read(".dependency-cruiser-known-cycles.json").length).toBeLessThanOrEqual(8);
+  });
+});
+
+// why: architecture rule 9's clock half, which no import rule can see: application code reads the
+// time and sets timers through the Clock port. The list holds what the repo had when the check
+// came in; a fix removes its entry, and nothing joins it.
+const KNOWN_TIME_READS: Readonly<Record<string, number>> = { "src/core/usage/index.ts": 1 };
+const TIME_READ = /\bDate\.now\(|\bnew Date\(\s*\)|\bset(?:Timeout|Interval)\(/g;
+
+const timeReads = (text: string): number =>
+  blankSource(text, { strings: true }).match(TIME_READ)?.length ?? 0;
+
+describe("the time outside src/ports/", () => {
+  it("is read, and timers set, only through the Clock port, apart from a known list that only shrinks", () => {
+    expect(
+      timeReads(
+        "// Date.now()\nconst at = Date.now(); new Date(); setTimeout(f, 1); 'setInterval('",
+      ),
+    ).toBe(3);
+    const sources = spawnSync("git", ["ls-files", "src/*.ts", "src/*.tsx"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+      .stdout.split("\n")
+      .filter((name) => name !== "" && !name.startsWith("src/ports/") && !/test/.test(name));
+    const found = Object.fromEntries(
+      sources
+        .map((name) => [name, timeReads(readFileSync(join(repoRoot, name), "utf8"))] as const)
+        .filter(([, count]) => count > 0),
+    );
+
+    expect(sources).toEqual(expect.arrayContaining(["src/core/registry.ts", "src/daemon/main.ts"]));
+    expect(found).toEqual(KNOWN_TIME_READS);
   });
 });

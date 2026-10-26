@@ -81,6 +81,7 @@ On the agent's machine, connect agent-device to Simlock once, then use it as usu
 ```sh
 export AGENT_DEVICE_DAEMON_AUTH_TOKEN=slk_Qm9yZWFsaXMtNzEzMi1kZXZpY2UtdG9rZW4tZXhhbXBsZQ
 agent-device connect proxy --daemon-base-url https://mac-studio-2.example.com/v1/agent-device
+export AGENT_DEVICE_SESSION=agent-1
 
 agent-device open --platform ios --device "iPhone 16"
 agent-device install MyApp ./build/Debug-iphonesimulator/MyApp.app
@@ -91,6 +92,8 @@ agent-device close
 ```
 
 The URL is the worker's HTTP address, or the gateway's (port 4700 by default), followed by `/v1/agent-device`.
+
+When several agents use agent-device on one machine, each sets its own `AGENT_DEVICE_SESSION` (or passes `--session` on every command). Without one, a command falls back to the last session saved on that machine, which may be another agent's, and fails with `No active proxy device lease for this session; run open first.` or `refused: lease <id> is not one of yours on this gateway`.
 
 - **`open` takes a lease.** `--platform ios` or `android` is required. `--device "iPhone 16"` asks for that model. `--target mobile`, `tv` or `desktop` asks for a phone, TV or desktop device. `--os` names an OS version or a range (`26.0`, `>=18 <27`, `18 - 26`; a range gets the newest installed version in it), and on Android `--image-tag` names a system image tag such as `google_apis_playstore`. With none of these, Simlock leases a phone. The reply to `open` names the model, OS and image tag you got. If every match is taken, `open` waits in Simlock's queue for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
 - **The lease is an ordinary Simlock lease.** `simlock status` and the console show it, held by the token. Its id is the one agent-device chose.
@@ -142,6 +145,8 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: name --platform ios or android` | `open` needs `--platform`. |
 | `refused: simlock picks the device` | A `--udid`, `--serial` or `--device` names a device that is not the one Simlock leased to you. |
 | `refused: simlock chooses the device set; run disconnect, then connect proxy without --ios-simulator-device-set` | Simlock decides which devices agent-device sees. |
+| `No active proxy device lease for this session; run open first.` | The command ran in a session with no lease, often because parallel agents share a machine without their own session. Set `AGENT_DEVICE_SESSION` (or pass `--session`) per agent, then `open`. |
+| `refused: lease <id> is not one of yours on this gateway` | The command named a lease held by another session or token, often the same cause. Give each agent its own `AGENT_DEVICE_SESSION`, then `open` again. |
 | `refused: malformed physical` | `physical` was not true or false. |
 | `refused: unknown --target <value>; use mobile, tv or desktop` | `--target` named a device class Simlock does not map. |
 | `refused: malformed osVersion`, `refused: malformed imageTag` | `--os` or `--image-tag` was not a string. |

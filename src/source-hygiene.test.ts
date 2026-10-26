@@ -287,3 +287,56 @@ describe("a file at vendor/'s root", () => {
     expect(rootFiles).toEqual(["vendor/README.md"]);
   });
 });
+
+/**
+ * why: `docs/internal/VENDORED-CODE.md` and `vendor/README.md` are the inventory a reader trusts
+ * to list what `vendor/` carries (vendor and third-party code rule 11), so both are checked against
+ * the directories on disk, and every `vendor/` path an inventory row names must still be there.
+ */
+describe("the vendored inventory", () => {
+  const inventory = readFileSync(join(REPO_ROOT, "docs/internal/VENDORED-CODE.md"), "utf8");
+  const section = inventory.split(/^## /m).find((part) => part.startsWith("The inventory")) ?? "";
+  const cells = (row: string): string[] =>
+    row
+      .replace(/^\||\|$/g, "")
+      .split(/(?<!\\)\|/)
+      .map((cell) => cell.trim());
+  const [header = "", , ...rows] = section.split("\n").filter((line) => line.startsWith("|"));
+  const where = cells(header).indexOf("Where it lives");
+  const backticked = (text: string): string[] =>
+    [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? "");
+
+  it("was parsed: a row per inventory entry, with a Where it lives column", () => {
+    expect(where).toBeGreaterThan(0);
+    expect(rows.length).toBeGreaterThanOrEqual(vendoredDirs.size);
+  });
+
+  it("names every first-level directory under vendor/ in a row's Where it lives column and in vendor/README.md", () => {
+    const placed = rows.flatMap((row) => backticked(cells(row)[where] ?? ""));
+    const index = readFileSync(join(REPO_ROOT, "vendor/README.md"), "utf8");
+    const missing = [...vendoredDirs.keys()].flatMap((dir) => [
+      ...(placed.some((path) => path.startsWith(`vendor/${dir}/`))
+        ? []
+        : [`VENDORED-CODE.md: vendor/${dir}/`]),
+      ...(index.includes(`\`${dir}/\``) ? [] : [`vendor/README.md: ${dir}/`]),
+    ]);
+
+    expect(missing).toEqual([]);
+  });
+
+  it("names only vendor/ paths that exist", () => {
+    const gone = rows
+      .flatMap(backticked)
+      .filter((token) => /^vendor\/\S+$/.test(token))
+      .filter((path) => {
+        try {
+          statSync(join(REPO_ROOT, path));
+          return false;
+        } catch {
+          return true;
+        }
+      });
+
+    expect(gone).toEqual([]);
+  });
+});

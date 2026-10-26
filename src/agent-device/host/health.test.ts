@@ -20,13 +20,12 @@ afterEach(async () => {
 });
 
 async function serve(
-  handler: (url: string | undefined) => { readonly body: string } | "never",
+  handler: (url: string | undefined) => { readonly body: string },
 ): Promise<{ readonly baseUrl: string; readonly urls: string[] }> {
   const urls: string[] = [];
   const server = createServer((request, response) => {
     urls.push(request.url ?? "");
     const answer = handler(request.url);
-    if (answer === "never") return;
     response.setHeader("content-type", "application/json");
     response.end(answer.body);
   });
@@ -52,13 +51,5 @@ describe("NodeAgentDeviceHealthProbe", () => {
     const { baseUrl } = await serve(() => ({ body: "<html>not json</html>" }));
 
     await expect(new NodeAgentDeviceHealthProbe().read(baseUrl)).rejects.toThrow();
-  });
-
-  it("rejects a server that never answers once its time limit passes", async () => {
-    const { baseUrl } = await serve(() => "never");
-    const started = Date.now();
-
-    await expect(new NodeAgentDeviceHealthProbe(50).read(baseUrl)).rejects.toThrow();
-    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

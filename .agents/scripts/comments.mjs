@@ -7,7 +7,9 @@
 // when no comment is listed.
 // `comment-lint.mjs` imports `listComments({ base, head, all, files })` for the same blocks as
 // data: `{ path, start, end, state, trailing, lines: [{ n, text }], next: { n, text } | null }`,
-// and `trailingText(line, shell)` for the comment part of a code line.
+// and `trailingText(line, shell)` for the comment part of a code line. `test-lint.mjs` imports
+// `changedFiles({ base, head, files })`: each touched code file as `{ path, lines, added }`, its
+// text at <head> split into lines and the set of the line numbers (from 1) the diff adds.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,18 +23,23 @@ const QUOTES = new Set(['"', "'", "`"]);
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
 
 export function listComments({ base, head, all = false, files = null }) {
-  // why: from where the branch left <base>, so a comment <base> changed since is not blamed on it.
-  const from = git("merge-base", base, head ?? "HEAD").trim();
-  const range = head === undefined ? [from] : [from, head];
-  const wanted = files === null ? null : new Set(files);
   const blocks = [];
-  for (const path of touchedFiles(range, head, wanted)) {
-    const lines = fileText(path, head).split("\n");
-    const added = addedLines(path, lines.length, range, head);
+  for (const { path, lines, added } of changedFiles({ base, head, files })) {
     const kinds = SHELL.test(path) ? shellKinds(lines) : scriptKinds(lines);
     blocks.push(...blocksIn(path, lines, kinds, added, all));
   }
   return blocks;
+}
+
+export function changedFiles({ base, head, files = null }) {
+  // why: from where the branch left <base>, so a line <base> changed since is not blamed on it.
+  const from = git("merge-base", base, head ?? "HEAD").trim();
+  const range = head === undefined ? [from] : [from, head];
+  const wanted = files === null ? null : new Set(files);
+  return touchedFiles(range, head, wanted).map((path) => {
+    const lines = fileText(path, head).split("\n");
+    return { path, lines, added: addedLines(path, lines.length, range, head) };
+  });
 }
 
 export function trailingText(line, shell = false) {
