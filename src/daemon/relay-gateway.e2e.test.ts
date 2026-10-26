@@ -314,6 +314,24 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(signals).toHaveLength(2);
   }, 30_000);
 
+  it("a gateway module opening a two-way relay gets the worker's refusal or an error", async () => {
+    twoWayBehavior = () =>
+      Promise.resolve(new Response("not for you", { headers: { "x-why": "no" }, status: 403 }));
+    const { relay, workerId } = await startFleet();
+
+    const refused = await relay.relayTwoWay(workerId, buildCall({}));
+    const missing = await settleWithin(
+      relay.relayTwoWay(workerId, buildCall({ target: "agent-device" })),
+    );
+
+    expect(refused).toBeInstanceOf(Response);
+    const refusal = refused as Response;
+    expect(refusal.status).toBe(403);
+    expect(refusal.headers.get("x-why")).toBe("no");
+    expect(await refusal.text()).toBe("not for you");
+    expect(missing).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
+  }, 30_000);
+
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
     let received = "";
     behavior = async (request) => {
