@@ -206,6 +206,8 @@ export interface FakeGatewayContext<C> {
   readonly clock: FakeClock;
   readonly ctx: GatewayContext<C>;
   readonly relayed: { readonly workerId: string; readonly url: string; readonly tenant: string }[];
+  // why: plays the gateway's index dropping a lease, as a relayed `lease.released` does.
+  removeLease(entry: FleetLease): void;
 }
 
 export async function fakeGatewayContext<C>(
@@ -226,9 +228,12 @@ export async function fakeGatewayContext<C>(
     systemStats: new FakeSystemStats({ cpuCount: 4, totalRamBytes: 16 * 1024 ** 3 }),
   });
   const serving = facts.serving ?? [];
+  const removedListeners: ((entry: FleetLease) => void)[] = [];
   const leases: FleetLeases = {
     all: (): readonly FleetLease[] => [],
-    onRemoved: () => undefined,
+    onRemoved: (listener) => {
+      removedListeners.push(listener);
+    },
     resolve: () => undefined,
   };
   const relayed: FakeGatewayContext<C>["relayed"][number][] = [];
@@ -258,5 +263,8 @@ export async function fakeGatewayContext<C>(
       workers: () => serving,
     },
     relayed,
+    removeLease: (entry) => {
+      for (const listener of removedListeners) listener(entry);
+    },
   };
 }
