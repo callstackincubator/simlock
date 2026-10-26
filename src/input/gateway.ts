@@ -4,6 +4,7 @@ import { createGatewayInput } from "./create.js";
 
 export function createGateway(ctx: GatewayContext<InputModuleConfig>): GatewayModule {
   const input = createGatewayInput({
+    clock: ctx.clock,
     relayTwoWay: (workerId, request, tenant, leaseId) =>
       ctx.relayTwoWay(workerId, request, tenant, leaseId),
     requesterPrefix: ctx.requesterPrefix,

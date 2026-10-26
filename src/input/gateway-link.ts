@@ -5,7 +5,7 @@ import type {
   ModuleLeaseSocketAccept,
   ModuleTwoWayRelay,
 } from "../modules/index.js";
-import type { LeaseSocket } from "../ports/index.js";
+import type { Clock, LeaseSocket } from "../ports/index.js";
 import { encodeFrame, readFrames } from "./framing.js";
 import { unavailable } from "./refusal.js";
 
@@ -17,7 +17,12 @@ export interface GatewayInputLinkOptions {
     leaseId?: string,
   ) => Promise<Response | ModuleTwoWayRelay>;
   readonly requesterPrefix: string;
+  readonly clock: Clock;
 }
+
+// why: the relay's own head deadline is 330 s, far too long for a person waiting on a socket; the
+// socket's open is bounded here and aborts the relay's open when it runs out.
+const OPEN_BOUND_MS = 10_000;
 
 export function createGatewayInputLink(options: GatewayInputLinkOptions): {
   open(
@@ -31,6 +36,11 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
       const controller = new AbortController();
       const workerId = lease.workerId ?? "";
       let relay: Response | ModuleTwoWayRelay;
+      let timedOut = false;
+      const timer = options.clock.setTimer(OPEN_BOUND_MS, () => {
+        timedOut = true;
+        controller.abort();
+      });
       try {
         relay = await options.relayTwoWay(
           workerId,
@@ -42,7 +52,15 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
           lease.workerLeaseId,
         );
       } catch (error) {
+        if (timedOut) {
+          return unavailable(
+            "WORKER_UNREACHABLE",
+            `Worker ${workerId} did not answer the input socket within 10 s`,
+          );
+        }
         return refusalFor(error, workerId, lease.id);
+      } finally {
+        options.clock.cancel(timer);
       }
       if (relay instanceof Response) return relay;
       return (socket) => bridge(socket, relay, controller);
