@@ -28,7 +28,7 @@ Over HTTP, the token is the requester. Every lease and request made with one age
 ### An agent token reaches the worker's machine
 
 <Aside type="caution">
-An agent token is a credential for the worker machine, not for one device. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the worker daemon, and can read and write any file that user can. This holds through a gateway too: the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers.
+An agent token is a credential for the worker machine, not for one device. Commands an agent runs on its device, such as `adb pull` or `simctl` commands, run on the worker as the user who runs the worker daemon, and can read and write any file that user can. This holds through a gateway too: the command runs on the worker that holds the lease. Give an agent token only to something you would let run commands on your workers. `simctl spawn` alone starts any program on the worker, so treat an agent token like shell access to it. A command gets only a short fixed list of the daemon's environment variables (see [Running commands with exec](/simlock/docs/using-devices/remote-agents#running-commands-with-exec)), so a secret in that environment is not handed on to the command. It is not hidden from it either: the command runs as the same user as the daemon, and can read the daemon's environment and any file that user can read.
 </Aside>
 
 ## Make, list and revoke tokens

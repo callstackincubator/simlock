@@ -34,7 +34,8 @@ Runs the command on the machine that owns the device and streams its output back
    `UNKNOWN_PASSTHROUGH_TOOL`. A refusal → `PASSTHROUGH_REFUSED`.
    The driver fills the lease's device into the command, and refuses one that names
    another device (ADR 0047), see "Resolution per platform".
-5. Env — the daemon's `process.env` + the command's `env`, minus its `unsetEnv`.
+5. Env — `execBaseEnvironment(process.env)` (`src/daemon/exec-env.ts`, the allowlisted
+   keys, read once at start) + the command's `env`, minus its `unsetEnv`.
 6. Spawn — `ProcessRunner.spawnStreaming`, pipes only. `stdin` is written once,
    then closed.
 7. `started` push the moment the process exists, then one `output` push per chunk
@@ -83,8 +84,9 @@ gateway that gives up the same way leaves the worker's command running.
   keeps running, maybe against a device reclaimed and granted again. Bounded by
   `exec.timeoutMs` and by `reclaiming` coming first; refused verbs stay refused.
 - **An `agent` token on a worker is a host-level credential.** Commands run as the
-  daemon's uid with its env; `adb pull <device path> <host path>` writes any path
-  the daemon can. Arguments are an accident boundary, not a security boundary.
+  daemon's uid (`simctl spawn` runs any program on the host); `adb pull <device path>
+  <host path>` writes any path the daemon can. Arguments are an accident boundary, not
+  a security boundary. Only the env is trimmed to the allowlist.
 - **No files.** Paths resolve on the worker: `simctl install /tmp/App.app` fails
   with the tool's own "no such file". Ship artifacts out of band; `device.upload`
   is an idea, not built.

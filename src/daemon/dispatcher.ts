@@ -740,7 +740,7 @@ export class Dispatcher {
     );
     const execEnv: NodeJS.ProcessEnv = { ...this.options.execEnv, ...command.env };
     for (const key of command.unsetEnv ?? []) {
-      // why: the daemon's own environment is the base, so a key it inherited could re-aim the command.
+      // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {

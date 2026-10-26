@@ -1040,6 +1040,48 @@ describe("startDaemon wires core and leasing together", () => {
     expect(entry).toMatchObject({ presence: { present: true } });
   });
 
+  it("starts a device.exec child from the allowlisted keys of the daemon's environment plus the command's own env, without a secret the daemon inherited", async () => {
+    const clock = new FakeClock(1_000);
+    const runner = new ScriptedProcessRunner([
+      { match: { args: ["list", "devices"], command: "fake-simctl" } },
+    ]);
+    const driver = new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      passthrough: () => ({
+        args: ["list", "devices"],
+        command: "fake-simctl",
+        env: { SIMLOCK_SCOPED: "1" },
+      }),
+      passthroughTools: ["simctl"],
+      platform: "ios",
+    });
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret");
+    vi.stubEnv("LC_CTYPE", "simlock-test-locale");
+    try {
+      const { daemon } = await start({
+        clock,
+        drivers: [driver],
+        hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+        processRunner: runner,
+      });
+      const grant = (await daemon.dispatch("lease.request", ios, agent)) as Grant;
+
+      await daemon.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId: grant.lease.id, tool: "simctl" },
+        agent,
+      );
+
+      const env = runner.calls.find((call) => call.command === "fake-simctl")?.options.env;
+      expect(env).toMatchObject({ LC_CTYPE: "simlock-test-locale", SIMLOCK_SCOPED: "1" });
+      expect(env?.PATH).toBe(process.env.PATH);
+      expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("announces the capacity figures and then the queue depth once startup is done", async () => {
     const { directory } = await start();
 
