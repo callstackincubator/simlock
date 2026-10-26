@@ -73,6 +73,24 @@ async function readConfig(child: BytePipeProcess): Promise<InputScreenConfig> {
   }
 }
 
+// why: the helper reads serve-sim's JSON for each tag; a scroll's position is left out when the
+// client sent none, so the helper scrolls under the centre.
+function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uint8Array {
+  switch (message.kind) {
+    case "touch":
+      return frameOf(INPUT_TAG.touch, { type: message.type, x: message.x, y: message.y });
+    case "scroll":
+      return frameOf(INPUT_TAG.scroll, {
+        dx: message.dx,
+        dy: message.dy,
+        ...(message.x === undefined ? {} : { x: message.x }),
+        ...(message.y === undefined ? {} : { y: message.y }),
+      });
+    case "key":
+      return frameOf(INPUT_TAG.key, { type: message.type, usage: message.usage });
+  }
+}
+
 function frameOf(tag: number, body: unknown): Uint8Array {
   return encodeScreenFrame(tag, new TextEncoder().encode(JSON.stringify(body)));
 }
@@ -100,9 +118,7 @@ class IosDeviceInput implements DeviceInput {
       if (message.button === "home") this.#home();
       return;
     }
-    if (message.kind !== "touch") return;
-    const { type, x, y } = message;
-    void this.#child.writeStdin(frameOf(INPUT_TAG.touch, { type, x, y }));
+    void this.#child.writeStdin(frameOfMessage(message));
   }
 
   // why: Xcode 26 and later silently drop the HID home-button press, so Home brings SpringBoard
