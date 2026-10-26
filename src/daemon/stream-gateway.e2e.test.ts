@@ -233,3 +233,88 @@ describe("a screen stream through a gateway", () => {
     },
   );
 });
+
+describe("a lease stream on a standalone worker", () => {
+  const daemons: DaemonServer[] = [];
+  const directories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
+    await Promise.all(
+      directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
+    );
+  });
+
+  async function standalone(streamEnabled: boolean) {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-stream-lease-"));
+    directories.push(directory);
+    const port = await freeLoopbackPort();
+    const worker = await startDaemon({
+      configOverrides: {
+        capabilities: { stream: { enabled: streamEnabled } },
+        http: { enabled: true, host: "127.0.0.1", port },
+      },
+      dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["18.0"],
+          clock: new SystemClock(),
+          knownModels: ["Pixel-A"],
+          platform: "android",
+          screenCapture: paintingScreen().capture,
+        }),
+      ],
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      version: "1.0.0-e2e",
+    });
+    daemons.push(worker);
+    const holder = await worker.dispatch("token.create", { label: "holder", role: "agent" }, admin);
+    const other = await worker.dispatch("token.create", { label: "other", role: "agent" }, admin);
+    const operator = await worker.dispatch(
+      "token.create",
+      { label: "op", role: "operator" },
+      admin,
+    );
+    const granted = await worker.dispatch(
+      "lease.request",
+      { model: "Pixel-A", platform: "android" },
+      { ...agent, principal: holder.token.id },
+    );
+    const leaseId = (granted as { lease: { id: string } }).lease.id;
+    const leaseStream = (token: string, id = leaseId) =>
+      fetch(`http://127.0.0.1:${String(port)}/v1/leases/${id}/stream`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+    return { holder: holder.secret, leaseStream, operator: operator.secret, other: other.secret };
+  }
+
+  it(
+    "a caller GETs /v1/leases/{id}/stream on a standalone worker and gets the picture or a refusal",
+    { timeout: 30_000 },
+    async () => {
+      const { holder, leaseStream, operator, other } = await standalone(true);
+      for (const token of [holder, operator]) {
+        const response = await leaseStream(token);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("simlock-stream-codec")).toBe("h264");
+        await response.body?.cancel();
+      }
+      for (const [token, id, message] of [
+        [other, undefined, "another's lease"],
+        [holder, "lse_unknown", "an unknown lease"],
+      ] as const) {
+        const response = await leaseStream(token, id);
+        expect(response.status, message).toBe(404);
+        const body = (await response.json()) as { error: { code: string } };
+        expect(body.error.code, message).toBe("UNKNOWN_LEASE");
+      }
+
+      const off = await standalone(false);
+      const unrouted = await off.leaseStream(off.holder);
+      expect(unrouted.status).toBe(404);
+      expect(await unrouted.text()).toBe("404 Not Found");
+    },
+  );
+});
