@@ -2968,16 +2968,18 @@ describe("AndroidDriver screen capture", () => {
   } as const;
   const settings = { bitrateKbps: 1500, fps: 30, maxDimension: 720 };
 
-  it("is offered only when both the server path and a TCP stream connector are given", async () => {
+  it("is offered, with the device input, only when both the server path and a TCP stream connector are given", async () => {
     const both = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
       scrcpyServerPath: serverPath,
       tcpStreamConnector: new FakeTcpStreamConnector(),
     });
     expect(both.screenCapture).toBeDefined();
+    expect(both.input).toBeDefined();
     const noPath = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]), {
       tcpStreamConnector: new FakeTcpStreamConnector(),
     });
     expect(noPath.screenCapture).toBeUndefined();
+    expect(noPath.input).toBeUndefined();
     const noConnector = await createDriver(
       await androidFilesystem(),
       new ScriptedProcessRunner([]),
@@ -2986,6 +2988,7 @@ describe("AndroidDriver screen capture", () => {
       },
     );
     expect(noConnector.screenCapture).toBeUndefined();
+    expect(noConnector.input).toBeUndefined();
   });
 
   it("pushes the server with this driver's adb, its scoped environment and the device's serial", async () => {
