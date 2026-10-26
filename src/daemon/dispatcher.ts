@@ -85,21 +85,15 @@ import type { UpdateCoordinator, UpdateProgress } from "./update-coordinator.js"
 
 export { DispatchError, type ContractDispatcher, type DispatchSession } from "./dispatch.js";
 
-/*
- * `DispatchSession`, `DispatchError`, and `ContractDispatcher` moved to `./dispatch.js` when
- * ADR 0005 gave the contract a second dispatcher implementation (`src/gateway/`), which needs
- * them without importing this file's `src/core` dependencies. They are re-exported above, so
- * every existing `from "./dispatcher.js"` import keeps working.
- */
 /**
- * How long a timed-out `device.exec` child gets between SIGTERM and SIGKILL (ADR 0005 §19e).
+ * why: How long a timed-out `device.exec` child gets between SIGTERM and SIGKILL (ADR 0005 §19e).
  * Fixed rather than derived from `exec.timeoutMs`: it is a termination-cleanup budget, not a
  * fraction of the command's own allowance -- the same reasoning, and the same ten seconds, as
  * `NodeProcessRunner`'s `SIGTERM_TO_SIGKILL_GRACE_MS`.
  */
 const EXEC_SIGKILL_GRACE_MS = 10_000;
 
-/** The `Promise.race` marker for "the timeout won". A unique object rather than a string, so
+/** why: The `Promise.race` marker for "the timeout won". A unique object rather than a string, so
  * it can never collide with something a `StreamingProcessHandle` could resolve with. */
 const EXEC_EXPIRED = Symbol("exec-expired");
 
@@ -130,15 +124,9 @@ export interface DispatcherOptions {
   readonly historyPath?: string;
   readonly capabilitySources?: readonly CapabilitySource[];
   readonly capacity: CapacityReader;
-  /** The warm pool as its last pass left it, for `status.get`. */
   readonly warmPool: WarmPoolReader;
   readonly catalog: CatalogReader;
   readonly clock: Clock;
-  /**
-   * The one installer (ADR 0010 §3), shared with the lease path so `component.install` and a
-   * lease request's download join one install, and read for `status.get`'s installs in progress
-   * and for `component.list`. `component.remove` goes through it too (ADR 0010 §8).
-   */
   readonly components: Pick<ComponentInstaller, "install" | "inProgress" | "list" | "remove">;
   readonly config: Config;
   readonly doctor?: Doctor;
@@ -146,21 +134,15 @@ export interface DispatcherOptions {
   readonly deviceModes: DeviceModeReader;
   readonly leases: LeaseCommands;
   readonly logger?: Logger;
-  /** Classifies a thrown error for the `operation` log line (`classifyError` in production).
+  /** why: Classifies a thrown error for the `operation` log line (`classifyError` in production).
    * Injected because `error-code.ts` imports this module. Unset or `undefined`: `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly nuke?: Nuke;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
-  /** Optional so the many tests that never issue a passthrough need not fabricate a resolver. */
   readonly passthrough?: PassthroughResolver;
-  /**
-   * Runs the command `device.exec` resolves (ADR 0005 §19a). Optional for the same reason as
-   * `passthrough`: the many tests that never exec should not have to fabricate a runner --
-   * `#deviceExec` answers `INTERNAL` when it is missing rather than crashing.
-   */
   readonly processRunner?: ProcessRunner;
   /**
-   * The environment a `device.exec` child starts from, before the driver's own scoping keys are
+   * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
    * layered on top. Injected rather than read from `process.env` here (architecture rule 9),
    * and layered rather than replaced because `ProcessRunner` replaces a child's environment
    * wholesale: a child given only `--set`/`-P` scoping would lose `PATH` and never find the
@@ -171,13 +153,6 @@ export interface DispatcherOptions {
   readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
   readonly reaper: CleanupReaper;
   readonly registry: Registry;
-  /**
-   * What the `stalled` flag `status.get` and `list.get` put on a device is worked out from
-   * (`isStalledTransition`, with `config.stalledTransition` and the clock): the drivers this
-   * daemon runs, and its device operation claims, so a live operation is never read as a
-   * stall. Optional so the tests that never stall a device need not fabricate either; absent,
-   * no device is flagged.
-   */
   readonly stalls?: {
     readonly drivers: readonly Pick<Driver, "estimate" | "platform">[];
     readonly claims: NonNullable<StallInput["claims"]>;
@@ -189,28 +164,18 @@ export interface DispatcherOptions {
    * clear `DispatchError` when it is missing rather than crashing on `undefined.create(...)`.
    */
   readonly tokens?: TokenOperations;
-  /** Reports current daemon health for `status.get`. */
   readonly health: () => "starting" | "running" | "failed";
-  /** `status.get`'s host block, from memory: answering never waits for a read (ADR 0008 §7). */
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
   readonly awaitReady: () => Promise<void>;
-  /** This daemon's instance id (`instance.json`), the id it presents to a gateway. `worker.list`
-   * answers with it as the one worker's id (ADR 0012 §1). */
   readonly instanceId: string;
-  /** This daemon's own version, the one its `hello` reply carries; `worker.list`'s `version`. */
   readonly version: string;
-  /**
-   * Where `worker.list` hears `WORKER_VIEW_CATALOG_EVENTS`, so its kept catalog is read again at
-   * once rather than on its next interval. Optional for the tests that never call `worker.list`;
-   * without it the kept catalog is only re-read on the interval.
-   */
   readonly eventBus?: Pick<EventBus, "subscribe">;
   readonly update?: UpdateCoordinator;
 }
 
 /**
- * A handler's declared *input* type is tied to its operation's contract schema (real
+ * why: A handler's declared *input* type is tied to its operation's contract schema (real
  * type-checking value: a handler that reads `input.wrongField` fails to compile). Its return
  * type is deliberately left as `unknown` rather than `z.infer<...Output>`: core's domain types
  * (`LeaseRecord`, `DoctorReport`, ...) are hand-mirrored by the contract's schemas, not reused
@@ -225,27 +190,13 @@ type Handler<Op extends OperationName> = (
   session: DispatchSession,
 ) => Promise<unknown> | unknown;
 
-/** Every operation this (worker-mode) dispatcher implements: the contract's set minus
- * `daemon.stop` (intercepted by `DaemonServer` itself, ADR 0003 §6). */
 type WorkerOperationName = Exclude<OperationName, "daemon.stop">;
 
-/**
- * The transport-independent dispatcher (ADR 0003 §2). One `dispatch()` call does, in order:
- * parse input, role check, `authorize` hook, park on startup readiness, call handler, parse
- * output. Handlers never see a raw payload or run their own role/ownership check -- both
- * already happened by the time a handler's function body runs.
- *
- * Deliberately excludes `hello` (protocol-level, answered before a session exists) and
- * `daemon.stop` (ADR §6's frozen exception -- scoped to the protocol-version gate only, so it
- * stays reachable across a version mismatch; still requires a completed handshake and the
- * `admin` role, checked in `DaemonServer#dispatchLine` itself) -- both stay in `DaemonServer`,
- * same as before this PR.
- */
 export class Dispatcher {
   readonly #logger: Logger;
   readonly #dispatchLogger: Logger;
   /**
-   * Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a declared
+   * why: Total over every operation but `daemon.stop`. Deliberately *not* a partial map: a declared
    * operation whose handler was never written is otherwise invisible to the compiler and only
    * shows up as `UNKNOWN_REQUEST` at runtime -- which is exactly how `driver.passthrough` came
    * to be declared, dispatched, and unimplemented at once.
@@ -265,7 +216,6 @@ export class Dispatcher {
    * share it; a read that fails is dropped, so the next call reads again.
    */
   #viewCatalog: { readonly readAt: number; readonly catalog: Promise<unknown> } | undefined;
-  /** Ends the bus subscriptions that drop `#viewCatalog`; see `dispose`. */
   readonly #unsubscribe: (() => void)[] = [];
 
   readonly #usage: UsageReader;
@@ -290,7 +240,6 @@ export class Dispatcher {
         },
       ],
     });
-    // Observers only (architecture rule 5): dropping a kept read decides nothing.
     for (const event of WORKER_VIEW_CATALOG_EVENTS) {
       const unsubscribe = options.eventBus?.subscribe(event, () => {
         this.#viewCatalog = undefined;
@@ -384,8 +333,7 @@ export class Dispatcher {
     });
   }
 
-  // ---- handlers ---------------------------------------------------------------------------
-  // Arrow-function class fields (not methods): each closes over `this` so it can be stored in
+  // why: Arrow-function class fields (not methods): each closes over `this` so it can be stored in
   // `#handlers` and invoked as a plain function, the same way any other transport-independent
   // callback would be. None of these run a role or ownership check -- `dispatch()` above
   // already did, per the ADR's ordering.
@@ -509,7 +457,7 @@ export class Dispatcher {
     const requesterId = input.requesterId ?? session.principal;
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
-    // `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
+    // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
     // maps to `admin`, so a role check would let any operator name someone else's owner. Refused, not ignored.
     if (input.owner !== undefined && session.isGatewayUplink !== true) {
       throw new DispatchError(
@@ -517,7 +465,7 @@ export class Dispatcher {
         "Only the gateway's own uplink session may set lease.request's `owner` field",
       );
     }
-    // Uplink only, refused before anything is stored: a probe is never queued on a worker, so it must say `noWait`.
+    // why: Uplink only, refused before anything is stored: a probe is never queued on a worker, so it must say `noWait`.
     if (input.fleetRequestId !== undefined) {
       if (session.isGatewayUplink !== true) {
         throw new DispatchError(
@@ -565,7 +513,7 @@ export class Dispatcher {
           throw new DispatchError("NO_CAPACITY", error.message, { capacityReason });
         }
       }
-      // The lease path sees only the clamped-to-false permission, so this is the one place that can
+      // why: The lease path sees only the clamped-to-false permission, so this is the one place that can
       // tell the caller that config, not missing consent, blocked the download.
       if (
         downloadsPolicy === "never" &&
@@ -584,24 +532,11 @@ export class Dispatcher {
     return { result };
   };
 
-  /**
-   * ADR 0004 §1: the one keep-alive, on every transport. An omitted `ttlMs` re-applies the
-   * lease's own stored width (`LeaseLifecycle#renew`), never `lease.defaultTtlMs`.
-   */
   #leaseRenew: Handler<"lease.renew"> = async (input) => {
     this.#requireTtlWithinCap(input.ttlMs);
     return this.options.leases.renew(input.leaseId, input.ttlMs);
   };
 
-  /**
-   * ADR 0004 §4's cap, applied identically to a request and a renew. It lives here rather than
-   * in the contract schema because `lease.maxTtlMs` is a daemon config value, and the contract
-   * module cannot see one; it lives in the dispatcher rather than in each transport because
-   * every transport reaches leases through this one shared object (ADR 0003 §2), so HTTP gets
-   * the same `400 BAD_REQUEST` the socket gets from the same line of code. Rejecting rather
-   * than clamping is the point: a caller silently given less time than it asked for would go
-   * on believing it had the time it named.
-   */
   #requireTtlWithinCap(ttlMs: number | undefined): void {
     const maxTtlMs = this.options.config.lease.maxTtlMs;
     if (ttlMs !== undefined && ttlMs > maxTtlMs) {
@@ -617,13 +552,6 @@ export class Dispatcher {
     return { leaseId: input.leaseId };
   };
 
-  /**
-   * `killed`, not `explicit`: `docs/internal/EVENTS.md` splits the two by who ended the lease and
-   * whether its holder asked. An operator's `simlock release --all` (and `nuke`, which already
-   * reports `killed` through `NukeService`) takes leases away from holders that never asked --
-   * which is exactly what a `lease-lost` reader needs to tell apart from the holder's own
-   * `lease.release` on its way out.
-   */
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
     const leaseIds = await this.options.leases.releaseAll("killed");
     return { leaseIds: [...leaseIds] };
@@ -660,7 +588,7 @@ export class Dispatcher {
   }
 
   /**
-   * Resolution only: the daemon builds the command and never runs it. Spawning it here would
+   * why: Resolution only: the daemon builds the command and never runs it. Spawning it here would
    * attach a user's interactive `adb shell` to the daemon's stdio, and the CLI is the process
    * that actually has a terminal (ADR 0001, decision 7).
    *
@@ -758,25 +686,17 @@ export class Dispatcher {
     }
     const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
       env: execEnv,
-      // Returned, not fired and forgotten: whatever the transport hands back is what pauses
+      // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
       // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
       onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
       ...(input.stdin === undefined ? {} : { input: input.stdin }),
     });
-    // Announced before the first chunk can arrive, because "it started" is what a transport
+    // why: Announced before the first chunk can arrive, because "it started" is what a transport
     // needs to decide its response shape on -- see `DispatchSession.onStarted`.
     session.onStarted?.();
     return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
   };
 
-  /**
-   * Waits for an exec'd command, killing it if it outruns `exec.timeoutMs` (ADR 0005 §19e).
-   * SIGTERM first, SIGKILL after a grace window, because a tool that ignores the first must
-   * not be able to hold this operation -- and the caller's connection -- open forever; that
-   * escalation mirrors `NodeProcessRunner#run`'s own. The timeout is reported as
-   * `EXEC_TIMEOUT` rather than as the exit code the kill produced: "we stopped it" and "it
-   * failed" are different facts, and only the first tells a caller to raise the limit.
-   */
   async #awaitExec(
     handle: StreamingProcessHandle,
     tool: string,
@@ -790,28 +710,28 @@ export class Dispatcher {
     });
     let killTimer: TimerHandle | undefined;
     try {
-      // Raced rather than decided by a flag the timer sets: a command that exits in the same
+      // why: Raced rather than decided by a flag the timer sets: a command that exits in the same
       // turn the timer fires has *finished*, and reporting that as a timeout would blame the
       // limit for a command that met it. `Promise.race` settles on whichever actually
       // happened first, which is exactly the question.
       const outcome = await Promise.race([waited, expired]);
       if (outcome !== EXEC_EXPIRED) return exitCodeOf(outcome);
 
-      // SIGTERM first, SIGKILL after a grace window: a tool that ignores the first must not be
+      // why: SIGTERM first, SIGKILL after a grace window: a tool that ignores the first must not be
       // able to hold this operation -- and the caller's connection -- open forever. The same
       // escalation `NodeProcessRunner#run` makes for its own timeout.
       killQuietly(handle, "SIGTERM");
       killTimer = this.options.clock.setTimer(EXEC_SIGKILL_GRACE_MS, () => {
         killQuietly(handle, "SIGKILL");
       });
-      // Once the kill is issued, the timeout is the authoritative fact (ADR 0005 §19e) --
+      // why: Once the kill is issued, the timeout is the authoritative fact (ADR 0005 §19e) --
       // `waited` rejecting with `ExecOutputDeliveryStalledError` (a consumer that stopped
       // reading is *why* the command outran its timeout in the first place: the pause that
       // stops it finishing is the same pause that stalls delivery) is a consequence of the
       // timeout, not a competing answer to it. Swallowed here rather than left to reject
       // this `await` and skip the throw below.
       await waited.catch(() => undefined);
-      // `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
+      // why: `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
       // failed" are different facts, and only the first tells a caller to raise the limit.
       throw new DispatchError(
         "EXEC_TIMEOUT",
@@ -825,13 +745,11 @@ export class Dispatcher {
 
   #doctorRun: Handler<"doctor.run"> = async (input) => {
     if (this.options.doctor === undefined) throw new DoctorUnavailableError();
-    // `purgeOrphans` travels as its own flag all the way down, never folded into `fix`:
+    // why: `purgeOrphans` travels as its own flag all the way down, never folded into `fix`:
     // someone already running `doctor --fix` unattended in CI must not acquire a
     // destructive behaviour by upgrading (ADR 0001, decision 6).
     return this.options.doctor.reconcile({
       fix: input.fix ?? false,
-      // Only an operator's `doctor` looks at the machine's prerequisites; startup convergence
-      // runs no tool.
       prerequisites: true,
       purgeOrphans: input.purgeOrphans ?? false,
     });
@@ -897,16 +815,6 @@ export class Dispatcher {
 
   #configGet: Handler<"config.get"> = () => this.options.config;
 
-  /**
-   * ADR 0012 §1: this host as its own fleet of one. The fields a gateway reads over the uplink
-   * come from the same four reads, made here against this dispatcher's own handlers; the
-   * contract's one builder turns them into a view. The parses only turn the handlers' core
-   * records into the wire types the builder takes: `worker.list`'s own output schema, applied
-   * by `dispatch()`, is what bounds and narrows the view on the wire. The catalog is the kept
-   * one (see `#viewCatalog`); status and devices are read on every call, as a gateway reads
-   * them on every worker event. `drained` is always `false`: a gateway that drained this worker
-   * holds that flag, not this host.
-   */
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
     let receivedAt = this.options.clock.now();
@@ -940,12 +848,6 @@ export class Dispatcher {
     };
   };
 
-  /**
-   * The kept catalog for `worker.list`, read again once it is older than the interval. The age
-   * is wall-clock time, so one that is negative (the clock was set back) counts as stale rather
-   * than keeping the catalog for as long as the clock went back. A failed read drops whatever is
-   * kept, at worst one read newer than it, which costs one more read.
-   */
   #keptViewCatalog(session: DispatchSession): Promise<unknown> {
     const now = this.options.clock.now();
     const kept = this.#viewCatalog;
@@ -966,13 +868,6 @@ export class Dispatcher {
     return catalog;
   }
 
-  /**
-   * ADR 0010 §4 and §6: an operator's explicit install. The command itself is the consent, so the
-   * one consent function is asked with `true`; only `downloads.policy: "never"` refuses it, and it
-   * does so before the installer is reached. Everything else -- joining an install already
-   * running, waiting a platform's turn, the disk reservation, the budget, the events -- is the
-   * installer's, exactly as for a lease request's download.
-   */
   #componentInstall: Handler<"component.install"> = async (input, session) => {
     if (!effectiveAllowDownload(this.options.config.downloads.policy, true)) {
       throw new DispatchError(
@@ -992,7 +887,7 @@ export class Dispatcher {
         : { onProgress: (progress) => onComponentProgress(toWireProgress(progress)) }),
       ...(onStarted === undefined ? {} : { onAdmitted: onStarted }),
     });
-    // No `stillNeeded` is passed, so `not-needed` cannot come back; a version is always present
+    // why: No `stillNeeded` is passed, so `not-needed` cannot come back; a version is always present
     // for the two outcomes that can.
     if (result.outcome === "not-needed" || result.version === undefined) {
       throw new Error(`Internal: component install ended as ${result.outcome} with no version`);
@@ -1005,16 +900,10 @@ export class Dispatcher {
     };
   };
 
-  /** ADR 0010 §8: a read for any session; the installer merges the drivers and the registry. */
   #componentList: Handler<"component.list"> = async (input) => ({
     components: await this.options.components.list(input.platform),
   });
 
-  /**
-   * ADR 0010 §8: an operator's removal of a component Simlock installed. Every check and the
-   * removal itself are the installer's; this names the admin principal for `component.removed`
-   * (safety rule 6) and puts the in-use counts on the wire as `COMPONENT_IN_USE`'s details.
-   */
   #componentRemove: Handler<"component.remove"> = async (input, session) => {
     try {
       const result = await this.options.components.remove({
@@ -1149,7 +1038,7 @@ export class Dispatcher {
 }
 
 /**
- * The installer's progress in the contract's words: its percentage, already within 0..100,
+ * why: The installer's progress in the contract's words: its percentage, already within 0..100,
  * becomes a fraction from 0 to 1, rounded to three decimals so that 1.1 percent is 0.011 and not
  * the 0.011000000000000001 a plain division gives. Only 100 percent becomes 1: 99.96 would round
  * up to it, and 1 is what an install says once it is complete. With none (the install has just
@@ -1162,7 +1051,7 @@ function toWireProgress(progress: ComponentInstallerProgress): ComponentProgress
   return { fraction: progress.percent < 100 ? Math.min(fraction, 0.999) : 1, stage: "downloading" };
 }
 
-/** A child that exited between the timer firing and the signal landing is not an error worth
+/** why: A child that exited between the timer firing and the signal landing is not an error worth
  * failing the operation over -- the wait below is about to report how it ended anyway. */
 function killQuietly(handle: StreamingProcessHandle, signal: NodeJS.Signals): void {
   try {

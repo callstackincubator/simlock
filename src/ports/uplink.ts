@@ -1,5 +1,5 @@
 /**
- * The worker uplink, as a port (architecture rule 9; ADR 0005 §33: "the uplink is a port
+ * why: The worker uplink, as a port (architecture rule 9; ADR 0005 §33: "the uplink is a port
  * (`UplinkListenerFactory` on the gateway, `UplinkConnector` on the worker) with a WebSocket
  * adapter, so tests script it in memory").
  *
@@ -30,21 +30,15 @@
  */
 import { subscribeListener, type IpcConnection } from "./ipc.js";
 
-/** Header carrying the worker's instance identity (`instance.json`) at upgrade (ADR 0005 §3a,
+/** why: Header carrying the worker's instance identity (`instance.json`) at upgrade (ADR 0005 §3a,
  * §4). A header rather than a query parameter so the id stays out of proxy access logs. */
 export const WORKER_ID_HEADER = "x-simlock-worker-id";
-/** Header carrying `gateway.label`, URI-encoded (it is free text and may be non-ASCII). */
+/** why: Header carrying `gateway.label`, URI-encoded (it is free text and may be non-ASCII). */
 export const WORKER_LABEL_HEADER = "x-simlock-worker-label";
-/**
- * The one route a `worker`-role join token may use (ADR 0005 §25), and the only path a gateway
- * upgrades an uplink on: `GET /v1/uplink`. A worker's `gateway.url` is the gateway's *base*
- * URL and this is derived from it -- see `resolveUplinkUrl` -- so an operator configures one
- * URL rather than remembering an endpoint.
- */
 export const UPLINK_PATH = "/v1/uplink";
 
 /**
- * Derives the uplink endpoint from `gateway.url`. Resolved against the base rather than
+ * why: Derives the uplink endpoint from `gateway.url`. Resolved against the base rather than
  * concatenated, so a gateway published under a sub-path by a reverse proxy
  * (`wss://ci.example/simlock/`) lands on `wss://ci.example/simlock/v1/uplink` rather than at
  * the host root. A base URL that already names the uplink path resolves to itself.
@@ -68,20 +62,10 @@ export interface MemoryTransportConnection extends UplinkTransportConnection {
   fail(error: Error): void;
 }
 
-/** One accepted uplink: who opened it, and the frames it carries. */
 export interface AcceptedUplink {
-  /** The worker's instance id, from `WORKER_ID_HEADER`. */
   readonly workerId: string;
-  /** `gateway.label`, when the worker sent one. Display only. */
   readonly label?: string;
   readonly connection: UplinkTransportConnection;
-  /**
-   * The join token record's own id, when `authenticate` reported one alongside `accept`
-   * (C-2, ADR 0005 §8: "revoking closes the uplink"). Recorded here so `GatewayService` can
-   * find every link opened with a given token and close it the moment `token.revoke` runs,
-   * rather than only at that worker's next reconnect. `undefined` for a caller that returns
-   * the bare `UplinkAuthOutcome` string -- every test that never exercises revocation.
-   */
   readonly tokenId?: string;
 }
 
@@ -103,33 +87,18 @@ export interface UplinkListener {
  */
 export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden" | "worker-mismatch";
 
-/**
- * `authenticate`'s actual return type: the bare outcome, or -- only on acceptance -- an object
- * naming the token record that authorized it. The object form exists solely to carry `tokenId`
- * to `AcceptedUplink` (C-2); a discriminated *addition* to the bare string rather than a new
- * required shape, so every `authenticate` that has no token store to consult (every uplink test
- * in the tree) keeps returning the plain string it always has. Read with `uplinkOutcome` and
- * `uplinkTokenId` rather than switching on `typeof` at each call site.
- */
 export type UplinkAuthResult =
   | UplinkAuthOutcome
   | { readonly outcome: "accept"; readonly tokenId: string };
 
-/** The outcome out of an `UplinkAuthResult`, whichever form `authenticate` returned. */
 export function uplinkOutcome(result: UplinkAuthResult): UplinkAuthOutcome {
   return typeof result === "string" ? result : result.outcome;
 }
 
-/** The token id out of an `UplinkAuthResult`, or `undefined` when `authenticate` returned the
- * bare outcome string (including every refusal, which never carries one). */
 export function uplinkTokenId(result: UplinkAuthResult): string | undefined {
   return typeof result === "string" ? undefined : result.tokenId;
 }
 
-/** What the dial *claims* about itself before authentication has run -- the worker id and label
- * headers, present or not, regardless of whether the credential checks out. Passed to
- * `authenticate` so a rejection can still name the peer it turned away (ADR 0005 §22:
- * `worker.rejected`'s `workerId`/`label` are "whatever the connection claimed in its headers"). */
 export interface ClaimedUplinkIdentity {
   readonly workerId?: string;
   readonly label?: string;
@@ -145,7 +114,6 @@ export interface UplinkHandlers {
     credential: string | undefined,
     claimed: ClaimedUplinkIdentity,
   ): Promise<UplinkAuthResult>;
-  /** Called once per accepted uplink. */
   accept(uplink: AcceptedUplink): void;
 }
 
@@ -154,12 +122,8 @@ export interface UplinkListenerFactory {
 }
 
 export interface UplinkDialOptions {
-  /** `gateway.url`: the gateway's **base** URL (`ws://host:port`, or `wss://...`). The adapter
-   * derives the uplink endpoint from it -- see `resolveUplinkUrl`. */
   readonly url: string;
-  /** The join token, sent as `Authorization: Bearer <token>`. */
   readonly token: string;
-  /** This worker's instance id (`instance.json`). */
   readonly workerId: string;
   readonly label?: string;
 }
@@ -169,7 +133,7 @@ export interface UplinkConnector {
 }
 
 /**
- * Why a dial failure is its own error class: the worker's reconnect supervisor backs off on
+ * why: Why a dial failure is its own error class: the worker's reconnect supervisor backs off on
  * *any* failure, but an operator reading the log needs to tell "the gateway is not up yet"
  * (`unreachable`) from "the gateway refused this token" (`rejected` -- a revoked or mistyped
  * join token, which retrying alone never fixes). ADR 0005 §4/§8: a revoked token closes the
@@ -189,12 +153,6 @@ export class UplinkError extends Error {
   }
 }
 
-/**
- * Deterministic in-process uplink, for tests that script a fleet without a socket (ADR 0005
- * §33/§35). `connect()` runs the same authentication the WebSocket adapter does, hands the
- * dialer one end and the listener's `accept` the other, and rejects with the same
- * `UplinkError` codes -- so a test that exercises a revoked token exercises the real branch.
- */
 export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConnector {
   #handlers: UplinkHandlers | undefined;
 
@@ -235,12 +193,6 @@ export class MemoryUplinkTransport implements UplinkListenerFactory, UplinkConne
   }
 }
 
-/**
- * Two `IpcConnection`s wired to each other: what one writes, the other's `onData` listeners
- * receive; closing either closes both. Used by `MemoryUplinkTransport`, and exported so a test
- * that needs a bare pair (a scripted worker on one end, a real `DaemonServer` on the other)
- * does not have to build one.
- */
 export function createConnectionPair(): [MemoryTransportConnection, MemoryTransportConnection] {
   const left = new PairedConnection();
   const right = new PairedConnection();
@@ -256,7 +208,7 @@ type PairedMessage =
 class PairedConnection implements MemoryTransportConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #dataListeners = new Set<(chunk: string) => void>();
-  /** Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
+  /** why: Buffered until the first `onData`, exactly as the WebSocket adapter does and as a real
    * socket does: the peer may write before this end has been handed to whoever reads it. */
   readonly #pending: string[] = [];
   readonly #errorListeners = new Set<(error: Error) => void>();
@@ -287,7 +239,7 @@ class PairedConnection implements MemoryTransportConnection {
 
   onClose(listener: () => void): () => void {
     if (this.#closed) {
-      // A listener attached after the close would otherwise never fire, and consumers attach
+      // why: A listener attached after the close would otherwise never fire, and consumers attach
       // `onClose` after construction -- an in-memory pair can close in between.
       listener();
       return () => {};

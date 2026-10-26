@@ -54,17 +54,12 @@ export type DoctorFinding =
       readonly detail: ProvenanceDrift;
     }
   | {
-      /** A platform Simlock is running without, because its driver refused to start. */
       readonly kind: "driver-unavailable";
       readonly platform: Platform;
       readonly reason: DriverRejectionReason;
       readonly detail: string;
     }
   | {
-      /**
-       * A registry device that outlived the move to owned roots: absent from this
-       * driver's root, still present in the location the platform used before it.
-       */
       readonly kind: "legacy-device";
       readonly deviceId: string;
       readonly platform: Platform;
@@ -81,27 +76,12 @@ export type DoctorFinding =
       readonly thresholdMs: number;
     }
   | {
-      /**
-       * Configuration-level information from a single driver's `advisories()`, not drift:
-       * nothing here describes a divergence between the registry and observed reality, so
-       * `--fix` never acts on it (see `#applySafeFixes`) and it is excluded from the
-       * `doctor.reconciled` event's `driftFindings` payload (see the comment at that emit
-       * call) -- it stays in `DoctorReport.findings` (what `doctor.run` returns to a caller)
-       * only.
-       */
       readonly kind: "driver-advisory";
       readonly platform: Platform;
       readonly code: string;
       readonly message: string;
     }
   | {
-      /**
-       * A tool the platform needs and Simlock does not install, from that platform's
-       * `PrerequisiteCheck`. `prerequisite`, `message` and `remedy` are the driver module's own
-       * text, carried unread -- except `daemon-restart`, the one this file adds itself. Like
-       * `driver-advisory` it is not drift: `--fix` never acts on it and `doctor.reconciled`
-       * does not carry it.
-       */
       readonly kind: "prerequisite-missing";
       readonly platform: Platform;
       readonly prerequisite: string;
@@ -162,7 +142,7 @@ export interface DoctorOptions {
   readonly clock: Clock;
   readonly config: Config;
   /**
-   * The decision section every registry write of this daemon is made in. A write made outside it
+   * why: The decision section every registry write of this daemon is made in. A write made outside it
    * can land on top of a concurrent one that read the registry before it, and undo it.
    */
   readonly decisions: Pick<SerializedDecision, "run">;
@@ -186,24 +166,12 @@ export interface DoctorOptions {
 
 export interface DoctorReconcileOptions {
   readonly fix?: boolean;
-  /**
-   * The startup read to reconcile against instead of listing every driver again. A platform it
-   * leaves out has no reality to compare, so its devices get no missing-device, orphan or other
-   * drift-against-reality finding. A `stalled-transition` finding is the exception: it reads the
-   * registry and the platform's driver, not the listing, so a platform that has a driver but
-   * whose listing failed still gets it.
-   */
   readonly read?: StartupRead;
   /**
-   * Destroys the orphans this run finds. Safety rule 1's single opt-in exception, and
-   * deliberately not part of `fix`: someone already running `doctor --fix` unattended in
+   * why: deliberately not part of `fix`: someone already running `doctor --fix` unattended in
    * CI must not acquire a destructive behaviour by upgrading (ADR 0001, decision 6).
    */
   readonly purgeOrphans?: boolean;
-  /**
-   * Runs every `PrerequisiteCheck`. Off by default so startup convergence starts no tool;
-   * `doctor.run` turns it on, so the machine is looked at again on every run.
-   */
   readonly prerequisites?: boolean;
 }
 
@@ -222,7 +190,7 @@ export class Doctor {
   }: DoctorReconcileOptions = {}): Promise<DoctorReport> {
     const snapshot = this.options.registry.snapshot;
     const realities = await this.#realities(read);
-    // A platform with no driver has no observable reality: its driver refused to start,
+    // why: A platform with no driver has no observable reality: its driver refused to start,
     // its SDK is missing, or this host has none. The same holds for a platform the startup
     // read could not list. "I could not look" is not "the device is
     // gone", and reading it as such is destructive -- every registry device of that
@@ -269,7 +237,7 @@ export class Doctor {
     if (fix) {
       await this.#applySafeFixes(findings, driversByPlatform);
     }
-    // Prerequisites last: a check may run for tens of seconds, and nothing `--fix` or a purge
+    // why: Prerequisites last: a check may run for tens of seconds, and nothing `--fix` or a purge
     // acts on should wait behind it and go stale. They are never acted on themselves.
     const remaining = [
       ...(purgeOrphans ? await this.#purgeOrphans(findings, driversByPlatform) : findings),
@@ -293,7 +261,6 @@ export class Doctor {
     return report;
   }
 
-  /** Each driver's reality: the startup read's, or a fresh `listManaged` when there is none. */
   async #realities(
     read: StartupRead | undefined,
   ): Promise<readonly { readonly driver: Driver; readonly reality: DriverReality }[]> {
@@ -312,10 +279,7 @@ export class Doctor {
   }
 
   /**
-   * Destroys every orphan this run found, and reports back the findings that outlived the
-   * attempt.
-   *
-   * This is the one place Simlock destroys something the registry has never heard of, and
+   * why: This is the one place Simlock destroys something the registry has never heard of, and
    * the residual risk is accepted rather than mitigated: an orphan has no registry record,
    * so no central safety filter and no `DeviceOperationClaims` entry can protect it --
    * including a device this very daemon is between `driver.provision` and
@@ -365,7 +329,7 @@ export class Doctor {
       );
     }
 
-    // An `orphan-process` for a device that is now gone is gone with it: destroying the
+    // why: An `orphan-process` for a device that is now gone is gone with it: destroying the
     // device covers the process it was running, so reporting both would ask the operator
     // to deal with something that no longer exists.
     return findings.filter(
@@ -378,9 +342,7 @@ export class Doctor {
   }
 
   /**
-   * Re-proves each root the purge is about to reach into, before its first destroy.
-   *
-   * The proof a purge acts on is the one taken at startup, and the thing it authorises is
+   * why: The proof a purge acts on is the one taken at startup, and the thing it authorises is
    * recomputed on every reconcile: a root replaced by a symlink, or a `mv` that leaves the
    * user's own device set at the configured path, turns `listManaged` into a claim over
    * their simulators and this command into the thing that deletes them. Reporting can live
@@ -416,9 +378,9 @@ export class Doctor {
   }
 
   /**
-   * Registry versus root, per device: existence, run state and provenance. Drift compares the
+   * why: Registry versus root, per device: existence, run state and provenance. Drift compares the
    * registry with what a root holds, so it reads virtual devices only: a physical record is in
-   * no root and would read as missing (ADR 0022 §4).
+   * no root and would read as missing.
    */
   async #driftFindings(
     devices: readonly VirtualDevice[],
@@ -474,12 +436,7 @@ export class Doctor {
   }
 
   /**
-   * Rewrites a `registry-device-missing` finding as `legacy-device` when the driver still
-   * finds the device where the platform kept it before roots existed. Absent from the root
-   * is what both findings have in common; where the device actually is decides which one it
-   * is, and only the driver can look there.
-   *
-   * A driver that cannot answer -- no legacy location, or a lookup that failed -- leaves
+   * why: A driver that cannot answer -- no legacy location, or a lookup that failed -- leaves
    * the original finding alone. `registry-device-missing` is the conservative of the two:
    * its fix only writes to the registry, while the legacy fix destroys.
    */
@@ -519,13 +476,6 @@ export class Doctor {
     );
   }
 
-  /**
-   * `advisories()` is optional, read-only, best-effort diagnostic information a single driver
-   * reports about its own configuration -- unlike `listManaged` (whose failure today aborts the
-   * whole reconcile via the unhandled rejection in the `Promise.all` above; widening that
-   * tolerance is out of scope here), a driver with no `advisories()` or one that rejects simply
-   * contributes nothing rather than failing every other driver's findings along with it.
-   */
   async #collectAdvisories(): Promise<DoctorFinding[]> {
     const perDriver = await Promise.all(
       this.options.drivers.map(async (driver): Promise<DoctorFinding[]> => {
@@ -549,11 +499,7 @@ export class Doctor {
   }
 
   /**
-   * Every platform's prerequisite check, run now: a package installed since the last run is
-   * no longer reported, with no restart. A check that rejects could not tell, so it is logged
-   * and contributes nothing, as a rejecting `advisories()` does.
-   *
-   * Driver discovery, though, ran once at startup. So a platform that is not running gets the
+   * why: Driver discovery, though, ran once at startup. So a platform that is not running gets the
    * restart sentence on each finding, and one whose prerequisites are all present gets a
    * finding of its own that says so -- unless its driver was refused, which `driver-unavailable`
    * already explains.
@@ -687,7 +633,7 @@ export class Doctor {
         );
       }
     }
-    // The machine's reserve cannot hold more slots than the machine has: a figure past the limit
+    // why: The machine's reserve cannot hold more slots than the machine has: a figure past the limit
     // would print a room below zero, and with no target there is nothing to report.
     const reserved = Math.min(reserves.ios + reserves.android, limits.global.maxRunning);
     const room = limits.global.maxRunning - reserved;
@@ -771,7 +717,6 @@ export class Doctor {
         break;
       case "orphan-device":
       case "orphan-process":
-        // Registry-only destruction: unregistered reality is report-only.
         break;
       case "expired-live-lease":
         if (this.options.leaseExpirer !== undefined) {
@@ -782,10 +727,10 @@ export class Doctor {
         await this.options.decisions.run(() => this.#fixForeignStateChange(finding));
         break;
       case "foreign-provenance-change":
-        // Report-only: re-marking destroys the evidence, and the device may be leased.
+        // why: Report-only: re-marking destroys the evidence, and the device may be leased.
         break;
       case "driver-unavailable":
-        // Nothing here can repair a refused root or an occupied port without doing the
+        // why: Nothing here can repair a refused root or an occupied port without doing the
         // one thing failing closed exists to prevent: adopting what it refused.
         break;
       case "legacy-device":
@@ -795,10 +740,8 @@ export class Doctor {
         await this.#fixStalledTransition(finding);
         break;
       case "driver-advisory":
-        // Information, not drift: `--fix` never acts on a driver advisory.
         break;
       case "prerequisite-missing":
-        // Simlock installs no prerequisite (safety rule 4), `--fix` included.
         break;
       case "service-broken":
         // why: installing again is the operator's call: `--fix` never rewrites the service.
@@ -815,7 +758,7 @@ export class Doctor {
   }
 
   /**
-   * The destroy reaches outside the driver's root, which every other path in Simlock is
+   * why: The destroy reaches outside the driver's root, which every other path in Simlock is
    * forbidden to do -- and is permitted here for one reason: the device is in the registry.
    * Registry-only destruction (safety rule 1) is a rule about *what may be destroyed*, and
    * a registry record satisfies it exactly as a root membership would; the record is also
@@ -860,7 +803,7 @@ export class Doctor {
     if (device === undefined) {
       return;
     }
-    // Only `ready` and `shutdown` have a legal transition to the opposite run state. A
+    // why: Only `ready` and `shutdown` have a legal transition to the opposite run state. A
     // device recorded as `leased` with no lease record reaches here past the lease guard
     // above; correcting it would throw IllegalTransition and abort the whole reconcile,
     // so leave it to the report rather than crashing the reaper tick.
@@ -872,7 +815,7 @@ export class Doctor {
     } else if (
       device.state === "shutdown" &&
       finding.observed === "running" &&
-      // A spent fresh device stays `shutdown`, running or not: every path that deletes it
+      // why: A spent fresh device stays `shutdown`, running or not: every path that deletes it
       // selects `shutdown`, and the delete stops a running simulator first. Moving it to
       // `ready` would strand it as ungrantable warm inventory that nothing deletes.
       mayBeGranted(device)
@@ -890,7 +833,7 @@ export class Doctor {
   async #fixStalledTransition(
     finding: Extract<DoctorFinding, { readonly kind: "stalled-transition" }>,
   ): Promise<void> {
-    // A device this finding targets is never `leased` -- that's a separate state
+    // why: A device this finding targets is never `leased` -- that's a separate state
     // entirely -- but the guard is kept anyway, matching every other fix here, so a
     // future change to what produces this finding can never reach a leased device.
     const snapshot = this.options.registry.snapshot;
@@ -950,12 +893,6 @@ function missingDeviceFinding(
   return { deviceId: device.id, kind: "registry-device-missing", platform: device.spec.platform };
 }
 
-/**
- * Run-state and provenance drift for a device whose registry state expects a definite run
- * state and that has an observed-reality match. Split out of `registryDriftFindings` so the
- * mid-transition/claim guard there is one flat condition rather than threading through this
- * logic's own branches.
- */
 function liveDriftFindings(
   device: DeviceRecord,
   expected: "running" | "stopped",
@@ -987,8 +924,7 @@ function liveDriftFindings(
 }
 
 /**
- * The reclaim estimate for the slowest strategy the driver would pick, whatever the clean
- * level. A `reclaiming` record does not say which level started it -- every production path
+ * why: A `reclaiming` record does not say which level started it -- every production path
  * asks for `standard`, but that is the caller's choice, not an invariant this finding can
  * depend on -- and the two errors are not symmetric: an estimate that is too tight turns a
  * healthy reclaim into a false stall finding, while one that is too loose only delays a real
@@ -1002,7 +938,7 @@ function slowestReclaimEstimateMs(driver: Pick<Driver, "estimate">, spec: Device
 }
 
 /**
- * A `provisioning` / `reclaiming` device is normally in-flight work Simlock itself is
+ * why: A `provisioning` / `reclaiming` device is normally in-flight work Simlock itself is
  * driving (see `expectedRunState`), not drift -- but only up to a point. Past a
  * driver-derived threshold it stops being "still working" and becomes a stall: the
  * driver call that was supposed to resolve it never did. This is a documented failure
@@ -1030,10 +966,6 @@ function slowestReclaimEstimateMs(driver: Pick<Driver, "estimate">, spec: Device
  * contended disk speed would still be guessing; the claim answers it exactly. A reclaim
  * orphaned by a crash has no claim in the new process, so the case this test exists to
  * catch is untouched.
- *
- * The one place the stall rule lives (architecture rule 10): `doctor`'s
- * `stalled-transition` finding and the `stalled` flag `status.get` and `list.get` put on a
- * device both ask it.
  */
 export function isStalledTransition(input: StallInput): boolean {
   const { claims, config, device, driver, now } = input;
@@ -1050,8 +982,6 @@ export function isStalledTransition(input: StallInput): boolean {
   return now - enteredAt > stallThresholdMs(device, driver, config);
 }
 
-/** What `isStalledTransition` reads: one device, the driver for its platform (absent when that
- * platform has none), the `stalledTransition` config, the operation claims and the time. */
 export interface StallInput {
   readonly device: DeviceRecord;
   readonly driver: Pick<Driver, "estimate"> | undefined;
@@ -1060,7 +990,6 @@ export interface StallInput {
   readonly now: number;
 }
 
-/** How long `device` may stay in its transition before it is a stall. */
 function stallThresholdMs(
   device: DeviceRecord,
   driver: Pick<Driver, "estimate">,
@@ -1074,7 +1003,6 @@ function stallThresholdMs(
   return Math.max(estimateMs * config.thresholdMultiplier, config.minimumThresholdMs);
 }
 
-/** The `stalled-transition` finding for a device `isStalledTransition` holds for. */
 function stalledTransitionFinding(
   device: DeviceRecord,
   driversByPlatform: ReadonlyMap<Platform, Driver>,
@@ -1086,8 +1014,6 @@ function stalledTransitionFinding(
   if (!isStalledTransition({ claims, config, device, driver, now })) {
     return undefined;
   }
-  // Narrowing only: `isStalledTransition` holds just for a device in one of these two states,
-  // with an entry time and a driver.
   const enteredAt = transitionEnteredAt(device);
   if (
     driver === undefined ||
@@ -1108,7 +1034,7 @@ function stalledTransitionFinding(
 }
 
 /**
- * Report-only by design. Re-marking would overwrite the only evidence that the
+ * why: Report-only by design. Re-marking would overwrite the only evidence that the
  * device was tampered with, and a fresh mark cannot be written to a leased
  * device without disturbing its holder -- so the core never repairs a mark.
  */
@@ -1126,7 +1052,7 @@ function provenanceDrift(mark: ObservedMark): ProvenanceDrift | undefined {
 }
 
 /**
- * Discovery runs once, at daemon start, so a refusal is a frozen snapshot: repairing the
+ * why: Discovery runs once, at daemon start, so a refusal is a frozen snapshot: repairing the
  * root and running `doctor` again reports the identical finding, because nothing has
  * looked at the root since. The finding therefore has to name the step that actually
  * retries the platform, or it reads as a repair that did not work.
@@ -1146,7 +1072,6 @@ function driverUnavailableFindings(rejections: readonly DriverRejection[]): Doct
 
 const PLATFORM_NAMES: Readonly<Record<Platform, string>> = { android: "Android", ios: "iOS" };
 
-/** Whether an OS constraint is a range rather than one version. */
 function isRange(osVersion: string): boolean {
   const parsed = parseOsConstraint(osVersion);
   return parsed.ok && parsed.constraint.kind === "range";
@@ -1161,7 +1086,6 @@ function unreachableTarget(
   const named = [model, osVersion, target.mode].filter((part) => part !== undefined).join(" / ");
   const name = PLATFORM_NAMES[platform];
   if (short === "runtime-missing") {
-    // A range names no version to install: `component install` takes one catalog version.
     if (osVersion !== undefined && isRange(osVersion)) {
       return [
         {
@@ -1221,14 +1145,12 @@ function unreachableTarget(
   return [];
 }
 
-/** Targets whose counts add up to more than the running limit leaves for them. */
 function overLimit(input: {
   readonly target: string;
   readonly sum: number;
   readonly limit: number;
   readonly reserve: number;
   readonly room: number;
-  /** `ios ` or `android `, or empty for the machine. */
   readonly scope: string;
   readonly platform?: Platform;
 }): DoctorFinding {
@@ -1244,7 +1166,6 @@ function overLimit(input: {
   };
 }
 
-/** Whether a finding belongs in `doctor.reconciled`'s `driftFindings` -- see the emit call. */
 function isDrift(finding: DoctorFinding): boolean {
   return (
     finding.kind !== "driver-advisory" &&
@@ -1255,7 +1176,6 @@ function isDrift(finding: DoctorFinding): boolean {
   );
 }
 
-/** One platform's check result, as findings -- see `Doctor#collectPrerequisites`. */
 function prerequisiteFindings(
   platform: Platform,
   missing: readonly MissingPrerequisite[],

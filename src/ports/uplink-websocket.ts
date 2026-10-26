@@ -1,5 +1,5 @@
 /**
- * The WebSocket adapters behind the uplink port (`./uplink.ts`) -- the one file in the tree
+ * why: The WebSocket adapters behind the uplink port (`./uplink.ts`) -- the one file in the tree
  * that imports `ws`, kept out of the ports barrel so processes that never open an uplink (the
  * CLI, the MCP server) never load it.
  *
@@ -55,7 +55,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
   readonly #closeListeners = new Set<() => void>();
   readonly #errorListeners = new Set<(error: Error) => void>();
   /**
-   * Frames that arrived before anything subscribed. A real socket buffers what is sent to it
+   * why: Frames that arrived before anything subscribed. A real socket buffers what is sent to it
    * until someone reads; `ws` does not -- it emits `message` events, and one emitted with no
    * listener attached is simply gone.
    *
@@ -100,8 +100,6 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
 
   onData(listener: (chunk: string) => void): () => void {
     const unsubscribe = subscribeListener(this.#dataListeners, listener);
-    // Whatever arrived before anyone was listening is delivered to the first subscriber, in
-    // order, before it sees anything new -- see `#pending`.
     if (this.#pending.length > 0) {
       const buffered = this.#pending.splice(0);
       for (const chunk of buffered) listener(chunk);
@@ -146,7 +144,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
   async write(contents: string): Promise<void> {
     if (this.#closed || this.#socket.readyState !== WebSocket.OPEN) return;
     await new Promise<void>((resolve) => {
-      // Resolving on the send callback (rather than fire-and-forget) keeps `write`'s contract
+      // why: Resolving on the send callback (rather than fire-and-forget) keeps `write`'s contract
       // the same as the unix-socket adapter's: the caller may await a frame actually leaving.
       // A send error is not rethrown -- the `error` event above already reports it to every
       // listener, and a rejected `write` would tear down a caller that has nothing to do
@@ -172,7 +170,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
 }
 
 /**
- * The gateway's half. `listen()` records the handlers; `attach(server)` wires the HTTP
+ * why: The gateway's half. `listen()` records the handlers; `attach(server)` wires the HTTP
  * server's `upgrade` event. The split exists because the HTTP server is created after this
  * factory (see `src/daemon/main.ts`), and a listener that silently did nothing until some
  * other call arrived would be a worse contract than one that names the call that wires it.
@@ -200,7 +198,6 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     };
   }
 
-  /** Wires this factory to a Node HTTP server's `upgrade` event. */
   attach(server: Server): void {
     const onUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
       void this.#handleUpgrade(request, socket, head);
@@ -214,14 +211,12 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   async #handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const handlers = this.#handlers;
     if (handlers === undefined) {
-      // Nothing is listening for uplinks (a daemon mid-shutdown): refuse rather than leave the
+      // why: Nothing is listening for uplinks (a daemon mid-shutdown): refuse rather than leave the
       // socket hanging half-upgraded.
       respondAndDestroy(socket, 404, "Not Found");
       return;
     }
     if (!isUplinkPath(request.url)) {
-      // The gateway upgrades exactly one path. Anything else is a client that guessed, or an
-      // HTTP route someone tried to upgrade; either way it is not an uplink.
       respondAndDestroy(socket, 404, "Not Found");
       return;
     }
@@ -230,7 +225,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       respondAndDestroy(socket, 400, "Bad Request");
       return;
     }
-    // P3: truncated before anything else touches it, which bounds the *size* of a flood -- one
+    // why: P3: truncated before anything else touches it, which bounds the *size* of a flood -- one
     // claimed id or label, up to Node's header budget (~16 KB), times the ring buffer's capacity
     // -- not the flood itself. Both fields below reach the gateway's event bus (`worker.rejected`
     // on the refusal path below, and a real `worker.connected` past authentication) *before* any
@@ -241,7 +236,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     // outage they are debugging, since the buffer is bounded by count, not bytes -- is P-2's:
     // `GatewayService#recordRejection` coalesces repeated refusals into one event per window.
     const workerId = rawWorkerId.slice(0, MAX_CLAIMED_FIELD_LENGTH);
-    // Decoded before authentication, not after: a dial that fails the credential check still
+    // why: Decoded before authentication, not after: a dial that fails the credential check still
     // claimed this identity in its headers, and ADR 0005 §22's `worker.rejected` reports
     // whatever a refused peer claimed rather than nothing at all.
     const label = decodeLabel(headerValue(request, WORKER_LABEL_HEADER));
@@ -250,7 +245,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
     try {
       result = await handlers.authenticate(bearerToken(request), claimed);
     } catch {
-      // A token store that cannot be read is not an authenticated peer.
+      // why: A token store that cannot be read is not an authenticated peer.
       result = "unauthenticated";
     }
     const outcome = uplinkOutcome(result);
@@ -261,8 +256,6 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       else respondAndDestroy(socket, 403, "Forbidden");
       return;
     }
-    // C-2: the token record id that authorized this uplink, carried onto `AcceptedUplink` so a
-    // later `token.revoke` of it can find and close this exact link (ADR 0005 §8).
     const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
       const connection = new WebSocketUplinkConnection(client);
@@ -280,7 +273,6 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   }
 }
 
-/** The worker's half: dials `gateway.url` with the join token and its instance id. */
 export class WebSocketUplinkConnector implements UplinkConnector {
   readonly #handshakeTimeoutMs: number;
 
@@ -291,8 +283,6 @@ export class WebSocketUplinkConnector implements UplinkConnector {
   }
 
   async connect(options: UplinkDialOptions): Promise<UplinkTransportConnection> {
-    // `options.url` is `gateway.url`, the gateway's base URL; the endpoint is this worker's to
-    // derive (ADR 0005 §4), so an operator configures one URL and never an internal path.
     const socket = new WebSocket(resolveUplinkUrl(options.url), {
       handshakeTimeout: this.#handshakeTimeoutMs,
       headers: {
@@ -303,7 +293,7 @@ export class WebSocketUplinkConnector implements UplinkConnector {
           : { [WORKER_LABEL_HEADER]: encodeURIComponent(options.label) }),
       },
     });
-    // Wrapped *before* awaiting `open`, not after: the gateway speaks first over an uplink, and
+    // why: Wrapped *before* awaiting `open`, not after: the gateway speaks first over an uplink, and
     // its `hello` can be emitted in the same tick the socket opens. The wrapper's `message`
     // listener has to be attached by then, or that frame is lost and the link deadlocks (see
     // `WebSocketUplinkConnection#pending`).
@@ -348,7 +338,7 @@ function waitForOpen(socket: WebSocket): Promise<void> {
       cleanup();
       reject(toUplinkError(error));
     };
-    // `ws` emits this instead of `error` when the handshake gets an HTTP response -- which is
+    // why: `ws` emits this instead of `error` when the handshake gets an HTTP response -- which is
     // exactly what a refused join token looks like (401). Without it, a revoked token would be
     // indistinguishable from an unreachable gateway in the worker's log.
     const onUnexpectedResponse = (_request: unknown, response: IncomingMessage) => {
@@ -387,8 +377,6 @@ function toUplinkError(error: unknown): UplinkError {
   );
 }
 
-/** The upgrade request's path, compared without its query string. A request with no `url` at
- * all (which Node's typings allow) is not the uplink. */
 function isUplinkPath(url: string | undefined): boolean {
   if (url === undefined) return false;
   const [path] = url.split("?");
@@ -414,7 +402,7 @@ function bearerToken(request: IncomingMessage): string | undefined {
  * ~16 KB a raw header can carry. */
 const MAX_CLAIMED_FIELD_LENGTH = 128;
 
-/** Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
+/** why: Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
  * than just truncating -- a raw header value the gateway's own JSON logging already renders
  * safely (`writeResult` JSON-encodes; terminal escapes are not the concern here), but a
  * multi-line or unreadable "machine name" in `simlock worker list` and `simlock events` is not
@@ -427,11 +415,9 @@ function decodeLabel(value: string | undefined): string | undefined {
   try {
     const decoded = decodeURIComponent(value);
     if (decoded === "" || NON_PRINTABLE.test(decoded)) return undefined;
-    // P3: truncated like `workerId` above, before it reaches the bus or a view -- see
-    // `MAX_CLAIMED_FIELD_LENGTH`'s comment for why.
     return decoded.slice(0, MAX_CLAIMED_FIELD_LENGTH);
   } catch {
-    // A label is cosmetic; a malformed encoding drops it rather than refusing the uplink.
+    // why: A label is cosmetic; a malformed encoding drops it rather than refusing the uplink.
     return undefined;
   }
 }

@@ -12,11 +12,6 @@ import { PUSH_SCHEMAS } from "./pushes.js";
 import type { Role } from "./roles.js";
 import { platformCatalogSchema } from "./schemas.js";
 
-/**
- * The ADR §3 operation matrix, name -> role. A table-driven test against this makes
- * "forgetting a role" (or getting one wrong) a test failure, not just a type-level one --
- * `doctor.run` gets two rows since its role is a function of `fix`.
- */
 const ROLE_MATRIX: ReadonlyArray<{
   readonly name: OperationName;
   readonly input: unknown;
@@ -61,16 +56,13 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "worker.undrain", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.remove", input: { workerId: "wrk_1" }, role: "admin" },
   { name: "worker.update", input: { workerId: "wrk_1" }, role: "admin" },
-  // ADR 0010 §6: an operator's consent to a download.
   { name: "component.install", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "component.list", input: {}, role: "agent" },
-  // ADR 0010 §7: the same consent, given for a set of workers through their gateway.
   {
     name: "worker.install-component",
     input: { platform: "ios", version: "26.4", workers: "all" },
     role: "admin",
   },
-  // ADR 0010 §8: removal is destructive, so admin-only.
   { name: "component.remove", input: { platform: "ios", version: "26.4" }, role: "admin" },
   { name: "device.add", input: { id: "00008110-001A2B3C4D5E", platform: "ios" }, role: "admin" },
   { name: "device.remove", input: { id: "00008110-001A2B3C4D5E" }, role: "admin" },
@@ -454,7 +446,7 @@ describe("operation input/output round trips", () => {
   });
 
   it("lease.request/lease.renew: a non-positive ttlMs is a schema-level BAD_REQUEST", () => {
-    // The upper bound (`lease.maxTtlMs`) is the dispatcher's to enforce -- it is a daemon
+    // why: The upper bound (`lease.maxTtlMs`) is the dispatcher's to enforce -- it is a daemon
     // config value this module cannot see -- but "a TTL is a positive number" is shape.
     expect(() =>
       OPERATIONS["lease.request"].input.parse({
@@ -1047,7 +1039,6 @@ describe("operation input/output round trips", () => {
       Object.fromEntries(names(count).map((name) => [name, ["a"]]));
     const classedModels = (count: number) =>
       Object.fromEntries(names(count).map((name) => [name, "phone"]));
-    // Each pair is the largest value accepted and the smallest one refused.
     const bounds = [
       [
         { modelAliases: { ["x".repeat(256)]: ["a"] } },
@@ -1092,12 +1083,12 @@ describe("operation input/output round trips", () => {
   });
 
   it("worker.remove reports whether there was a view to forget; drain never lies", () => {
-    // `remove` is idempotent: forgetting a worker the gateway has already forgotten is done,
+    // why: `remove` is idempotent: forgetting a worker the gateway has already forgotten is done,
     // not an error -- so `false` is a legitimate outcome, the same shape `token.revoke` uses.
     expect(OPERATIONS["worker.remove"].output.parse({ workerId: "wrk_1", removed: false })).toEqual(
       { workerId: "wrk_1", removed: false },
     );
-    // Drain and undrain each report the state they establish, and only that state: an
+    // why: Drain and undrain each report the state they establish, and only that state: an
     // `undrain` answering `drained: true` would be a contradiction rather than an outcome.
     expect(OPERATIONS["worker.drain"].output.parse({ workerId: "wrk_1", drained: true })).toEqual({
       workerId: "wrk_1",
@@ -1119,7 +1110,7 @@ describe("operation input/output round trips", () => {
   });
 
   it("device.exec: parses a command, keeps stdin optional, and refuses anything else", () => {
-    // ADR 0005 §19a. `.strict()` is doing real work here: a client that sent `input` or `env`
+    // why: ADR 0005 §19a. `.strict()` is doing real work here: a client that sent `input` or `env`
     // hoping either would reach the child must be told no, not have it silently dropped.
     expect(
       OPERATIONS["device.exec"].input.parse({
@@ -1134,7 +1125,7 @@ describe("operation input/output round trips", () => {
       OPERATIONS["device.exec"].input.parse({ args: [], leaseId: "lse_1", tool: "simctl" }),
     ).toEqual({ args: [], leaseId: "lse_1", tool: "simctl" });
 
-    // `tool` is an open string, exactly as `driver.passthrough`'s is: which wrappers exist is
+    // why: `tool` is an open string, exactly as `driver.passthrough`'s is: which wrappers exist is
     // the drivers' answer, so a name none of them wraps parses fine here and comes back as
     // `UNKNOWN_PASSTHROUGH_TOOL` from the driver catalog rather than as a malformed body.
     expect(
@@ -1157,8 +1148,6 @@ describe("operation input/output round trips", () => {
   });
 
   it("the output push carries a frame id, a stream, and a chunk", () => {
-    // The `output` family is request-scoped exactly like `progress` (ADR 0005 §19a), which is
-    // the property that lets one connection run more than one command at a time.
     expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
       chunk: "hello",
       requestId: 7,
@@ -1183,7 +1172,6 @@ describe("operation input/output round trips", () => {
     }
   });
 
-  // Each refused push beside the nearest one that is accepted, so the refusal is the bound's.
   it.each([
     ["a percent above 100", { percent: 101 }, { percent: 100 }],
     ["a percent below 0", { percent: -1 }, { percent: 0 }],

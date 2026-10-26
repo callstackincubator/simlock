@@ -36,7 +36,6 @@ function idOf(workers: readonly WorkerView[], label: string): string {
   return worker.id;
 }
 
-/** Which workers the gateway's catalog lists Android `runtime` for. */
 async function androidRuntimeWorkers(gateway: TestEnv, runtime: string): Promise<unknown> {
   const catalog = await gateway.cli(["catalog", "--platform", "android", "--json"]);
   expect(catalog.code, catalog.stderr).toBe(0);
@@ -61,7 +60,7 @@ describe("simlock component install through a gateway", () => {
         availableOsVersions: ["34"],
         installProgress: [50],
         knownModels: ["Pixel 9"],
-        // Held open long enough for `worker list` to see it.
+        // why: Held open long enough for `worker list` to see it.
         latencyMs: { installComponent: 3_000 },
       },
     };
@@ -94,7 +93,6 @@ describe("simlock component install through a gateway", () => {
     const locked = idOf(workers, "locked");
     expect(await androidRuntimeWorkers(gateway, "35")).toBeUndefined();
 
-    // An agent token on the gateway's HTTP API is refused, and no worker starts an install.
     const agent = await gateway.cli(["token", "create", "--role", "agent"]);
     expect(agent.code, agent.stderr).toBe(0);
     const refused = await fetch(`http://127.0.0.1:${port}/v1/components/install`, {
@@ -143,7 +141,6 @@ describe("simlock component install through a gateway", () => {
       outcome: "refused",
       workerId: locked,
     });
-    // Progress on stderr names the worker it came from.
     const progress = install.stderr
       .trim()
       .split("\n")
@@ -151,7 +148,7 @@ describe("simlock component install through a gateway", () => {
       .filter((line) => line["stage"] !== undefined);
     expect(progress).toContainEqual({ fraction: 0.5, stage: "downloading", workerId: open });
 
-    // Read straight after the command, with no wait: the relay refreshed the catalog first.
+    // why: Read straight after the command, with no wait: the relay refreshed the catalog first.
     expect(await androidRuntimeWorkers(gateway, "35")).toEqual([open]);
   });
 

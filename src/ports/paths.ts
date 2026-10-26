@@ -22,7 +22,7 @@ export function resolveSimlockHome(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
- * The longest AF_UNIX socket path the kernel accepts, in bytes, excluding the trailing
+ * why: The longest AF_UNIX socket path the kernel accepts, in bytes, excluding the trailing
  * NUL: `sun_path` is 104 bytes on macOS and the BSDs and 108 on Linux. Windows named
  * pipes have no such limit.
  */
@@ -31,7 +31,6 @@ function maxSocketPathLength(platform: NodeJS.Platform = process.platform): numb
   return (platform === "linux" ? 108 : 104) - 1;
 }
 
-/** A `SIMLOCK_HOME` so deep that no socket can be bound or connected under it. */
 export class SocketPathTooLongError extends Error {
   constructor(
     readonly path: string,
@@ -46,7 +45,7 @@ export class SocketPathTooLongError extends Error {
 }
 
 /**
- * Where the daemon listens under a data directory. Checked here, once, for every process
+ * why: Where the daemon listens under a data directory. Checked here, once, for every process
  * that derives it: a path past the kernel's limit otherwise fails on connect as a bare
  * `EINVAL`, which says nothing about `SIMLOCK_HOME` being the cause.
  */
