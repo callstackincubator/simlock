@@ -48,7 +48,7 @@ export function mapLegacyProtocolMismatch(
 export const helloRequestSchema = z
   .object({
     clientVersion: z.string(),
-    /** Legacy exact version, sent alongside `protocolRange` so an old protocol-2 daemon (which
+    /** why: Legacy exact version, sent alongside `protocolRange` so an old protocol-2 daemon (which
      * only ever compares this field) still answers intelligibly. */
     protocolVersion: z.number().int().optional(),
     protocolRange: protocolRangeSchema.optional(),
