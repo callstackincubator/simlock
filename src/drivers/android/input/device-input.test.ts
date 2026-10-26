@@ -394,6 +394,17 @@ describe("Android device input: send", () => {
         vertical: 0,
       });
     }
+
+    const edge = setup();
+    const edgeInput = opened(await open(edge));
+    edgeInput.send({ kind: "touch", type: "begin", x: 1, y: 1 });
+    edgeInput.send({ dx: 5, dy: 5, kind: "scroll" });
+    edgeInput.send({ dx: -5, dy: -5, kind: "scroll" });
+    await flush();
+    const [corner, far, back] = controlPackets(edge);
+    expect(touchOf(corner as DataView)).toMatchObject({ x: 1079, y: 2399 });
+    expect(scrollOf(far as DataView)).toMatchObject({ horizontal: -16, vertical: 16 });
+    expect(scrollOf(back as DataView)).toMatchObject({ horizontal: 16, vertical: -16 });
   });
 });
 
