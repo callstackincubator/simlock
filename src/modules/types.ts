@@ -24,7 +24,7 @@ import type {
 import type {
   Clock,
   Filesystem,
-  LeaseSocket,
+  LeaseSocketAccept,
   Logger,
   ProcessRunner,
   ProcessSupervisor,
@@ -129,7 +129,7 @@ export type ModuleLeaseHandler = (
 
 // why: a lease socket handler has two steps so a refusal is a plain `Response` sent before the upgrade
 // (a gateway's 503 for a worker that cannot take the socket), and only an accept ever sees a socket.
-export type ModuleLeaseSocketAccept = (socket: LeaseSocket) => void;
+export type ModuleLeaseSocketAccept = LeaseSocketAccept;
 
 export interface ModuleLeaseSocketHandler {
   open(

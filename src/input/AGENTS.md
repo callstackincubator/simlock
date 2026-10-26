@@ -27,7 +27,8 @@ Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `i
 Two doors reach one session. A standalone worker: the HTTP layer resolves the lease for the caller, then
 `socket.open` answers an accept and the upgrade router hands it the upgraded socket. Through a gateway the
 same `open` on the gateway calls `relayTwoWay` (`input` target) with `/input/leases/<id>` and the worker's
-lease id; the worker's `relayTwoWay` finds the lease and attaches a `channelSocket` to the same session.
+lease id; the worker's `relayTwoWay` finds the lease and attaches a `channelSocket` to the same session. The
+gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls when the handshake is refused after the relay opened.
 
 1. Worker session (`sessions.ts` `attach`): a lease gone from the registry → close 4001 `lease ended`; a failed
    open within 10 s → close 1013; 8 sockets already → close 1013. Else it opens the lease's one device input

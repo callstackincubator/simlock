@@ -8,6 +8,12 @@ export interface LeaseSocket {
   onClose(listener: () => void): void;
 }
 
+// why: what a module hands the upgrade router once it has opened what a socket needs (a gateway's relay
+// to the worker): `abandon` releases it when the handshake fails and no socket ever arrives.
+export type LeaseSocketAccept = ((socket: LeaseSocket) => void) & {
+  readonly abandon?: () => void;
+};
+
 // why: the in-memory end of a `LeaseSocket` for tests: `sent` records what the module wrote and
 // `closed` how it closed; `receive` and `drop` play the client.
 export class MemoryLeaseSocket implements LeaseSocket {

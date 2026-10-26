@@ -193,6 +193,24 @@ describe("a worker's input socket", () => {
     expect(after.sent).toEqual([]);
   });
 
+  it("keeps the device input open for a socket that joins while it is still opening after the first one left", async () => {
+    const { factory, worker } = await setup();
+    let open!: () => void;
+    factory.gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const first = await attach(worker);
+    first.drop();
+    const second = await attach(worker);
+    open();
+    await vi.waitFor(() => expect(second.sent.map((sent) => sent[0])).toEqual([0x83, 0x82]));
+    expect(factory.opened[0]?.closes).toBe(0);
+    expect(factory.opens).toBe(1);
+
+    second.drop();
+    await vi.waitFor(() => expect(factory.opened[0]?.closes).toBe(1));
+  });
+
   it("sends the gateway a heartbeat every 5 s while its channel is open and none after it closes", async () => {
     const { clock, worker } = await setup();
     const toGateway = new TransformStream<Uint8Array, Uint8Array>();

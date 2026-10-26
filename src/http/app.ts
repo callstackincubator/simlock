@@ -14,7 +14,7 @@ import {
 } from "../contract/index.js";
 import type { Config, DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
-import type { Clock, IdGenerator, LeaseSocket, Logger } from "../ports/index.js";
+import type { Clock, IdGenerator, LeaseSocketAccept, Logger } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
 import {
@@ -149,7 +149,7 @@ interface HttpLeaseSocketLease {
   readonly workerLeaseId?: string;
 }
 
-export type HttpLeaseSocketAccept = (socket: LeaseSocket) => void;
+export type HttpLeaseSocketAccept = LeaseSocketAccept;
 
 // why: what the upgrade router needs of a lease socket request: the refusal to send before the
 // upgrade, or the accept to run on the upgraded socket.

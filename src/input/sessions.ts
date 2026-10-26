@@ -65,14 +65,18 @@ export function createInputSessions(options: {
     if (leases.get(leaseId) === entry) leases.delete(leaseId);
   }
 
-  function releaseWhenOpen(leaseId: string, entry: LeaseInput): void {
+  // why: `unlessJoined` is the last socket leaving: a socket that joined while the input was still opening keeps it, so the close that waited for the open drops out.
+  function releaseWhenOpen(leaseId: string, entry: LeaseInput, unlessJoined = false): void {
     if (entry.device !== undefined) {
       release(leaseId, entry, entry.device);
       return;
     }
     void entry.opening.then(
-      (opened) =>
-        isUnavailableInput(opened) ? forget(leaseId, entry) : release(leaseId, entry, opened),
+      (opened) => {
+        if (unlessJoined && entry.sockets.size > 0) return;
+        if (isUnavailableInput(opened)) forget(leaseId, entry);
+        else release(leaseId, entry, opened);
+      },
       () => undefined,
     );
   }
@@ -156,7 +160,7 @@ export function createInputSessions(options: {
     entry.sockets.add(attached);
     socket.onClose(() => {
       entry.sockets.delete(attached);
-      if (entry.sockets.size === 0) releaseWhenOpen(leaseId, entry);
+      if (entry.sockets.size === 0) releaseWhenOpen(leaseId, entry, true);
     });
     let opened: DeviceInput | UnavailableDeviceInput;
     try {

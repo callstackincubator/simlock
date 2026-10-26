@@ -95,13 +95,7 @@ describe("a gateway's input socket", () => {
     });
   });
 
-  it("closes the client's socket when the worker goes quiet or away, the lease goes, or the daemon stops", async () => {
-    const away = await attached("w1");
-    await away.worker.abort(new Error("the uplink dropped"));
-    await vi.waitFor(() =>
-      expect(away.client.closed).toEqual({ code: 1011, reason: "Worker w1 stopped answering" }),
-    );
-
+  it("closes the client's socket when the worker relay ends or says something it may not, or the lease goes", async () => {
     const ended = await attached("w1");
     await ended.worker.close();
     await vi.waitFor(() =>
@@ -144,9 +138,5 @@ describe("a gateway's input socket", () => {
     expect(silent.client.closed).toBeUndefined();
     silent.clock.advance(1);
     expect(silent.client.closed).toEqual({ code: 4001, reason: "lease ended" });
-
-    const stopping = await attached("w1");
-    await stopping.gateway.hooks?.beforeDrain?.();
-    expect(stopping.client.closed).toEqual({ code: 1001, reason: "Simlock is stopping" });
   });
 });

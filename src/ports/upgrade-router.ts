@@ -8,12 +8,12 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 
 import { type Clock, SystemClock } from "./clock.js";
-import type { LeaseSocket } from "./lease-socket.js";
+import type { LeaseSocket, LeaseSocketAccept } from "./lease-socket.js";
 import { UPLINK_PATH } from "./uplink.js";
 
 export type LeaseSocketOutcome =
   | { readonly response: Response }
-  | { readonly accept: (socket: LeaseSocket) => void };
+  | { readonly accept: LeaseSocketAccept };
 
 export interface UpgradeRouterOptions {
   readonly uplinks?: {
@@ -76,7 +76,17 @@ async function leaseUpgrade(
     return;
   }
   const { accept } = outcome;
+  // why: `ws` answers a handshake it refuses (a bad version, a bad key) itself and never calls back, so what the module opened for this socket is released when the connection ends unaccepted.
+  let upgraded = false;
+  socket.once("close", () => {
+    if (!upgraded) accept.abandon?.();
+  });
+  if (socket.destroyed) {
+    accept.abandon?.();
+    return;
+  }
   sockets.handleUpgrade(request, socket, head, (client) => {
+    upgraded = true;
     accept(wrap(client, clock));
   });
 }

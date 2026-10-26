@@ -143,7 +143,9 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
         options.clock.cancel(timer);
       }
       if (relay instanceof Response) return relay;
-      return (socket) => bridge(socket, relay, controller, lease);
+      return Object.assign((socket: LeaseSocket) => bridge(socket, relay, controller, lease), {
+        abandon: () => controller.abort(),
+      });
     },
   };
 }
