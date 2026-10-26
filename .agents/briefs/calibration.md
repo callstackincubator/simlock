@@ -1,40 +1,40 @@
-# Findings rejected in the 4 weeks to 2026-10-14
+# Findings rejected in the 4 weeks to 2026-10-26
 
 Each line below was raised as blocking and rejected when it was verified against the code,
 with the reason after the dash. A finding like one of these is right only with evidence that
 distinguishes it from the rejected one: name the input or state that makes this one differ.
 
-Written by `node .agents/scripts/delivery-stats.mjs --calibration`; 484 rejected findings in all.
+Written by `node .agents/scripts/delivery-stats.mjs --calibration`; 521 rejected findings in all.
 
 ## spec review
 
-- #509 `e2e/slow-agent-device.test.ts` short sample gap stays green — not blocking: Assumption 1 accepts it
-- #382 the title "within the configured grace" promises more than the < 3 s bound proves — not blocking: the likely regression (the option ignored, so the 10 s default applies) fails the < 3 s assertion by name; only a grace between 0.1 s and 2.8 s gets through
-- #497 edge.test.ts:493 "no idempotency key" unproven — unobservable at the daemon seam (Assumption 2)
-- #497 allocate.ts:77 unknown target silently ignored — decided by Assumption 5
-- #497 host.ts:42 randomUUID bypasses the IdGenerator port — no rule requires it; Assumption 4
-- #497 front.ts:91 /rpc matched by exact path only — speculative, no evidence the proxy routes that path
-- #497 edge.test.ts:515 no baseline for "offers no download" — duplicate of the code finding at :514, fixed
-- #496 src/core/doctor.test.ts:463 optionalModules order unproven — duplicate of the code finding, fixed there
+- #907 the "40 requests a minute" bound fails under load [incorrect] — it is stated for an idle tab, which has no events.
+- #907 ADR 0037 action events are left unmapped [incorrect] — the #905 event map covers all five.
+- #878 R5 `parseUpdaterArgs` tests are unasked — [incorrect] always-in-scope items 4 and 8 ask for them
+- #878 R13 extra assertions in "old daemon stays up" are unasked — [incorrect] they prove the R4 fix (testing 9)
+- #878 R14 scenarios "holds the socket" and "daemon start never exits" are unasked — [incorrect] they prove the R1 fix (testing 9)
+- #780 going back to page 1 on search needs more proofs — [incorrect] the model test and one browser line are what the Tests line asks for.
+- #773 the dispatcher tests for `limit` alone duplicate the history test — [incorrect] they cover the dispatchers' routing condition, which the history test cannot reach.
+- #651 ui/src/model/overview.test.ts:64 the new comments break the comment lint — CI's `lint:comments` is what rules on it; the lint then rejected six comments and that fix went through the fix check.
 
 ## code review
 
-- #509 `e2e/helpers/env.ts` `restart()` has no timeout of its own — duplicate of a spec finding, fixed under it
-- #509 `e2e/slow-agent-device.test.ts` `session list` exit code unchecked — not blocking: weakens no stated check
-- #509 `e2e/helpers/env.ts:384` `restartSteps` keeps running after the 90 s limit — not blocking: slow-lane helper, teardown only
-- #509 `src/agent-device/front/request-rules.ts:236` emulator name fallback may match another agent's emulator — not blocking: speculative
-- #507 `allocate.ts:325` the "absent target reads as mobile" rule is decided twice — not blocking: both places give the same answer today, and no rule is broken
-- #497 edge.test.ts:849 repeated cancel — duplicate of the spec finding at :849, fixed
-- #495 supervisor.test.ts:1099 deleting removeRecord stays green — duplicate of the spec finding, fixed
-- #495 supervisor.ts:745 stop-waiter removal untested — the leak is not observable without asserting private state
+- #974 the `lease_status` test fails by timeout, not on an assertion, when `run_on_device` goes back on the queue (src/mcp/server.test.ts:881) — [incorrect] a hung `lease_status` is the failure its title names
+- #879 edge.test.ts:827 title "(`false` for a virtual one)" has no case — [incorrect] the virtual case is at :754 and :770-777
+- #679 src/core/reclaim-coordinator.test.ts:381 architecture 17 forbids this comment — not blocking: it gives a real why, every fact holds, lint passes
+- #606 src/modules/conformance.test.ts:142 beforeDrain assertion can never fail — not blocking: a hang fails by timeout, so the test can still fail
+- #605 same finding as the spec one — same reason
+- #582 `src/link/link-portable.test.ts:41` title covers one direction only — from main (#579), not this PR.
+- #581 the path check skips a directory named without a trailing `/` — the manuals write directories with a trailing slash; no state is wrong.
+- #567 the gateway copies the worker's probe-default decision (main.ts:845) — the shared factory is used and behaviour is the same
 
 ## claims review
 
+- #963 "A worker that joins a gateway writes none" (agent-device.mdx:114) is false — [incorrect] config load refuses `http.enabled` on a joined worker (`src/core/config.ts:800-806`), so the profile step takes its off path.
+- #689 src/ports/daemon-launcher.ts:41 "the daemon's own sink only appends" is false of a hand-started daemon — [incorrect] the sentence is scoped "for an auto-launched daemon", where it is true
+- #674 R1 src/ports/daemon-launcher.ts:17 "the 30 s a caller gives the CLI process" is stated nowhere — incorrect: it is stated in code the change depends on, `e2e/console/fixtures.ts:109` (`cli(["daemon", "start"], env, { timeout: 30_000 })`) and `e2e/helpers/cli.ts:163` (`waitForExit(timeout = 30_000)`)
+- #606 src/module-registry/AGENTS.md:5 entry is index.ts not the definition file — not blocking: index.ts only re-exports the definition
+- #583 ADR 0022 line 429 says "KNOWN-PITFALLS gets an entry" — ADRs are history and stay as written.
+- #582 four stale references to removed ARCHITECTURE.md sections inside COMPONENTS.md and KNOWN-PITFALLS.md — both files are deleted by #583, which merges with this PR.
+- #568 docs/CONSOLE.md:152 page description omits the Load panel — incomplete wording, no wrong state
 - #509 `toolchain.md` package.json names only a short hash — not blocking: still true via vendor/README.md
-- #468 src/leasing/lease-acquisition-coordinator.ts:299 cites ADR 0023, not in docs/internal/adr/ — ADR 0023 is accepted on draft PR #465, merged by the maintainer.
-- #468 docs/EVENTS.md:26 "one-lease-per-requester" wording is stale — the default limit is still 1; the name is dated, not false.
-- #468 src/leasing/lease-acquisition-coordinator.ts:322 "one-lease-per-requester check" is stale — it still describes the default limit.
-- #462 src/daemon/dispatcher.ts:135 execEnv doc says driver keys are "layered on top"; unsetEnv now removes keys — not blocking: still true of the layering; unsetEnv is documented at the use site
-- #458 src/leasing/lease-release-coordinator.ts:86 set doc omits return reclaims — incomplete, not false; deleted under rule 17
-- #458 src/contract/schemas.ts:204, src/core/doctor.ts:257, src/core/registry.ts:123 — each gives a why
-- #458 src/daemon/server.test.ts:2032, :3087, src/leasing/lease-release-coordinator.ts:165, :274 — each gives a why (round 2)
