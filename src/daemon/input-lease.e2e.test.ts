@@ -61,6 +61,8 @@ interface OpenedSocket {
   readonly code: string | undefined;
   readonly messages: Buffer[];
   readonly socket: WebSocket;
+  // why: how the socket closed, once it has; read it again after waiting, it changes.
+  readonly closed: { code: number; reason: string } | undefined;
 }
 
 async function openInput(url: string, token: string | undefined): Promise<OpenedSocket> {
@@ -69,7 +71,11 @@ async function openInput(url: string, token: string | undefined): Promise<Opened
   });
   sockets.push(socket);
   const messages: Buffer[] = [];
+  const opened: { closed: { code: number; reason: string } | undefined } = { closed: undefined };
   socket.on("message", (data) => messages.push(data as Buffer));
+  socket.on("close", (code, reason) => {
+    opened.closed = { code, reason: reason.toString("utf8") };
+  });
   const outcome = await new Promise<{ status: number; code: string | undefined }>(
     (resolve, reject) => {
       socket.once("open", () => resolve({ code: undefined, status: 101 }));
@@ -91,7 +97,14 @@ async function openInput(url: string, token: string | undefined): Promise<Opened
       socket.once("error", reject);
     },
   );
-  return { ...outcome, messages, socket };
+  return {
+    ...outcome,
+    get closed() {
+      return opened.closed;
+    },
+    messages,
+    socket,
+  };
 }
 
 const sockets: WebSocket[] = [];
@@ -190,11 +203,13 @@ describe("a lease's input socket", () => {
       { timeout: 10_000 },
     );
     return {
+      gateway,
       holder: holder.secret,
       inputUrl: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/input`,
       leaseId,
       operator: operator.secret,
       other: other.secret,
+      owner: { ...agent, principal: holder.token.id },
       plainUrl: (id = leaseId) => `http://127.0.0.1:${String(port)}/v1/leases/${id}/input`,
     };
   }
@@ -338,6 +353,25 @@ describe("a lease's input socket", () => {
       expect(input.opened[0]?.closes).toBe(0);
       second.socket.close();
       await vi.waitFor(() => expect(input.opened[0]?.closes).toBe(1), { timeout: 10_000 });
+    },
+  );
+
+  it(
+    "closes with 4001 and the worker's reason through a gateway when the lease ends, and a reconnect gets 404",
+    { timeout: 60_000 },
+    async () => {
+      const { gateway, holder, inputUrl, leaseId, owner } = await fleet({
+        gatewayInput: true,
+        workerInput: true,
+      });
+      const opened = await openInput(inputUrl(), holder);
+      await vi.waitFor(() => expect(tags(opened)).toEqual([0x83, 0x82]), { timeout: 10_000 });
+
+      await gateway.dispatch("lease.release", { leaseId }, owner);
+      await vi.waitFor(() => expect(opened.closed).toEqual({ code: 4001, reason: "explicit" }), {
+        timeout: 10_000,
+      });
+      await expectRefused(inputUrl(), holder, { code: "UNKNOWN_LEASE", status: 404 });
     },
   );
 });
