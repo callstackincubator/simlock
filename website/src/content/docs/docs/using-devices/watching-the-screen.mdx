@@ -5,7 +5,7 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
 
 ## Before you start
 
@@ -66,7 +66,7 @@ A device that is not running has no picture, and the tab says why: shut down, st
 
 - **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer: Simlock checks the phone's screen and adb server before it starts. The console waits up to 200 seconds.
 - **A phone with its screen off is woken first.** If it does not wake, you are told to turn it on. While a phone streams, it is kept awake as long as it is charging, and its setting is put back when the stream ends.
-- **The picture ends with the device's run.** When the device is shut down, loses its connection, is quarantined or deleted, or its lease is released, expires or loses it, the stream stops, so a device is never watched after it is handed back or reset. The tab then says why.
+- **The picture ends with the device's run.** When the device is shut down, loses its connection, is quarantined or deleted, or its lease is released, expires or loses it, the stream stops, so a device is never watched after it is handed back or reset. When a lease ends it, the tab says "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost." Other ends show no such reason.
 - **A frozen device does not look live.** A stream that gets no frames for 30 seconds ends with an error.
 - **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
 - **A rotated iOS simulator or iPhone keeps the first picture's scale.** An Android device's picture follows the rotation.
@@ -100,7 +100,11 @@ At the defaults, a screen that is busy redrawing costs about 1.4 Mbit/s, and a s
 
 ## Stream from your own tool
 
-Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen. The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. Most users watch in the console instead.
+Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen by device.
+
+A lease's holder can read its own lease's screen at `GET /v1/leases/<lease-id>/stream`, on a worker or on a gateway, with the same frames. An operator token can read any lease's. A lease that is not the caller's, or does not exist, answers 404 `UNKNOWN_LEASE`. With streaming off on the daemon that answers, the path is a plain 404; through a gateway, streaming must be on for the lease's worker too, or the answer is 503 `STREAM_UNAVAILABLE`.
+
+The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. When a lease end stops a stream, its last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Any other end sends no such frame. Most users watch in the console instead.
 
 ## When it does not work
 

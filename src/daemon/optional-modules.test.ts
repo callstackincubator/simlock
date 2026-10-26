@@ -279,6 +279,31 @@ describe("optional modules: HTTP routes", () => {
     );
   });
 
+  it("a module named like a core lease sub-route (renew, exec) fails the start, and POST /v1/leases/{id}/renew still renews", async () => {
+    for (const name of ["renew", "exec"]) {
+      await expect(start({ modules: definitions(fakeModule({ name })) })).rejects.toThrow(name);
+    }
+
+    const { daemon, origin } = await start({
+      http: true,
+      modules: definitions(fakeModule({ name: "alpha" })),
+      on: ["alpha"],
+    });
+    const { secret } = await daemon.dispatch(
+      "token.create",
+      { label: "o", role: "operator" },
+      admin,
+    );
+    const grant = (await daemon.dispatch("lease.request", ios, agent)) as { lease: { id: string } };
+    const response = await fetch(`${origin}/v1/leases/${grant.lease.id}/renew`, {
+      headers: { authorization: `Bearer ${secret}` },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ leaseId: grant.lease.id });
+  });
+
   it("with agent-device on and a fake module registered, both modules' routes and relay targets answer, and both capabilities are listed", async () => {
     const { daemon, origin } = await start({
       http: true,

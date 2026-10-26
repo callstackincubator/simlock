@@ -109,6 +109,26 @@ export interface ModuleMount {
   handle(request: Request, identity: ModuleIdentity): Promise<Response>;
 }
 
+// why: the lease the daemon's http layer has already resolved for the caller (owner or operator); a
+// gateway's carries the worker and the worker's own lease id, which is what a relay names.
+export interface ModuleLease {
+  readonly id: string;
+  readonly deviceId: string;
+  readonly workerId?: string;
+  readonly workerLeaseId?: string;
+}
+
+export type ModuleLeaseHandler = (
+  request: Request,
+  identity: ModuleIdentity,
+  lease: ModuleLease,
+) => Promise<Response>;
+
+export interface ModuleLeaseRoute {
+  readonly name: string;
+  readonly handle: ModuleLeaseHandler;
+}
+
 export interface MountDeps {
   readonly dispatch: ModuleDispatch;
 }
@@ -125,6 +145,7 @@ export interface WorkerModule {
   readonly relayTarget?: ModuleRelayTarget;
   readonly relayTwoWay?: ModuleRelayTwoWayTarget;
   readonly mount?: (deps: MountDeps) => ModuleHandler;
+  readonly leaseRoute?: ModuleLeaseHandler;
   readonly findings?: () => readonly ModuleFinding[];
   readonly hooks?: WorkerHooks;
 }
@@ -203,6 +224,7 @@ export interface GatewayHooks {
 
 export interface GatewayModule {
   readonly mount?: (deps: MountDeps) => ModuleHandler;
+  readonly leaseRoute?: ModuleLeaseHandler;
   readonly hooks?: GatewayHooks;
 }
 
@@ -289,6 +311,7 @@ export interface ModuleHost {
   readonly relayTwoWayTargets: Readonly<Record<string, ModuleRelayTwoWayTarget>>;
   readonly leaseEndParticipants: readonly ModuleLeaseEndParticipant[];
   mounts(deps: MountDeps): readonly ModuleMount[];
+  leaseRoutes(): readonly ModuleLeaseRoute[];
   findings(): readonly {
     readonly kind: "module-unavailable";
     readonly module: string;
@@ -333,6 +356,7 @@ export interface GatewayParts {
 
 export interface GatewayModuleHost {
   mounts(deps: MountDeps): readonly ModuleMount[];
+  leaseRoutes(): readonly ModuleLeaseRoute[];
   beforeDrain(): Promise<void>;
 }
 

@@ -12,6 +12,7 @@ export type {
   ModuleEndedLease,
   ModuleFinding,
   ModuleHttpResponse,
+  ModuleLease,
   ModuleLeaseEndParticipant,
   ModuleMount,
   ModuleRegistryView,

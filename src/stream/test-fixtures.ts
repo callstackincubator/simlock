@@ -17,9 +17,14 @@ export interface TestDevice {
 
 export class TestRegistry implements StreamRegistry {
   devices: TestDevice[];
+  leases: { readonly id: string; readonly deviceId: string }[];
 
-  constructor(devices: TestDevice[]) {
+  constructor(
+    devices: TestDevice[],
+    leases: { readonly id: string; readonly deviceId: string }[] = [],
+  ) {
     this.devices = devices;
+    this.leases = leases;
   }
 
   get snapshot(): StreamRegistry["snapshot"] {
@@ -37,6 +42,7 @@ export class TestRegistry implements StreamRegistry {
             spec: { platform: device.platform },
           }) as unknown as DeviceRecord,
       ),
+      leases: this.leases as unknown as StreamRegistry["snapshot"]["leases"],
     };
   }
 }

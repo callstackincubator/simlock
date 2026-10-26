@@ -1,6 +1,6 @@
 # Stream
 
-Does: serves a running device's live screen to operators at `GET /v1/stream/workers/{workerId}/devices/{deviceId}` on a worker and through a gateway.
+Does: serves a running device's live screen to operators at `GET /v1/stream/workers/{workerId}/devices/{deviceId}`, and a lease's screen to its holder or an operator at `GET /v1/leases/{id}/stream`, on a worker and through a gateway.
 Entry: `index.ts` → `streamModule`, an optional module (ADR 0030): `worker.ts` `createWorker`,
 `gateway.ts` `createGateway`, loaded by the module host only when turned on.
 Uses: core (`ScreenFeed`, frame tags, registry records), modules (the context and hook types), ports.
@@ -20,7 +20,7 @@ Off unless `capabilities.stream.enabled` (false). Off: nothing loaded, and the `
 | `framing.ts`              | `MetaFrameScanner`, `checkedMeta`: codec and size a picture may claim                 |
 | `captures.ts`             | Captures per device; the lease-end participant that stops them                        |
 | `service.ts`              | One request either door: method, refusal body, response headers, log line             |
-| `mounts.ts`               | The HTTP mount and the relay target                                                   |
+| `mounts.ts`               | The HTTP mount, the lease handler and the relay target                                |
 | `refusal.ts`              | `StreamRefusalError`, each refusal's status and code, a relayed refusal checked       |
 | `caller.ts`               | Who asks                                                                              |
 | `test-fixtures.ts`        | `TestRegistry`, `ScriptedFeed` for tests                                              |
@@ -33,8 +33,14 @@ Worker — `worker-link.ts` `createWorkerStreamLink`:
 1. Operator only (an agent gets 404 `UNKNOWN_DEVICE`, as for any device), the path's worker id
    must be this worker's own (404 `UNKNOWN_WORKER`), the device must exist (404 `UNKNOWN_DEVICE`)
    and be `ready` or `leased` (409 `DEVICE_NOT_RUNNING`); nothing is opened first. A relayed
-   request is served whatever the tenant: the gateway has already refused non-operators. Any other
-   stream path, a lease's included, answers 404 `UNKNOWN_DEVICE` "This path names no stream".
+   request is served whatever the tenant: the gateway has already refused a non-operator on a device path
+   and a non-owner on a lease path. Any other
+   stream path answers 404 `UNKNOWN_DEVICE` "This path names no stream".
+   The lease route (`GET /v1/leases/{id}/stream`, the module's `leaseRoute`) is a different door: the HTTP layer
+   has already resolved the lease for the caller (owner or operator; else 404 `UNKNOWN_LEASE`), so the link
+   checks no owner. It finds the lease in the worker's own registry (404 `UNKNOWN_LEASE` when gone) and streams
+   its device. A gateway's `leaseRoute` relays `/stream/leases/<workerLeaseId>` with that id as the relay's
+   `leaseId`, and puts the gateway's own lease id into a worker's 404 `UNKNOWN_LEASE` message.
 2. `captures.beginOnDevice(deviceId)` — registered before the capture starts.
 3. `ctx.screens.openScreen(platform, device, settings)` (the daemon passes its `DriverCatalog`) → the driver's `ScreenFeed`.
    `ScreenNotSupportedError` → 415 `STREAM_NOT_SUPPORTED`; anything else → 503 `STREAM_UNAVAILABLE`.
@@ -48,8 +54,15 @@ ends or errors; no byte within the silence bound; the lease ends (the `beforeDev
 its device stops with no lease end (`device.shutdown`, `device.absence-detected`, `device.quarantined` or
 `device.deleted` → `captures.stopOnDevice`). A lease granted while streaming ends nothing.
 
-Gateway — `gateway-link.ts`: not an operator → 404 `UNKNOWN_DEVICE`; a worker not in the fleet →
-404 `UNKNOWN_WORKER`; else relays `GET /stream/devices/<device>` with tenant
+A stop with a reason writes a last frame, tag `0x07` holding `{"reason"}`, before the body ends: the lease end
+passes its `reason` (`explicit`, `killed`, `expired`, `device-lost`), and `device.absence-detected` on a device
+that was `leased` passes `device-lost`, because the registry commits that lease end and then emits, so this stop
+runs before the lease-end participants; the lease end after it finds no capture and adds no second frame. Every
+other stop, and a viewer that leaves, ends with no frame. A capture that fails or is stopped before its first
+frame has no body to carry it (409 `DEVICE_NOT_RUNNING`).
+
+Gateway — `gateway-link.ts`: on the device route, not an operator → 404 `UNKNOWN_DEVICE`; a worker not in the
+fleet → 404 `UNKNOWN_WORKER`; else relays `GET /stream/devices/<device>` (the lease route, `/stream/leases/<id>`) with tenant
 `<requesterPrefix><principal>`. A refusal
 body is read to 16 KiB; its code and message are forwarded only if the code matches
 `^[A-Z][A-Z0-9_]{0,63}$`, else the code becomes `STREAM_UNAVAILABLE`. The worker's 4xx or 5xx

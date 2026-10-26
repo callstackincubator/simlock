@@ -110,6 +110,9 @@ function targetsByName<T>(
   return targets;
 }
 
+// why: a module's lease route is `/v1/leases/:id/<name>`; these are the sub-routes the HTTP app registers itself, and a module may not take one.
+const CORE_LEASE_SUBROUTES: readonly string[] = ["exec", "renew"];
+
 type StopHook = "beforeDrain" | "beforeDriversDispose";
 
 function messageOf(error: unknown): string {
@@ -126,7 +129,7 @@ function checkNames(definitions: readonly OptionalModuleDefinition<unknown>[]): 
       throw new Error(`Optional module "${name}": the name is already taken`);
     }
     seen.add(name);
-    if (CORE_ROUTE_SEGMENTS.includes(name)) {
+    if (CORE_ROUTE_SEGMENTS.includes(name) || CORE_LEASE_SUBROUTES.includes(name)) {
       throw new Error(`Optional module "${name}": the name is reserved for a core route`);
     }
   }
@@ -291,6 +294,10 @@ async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayMo
       started.flatMap(({ gateway, name }) =>
         gateway.mount === undefined ? [] : [{ handle: gateway.mount(deps), prefix: name }],
       ),
+    leaseRoutes: () =>
+      started.flatMap(({ gateway, name }) =>
+        gateway.leaseRoute === undefined ? [] : [{ handle: gateway.leaseRoute, name }],
+      ),
   };
 }
 
@@ -395,6 +402,10 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
         worker.mount === undefined ? [] : [{ handle: worker.mount(deps), prefix: name }],
       );
     },
+    leaseRoutes: () =>
+      started.flatMap(({ name, worker }) =>
+        worker.leaseRoute === undefined ? [] : [{ handle: worker.leaseRoute, name }],
+      ),
     relayTargets,
     relayTwoWayTargets,
   };

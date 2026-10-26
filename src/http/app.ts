@@ -124,6 +124,23 @@ export interface HttpGatewayDeps {
    * request `POST` early. Default `true`. */
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];
+  readonly leaseRoutes?: readonly HttpLeaseRoute[];
+}
+
+// why: the lease is resolved here, with `lease.get`'s own owner-or-operator answer, so a module's
+// lease handler never checks who owns it; http knows a module only by its name.
+export interface HttpLeaseRoute {
+  readonly name: string;
+  handle(
+    request: Request,
+    identity: Identity,
+    lease: {
+      readonly id: string;
+      readonly deviceId: string;
+      readonly workerId?: string;
+      readonly workerLeaseId?: string;
+    },
+  ): Promise<Response>;
 }
 
 export interface HttpMount {
@@ -782,6 +799,19 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const handler = (c: Context<Env>) => mount.handle(c.req.raw, c.get("identity"));
     app.all(`/v1/${mount.prefix}`, agentAuth, handler);
     app.all(`/v1/${mount.prefix}/*`, agentAuth, handler);
+  }
+
+  for (const route of deps.leaseRoutes ?? []) {
+    app.all(`/v1/leases/:id/${route.name}`, agentAuth, async (c) => {
+      const identity = c.get("identity");
+      const lease = await findOwnedLease(deps, buildHttpSession(identity), c.req.param("id"));
+      return route.handle(c.req.raw, identity, {
+        deviceId: lease.deviceId,
+        id: lease.id,
+        ...(lease.workerId === undefined ? {} : { workerId: lease.workerId }),
+        ...(lease.workerLeaseId === undefined ? {} : { workerLeaseId: lease.workerLeaseId }),
+      });
+    });
   }
 
   // `notices` holds a subscription for the app's lifetime -- exposed here rather than left to

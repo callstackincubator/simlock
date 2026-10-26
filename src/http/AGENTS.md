@@ -68,6 +68,12 @@ the document from the same list plus the routes of every definition that carries
 `HttpMount` adds a prefix (`/v1/<prefix>`, `/v1/<prefix>/*`) behind the same auth. Today: the
 agent-device front and the stream (`/v1/stream`).
 
+`HttpLeaseRoute` adds `/v1/leases/{id}/<module name>` for each loaded module that has a lease handler, behind the same
+auth. The route resolves the lease with `lease.get` (the owner or an operator; anyone else, and an unknown id, get
+404 `UNKNOWN_LEASE`), then calls the handler with `(request, identity, lease)`; the lease carries `workerId` and
+`workerLeaseId` on a gateway. The module never checks an owner, and http knows a module only by its name. Today: the
+stream (`/v1/leases/{id}/stream`).
+
 ## Lease requests
 
 1. `POST /v1/lease-requests` → `LeaseRequestTracker.submit` → `lease.request`.

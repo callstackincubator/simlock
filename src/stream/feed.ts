@@ -22,9 +22,12 @@ export const DEFAULT_START_MS = 30_000;
 // saying so, and a viewer must not be left looking at a frozen picture it cannot tell from a live one.
 export const DEFAULT_SILENCE_MS = 30_000;
 
+// why: `lastFrame` is asked for once, when the capture's own body has ended, so a stream a lease end
+// stopped can close on a frame saying why; it answers nothing for any other end.
 export async function readScreenFeed(
   feed: ScreenFeed,
   bounds: FeedBounds,
+  lastFrame: () => Uint8Array | undefined = () => undefined,
 ): Promise<CapturedStream> {
   const reader = feed.body.getReader();
   const scanner = new MetaFrameScanner();
@@ -47,6 +50,7 @@ export async function readScreenFeed(
             () => read(bounds.silenceMs, "the next frame"),
             reader,
             feed,
+            lastFrame,
           ),
           close: () => feed.close(),
           meta: found.meta,
@@ -92,6 +96,7 @@ function followedBy(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
   source: ReadableStreamDefaultReader<Uint8Array>,
   feed: ScreenFeed,
+  lastFrame: () => Uint8Array | undefined,
 ): ReadableStream<Uint8Array> {
   let handed = false;
   return new ReadableStream<Uint8Array>({
@@ -109,6 +114,8 @@ function followedBy(
         const step = await read();
         if (step.done) {
           await feed.close();
+          const last = lastFrame();
+          if (last !== undefined) controller.enqueue(last);
           controller.close();
         } else controller.enqueue(step.value);
       } catch (error) {

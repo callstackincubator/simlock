@@ -4,9 +4,23 @@ import { noSuchStream, StreamRefusalError } from "./refusal.js";
 
 // why: a stream is asked for by the device it films; `workerId` is absent on the relay door, where the
 // gateway has already chosen the worker.
-export interface StreamTarget {
+export type StreamTarget = DeviceStreamTarget | LeaseStreamTarget;
+
+export interface DeviceStreamTarget {
   readonly deviceId: string;
   readonly workerId?: string;
+  readonly leaseId?: undefined;
+  readonly workerLeaseId?: undefined;
+}
+
+// why: a lease's stream is asked for by the lease; the caller's right to it was settled by the HTTP
+// layer's lease lookup, so a link never checks an owner. `workerLeaseId` is the worker's own id for a
+// lease a gateway names by its own.
+export interface LeaseStreamTarget {
+  readonly leaseId: string;
+  readonly workerId?: string;
+  readonly workerLeaseId?: string;
+  readonly deviceId?: undefined;
 }
 
 export interface StreamLink {
@@ -33,6 +47,12 @@ export function relayedDeviceTargetOf(pathname: string): StreamTarget | undefine
   const encoded = /^\/stream\/devices\/([^/]+)$/.exec(pathname)?.[1];
   const deviceId = encoded === undefined ? undefined : decoded(encoded);
   return deviceId === undefined ? undefined : { deviceId };
+}
+
+export function relayedLeaseTargetOf(pathname: string): StreamTarget | undefined {
+  const encoded = /^\/stream\/leases\/([^/]+)$/.exec(pathname)?.[1];
+  const leaseId = encoded === undefined ? undefined : decoded(encoded);
+  return leaseId === undefined ? undefined : { leaseId };
 }
 
 function decoded(segment: string): string | undefined {
@@ -106,7 +126,7 @@ export function streamResponse(stream: CapturedStream): Response {
 }
 
 function targetFields(target: StreamTarget): Record<string, unknown> {
-  return { deviceId: target.deviceId, workerId: target.workerId };
+  return { deviceId: target.deviceId, leaseId: target.leaseId, workerId: target.workerId };
 }
 
 // why: one body shape for every refusal this route can make -- `{ "error": { "code", "message" } }`,

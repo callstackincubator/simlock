@@ -5,8 +5,10 @@ import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 import { DEFAULT_SILENCE_MS, DEFAULT_START_MS } from "./feed.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import {
+  createStreamLeaseHandler,
   createStreamMount,
   createStreamRelayTarget,
+  type StreamLeaseHandler,
   type StreamMount,
   type StreamRelayTarget,
 } from "./mounts.js";
@@ -40,6 +42,7 @@ export interface StreamCapabilitySource {
 
 export interface WorkerStream {
   readonly mount: StreamMount;
+  readonly leaseRoute: StreamLeaseHandler;
   readonly relayTarget: StreamRelayTarget;
   readonly leaseEnd: ModuleLeaseEndParticipant;
   readonly capabilitySource: StreamCapabilitySource;
@@ -66,7 +69,16 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
   // does -- a simulator's repeats its last frame -- so these four events are what end it.
   for (const event of DEVICE_STOP_EVENTS) {
     options.events.subscribe(event, (envelope) => {
-      void captures.stopOnDevice(envelope.payload.deviceId);
+      // why: a leased phone that drops off ends its lease after this event (the registry commits the
+      // end, then emits, and the participants run after), so this stop is the one a viewer's last
+      // frame can be written on; the lease end that follows finds no capture left and adds none.
+      const payload = envelope.payload as { readonly previousState?: string };
+      void captures.stopOnDevice(
+        envelope.payload.deviceId,
+        event === "device.absence-detected" && payload.previousState === "leased"
+          ? "device-lost"
+          : undefined,
+      );
     });
   }
   return {
@@ -75,6 +87,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
       read: async () => describeAvailability(await options.screens.screenAvailability()),
     },
     leaseEnd: createStreamLeaseEnd(captures),
+    leaseRoute: createStreamLeaseHandler(service),
     mount: createStreamMount(service),
     relayTarget: createStreamRelayTarget(service),
   };
@@ -87,13 +100,13 @@ export interface GatewayStreamOptions {
 
 export function createGatewayStream(options: GatewayStreamOptions): {
   readonly mount: StreamMount;
+  readonly leaseRoute: StreamLeaseHandler;
 } {
-  return {
-    mount: createStreamMount({
-      link: createGatewayStreamLink({ fleet: options.fleet }),
-      logger: options.logger,
-    }),
+  const service: StreamServiceOptions = {
+    link: createGatewayStreamLink({ fleet: options.fleet }),
+    logger: options.logger,
   };
+  return { leaseRoute: createStreamLeaseHandler(service), mount: createStreamMount(service) };
 }
 
 function describeAvailability(platforms: readonly ScreenAvailability[]): {

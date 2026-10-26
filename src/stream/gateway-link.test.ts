@@ -56,6 +56,8 @@ async function refusalOf(served: Promise<unknown>): Promise<StreamRefusalError> 
   return outcome as StreamRefusalError;
 }
 
+const HOLDER: StreamCaller = { principal: "tok_agent", role: "agent" };
+
 const signal = () => new AbortController().signal;
 
 describe("the gateway's stream link", () => {
@@ -166,5 +168,29 @@ describe("the gateway's stream link", () => {
     );
     expect([refusal.status, refusal.code]).toEqual([503, "STREAM_UNAVAILABLE"]);
     expect(refusal.message).toContain("Worker w1");
+  });
+
+  // why: a gateway holds a lease the worker has already dropped only for the moment between the two
+  // views, which two real daemons cannot be held open in, so the worker is a relay that answers as it.
+  it("a lease the worker no longer holds is 404 UNKNOWN_LEASE naming the lease the caller asked for", async () => {
+    const { port, relayed } = fleet(() =>
+      Response.json(
+        { error: { code: "UNKNOWN_LEASE", message: "Unknown lease: lse_7" } },
+        { status: 404 },
+      ),
+    );
+    const refusal = await refusalOf(
+      createGatewayStreamLink({ fleet: port }).serve(
+        { leaseId: "w1.lse_7", workerId: "w1", workerLeaseId: "lse_7" },
+        HOLDER,
+        signal(),
+      ),
+    );
+    expect(relayed.map((call) => call.url)).toEqual(["http://simlock-worker/stream/leases/lse_7"]);
+    expect([refusal.status, refusal.code, refusal.message]).toEqual([
+      404,
+      "UNKNOWN_LEASE",
+      "Unknown lease: w1.lse_7",
+    ]);
   });
 });
