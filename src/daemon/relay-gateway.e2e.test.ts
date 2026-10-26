@@ -228,11 +228,31 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   }, 30_000);
 
   it("a gateway module's two-way relay carries bytes both ways at once until either side ends", async () => {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const { relay, workerId } = await startFleet();
+    const open = async () => {
+      const opened = await relay.relayTwoWay(workerId, buildCall({}));
+      expect(opened).not.toBeInstanceOf(Response);
+      const two = opened as TwoWayRelay;
+      const reader = two.readable.getReader();
+      const readText = async (length: number): Promise<string> => {
+        let seen = "";
+        while (seen.length < length) {
+          const step = await reader.read();
+          if (step.done) break;
+          seen += decoder.decode(step.value);
+        }
+        return seen;
+      };
+      return { reader, readText, two, writer: two.writable.getWriter() };
+    };
+
     twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
       void (async () => {
         const writer = pipe.writable.getWriter();
         const reader = pipe.readable.getReader();
-        await writer.write(new TextEncoder().encode("hello from worker"));
+        await writer.write(encoder.encode("hello from worker"));
         for (;;) {
           const step = await reader.read();
           if (step.done) return;
@@ -241,31 +261,57 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       })().catch(() => undefined);
       return Promise.resolve(new Response(null, { status: 200 }));
     };
-    const { relay, workerId } = await startFleet();
+    const both = await open();
+    const first = await both.readText("hello from worker".length);
+    await both.writer.write(encoder.encode("ping"));
+    const echoed = await both.readText("ping".length);
 
-    const opened = await relay.relayTwoWay(workerId, buildCall({}));
-    expect(opened).not.toBeInstanceOf(Response);
-    const two = opened as TwoWayRelay;
-    const reader = two.readable.getReader();
-    const writer = two.writable.getWriter();
-    const text = new TextDecoder();
-    const readText = async (length: number): Promise<string> => {
-      let seen = "";
-      while (seen.length < length) {
-        const step = await reader.read();
-        if (step.done) break;
-        seen += text.decode(step.value);
-      }
-      return seen;
+    const heard = gate();
+    let heardText = "";
+    let endedSignal: AbortSignal | undefined;
+    twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
+      endedSignal = pipe.signal;
+      void (async () => {
+        const writer = pipe.writable.getWriter();
+        await writer.write(encoder.encode("bye"));
+        await writer.close();
+        const reader = pipe.readable.getReader();
+        for (;;) {
+          const step = await reader.read();
+          if (step.done) break;
+          heardText += decoder.decode(step.value);
+        }
+        heard.open();
+      })().catch(() => undefined);
+      return Promise.resolve(new Response(null, { status: 200 }));
     };
+    const workerEnds = await open();
+    const bye = await workerEnds.readText(3);
+    const afterBye = await workerEnds.reader.read();
+    await workerEnds.writer.write(encoder.encode("late"));
+    await workerEnds.writer.close();
+    await heard.promise;
 
-    const first = await readText("hello from worker".length);
-    await writer.write(new TextEncoder().encode("ping"));
-    const echoed = await readText("ping".length);
+    const signals: AbortSignal[] = [];
+    twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
+      signals.push(pipe.signal);
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const cancelled = await open();
+    const abortedWrites = await open();
+    await cancelled.reader.cancel();
+    await abortedWrites.writer.abort(new Error("gone"));
+    await poll(() => signals.map((signal) => signal.aborted)).toEqual([true, true]);
+    await both.reader.cancel();
 
-    expect(two.status).toBe(200);
+    expect(both.two.status).toBe(200);
     expect(first).toBe("hello from worker");
     expect(echoed).toBe("ping");
+    expect(bye).toBe("bye");
+    expect(afterBye.done).toBe(true);
+    expect(heardText).toBe("late");
+    expect(endedSignal?.aborted).toBe(false);
+    expect(signals).toHaveLength(2);
   }, 30_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
