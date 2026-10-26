@@ -803,6 +803,7 @@ async function composeDaemon(
       idGenerator,
       leaseRequests: leasing.requests,
       logger: httpLogger,
+      leaseRoutes: [...moduleHost.leaseRoutes()],
       mounts: [...moduleHost.mounts({ dispatch })],
       ownerRoutedFacts: daemon.ownerRoutedFacts,
       registry,
@@ -1140,6 +1141,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       // The fleet coordinator's in-memory request book: a gateway stores nothing on disk.
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
+      leaseRoutes: [...moduleHost.leaseRoutes()],
       mounts: [...moduleHost.mounts({ dispatch })],
       // Inert in gateway mode: the gateway issues no leases of its own in this PR, so there
       // are no owner-routed facts to buffer (see `DaemonServer`'s constructor).

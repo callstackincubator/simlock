@@ -147,6 +147,7 @@ describe("a screen stream through a gateway", () => {
     );
     const leaseId = (granted as { lease: { id: string } }).lease.id;
     const deviceId = (granted as { lease: { deviceId: string } }).lease.deviceId;
+    await vi.waitFor(() => gateway.dispatch("lease.get", { leaseId }, owner), { timeout: 10_000 });
     const { workers } = await gateway.dispatch("worker.list", {}, admin);
     const workerId = workers[0]?.id ?? "";
     const stream = (signal?: AbortSignal) =>

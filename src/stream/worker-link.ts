@@ -1,5 +1,6 @@
 import {
   type DeviceRecord,
+  type LeaseRecord,
   type Platform,
   type PhysicalDriverDevice,
   type ScreenFeed,
@@ -19,6 +20,7 @@ import {
   StreamRefusalError,
   streamUnavailable,
   unknownDevice,
+  unknownLease,
   unknownWorker,
 } from "./refusal.js";
 import type { StreamLink, StreamTarget } from "./service.js";
@@ -26,6 +28,7 @@ import type { StreamLink, StreamTarget } from "./service.js";
 export interface StreamRegistry {
   readonly snapshot: {
     readonly devices: readonly DeviceRecord[];
+    readonly leases: readonly LeaseRecord[];
   };
 }
 
@@ -116,17 +119,28 @@ function requireDevice(
   caller: StreamCaller,
 ): DeviceRecord {
   // why: only an operator watches a device, and an agent gets the answer an unknown device gets, so
-  // it cannot learn which devices exist or which one its lease holds.
-  if (caller.role !== "operator") throw unknownDevice(target.deviceId);
+  // it cannot learn which devices exist or which one its lease holds. A lease's stream was checked
+  // against its owner by the HTTP layer before it got here.
+  if (target.leaseId === undefined && caller.role !== "operator") {
+    throw unknownDevice(target.deviceId);
+  }
   // why: a worker answers only for its own id (ADR 0012 section 1); a gateway names the worker it relays to,
   // and a request that reaches the wrong worker is refused rather than answered with the wrong screen.
   if (target.workerId !== undefined && target.workerId !== options.instanceId) {
     throw unknownWorker(target.workerId);
   }
-  const device = options.registry.snapshot.devices.find(
-    (candidate) => candidate.id === target.deviceId,
-  );
-  if (device === undefined) throw unknownDevice(target.deviceId);
+  const deviceId =
+    target.leaseId === undefined ? target.deviceId : leasedDeviceId(options, target.leaseId);
+  const device = options.registry.snapshot.devices.find((candidate) => candidate.id === deviceId);
+  if (device === undefined) throw unknownDevice(deviceId);
   if (device.state !== "ready" && device.state !== "leased") throw deviceNotRunning(device.state);
   return device;
+}
+
+// why: the worker's own record is the truth for a lease a caller names; a lease that is gone from it
+// is unknown whoever asks, as `lease.get` answers.
+function leasedDeviceId(options: WorkerStreamLinkOptions, leaseId: string): string {
+  const lease = options.registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+  if (lease === undefined) throw unknownLease(leaseId);
+  return lease.deviceId;
 }

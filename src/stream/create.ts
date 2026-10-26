@@ -5,8 +5,10 @@ import { createCaptureRegistry, createStreamLeaseEnd } from "./captures.js";
 import { DEFAULT_SILENCE_MS, DEFAULT_START_MS } from "./feed.js";
 import { createGatewayStreamLink, type FleetPort } from "./gateway-link.js";
 import {
+  createStreamLeaseHandler,
   createStreamMount,
   createStreamRelayTarget,
+  type StreamLeaseHandler,
   type StreamMount,
   type StreamRelayTarget,
 } from "./mounts.js";
@@ -87,13 +89,13 @@ export interface GatewayStreamOptions {
 
 export function createGatewayStream(options: GatewayStreamOptions): {
   readonly mount: StreamMount;
+  readonly leaseRoute: StreamLeaseHandler;
 } {
-  return {
-    mount: createStreamMount({
-      link: createGatewayStreamLink({ fleet: options.fleet }),
-      logger: options.logger,
-    }),
+  const service: StreamServiceOptions = {
+    link: createGatewayStreamLink({ fleet: options.fleet }),
+    logger: options.logger,
   };
+  return { leaseRoute: createStreamLeaseHandler(service), mount: createStreamMount(service) };
 }
 
 function describeAvailability(platforms: readonly ScreenAvailability[]): {

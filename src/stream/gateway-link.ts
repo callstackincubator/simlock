@@ -18,7 +18,11 @@ export interface FleetPort {
   readonly requesterPrefix: string;
   relay(
     workerId: string,
-    call: { readonly request: Request; readonly tenant: string },
+    call: {
+      readonly request: Request;
+      readonly tenant: string;
+      readonly leaseId?: string | undefined;
+    },
   ): Promise<Response>;
 }
 
@@ -37,20 +41,26 @@ async function serveDevice(
   signal: AbortSignal,
 ): Promise<CapturedStream> {
   // why: the same refusal an unknown device gets, before any relay, so an agent cannot reach a screen
-  // by naming a device.
-  if (caller.role !== "operator") throw unknownDevice(target.deviceId);
+  // by naming a device. A lease's stream was checked against its owner by the HTTP layer.
+  if (target.leaseId === undefined && caller.role !== "operator") {
+    throw unknownDevice(target.deviceId);
+  }
   const workerId = target.workerId ?? "";
   if (!options.fleet.knowsWorker(workerId)) throw unknownWorker(workerId);
-  const response = await relayed(workerId, `device ${target.deviceId}`, () =>
+  const subject =
+    target.leaseId === undefined ? `device ${target.deviceId}` : `lease ${target.leaseId}`;
+  const path =
+    target.leaseId === undefined
+      ? `/stream/devices/${encodeURIComponent(target.deviceId)}`
+      : `/stream/leases/${encodeURIComponent(target.workerLeaseId ?? target.leaseId)}`;
+  const response = await relayed(workerId, subject, () =>
     options.fleet.relay(workerId, {
-      request: new Request(
-        `http://simlock-worker/stream/devices/${encodeURIComponent(target.deviceId)}`,
-        { method: "GET", signal },
-      ),
+      leaseId: target.workerLeaseId,
+      request: new Request(`http://simlock-worker${path}`, { method: "GET", signal }),
       tenant: `${options.fleet.requesterPrefix}${caller.principal}`,
     }),
   );
-  return fromResponse(workerId, `device ${target.deviceId}`, response);
+  return fromResponse(workerId, subject, response);
 }
 
 // why: the relay fails with the fleet's own codes -- a worker gone (`WORKER_UNREACHABLE`), a worker

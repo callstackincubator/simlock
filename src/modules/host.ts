@@ -273,6 +273,10 @@ async function createGatewayHost(options: GatewayHostOptions): Promise<GatewayMo
       started.flatMap(({ gateway, name }) =>
         gateway.mount === undefined ? [] : [{ handle: gateway.mount(deps), prefix: name }],
       ),
+    leaseRoutes: () =>
+      started.flatMap(({ gateway, name }) =>
+        gateway.leaseRoute === undefined ? [] : [{ handle: gateway.leaseRoute, name }],
+      ),
   };
 }
 
@@ -379,6 +383,10 @@ async function createWorkerHost(options: ModuleHostOptions): Promise<ModuleHost>
         worker.mount === undefined ? [] : [{ handle: worker.mount(deps), prefix: name }],
       );
     },
+    leaseRoutes: () =>
+      started.flatMap(({ name, worker }) =>
+        worker.leaseRoute === undefined ? [] : [{ handle: worker.leaseRoute, name }],
+      ),
     relayTargets,
   };
 }

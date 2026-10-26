@@ -6,10 +6,13 @@ export function createGateway(ctx: GatewayContext<StreamModuleConfig>): GatewayM
   const stream = createGatewayStream({
     fleet: {
       knowsWorker: (workerId) => ctx.worker(workerId) !== undefined,
-      relay: (workerId, call) => ctx.relay(workerId, call.request, call.tenant),
+      relay: (workerId, call) => ctx.relay(workerId, call.request, call.tenant, call.leaseId),
       requesterPrefix: ctx.requesterPrefix,
     },
     logger: ctx.logger,
   });
-  return { mount: () => (request, identity) => stream.mount.handle(request, identity) };
+  return {
+    leaseRoute: stream.leaseRoute,
+    mount: () => (request, identity) => stream.mount.handle(request, identity),
+  };
 }

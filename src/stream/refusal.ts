@@ -21,6 +21,10 @@ export function unknownDevice(deviceId: string): StreamRefusalError {
   return new StreamRefusalError(404, "UNKNOWN_DEVICE", `Unknown device: ${deviceId}`);
 }
 
+export function unknownLease(leaseId: string): StreamRefusalError {
+  return new StreamRefusalError(404, "UNKNOWN_LEASE", `Unknown lease: ${leaseId}`);
+}
+
 export function unknownWorker(workerId: string): StreamRefusalError {
   return new StreamRefusalError(404, "UNKNOWN_WORKER", `Unknown worker: ${workerId}`);
 }
