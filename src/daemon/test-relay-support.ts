@@ -13,7 +13,7 @@ import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
-import type { RelayTarget, RelayTargets } from "./relay.js";
+import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
 
@@ -318,6 +318,7 @@ export interface FleetContext {
   readonly daemons: DaemonServer[];
   readonly directories: string[];
   readonly target: RelayTarget;
+  readonly twoWayTarget?: TwoWayRelayTarget;
 }
 
 export interface FleetOptions {
@@ -327,7 +328,7 @@ export interface FleetOptions {
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
-  const { daemons, directories, target } = context;
+  const { daemons, directories, target, twoWayTarget } = context;
   const execCommand = options.execCommand;
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
@@ -371,6 +372,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     daemons,
     { "agent-device": target, echo: target },
     {
+      ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
       configOverrides: {
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },

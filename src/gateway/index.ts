@@ -28,4 +28,5 @@ export { createRoutingPolicy } from "./routing.js";
 export type { RoutingPolicy, RoutingPolicyName } from "./routing.js";
 export { GatewayOwnerRoutedFacts } from "./owner-routed-facts.js";
 export { GatewayRelay } from "./relay.js";
+export type { TwoWayRelay } from "./relay.js";
 export type { GatewayWorkerClient } from "./worker-client.js";

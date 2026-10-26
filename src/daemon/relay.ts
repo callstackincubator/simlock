@@ -23,6 +23,22 @@ export type RelayTarget = (
 
 export type RelayTargets = Readonly<Record<string, RelayTarget>>;
 
+// why: a two-way target answers a refusal before touching `pipe`, or a 2xx with no body and then uses the pipe until it ends.
+export interface TwoWayPipe {
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+  readonly signal: AbortSignal;
+}
+
+export type TwoWayRelayTarget = (
+  request: Request,
+  tenant: string,
+  leaseId: string | undefined,
+  pipe: TwoWayPipe,
+) => Promise<Response>;
+
+export type TwoWayRelayTargets = Readonly<Record<string, TwoWayRelayTarget>>;
+
 type RelayRequestInput = z.infer<(typeof OPERATIONS)["relay.request"]["input"]>;
 
 // why: the call resolves once the frame is on the socket, so the relay writes the response body only after its head.

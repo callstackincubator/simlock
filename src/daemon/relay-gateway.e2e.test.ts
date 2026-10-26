@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { GatewayRelay, type GatewayWorkerClient, type WorkerDirectory } from "../gateway/index.js";
+import {
+  GatewayRelay,
+  type GatewayWorkerClient,
+  type TwoWayRelay,
+  type WorkerDirectory,
+} from "../gateway/index.js";
 import { linkPair, TYPE } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import type { DispatchSession } from "./dispatch.js";
-import type { RelayTarget } from "./relay.js";
+import type { RelayTarget, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import {
   aborted,
@@ -111,6 +116,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     leaseId: string | undefined;
   }[] = [];
 
+  let twoWayBehavior: TwoWayRelayTarget = () =>
+    Promise.resolve(new Response(null, { status: 200 }));
+  const twoWayTarget: TwoWayRelayTarget = (request, tenant, leaseId, pipe) =>
+    twoWayBehavior(request, tenant, leaseId, pipe);
+
   const target: RelayTarget = (request, tenant, leaseId) => {
     targetCalls.push({
       headers: request.headers,
@@ -124,6 +134,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
   afterEach(async () => {
     behavior = () => Promise.resolve(new Response("ok"));
+    twoWayBehavior = () => Promise.resolve(new Response(null, { status: 200 }));
     targetCalls.length = 0;
     await cleanUp(daemons, directories);
   });
@@ -163,7 +174,10 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   }
 
   const startFleet = (execCommand?: FleetExec) =>
-    startFleet_({ daemons, directories, target }, execCommand === undefined ? {} : { execCommand });
+    startFleet_(
+      { daemons, directories, target, twoWayTarget },
+      execCommand === undefined ? {} : { execCommand },
+    );
 
   const agent = (overrides: Partial<DispatchSession> = {}): DispatchSession => ({
     manageEventSubscription: () => undefined,
@@ -211,6 +225,47 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     expect(body).toBe("over a channel");
     expect(taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  it("a gateway module's two-way relay carries bytes both ways at once until either side ends", async () => {
+    twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
+      void (async () => {
+        const writer = pipe.writable.getWriter();
+        const reader = pipe.readable.getReader();
+        await writer.write(new TextEncoder().encode("hello from worker"));
+        for (;;) {
+          const step = await reader.read();
+          if (step.done) return;
+          await writer.write(step.value);
+        }
+      })();
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const { relay, workerId } = await startFleet();
+
+    const opened = await relay.relayTwoWay(workerId, buildCall({}));
+    expect(opened).not.toBeInstanceOf(Response);
+    const two = opened as TwoWayRelay;
+    const reader = two.readable.getReader();
+    const writer = two.writable.getWriter();
+    const text = new TextDecoder();
+    const readText = async (length: number): Promise<string> => {
+      let seen = "";
+      while (seen.length < length) {
+        const step = await reader.read();
+        if (step.done) break;
+        seen += text.decode(step.value);
+      }
+      return seen;
+    };
+
+    const first = await readText("hello from worker".length);
+    await writer.write(new TextEncoder().encode("ping"));
+    const echoed = await readText("ping".length);
+
+    expect(two.status).toBe(200);
+    expect(first).toBe("hello from worker");
+    expect(echoed).toBe("ping");
   }, 30_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {

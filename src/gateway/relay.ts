@@ -28,6 +28,13 @@ export interface GatewayRelayCall {
   readonly leaseId?: string;
 }
 
+export interface TwoWayRelay {
+  readonly status: number;
+  readonly headers: Headers;
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
+}
+
 // why: agent-device's proxy allows 300 s per exchange; the rest is a margin.
 const DEFAULT_DEADLINE_MS = 330_000;
 // why: agent-device's proxy ends an exchange 300 s after it starts, and its RPC body may sit silent between progress
@@ -39,6 +46,10 @@ const NO_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 
 export class GatewayRelay {
   constructor(private readonly options: GatewayRelayOptions) {}
+
+  relayTwoWay(_workerId: string, _call: GatewayRelayCall): Promise<Response | TwoWayRelay> {
+    return Promise.resolve(new Response(null, { status: 500 }));
+  }
 
   relay(workerId: string, call: GatewayRelayCall): Promise<Response> {
     return new Promise<Response>((resolve, reject) => {

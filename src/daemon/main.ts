@@ -150,7 +150,7 @@ import { describeLeaseRequestFailure } from "./error-code.js";
 import { wakingQueueAfter } from "./enrollment-wake.js";
 import { execBaseEnvironment } from "./exec-env.js";
 import { GatewayUplink } from "./gateway-uplink.js";
-import type { RelayTargets } from "./relay.js";
+import type { RelayTargets, TwoWayRelayTargets } from "./relay.js";
 
 export interface StartDaemonOptions {
   readonly clock?: Clock;
@@ -168,6 +168,7 @@ export interface StartDaemonOptions {
   /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
   readonly relayTargets?: RelayTargets;
+  readonly relayTwoWayTargets?: TwoWayRelayTargets;
   readonly role?: DaemonMode;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   readonly serviceCheck?: ServiceCheck;
