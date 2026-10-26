@@ -32,7 +32,10 @@ export function requireAuth(auth: Pick<Auth, "authenticateRequest">): Middleware
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function refuseCrossSiteChange(c: Context<AuthEnv>): void {
-  if (!c.get("identity").ambient || SAFE_METHODS.has(c.req.method)) return;
+  if (!c.get("identity").ambient) return;
+  // why: a WebSocket upgrade is a GET a browser opens cross-site with the person's cookies, so it needs the header like a change.
+  const upgrade = c.req.header("upgrade")?.toLowerCase() === "websocket";
+  if (SAFE_METHODS.has(c.req.method) && !upgrade) return;
   if (c.req.header("sec-fetch-site") === "same-origin") return;
   throw new HttpApiError(
     403,

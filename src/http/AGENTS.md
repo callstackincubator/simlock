@@ -41,7 +41,8 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
    Neither valid → 401 `UNAUTHENTICATED`. A `worker` join token → 403 on every route.
    A proxy-signed (`ambient`) identity on any method but GET, HEAD or OPTIONS needs
-   `Sec-Fetch-Site: same-origin` exactly, else 403 `FORBIDDEN` (mounts included). Tokens are exempt.
+   `Sec-Fetch-Site: same-origin` exactly, else 403 `FORBIDDEN` (mounts included); so does a WebSocket upgrade
+   (`Upgrade: websocket`, a lease's input socket). Tokens are exempt.
 4. Input — a declared route's query, path and JSON body schemas run before the handler;
    a failure is 400 `BAD_REQUEST` (`validationHook`). A JSON body without a JSON content type is
    415 `UNSUPPORTED_MEDIA_TYPE`, malformed JSON 400 `Invalid JSON body` (`mapError` reads the

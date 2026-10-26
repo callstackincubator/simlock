@@ -118,7 +118,7 @@ Your proxy must also:
 - **Let the worker connections through without a sign-in.** Workers connect to `/v1/uplink` with their join token, and carry no proxy JWT.
 - **Let `/v1/healthz` through**, if anything checks the gateway's health.
 - **Let agents through**, by whatever means your proxy offers, such as a bypass rule or service credentials. Agents send their Simlock token, which Simlock checks as usual. When a request carries both a Simlock token and a JWT, the token wins.
-- **Serve the console over HTTPS.** A browser marks its requests as coming from the console only over `https://` or on the local machine. Without that mark, Simlock refuses every request that changes something and is signed in through the proxy.
+- **Serve the console over HTTPS.** A browser marks its requests as coming from the console only over `https://` or on the local machine. Without that mark, Simlock refuses every request that changes something, and every screen-input socket, signed in through the proxy.
 
 An operator token pasted into the console still works behind the proxy.
 
