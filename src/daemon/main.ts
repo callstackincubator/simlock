@@ -1325,6 +1325,7 @@ async function discoverIosDriver(
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
+      logger: logger.child("ios"),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       screenCapture: {
         baseEnvironment: process.env,

@@ -6,6 +6,7 @@ import {
   type ComponentInstallResult,
   type ComponentReceipt,
   type ComponentRemoval,
+  type DeviceInputFactory,
   COMPONENT_REMOVAL_TIMEOUT_MS,
   type ExactDeviceRequest,
   type Driver,
@@ -50,6 +51,7 @@ import type {
   Clock,
   Filesystem,
   IdGenerator,
+  Logger,
   ProcessResult,
   ProcessRunner,
 } from "../../ports/index.js";
@@ -58,6 +60,7 @@ import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-lef
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
+import { createIosDeviceInput } from "./input/index.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
@@ -216,6 +219,8 @@ export interface IosSimctlDriverOptions {
     readonly bootTimeoutMs: number;
   };
   readonly slimByDefault?: boolean;
+  // why: the device input logs a Home press that did nothing; nothing else in the driver logs through it.
+  readonly logger?: Logger;
   // why: absent when this host has no way to run the capture program; the driver then offers no
   // screen at all rather than one that fails on every open.
   readonly screenCapture?: {
@@ -349,9 +354,23 @@ export class IosSimctlDriver implements Driver {
               ? {}
               : { onLog: options.screenCapture.onLog }),
           });
+    // why: the input is offered exactly when the screen capture is, because both are the one program.
+    this.input =
+      options.screenCapture === undefined
+        ? undefined
+        : createIosDeviceInput({
+            baseEnvironment: options.screenCapture.baseEnvironment,
+            clock: options.clock,
+            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
+            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
+            ...(options.logger === undefined ? {} : { logger: options.logger }),
+            launcher: options.screenCapture.launcher,
+            processRunner: options.processRunner,
+          });
   }
 
   readonly screenCapture: ScreenCapture | undefined;
+  readonly input: DeviceInputFactory | undefined;
 
   /**
    * why: Establishes the device set this driver owns before it can be asked to do anything,
