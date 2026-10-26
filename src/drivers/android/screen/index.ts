@@ -1,3 +1,4 @@
+export { ChunkReader } from "./adb-socket.js";
 export { createAndroidScreenCapture } from "./session.js";
 export type { ScreenTarget } from "./session.js";
 export {

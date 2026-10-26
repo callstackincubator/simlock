@@ -11,6 +11,7 @@ import {
 } from "../../../core/index.js";
 import type { Clock, ProcessHandle, TcpStream } from "../../../ports/index.js";
 import {
+  type ChunkReader,
   CLOSE_DEADLINE_MS,
   connectScrcpySocket,
   DEVICE_DIRECTORY,
@@ -90,6 +91,7 @@ class AndroidDeviceInput implements DeviceInput {
   #stream: TcpStream | undefined;
   readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
   #poll: ReturnType<Clock["setTimer"]> | undefined;
+  readonly #failedListeners = new Set<(error: Error) => void>();
   #meta = 0;
   #pushed = false;
   #shellExited = false;
@@ -119,7 +121,7 @@ class AndroidDeviceInput implements DeviceInput {
       // why: the budget starts when the server does and never restarts, so a server that keeps
       // refusing cannot hold the open longer.
       timer = this.#options.clock.setTimer(START_DEADLINE_MS, () => this.#abort.abort());
-      const { stream } = await connectScrcpySocket({
+      const { reader, stream } = await connectScrcpySocket({
         clock: this.#options.clock,
         deadlineAt: this.#options.clock.now() + START_DEADLINE_MS,
         scidHex: this.#scidHex,
@@ -131,6 +133,7 @@ class AndroidDeviceInput implements DeviceInput {
         target: this.#target,
       });
       this.#stream = stream;
+      void this.#drain(reader);
       this.#pollSize();
       return this;
     } finally {
@@ -216,8 +219,21 @@ class AndroidDeviceInput implements DeviceInput {
     return () => this.#configListeners.delete(listener);
   }
 
-  onFailed(_listener: (error: Error) => void): () => void {
-    return () => undefined;
+  onFailed(listener: (error: Error) => void): () => void {
+    this.#failedListeners.add(listener);
+    return () => this.#failedListeners.delete(listener);
+  }
+
+  // why: the server sends the device's messages (clipboard, acknowledgements) on the control socket;
+  // none is used, but they are read so the socket never fills, and the read ending is how a server
+  // that died is noticed.
+  async #drain(reader: ChunkReader): Promise<void> {
+    while ((await reader.read()) !== undefined) {
+      // why: nothing to do with what the device says; only the end matters.
+    }
+    if (this.#closing !== undefined) return;
+    const error = new Error(`The input server on ${this.#target.serial} closed its control socket`);
+    for (const listener of this.#failedListeners) listener(error);
   }
 
   // why: an agent can rotate the device at any time, and a position is measured against the screen as
