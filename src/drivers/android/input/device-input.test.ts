@@ -396,3 +396,56 @@ describe("Android device input: send", () => {
     }
   });
 });
+
+describe("Android device input: keys", () => {
+  it("turns buttons and HID keys into scrcpy keycodes, holding a modifier in the meta state until it is released", async () => {
+    const world = setup();
+    const input = opened(await open(world));
+    for (const button of ["home", "app_switcher", "lock", "back"] as const) {
+      input.send({ button, kind: "button" });
+    }
+    const tap = (usage: number) => {
+      input.send({ kind: "key", type: "down", usage });
+      input.send({ kind: "key", type: "up", usage });
+    };
+    for (const usage of [0x04, 0x1e, 0x27, 0x28, 0x2a, 0x3a]) tap(usage);
+    input.send({ kind: "key", type: "down", usage: 0xe1 });
+    input.send({ kind: "key", type: "down", usage: 0x04 });
+    input.send({ kind: "key", type: "up", usage: 0x04 });
+    input.send({ kind: "key", type: "up", usage: 0xe1 });
+    input.send({ kind: "key", type: "down", usage: 0x04 });
+    await flush();
+    const keys = controlPackets(world).map((packet) => ({
+      action: packet.getUint8(1),
+      keycode: packet.getInt32(2),
+      meta: packet.getInt32(10),
+      type: packet.getUint8(0),
+    }));
+    const key = (keycode: number, action: number, meta = 0) => ({ action, keycode, meta, type: 0 });
+    expect(keys).toEqual([
+      key(3, 0),
+      key(3, 1),
+      key(187, 0),
+      key(187, 1),
+      key(26, 0),
+      key(26, 1),
+      key(4, 0),
+      key(4, 1),
+      key(29, 0),
+      key(29, 1),
+      key(8, 0),
+      key(8, 1),
+      key(7, 0),
+      key(7, 1),
+      key(66, 0),
+      key(66, 1),
+      key(67, 0),
+      key(67, 1),
+      key(59, 0, 0x41),
+      key(29, 0, 0x41),
+      key(29, 1, 0x41),
+      key(59, 1),
+      key(29, 0),
+    ]);
+  });
+});
