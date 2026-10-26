@@ -9,6 +9,7 @@ import {
   type VirtualDriverDevice,
 } from "../../../core/index.js";
 import type {
+  BytePipeExit,
   BytePipeLauncher,
   BytePipeProcess,
   Clock,
@@ -16,6 +17,7 @@ import type {
   ProcessRunner,
 } from "../../../ports/index.js";
 import { iosRuntimeVersionFromId } from "../runtime-version.js";
+import { stopProgram } from "../screen-capture.js";
 
 export interface IosDeviceInputOptions {
   readonly command: string;
@@ -30,6 +32,9 @@ export interface IosDeviceInputOptions {
 
 const FRAME_HEADER_BYTES = 4;
 const HOME_TIMEOUT_MS = 10_000;
+// why: the helper sets up its HID client before it reports a size; one that never does is stuck, and
+// the open must not wait on it (architecture rule 11).
+const READY_DEADLINE_MS = 10_000;
 const SPRINGBOARD = "com.apple.springboard";
 
 export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInputFactory {
@@ -38,7 +43,13 @@ export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInpu
       const child = options.launcher.start(options.command, [device.deviceId, "--input"], {
         env: environmentFor(options),
       });
-      const size = await readConfig(child);
+      let size: InputScreenConfig;
+      try {
+        size = await within(READY_DEADLINE_MS, options.clock, readConfig(child));
+      } catch (error) {
+        await stopProgram(child, options.clock);
+        throw error;
+      }
       const keys = keysAvailable(device);
       const config: InputScreenConfig = keys ? size : { ...size, keyboardUnavailable: true };
       return new IosDeviceInput(options, device.deviceId, child, config, keys);
@@ -71,7 +82,12 @@ async function readConfig(child: BytePipeProcess): Promise<InputScreenConfig> {
   let buffered = new Uint8Array();
   for (;;) {
     const step = await reader.read();
-    if (step.done) throw new Error("The input helper ended before it reported the screen size");
+    if (step.done) {
+      const exit = await child.exited;
+      throw new Error(
+        `The input helper ${describeExit(exit)}${exit.error === undefined ? " before it reported the screen size" : ""}`,
+      );
+    }
     buffered = Uint8Array.from([...buffered, ...step.value]);
     if (buffered.length < FRAME_HEADER_BYTES) continue;
     const length = new DataView(buffered.buffer).getUint32(0);
@@ -83,6 +99,22 @@ async function readConfig(child: BytePipeProcess): Promise<InputScreenConfig> {
     ) as { width: number; height: number };
     return { height: size.height, orientation: "portrait", width: size.width };
   }
+}
+
+function describeExit(exit: BytePipeExit): string {
+  if (exit.error !== undefined) return `could not be started: ${exit.error}`;
+  return exit.signal === null
+    ? `exited with code ${String(exit.code)}`
+    : `was killed by ${exit.signal}`;
+}
+
+function within<T>(milliseconds: number, clock: Clock, work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = clock.setTimer(milliseconds, () => {
+      reject(new Error("The input helper reported no screen size within 10 s"));
+    });
+    void work.then(resolve, reject).finally(() => clock.cancel(timer));
+  });
 }
 
 // why: the helper reads serve-sim's JSON for each tag; a scroll's position is left out when the
@@ -113,6 +145,8 @@ class IosDeviceInput implements DeviceInput {
   readonly #child: BytePipeProcess;
   readonly #config: InputScreenConfig;
   readonly #keys: boolean;
+  readonly #failedListeners = new Set<(error: Error) => void>();
+  #closing: Promise<void> | undefined;
 
   constructor(
     options: IosDeviceInputOptions,
@@ -122,6 +156,11 @@ class IosDeviceInput implements DeviceInput {
     keys: boolean,
   ) {
     this.#keys = keys;
+    void child.exited.then((exit) => {
+      if (this.#closing !== undefined) return;
+      const error = new Error(`The input helper ${describeExit(exit)}`);
+      for (const listener of this.#failedListeners) listener(error);
+    });
     this.#options = options;
     this.#udid = udid;
     this.#child = child;
@@ -164,11 +203,13 @@ class IosDeviceInput implements DeviceInput {
     return () => undefined;
   }
 
-  onFailed(): () => void {
-    return () => undefined;
+  onFailed(listener: (error: Error) => void): () => void {
+    this.#failedListeners.add(listener);
+    return () => this.#failedListeners.delete(listener);
   }
 
   close(): Promise<void> {
-    return Promise.resolve();
+    this.#closing ??= stopProgram(this.#child, this.#options.clock);
+    return this.#closing;
   }
 }

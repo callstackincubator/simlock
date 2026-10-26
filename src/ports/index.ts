@@ -110,6 +110,7 @@ export {
   type TcpStreamConnector,
 } from "./tcp-stream.js";
 export {
+  type BytePipeExit,
   type BytePipeLauncher,
   type BytePipeProcess,
   FakeBytePipeLauncher,

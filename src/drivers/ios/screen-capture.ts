@@ -114,7 +114,7 @@ function startCapture(
       },
     },
   );
-  const close = once(() => stop(child, options.clock));
+  const close = once(() => stopProgram(child, options.clock));
   return { body: bodyOf(child, tail, close), close };
 }
 
@@ -172,7 +172,7 @@ function bodyOf(
   });
 }
 
-async function stop(child: BytePipeProcess, clock: Clock): Promise<void> {
+export async function stopProgram(child: BytePipeProcess, clock: Clock): Promise<void> {
   child.closeStdin();
   if (await exitsWithin(child, clock, STOP_GRACE_MS)) return;
   child.kill("SIGKILL");
