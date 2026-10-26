@@ -517,6 +517,29 @@ describe("reading the envelope", () => {
   });
 });
 
+describe("a stream's last frame", () => {
+  it("a console viewer sees why the picture stopped when a 0x07 frame arrives", async () => {
+    const cases = [
+      { frames: [frame(TAG.ended, { reason: "explicit" })], shown: "The lease was released." },
+      { frames: [frame(TAG.ended, { reason: "expired" })], shown: "The lease expired." },
+      {
+        frames: [frame(TAG.ended, { reason: "killed" })],
+        shown: "The lease was ended by an operator.",
+      },
+      {
+        frames: [frame(TAG.alive, []), frame(TAG.ended, { reason: "device-lost" })],
+        shown: "The device was lost.",
+      },
+      { frames: [frame(TAG.ended, "not json")], shown: undefined },
+    ];
+    for (const { frames, shown } of cases) {
+      const recorded = await read([meta(), ...frames]);
+      expect(recorded.ends, String(shown)).toEqual([shown]);
+      expect(recorded.last.error, String(shown)).toBeUndefined();
+    }
+  });
+});
+
 describe("a decoder that falls behind", () => {
   it("stops handing deltas over once the queue is over the bound and waits for a keyframe", async () => {
     initialBacklog = 20;
