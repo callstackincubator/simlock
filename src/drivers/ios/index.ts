@@ -61,6 +61,7 @@ import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
+import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 
@@ -2276,18 +2277,7 @@ function iosDriverData(device: DriverDevice): IosDriverData {
   };
 }
 
-export function iosRuntimeVersionFromId(runtimeId: string): readonly [number, number] | undefined {
-  const match = /iOS-(\d+)(?:-(\d+))?(?:-(\d+))?$/.exec(runtimeId);
-  if (match === null) {
-    return undefined;
-  }
-  const major = Number.parseInt(match[1] ?? "", 10);
-  const minor = match[2] === undefined ? 0 : Number.parseInt(match[2], 10);
-  if (Number.isNaN(major) || Number.isNaN(minor)) {
-    return undefined;
-  }
-  return [major, minor];
-}
+export { iosRuntimeVersionFromId };
 
 export function supportsPersistentSlim(version: readonly [number, number] | undefined): boolean {
   if (version === undefined) {

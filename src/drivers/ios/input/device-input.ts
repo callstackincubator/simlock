@@ -15,6 +15,7 @@ import type {
   Logger,
   ProcessRunner,
 } from "../../../ports/index.js";
+import { iosRuntimeVersionFromId } from "../runtime-version.js";
 
 export interface IosDeviceInputOptions {
   readonly command: string;
@@ -37,8 +38,10 @@ export function createIosDeviceInput(options: IosDeviceInputOptions): DeviceInpu
       const child = options.launcher.start(options.command, [device.deviceId, "--input"], {
         env: environmentFor(options),
       });
-      const config = await readConfig(child);
-      return new IosDeviceInput(options, device.deviceId, child, config);
+      const size = await readConfig(child);
+      const keys = keysAvailable(device);
+      const config: InputScreenConfig = keys ? size : { ...size, keyboardUnavailable: true };
+      return new IosDeviceInput(options, device.deviceId, child, config, keys);
     },
   };
 }
@@ -50,6 +53,15 @@ function environmentFor(options: IosDeviceInputOptions): NodeJS.ProcessEnv {
   return options.deviceSet === undefined
     ? environment
     : { ...environment, SIMLOCK_IOS_DEVICE_SET: options.deviceSet };
+}
+
+// why: the iOS 27 guest ignores injected keys (F21), so keys are dropped there; a runtime that cannot
+// be read is treated the same, because a key that does nothing is worse than a key refused.
+function keysAvailable(device: VirtualDriverDevice | PhysicalDriverDevice): boolean {
+  const data = device.driverData as { runtimeId?: unknown } | null;
+  const runtimeId = typeof data?.runtimeId === "string" ? data.runtimeId : "";
+  const version = iosRuntimeVersionFromId(runtimeId);
+  return version !== undefined && version[0] < 27;
 }
 
 // why: the helper's stdout is the stream's envelope (a 4-byte length counting the tag, a tag, the
@@ -100,13 +112,16 @@ class IosDeviceInput implements DeviceInput {
   readonly #udid: string;
   readonly #child: BytePipeProcess;
   readonly #config: InputScreenConfig;
+  readonly #keys: boolean;
 
   constructor(
     options: IosDeviceInputOptions,
     udid: string,
     child: BytePipeProcess,
     config: InputScreenConfig,
+    keys: boolean,
   ) {
+    this.#keys = keys;
     this.#options = options;
     this.#udid = udid;
     this.#child = child;
@@ -118,6 +133,7 @@ class IosDeviceInput implements DeviceInput {
       if (message.button === "home") this.#home();
       return;
     }
+    if (message.kind === "key" && !this.#keys) return;
     void this.#child.writeStdin(frameOfMessage(message));
   }
 
