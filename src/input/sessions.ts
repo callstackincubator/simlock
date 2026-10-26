@@ -60,18 +60,25 @@ export function createInputSessions(options: {
     void opened.close();
   }
 
+  // why: an unavailable device input has nothing to close, so its entry is dropped at once instead of staying for the daemon's lifetime.
+  function forget(leaseId: string, entry: LeaseInput): void {
+    if (leases.get(leaseId) === entry) leases.delete(leaseId);
+  }
+
   function releaseWhenOpen(leaseId: string, entry: LeaseInput): void {
     if (entry.device !== undefined) {
       release(leaseId, entry, entry.device);
       return;
     }
     void entry.opening.then(
-      (opened) => (isUnavailableInput(opened) ? undefined : release(leaseId, entry, opened)),
+      (opened) =>
+        isUnavailableInput(opened) ? forget(leaseId, entry) : release(leaseId, entry, opened),
       () => undefined,
     );
   }
 
   function end(leaseId: string, reason: string): void {
+    failedOpens.delete(leaseId);
     const entry = leases.get(leaseId);
     if (entry === undefined) return;
     for (const attached of entry.sockets) attached.socket.close(CLOSE_LEASE_ENDED, reason);

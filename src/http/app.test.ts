@@ -61,7 +61,6 @@ function buildHarness(
     readonly identities?: Readonly<Record<string, Identity>>;
     readonly auth?: Auth;
     readonly mounts?: HttpGatewayDeps["mounts"];
-    readonly leaseRoutes?: HttpGatewayDeps["leaseRoutes"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -119,7 +118,6 @@ function buildHarness(
     registry: overrides.registry ?? registry,
     auth,
     ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
-    ...(overrides.leaseRoutes === undefined ? {} : { leaseRoutes: overrides.leaseRoutes }),
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),
@@ -3201,42 +3199,6 @@ describe("a person the sign-in proxy signed in", () => {
         expect(response.status).toBe(403);
         expect(await response.json()).toEqual(CSRF_BODY);
         expect(dispatcher.calls).toEqual([]);
-      });
-    });
-
-    describe("a lease socket upgrade", () => {
-      const sites: ReadonlyArray<readonly [string | undefined, number]> = [
-        ["same-origin", 204],
-        ["cross-site", 403],
-        ["same-site", 403],
-        [undefined, 403],
-      ];
-
-      it.each(sites)("with Sec-Fetch-Site %s answers %s", async (site, status) => {
-        const accept = () => undefined;
-        const { app, registry } = buildHarness({
-          identities: { slk_proxy: proxyPerson(signedInAt + 120_000) },
-          leaseRoutes: [
-            {
-              handle: () => Promise.resolve(new Response(null, { status: 426 })),
-              name: "input",
-              socket: { open: () => Promise.resolve(accept) },
-            },
-          ],
-        });
-        registry.devices = [makeDevice({ id: "dev_1" })];
-        registry.leases = [makeLease({ deviceId: "dev_1", id: "lse_1", ownerId: "tok_other" })];
-
-        const outcome = await app.leaseSocket(
-          new Request("http://gw/v1/leases/lse_1/input", {
-            headers: { ...withSite(site), upgrade: "websocket" },
-          }),
-        );
-
-        expect("accept" in outcome ? 204 : outcome.response.status).toBe(status);
-        expect("accept" in outcome ? undefined : await outcome.response.json()).toEqual(
-          status === 204 ? undefined : CSRF_BODY,
-        );
       });
     });
 

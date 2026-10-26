@@ -187,7 +187,9 @@ by one.
 
 A request whose identity is `ambient`, with a method other than `GET`,
 `HEAD` or `OPTIONS`, must carry `Sec-Fetch-Site: same-origin`. Any other
-value, or no header, is `403 FORBIDDEN`. A bearer token is not ambient, so
+value, or no header, is `403 FORBIDDEN`. A WebSocket upgrade (a `GET` with
+`Upgrade: websocket`) is held to the same rule, since a page on another site
+can open one with the person's cookies. A bearer token is not ambient, so
 agents and scripts are not affected. Browsers send the header only to an
 `https://` address or to loopback, so behind a proxy served over plain HTTP
 on a network name every such request is refused; the console sends none

@@ -80,7 +80,7 @@ describe("a gateway's input socket", () => {
     });
 
     clock.advance(9_999);
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(outcome).toBeUndefined();
 
     clock.advance(1);
@@ -107,6 +107,21 @@ describe("a gateway's input socket", () => {
     await vi.waitFor(() =>
       expect(ended.client.closed).toEqual({ code: 1011, reason: "Worker w1 stopped answering" }),
     );
+
+    for (const [code, reason] of [
+      [1001, "Simlock is stopping"],
+      [1000, "done"],
+      [5000, "out of range"],
+    ] as const) {
+      const closing = await attached("w1");
+      await closing.worker.write(closeFrame(code, reason));
+      await vi.waitFor(() =>
+        expect(closing.client.closed).toEqual({
+          code: 1011,
+          reason: "Worker w1 stopped answering",
+        }),
+      );
+    }
 
     const longId = "w".repeat(128);
     const long = await attached(longId);

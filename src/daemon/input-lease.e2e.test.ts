@@ -1,11 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer as createHttpServer, type Server } from "node:http";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import { createTestKey, keySetBody, type TestKey } from "../auth/testing.js";
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
 import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
@@ -68,11 +70,14 @@ interface OpenedSocket {
 async function openInput(
   url: string,
   token: string | undefined,
-  options: { readonly autoPong?: boolean } = {},
+  options: { readonly autoPong?: boolean; readonly headers?: Record<string, string> } = {},
 ): Promise<OpenedSocket> {
   const socket = new WebSocket(url, {
     autoPong: options.autoPong ?? true,
-    headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+    headers: {
+      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+      ...options.headers,
+    },
   });
   sockets.push(socket);
   const messages: Buffer[] = [];
@@ -117,8 +122,18 @@ const sockets: WebSocket[] = [];
 describe("a lease's input socket", () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
+  const keyServers: Server[] = [];
 
   afterEach(async () => {
+    await Promise.all(
+      keyServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
     for (const socket of sockets.splice(0)) socket.terminate();
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
     await Promise.all(
@@ -220,13 +235,30 @@ describe("a lease's input socket", () => {
     };
   }
 
-  async function standalone(clock?: FakeClock) {
+  async function keyServer(key: TestKey): Promise<string> {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" }).end(keySetBody(key));
+    });
+    keyServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/keys`;
+  }
+
+  async function standalone(
+    options: { readonly clock?: FakeClock; readonly proxyAuth?: Record<string, unknown> } = {},
+  ) {
+    const { clock, proxyAuth } = options;
     const port = await freeLoopbackPort();
     const worker = await startDaemon({
       ...(clock === undefined ? {} : { clock }),
       configOverrides: {
-        capabilities: { input: { enabled: true } },
-        http: { enabled: true, host: "127.0.0.1", port },
+        capabilities: { input: { enabled: true }, stream: { enabled: true } },
+        http: {
+          enabled: true,
+          host: "127.0.0.1",
+          port,
+          ...(proxyAuth === undefined ? {} : { proxyAuth }),
+        },
       },
       dataDirectory: await directory("standalone"),
       deviceDataTables: fakeDeviceDataTables,
@@ -291,6 +323,42 @@ describe("a lease's input socket", () => {
       await expectAdmitted(direct.inputUrl(), direct.operator);
       await expectRefused(direct.inputUrl(), direct.other, unknown);
       await expectRefused(direct.inputUrl(), undefined, { code: "UNAUTHENTICATED", status: 401 });
+      // why: the stream's lease route exists here, and only the input route takes a socket.
+      await expectRefused(direct.inputUrl().replace(/input$/, "stream"), direct.holder, {
+        code: undefined,
+        status: 404,
+      });
+
+      const key = await createTestKey("ES256", "k1");
+      const proxied = await standalone({
+        proxyAuth: {
+          audience: "aud",
+          header: "cf-access-jwt-assertion",
+          issuer: "https://team.example",
+          jwksUrl: await keyServer(key),
+        },
+      });
+      const jwt = await key.sign({
+        aud: "aud",
+        email: "alice@team.dev",
+        exp: Math.floor(Date.now() / 1000) + 300,
+        iss: "https://team.example",
+        sub: "7f3a",
+      });
+      const signedIn = { "cf-access-jwt-assertion": jwt };
+      for (const site of [undefined, "cross-site", "same-site"]) {
+        const refused = await openInput(proxied.inputUrl(), undefined, {
+          headers: { ...signedIn, ...(site === undefined ? {} : { "sec-fetch-site": site }) },
+        });
+        expect({ code: refused.code, status: refused.status }).toEqual({
+          code: "FORBIDDEN",
+          status: 403,
+        });
+      }
+      const sameOrigin = await openInput(proxied.inputUrl(), undefined, {
+        headers: { ...signedIn, "sec-fetch-site": "same-origin" },
+      });
+      expect(sameOrigin.status).toBe(101);
 
       const gatewayOff = await fleet({ gatewayInput: false, workerInput: true });
       await expectRefused(gatewayOff.inputUrl(), gatewayOff.holder, {
@@ -388,14 +456,23 @@ describe("a lease's input socket", () => {
     { timeout: 60_000 },
     async () => {
       const clock = new FakeClock();
-      const direct = await standalone(clock);
+      const direct = await standalone({ clock });
       const quiet = await openInput(direct.inputUrl(), direct.holder, { autoPong: false });
       const alive = await openInput(direct.inputUrl(), direct.holder);
       await vi.waitFor(() => expect(tags(alive)).toEqual([0x83, 0x82]), { timeout: 10_000 });
-      clock.advance(15_000);
+      let pings = 0;
+      quiet.socket.on("ping", () => {
+        pings += 1;
+      });
+      clock.advance(14_999);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(pings).toBe(0);
+      clock.advance(1);
+      await vi.waitFor(() => expect(pings).toBe(1), { timeout: 10_000 });
+      clock.advance(14_999);
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(quiet.closed).toBeUndefined();
-      clock.advance(15_000);
+      clock.advance(1);
       await vi.waitFor(() => expect(quiet.closed?.code).toBe(1006), { timeout: 10_000 });
       expect(alive.closed).toBeUndefined();
 

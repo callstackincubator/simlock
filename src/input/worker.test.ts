@@ -99,16 +99,19 @@ describe("a worker's input socket", () => {
       message(0x03, null),
       message(0x04, { button: "volume_up" }),
       message(0x06, { type: "down", usage: 300 }),
-      Uint8Array.from([
-        0x03,
-        ...new TextEncoder().encode(`{"x":0.5,"pad":"${"a".repeat(65_536)}"}`),
-      ]),
+      message(0x06, { type: "down", usage: -1 }),
+      message(0x06, { type: "up", usage: 4.5 }),
+      message(0x0b, { dx: 1.5, dy: 0 }),
+      message(0x0b, { dx: 0, dy: -1.5 }),
+      message(0x0b, { dx: 0, dy: 0, x: 2, y: 0.5 }),
+      message(0x03, { pad: "a".repeat(65_536), type: "end", x: 0.5, y: 0.5 }),
     ];
+    const sentBefore = socket.sent.length;
     for (const refused of dropped) socket.receive(refused);
     expect(device?.sent).toHaveLength(valid.length);
     expect(socket.closed).toBeUndefined();
+    expect(socket.sent).toHaveLength(sentBefore);
 
-    const sentBefore = socket.sent.length;
     socket.receive(message(0x10, { command: "set-pose", requestId: 7 }));
     expect(socket.sent).toHaveLength(sentBefore + 1);
     const answer = socket.sent.at(-1);
@@ -219,6 +222,7 @@ describe("a worker's input socket", () => {
     await vi.waitFor(() => expect(written.slice(0, 5)).toEqual([0, 0, 0, 1, 0x83]));
 
     clock.advance(4_999);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(heartbeats()).toBe(0);
     clock.advance(1);
     await vi.waitFor(() => expect(heartbeats()).toBe(1));
