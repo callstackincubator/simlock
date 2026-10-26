@@ -420,10 +420,10 @@ export class Dispatcher {
       host,
       ...loadField,
       installs: [...this.options.components.inProgress()],
-      leases: [...snapshot.leases],
+      leases: this.#leasesFor(session),
       physicalQueueDepth: this.options.queue.physicalQueueDepth,
       queueDepth: this.options.queue.queueDepth,
-      waiting: [...this.options.queue.waitingRequests()],
+      waiting: this.#waitingFor(session),
       warmPool: this.options.warmPool.figures(),
     };
     return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
@@ -639,12 +639,25 @@ export class Dispatcher {
     return { lease };
   };
 
-  #leaseList: Handler<"lease.list"> = (_input, session) => {
-    const leases = this.options.registry.snapshot.leases.filter(
+  #leaseList: Handler<"lease.list"> = (_input, session) => ({ leases: this.#leasesFor(session) });
+
+  // why: an agent token must not learn other principals' leases or requester ids; admin sees all.
+  #leasesFor(session: DispatchSession) {
+    return this.options.registry.snapshot.leases.filter(
       (lease) => session.role === "admin" || lease.ownerId === session.principal,
     );
-    return { leases };
-  };
+  }
+
+  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester decides.
+  #waitingFor(session: DispatchSession) {
+    return this.options.queue
+      .waitingRequests()
+      .filter(
+        (request) =>
+          session.role === "admin" ||
+          this.options.queue.pendingRequestOwner(request.requesterId) === session.principal,
+      );
+  }
 
   /**
    * Resolution only: the daemon builds the command and never runs it. Spawning it here would

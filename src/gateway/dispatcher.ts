@@ -363,7 +363,22 @@ export class GatewayDispatcher {
       leaseIndex: this.options.leaseIndex,
     });
     const answer = { ...status, daemon: { ...status.daemon, ...consoleUrl }, history };
-    return session.role === "agent" ? withoutQuarantineMessages(answer) : answer;
+    if (session.role === "admin") return answer;
+    const { principal } = session;
+    return withoutQuarantineMessages({
+      ...answer,
+      // why: a worker's view repeats its admin-read leases and waiting requests, other principals' included.
+      workers: answer.workers?.map(({ leases: _leases, ...worker }) => ({
+        ...worker,
+        waiting: [],
+      })),
+      leases: this.#ownedFleetLeases(principal),
+      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester decides.
+      waiting: (answer.waiting ?? []).filter(
+        (request) =>
+          this.options.coordinator.pendingRequestOwner(request.requesterId) === principal,
+      ),
+    });
   };
 
   #catalogGet: Handler<"catalog.get"> = (input) =>

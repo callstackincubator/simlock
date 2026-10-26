@@ -1178,6 +1178,57 @@ describe("Dispatcher: ownership", () => {
     ).resolves.toMatchObject({ lease: { id: leaseId } });
   });
 
+  it("status.get: an agent sees only the leases and waiting requests it owns, one that owns none sees empty lists, admin sees all", async () => {
+    const { dispatcher, engine } = await buildDispatcher();
+    const IOS = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const ask = (principal: string, requesterId: string) =>
+      dispatcher.dispatch(
+        "lease.request",
+        { ...IOS, requesterId },
+        session({ principal, role: "agent" }),
+      );
+    // why: two leases fill iOS (maxRunning: 2, see testConfig), so the next two requests wait.
+    await ask("tok_owner1", "owner1-lease");
+    await ask("tok_owner2", "owner2-lease");
+    void ask("tok_owner1", "owner1-waiting").catch(() => undefined);
+    void ask("host", "agent-7").catch(() => undefined);
+    await expect.poll(() => engine.queueDepth).toBe(2);
+
+    const cases = [
+      [
+        "admin",
+        { principal: "tok_admin", role: "admin" },
+        ["owner1-lease", "owner2-lease"],
+        ["owner1-waiting", "agent-7"],
+      ],
+      [
+        "an agent with a lease and a waiting request",
+        { principal: "tok_owner1", role: "agent" },
+        ["owner1-lease"],
+        ["owner1-waiting"],
+      ],
+      [
+        "an agent whose request waits under another requesterId",
+        { principal: "host", role: "agent" },
+        [],
+        ["agent-7"],
+      ],
+      ["an agent that owns nothing", { principal: "tok_nobody", role: "agent" }, [], []],
+    ] as const;
+    const seen = await Promise.all(
+      cases.map(async ([name, who]) => {
+        const status = await dispatcher.dispatch("status.get", {}, session(who));
+        return {
+          leases: status.leases?.map((lease) => lease.requesterId),
+          name,
+          waiting: status.waiting?.map((request) => request.requesterId),
+        };
+      }),
+    );
+
+    expect(seen).toEqual(cases.map(([name, , leases, waiting]) => ({ leases, name, waiting })));
+  });
+
   it("lease.cancel: naming a requesterId with no pending request always passes (not-found), admin bypasses too", async () => {
     const { dispatcher } = await buildDispatcher();
 
@@ -2432,7 +2483,7 @@ describe("Dispatcher: list.get requests and status.get waiting", () => {
     await expect.poll(() => engine.queueDepth).toBe(1);
 
     const listed = await requests(dispatcher);
-    const { waiting } = await dispatcher.dispatch("status.get", {}, session());
+    const { waiting } = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
 
     expect(listed.map((entry) => ("stage" in entry ? entry.stage : undefined))).toEqual([
       "starting",

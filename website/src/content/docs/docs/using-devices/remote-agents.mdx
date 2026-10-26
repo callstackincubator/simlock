@@ -158,6 +158,7 @@ A command runs on the worker machine, as the user who runs the worker daemon. `s
 | `GET /v1/leases/<id>` | Read the lease again, for example after your agent restarts. `expiresAt` is the current deadline. |
 | `GET /v1/leases/<id>/events` | Server-Sent Events for `device_unhealthy`, `device_recovered` and `lease_lost`. The stream ends after `lease_lost`. |
 | `GET /v1/leases` | Your leases. On a gateway each one also carries `workerLeaseId`, the id its worker knows it by. |
+| `GET /v1/status` | The devices, capacity and queue depth. With an agent token, `leases` and `waiting` show only your own. |
 | `GET /v1/catalog?platform=ios` | The models and runtimes you can ask for, as `simlock catalog --json` prints them. |
 | `GET /v1/identity` | Who the token is. |
 

@@ -261,7 +261,7 @@ Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connecte
 
 ## simlock status
 
-Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. See [Monitoring](/simlock/docs/worker/monitoring).
+Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. With an agent token, the leases and waiting requests are only your own. See [Monitoring](/simlock/docs/worker/monitoring).
 
 When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
 

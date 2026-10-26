@@ -141,7 +141,7 @@ Over HTTP the requester is the token, not anything the request says. See [Remote
 | `simlock list --leases` | Every lease, as one JSON line. |
 | `simlock list --requests` | Every request waiting for a device. |
 
-On the machine that runs the daemon, the CLI connects as admin, so these show everyone's leases, and `lease renew` and `release` work on any lease id from any shell.
+On the machine that runs the daemon, the CLI connects as admin, so these show everyone's leases, and `lease renew` and `release` work on any lease id from any shell. With an agent token, `simlock status` shows only your own leases and waiting requests.
 
 ## When a lease is lost
 
