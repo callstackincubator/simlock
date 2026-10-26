@@ -105,6 +105,9 @@ Three identities:
 - OS constraint: a bare version is exact (string equality). A range is one or more of
   `>=`, `>`, `<=`, `<` + a dotted version, joined by single spaces, or `A - B`.
   `^`, `~`, `*`, `||` and `x` read as a range and are refused.
+- `lease.request` holds an exact `osVersion` to `componentVersionSchema`'s bound (1 to 64
+  characters, no whitespace, control character or `;`, no leading `-`): a downloadable missing
+  runtime installs it as a component.
 - A partial version covers its prefix: `<=26` takes every 26.x, `>26` excludes it. A version that
   is not dotted integers (`Baklava`) matches only exactly.
 - Duration: `500` (ms), `2s`, `3m`, `1h`, `7d`. `undefined` when not one or not a safe integer.

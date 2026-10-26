@@ -151,6 +151,22 @@ export const LEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export const leaseIdSchema = z.string().regex(LEASE_ID_PATTERN);
 
+/**
+ * why: a component's version (`26.4`, `35`) reaches the driver unread and becomes an installer
+ * argument, so its shape is bounded here (safety rule 10): no whitespace or control character, no
+ * `;` (sdkmanager's package path separator), no leading `-` (an option). An exact `osVersion` in
+ * `lease.request` is held to it too, because a downloadable missing runtime installs that string.
+ */
+const componentVersionSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[^\s\p{Cc};]+$/u, "must contain no whitespace, control character or ';'")
+  .refine((version) => !version.startsWith("-"), "must not start with '-'");
+
+const EXACT_OS_VERSION_BOUND =
+  "an exact OS version is 1 to 64 characters, none of them whitespace, a control character or `;`, and does not start with `-`";
+
 const leaseRequestBaseSchema = z
   .object({
     model: z.string().min(1).optional(),
@@ -279,6 +295,17 @@ function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefi
       context.addIssue({
         code: "custom",
         message: parsed.message,
+        path: ["osVersion"],
+      });
+      return;
+    }
+    if (
+      parsed.constraint.kind === "exact" &&
+      !componentVersionSchema.safeParse(parsed.constraint.version).success
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: EXACT_OS_VERSION_BOUND,
         path: ["osVersion"],
       });
     }
@@ -859,20 +886,6 @@ export const workerUpdate = defineOperation({
 });
 
 // ---- component.install (ADR 0010 §6) --------------------------------------------------------
-
-/**
- * A component's version as the catalog lists it under `runtimes` (`26.4`, `35`), carried to the
- * driver unread -- which is why its shape is bounded here, before it reaches one (safety rule
- * 10): a driver builds an installer argument from it. One to 64 characters, none of them
- * whitespace or a control character, and not starting with `-`, which an installer could read
- * as an option.
- */
-const componentVersionSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[^\s\p{Cc}]+$/u, "must contain no whitespace or control character")
-  .refine((version) => !version.startsWith("-"), "must not start with '-'");
 
 /**
  * Installs one iOS simulator runtime or Android system image without leasing a device (ADR 0010
