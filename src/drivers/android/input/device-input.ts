@@ -25,6 +25,8 @@ import {
 import { readScreenSize, type ScreenSize } from "./display-size.js";
 
 const SCID_LIMIT = 2 ** 31;
+// why: an agent that rotates the device is followed within this long.
+const SIZE_POLL_MS = 2_000;
 
 export interface AndroidDeviceInputOptions {
   readonly clock: Clock;
@@ -71,6 +73,8 @@ class AndroidDeviceInput implements DeviceInput {
   #config: InputScreenConfig | undefined;
   #shell: ProcessHandle | undefined;
   #stream: TcpStream | undefined;
+  readonly #configListeners = new Set<(config: InputScreenConfig) => void>();
+  #poll: ReturnType<Clock["setTimer"]> | undefined;
   #pushed = false;
   #shellExited = false;
   #closing: Promise<void> | undefined;
@@ -111,6 +115,7 @@ class AndroidDeviceInput implements DeviceInput {
         target: this.#target,
       });
       this.#stream = stream;
+      this.#pollSize();
       return this;
     } finally {
       stopped.removeEventListener("abort", stop);
@@ -162,12 +167,35 @@ class AndroidDeviceInput implements DeviceInput {
   send(_message: InputMessage): void {}
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
+    this.#configListeners.add(listener);
     if (this.#config !== undefined) listener(this.#config);
-    return () => undefined;
+    return () => this.#configListeners.delete(listener);
   }
 
   onFailed(_listener: (error: Error) => void): () => void {
     return () => undefined;
+  }
+
+  // why: an agent can rotate the device at any time, and a position is measured against the screen as
+  // it is now; a read that is still running is waited for, so reads never pile up on a slow device.
+  #pollSize(): void {
+    this.#poll = this.#options.clock.setTimer(SIZE_POLL_MS, () => {
+      void this.#readAgain();
+    });
+  }
+
+  async #readAgain(): Promise<void> {
+    try {
+      const config = configOf(await readScreenSize(this.#target));
+      const last = this.#config;
+      if (last === undefined || config.width !== last.width || config.height !== last.height) {
+        this.#config = config;
+        for (const listener of this.#configListeners) listener(config);
+      }
+    } catch {
+      // why: a failed read leaves the last size in force; the next read tries again.
+    }
+    if (!this.#abort.signal.aborted) this.#pollSize();
   }
 
   close(): Promise<void> {
@@ -190,6 +218,7 @@ class AndroidDeviceInput implements DeviceInput {
 
   async #teardown(): Promise<void> {
     this.#abort.abort();
+    if (this.#poll !== undefined) this.#options.clock.cancel(this.#poll);
     this.#stream?.close();
     const shell = this.#shell;
     if (shell !== undefined && !this.#shellExited) {
