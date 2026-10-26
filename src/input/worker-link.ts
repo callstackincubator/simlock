@@ -53,7 +53,7 @@ export function createWorkerInputLink(base: WorkerInputLinkOptions): {
     relayTwoWay: (_request, _tenant, leaseId, pipe) => {
       const lease = options.registry.snapshot.leases.find((entry) => entry.id === leaseId);
       if (lease === undefined) return Promise.resolve(unknownLease(leaseId ?? ""));
-      serve(options, lease, channelSocket(pipe));
+      serve(options, lease, channelSocket(pipe, options.clock));
       return Promise.resolve(new Response(null, { status: 200 }));
     },
   };
