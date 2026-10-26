@@ -48,6 +48,10 @@ const TWO_WAY_SILENCE_MS = 15_000;
 const TWO_WAY_READ_AHEAD_BYTES = 64 * 1024;
 const NO_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 
+function isStopped(error: unknown): boolean {
+  return error instanceof LinkChannelError && error.reason === "stopped";
+}
+
 export class GatewayRelay {
   constructor(private readonly options: GatewayRelayOptions) {}
 
@@ -317,8 +321,10 @@ class Exchange {
         try {
           await writer.close();
         } catch (error: unknown) {
-          this.#onChannelError(error);
-          throw error;
+          if (!isStopped(error)) {
+            this.#onChannelError(error);
+            throw error;
+          }
         }
         this.#writeEnded = true;
         this.#maybeComplete();
@@ -330,7 +336,11 @@ class Exchange {
         try {
           await writer.write(chunk);
         } catch (error: unknown) {
-          this.#onChannelError(error);
+          // why: a worker that stopped reading ended the gateway's direction only; the worker's direction goes on, and the module's writable errors alone.
+          if (isStopped(error)) {
+            this.#writeEnded = true;
+            this.#maybeComplete();
+          } else this.#onChannelError(error);
           throw error;
         }
       },

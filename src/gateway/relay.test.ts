@@ -21,6 +21,7 @@ class FakeChannel implements LinkChannel {
   readonly readable: ReadableStream<Uint8Array>;
   readonly writable: WritableStream<Uint8Array>;
   readonly written: Uint8Array[] = [];
+  #stopped = false;
   readonly credit = 0;
   writableClosed = false;
   aborted = false;
@@ -36,12 +37,14 @@ class FakeChannel implements LinkChannel {
     });
     this.writable = new WritableStream<Uint8Array>({
       close: () => {
+        if (this.#stopped) throw new LinkChannelError("stopped");
         this.writableClosed = true;
       },
       start: (controller) => {
         this.#writeController = controller;
       },
       write: (chunk) => {
+        if (this.#stopped) throw new LinkChannelError("stopped");
         this.written.push(chunk);
       },
     });
@@ -80,6 +83,11 @@ class FakeChannel implements LinkChannel {
     } catch {
       // why: already closed.
     }
+  }
+
+  // why: the real channel reports a peer's STOP on the next write or close, not by erroring the stream at once.
+  stopWriting(): void {
+    this.#stopped = true;
   }
 
   failWritable(reason: LinkChannelErrorReason): void {
@@ -505,6 +513,39 @@ describe("GatewayRelay finishing a two-way relay", () => {
   });
 });
 
+describe("GatewayRelay when the worker stops reading a two-way relay", () => {
+  it.each([
+    {
+      how: "a write",
+      end: (writer: WritableStreamDefaultWriter<Uint8Array>) => writer.write(new Uint8Array(1)),
+      settles: "rejected",
+    },
+    {
+      how: "a close",
+      end: (writer: WritableStreamDefaultWriter<Uint8Array>) => writer.close(),
+      settles: "fulfilled",
+    },
+  ])(
+    "ends only the gateway's direction on $how after the stop: the worker's bytes still arrive and its end finishes the relay",
+    async ({ end, settles }) => {
+      const open = await openTwoWay();
+      open.channel.stopWriting();
+
+      const ended = await outcome(end(open.writer));
+      open.channel.feed(new Uint8Array(2));
+      const first = await open.reader.read();
+      open.channel.end();
+      const last = await open.reader.read();
+
+      expect(ended.state).toBe(settles);
+      expect(first.value?.length).toBe(2);
+      expect(last.done).toBe(true);
+      expect(open.channel.aborted).toBe(false);
+      expect(open.connection.lastSentOf("relay.cancel")).toBeUndefined();
+    },
+  );
+});
+
 describe("GatewayRelay bounding the head and the body", () => {
   it.each([
     { bound: "the deadline", deadlineMs: 100, idleMs: 10_000 },
@@ -576,11 +617,14 @@ describe("GatewayRelay bounding the head and the body", () => {
   it("ends a two-way relay with WORKER_UNREACHABLE after 15 s with no byte from the worker, however much the gateway writes, and keeps it open while bytes come or the worker's direction is ended", async () => {
     const silent = await openTwoWay();
     await silent.writer.write(new Uint8Array(8));
-    silent.clock.advance(14_999);
+    silent.clock.advance(10_000);
+    await silent.writer.write(new Uint8Array(8));
+    silent.clock.advance(4_999);
     const openAt14 = silent.channel.aborted;
     silent.clock.advance(1);
-    const silentRead = await outcome(silent.reader.read());
-    const writeFailure = await outcome(silent.writer.write(new Uint8Array(1)));
+    const abortedAt15 = silent.channel.aborted;
+    const silentRead = outcome(silent.reader.read());
+    const writeFailure = outcome(silent.writer.write(new Uint8Array(1)));
 
     const chatty = await openTwoWay();
     const steps: number[] = [];
@@ -608,8 +652,13 @@ describe("GatewayRelay bounding the head and the body", () => {
 
     const message = `worker ${WORKER_ID} sent nothing on the relayed response for 15000 ms`;
     expect(openAt14).toBe(false);
-    expect(silentRead).toMatchObject({ code: "WORKER_UNREACHABLE", message, state: "rejected" });
-    expect(writeFailure).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
+    expect(abortedAt15).toBe(true);
+    expect(await silentRead).toMatchObject({
+      code: "WORKER_UNREACHABLE",
+      message,
+      state: "rejected",
+    });
+    expect(await writeFailure).toMatchObject({ code: "WORKER_UNREACHABLE", state: "rejected" });
     expect(silent.channel.aborted).toBe(true);
     expect(silent.connection.lastSentOf("relay.cancel")).toBeDefined();
     expect(steps).toEqual(Array.from({ length: 12 }, () => 1));

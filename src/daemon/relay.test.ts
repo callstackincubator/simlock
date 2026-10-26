@@ -165,14 +165,28 @@ describe("a worker's relay connection", () => {
     await pipe.writable.getWriter().close();
     const afterWrite = await settleWithin(both.result);
 
+    const writeFirst = await start(relayInput({ twoWay: true }) as Input);
+    await vi.waitFor(() => expect(pipes).toHaveLength(2));
+    const second = pipes[1] as TwoWayPipe;
+    await second.writable.getWriter().close();
+    const afterWriteFirst = await settleWithin(writeFirst.result, 50);
+    await writeFirst.gateway.writable.getWriter().close();
+    const drainedSecond = second.readable.getReader();
+    while (!(await drainedSecond.read()).done) {
+      // why: the target reads the gateway's direction to its end.
+    }
+    const afterReadLast = await settleWithin(writeFirst.result);
+
     const input = relayInput({ twoWay: true }) as Input;
     const cancelled = await start(input);
-    await vi.waitFor(() => expect(heads).toBe(2));
+    await vi.waitFor(() => expect(heads).toBe(3));
     relays.cancel(input.relayId);
     const afterCancel = await settleWithin(cancelled.result);
 
     expect(afterRead).toEqual({ state: "pending" });
     expect(afterWrite).toEqual({ state: "fulfilled", value: {} });
+    expect(afterWriteFirst).toEqual({ state: "pending" });
+    expect(afterReadLast).toEqual({ state: "fulfilled", value: {} });
     expect(afterCancel).toEqual({ state: "fulfilled", value: { cancelled: true } });
   });
 

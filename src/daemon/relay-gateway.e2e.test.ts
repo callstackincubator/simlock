@@ -294,6 +294,24 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     await workerEnds.writer.close();
     await heard.promise;
 
+    const more = gate();
+    twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
+      void (async () => {
+        const writer = pipe.writable.getWriter();
+        await writer.write(encoder.encode("one"));
+        await more.promise;
+        await writer.write(encoder.encode("two"));
+        await writer.close();
+      })().catch(() => undefined);
+      return Promise.resolve(new Response(null, { status: 200 }));
+    };
+    const gatewayEnds = await open();
+    const one = await gatewayEnds.readText(3);
+    await gatewayEnds.writer.close();
+    more.open();
+    const two = await settleWithin(gatewayEnds.readText(3));
+    const afterTwo = await settleWithin(gatewayEnds.reader.read());
+
     const signals: AbortSignal[] = [];
     twoWayBehavior = (_request, _tenant, _leaseId, pipe) => {
       signals.push(pipe.signal);
@@ -313,6 +331,9 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(afterBye.done).toBe(true);
     expect(heardText).toBe("late");
     expect(endedSignal?.aborted).toBe(false);
+    expect(one).toBe("one");
+    expect(two).toEqual({ state: "fulfilled", value: "two" });
+    expect(afterTwo).toMatchObject({ state: "fulfilled", value: { done: true } });
     expect(signals).toHaveLength(2);
   }, 30_000);
 
