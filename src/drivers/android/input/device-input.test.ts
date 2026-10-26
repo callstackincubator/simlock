@@ -318,10 +318,10 @@ describe("Android device input: open", () => {
     expect(closed.target.peers).toEqual([]);
 
     const seen = configs(input);
-    await settle(world.clock, 2_000);
-    expect(seen).toHaveLength(1);
     world.target.display = displays(2400, 1080);
-    await settle(world.clock, 2_000);
+    await settle(world.clock, 1_800);
+    expect(seen).toHaveLength(1);
+    await settle(world.clock, 400);
     expect(seen).toEqual([
       { height: 2400, orientation: "portrait", width: 1080 },
       { height: 1080, orientation: "landscape_left", width: 2400 },

@@ -110,7 +110,9 @@ describe.skipIf(missing !== undefined)(
         });
         expect(added.code, `device add failed: ${added.stderr}`).toBe(0);
         await expectAfterPrompt(env, serial, "unlock the phone and keep it plugged in", "ready");
-        const created = await env.cli(["token", "create", "--role", "agent"]);
+        // why: the lease is opened through the CLI, so its holder is not an agent token minted here; an
+        // operator token can open any lease's input socket.
+        const created = await env.cli(["token", "create", "--role", "operator"]);
         const { secret } = created.json as { secret: string };
         const leased = await env.cli(
           [
