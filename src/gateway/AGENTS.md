@@ -25,7 +25,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 | `owner-routed-facts.ts`       | Relayed lease facts → `lease-lost` and device pushes to the owner                                                                                |
 | `aggregate.ts`                | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                                          |
 | `component-relay.ts`          | `relayComponentInstall`: `worker.install-component` fan-out                                                                                      |
-| `relay.ts`                    | `GatewayRelay`: one HTTP exchange to a worker's relay target                                                                                     |
+| `relay.ts`                    | `GatewayRelay`: one HTTP exchange, or a two-way channel, to a worker's relay target                                                              |
 | `fleet-ports.ts`              | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                                                    |
 | `../daemon/gateway-uplink.ts` | Worker: `GatewayUplink`, dial and redial                                                                                                         |
 | `../daemon/relay.ts`          | Worker: `RelayConnection`, serves `relay.request`                                                                                                |
@@ -99,6 +99,16 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
    from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
 
+**Two-way relay** (`GatewayRelay.relayTwoWay`, `GatewayContext.relayTwoWay`): the same open and head, with
+`relay.request {twoWay: true}` (GET, no body), but both directions of the channel stay open after the head.
+A non-2xx head is a `Response` with its body, as above; a 2xx head is a `TwoWayRelay`
+(`{status, headers, readable, writable}`). The relay reads the worker's direction itself into `readable`,
+at most 64 KiB ahead; past that it stops reading, and the silence bound stops with it. Ending one
+direction ends only that direction; the relay ends when both have, or when either side aborts (cancel
+`readable`, abort `writable`). While the worker's direction is open, 15 s with no byte read from it, counted
+from the head or the last byte, → `WORKER_UNREACHABLE`, `relay.cancel`; bytes the gateway writes never reset it.
+The target is the worker module's `relayTwoWay`, keyed by module name; unknown → `RELAY_TARGET_MISSING`.
+
 **Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` and `lease.get` (one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record also carries `workerLeaseId`, the worker's own id (not on `status.get`).
 `lease.list` and `status.get`'s `leases`: admin all; else the index's entries it owns. `status.get`'s `waiting`: admin all; else the fleet requests it owns. For a non-admin, `workers[]` drops each worker's own `leases` and `waiting`. `inbox.get` runs `inboxItems` (contract) over the worker views, the fleet's leases and waiting requests (what `list.get` returns for `leases` and `requests`) and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
 
@@ -115,6 +125,7 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 | Forwarded `device.exec`                | 11 min                                   | `gateway.execTimeoutMs`                               |
 | Disconnected view kept                 | 24 h, held while a gateway lease is live | `gateway.disconnectedRetentionMs`                     |
 | Relay: channel + head / silent body    | 330 s / 330 s                            | `GatewayRelayOptions.deadlineMs` / `.idleMs`          |
+| Two-way relay: silent worker direction | 15 s                                     | `TWO_WAY_SILENCE_MS` (`relay.ts`)                     |
 | Link: channels per side, accept, stall | 64, 30 s, 60 s                           | `../link/` constants                                  |
 | Request records                        | 10 000, 10 min                           | `lease.maxRequestRecords`, `lease.requestRetentionMs` |
 

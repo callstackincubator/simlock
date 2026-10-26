@@ -122,6 +122,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 - `GatewayUplink` dials `gateway.url` with `gateway.token`, after the first host load reading. Backoff from 1 s, ×2, cap 30 s, jittered; retries forever.
 - `DaemonServer.acceptUplink` serves it as one more connection, role `admin`.
 - `relay.request` runs only on that connection; targets come from `relayTargets` (today `agent-device` and `stream`). See [gateway](../gateway/AGENTS.md).
+- A `relay.request` with `twoWay` takes its target from `relayTwoWayTargets` (a module's `relayTwoWay`, by module name; none → `RELAY_TARGET_MISSING`) and runs no body cut-off: the target gets `pipe = {readable, writable, signal}` on the channel's two directions. It answers a refusal before touching the pipe, or a 2xx with no body and then uses the pipe; the call answers once both directions have ended. `relay.cancel`, `abortAll` and a closed uplink abort `pipe.signal`; a target that fails after its head aborts `pipe.writable`. The 15 s silence bound is the gateway's.
 
 ## Logging and event records
 
