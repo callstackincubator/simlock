@@ -1,6 +1,6 @@
 # 0049. A lease holder watches and drives its device's screen
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-26
 - **Issue:** [#1013](https://github.com/callstackincubator/simlock/issues/1013)
 - **Narrows:** [ADR 0045](0045-a-devices-screen-streams-to-operators-not-a-leases.md)
