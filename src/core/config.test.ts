@@ -123,6 +123,7 @@ describe("loadConfig", () => {
       http: { enabled: true, host: "127.0.0.1", port: 4701 },
       warmPool: {
         enabled: true,
+        learn: true,
         maxConcurrentBoots: 2,
         reserveRunning: { android: 0, ios: 0 },
         targets: [],
