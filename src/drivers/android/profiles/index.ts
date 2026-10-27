@@ -3,6 +3,7 @@ import { AUTOMOTIVE_1024P_LANDSCAPE } from "./automotive-1024p-landscape.js";
 import { AUTOMOTIVE_1080P_LANDSCAPE } from "./automotive-1080p-landscape.js";
 import { DESKTOP_LARGE } from "./desktop-large.js";
 import { DESKTOP_MEDIUM } from "./desktop-medium.js";
+import { GALAXY_Z_FOLD_8 } from "./galaxy-z-fold-8.js";
 import { MEDIUM_PHONE } from "./medium-phone.js";
 import { MEDIUM_TABLET } from "./medium-tablet.js";
 import { PIXEL_6 } from "./pixel-6.js";
@@ -35,6 +36,7 @@ export const LIBRARY_PROFILES: readonly LibraryDeviceProfile[] = [
   AUTOMOTIVE_1024P_LANDSCAPE,
   DESKTOP_MEDIUM,
   DESKTOP_LARGE,
+  GALAXY_Z_FOLD_8,
 ];
 
 export class LibraryDeviceProfileSource implements DeviceProfileSource {

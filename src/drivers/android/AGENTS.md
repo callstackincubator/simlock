@@ -19,7 +19,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
 | `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
 | `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                                                                                                          |
-| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                                                                                                                   |
+| `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 17 profiles                                                                                                                   |
 | `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                                                                                                            |
 | `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`                                                                                                  |
 | `data.ts`                  | `AndroidDriverData`: `avdName`, `configHash`, `imageIdentity`, `port`, `serial`                                                                                       |

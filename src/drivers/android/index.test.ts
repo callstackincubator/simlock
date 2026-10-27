@@ -1327,6 +1327,7 @@ describe("AndroidDriver", () => {
         "Pixel 5": ["34", "35"],
         "Pixel 9": ["35"],
         "Pixel 9 Pro XL": ["35"],
+        "Galaxy Z Fold 8": [],
       }),
       models: [...libraryModels, "Pixel 5"],
       runtimes: ["34", "35"],
@@ -1355,6 +1356,7 @@ describe("AndroidDriver", () => {
         "Pixel 8": ["35"],
         "Pixel 9": ["35"],
         "Pixel 9 Pro XL": ["35"],
+        "Galaxy Z Fold 8": [],
       }),
     );
   });

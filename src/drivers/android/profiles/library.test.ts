@@ -90,6 +90,7 @@ const TABLE = [
   ],
   ["desktop_medium", "Medium Desktop", "desktop", "android-desktop", 32, false, {}],
   ["desktop_large", "Large Desktop", "desktop", "android-desktop", 32, false, {}],
+  ["galaxy_z_fold_8", "Galaxy Z Fold 8", "phone", undefined, 36, true, {}],
 ] as const;
 
 function byId(id: string) {
@@ -126,7 +127,7 @@ describe("the Android device profile library", () => {
     expect(profile.bootProperties).toEqual({});
   });
 
-  it("the library holds exactly the 16 profiles #485 lists, by name", () => {
+  it("the library holds exactly the 16 profiles #485 lists and the Galaxy Z Fold 8, by name", () => {
     expect(LIBRARY_PROFILES.map((profile) => profile.name).sort()).toEqual(
       ["Pixel 9", ...TABLE.map((row) => row[1])].sort(),
     );
