@@ -107,6 +107,7 @@ function harness(
   options: {
     limit?: number;
     enabled?: boolean;
+    learn?: boolean;
     refuseBoot?: boolean;
     shutdown?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
     boot?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
@@ -262,6 +263,7 @@ function harness(
     clock,
     config: {
       enabled: options.enabled ?? true,
+      ...(options.learn === undefined ? {} : { learn: options.learn }),
       maxConcurrentBoots: options.maxConcurrentBoots ?? 1,
       reserveRunning: { android: 0, ios: 0 },
       targets: options.targets ?? [],
@@ -2609,6 +2611,12 @@ describe("warm pool learned kinds", () => {
       expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],
       ]);
+      const unlearned = harness([], { learn: false, state, targets: [phone] });
+      await unlearned.pool.pass();
+      await unlearned.pool.settle();
+      expect(
+        unlearned.pool.figures().targets.map((target) => [target.model, target.origin]),
+      ).toEqual([["iPhone 15", "configured"]]);
       const fresh = harness([], { state, targets: [phone] });
       expect(fresh.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],

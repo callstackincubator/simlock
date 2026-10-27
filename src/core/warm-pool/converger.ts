@@ -226,6 +226,7 @@ export class WarmPool {
 
   /** why: the learned kinds, or none when the record cannot be read; the failure is logged once per pass. */
   #learnedKinds(): LearnedKind[] {
+    if (this.options.config.learn === false) return [];
     try {
       return this.#learned.kinds(this.options.clock.now());
     } catch (error: unknown) {
