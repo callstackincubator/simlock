@@ -91,14 +91,17 @@ is ready devices only (ADR 0017 §5).
 The budget is ADR 0017 §4, unchanged: the running limit minus the reserve
 minus held slots, the device limit, the RAM budget and the boot cap. Within
 it the pass fills, in this order: configured targets in config order, then
-learned kinds by their last lease, newest first.
+learned kinds by their last lease, newest first. Every configured count is
+filled before any learned count, a configured kind's learned peak included.
 
 A learned kind short for a running slot may take the slot of an idle ready
 device of an older learned kind, when that device is kept by no configured
 target and serves no waiting request: the device is shut down (initiator
 `warm-pool`, reason `displaced`), least recently used first, and the newer
-kind boots or creates into the slot. A configured target's devices are never
-displaced, and a configured target never displaces (as today). A kind both
+kind boots or creates into the slot. A configured count short for a running
+or reserved slot takes the slot of an idle ready device no configured count
+keeps: one of a learned kind, or a copy past its own kind's configured
+count. A device a configured count keeps is never displaced. A kind both
 configured and learned is one entry, origin `configured`, count the larger
 of the two: the entry needs the larger of what the configured count lacks
 in ready devices and what the learned count lacks in devices had.
