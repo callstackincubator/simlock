@@ -95,14 +95,9 @@ Programs: dist/bin from `pnpm build`, or `drivers.ios.screenCaptureCommand` and
 program enforces its pin: a CoreDevice major other than 642 exits 69 with the reason, a 503 for
 the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
 
-Input — `input` (offered with `screenCapture`, same launcher): `simlock-screen-capture <udid> --input`
-with the same `SIMLOCK_IOS_DEVICE_SET` rule. stdout: one `0x82` `{width,height}` (the device type's native
-size) within 10 s of spawn, else the open rejects (also for a missing program or an early exit; the helper is
-stopped). stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06` and scroll `0x0b`; a failed write or a later
-exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is
-logged); the app switcher, Lock and Back are dropped. The config is always `portrait`, with `keyboardUnavailable: true`
-when the runtime is iOS 27 or later or unreadable, and keys are then dropped. Close: stdin, 2 s, SIGKILL. A physical iPhone answers
-`{unavailable}` and starts nothing.
+Input — `input` (offered with `screenCapture`, same launcher): `simlock-screen-capture <udid> --input` with the same `SIMLOCK_IOS_DEVICE_SET` rule. stdout: one `0x82` `{width,height}` (the device type's native size) within 10 s of spawn, else the open rejects (also for a missing program or an early exit; the helper is stopped).
+stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06` and scroll `0x0b`; a failed write or a later exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is logged); the app switcher, Lock and Back are dropped.
+The config is always `portrait`, with `keyboardUnavailable: true` when the runtime is iOS 27 or later or unreadable, and keys are then dropped. Close: stdin, 2 s, SIGKILL. A physical iPhone answers `{unavailable}` and starts nothing.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
