@@ -69,8 +69,9 @@ hours. `warmPool.enabled: false` still turns the whole pool off.
 - A worker too small for its learned kinds and its targets can keep only
   the targets, without turning the pool off.
 - One more config key; ADR 0038's "zero configuration" stays the default.
-- No protocol bump: `displaced` is already a shutdown reason, and status
-  carries no new field.
+- The config schema gains `warmPool.learn`, so the protocol version rises
+  by one. `displaced` is already a shutdown reason, and status carries no
+  new field.
 
 ## Alternatives considered
 

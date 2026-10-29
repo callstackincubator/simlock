@@ -57,7 +57,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 64, max: 64 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 65, max: 65 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
