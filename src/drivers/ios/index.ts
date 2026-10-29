@@ -2285,7 +2285,7 @@ function iosDriverData(device: DriverDevice): IosDriverData {
 
 export { iosRuntimeVersionFromId };
 
-export function supportsPersistentSlim(version: readonly [number, number] | undefined): boolean {
+function supportsPersistentSlim(version: readonly [number, number] | undefined): boolean {
   if (version === undefined) {
     return false;
   }

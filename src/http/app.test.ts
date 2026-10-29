@@ -1022,7 +1022,9 @@ describe("full lease-request lifecycle via GET / long-poll / SSE", () => {
     const { app, clock, dispatcher } = buildHarness();
     const { id } = await createLeaseRequest(app, dispatcher);
 
-    const waitPromise = app.request(`/v1/lease-requests/${id}?wait=5`, { headers: agentAuth });
+    const waitPromise = Promise.resolve(
+      app.request(`/v1/lease-requests/${id}?wait=5`, { headers: agentAuth }),
+    );
     let answered = false;
     void waitPromise.then(() => {
       answered = true;
@@ -2495,9 +2497,9 @@ describe("hardening from review", () => {
     const { app, clock, dispatcher } = buildHarness();
     const { id } = await createLeaseRequest(app, dispatcher);
 
-    const waitPromise = app.request(`/v1/lease-requests/${id}?wait=999999`, {
-      headers: agentAuth,
-    });
+    const waitPromise = Promise.resolve(
+      app.request(`/v1/lease-requests/${id}?wait=999999`, { headers: agentAuth }),
+    );
     let answered = false;
     void waitPromise.then(() => {
       answered = true;
