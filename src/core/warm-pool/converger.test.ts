@@ -2611,7 +2611,13 @@ describe("warm pool learned kinds", () => {
       expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],
       ]);
-      const unlearned = harness([], { learn: false, state, targets: [phone] });
+      learned.learn(ipad, "pad-again", now - minute);
+      const unlearned = harness([], {
+        catalog: async () => [iosListing],
+        learn: false,
+        state,
+        targets: [phone],
+      });
       await unlearned.pool.pass();
       await unlearned.pool.settle();
       expect(

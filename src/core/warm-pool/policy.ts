@@ -604,7 +604,7 @@ interface TargetPlan {
   /** why: the idle ready devices a newer learned kind may shut down for a slot, least recently used first. */
   readonly victims: VirtualDevice[];
   readonly displaced: Set<string>;
-  /** Idle and not displaced this pass: the devices a kind still counts as its own. */
+  /** why: idle and not displaced this pass: the devices a kind still counts as its own. */
   readonly isIdle: (device: VirtualDevice) => boolean;
   /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
   started: number;

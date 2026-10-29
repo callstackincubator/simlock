@@ -35,7 +35,7 @@ export interface WarmPoolConfig {
   readonly reserveRunning: { readonly ios: number; readonly android: number };
   /** Kinds of device kept booted ahead of demand. */
   readonly targets: readonly WarmTarget[];
-  /** `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
+  /** why: `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
   readonly learn?: boolean;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
