@@ -125,7 +125,7 @@ The requester id decides which leases are yours and enforces the one-lease limit
 
 1. `--agent-id <id>` on the command.
 2. The `SIMLOCK_AGENT_ID` environment variable.
-3. The agent session: under Claude Code, `claude-code:<session id>`; under Codex, `codex:<session id>`. Every command and sub-agent in one session shares that id, and so its one lease.
+3. The agent session: under Claude Code, `claude-code:<session id>`; under Codex, `codex:<session id>`; under pi, `pi:<session id>`. Every command and sub-agent in one session shares that id, and so its one lease.
 4. The process id of that one `simlock` command.
 
 Outside an agent session, with nothing set, each `simlock` command is a different requester. The one-lease limit then never applies between commands. Set `SIMLOCK_AGENT_ID` in each agent's environment when you run agents some other way, and give every agent its own value: agents that share one id share one lease.
