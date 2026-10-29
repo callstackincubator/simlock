@@ -55,7 +55,7 @@ the status is stale.
 | [0014](0014-an-event-has-one-id-minted-where-the-fact-happened.md) | An event has one id, minted where the fact happened | Accepted; §6 narrowed by 0021 |
 | [0015](0015-a-lease-request-is-a-set-of-constraints.md) | A lease request is a set of constraints, and the catalog says which class each model is | Accepted; §3 narrowed by 0022 for physical devices; §3–5 narrowed by 0025 on Android |
 | [0016](0016-usage-figures-are-derived-on-read-from-the-event-history.md) | Usage figures are derived on read from the event history | Accepted — partly implemented: the event and retention parts are built, the reader (§1, §5–§8) is not; §6's fleet join and a Consequence superseded by 0021; §1 and §4 superseded by 0032 |
-| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — partly implemented: §3 (the release path still calls into the pool); §2, §4, §5 and §8 narrowed by 0038 |
+| [0017](0017-the-warm-pool-is-a-module-beside-the-lease-transaction.md) | The warm pool is a module beside the lease transaction, not a step in it | Accepted — partly implemented: §3 (the release path still calls into the pool); §2, §4, §5 and §8 narrowed by 0038; §5 step 3 narrowed by 0051 |
 | [0018](0018-leasing-is-one-module-and-every-module-is-entered-through-its-index.md) | Leasing is one module, and every module is entered through its index | Accepted — partly implemented: §3 and §4's warm-pool name rule; §4's path rules superseded by 0027; §1's one-write wording narrowed by 0036 |
 | [0019](0019-startup-ends-every-lease-whose-device-is-not-running.md) | Startup ends every lease whose device is not running | Accepted; §1–2 narrowed by 0022 for physical devices; §4 narrowed by 0036 (a replay reads the current device) |
 | [0020](0020-a-requester-may-choose-its-lease-id.md) | A requester may choose its lease id, and the gateway passes it through bare | Accepted |
@@ -76,7 +76,7 @@ the status is stale.
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
-| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented |
+| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented; §3, §8 and an alternative narrowed by 0051 |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
@@ -88,3 +88,4 @@ the status is stale.
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
 | [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted |
+| [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |

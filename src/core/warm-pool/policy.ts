@@ -615,7 +615,7 @@ interface TargetPlan {
  * of its kind is booted before a new one is created, never while a waiter on its platform is one
  * the queue pass could not serve, never while its spec is held back after a failure, and never past the slots, the
  * device limit and RAM the capacity allows, nor past `maxConcurrentBoots` pool boots at once. A
- * target never shuts a device down: what it cannot fit it reports short.
+ * target shuts a device down only to displace it (ADR 0051): what it cannot fit it reports short.
  */
 function planTargets(
   view: WarmPolicyView,
