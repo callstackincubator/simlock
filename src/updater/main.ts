@@ -19,12 +19,13 @@ function describe(error: unknown): string {
 async function update(args: UpdaterArguments): Promise<number> {
   const filesystem = new NodeFilesystem();
   const dataDirectory = daemonDataDirectory(resolveSimlockHome(process.env), args.role);
+  const processes = new NodeProcessRunner();
   return runUpdater({
     ...args,
     npm: new NodeNpmCli({ runner: new NodeProcessRunner(), filesystem, dataDirectory }),
     probe: createDaemonProbe({ dataDirectory, filesystem }),
-    processes: new NodeProcessRunner(),
-    supervisor: new NodeProcessSupervisor(),
+    processes,
+    supervisor: new NodeProcessSupervisor({ platform: process.platform, processRunner: processes }),
     filesystem,
     clock: new SystemClock(),
     packageRoot: fileURLToPath(new URL("../../", import.meta.url)),

@@ -45,7 +45,13 @@ function changelogWithRelease(changelog, { version, previousTag, notes, reposito
       ? `## ${version} (${date})`
       : `## [${version}](${repository}/compare/${previousTag}...v${version}) (${date})`;
   // why: GitHub's notes start at `## What's Changed`, the level the version heading has.
-  const body = notes.trim().replace(/^## /gmu, "### ");
+  // why: GitHub's notes use `*` bullets and no blank line under a heading; oxfmt --check (CI's
+  // Static checks) wants `-` and the blank line, so the release commit must arrive formatted.
+  const body = notes
+    .trim()
+    .replace(/^## (.*)\n(?!\n)/gmu, "### $1\n\n")
+    .replace(/^## /gmu, "### ")
+    .replace(/^\* /gmu, "- ");
   const section = `${title}\n\n${body}\n\n`;
   const lines = changelog.split("\n");
   const first = lines.findIndex((line) => /^## \[?\d+\.\d+\.\d+/u.test(line));

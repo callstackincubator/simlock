@@ -55,7 +55,7 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
+1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`. On Windows the endpoint is a named pipe (`\\.\pipe\simlock-<hash of the data directory>`): none of the file steps run, since a pipe has no directory and no stale entry, and a live one fails the bind with `address-in-use`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
@@ -87,8 +87,8 @@ Health: `starting` → `running`, or `failed`.
 
 - `hello`, `status.get` and `daemon.update` with `query` answer at once; `status.get` while `starting` carries
   `daemon`, `host` and `load` only.
-- Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
-  (`convergence-failed`).
+- Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops (`convergence-failed`).
+- Claim or `admin.token` write fails → parked requests get `DAEMON_STARTUP_FAILED`; `start` disposes what the stop does (engine, `settle`, `dispose`, connections, a claimed socket) without `daemon.stopping` or the `admin.token` removal, then rejects; a later `stop()` gets that release's promise. A stop already running (a `daemon.stop` after the claim) is the one teardown instead: `start` rejects at once with its own error (that stop's `stopAuxiliary` waits for the start to settle), and `startDaemon` waits for the stop before it rejects. `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server.
 - A stop during converge → nothing is armed, no `daemon.started`; parked requests get `DAEMON_STOPPING`.
 - Arm: owner-routed push subscription → `daemon.started` → driver refusal events →
   health monitor and physical device watcher start.
@@ -110,7 +110,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 - Every socket peer is the same OS user; file modes are the real boundary: the data
   directory is created `0700` (`DATA_DIRECTORY_MODE`) by whoever makes it first (the
   daemon, `NodeDaemonLauncher`, `config set`, service install), and its files are `0600`.
-  An existing directory is never chmod'ed; the daemon warns when group or others can reach it.
+  An existing directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows the endpoint is a named pipe no directory guards: see [ports](../ports/AGENTS.md).
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
 - A worker that joins a fleet grants its gateway `admin` over itself.
@@ -136,7 +136,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
   starts it in both modes with the role and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
   failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `inbox.get` (worker mode) runs `inboxItems` over its own `worker.list` view, `lease.list` and its queue. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
-- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
+- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering, or a connect to its endpoint timing out (`connection-timeout`: a pipe whose every instance is busy), logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. Both exit at once (`process.exit`) after the line, since a start that lost the claim keeps its drivers' children. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
 
 ## Rules
 

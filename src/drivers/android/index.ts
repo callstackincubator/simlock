@@ -101,6 +101,11 @@ const COLD_BOOT_ESTIMATE_MS = 70_000;
 // `#reattachRunningEmulators` swept, which is exactly this range.
 const PORT_MAX = 5682;
 const PORT_MIN = 5586;
+// why: With `-port` set and no `-grpc`, the emulator opens no gRPC server and writes no
+// `avd/running/pid_*.ini`, so tools that drive it over gRPC cannot find it. The emulator's own
+// default, console port + 3000, keeps the endpoint per-console and so unique per lease
+// (8586-8682 for Simlock's 5586-5682).
+const GRPC_PORT_OFFSET = 3000;
 const PORT_POLL_INTERVAL_MS = 2_000;
 /**
  * why: The command timeout on the `adb devices` that `listManaged` runs. It sits below the 60-second
@@ -2113,6 +2118,9 @@ export class AndroidDriver implements Driver {
         "-port",
         String(data.port),
         "-no-snapshot-save",
+        "-grpc",
+        String(data.port + GRPC_PORT_OFFSET),
+        "-grpc-use-token",
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
@@ -2418,6 +2426,7 @@ async function consolePortsInUse(tcpProbe: TcpProbe, consolePort: number): Promi
   const listening = await Promise.all([
     tcpProbe.isListening(consolePort),
     tcpProbe.isListening(consolePort + 1),
+    tcpProbe.isListening(consolePort + GRPC_PORT_OFFSET),
   ]);
   return listening.includes(true);
 }

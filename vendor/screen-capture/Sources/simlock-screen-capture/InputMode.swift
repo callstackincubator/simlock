@@ -5,9 +5,10 @@
 // stdin. Each message is the stream's envelope: a 4-byte big-endian length (covering the tag), a tag
 // byte, and serve-sim's JSON for that tag:
 //
-//   0x03 touch   {"type":"begin"|"move"|"end","x":0..1,"y":0..1}
-//   0x06 key     {"type":"down"|"up","usage":<USB HID keyboard usage>}
-//   0x0b scroll  {"dx":-1..1,"dy":-1..1,"x"?:0..1,"y"?:0..1}  (fractions of the screen)
+//   0x03 touch        {"type":"begin"|"move"|"end","x":0..1,"y":0..1}
+//   0x06 key          {"type":"down"|"up","usage":<USB HID keyboard usage>}
+//   0x07 orientation  {"orientation":"portrait"|"portrait_upside_down"|"landscape_left"|"landscape_right"}
+//   0x0b scroll       {"dx":-1..1,"dy":-1..1,"x"?:0..1,"y"?:0..1}  (fractions of the screen)
 //
 // stdout carries one envelope, tag 0x82, `{"width":<px>,"height":<px>}`, once the HID client exists.
 // End of stdin ends the program, as it ends a capture. Home is not here: the daemon relaunches
@@ -18,7 +19,16 @@ import SimlockCapture
 private let tagTouch: UInt8 = 0x03
 private let tagKey: UInt8 = 0x06
 private let tagScroll: UInt8 = 0x0b
+private let tagOrientation: UInt8 = 0x07
 private let tagConfig: UInt8 = 0x82
+
+// why: serve-sim's names, mapped to the UIDeviceOrientation values the guest's GraphicsServices takes.
+private let orientations: [String: UInt32] = [
+    "portrait": HIDInjector.orientationPortrait,
+    "portrait_upside_down": HIDInjector.orientationPortraitUpsideDown,
+    "landscape_left": HIDInjector.orientationLandscapeLeft,
+    "landscape_right": HIDInjector.orientationLandscapeRight,
+]
 
 /// Reads exactly `count` bytes from stdin, or nil when stdin has ended.
 private func readExactly(_ count: Int) -> Data? {
@@ -87,6 +97,9 @@ func runInput(udid: String) async -> Never {
                     anchorX: anchorX, anchorY: anchorY,
                     screenWidth: size.width, screenHeight: size.height)
             }
+        case tagOrientation:
+            guard let name = fields["orientation"] as? String, let value = orientations[name] else { continue }
+            if !(await injector.sendOrientation(orientation: value)) { log("orientation \(name) not sent") }
         default:
             continue
         }

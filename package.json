@@ -1,6 +1,6 @@
 {
   "name": "simlock",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Control plane for iOS simulators and Android emulators.",
   "keywords": [
     "agents",
@@ -73,12 +73,12 @@
     "openapi": "TURBO_TELEMETRY_DISABLED=1 turbo run build:daemon:run && node scripts/openapi.mjs"
   },
   "dependencies": {
-    "@agent-device/proxy": "0.21.28",
-    "@hono/node-server": "2.0.10",
+    "@agent-device/proxy": "0.21.32",
+    "@hono/node-server": "2.1.5",
     "@hono/zod-openapi": "1.6.3",
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "hono": "^4.13.13",
-    "jose": "6.2.9",
+    "jose": "6.2.13",
     "ws": "8.22.0",
     "zod": "^4.6.5"
   },
@@ -97,12 +97,12 @@
     "@types/node": "^26.1.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@types/ws": "8.18.1",
+    "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "^6.1.1",
-    "dependency-cruiser": "18.4.0",
+    "dependency-cruiser": "18.7.0",
     "fallow": "^3.35.0",
     "lefthook": "^2.1.10",
-    "oxfmt": "^0.59.0",
+    "oxfmt": "^0.75.0",
     "oxlint": "^1.74.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
@@ -117,7 +117,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "11.22.0",
+      "version": "12.8.1",
       "onFail": "download"
     }
   },

@@ -175,6 +175,31 @@ describe("ensureOwnedRoot", () => {
     await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
   });
 
+  it.each(["EPERM", "EACCES"])(
+    "keeps a root another process published first when Windows refuses the rename with %s",
+    async (code) => {
+      const filesystem = new RefusingRenameFilesystem(
+        uid,
+        async (target) => {
+          await target.mkdirp(root);
+          await target.writeFileAtomic(markerPath, marker());
+        },
+        code,
+      );
+
+      await expect(ensure(filesystem)).resolves.toBe(root);
+      await expect(filesystem.readFile(markerPath)).resolves.toBe(marker());
+      await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
+    },
+  );
+
+  it("still refuses a root whose rename was refused with EPERM when nothing else published it", async () => {
+    const filesystem = new RefusingRenameFilesystem(uid, async () => undefined);
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
+    await expect(filesystem.exists(root)).resolves.toBe(false);
+  });
+
   it.each([
     ["a relative one", "devices/ios"],
     ["one written against the home directory", "~/devices/ios"],
@@ -269,6 +294,16 @@ describe("ensureOwnedRoot", () => {
     const filesystem = createFilesystem();
     await ensure(filesystem);
     filesystem.defineAttributes(root, { uid: uid + 1 });
+
+    await expect(
+      ensureOwnedRoot({ filesystem, idGenerator, instanceId, path: root, platform: "ios" }),
+    ).resolves.toBe(root);
+  });
+
+  it("accepts a root with any mode when the platform has no uids, since it has no mode bits either", async () => {
+    const filesystem = createFilesystem();
+    await ensure(filesystem);
+    filesystem.defineAttributes(root, { mode: 0o666 });
 
     await expect(
       ensureOwnedRoot({ filesystem, idGenerator, instanceId, path: root, platform: "ios" }),
@@ -458,6 +493,27 @@ class SwappedRootFilesystem extends MemoryFilesystem {
 class UmaskedFilesystem extends MemoryFilesystem {
   async mkdir(path: string, options: { readonly mode?: number } = {}): Promise<void> {
     await super.mkdir(path, { mode: (options.mode ?? 0o777) & ~0o277 });
+  }
+}
+
+/** why: Windows refuses renaming onto an existing directory with EPERM or EACCES; `before` decides whether another process published the root first. */
+class RefusingRenameFilesystem extends MemoryFilesystem {
+  constructor(
+    owner: number,
+    private readonly before: (target: MemoryFilesystem) => Promise<void>,
+    private readonly code = "EPERM",
+  ) {
+    super(undefined, owner);
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    if (to !== root) return super.rename(from, to);
+    await this.before(this);
+    const error: NodeJS.ErrnoException = new Error(
+      `${this.code}: operation not permitted, rename '${from}' -> '${to}'`,
+    );
+    error.code = this.code;
+    throw error;
   }
 }
 

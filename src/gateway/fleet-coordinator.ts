@@ -839,12 +839,10 @@ export class FleetLeaseCoordinator {
     const explained = new Map(
       this.options.routing.explain(request, views).map((entry) => [entry.workerId, entry]),
     );
-    return views.map(
-      (view): WorkerEntry => ({
-        ...this.#reasonFor(waiter, view, explained.get(view.id), options),
-        workerId: view.id,
-      }),
-    );
+    return views.map((view): WorkerEntry => ({
+      ...this.#reasonFor(waiter, view, explained.get(view.id), options),
+      workerId: view.id,
+    }));
   }
 
   #reasonFor(

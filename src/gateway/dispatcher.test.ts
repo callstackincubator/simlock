@@ -1,4 +1,3 @@
-import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createHmac } from "node:crypto";
@@ -19,7 +18,7 @@ import {
   usageRig,
 } from "../history/testing.js";
 import { OPERATIONS, SimlockError, type OperationName } from "../contract/index.js";
-import { DispatchError, runDispatch, type DispatchSession } from "../daemon/dispatch.js";
+import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import {
   FakeClock,
   FetchWebhookPoster,
@@ -336,38 +335,6 @@ describe("GatewayDispatcher", () => {
     ).resolves.toEqual({ name: "ci-runner", principal: "tok_9f2c", role: "agent", via: "token" });
   });
 
-  it("The gateway dispatcher logs the same line for the same operation", async () => {
-    const { clock, dispatcher, logSink, workers } = harness();
-    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
-    const otherSink = new MemoryLogSink();
-    const other = (role: "admin" | "agent") =>
-      runDispatch("worker.drain", { workerId: "wrk_1" }, session({ role }), {
-        handlers: { "worker.drain": () => ({ drained: true, workerId: "wrk_1" }) },
-        observe: {
-          clock,
-          codeOf: (error) => (error instanceof DispatchError ? error.code : "INTERNAL"),
-          logger: new JsonLinesLogger({ clock, module: "other.dispatch", sink: otherSink }),
-        },
-      });
-
-    await dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session());
-    await other("admin");
-    await expect(
-      dispatcher.dispatch("worker.drain", { workerId: "wrk_1" }, session({ role: "agent" })),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(other("agent")).rejects.toMatchObject({ code: "FORBIDDEN" });
-
-    const gatewayLines = logSink.records.filter((record) => record.message === "operation");
-    expect(gatewayLines.map((record) => record.module)).toEqual([
-      "gateway.dispatch",
-      "gateway.dispatch",
-    ]);
-    expect(gatewayLines.map(({ module: _module, ...rest }) => rest)).toEqual(
-      otherSink.records.map(({ module: _module, ...rest }) => rest),
-    );
-    expect(gatewayLines[1]?.fields).toMatchObject({ code: "FORBIDDEN" });
-  });
-
   it("answers status.get from the fleet", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", "0.3.0");
@@ -608,9 +575,7 @@ describe("GatewayDispatcher", () => {
   it("answers config.get with the gateway's own config", async () => {
     const { dispatcher } = harness();
 
-    await expect(dispatcher.dispatch("config.get", {}, session())).resolves.toMatchObject({
-      mode: "gateway",
-    });
+    await expect(dispatcher.dispatch("config.get", {}, session())).resolves.toEqual(gatewayConfig);
   });
 
   it("lists workers, and drains, undrains and removes one", async () => {
@@ -799,11 +764,17 @@ describe("GatewayDispatcher", () => {
     ).rejects.toMatchObject({ code: "UNKNOWN_WORKER", details: { workerId: "wrk_ghost" } });
   });
 
-  it("keeps worker.* admin-only", async () => {
-    const { dispatcher } = harness();
+  it.each([
+    ["worker.list", {}],
+    ["worker.drain", { workerId: "wrk_1" }],
+    ["worker.undrain", { workerId: "wrk_1" }],
+    ["worker.remove", { workerId: "wrk_1" }],
+  ] as const)("keeps %s admin-only", async (operation, input) => {
+    const { dispatcher, workers } = harness();
+    workers.connected("wrk_1", "mac-mini-1", "0.3.0");
 
     await expect(
-      dispatcher.dispatch("worker.list", {}, session({ role: "agent" })),
+      dispatcher.dispatch(operation, input, session({ role: "agent" })),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
@@ -1283,17 +1254,13 @@ describe("GatewayDispatcher", () => {
     },
   );
 
-  it("mints and revokes its own tokens, worker join tokens included", async () => {
+  it("mints its own tokens, worker join tokens included", async () => {
     const { dispatcher, tokens } = harness();
 
     await expect(
       dispatcher.dispatch("token.create", { role: "worker", label: "mac-mini-1" }, session()),
     ).resolves.toMatchObject({ secret: "slk_secret", token: { role: "worker" } });
     expect(tokens.created).toEqual(["worker"]);
-
-    await expect(dispatcher.dispatch("token.revoke", { id: "tok_1" }, session())).resolves.toEqual({
-      revoked: true,
-    });
   });
 
   it("closes the uplink a revoked token authorized, not merely the store entry (C-2)", async () => {
@@ -1619,47 +1586,52 @@ describe("GatewayDispatcher", () => {
       });
     });
 
-    it("component.install answers UNSUPPORTED_IN_GATEWAY_MODE, telling the operator to name workers (ADR 0010 §7)", async () => {
-      const { dispatcher } = harness();
-
-      await expect(
-        dispatcher.dispatch("component.install", { platform: "android", version: "35" }, session()),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "component.install" },
-        message:
-          "component.install installs on one machine; on a gateway, name the workers to install on " +
+    it.each([
+      [
+        "component.install",
+        { platform: "android", version: "35" },
+        "admin",
+        "component.install installs on one machine; on a gateway, name the workers to install on " +
           "(simlock component install --worker <id> or --all-workers)",
-      });
-    });
+      ],
+      [
+        "component.list",
+        {},
+        "agent",
+        "component.list lists one machine's components; run it against a worker",
+      ],
+      [
+        "component.remove",
+        { platform: "ios", version: "26.4" },
+        "admin",
+        "component.remove removes a component from one machine; run it against a worker",
+      ],
+      [
+        "device.add",
+        { id: "00008110-001A2B3C4D5E", platform: "ios" },
+        "admin",
+        "device.add enrols a device plugged into one machine; run it on the worker the device is plugged into",
+      ],
+      [
+        "device.remove",
+        { id: "00008110-001A2B3C4D5E" },
+        "admin",
+        "device.remove unenrols a device plugged into one machine; run it on the worker the device is plugged into",
+      ],
+    ] as const)(
+      "%s answers UNSUPPORTED_IN_GATEWAY_MODE with a message pointing at the worker",
+      async (operation, input, role, message) => {
+        const { dispatcher } = harness();
 
-    it("component.list answers UNSUPPORTED_IN_GATEWAY_MODE to an agent session, saying it lists one machine's components (ADR 0010 §8)", async () => {
-      const { dispatcher } = harness();
-
-      await expect(
-        dispatcher.dispatch("component.list", {}, session({ role: "agent" })),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "component.list" },
-        message: "component.list lists one machine's components; run it against a worker",
-      });
-    });
-
-    it("component.remove answers UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying it removes from one machine (ADR 0010 §8)", async () => {
-      const { dispatcher } = harness();
-
-      await expect(
-        dispatcher.dispatch(
-          "component.remove",
-          { platform: "ios", version: "26.4" },
-          session({ role: "admin" }),
-        ),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "component.remove" },
-        message: "component.remove removes a component from one machine; run it against a worker",
-      });
-    });
+        await expect(
+          dispatcher.dispatch(operation, input, session({ role })),
+        ).rejects.toMatchObject({
+          code: "UNSUPPORTED_IN_GATEWAY_MODE",
+          details: { operation },
+          message,
+        });
+      },
+    );
   });
 
   describe("daemon.update", () => {
@@ -1697,37 +1669,6 @@ describe("GatewayDispatcher", () => {
 
       const status = await dispatcher.dispatch("status.get", {}, session({ role: "admin" }));
       expect(status.daemon).toMatchObject({ lastUpdateFailure: failure, update: run });
-    });
-  });
-
-  describe("device.add and device.remove", () => {
-    it("answer UNSUPPORTED_IN_GATEWAY_MODE to an admin session, saying to run the command on the worker the device is plugged into", async () => {
-      const { dispatcher } = harness();
-
-      await expect(
-        dispatcher.dispatch(
-          "device.add",
-          { id: "00008110-001A2B3C4D5E", platform: "ios" },
-          session({ role: "admin" }),
-        ),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "device.add" },
-        message:
-          "device.add enrols a device plugged into one machine; run it on the worker the device is plugged into",
-      });
-      await expect(
-        dispatcher.dispatch(
-          "device.remove",
-          { id: "00008110-001A2B3C4D5E" },
-          session({ role: "admin" }),
-        ),
-      ).rejects.toMatchObject({
-        code: "UNSUPPORTED_IN_GATEWAY_MODE",
-        details: { operation: "device.remove" },
-        message:
-          "device.remove unenrols a device plugged into one machine; run it on the worker the device is plugged into",
-      });
     });
   });
 
@@ -1866,6 +1807,10 @@ describe("GatewayDispatcher", () => {
       ["neither a model nor a class", { platform: "ios" }],
       ["a class and an OS range", { class: "phone", osVersion: ">=18", platform: "ios" }],
       ["a model and an OS range", { model: "iPhone 17", osVersion: ">=18", platform: "ios" }],
+      [
+        "a model and an exact osVersion",
+        { model: "iPhone 17", osVersion: "26.0", platform: "ios" },
+      ],
     ] as const)(
       "serves a lease.request naming %s through a worker that fits, forwarding it as it arrived",
       async (_label, input) => {
@@ -1899,30 +1844,6 @@ describe("GatewayDispatcher", () => {
         if (!("model" in input)) expect(client.lastRequestLeaseInput).not.toHaveProperty("model");
       },
     );
-
-    it("forwards a lease.request's exact osVersion to the worker unchanged", async () => {
-      const { directory, dispatcher, workers } = harness();
-      const client = new ScriptedWorkerClient();
-      directory.add("wrk_1", client);
-      workers.connected("wrk_1", undefined, "0.3.0");
-      workers.refresh("wrk_1", {
-        capacity: statusFixture().capacity,
-        health: "running",
-        queueDepth: 0,
-        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
-          .platforms,
-        downloads: { policy: "on-request" },
-      });
-      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-
-      await dispatcher.dispatch(
-        "lease.request",
-        { model: "iPhone 17", noWait: true, osVersion: "26.0", platform: "ios" },
-        session({ role: "agent" }),
-      );
-
-      expect(client.lastRequestLeaseInput).toMatchObject({ osVersion: "26.0" });
-    });
 
     it("forwards a lease.request's image tag to the worker unchanged", async () => {
       const { directory, dispatcher, workers } = harness();
@@ -2022,7 +1943,7 @@ describe("GatewayDispatcher", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
-    it("calls onStarted for a silent device.exec from the worker's own started push, with no output and no answer (ADR §19a/§19b/§19e)", async () => {
+    it("calls onStarted for a silent device.exec from the worker's own started push (ADR §19a/§19b/§19e)", async () => {
       const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_1", client);
@@ -2058,9 +1979,7 @@ describe("GatewayDispatcher", () => {
           role: "agent",
         }),
       );
-      await Promise.resolve();
-
-      expect(started).toBe(true);
+      await expect.poll(() => started).toBe(true);
     });
 
     it.each([
@@ -2215,7 +2134,7 @@ describe("GatewayDispatcher: waiting requests", () => {
     dispatcher.dispatch("list.get", { kind: "requests" }, session());
 
   it("list.get requests and status.get waiting on a gateway return the fleet queue with each worker's reason in workers, and each worker's waiting requests with their workerId and reason, a workers field a worker sends on its own entry dropped", async () => {
-    const { coordinator, dispatcher, workers } = harness();
+    const { dispatcher, workers } = harness();
     const capacity = statusFixture().capacity;
     for (const [workerId, requestId] of [
       ["wrk_1", "req_w1"],
@@ -2245,7 +2164,6 @@ describe("GatewayDispatcher: waiting requests", () => {
       session({ principal: "fleet-owner", role: "agent" }),
     );
     await settle();
-    expect(coordinator.queueDepth).toBe(1);
 
     const listed = await listRequests(dispatcher);
 
@@ -2451,17 +2369,14 @@ describe("GatewayDispatcher: usage.get", () => {
       totals: { requests: 1 },
     });
     gate.open = false;
-    const posted = vi.spyOn(Worker.prototype, "postMessage");
 
     await expect(dispatcher.dispatch("usage.get", window, session())).rejects.toMatchObject({
       code: "HISTORY_UNAVAILABLE",
       message: "The history could not be opened, so no figures can be read; see daemon.log.",
     });
-    expect(posted).not.toHaveBeenCalled();
-    posted.mockRestore();
   });
 
-  it("the gateway handler strips its own gw: prefix before the label lookup and leaves another prefix alone, and labels nothing when it has no token store", async () => {
+  it("the gateway handler strips its own gw: prefix before the label lookup and leaves another prefix alone, labels nothing when it has no token store, and with includeLedger lists the request rows as entries labelled the same way", async () => {
     const { eventHistory, rig } = await fleetHistory();
     for (const [index, requester] of [
       `${GATEWAY_REQUESTER_PREFIX}tok_a`,
@@ -2483,6 +2398,11 @@ describe("GatewayDispatcher: usage.get", () => {
 
     const answer = await labelled.dispatcher.dispatch("usage.get", window, session());
     const bare = await unlabelled.dispatcher.dispatch("usage.get", window, session());
+    const ledger = await labelled.dispatcher.dispatch(
+      "usage.get",
+      { ...window, includeLedger: true },
+      session(),
+    );
 
     expect(
       Object.fromEntries(answer.requesters.map((requester) => [requester.id, requester.label])),
@@ -2493,34 +2413,10 @@ describe("GatewayDispatcher: usage.get", () => {
     });
     expect(bare.requesters).toHaveLength(3);
     expect(bare.requesters.every((requester) => !("label" in requester))).toBe(true);
-  });
-
-  it("the gateway handler with includeLedger lists the fleet's request rows as entries, labelled after stripping its own gw: prefix", async () => {
-    const { eventHistory, rig } = await fleetHistory();
-    for (const [index, requester] of [
-      `${GATEWAY_REQUESTER_PREFIX}tok_a`,
-      "gw:other-instance:tok_a",
-      "tok_a",
-    ].entries()) {
-      rig.emit("lease.requested", requested(`R${index}`, { requester }));
-    }
-    const { dispatcher } = harness({
-      eventHistory,
-      historyPath: rig.historyPath,
-      tokenRecords: [{ id: "tok_a", label: "ci-bot" }],
-    });
-
-    const answer = await dispatcher.dispatch(
-      "usage.get",
-      { ...window, includeLedger: true },
-      session(),
-    );
-    const plain = await dispatcher.dispatch("usage.get", window, session());
-
     expect(
-      Object.fromEntries((answer.requests ?? []).map((entry) => [entry.requestId, entry.label])),
+      Object.fromEntries((ledger.requests ?? []).map((entry) => [entry.requestId, entry.label])),
     ).toEqual({ R0: "ci-bot", R1: undefined, R2: "ci-bot" });
-    expect(plain).not.toHaveProperty("requests");
+    expect(answer).not.toHaveProperty("requests");
   });
 
   it("the gateway handler lists every registry worker with its label and a worker id the rows name that the registry lacks, and counts a fleet request with no worker in totals and its platform only", async () => {

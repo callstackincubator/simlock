@@ -36,7 +36,7 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
      `docs/internal/adr/README.md` to the status named, and change nothing
      else.
    - a `stack:` line naming a parent branch: in your worktree, `git merge
-origin/<parent>` into the branch, resolve the conflicts, run the tests
+     origin/<parent>` into the branch, resolve the conflicts, run the tests
      of the files the resolution touched, commit the merge and push. Never
      rebase, never force-push, never touch another branch: the orchestrator
      carries the merge up the stack with `stack-sync.sh`.

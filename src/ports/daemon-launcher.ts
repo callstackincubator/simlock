@@ -121,6 +121,8 @@ export class NodeDaemonLauncher implements DaemonLauncher {
         // auto-launched it, and must be told the home this one already resolved.
         env: { ...process.env, SIMLOCK_HOME: this.options.simlockHome },
         stdio: ["ignore", log.fd, log.fd],
+        // why: on Windows a detached child gets a console window of its own, and closing it ends the daemon.
+        windowsHide: true,
       });
       const exited = new Promise<DaemonExit>((resolve) => {
         child.once("exit", (code, signal) => resolve({ code, signal }));

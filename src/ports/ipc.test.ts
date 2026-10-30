@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createServer, Socket } from "node:net";
 import { join } from "node:path";
 
+import { IpcError, resolveDaemonSocketPath } from "./index.js";
 import { MemoryIpcTransport, NodeIpcTransport } from "./ipc.js";
 
 const implementations = [
@@ -91,4 +93,43 @@ describe.each(implementations)("IpcTransport contract: $name", ({ create }) => {
 
     await expect(ipc.connect(endpoint)).rejects.toMatchObject({ code: "endpoint-not-found" });
   });
+});
+
+describe("NodeIpcTransport", () => {
+  it("gives up on a connect that never completes with connection-timeout, and destroys its socket", async () => {
+    const socket = new Socket();
+    const transport = new NodeIpcTransport({ connectTimeoutMs: 20, socketFor: () => socket });
+
+    const failure = await transport.connect("/never/answers").catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IpcError);
+    expect(failure).toMatchObject({ code: "connection-timeout" });
+    expect(socket.destroyed).toBe(true);
+  });
+
+  // why: a Windows pipe closes on `end()` whatever the peer does; only a socket can be held half-open.
+  it.skipIf(process.platform === "win32")(
+    "close() destroys a connection whose peer never ends its side, once the grace has passed",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-ipc-"));
+      const endpoint = resolveDaemonSocketPath(directory);
+      const held: Socket[] = [];
+      const server = createServer({ allowHalfOpen: true }, (socket) => {
+        held.push(socket);
+        socket.resume();
+      });
+      await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+      try {
+        const connection = await new NodeIpcTransport({ closeGraceMs: 50 }).connect(endpoint);
+
+        await connection.close();
+
+        expect(connection.closed).toBe(true);
+      } finally {
+        for (const socket of held) socket.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await rm(directory, { force: true, recursive: true });
+      }
+    },
+  );
 });

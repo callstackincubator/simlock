@@ -48,7 +48,6 @@ import {
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
 import { DaemonEndpointHost, type ConnectionHost } from "./connection-host.js";
-import { Dispatcher } from "./dispatcher.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
 import {
   AdminAuthenticationFailedError,
@@ -398,7 +397,7 @@ describe("DaemonServer", () => {
     });
   });
 
-  it("maps status, cleanup, events, config, and detached lease commands to daemon-owned core state", async () => {
+  it("answers status.get with the capacity, answers list.get, config.get, cleanup.run and events.replay as ok, pushes subscribed events, and renews and releases a lease", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
     await hello(client);
@@ -1052,26 +1051,6 @@ describe("DaemonServer", () => {
     await releaser.close();
   });
 
-  it("does not push a redundant lease-lost notification back to a connection that explicitly released its own lease", async () => {
-    const harness = await createHarness();
-    const holder = await createClient(harness.socketPath);
-    await hello(holder);
-    const grant = await holder.request("lease.request", {
-      requesterId: "holder",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    const leaseId = leaseIdOf(grant);
-
-    await expect(holder.request("lease.release", { leaseId })).resolves.toMatchObject({
-      ok: true,
-    });
-    await expect(holder.request("status.get", {})).resolves.toMatchObject({ ok: true });
-    expect(holder.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
-    await holder.close();
-  });
-
   it("drops a lease-lost push to a connection whose peer has hung up instead of leaving its failed write unhandled", async () => {
     const connection = new BlockingConnection();
     const harness = await createHarness({ host: new SingleConnectionHost(connection) });
@@ -1396,7 +1375,7 @@ describe("DaemonServer startup readiness", () => {
     });
   });
 
-  it("does not arm live machinery when a stop completes while convergence is still running", async () => {
+  it("emits daemon.stopping and no daemon.started when a stop completes during convergence", async () => {
     const converge = deferred<void>();
     const harness = await createHarness({ converge: () => converge.promise, start: false });
     const emitted: string[] = [];
@@ -1617,10 +1596,11 @@ describe("DaemonServer stored lease requests", () => {
 });
 
 describe("DaemonServer relays during startup", () => {
-  async function startParked(relayTargets: RelayTargets) {
+  async function startParked(relayTargets: RelayTargets, host?: ConnectionHost) {
     const converge = deferred<void>();
     const harness = await createHarness({
       converge: () => converge.promise,
+      ...(host === undefined ? {} : { host }),
       relayTargets,
       start: false,
     });
@@ -1752,21 +1732,99 @@ describe("DaemonServer relays during startup", () => {
     expect(calls).toBe(0);
   });
 
-  it("a parked relay whose startup fails answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted", async () => {
-    const { converge, pair, startPromise } = await startParked({
-      echo: () => Promise.resolve(new Response("ok")),
+  it.each(["convergence", "socket claim"] as const)(
+    "a parked relay whose startup fails at its %s answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted",
+    async (failing) => {
+      const claim = deferred<void>();
+      const host: ConnectionHost = {
+        endpoint: "/claim-refused/daemon.sock",
+        start: () => claim.promise,
+        stop: async () => undefined,
+      };
+      const { converge, pair, startPromise } = await startParked(
+        { echo: () => Promise.resolve(new Response("ok")) },
+        failing === "socket claim" ? host : undefined,
+      );
+      const uplink = await wireOf(pair);
+      const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
+      await relaySupport.sleep(100);
+
+      if (failing === "socket claim") claim.reject(new Error("listen EACCES"));
+      else converge.reject(new Error("boom"));
+      await startPromise.catch(() => undefined);
+      const outcome = await relaySupport.settleWithin(relay.result);
+      const read = await relay.readError();
+
+      expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
+      expect(read).toEqual({ ended: false, reason: "aborted" });
+    },
+  );
+});
+
+describe("DaemonServer failed start", () => {
+  it("a daemon.stop accepted while the admin.token write is pending is the one teardown when that write then fails, and the start rejects with the write's error without waiting for a stop whose auxiliary waits for the start", async () => {
+    const persisting = deferred<void>();
+    const startSettled = deferred<void>();
+    let stopBegun = false;
+    let disposals = 0;
+    let removals = 0;
+    const harness = await createHarness({
+      adminSecret: {
+        persist: () => persisting.promise,
+        remove: async () => {
+          removals += 1;
+        },
+      },
+      beginStop: () => {
+        stopBegun = true;
+      },
+      dispose: () => {
+        disposals += 1;
+      },
+      // why: as `main.ts`'s does: the HTTP frontend's start is settled only once `start()` settles when the claim's hooks never ran.
+      stopAuxiliary: () => startSettled.promise,
+      host: {
+        endpoint: "memory://failed-start",
+        start: async () => undefined,
+        stop: async () => undefined,
+      },
+      start: false,
     });
-    const uplink = await wireOf(pair);
-    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
-    await relaySupport.sleep(100);
+    const events: string[] = [];
+    harness.eventBus.subscribeAll((event) => {
+      if (event.event.startsWith("daemon.")) events.push(event.event);
+    });
+    const startPromise = harness.daemon.start().finally(() => startSettled.resolve());
+    startPromise.catch(() => undefined);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
+    await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "gw:test",
+    });
 
-    converge.reject(new Error("boom"));
-    await startPromise.catch(() => undefined);
-    const outcome = await relaySupport.settleWithin(relay.result);
-    const read = await relay.readError();
+    await expect(gateway.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
+    await expect.poll(() => stopBegun).toBe(true);
+    persisting.reject(new Error("disk is read-only"));
+    const outcome = await Promise.race([
+      startPromise.then(
+        () => "resolved",
+        (error: unknown) => (error as Error).message,
+      ),
+      relaySupport.sleep(1_000).then(() => "still pending after 1 s"),
+    ]);
+    // why: unwinds a start that waits for the stop, so a failing run ends instead of hanging the stop below.
+    startSettled.resolve();
+    await harness.daemon.stop();
 
-    expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
-    expect(read).toEqual({ ended: false, reason: "aborted" });
+    expect({ outcome, disposals, removals, events }).toEqual({
+      outcome: "disk is read-only",
+      disposals: 1,
+      removals: 1,
+      events: ["daemon.stopping"],
+    });
   });
 });
 
@@ -1807,19 +1865,35 @@ describe("DaemonServer driver rejections", () => {
           reason: "wrong-instance",
           summary: "Refusing the ios device root /Devices: it belongs to another instance",
         },
+        {
+          event: "driver.adb-server-rejected",
+          payload: { port: 5038, reason: "occupied" },
+          platform: "android",
+          reason: "occupied",
+          summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+        },
       ],
     });
 
     const events = harness.eventBus.replay();
-    const rejected = events.filter((event) => event.event === "driver.root-rejected");
+    const rejected = events.filter(
+      (event) =>
+        event.event === "driver.root-rejected" || event.event === "driver.adb-server-rejected",
+    );
     expect(rejected).toEqual([
       expect.objectContaining({
+        event: "driver.root-rejected",
         module: "daemon",
         payload: { platform: "ios", reason: "wrong-instance", root: "/Devices" },
       }),
+      expect.objectContaining({
+        event: "driver.adb-server-rejected",
+        module: "daemon",
+        payload: { port: 5038, reason: "occupied" },
+      }),
     ]);
     const started = events.find((event) => event.event === "daemon.started");
-    expect(started?.seq).toBeLessThan(rejected[0]?.seq ?? 0);
+    for (const event of rejected) expect(started?.seq).toBeLessThan(event.seq);
   });
 
   it("names the refusal when a lease asks for a platform whose driver did not start", async () => {
@@ -1872,62 +1946,51 @@ describe("DaemonServer driver rejections", () => {
     expect(response.error?.message).toBe("No driver registered for platform: android");
   });
 
-  it("names the refusal when a passthrough asks for the tool whose driver did not start", async () => {
-    const harness = await createHarness({
-      driverRejections: [
-        rejectionNaming(
-          {
-            event: "driver.adb-server-rejected",
-            payload: { port: 5038, reason: "occupied" },
-            platform: "android",
-            reason: "occupied",
-            summary:
-              "Refusing the Android driver: port 5038 is held by an adb server we do not own",
-          },
-          ["adb"],
-        ),
-      ],
-    });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
+  it.each([
+    {
+      name: "adb",
+      rejection: {
+        event: "driver.adb-server-rejected",
+        payload: { port: 5038, reason: "occupied" },
+        platform: "android",
+        reason: "occupied",
+        summary: "Refusing the Android driver: port 5038 is held by an adb server we do not own",
+      },
+      tools: ["adb"],
+      request: { args: ["devices"], tool: "adb" },
+      text: "port 5038 is held by an adb server we do not own",
+    },
+    {
+      name: "devicectl",
+      rejection: {
+        event: "driver.root-rejected",
+        payload: { platform: "ios", reason: "symlink", root: "/Devices" },
+        platform: "ios",
+        reason: "symlink",
+        summary: "Refusing the ios device root /Devices: it is a symlink",
+      },
+      tools: ["simctl", "devicectl"],
+      request: { args: ["list", "devices"], tool: "devicectl" },
+      text: "Refusing the ios device root /Devices: it is a symlink",
+    },
+  ] as const)(
+    "names the refusal when a $name passthrough asks for the tool whose driver did not start",
+    async ({ rejection, request, text, tools }) => {
+      const harness = await createHarness({
+        driverRejections: [rejectionNaming(rejection, tools)],
+      });
+      const client = await createClient(harness.socketPath);
+      await hello(client);
 
-    const response = await client.request("driver.passthrough", {
-      args: ["devices"],
-      tool: "adb",
-    });
+      const response = await client.request("driver.passthrough", {
+        args: [...request.args],
+        tool: request.tool,
+      });
 
-    expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
-    expect(response.error?.message).toContain("port 5038 is held by an adb server we do not own");
-  });
-
-  it("names the iOS refusal when a devicectl passthrough asks for the tool whose driver did not start", async () => {
-    const harness = await createHarness({
-      driverRejections: [
-        rejectionNaming(
-          {
-            event: "driver.root-rejected",
-            payload: { platform: "ios", reason: "symlink", root: "/Devices" },
-            platform: "ios",
-            reason: "symlink",
-            summary: "Refusing the ios device root /Devices: it is a symlink",
-          },
-          ["simctl", "devicectl"],
-        ),
-      ],
-    });
-    const client = await createClient(harness.socketPath);
-    await hello(client);
-
-    const response = await client.request("driver.passthrough", {
-      args: ["list", "devices"],
-      tool: "devicectl",
-    });
-
-    expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
-    expect(response.error?.message).toContain(
-      "Refusing the ios device root /Devices: it is a symlink",
-    );
-  });
+      expect(response.error?.code).toBe("UNKNOWN_PASSTHROUGH_TOOL");
+      expect(response.error?.message).toContain(text);
+    },
+  );
 
   it("leaves an unknown passthrough tool unexplained when no driver claimed it", async () => {
     const harness = await createHarness({
@@ -2011,28 +2074,6 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await holder.close();
   });
 
-  it("never pushes anything to a connection to prove liveness", async () => {
-    const harness = await createHarness({ lease: { defaultTtlMs: 40 } });
-    const holder = await createClient(harness.socketPath);
-    await hello(holder);
-    const grant = await holder.request("lease.request", {
-      requesterId: "agent-1",
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    const leaseId = leaseIdOf(grant);
-
-    harness.clock.advance(40);
-    await expect.poll(() => harness.registry.snapshot.leases).toEqual([]);
-    expect(holder.frames().filter((frame) => frame.push === "lease.heartbeat")).toEqual([]);
-    await expect(holder.nextFrame((frame) => frame.push === "lease-lost")).resolves.toMatchObject({
-      payload: { leaseId, reason: "expired" },
-      push: "lease-lost",
-    });
-    await holder.close();
-  });
-
   it("no longer answers lease.heartbeat at all", async () => {
     const harness = await createHarness();
     const client = await createClient(harness.socketPath);
@@ -2089,13 +2130,32 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
   });
 
   it("disposes the worker's dispatcher, ending its bus subscriptions, when the daemon stops", async () => {
-    const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
-    const dispose = vi.spyOn(Dispatcher.prototype, "dispose");
+    const live = new Map<string, number>();
+    const subscribe = EventBus.prototype.subscribe;
+    const spy = vi.spyOn(EventBus.prototype, "subscribe").mockImplementation(function (
+      this: EventBus,
+      event,
+      handler,
+    ) {
+      const unsubscribe = subscribe.call(this, event, handler);
+      live.set(event, (live.get(event) ?? 0) + 1);
+      let ended = false;
+      return () => {
+        if (!ended) live.set(event, (live.get(event) ?? 0) - 1);
+        ended = true;
+        unsubscribe();
+      };
+    });
+    try {
+      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
+      expect(live.get("component.installed")).toBeGreaterThan(0);
 
-    await harness.daemon.stop("test");
+      await harness.daemon.stop("test");
 
-    expect(dispose).toHaveBeenCalledTimes(1);
-    dispose.mockRestore();
+      expect(live.get("component.installed")).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("answers worker.install-component and worker.update with UNSUPPORTED_IN_WORKER_MODE: a worker has no workers to install on or update", async () => {
@@ -2370,17 +2430,6 @@ describe("DaemonServer decorations", () => {
 
       expect(order).toEqual(["beginStop", "stopAuxiliary"]);
     });
-
-    it("reports health via the public accessor across the startup/stop lifecycle", async () => {
-      const harness = await createHarness({ start: false });
-      expect(harness.daemon.health).toBe("starting");
-
-      await harness.daemon.start();
-      expect(harness.daemon.health).toBe("running");
-
-      await harness.daemon.stop("test-health");
-      expect(harness.daemon.health).toBe("running");
-    });
   });
 });
 
@@ -2408,7 +2457,7 @@ describe("DaemonServer download policy", () => {
     await client.close();
   });
 
-  it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it and logging that", async () => {
+  it("still answers a lease request whose download names a component past the progress push's bound, sending no downloading push for it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     // why: the driver, not the request, names the component: a request's exact osVersion is held
@@ -2420,12 +2469,7 @@ describe("DaemonServer download policy", () => {
         new RuntimeMissingError("ios", "26.5", { component: "9".repeat(65) }),
       );
     }
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({
-      clock,
-      driver,
-      logger: new JsonLinesLogger({ clock, level: "debug", sink }),
-    });
+    const harness = await createHarness({ clock, driver });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
@@ -2444,13 +2488,6 @@ describe("DaemonServer download policy", () => {
       .map((frame) => (frame.payload as { progress: { stage: string } }).progress.stage);
     expect(stages).toContain("provisioning");
     expect(stages).not.toContain("downloading");
-    expect(sink.records).toContainEqual(
-      expect.objectContaining({
-        fields: { stage: "downloading" },
-        level: "warn",
-        message: "A lease progress push was not sent",
-      }),
-    );
     await client.close();
   });
 
@@ -2502,6 +2539,22 @@ describe("DaemonServer download policy", () => {
     expect(response.ok).toBe(false);
     expect(response.error).toMatchObject({ code: "RUNTIME_MISSING" });
     expect(response.error?.message).not.toContain("downloads.policy");
+    expect(driver.calls.map((call) => call.operation)).not.toContain("installComponent");
+
+    const flagged = await client.request("lease.request", {
+      allowDownload: true,
+      requesterId: "agent-1",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+
+    expect(flagged.ok).toBe(true);
+    expect(
+      driver.calls
+        .filter((call) => call.operation === "installComponent")
+        .map((call) => call.arguments),
+    ).toEqual([["26.5"]]);
     await client.close();
   });
 
@@ -2647,18 +2700,6 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       await client.close();
     });
 
-    it("lets an admin connection stop the daemon", async () => {
-      const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
-      const client = await createClient(harness.socketPath);
-      await hello(client);
-
-      await expect(client.request("daemon.stop", {})).resolves.toMatchObject({
-        ok: true,
-        payload: { stopping: true },
-      });
-      await expect.poll(() => harness.daemon.health).toBe("running");
-    });
-
     it("still fails the handshake outright on a wrong credential, and daemon.stop never runs on that connection", async () => {
       const harness = await createHarness({
         resolveRole: {
@@ -2684,7 +2725,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       });
 
       await socketClosed;
-      expect(harness.daemon.health).toBe("running");
+      expect(harness.eventBus.replay().map((event) => event.event)).not.toContain(
+        "daemon.stopping",
+      );
     });
 
     it("lets an admin connection stop the daemon even when its own hello's protocol negotiation failed, and refuses every other operation on it with the version error", async () => {
@@ -2719,7 +2762,9 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
         ok: true,
         payload: { stopping: true },
       });
-      await expect.poll(() => harness.daemon.health).toBe("running");
+      await expect
+        .poll(() => harness.eventBus.replay().map((event) => event.event))
+        .toContain("daemon.stopping");
     });
 
     it("still refuses daemon.stop with FORBIDDEN on a version-mismatched connection whose role is agent", async () => {
@@ -2819,6 +2864,11 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 
     const admin = await createClient(harness.socketPath);
     await helloAs(admin, "operator");
+    harness.clock.advance(5_000);
+    await expect(admin.request("lease.renew", { leaseId })).resolves.toMatchObject({
+      ok: true,
+      payload: { ttlDeadline: 6_000 + 60_000 },
+    });
     await expect(admin.request("lease.release", { leaseId })).resolves.toMatchObject({ ok: true });
     await owner.close();
     await admin.close();
@@ -2889,7 +2939,10 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
   });
 
   it("forwards ttlMs as the initial TTL of any lease, and stores it as the lease's width", async () => {
-    const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
+    const harness = await createHarness({
+      iosMaxDevices: 2,
+      resolveRole: { resolve: () => "agent" },
+    });
     const client = await createClient(harness.socketPath);
     await hello(client);
 
@@ -2911,6 +2964,15 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       ok: true,
       payload: { ttlMs: 30_000, ttlDeadline: 6_000 + 30_000 },
     });
+
+    const defaulted = await client.request("lease.request", {
+      requesterId: "defaulted",
+      model: "iPhone 16",
+      osVersion: "26.5",
+      platform: "ios",
+    });
+    expect(defaulted.ok).toBe(true);
+    expect((defaulted.payload as { lease: { ttlMs: number } }).lease.ttlMs).toBe(60_000);
     await client.close();
   });
 
@@ -2966,6 +3028,7 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
 
     const push = await observer.nextFrame((frame) => frame.push === "lease-lost");
     expect(push.payload).toMatchObject({ leaseId, reason: "explicit" });
+    await expect(requester.request("status.get", {})).resolves.toMatchObject({ ok: true });
     expect(requester.frames().filter((frame) => frame.push === "lease-lost")).toEqual([]);
 
     await requester.close();

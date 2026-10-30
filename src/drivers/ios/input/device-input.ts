@@ -137,6 +137,8 @@ function frameOfMessage(message: Exclude<InputMessage, { kind: "button" }>): Uin
       });
     case "key":
       return frameOf(INPUT_TAG.key, { type: message.type, usage: message.usage });
+    case "orientation":
+      return frameOf(INPUT_TAG.orientation, { orientation: message.orientation });
   }
 }
 
