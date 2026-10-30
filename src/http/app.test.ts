@@ -3257,7 +3257,7 @@ describe("the stream mount's listed route", () => {
 });
 
 describe("ETag on a JSON read under /v1", () => {
-  it("304 and no body for an unchanged read, 200 with a new ETag otherwise, no ETag on a 404 or a mount", async () => {
+  it("304 and no body for an unchanged read, 200 for a stale tag, a new ETag once the data changes, no ETag on a 404 or a mount", async () => {
     const tokens: { id: string }[] = [{ id: "tok_1" }];
     const { app, dispatcher, eventBus } = buildHarness({
       mounts: [

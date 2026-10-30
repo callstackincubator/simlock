@@ -1619,7 +1619,7 @@ describe("GatewayDispatcher", () => {
         "device.remove unenrols a device plugged into one machine; run it on the worker the device is plugged into",
       ],
     ] as const)(
-      "%s answers UNSUPPORTED_IN_GATEWAY_MODE with a message pointing at the worker (ADR 0010 §7, §8)",
+      "%s answers UNSUPPORTED_IN_GATEWAY_MODE with a message pointing at the worker",
       async (operation, input, role, message) => {
         const { dispatcher } = harness();
 
