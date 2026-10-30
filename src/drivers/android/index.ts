@@ -2015,23 +2015,36 @@ export class AndroidDriver implements Driver {
         continue;
       }
       if (completed.stdout.trim() === "1") {
-        const bootAnimation = await this.#runOrThrow(this.#sdk.adb, [
-          "-s",
-          data.serial,
-          "shell",
-          "getprop",
-          "init.svc.bootanim",
-        ]);
-        if (bootAnimation.stdout.trim() === "" || bootAnimation.stdout.trim() === "stopped") {
-          await this.#confirmAvdAnswers(data);
-          return;
-        }
+        if (await this.#bootSettled(data)) return;
       }
 
       await this.#delay(
         Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)),
       );
     }
+  }
+
+  /**
+   * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted
+   * then fails its first install or package query.
+   */
+  async #bootSettled(data: AndroidDriverData): Promise<boolean> {
+    const bootAnimation = await this.#runOrThrow(this.#sdk.adb, [
+      "-s",
+      data.serial,
+      "shell",
+      "getprop",
+      "init.svc.bootanim",
+    ]);
+    const stopped = bootAnimation.stdout.trim();
+    if (stopped !== "" && stopped !== "stopped") return false;
+    await this.#confirmAvdAnswers(data);
+    const answer = await this.#processRunner.run(
+      this.#sdk.adb,
+      ["-s", data.serial, "shell", "pm", "path", "android"],
+      { env: this.#env() },
+    );
+    return answer.code === 0 && answer.stdout.includes("package:");
   }
 
   /**

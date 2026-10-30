@@ -727,6 +727,28 @@ describe("AndroidDriver", () => {
     await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
   });
 
+  it("is not ready until `pm path android` exits 0 and prints a package", async () => {
+    const harness = await provisionedHarness({
+      unsettledPmAnswers: [
+        { code: 1, stderr: "cmd: Can't find service: package", stdout: "" },
+        { code: 0, stderr: "", stdout: "Error: could not access the Package Manager\n" },
+        { code: 1, stderr: "", stdout: "package:/system/framework/framework-res.apk\n" },
+      ],
+    });
+    const ready = harness.driver.makeReady(harness.device);
+    const settled = vi.fn();
+    void ready.then(settled, settled);
+    const pmCalls = () => harness.runner.calls.filter((call) => call.args.includes("pm")).length;
+
+    for (const asked of [1, 2, 3]) {
+      await vi.waitFor(() => expect(pmCalls()).toBe(asked));
+      expect(settled, `ready after ${asked} unanswered pm`).not.toHaveBeenCalled();
+      harness.clock.advance(2_000);
+    }
+
+    await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
+  });
+
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
     const harness = await provisionedHarness({ forReclaim: true });
     await harness.filesystem.mkdirp(`${avdDirectory}/simlock_one.avd/snapshots/default_boot`);
@@ -838,6 +860,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -885,6 +912,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -1116,6 +1148,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
     ];
 
     it.each([
@@ -1291,6 +1328,11 @@ describe("AndroidDriver", () => {
           "",
         ),
         avdPathExpectation("emulator-5586"),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
         { ...defaults, headless: true },
@@ -2096,6 +2138,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
@@ -4762,6 +4809,11 @@ describe("AndroidDriver console port reservations", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       processResult(binaries.adb, [
         "-s",
         "emulator-5586",
@@ -5260,6 +5312,7 @@ async function provisionedHarness(
     readonly forReclaim?: boolean;
     readonly ids?: readonly string[];
     readonly initialAdbFailures?: number;
+    readonly unsettledPmAnswers?: readonly ProcessResult[];
     readonly readinessTimeoutMs?: number;
     readonly firstMarkToken?: string;
     readonly afterwards?: readonly ScriptedProcessExpectation[];
@@ -5306,6 +5359,7 @@ async function provisionedHarness(
         emulatorFlags: options.emulatorFlags,
         initialAdbFailures: options.initialAdbFailures,
         launchArgs: ["-no-snapshot-load"],
+        unsettledPmAnswers: options.unsettledPmAnswers,
       }),
     );
     if ((options.bootCompleted ?? "1\n").trim() === "1") {
@@ -5333,6 +5387,11 @@ async function provisionedHarness(
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", secondMarkToken),
     );
   }
@@ -6510,6 +6569,7 @@ function baselineBuildExpectations(options: {
   readonly emulatorFlags?: readonly string[] | undefined;
   readonly initialAdbFailures?: number | undefined;
   readonly launchArgs: readonly string[];
+  readonly unsettledPmAnswers?: readonly ProcessResult[] | undefined;
 }): ScriptedProcessExpectation[] {
   const bootCompleted = options.bootCompleted ?? "1\n";
   const emulatorFlags = options.emulatorFlags ?? [];
@@ -6554,6 +6614,28 @@ function baselineBuildExpectations(options: {
     return expectations;
   }
 
+  for (const answer of options.unsettledPmAnswers ?? []) {
+    expectations.push(
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+      avdPathExpectation("emulator-5586"),
+      {
+        match: {
+          args: ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          command: binaries.adb,
+        },
+        result: answer,
+      },
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+    );
+  }
   expectations.push(
     processResult(
       binaries.adb,
@@ -6561,6 +6643,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
     processResult(binaries.adb, [
       "-s",
       "emulator-5586",
@@ -6608,6 +6695,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
   );
   return expectations;
 }
@@ -6815,6 +6907,7 @@ class RecordingRunner implements ProcessRunner {
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
   ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
   ["emu avd snapshot list", "simlock_clean_baseline\n"],
   ["emu avd snapshot load simlock_clean_baseline", "OK\n"],
