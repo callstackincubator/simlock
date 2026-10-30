@@ -117,7 +117,8 @@ Screen — `screenCapture` and `input`, only when `create` got `scrcpyServerPath
 Plain facts: `listCatalog`, a resolve of a model the library lacks and a library provision (seed) share one `AvdmanagerDeviceList`:
 `avdmanager list device` runs again only when the size or modified time of a file it reads profiles from changed, or one
 appeared or went: the tools package's `lib/sdklib/sdklib.core.jar` (legacy `tools/lib/sdklib*.jar`) and `source.properties`,
-the user's devices.xml, and `devices.xml` in each `system-images/*/*/*` and `add-ons/*` directory (a new image is a new path).
+the user's devices.xml, `devices.xml` in each `system-images/*/*/*` and `add-ons/*` directory (a new image is a new path),
+and `devices.xml` and `source.properties` in each `extras/*/*` directory (avdmanager reads an extra whose `source.properties` says `Extra.Path=DeviceProfiles`).
 Otherwise the last good answer is served; a failed run is not kept; concurrent callers share one run.
 The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 

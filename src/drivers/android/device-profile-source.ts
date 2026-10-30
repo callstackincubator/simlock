@@ -270,11 +270,12 @@ export interface AvdmanagerDeviceListOptions {
  * why: `avdmanager list device` starts two JVMs (about 1 s, and 3 s of CPU) and the warm pool
  * reads the catalog every 30 s (ADR 0015's Consequences left a cache for when the cost shows).
  * So its answer is kept and it runs again only when a file it reads device definitions from
- * changed: its tools package's sdklib jar and `source.properties`, the user's devices.xml, and
- * the devices.xml of each installed system image and add-on, each keyed by its size and
- * modified time or its absence, the image and add-on directories by their paths. While that key
- * is unchanged the kept answer equals a fresh read. A failed run is not kept, and callers that
- * ask while a run for the same key is under way share it.
+ * changed: its tools package's sdklib jar and `source.properties`, the user's devices.xml, the
+ * devices.xml of each installed system image and add-on, and the devices.xml and
+ * `source.properties` of each `extras/<vendor>/<item>` directory, each keyed by its size and
+ * modified time or its absence, the image, add-on and extra directories by their paths. While
+ * that key is unchanged the kept answer equals a fresh read. A failed run is not kept, and
+ * callers that ask while a run for the same key is under way share it.
  */
 export class AvdmanagerDeviceList {
   readonly #options: AvdmanagerDeviceListOptions;
@@ -332,12 +333,19 @@ export class AvdmanagerDeviceList {
     );
     const images = await this.#descendants(`${sdkRoot}/system-images`, 3);
     const addOns = await this.#descendants(`${sdkRoot}/add-ons`, 1);
+    // why: sdklib's DeviceManager reads `extras/<vendor>/<item>/devices.xml` when the item's
+    // source.properties has the line `Extra.Path=DeviceProfiles`, so both files are keyed.
+    const extras = await this.#descendants(`${sdkRoot}/extras`, 2);
     const paths = [
       `${toolsPackage}/source.properties`,
       `${toolsPackage}/lib/sdklib/sdklib.core.jar`,
       ...legacyJars.map((name) => `${toolsPackage}/lib/${name}`),
       devicesXmlPath,
       ...[...images, ...addOns].map((directory) => `${directory}/devices.xml`),
+      ...extras.flatMap((directory) => [
+        `${directory}/source.properties`,
+        `${directory}/devices.xml`,
+      ]),
     ];
     const stamps = await Promise.all(
       paths.map(async (path) => `${path}=${await this.#stamp(path)}`),

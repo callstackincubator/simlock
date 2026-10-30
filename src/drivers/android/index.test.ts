@@ -1514,7 +1514,19 @@ describe("AndroidDriver", () => {
     const userDevicesXml = `${home}/.android/devices.xml`;
     const imageDevicesXml = `${sdk}/system-images/android-34/google_apis/arm64-v8a/devices.xml`;
     const addOnDevicesXml = `${sdk}/add-ons/addon-acme/devices.xml`;
+    const extraDirectory = `${sdk}/extras/acme/device_profiles`;
+    const extraDevicesXml = `${extraDirectory}/devices.xml`;
     const rereadDevices = `Available devices:\nid: 0 or "reread_phone"\n    Name: Reread Phone\n    OEM : Acme\n`;
+
+    /** why: sdklib reads `extras/<vendor>/<item>/devices.xml` only when the item's source.properties says `Extra.Path=DeviceProfiles`. */
+    async function profilesExtra(filesystem: MemoryFilesystem, devicesXml?: string): Promise<void> {
+      await filesystem.mkdirp(extraDirectory);
+      await filesystem.writeFileAtomic(
+        `${extraDirectory}/source.properties`,
+        "Pkg.Revision=1\nExtra.Path=DeviceProfiles\n",
+      );
+      if (devicesXml !== undefined) await filesystem.writeFileAtomic(extraDevicesXml, devicesXml);
+    }
 
     /** why: every input the read is keyed on is present, so a change to any of them is a change, not a creation. */
     async function readsHarness(
@@ -1628,6 +1640,37 @@ describe("AndroidDriver", () => {
           act: async (filesystem) =>
             filesystem.writeFileAtomic(addOnDevicesXml, "<d:devices></d:devices>"),
           change: "an add-on's devices.xml",
+        },
+        {
+          act: async (filesystem) => filesystem.writeFileAtomic(extraDevicesXml, "<d:devices/>"),
+          before: async (filesystem) => profilesExtra(filesystem),
+          change: "an extra's devices.xml created",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(extraDevicesXml, "<d:devices></d:devices>"),
+          before: async (filesystem) => profilesExtra(filesystem, "<d:devices/>"),
+          change: "an extra's devices.xml edited",
+        },
+        {
+          act: async (filesystem) => filesystem.rm(extraDevicesXml),
+          before: async (filesystem) => profilesExtra(filesystem, "<d:devices/>"),
+          change: "an extra's devices.xml removed",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(
+              `${extraDirectory}/source.properties`,
+              "Extra.Path=DeviceProfiles\n",
+            ),
+          before: async (filesystem) => {
+            await profilesExtra(filesystem, "<d:devices/>");
+            await filesystem.writeFileAtomic(
+              `${extraDirectory}/source.properties`,
+              "Extra.Path=usb_driver\n",
+            );
+          },
+          change: "an extra's source.properties made it a device-profiles extra",
         },
         {
           act: async (filesystem) => filesystem.writeFileAtomic(legacyJar, "legacy jar, updated"),

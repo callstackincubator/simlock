@@ -17,7 +17,7 @@ How one lease request becomes one concrete device, virtual or physical.
 | Built-in preference lists | `Driver.defaultModels` of each driver | Merged once at start, after the operator's |
 | Catalog | `DriverCatalog.listCatalog` → `Driver.listCatalog` | Per class or range request; built on every read (Android keeps only its `avdmanager list device` answer, below) |
 | Android profile library (16) | `drivers/android/profiles/` | Static |
-| Android SDK profiles | `avdmanager list device`, kept in `AvdmanagerDeviceList` | Asked by each catalog, each resolve of a model the library lacks, each library provision (seed); run again only when the sdklib jar, the tools' `source.properties`, the user's devices.xml or an image's or add-on's devices.xml changed size or modified time, appeared or went, or an image was installed or removed; 30 s limit |
+| Android SDK profiles | `avdmanager list device`, kept in `AvdmanagerDeviceList` | Asked by each catalog, each resolve of a model the library lacks, each library provision (seed); run again only when the sdklib jar, the tools' `source.properties`, the user's devices.xml, an image's or add-on's devices.xml, or an `extras/<vendor>/<item>` extra's devices.xml or `source.properties` changed size or modified time, appeared or went, or an image was installed or removed; 30 s limit |
 | Android devices.xml | `$ANDROID_USER_HOME/devices.xml`, else `.android/devices.xml` | Each catalog; a resolve no earlier source answered |
 | Android system images | `<sdk>/system-images/android-*/<tag>/<abi>` + `source.properties` | Each resolve, catalog, provision |
 | Android fit rule | `drivers/android/image-fit.ts` `fits` | With every image read |

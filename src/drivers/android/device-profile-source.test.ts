@@ -769,6 +769,28 @@ function sdkSource(processRunner: ScriptedProcessRunner): BuiltinDeviceProfileSo
   );
 }
 
+describe("AvdmanagerDeviceList", () => {
+  it.each([
+    ["is stopped at its 30 s limit", null, "stopped before it finished"],
+    ["exits non-zero", 3, "exit code 3"],
+  ] as const)(
+    "names why `avdmanager list device` failed when it %s and prints nothing",
+    async (_case, code, reason) => {
+      const runner = new ScriptedProcessRunner([
+        {
+          match: { args: ["list", "device"], command: avdmanager },
+          result: { code, stderr: "", stdout: "" },
+        },
+      ]);
+
+      await expect(sdkSource(runner).profiles()).rejects.toMatchObject({
+        message: `${avdmanager} list device failed: ${reason}`,
+        name: "DriverCrashError",
+      });
+    },
+  );
+});
+
 describe("device classes", () => {
   const entry = (id: string, name: string, tag?: string) =>
     `id: 1 or "${id}"\n    Name: ${name}\n    OEM : Google\n` +
