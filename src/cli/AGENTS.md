@@ -57,7 +57,8 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    answers `UNSUPPORTED_IN_WORKER_MODE`, no `--gateway` was given and a gateway is present,
    the printed message gets the `--gateway` hint appended. With `--gateway` and no gateway
    present every command but `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup` (and any `--help`, except after `adb`/`simctl`)
-   stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects.
+   stops with `GATEWAY_NOT_PRESENT`, exit 2, before it connects. `setup` when the command goes to the gateway
+   (`--gateway`, or a gateway-only home) skips its machine check without connecting (`src/cli/commands/setup.ts` `checkMachine`).
 2. **Connect** (`connectDaemonClient`) — always `connectSimlockAdmin`; principal =
    `resolveRequesterId(env, <pid>)`. Credential, first found: `--token` →
    `SIMLOCK_ADMIN_TOKEN` → `admin.token` in the data directory (3 reads, 50 ms apart).
@@ -104,8 +105,13 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 11. **`simlock setup [--user | --project] [--tool <t>] [--mcp | --no-mcp] [--json]`** — installs the
     router skill through `setupAgentTools`, with `environment.homeDirectory`, `workingDirectory`,
     `codexHome`, `filesystem` and `runTool` (the composition root reads `homedir()`, `process.cwd()`
-    and `CODEX_HOME`); never connects to a daemon. Prompts only without `--json`. A refusal is
-    `SETUP_REFUSED` (exit 2); a failed `mcp add` prints the report, then `SETUP_MCP_FAILED` (exit 1).
+    and `CODEX_HOME`). Then it connects to the daemon (starting it, as `doctor` does), asks
+    `doctor.run` with no `fix`, writes doctor's act-on lines to stderr (`writeDoctorFindings`) and adds
+    a `machine` line (`ios ok, android missing: android-sdk`; iOS only when `hostPlatform` is
+    `darwin`) and a `machine` object `{ summary, findings }` to `--json`. A check that cannot run
+    (no daemon, or `UNSUPPORTED_IN_GATEWAY_MODE`) is `not checked: <message>`; a missing platform
+    never changes the exit code. Prompts only without `--json`. A refusal is `SETUP_REFUSED`
+    (exit 2); a failed `mcp add` prints the report with its `machine` line, then `SETUP_MCP_FAILED` (exit 1).
 
 ## Rules
 

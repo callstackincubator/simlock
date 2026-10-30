@@ -367,6 +367,7 @@ export function buildCliEnvironment(
     homeDirectory: ports.homeDirectory,
     workingDirectory: ports.workingDirectory,
     codexHome: ports.codexHome,
+    hostPlatform: ports.hostPlatform,
     runTool: ports.runTool,
     filesystem,
     connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
