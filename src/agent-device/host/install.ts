@@ -10,41 +10,92 @@ export type AgentDeviceInstall =
       readonly message: string;
     };
 
-async function isExecutableFile(filesystem: Filesystem, path: string): Promise<boolean> {
+// why: Windows has no execute bit; Node reports every file there as 0o666, so any file counts.
+async function isExecutableFile(
+  filesystem: Filesystem,
+  path: string,
+  windows: boolean,
+): Promise<boolean> {
   try {
     const details = await filesystem.stat(path);
-    return details.kind === "file" && ((details.mode ?? 0) & 0o111) !== 0;
+    return details.kind === "file" && (windows || ((details.mode ?? 0) & 0o111) !== 0);
   } catch {
     return false;
   }
+}
+
+/**
+ * why: npm on Windows installs a `<command>.cmd` shim, not a symlink, with the package beside it
+ * in `node_modules/<command>`. `node` cannot run the shim, and its real path is itself, so the
+ * package's own `bin` file stands in for it: `--version` runs it, and the package root is above it.
+ */
+async function npmShimTarget(
+  filesystem: Filesystem,
+  directory: string,
+  command: string,
+): Promise<string | undefined> {
+  if (!(await isExecutableFile(filesystem, `${directory}/${command}.cmd`, true))) return undefined;
+  const packageRoot = `${directory}/node_modules/${command}`;
+  try {
+    const { bin } = JSON.parse(await filesystem.readFile(`${packageRoot}/package.json`)) as {
+      bin?: unknown;
+    };
+    const relative =
+      typeof bin === "string" ? bin : (bin as Record<string, unknown> | undefined)?.[command];
+    if (typeof relative !== "string") return undefined;
+    const target = `${packageRoot}/${relative.replace(/^\.\//, "")}`;
+    return (await isExecutableFile(filesystem, target, true)) ? target : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPath(command: string, windows: boolean): boolean {
+  return command.includes("/") || (windows && command.includes("\\"));
 }
 
 async function locate(
   filesystem: Filesystem,
   command: string,
   pathVariable: string | undefined,
+  platform: NodeJS.Platform,
 ): Promise<string | undefined> {
-  if (command.includes("/")) {
-    return (await isExecutableFile(filesystem, command)) ? command : undefined;
+  const windows = platform === "win32";
+  if (isPath(command, windows)) {
+    return (await isExecutableFile(filesystem, command, windows)) ? command : undefined;
   }
-  for (const directory of (pathVariable ?? "").split(":")) {
+  // why: Windows separates PATH entries with `;`, and its drive letters hold a `:`.
+  for (const directory of (pathVariable ?? "").split(windows ? ";" : ":")) {
     if (directory === "") continue;
-    const candidate = `${directory}/${command}`;
-    if (await isExecutableFile(filesystem, candidate)) return candidate;
+    const candidate = windows
+      ? await npmShimTarget(filesystem, directory, command)
+      : (await isExecutableFile(filesystem, `${directory}/${command}`, false))
+        ? `${directory}/${command}`
+        : undefined;
+    if (candidate !== undefined) return candidate;
   }
   return undefined;
+}
+
+/** why: on Windows the variable is `Path`, and a copy of `process.env` loses its case-insensitive lookup. */
+export function pathVariableOf(environment: NodeJS.ProcessEnv): string | undefined {
+  return (
+    environment["PATH"] ??
+    Object.entries(environment).find(([key]) => key.toUpperCase() === "PATH")?.[1]
+  );
 }
 
 export async function findAgentDevice(
   filesystem: Filesystem,
   command: string,
   pathVariable: string | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<AgentDeviceInstall> {
-  const found = await locate(filesystem, command, pathVariable);
+  const found = await locate(filesystem, command, pathVariable, platform);
   const notFound = {
     ok: false,
     reason: "not-found",
-    message: command.includes("/")
+    message: isPath(command, platform === "win32")
       ? `agent-device not found: ${command} is not an executable file`
       : `agent-device not found: "${command}" is not on PATH`,
   } as const;
