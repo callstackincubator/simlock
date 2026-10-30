@@ -268,13 +268,30 @@ describe("CLI: exit codes", () => {
         },
       ],
     };
-    for (const [report, summary, stderr] of [
+    const wrongOwner: DoctorReport = {
+      findings: [
+        {
+          kind: "driver-unavailable",
+          platform: "ios",
+          reason: "wrong-owner",
+          detail: "The device set belongs to another user.",
+        },
+      ],
+    };
+    const cases: readonly (readonly [DoctorReport, string, string])[] = [
+      [{ findings: [] }, "ios ok, android ok", ""],
+      [
+        wrongOwner,
+        "ios unavailable: wrong-owner, android ok",
+        "Unavailable [ios] wrong-owner: The device set belongs to another user.\n",
+      ],
       [
         missingSdk,
         "ios ok, android missing: android-sdk",
         "Missing [android] android-sdk: No Android SDK. Install it.\n",
       ],
-    ] as const) {
+    ];
+    for (const [report, summary, stderr] of cases) {
       const output = outputCapture();
       const doctorInputs: unknown[] = [];
       const code = await runCli(
