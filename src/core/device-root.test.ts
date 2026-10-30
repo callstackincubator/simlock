@@ -175,6 +175,24 @@ describe("ensureOwnedRoot", () => {
     await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
   });
 
+  it("keeps a root another process published first when Windows refuses the rename with EPERM", async () => {
+    const filesystem = new RefusingRenameFilesystem(uid, async (target) => {
+      await target.mkdirp(root);
+      await target.writeFileAtomic(markerPath, marker());
+    });
+
+    await expect(ensure(filesystem)).resolves.toBe(root);
+    await expect(filesystem.readFile(markerPath)).resolves.toBe(marker());
+    await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
+  });
+
+  it("still refuses a root whose rename was refused with EPERM when nothing else published it", async () => {
+    const filesystem = new RefusingRenameFilesystem(uid, async () => undefined);
+
+    await expect(refusal(filesystem)).resolves.toBe("unreadable");
+    await expect(filesystem.exists(root)).resolves.toBe(false);
+  });
+
   it.each([
     ["a relative one", "devices/ios"],
     ["one written against the home directory", "~/devices/ios"],
@@ -475,6 +493,26 @@ class UmaskedFilesystem extends MemoryFilesystem {
  * Reports the root as absent exactly once, so the first `mkdir` loses a race it could not
  * have seen coming -- the window every check-then-create has.
  */
+/** Refuses renaming onto the root with EPERM, as Windows does when the root exists, after `before` runs. */
+class RefusingRenameFilesystem extends MemoryFilesystem {
+  constructor(
+    owner: number,
+    private readonly before: (target: MemoryFilesystem) => Promise<void>,
+  ) {
+    super(undefined, owner);
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    if (to !== root) return super.rename(from, to);
+    await this.before(this);
+    const error: NodeJS.ErrnoException = new Error(
+      `EPERM: operation not permitted, rename '${from}' -> '${to}'`,
+    );
+    error.code = "EPERM";
+    throw error;
+  }
+}
+
 class RacingFilesystem extends MemoryFilesystem {
   #absentOnce: string | undefined;
 

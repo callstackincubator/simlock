@@ -126,7 +126,7 @@ async function createRoot(context: RootContext): Promise<boolean> {
   } catch (error: unknown) {
     await discard(filesystem, staging);
 
-    if (isOccupiedPathError(error)) {
+    if (isOccupiedPathError(error) || (await lostRaceOnWindows(context, error))) {
       return false;
     }
 
@@ -382,6 +382,18 @@ function isMissingPathError(error: unknown): boolean {
  * is sitting there: a non-empty directory, a directory replaced by a file, or a plain
  * refusal to clobber.
  */
+/**
+ * why: Windows refuses to rename a directory onto one that exists with `EPERM` (or `EACCES`), not
+ * `EEXIST`, so two daemons starting at once would leave the loser refusing its own root. The same
+ * codes also mean a real permission problem, so the refusal is a lost race only when the root is
+ * there now; the caller then validates it like any root another process made first.
+ */
+async function lostRaceOnWindows(context: RootContext, error: unknown): Promise<boolean> {
+  const code = errorCode(error);
+  if (code !== "EPERM" && code !== "EACCES") return false;
+  return (await pathDetails(context, context.root, "it")) !== undefined;
+}
+
 function isOccupiedPathError(error: unknown): boolean {
   const code = errorCode(error);
 
