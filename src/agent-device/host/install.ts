@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, win32 } from "node:path";
 
 import { type Filesystem } from "../../ports/index.js";
 
@@ -24,24 +24,42 @@ async function isExecutableFile(
   }
 }
 
+const SHIM_SUFFIX = /\.cmd$/i;
+
 /**
- * why: npm on Windows installs a `<command>.cmd` shim, not a symlink, with the package beside it
- * in `node_modules/<command>`. `node` cannot run the shim, and its real path is itself, so the
- * package's own `bin` file stands in for it: `--version` runs it, and the package root is above it.
+ * why: npm on Windows installs a `<command>.cmd` shim, not a symlink. `node` cannot run the shim,
+ * and its real path is itself, so the package's own `bin` file stands in for it: `--version` runs
+ * it, and the package root is above it. A configured name or path may already end in `.cmd`.
  */
 async function npmShimTarget(
   filesystem: Filesystem,
   directory: string,
   command: string,
 ): Promise<string | undefined> {
-  if (!(await isExecutableFile(filesystem, `${directory}/${command}.cmd`, true))) return undefined;
-  const packageRoot = `${directory}/node_modules/${command}`;
+  const name = command.replace(SHIM_SUFFIX, "");
+  const shimDirectory = directory.replace(/[\\/]+$/, "");
+  if (!(await isExecutableFile(filesystem, `${shimDirectory}/${name}.cmd`, true))) return undefined;
+  return packageBin(filesystem, packageRootBeside(shimDirectory, name), name);
+}
+
+// why: a global install puts its shims beside `node_modules`; a local one puts them in `node_modules/.bin`, beside the package.
+function packageRootBeside(shimDirectory: string, name: string): string {
+  return /(^|[\\/])node_modules[\\/]\.bin$/i.test(shimDirectory)
+    ? `${win32.dirname(shimDirectory)}/${name}`
+    : `${shimDirectory}/node_modules/${name}`;
+}
+
+async function packageBin(
+  filesystem: Filesystem,
+  packageRoot: string,
+  name: string,
+): Promise<string | undefined> {
   try {
     const { bin } = JSON.parse(await filesystem.readFile(`${packageRoot}/package.json`)) as {
       bin?: unknown;
     };
     const relative =
-      typeof bin === "string" ? bin : (bin as Record<string, unknown> | undefined)?.[command];
+      typeof bin === "string" ? bin : (bin as Record<string, unknown> | undefined)?.[name];
     if (typeof relative !== "string") return undefined;
     const target = `${packageRoot}/${relative.replace(/^\.\//, "")}`;
     return (await isExecutableFile(filesystem, target, true)) ? target : undefined;
@@ -54,6 +72,26 @@ function isPath(command: string, windows: boolean): boolean {
   return command.includes("/") || (windows && command.includes("\\"));
 }
 
+async function locatePath(
+  filesystem: Filesystem,
+  command: string,
+  windows: boolean,
+): Promise<string | undefined> {
+  if (windows && SHIM_SUFFIX.test(command)) {
+    return npmShimTarget(filesystem, win32.dirname(command), win32.basename(command));
+  }
+  return (await isExecutableFile(filesystem, command, windows)) ? command : undefined;
+}
+
+async function executableIn(
+  filesystem: Filesystem,
+  directory: string,
+  command: string,
+): Promise<string | undefined> {
+  const candidate = `${directory}/${command}`;
+  return (await isExecutableFile(filesystem, candidate, false)) ? candidate : undefined;
+}
+
 async function locate(
   filesystem: Filesystem,
   command: string,
@@ -61,17 +99,12 @@ async function locate(
   platform: NodeJS.Platform,
 ): Promise<string | undefined> {
   const windows = platform === "win32";
-  if (isPath(command, windows)) {
-    return (await isExecutableFile(filesystem, command, windows)) ? command : undefined;
-  }
+  if (isPath(command, windows)) return locatePath(filesystem, command, windows);
+  const lookIn = windows ? npmShimTarget : executableIn;
   // why: Windows separates PATH entries with `;`, and its drive letters hold a `:`.
   for (const directory of (pathVariable ?? "").split(windows ? ";" : ":")) {
     if (directory === "") continue;
-    const candidate = windows
-      ? await npmShimTarget(filesystem, directory, command)
-      : (await isExecutableFile(filesystem, `${directory}/${command}`, false))
-        ? `${directory}/${command}`
-        : undefined;
+    const candidate = await lookIn(filesystem, directory, command);
     if (candidate !== undefined) return candidate;
   }
   return undefined;

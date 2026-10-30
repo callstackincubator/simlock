@@ -1,6 +1,10 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { MemoryFilesystem } from "../../ports/index.js";
+import { MemoryFilesystem, NodeFilesystem } from "../../ports/index.js";
 import { findAgentDevice, pathVariableOf } from "./install.js";
 
 const npm = "/Users/me/AppData/Roaming/npm";
@@ -50,6 +54,42 @@ describe("findAgentDevice", () => {
     },
   );
 
+  it("finds a local install's shim in node_modules/.bin, its package beside .bin", async () => {
+    const project = "/work/app/node_modules";
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(`${project}/.bin`);
+    await filesystem.mkdirp(`${project}/agent-device/bin`);
+    await filesystem.mkdirp(`${project}/agent-device/dist/src`);
+    await filesystem.writeFileAtomic(`${project}/.bin/agent-device.cmd`, "@node ...");
+    await filesystem.writeFileAtomic(
+      `${project}/agent-device/package.json`,
+      JSON.stringify({ bin: { "agent-device": "bin/agent-device.mjs" }, name: "agent-device" }),
+    );
+    await filesystem.writeFileAtomic(`${project}/agent-device/bin/agent-device.mjs`, "");
+    await filesystem.writeFileAtomic(`${project}/agent-device/dist/src/daemon.js`, "");
+
+    await expect(
+      findAgentDevice(filesystem, "agent-device", `/Windows;${project}/.bin/`, "win32"),
+    ).resolves.toEqual({
+      entry: `${project}/agent-device/dist/src/daemon.js`,
+      ok: true,
+      realPath: `${project}/agent-device/bin/agent-device.mjs`,
+    });
+  });
+
+  it.each([
+    ["a command name ending in .cmd, looked up on PATH", "agent-device.CMD", npm],
+    ["a configured path to the shim", `${npm}/agent-device.cmd`, undefined],
+  ])("stands in the package's bin for %s on Windows", async (_case, command, pathVariable) => {
+    const filesystem = await windowsNpmInstall();
+
+    await expect(findAgentDevice(filesystem, command, pathVariable, "win32")).resolves.toEqual({
+      entry: `${packageRoot}/dist/src/internal/daemon.js`,
+      ok: true,
+      realPath: `${packageRoot}/bin/agent-device.mjs`,
+    });
+  });
+
   it("does not take a package with no .cmd shim beside it as the command on Windows", async () => {
     const filesystem = await windowsNpmInstall({ shim: false });
 
@@ -97,6 +137,35 @@ describe("findAgentDevice", () => {
     await expect(findAgentDevice(filesystem, command, undefined, "linux")).resolves.toMatchObject({
       message: `agent-device not found: "${command}" is not on PATH`,
     });
+  });
+});
+
+describe.runIf(process.platform === "win32")("findAgentDevice on Windows", () => {
+  it("finds a local install from a PATH entry that is a project's node_modules .bin, written with backslashes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock agent-device "));
+    const modules = join(directory, "node_modules");
+    const packageRoot = join(modules, "agent-device");
+    try {
+      await mkdir(join(modules, ".bin"), { recursive: true });
+      await mkdir(join(packageRoot, "bin"), { recursive: true });
+      await mkdir(join(packageRoot, "dist", "src"), { recursive: true });
+      await writeFile(join(modules, ".bin", "agent-device.cmd"), "@node ...");
+      await writeFile(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ bin: { "agent-device": "bin/agent-device.mjs" }, name: "agent-device" }),
+      );
+      await writeFile(join(packageRoot, "bin", "agent-device.mjs"), "");
+      await writeFile(join(packageRoot, "dist", "src", "daemon.js"), "");
+
+      await expect(
+        findAgentDevice(new NodeFilesystem(), "agent-device", join(modules, ".bin"), "win32"),
+      ).resolves.toMatchObject({
+        ok: true,
+        realPath: join(packageRoot, "bin", "agent-device.mjs"),
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
 
