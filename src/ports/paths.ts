@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -23,12 +24,33 @@ export function resolveSimlockHome(env: NodeJS.ProcessEnv = process.env): string
 
 /**
  * why: The longest AF_UNIX socket path the kernel accepts, in bytes, excluding the trailing
- * NUL: `sun_path` is 104 bytes on macOS and the BSDs and 108 on Linux. Windows named
- * pipes have no such limit.
+ * NUL: `sun_path` is 104 bytes on macOS and the BSDs and 108 on Linux. Windows has no such
+ * limit because it listens on a named pipe, not a socket file.
  */
-function maxSocketPathLength(platform: NodeJS.Platform = process.platform): number {
-  if (platform === "win32") return Number.POSITIVE_INFINITY;
+function maxSocketPathLength(platform: NodeJS.Platform): number {
   return (platform === "linux" ? 108 : 104) - 1;
+}
+
+// why: `String.raw` cannot end in a backslash (it escapes the closing backtick), so the prefix is written out.
+const PIPE_PREFIX = "\\\\.\\pipe\\";
+
+/**
+ * why: Node on Windows listens only on a named pipe, and `listen` on a file path there fails
+ * with `EACCES`. A pipe is not a file: `stat` on a live one fails with `EBUSY`, it cannot be
+ * removed, and it is gone when its server closes, so callers must not treat it as one.
+ */
+export function isPipeEndpoint(endpoint: string): boolean {
+  return endpoint.startsWith(PIPE_PREFIX);
+}
+
+/**
+ * why: Pipe names share one machine-wide namespace, so the name is derived from the data
+ * directory: two daemons with different `SIMLOCK_HOME`s never collide. Lower-cased because
+ * Windows paths are case-insensitive and one directory must keep one name.
+ */
+function windowsPipeName(dataDirectory: string): string {
+  const digest = createHash("sha256").update(dataDirectory.toLowerCase()).digest("hex");
+  return `${PIPE_PREFIX}simlock-${digest.slice(0, 16)}`;
 }
 
 export class SocketPathTooLongError extends Error {
@@ -45,14 +67,16 @@ export class SocketPathTooLongError extends Error {
 }
 
 /**
- * why: Where the daemon listens under a data directory. Checked here, once, for every process
- * that derives it: a path past the kernel's limit otherwise fails on connect as a bare
- * `EINVAL`, which says nothing about `SIMLOCK_HOME` being the cause.
+ * why: Where the daemon listens under a data directory: `<data dir>/daemon.sock`, or a named
+ * pipe on Windows. Checked here, once, for every process that derives it: a path past the
+ * kernel's limit otherwise fails on connect as a bare `EINVAL`, which says nothing about
+ * `SIMLOCK_HOME` being the cause.
  */
 export function resolveDaemonSocketPath(
   dataDirectory: string,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  if (platform === "win32") return windowsPipeName(dataDirectory);
   const socketPath = join(dataDirectory, "daemon.sock");
   const maxLength = maxSocketPathLength(platform);
   if (Buffer.byteLength(socketPath) > maxLength) {

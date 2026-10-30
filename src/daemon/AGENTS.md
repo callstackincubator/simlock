@@ -55,7 +55,7 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 
 ## Connection (`server.ts`)
 
-1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`.
+1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`. On Windows the endpoint is a named pipe (`\\.\pipe\simlock-<hash of the data directory>`): none of the file steps run, since a pipe has no directory and no stale entry, and a live one fails the bind with `address-in-use`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`

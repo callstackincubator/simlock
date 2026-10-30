@@ -372,8 +372,18 @@ export function buildCliEnvironment(
     connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {
-      const { resolveDaemonSocketPath } = await import("../ports/index.js");
-      return filesystem.exists(resolveDaemonSocketPath(dataDirectory));
+      const { IpcError, isPipeEndpoint, resolveDaemonSocketPath } =
+        await import("../ports/index.js");
+      const endpoint = resolveDaemonSocketPath(dataDirectory);
+      if (!isPipeEndpoint(endpoint)) return filesystem.exists(endpoint);
+      // why: `stat` on a live named pipe throws `EBUSY`, so a pipe is present exactly when something answers it.
+      try {
+        await (await ipc.connect(endpoint)).close();
+        return true;
+      } catch (error: unknown) {
+        if (!(error instanceof IpcError)) return true;
+        return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
+      }
     },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}

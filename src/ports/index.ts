@@ -12,6 +12,7 @@ export {
   type DaemonRole,
   type DaemonFlag,
   type DaemonHome,
+  isPipeEndpoint,
   resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
