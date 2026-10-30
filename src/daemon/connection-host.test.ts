@@ -88,6 +88,50 @@ describe("DaemonEndpointHost", () => {
     );
   });
 
+  it("claims a named pipe without touching the filesystem, which has nothing to make or remove", async () => {
+    const pipe = String.raw`\\.\pipe\simlock-0123456789abcdef`;
+    const untouchable = new Proxy(new MemoryFilesystem(), {
+      get: (_target, method) => () => {
+        throw new Error(`a pipe endpoint must not call filesystem.${String(method)}`);
+      },
+    });
+    const ipc = new MemoryIpcTransport();
+    const host = new DaemonEndpointHost({
+      connector: ipc,
+      endpoint: pipe,
+      filesystem: untouchable,
+      listenerFactory: ipc,
+    });
+
+    await host.start(() => undefined);
+    await expect((await ipc.connect(pipe)).close()).resolves.toBeUndefined();
+    await host.stop();
+
+    await expect(ipc.connect(pipe)).rejects.toMatchObject({ code: "endpoint-not-found" });
+  });
+
+  it("refuses a second claim of a live named pipe", async () => {
+    const pipe = String.raw`\\.\pipe\simlock-0123456789abcdef`;
+    const ipc = new MemoryIpcTransport();
+    const first = new DaemonEndpointHost({
+      connector: ipc,
+      endpoint: pipe,
+      filesystem: new MemoryFilesystem(),
+      listenerFactory: ipc,
+    });
+    await first.start(() => undefined);
+
+    await expect(
+      new DaemonEndpointHost({
+        connector: ipc,
+        endpoint: pipe,
+        filesystem: new MemoryFilesystem(),
+        listenerFactory: ipc,
+      }).start(() => undefined),
+    ).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
+    await first.stop();
+  });
+
   it("is one-shot after stopping", async () => {
     const filesystem = new MemoryFilesystem();
     const ipc = new MemoryIpcTransport();
