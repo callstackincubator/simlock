@@ -278,16 +278,19 @@ describe("CLI: exit codes", () => {
       const output = outputCapture();
       const doctorInputs: unknown[] = [];
       const code = await runCli(
-        ["setup", "--tool", "claude-code", "--no-mcp"],
+        ["setup", "--user", "--tool", "claude-code", "--no-mcp"],
         output.environmentWith({
           hostPlatform: "darwin",
-          connectAdmin: async () =>
-            fakeClient({
+          adminTokenFromEnv: "admin-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient({
               runDoctor: (input) => {
                 doctorInputs.push(input);
                 return Promise.resolve(report);
               },
-            }),
+            });
+          },
         }),
       );
       expect(code, summary).toBe(0);
@@ -303,6 +306,7 @@ describe("CLI: exit codes", () => {
   it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
     const HOME = "/home/operator";
     const CWD = "/work/project";
+    const MACHINE = "machine      ios ok, android ok\n";
     const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
     const exited = (code: number, stderr = ""): ToolOutcome => ({
       outcome: "exited",
@@ -340,8 +344,11 @@ describe("CLI: exit codes", () => {
             return false;
           },
           runTool: async () => options.outcome ?? exited(0),
-          connectAdmin: async () => {
-            throw new Error("setup must not connect to a daemon");
+          hostPlatform: "darwin",
+          adminTokenFromEnv: "admin-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient();
           },
         }),
       );
@@ -353,14 +360,17 @@ describe("CLI: exit codes", () => {
     expect(plain.stderr).toBe("");
     expect(plain.stdout).toBe(
       `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n` +
-        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n`,
+        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n` +
+        MACHINE,
     );
     expect(plain.questions[0]).toBe(SCOPE_PROMPT);
 
     const again = await setupRun(["setup", "--tool", "claude-code"], {
       prepare: async (filesystem) => filesystem.mkdirp(`${HOME}/.claude/skills/simlock`),
     });
-    expect(again.stdout).toBe(`claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n`);
+    expect(again.stdout).toBe(
+      `claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n${MACHINE}`,
+    );
 
     for (const [outcome, line] of [
       [exited(0), "claude-code  mcp    connected\n"],
@@ -373,7 +383,7 @@ describe("CLI: exit codes", () => {
       const run = await setupRun(["setup", "--tool", "claude-code", "--mcp"], { outcome });
       expect(run.code, line).toBe(0);
       expect(run.stdout, line).toBe(
-        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}`,
+        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}${MACHINE}`,
       );
     }
 
@@ -388,6 +398,7 @@ describe("CLI: exit codes", () => {
           mcp: { status: "connected" },
         },
       ],
+      machine: { summary: "ios ok, android ok", findings: [] },
     });
     const projectJson = await setupRun([
       "setup",
@@ -406,6 +417,7 @@ describe("CLI: exit codes", () => {
           mcp: { status: "skipped", reason: "codex mcp add has no project scope" },
         },
       ],
+      machine: { summary: "ios ok, android ok", findings: [] },
     });
 
     const failed = await setupRun(["setup", "--tool", "claude-code", "--mcp"], {
@@ -413,7 +425,7 @@ describe("CLI: exit codes", () => {
     });
     expect(failed.code).toBe(1);
     expect(failed.stdout).toBe(
-      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n`,
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n${MACHINE}`,
     );
     expect(JSON.parse(failed.stderr)).toEqual({
       error: { code: "SETUP_MCP_FAILED", message: "MCP not connected for claude-code: boom" },
