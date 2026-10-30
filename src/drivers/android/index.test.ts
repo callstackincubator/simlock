@@ -727,6 +727,27 @@ describe("AndroidDriver", () => {
     await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
   });
 
+  it("is not ready until `pm path android` exits 0 and prints a package", async () => {
+    const harness = await provisionedHarness({
+      unsettledPmAnswers: [
+        { code: 1, stderr: "cmd: Can't find service: package", stdout: "" },
+        { code: 0, stderr: "", stdout: "Error: could not access the Package Manager\n" },
+      ],
+    });
+    const ready = harness.driver.makeReady(harness.device);
+    const settled = vi.fn();
+    void ready.then(settled, settled);
+    const pmCalls = () => harness.runner.calls.filter((call) => call.args.includes("pm")).length;
+
+    for (const asked of [1, 2]) {
+      await vi.waitFor(() => expect(pmCalls()).toBe(asked));
+      expect(settled, `ready after ${asked} unanswered pm`).not.toHaveBeenCalled();
+      harness.clock.advance(2_000);
+    }
+
+    await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
+  });
+
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
     const harness = await provisionedHarness({ forReclaim: true });
     await harness.filesystem.mkdirp(`${avdDirectory}/simlock_one.avd/snapshots/default_boot`);
@@ -5290,6 +5311,7 @@ async function provisionedHarness(
     readonly forReclaim?: boolean;
     readonly ids?: readonly string[];
     readonly initialAdbFailures?: number;
+    readonly unsettledPmAnswers?: readonly ProcessResult[];
     readonly readinessTimeoutMs?: number;
     readonly firstMarkToken?: string;
     readonly afterwards?: readonly ScriptedProcessExpectation[];
@@ -5336,6 +5358,7 @@ async function provisionedHarness(
         emulatorFlags: options.emulatorFlags,
         initialAdbFailures: options.initialAdbFailures,
         launchArgs: ["-no-snapshot-load"],
+        unsettledPmAnswers: options.unsettledPmAnswers,
       }),
     );
     if ((options.bootCompleted ?? "1\n").trim() === "1") {
@@ -6545,6 +6568,7 @@ function baselineBuildExpectations(options: {
   readonly emulatorFlags?: readonly string[] | undefined;
   readonly initialAdbFailures?: number | undefined;
   readonly launchArgs: readonly string[];
+  readonly unsettledPmAnswers?: readonly ProcessResult[] | undefined;
 }): ScriptedProcessExpectation[] {
   const bootCompleted = options.bootCompleted ?? "1\n";
   const emulatorFlags = options.emulatorFlags ?? [];
@@ -6589,6 +6613,28 @@ function baselineBuildExpectations(options: {
     return expectations;
   }
 
+  for (const answer of options.unsettledPmAnswers ?? []) {
+    expectations.push(
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+      avdPathExpectation("emulator-5586"),
+      {
+        match: {
+          args: ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          command: binaries.adb,
+        },
+        result: answer,
+      },
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+    );
+  }
   expectations.push(
     processResult(
       binaries.adb,
