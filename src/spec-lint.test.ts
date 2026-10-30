@@ -222,6 +222,11 @@ describe("spec-lint.mjs on a task", () => {
       "B 100 Facts: F1 is used twice; renumber one",
     ],
     [
+      "an F number that comes after a higher one",
+      swap("| F1 |", "| F3 |"),
+      "N 100 Facts: F2 comes after F3",
+    ],
+    [
       "a line past the end of its file",
       swap("`package.json:2`", "`package.json:99999`"),
       `B 100 Facts: \`package.json:99999\` is past the end of package.json (`,
@@ -332,12 +337,6 @@ describe("spec-lint.mjs on a task", () => {
 
     expect(result.lines.some((line) => line.startsWith(expected))).toBe(true);
     expect(result.status).toBe(expected.startsWith("B") ? 1 : 0);
-  });
-
-  it("notes an F number that comes after a higher one", () => {
-    const body = TASK.replace("| F1 |", "| F3 |");
-
-    expect(lintTask(body).lines).toContain("N 100 Facts: F2 comes after F3");
   });
 
   it("passes Failure modes written as none", () => {
