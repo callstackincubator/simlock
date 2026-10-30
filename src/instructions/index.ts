@@ -7,7 +7,7 @@ const RULES_FOR_EVERY_AGENT = `## Rules for every agent
 
 - Never run the platform tools yourself: not \`xcrun simctl\`, \`adb\`, \`avdmanager\` or \`emulator\`. They cannot see Simlock's devices and can break other agents' devices.
 - Drive only the device you leased. Never touch a device another agent holds.
-- Under Claude Code and Codex your identity is automatic: do not set \`SIMLOCK_AGENT_ID\`. Under any other tool, set a \`SIMLOCK_AGENT_ID\` of your own and keep it for the whole session. Never share one with another agent.
+- Under Claude Code, Codex and pi your identity is automatic: do not set \`SIMLOCK_AGENT_ID\`. Under any other tool, set a \`SIMLOCK_AGENT_ID\` of your own and keep it for the whole session. Never share one with another agent.
 - The operator decides how many leases you may hold. When a request fails with \`REQUESTER_ALREADY_LEASED\`, use the lease you hold, or release it first.
 - Never pass \`--allow-download\` unless a person told you to. It can download many gigabytes.
 - Never run \`simlock release --all\` or \`simlock nuke\`. They take devices away from every agent.
