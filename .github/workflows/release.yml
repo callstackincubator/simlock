@@ -6,8 +6,9 @@ name: Release
 #   plan      the next version (0.X for a feature, 0.X.Y for a patch, from package.json), after
 #             checking that main's CI passed on this commit and that the tag and the npm version
 #             are free
-#   build     the package at that version, on macOS so dist/bin/ holds both iOS capture programs
-#             (Linux cannot build them); its tarball is the one artifact every later job ships
+#   build     the package at that version, on macOS with Xcode 27 so dist/bin/ holds both iOS
+#             capture programs (Linux cannot build them); its tarball is the one artifact every
+#             later job ships
 #   tag       the release commit (package.json, CHANGELOG.md) and the tag v0.X.Y, pushed to main
 #   publish   that tarball to npm through trusted publishing (OIDC, no stored token), with
 #             provenance
@@ -130,8 +131,10 @@ jobs:
     name: Build
     needs: plan
     # why: dist/bin/ holds two Swift programs that only a Mac with Xcode builds; a package built
-    # on Linux would stream no iOS screen for anyone who installs it.
-    runs-on: macos-15
+    # on Linux would stream no iOS screen for anyone who installs it. simlock-device-capture links
+    # CoreDevice symbols that first ship with Xcode 27 (ADR 0031), and macos-15 and macos-26 carry
+    # Xcode 26 at most, so only the xcode-27 image (a preview, 2026-10) builds it.
+    runs-on: xcode-27
     permissions:
       contents: read
     timeout-minutes: 30
