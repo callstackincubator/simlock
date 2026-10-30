@@ -110,12 +110,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 - Every socket peer is the same OS user; file modes are the real boundary: the data
   directory is created `0700` (`DATA_DIRECTORY_MODE`) by whoever makes it first (the
   daemon, `NodeDaemonLauncher`, `config set`, service install), and its files are `0600`.
-  An existing directory is never chmod'ed; the daemon warns when group or others can reach it.
-- On Windows the endpoint is a named pipe, which no directory guards: the default pipe ACL lets
-  other accounts only read (a client needs read and write), and libuv's first-instance flag makes
-  a second listener fail `address-in-use`. Its name is predictable, so another local account that
-  creates it before the daemon starts receives the CLI's `hello` (any `--token` or
-  `SIMLOCK_ADMIN_TOKEN` with it) and answers in the daemon's place. Single-user machines only.
+  An existing directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows the endpoint is a named pipe no directory guards: see [ports](../ports/AGENTS.md).
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
 - A worker that joins a fleet grants its gateway `admin` over itself.
