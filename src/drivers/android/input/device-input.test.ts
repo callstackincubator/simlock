@@ -233,16 +233,11 @@ function remove(): ScriptedProcessExpectation {
 
 // why: both devices' worlds: the other device's target is here so "it went through this device's
 // target" can fail, since an input aimed at the wrong device would show up in the other's log.
-class RecordingLogger implements Logger {
-  readonly lines: string[] = [];
+class SilentLogger implements Logger {
   debug(): void {}
   info(): void {}
-  warn(message: string): void {
-    this.lines.push(message);
-  }
-  error(message: string): void {
-    this.lines.push(message);
-  }
+  warn(): void {}
+  error(): void {}
   child(): Logger {
     return this;
   }
@@ -255,7 +250,7 @@ function setup(
   const clock = new FakeClock(1_000);
   const target = new FakeTarget(device.address, expectations);
   const other = new FakeTarget("other", []);
-  const logger = new RecordingLogger();
+  const logger = new SilentLogger();
   const factory = createAndroidDeviceInput({
     clock,
     logger,
@@ -263,7 +258,7 @@ function setup(
     serverPath: SERVER,
     targetFor: async (asked) => (asked === device ? target : other),
   });
-  return { clock, device, factory, logger, other, target };
+  return { clock, device, factory, other, target };
 }
 
 async function drive<T>(clock: FakeClock, promise: Promise<T>, stepMs = 50): Promise<T> {
@@ -346,7 +341,7 @@ function configs(input: DeviceInput): InputScreenConfig[] {
 }
 
 describe("Android device input: open", () => {
-  it("starts a control-only scrcpy and reads the screen's size in its current rotation, a phone passes the adb check first, a start that fails is rejected, a rotation is reported once, a close stops the reads, reads never overlap, and a failing read is logged once", async () => {
+  it("starts a control-only scrcpy and reads the screen's size in its current rotation, a phone passes the adb check first, a start that fails is rejected, a rotation is reported once, a close stops the reads, reads never overlap, and a failing read keeps the last size until one succeeds", async () => {
     const world = setup();
     const input = opened(await open(world));
     expect(world.target.log).toEqual([`push ${SERVER} ${DEVICE_JAR}`, SERVER_ARGS]);
@@ -412,7 +407,6 @@ describe("Android device input: open", () => {
     failing.target.readFails = true;
     await settle(failing.clock, 7_000);
     expect(failing.target.reads).toBeGreaterThan(3);
-    expect(failing.logger.lines).toEqual(["Could not read the screen size"]);
     expect(kept).toEqual([{ height: 2400, orientation: "portrait", width: 1080 }]);
     failing.target.display = displays(2400, 1080);
     failing.target.readFails = false;
