@@ -87,7 +87,7 @@ the status is stale.
 | [0046](0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md) | A standalone worker serves agent-device by default and hands local agents a private profile | Accepted — not yet implemented; narrows 0023 §1, §3–4, 0030 §2, 0039 and 0043 §4 |
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
-| [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted |
+| [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted; §3 narrowed by 0052 |
 | [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted |
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
-| [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Proposed; narrows 0049 §3 on iOS simulators |
+| [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |

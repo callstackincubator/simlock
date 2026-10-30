@@ -128,7 +128,7 @@ record of a device's mode; `driverData` holds the slim signature.
 
 ## Known gaps
 
-- **Input:** no app switcher or Lock, and no keys on iOS 27 runtimes (#1024). Rotation was seen to work only on Xcode 26.4 with an iOS 26.4 runtime (#1080); on Xcode 27 the GSEvent is accepted but the simulator did not turn (#1024), and nothing tells the client. The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
+- **Input:** no app switcher or Lock, and no keys on iOS 27 runtimes (#1024). Rotation was checked on Xcode 26.4 (iOS 26.4 runtime) and Xcode 27.0 (iOS 26.4 and 27.0 runtimes) (#1080); a screen that does not rotate (the iPhone home screen, upside down on a Face ID iPhone) ignores it, and nothing tells the client. The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
 - **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Every reclaim erases, so the next boot re-slims: two boots each
