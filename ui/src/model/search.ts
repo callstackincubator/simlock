@@ -43,48 +43,38 @@ export interface SearchInput {
 
 export function buildResults(input: SearchInput): readonly SearchResult[] {
   return [
-    ...input.pages.map(
-      (page): SearchResult => ({
-        group: "Pages",
-        id: `page:${page.path}`,
-        label: page.label,
-        target: { kind: "go", to: page.path },
-      }),
-    ),
-    ...input.workers.map(
-      (worker): SearchResult => ({
-        group: "Workers",
-        id: `worker:${worker.id}`,
-        label: workerName(worker),
-        target: { kind: "go", to: workerPath(worker.id) },
-      }),
-    ),
+    ...input.pages.map((page): SearchResult => ({
+      group: "Pages",
+      id: `page:${page.path}`,
+      label: page.label,
+      target: { kind: "go", to: page.path },
+    })),
+    ...input.workers.map((worker): SearchResult => ({
+      group: "Workers",
+      id: `worker:${worker.id}`,
+      label: workerName(worker),
+      target: { kind: "go", to: workerPath(worker.id) },
+    })),
     ...input.workers.flatMap((worker) =>
-      (worker.devices ?? []).map(
-        (device): SearchResult => ({
-          group: "Devices",
-          id: `device:${worker.id}/${device.id}`,
-          label: `${device.spec.model} · ${workerName(worker)}`,
-          target: { kind: "go", to: devicePath(worker.id, device.id) },
-        }),
-      ),
+      (worker.devices ?? []).map((device): SearchResult => ({
+        group: "Devices",
+        id: `device:${worker.id}/${device.id}`,
+        label: `${device.spec.model} · ${workerName(worker)}`,
+        target: { kind: "go", to: devicePath(worker.id, device.id) },
+      })),
     ),
-    ...input.leases.map(
-      (lease): SearchResult => ({
-        group: "Leases",
-        id: `lease:${lease.key}`,
-        label: `${lease.holder} · ${lease.model}`,
-        target: { kind: "go", to: lease.to as `/${string}` },
-      }),
-    ),
-    ...input.requests.map(
-      (request): SearchResult => ({
-        group: "Requests",
-        id: `request:${request.key}`,
-        label: `${request.requester} · ${request.device}`,
-        target: { kind: "go", to: request.to as `/${string}` },
-      }),
-    ),
+    ...input.leases.map((lease): SearchResult => ({
+      group: "Leases",
+      id: `lease:${lease.key}`,
+      label: `${lease.holder} · ${lease.model}`,
+      target: { kind: "go", to: lease.to as `/${string}` },
+    })),
+    ...input.requests.map((request): SearchResult => ({
+      group: "Requests",
+      id: `request:${request.key}`,
+      label: `${request.requester} · ${request.device}`,
+      target: { kind: "go", to: request.to as `/${string}` },
+    })),
     ...actionResults(input),
   ];
 }

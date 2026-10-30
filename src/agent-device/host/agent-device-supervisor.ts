@@ -104,7 +104,6 @@ export interface AgentDeviceSupervisorOptions {
 }
 
 const POLL_MS = 100;
-const PS_TIMEOUT_MS = 5_000;
 const VERSION_TIMEOUT_MS = 10_000;
 const READY_TIMEOUT_MS = 15_000;
 const TERM_GRACE_MS = 10_000;
@@ -740,7 +739,7 @@ export class AgentDeviceSupervisor {
     realHome: string,
     entry: string | undefined,
   ): Promise<"own" | "other" | "unknown"> {
-    const line = await this.#psLine(pid);
+    const line = await this.#o.processSupervisor.commandLine(pid);
     if (line === undefined) return "unknown";
     if (!line.endsWith(` ${this.#markerArgs(realHome).join(" ")}`)) return "other";
     if (entry !== undefined && !line.includes(entry)) return "other";
@@ -749,22 +748,6 @@ export class AgentDeviceSupervisor {
       if (named !== undefined && named !== pid) return "other";
     }
     return "own";
-  }
-
-  async #psLine(pid: number): Promise<string | undefined> {
-    try {
-      const raced = await this.#race(
-        this.#o.processRunner.run("ps", ["-ww", "-o", "args=", "-p", String(pid)], {
-          timeoutMs: PS_TIMEOUT_MS,
-        }),
-        PS_TIMEOUT_MS,
-      );
-      if (raced.timedOut || raced.value.code !== 0) return undefined;
-      const line = raced.value.stdout.split("\n")[0]?.trim() ?? "";
-      return line === "" ? undefined : line;
-    } catch {
-      return undefined;
-    }
   }
 
   async #stateDirIsOurs(): Promise<boolean> {

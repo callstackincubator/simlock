@@ -18,7 +18,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers                                                                                         |
 | `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
 | `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
-| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                                                                                                          |
+| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources; `AvdmanagerDeviceList`, the kept `list device` answer                                                   |
 | `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                                                                                                                   |
 | `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                                                                                                            |
 | `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`                                                                                                  |
@@ -28,7 +28,8 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 Start — `AndroidDriver.create`:
 
-1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` with
+1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (on Windows
+   `%LOCALAPPDATA%\Android\Sdk`, and the tools are `adb.exe`, `emulator.exe`, `avdmanager.bat`, `sdkmanager.bat`) with
    `avdmanager` + `sdkmanager` (newest `cmdline-tools/*/bin`, else `tools/bin`), `emulator`,
    `platform-tools/adb`. None → `SdkMissingError`: Android absent, no rejection.
 2. `ensureOwnedRoot`: the AVD home, default `$SIMLOCK_HOME/devices/android`.
@@ -42,7 +43,7 @@ Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no sc
 
 1. Port listening + live record → adopt. Listening, no record → `occupied`.
 2. Record alive, port silent → reap. Then spawn, write the record, wait for the port → else `start-failed`.
-3. Reap = `ps -o args=` must show `adb`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. Unreadable `ps` keeps the record.
+3. Reap = its command line (`ProcessSupervisor.commandLine`) must show `adb` or `adb.exe`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. An unreadable one keeps the record.
 4. `dispose` reaps it. Emulators are spawned unref'd and outlive the daemon.
 
 Provision — `provision`:
@@ -60,9 +61,9 @@ Provision — `provision`:
 Boot — `makeReady` (per-device lock):
 
 1. Baseline: stored hash matches → `-snapshot simlock_clean_baseline`; differs → delete
-   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`.
+   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
-   `adb devices`, not reserved, port and port+1 not listening.
+   `adb devices`, not reserved, port, port+1 and port+3000 (gRPC) not listening.
 3. Ready = `sys.boot_completed` 1, `init.svc.bootanim` stopped or unset, and `adb emu avd path`
    names `<root>/<avd>.avd` (or the same `realpath`), else `DriverCrashError`. Silent serial past 5 s → re-announce.
 4. No baseline → `emu avd snapshot save`, check `snapshot list`, write `simlock-clean-baseline.json`, reboot from it.
@@ -79,8 +80,7 @@ Reclaim — `reclaim`:
 Ownership gate: before any `emu kill` or snapshot load, `adb emu avd path` (5 s timeout, asked every time, never cached) must name this device's own AVD directory; unreachable, timed out or another path → nothing is sent (a snapshot reclaim then shuts down and wipes).
 
 `shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills the emulator this process started, or after a restart each attached
-emulator whose bounded `emu avd path` names this AVD (any serial that cannot answer → refuse), then `avdmanager delete avd`, frees the port.
-`listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
+emulator whose bounded `emu avd path` names this AVD (any serial that cannot answer → refuse), then `avdmanager delete avd`, frees the port. `listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
 (`$ANDROID_USER_HOME/devices.xml`, else `.android/devices.xml` under `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME`
@@ -114,8 +114,8 @@ No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's
 
 Screen — `screenCapture` and `input`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
-Plain facts: `avdmanager list device` runs on every `listCatalog`, resolve of a model the library lacks,
-and library provision (seed); nothing is cached. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
+Plain facts: `listCatalog`, a resolve of a model the library lacks and a library provision (seed) share one `AvdmanagerDeviceList`: `avdmanager list device` runs again only when the size or modified time of a file it reads profiles from changed, or one appeared or went: the tools package's `lib/sdklib/sdklib.core.jar` (legacy `tools/lib/sdklib*.jar`) and `source.properties`, the user's devices.xml, `devices.xml` in each `system-images/*/*/*` and `add-ons/*` directory (a new image is a new path), and `devices.xml` and `source.properties` in each `extras/*/*` directory (avdmanager reads an extra whose `source.properties` says `Extra.Path=DeviceProfiles`).
+Otherwise the last good answer is served; a failed run is not kept; concurrent callers share one run. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 
 ## State and timers
 
@@ -129,9 +129,9 @@ and library provision (seed); nothing is cached. The sdkmanager catalog is never
 | `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
 | AVD path query (listing / boot) | 5 s                                     | none                                                            |
 | Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
+| `avdmanager list device`        | 30 s                                    | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
-Reads only: the user's AVD home, devices.xml, the SDK.
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`). Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 
@@ -143,7 +143,6 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 ## Known gaps
 
 - **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`.
-  No record → `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
-- **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
-  between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
+  No record → `occupied`: find it with `lsof` (Windows: `Get-NetTCPConnection -LocalPort <port>`; the message names `lsof` only), or move `drivers.android.adbServerPort` (one per instance).
+- **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
 - **Port checks are partial.** A port handed out but not yet booted reads free to another instance.

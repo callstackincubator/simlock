@@ -131,5 +131,3 @@ pool's own `state.db` tables, kept across restarts and cleared by nuke.
   it waits; a burst larger than `count` pays the boot.
 - **A failing target retries forever.** 1, 2, 4 … minutes, at most 10 apart, no attempt limit; each
   try boots or creates a device. `retry.ts` is the one place to add a limit.
-- **A hung `avdmanager` leaves one stuck process per 30 s.** The catalog check abandons a read
-  after 30 s, but the driver's call has no timeout of its own.

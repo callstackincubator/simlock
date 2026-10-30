@@ -9,13 +9,11 @@ interface TableDefinition {
   readonly indexes: readonly string[];
 }
 
-const valueColumns = USAGE_VALUES.flatMap(
-  (value): Array<readonly [string, string]> => [
-    [`${value}Peak`, "REAL"],
-    [`${value}Last`, "REAL"],
-    [`${value}Integral`, "REAL"],
-  ],
-);
+const valueColumns = USAGE_VALUES.flatMap((value): Array<readonly [string, string]> => [
+  [`${value}Peak`, "REAL"],
+  [`${value}Last`, "REAL"],
+  [`${value}Integral`, "REAL"],
+]);
 
 export const USAGE_TABLES: readonly TableDefinition[] = [
   {

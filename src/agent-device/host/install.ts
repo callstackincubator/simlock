@@ -118,6 +118,14 @@ export function pathVariableOf(environment: NodeJS.ProcessEnv): string | undefin
   );
 }
 
+// why: a pnpm global install puts a shell launcher in PNPM_HOME/bin, not a symlink into the
+// package; the launcher records the real CLI in a `cmd-shim-target` comment.
+async function pnpmShimTarget(filesystem: Filesystem, file: string): Promise<string | undefined> {
+  const text = await filesystem.readFile(file);
+  if (!text.startsWith("#!")) return undefined;
+  return /^# cmd-shim-target=(.+)$/m.exec(text)?.[1]?.trim();
+}
+
 export async function findAgentDevice(
   filesystem: Filesystem,
   command: string,
@@ -137,6 +145,8 @@ export async function findAgentDevice(
   let realPath: string;
   try {
     realPath = await filesystem.realpath(found);
+    const shimTarget = await pnpmShimTarget(filesystem, realPath);
+    if (shimTarget !== undefined) realPath = await filesystem.realpath(shimTarget);
   } catch {
     return notFound;
   }

@@ -46,7 +46,7 @@ daemon. `RoutedHostLink` sends a physical allocate (its `serial`/`udid` is an en
 Supervisor start (`AgentDeviceSupervisor.start`, at daemon start), per role:
 
 1. Reap — pid from the role's record, else the state dir's `daemon.json`.
-   Signal only if `ps` args end in the role's marker; SIGTERM, check again, SIGKILL.
+   Signal only if its command line (`ProcessSupervisor.commandLine`) ends in the role's marker; SIGTERM, check again, SIGKILL.
 2. Find — `capabilities.agent-device.command` (`agent-device`) on `PATH` or as a path; `package.json`
    names `agent-device`; a daemon entry under `dist/src`. Never downloads.
 3. Check — `--version` ≥ 0.21.28 (a prerelease of it is older); Node ≥ 22.12.0 (`shared/compatibility.ts`).

@@ -6,8 +6,9 @@ name: Release
 #   plan      the next version (0.X for a feature, 0.X.Y for a patch, from package.json), after
 #             checking that main's CI passed on this commit and that the tag and the npm version
 #             are free
-#   build     the package at that version, on macOS so dist/bin/ holds both iOS capture programs
-#             (Linux cannot build them); its tarball is the one artifact every later job ships
+#   build     the package at that version, on macOS with Xcode 27 so dist/bin/ holds both iOS
+#             capture programs (Linux cannot build them); its tarball is the one artifact every
+#             later job ships
 #   tag       the release commit (package.json, CHANGELOG.md) and the tag v0.X.Y, pushed to main
 #   publish   that tarball to npm through trusted publishing (OIDC, no stored token), with
 #             provenance
@@ -130,8 +131,10 @@ jobs:
     name: Build
     needs: plan
     # why: dist/bin/ holds two Swift programs that only a Mac with Xcode builds; a package built
-    # on Linux would stream no iOS screen for anyone who installs it.
-    runs-on: macos-15
+    # on Linux would stream no iOS screen for anyone who installs it. simlock-device-capture links
+    # CoreDevice symbols that first ship with Xcode 27 (ADR 0031), and macos-15 and macos-26 carry
+    # Xcode 26 at most, so only the xcode-27 image (a preview, 2026-10) builds it.
+    runs-on: xcode-27
     permissions:
       contents: read
     timeout-minutes: 30
@@ -146,7 +149,7 @@ jobs:
       - name: Enable Corepack
         run: |
           corepack enable
-          corepack prepare pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621 --activate
+          corepack prepare pnpm@12.8.1+sha512.f64ba907507f5ceafe06c8d38e6052d0179444580ec1279ddd5bfc11cb48aa8a2644b66598e07e761da84872a9fc57d5f902b87fa49d024198d558612aabbe45 --activate
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Version
@@ -288,8 +291,10 @@ jobs:
             echo "::error::the tarball is simlock@$packed, not $VERSION"
             exit 1
           fi
-          npm --version
-          node -e 'const [a, b, c] = process.versions.npm.split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }'
+          # why: Node's process.versions has no npm key; the version comes from npm itself.
+          npm_version=$(npm --version)
+          echo "npm $npm_version"
+          node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }' "$npm_version"
       - name: Publish
         working-directory: ${{ runner.temp }}/package
         env:

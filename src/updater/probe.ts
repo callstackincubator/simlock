@@ -1,7 +1,7 @@
 import { connectSimlockAdmin } from "../admin/index.js";
 import {
   NodeIpcTransport,
-  IpcError,
+  isEndpointAbsent,
   resolveDaemonSocketPath,
   type Filesystem,
   type IpcConnector,
@@ -20,8 +20,7 @@ export async function socketHeld(ipc: IpcConnector, endpoint: string): Promise<b
     await (await ipc.connect(endpoint)).close();
     return true;
   } catch (error: unknown) {
-    if (!(error instanceof IpcError)) return true;
-    return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
+    return !isEndpointAbsent(error);
   }
 }
 

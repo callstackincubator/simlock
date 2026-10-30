@@ -635,15 +635,15 @@ describe("PhysicalDeviceWatcher counting", () => {
     gone(harness, "UDID-A");
     const original = Object.getOwnPropertyDescriptor(Registry.prototype, "snapshot")?.get;
     let thrown = false;
-    const spy = vi
-      .spyOn(harness.registry, "snapshot", "get")
-      .mockImplementation(function (this: Registry) {
-        if (!thrown && new Error().stack?.includes("physical-device-watcher.ts:") === true) {
-          thrown = true;
-          throw new Error("snapshot unavailable");
-        }
-        return original?.call(this) as never;
-      });
+    const spy = vi.spyOn(harness.registry, "snapshot", "get").mockImplementation(function (
+      this: Registry,
+    ) {
+      if (!thrown && new Error().stack?.includes("physical-device-watcher.ts:") === true) {
+        thrown = true;
+        throw new Error("snapshot unavailable");
+      }
+      return original?.call(this) as never;
+    });
     startWatcher(harness);
 
     await tick(harness);

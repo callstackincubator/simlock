@@ -1,6 +1,6 @@
 # Input
 
-Does: lets a lease's holder (or an operator) send taps, keys and buttons to its device over `WS /v1/leases/{id}/input`, on a worker and through a gateway, in expo serve-sim's messages.
+Does: lets a lease's holder (or an operator) send taps, keys, buttons and rotations to its device over `WS /v1/leases/{id}/input`, on a worker and through a gateway, in expo serve-sim's messages.
 Entry: `index.ts` → `inputModule`, an optional module (ADR 0030, ADR 0049): `worker.ts` `createWorker`,
 `gateway.ts` `createGateway`, loaded by the module host only when turned on.
 Uses: core (`DeviceInput`, the message types), modules (the context, socket and relay types), ports (`LeaseSocket`).
@@ -36,7 +36,8 @@ gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls w
 2. `0x82` is the device input's `onConfig` (called at once, then on each change) and goes to every admitted socket.
    An unavailable device input sends `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}` and drops messages.
 3. Client messages go through `parseClientMessage` (core): bad JSON, an unknown tag, a position outside 0..1,
-   `0x07` and anything over 64 KiB are dropped, the socket stays. `0x10` is answered `0x90 {ok:false}`.
+   a `0x07` orientation other than serve-sim's four names and anything over 64 KiB are dropped, the socket
+   stays; the device input decides what a valid `0x07` does. `0x10` is answered `0x90 {ok:false}`.
 4. Ends: the last socket leaves → the device input closes once; `onFailed` → every socket 1013; the
    `beforeDeviceReclaim` hook → every socket 4001 with the lease-end reason; `beforeDrain` → every socket 1001.
 5. Gateway bridge (`gateway-link.ts`): client frames (≤ 64 KiB) → channel; channel → client except `0xF0`.
