@@ -359,6 +359,40 @@ describe("CLI: exit codes", () => {
     }
   });
 
+  it("simlock setup still installs the skill and says the machine was not checked when the check cannot run", async () => {
+    const refusal = new Error("doctor.run is not available on a gateway");
+    const cases: readonly (readonly [string, Partial<SimlockAdminClient> | Error, string])[] = [
+      ["daemon fails to connect", new Error("daemon did not start"), "daemon did not start"],
+      [
+        "daemon refuses doctor.run",
+        { runDoctor: () => Promise.reject(refusal) },
+        "doctor.run is not available on a gateway",
+      ],
+    ];
+    for (const [name, daemon, message] of cases) {
+      const output = outputCapture();
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/operator/.claude");
+      const code = await runCli(
+        ["setup", "--user", "--tool", "claude-code", "--no-mcp"],
+        output.environmentWith({
+          hostPlatform: "darwin",
+          filesystem,
+          connectAdmin: async () => {
+            if (daemon instanceof Error) throw daemon;
+            return fakeClient(daemon);
+          },
+        }),
+      );
+      expect(code, name).toBe(0);
+      expect(output.stdout, name).toBe(
+        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+          `machine      not checked: ${message}\n`,
+      );
+      expect(await filesystem.exists("/home/operator/.claude/skills/simlock"), name).toBe(true);
+    }
+  });
+
   it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
     const HOME = "/home/operator";
     const CWD = "/work/project";
