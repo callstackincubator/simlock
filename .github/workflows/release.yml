@@ -291,8 +291,10 @@ jobs:
             echo "::error::the tarball is simlock@$packed, not $VERSION"
             exit 1
           fi
-          npm --version
-          node -e 'const [a, b, c] = process.versions.npm.split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }'
+          # why: Node's process.versions has no npm key; the version comes from npm itself.
+          npm_version=$(npm --version)
+          echo "npm $npm_version"
+          node -e 'const [a, b, c] = process.argv[1].split(".").map(Number); if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) { console.error("npm 11.5.1 or later is needed for trusted publishing"); process.exit(1); }' "$npm_version"
       - name: Publish
         working-directory: ${{ runner.temp }}/package
         env:
