@@ -19,7 +19,7 @@ Answer four questions, and only these:
 1. Is every line of Scope and Done when (for a bug: the Simplest fix; for a
    feature: every Completion condition) delivered by the diff? One line
    each, by position: `Done when 3: <hunk path:line>`, `Done when 3: not
-delivered`, or `Done when 3: differently: <how, at most 15 words>`.
+   delivered`, or `Done when 3: differently: <how, at most 15 words>`.
 2. Does the diff do anything the specification did not ask for? Anything
    `always-in-scope.md` lists is asked for: never a finding.
 3. For every Tests line of the specification: the test in the diff that

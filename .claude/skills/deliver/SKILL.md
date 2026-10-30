@@ -86,7 +86,7 @@ nobody decided) does not stop the run either:
 1. Take the conservative option: the one closest to what the code does
    today and the easiest to reverse.
 2. Fold it into the issue body as rule 3 says (`issue-body.mjs <N>
-replace` or `set-section`), the line ending
+   replace` or `set-section`), the line ending
    `(decided in delivery, pending the maintainer)`, with a Tests line that
    pins it.
 3. Start the next stage on it, with a `decision:` line naming it.
@@ -171,7 +171,7 @@ they name; never build again or restart review at round 1.
    as `ci: <its line> run <id>`; a `job <name>` line's indented lines
    are the log's errors and join the same way, never read by hand.
    `mergeable false` from pr-shas joins as `stack: merge
-origin/<base-ref>`. With no fix run due, they get one before the
+   origin/<base-ref>`. With no fix run due, they get one before the
    round.
 3. **Decide** on the review report:
    - Incomplete assessment: preserve findings and missing scope; park. It
@@ -180,7 +180,7 @@ origin/<base-ref>`. With no fix run due, they get one before the
      run with the immutable base/merge-base, `previous <Commit>`, ledger
      and findings, then `reviewer` with the round `Rerun` names. After a
      rebase or stack sync, the review also gets `previous-base: <the
-base-sha the previous check used>`, so the inputs script can map the
+     base-sha the previous check used>`, so the inputs script can map the
      previous commit across the rebase.
    - `Rerun: none` with unresolved nonmechanical findings or unchecked fixes
      at the cap: park. Mechanical changes get a coordinator diff check.
@@ -189,9 +189,9 @@ base-sha the previous check used>`, so the inputs script can map the
      A clean base merge alone needs no repeat review; record its new head
      and base and let CI check it. Never silently reset the round cap.
    - Every body edit goes through `node .agents/scripts/issue-body.mjs
-<M> --pr set-section <heading> <file>` (`replace <old> <new>` for
+     <M> --pr set-section <heading> <file>` (`replace <old> <new>` for
      one line; `<N>` without `--pr` for an issue): the PR body's `##
-Review`, `### Status` and `Notes so far:`, and a decision folded into
+     Review`, `### Status` and `Notes so far:`, and a decision folded into
      a task body. Never rebuild a body by hand or with inline python.
    - After each check persist the resolution ledger, the findings file
      (`docs/internal/REVIEW.md`, "Measurement"), counts and dispositions in
@@ -206,7 +206,7 @@ Review`, `### Status` and `Notes so far:`, and a decision folded into
      under `fixes`, then `hardware-verifier` again on its head; repeat until
      `pass`, with no review in between. After six failed lane runs, park.
      On `pass` after a loop: `reviewer` with `fix-check` and `previous
-<the commit the review passed>`, covering every loop commit; its
+     <the commit the review passed>`, covering every loop commit; its
      fixes affecting device behavior need the lane again.
    - Hardware `busy` or `unavailable`: finish the checks, do items 4
      and 5, run `gh pr ready <M>`, add the `needs-hardware` label to the PR,
@@ -235,7 +235,7 @@ Review`, `### Status` and `Notes so far:`, and a decision folded into
    `Code review: skipped. Claims review: skipped.`). `<n>` is the number of
    legacy full/targeted rounds, 1 or 2. Post the `## Review ledger` comment
    with `node .agents/scripts/review-ledger.mjs <M> --issue <N> --findings
-<file> --round <r>:<Commit> ...`, one `--round` per check in order,
+   <file> --round <r>:<Commit> ...`, one `--round` per check in order,
    fix-checks included, each SHA the `Commit` its report gave; it posts or
    updates the comment as `docs/internal/REVIEW.md` "Measurement" says and
    then runs `pr-body-check.mjs <M>`, exiting with its code. Add
@@ -280,7 +280,7 @@ Review`, `### Status` and `Notes so far:`, and a decision folded into
    ```
 
    While it waits it prints one `merge-pr: #<M> pending <n> check(s) ...,
-<m> min waited` line per poll and one `re-running ... run <id>` line
+   <m> min waited` line per poll and one `re-running ... run <id>` line
    per re-run; nothing to act on. Exit 0: merged. A conflict: an `implementer` fix run that merges the
    base branch. Red CI: one `implementer` fix run with the failing test
    titles and the run id. Either way, the `fix-check` review in item 3
@@ -339,7 +339,7 @@ and a `B` line (a missing number, a cycle) parks the feature.
   bottom to top, in temporary worktrees, and never rebases. It stops on
   the first conflict (`conflict <branch> <parent> <files>`): send that
   task's branch one `implementer` fix run with `fixes: stack: merge
-origin/<parent>`, then a fix check on that PR, then the script again.
+  origin/<parent>`, then a fix check on that PR, then the script again.
   PR body Status: `Gate: waiting for the stack`.
 - Deliver up to two runnable tasks at once, each in its own worktree. Start
   a stage for one as soon as the other's agent is running; never wait on one
