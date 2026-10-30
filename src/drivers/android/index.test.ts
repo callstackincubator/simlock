@@ -838,6 +838,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -885,6 +890,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -1116,6 +1126,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
     ];
 
     it.each([
@@ -1291,6 +1306,11 @@ describe("AndroidDriver", () => {
           "",
         ),
         avdPathExpectation("emulator-5586"),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
         { ...defaults, headless: true },
@@ -2096,6 +2116,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
@@ -4762,6 +4787,11 @@ describe("AndroidDriver console port reservations", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       processResult(binaries.adb, [
         "-s",
         "emulator-5586",
@@ -5333,6 +5363,11 @@ async function provisionedHarness(
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", secondMarkToken),
     );
   }
@@ -6561,6 +6596,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
     processResult(binaries.adb, [
       "-s",
       "emulator-5586",
@@ -6608,6 +6648,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
   );
   return expectations;
 }
@@ -6815,6 +6860,7 @@ class RecordingRunner implements ProcessRunner {
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
   ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
   ["emu avd snapshot list", "simlock_clean_baseline\n"],
   ["emu avd snapshot load simlock_clean_baseline", "OK\n"],
