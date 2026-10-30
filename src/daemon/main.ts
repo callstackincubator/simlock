@@ -509,6 +509,7 @@ async function composeDaemon(
       leaseEnvironment,
       nodePath: process.execPath,
       nodeVersion: process.versions.node,
+      hostPlatform: process.platform,
       platforms: drivers.map((driver) => driver.platform),
       processRunner,
       processSupervisor,

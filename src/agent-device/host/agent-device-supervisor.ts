@@ -90,6 +90,7 @@ export interface AgentDeviceSupervisorOptions {
   readonly filesystem: Filesystem;
   readonly healthProbe: AgentDeviceHealthProbe;
   readonly home: string;
+  readonly hostPlatform: NodeJS.Platform;
   readonly ios?: AgentDeviceIosSigning;
   readonly leaseMaxTtlMs: number;
   readonly logger: Logger;
@@ -326,6 +327,7 @@ export class AgentDeviceSupervisor {
       o.filesystem,
       o.config.command,
       pathVariableOf(o.baseEnvironment),
+      o.hostPlatform,
     );
     if (!install.ok) {
       this.#fail(install.reason, install.message);

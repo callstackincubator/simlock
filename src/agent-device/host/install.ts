@@ -10,7 +10,7 @@ export type AgentDeviceInstall =
       readonly message: string;
     };
 
-// why: Windows has no execute bit; Node reports every file there as 0o666, so any file counts.
+// why: Windows has no execute bit; Node reports a file there as 0o666 (0o444 when read-only), so any file counts.
 async function isExecutableFile(
   filesystem: Filesystem,
   path: string,
@@ -122,7 +122,7 @@ export async function findAgentDevice(
   filesystem: Filesystem,
   command: string,
   pathVariable: string | undefined,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform,
 ): Promise<AgentDeviceInstall> {
   const found = await locate(filesystem, command, pathVariable, platform);
   const notFound = {

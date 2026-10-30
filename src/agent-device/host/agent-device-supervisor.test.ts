@@ -187,6 +187,7 @@ async function arrange(options: Options = {}) {
     filesystem,
     healthProbe: health,
     home: simlockHome,
+    hostPlatform: "linux",
     ...supervisorRole(options),
     leaseMaxTtlMs: options.leaseMaxTtlMs ?? 4 * 60 * 60_000,
     logger,
