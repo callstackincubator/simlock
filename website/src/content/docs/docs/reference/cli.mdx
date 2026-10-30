@@ -233,7 +233,7 @@ simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mc
 | `--user` | Install for your user, for every project. The default. |
 | `--project` | Install for the project in the current directory only. |
 | `--tool <claude-code\|codex>` | Install for this tool, even when it is not set up on this machine. Without it, `setup` installs for each tool whose directory (`~/.claude`, `~/.codex` or `$CODEX_HOME`) exists, and reports the other as `skipped`. |
-| `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. |
+| `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. It follows the scope: `claude mcp add -s user` or `-s project`; Codex has user scope only. |
 | `--no-mcp` | Do not connect it, and do not ask. |
 | `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...], "machine": {...}}`, and ask nothing. |
 

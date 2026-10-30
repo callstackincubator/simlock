@@ -7,6 +7,19 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 You need Node.js 22.13 or later, plus Xcode for iOS or the Android SDK for Android. The full list is in [Requirements](/simlock/docs/introduction/requirements).
 
+## For agents
+
+<Aside type="tip" title="For agents">
+`setup` checks the machine itself, so there is no separate `simlock doctor` step.
+
+```sh
+npm i -g simlock
+simlock setup --project --tool claude-code --mcp --json   # or --user, --tool codex, --no-mcp
+simlock lease --platform ios --detach                      # prints the lease
+simlock release <lease-id>
+```
+</Aside>
+
 ## Install
 
 <Steps>
