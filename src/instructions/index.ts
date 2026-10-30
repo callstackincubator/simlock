@@ -69,7 +69,7 @@ When Simlock is connected to you as an MCP server, it has five tools:
 - \`lease_status\`: whether you still hold a lease, and which. Call it after a context compaction.
 - \`run_on_device\`: run one \`simctl\`, \`adb\` or \`devicectl\` command on your leased device, for example install and launch an app. Leave the device out; Simlock fills it in. It returns \`exitCode\`, \`stdout\`, \`stderr\` and \`truncated\`; a non-zero exit code is the command's answer, not an error.
 
-Under Codex, the MCP server and the CLI are two identities: use only one of them per session.`;
+Under Codex and pi, the MCP server and the CLI are two identities: use only one of them per session.`;
 
 const MORE = "More: https://callstackincubator.github.io/simlock/docs/";
 
