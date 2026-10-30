@@ -370,16 +370,26 @@ describe("CLI: exit codes", () => {
         "doctor.run is not available on a gateway",
       ],
     ];
-    for (const [name, daemon, message] of cases) {
+    let gatewayConnects = 0;
+    for (const [name, daemon, message, prefix] of [
+      ...cases.map(([n, d, m]) => [n, d, m, []] as const),
+      [
+        "--gateway never connects",
+        new Error("a gateway was contacted"),
+        "setup does not check a gateway",
+        ["--gateway"],
+      ] as const,
+    ]) {
       const output = outputCapture();
       const filesystem = new MemoryFilesystem();
       await filesystem.mkdirp("/home/operator/.claude");
       const code = await runCli(
-        ["setup", "--user", "--tool", "claude-code", "--no-mcp"],
+        [...prefix, "setup", "--user", "--tool", "claude-code", "--no-mcp"],
         output.environmentWith({
           hostPlatform: "darwin",
           filesystem,
           connectAdmin: async () => {
+            if (prefix.length > 0) gatewayConnects += 1;
             if (daemon instanceof Error) throw daemon;
             return fakeClient(daemon);
           },
@@ -392,6 +402,7 @@ describe("CLI: exit codes", () => {
       );
       expect(await filesystem.exists("/home/operator/.claude/skills/simlock"), name).toBe(true);
     }
+    expect(gatewayConnects).toBe(0);
   });
 
   it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {

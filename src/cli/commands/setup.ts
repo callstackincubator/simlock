@@ -73,6 +73,10 @@ function renderReport(report: SetupReport | MachineSetupReport): string {
 
 async function checkMachine(context: CommandContext): Promise<Machine> {
   const { environment, token } = context;
+  // why: the gateway never answers doctor.run, and setup must not launch one or connect to it.
+  if (context.daemonFlag === "gateway" || environment.daemonHome.role === "gateway") {
+    return { summary: "not checked: setup does not check a gateway", findings: [] };
+  }
   try {
     const client = await connectDaemonClient(environment, token);
     try {

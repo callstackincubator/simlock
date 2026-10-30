@@ -60,7 +60,7 @@ The CLI takes these flags out of the whole command line, including the arguments
 
 With `--gateway`, the command goes to the gateway. With `--local`, it goes to the worker. With neither, it goes to the gateway only when this machine has a gateway (`~/.simlock/gateway` holds an `instance.json` or `config.json`) and no worker has started here yet (`~/.simlock/instance.json` does not exist). Otherwise it goes to the worker.
 
-`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`.
+`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`. Under `--gateway`, `setup` installs the skill, never connects to a gateway and prints `machine      not checked: setup does not check a gateway`; without `--gateway` it checks the local daemon.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
 
