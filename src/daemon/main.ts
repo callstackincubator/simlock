@@ -277,7 +277,6 @@ async function composeDaemon(
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
   const ipc = options.ipc ?? new NodeIpcTransport();
   const baseProcessRunner = options.processRunner ?? new NodeProcessRunner();
-  const processSupervisor = options.processSupervisor ?? new NodeProcessSupervisor();
   const tcpProbe = options.tcpProbe ?? new NodeTcpProbe();
   const configPath = options.configPath ?? join(dataDirectory, "config.json");
   const socketPath = options.socketPath ?? resolveDaemonSocketPath(dataDirectory);
@@ -311,6 +310,9 @@ async function composeDaemon(
   for (const message of configWarnings) logger.warn(message);
   if (dataDirectoryWarning !== undefined) logger.warn(dataDirectoryWarning);
   const processRunner = processRunnerFor(config.log.level, baseProcessRunner, logger, clock);
+  const processSupervisor =
+    options.processSupervisor ??
+    new NodeProcessSupervisor({ platform: process.platform, processRunner });
   // why: ADR 0008 §6: the machine is read once, here. Bounded and never throwing, so a slow or
   // missing `sw_vers` costs a fallback value, not the daemon.
   const hostSystem = await (

@@ -65,6 +65,7 @@ interface Child {
 interface Options {
   readonly baseEnvironment?: NodeJS.ProcessEnv;
   readonly command?: string;
+  readonly commandLines?: readonly (readonly [number, readonly (string | undefined)[]])[];
   readonly daemonJson?: (startIndex: number) => DaemonJson;
   readonly driverEnvironment?: Readonly<Record<string, string>>;
   readonly expectations?: readonly ScriptedProcessExpectation[];
@@ -109,6 +110,7 @@ async function arrange(options: Options = {}) {
   const health = new FakeAgentDeviceHealth();
   const processes = new ProcessTable(options.livePids ?? []);
   for (const [pid, behaviour] of options.behaviours ?? []) processes.behaviours.set(pid, behaviour);
+  for (const [pid, lines] of options.commandLines ?? []) processes.answerCommandLine(pid, ...lines);
   const runner = new ScriptedProcessRunner(options.expectations ?? [versionRun(), daemonSpawn()]);
   const children: Child[] = [];
   const events: string[] = [];
@@ -274,13 +276,6 @@ function daemonSpawn(
 
 function phoneSpawn(simlockHome = home): ScriptedProcessExpectation {
   return daemonSpawn(internalEntry, {}, simlockHome, ["--simlock-role=phones"]);
-}
-
-function psRun(pid: number, line: string, code = 0): ScriptedProcessExpectation {
-  return {
-    match: { args: ["-ww", "-o", "args=", "-p", String(pid)], command: "ps" },
-    result: { code, stderr: "", stdout: line === "" ? "" : `${line}\n` },
-  };
 }
 
 function ownLine(entry = internalEntry, simlockHome = home, role?: "phones"): string {
@@ -868,11 +863,8 @@ describe("AgentDeviceSupervisor reaping by role", () => {
     "signals only a pid whose line ends with its own role's suffix, and never touches the other role's record: $name",
     async ({ line, otherRecord, role, signalled, survivingRecord }) => {
       const harness = await run({
-        expectations: [
-          psRun(900, line),
-          versionRun(),
-          role === "phones" ? phoneSpawn() : daemonSpawn(),
-        ],
+        commandLines: [[900, [line]]],
+        expectations: [versionRun(), role === "phones" ? phoneSpawn() : daemonSpawn()],
         layout: async (filesystem) => {
           if (otherRecord !== undefined) await leftBehind(otherRecord, 901)(filesystem);
         },
@@ -1226,7 +1218,7 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
   it("sends SIGTERM to a live recorded pid whose line ends with the marker and holds the entry, removes the record once it is gone, and starts a new daemon", async () => {
     const harness = await run({
       ...recorded,
-      expectations: [psRun(900, ownLine()), versionRun(), daemonSpawn()],
+      commandLines: [[900, [ownLine()]]],
     });
 
     expect(harness.processes.signals).toEqual([{ pid: 900, signal: "SIGTERM" }]);
@@ -1239,7 +1231,7 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     const harness = await arrange({
       ...recorded,
       behaviours: new Map([[900, "ignores-sigterm"]]),
-      expectations: [psRun(900, ownLine()), psRun(900, ownLine()), versionRun(), daemonSpawn()],
+      commandLines: [[900, [ownLine(), ownLine()]]],
     });
     const startedAt = harness.clock.now();
 
@@ -1253,16 +1245,11 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     expect(stateOf(harness)).toBe("running");
   });
 
-  it("sends no SIGKILL to a pid whose second ps line no longer passes the identity check", async () => {
+  it("sends no SIGKILL to a pid whose second command line no longer passes the identity check", async () => {
     const harness = await run({
       ...recorded,
       behaviours: new Map([[900, "ignores-sigterm"]]),
-      expectations: [
-        psRun(900, ownLine()),
-        psRun(900, "/usr/bin/vim notes.txt"),
-        versionRun(),
-        daemonSpawn(),
-      ],
+      commandLines: [[900, [ownLine(), "/usr/bin/vim notes.txt"]]],
     });
 
     expect(harness.processes.signals).toEqual([{ pid: 900, signal: "SIGTERM" }]);
@@ -1272,7 +1259,8 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     const harness = await run({
       ...recorded,
       behaviours: new Map([[900, "immortal"]]),
-      expectations: [psRun(900, ownLine()), psRun(900, ownLine())],
+      commandLines: [[900, [ownLine(), ownLine()]]],
+      expectations: [],
     });
 
     expect(harness.processes.signals.map((entry) => entry.signal)).toEqual(["SIGTERM", "SIGKILL"]);
@@ -1296,11 +1284,8 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     expect(first.children[0]?.args).toEqual([internalEntry, "--simlock-home=/private/tmp/x"]);
 
     const second = await run({
-      expectations: [
-        psRun(childPid, ownLine(internalEntry, "/private/tmp/x")),
-        versionRun(),
-        daemonSpawn(internalEntry, {}, "/private/tmp/x"),
-      ],
+      commandLines: [[childPid, [ownLine(internalEntry, "/private/tmp/x")]]],
+      expectations: [versionRun(), daemonSpawn(internalEntry, {}, "/private/tmp/x")],
       filesystem,
       home: "/tmp/x",
       livePids: [childPid],
@@ -1311,7 +1296,7 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
 
   it("reaps the live pid daemon.json names when there is no record and the line ends with the marker", async () => {
     const harness = await run({
-      expectations: [psRun(901, ownLine()), versionRun(), daemonSpawn()],
+      commandLines: [[901, [ownLine()]]],
       livePids: [901],
       stateDirContents: async (filesystem) => {
         await filesystem.mkdir(stateDir, { mode: 0o700 });
@@ -1337,28 +1322,24 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     });
 
     expect(harness.processes.signals).toEqual([]);
-    expect(commandsRun(harness).filter((call) => call[0] === "ps")).toEqual([]);
+    expect(harness.processes.commandLineReads).toEqual([]);
     expect(unavailable(harness).reason).toBe("state-dir");
   });
 
   it.each([
-    ["a dead recorded pid", [], []],
-    ["a ps line of another command", [900], [psRun(900, "/usr/bin/vim notes.txt")]],
-    ["a line holding the entry but no marker", [900], [psRun(900, `${nodePath} ${internalEntry}`)]],
-    [
-      "a line with another home's marker",
-      [900],
-      [psRun(900, ownLine(internalEntry, "/other/home"))],
-    ],
+    ["a dead recorded pid", [], undefined],
+    ["a command line of another command", [900], "/usr/bin/vim notes.txt"],
+    ["a line holding the entry but no marker", [900], `${nodePath} ${internalEntry}`],
+    ["a line with another home's marker", [900], ownLine(internalEntry, "/other/home")],
     [
       "a line with this home's marker but another entry than the recorded one",
       [900],
-      [psRun(900, ownLine("/elsewhere/daemon.js"))],
+      ownLine("/elsewhere/daemon.js"),
     ],
-  ] as const)("removes the record and signals nothing for %s", async (_case, livePids, ps) => {
+  ] as const)("removes the record and signals nothing for %s", async (_case, livePids, line) => {
     // why: the spawn throws, so no new record can stand in for the old one: only a removal empties it.
     const harness = await run({
-      expectations: [...ps, versionRun(), daemonSpawn()],
+      commandLines: line === undefined ? [] : [[900, [line]]],
       livePids,
       record: record(900),
       spawnThrows: new Error("no spawn"),
@@ -1370,7 +1351,7 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
 
   it("signals nothing when daemon.json names another pid than the recorded one", async () => {
     const harness = await run({
-      expectations: [psRun(900, ownLine()), versionRun(), daemonSpawn()],
+      commandLines: [[900, [ownLine()]]],
       livePids: [900],
       record: record(900),
       stateDirContents: async (filesystem) => {
@@ -1386,7 +1367,7 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
 
   it("removes the record when daemon.json names another pid than the recorded one", async () => {
     const harness = await run({
-      expectations: [psRun(900, ownLine()), versionRun(), daemonSpawn()],
+      commandLines: [[900, [ownLine()]]],
       livePids: [900],
       record: record(900),
       spawnThrows: new Error("no spawn"),
@@ -1399,22 +1380,20 @@ describe("AgentDeviceSupervisor reaping a daemon a killed simlock left", () => {
     expect(await harness.filesystem.exists(recordPath)).toBe(false);
   });
 
-  it.each([
-    ["fails", [psRun(900, "", 1)]],
-    ["prints nothing", [psRun(900, "")]],
-    ["runs past 5 s", [{ ...psRun(900, ""), hangs: true }]],
-  ] as const)(
-    "signals nothing, keeps the record, starts nothing and reports start-failed naming the pid when ps %s",
-    async (_case, expectations) => {
-      const harness = await run({ expectations, livePids: [900], record: record(900) });
+  it("signals nothing, keeps the record, starts nothing and reports start-failed naming the pid when its command line cannot be read", async () => {
+    const harness = await run({
+      commandLines: [[900, [undefined]]],
+      livePids: [900],
+      record: record(900),
+    });
 
-      expect(harness.processes.signals).toEqual([]);
-      expect(unavailable(harness)).toMatchObject({ reason: "start-failed" });
-      expect(unavailable(harness).message).toContain("900");
-      expect(await readJson(harness, recordPath)).toMatchObject({ pid: 900 });
-      expect(commandsRun(harness).filter((call) => call[0] === nodePath)).toEqual([]);
-    },
-  );
+    expect(harness.processes.commandLineReads).toEqual([900]);
+    expect(harness.processes.signals).toEqual([]);
+    expect(unavailable(harness)).toMatchObject({ reason: "start-failed" });
+    expect(unavailable(harness).message).toContain("900");
+    expect(await readJson(harness, recordPath)).toMatchObject({ pid: 900 });
+    expect(commandsRun(harness).filter((call) => call[0] === nodePath)).toEqual([]);
+  });
 });
 
 describe("AgentDeviceSupervisor after the daemon is running", () => {
