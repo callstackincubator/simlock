@@ -26,12 +26,19 @@ interface Machine {
 type MachineSetupReport = SetupReport & { readonly machine: Machine };
 
 function platformSummary(platform: "ios" | "android", report: DoctorReport): string {
-  const missing = report.findings.flatMap((finding) =>
-    finding.kind === "prerequisite-missing" && finding.platform === platform
-      ? [finding.prerequisite]
-      : [],
-  );
-  return `${platform} ${missing.length === 0 ? "ok" : `missing: ${missing.join(", ")}`}`;
+  const missing: string[] = [];
+  const unavailable: string[] = [];
+  for (const finding of report.findings) {
+    if (finding.kind === "prerequisite-missing" && finding.platform === platform) {
+      missing.push(finding.prerequisite);
+    }
+    if (finding.kind === "driver-unavailable" && finding.platform === platform) {
+      unavailable.push(finding.reason);
+    }
+  }
+  if (missing.length > 0) return `${platform} missing: ${missing.join(", ")}`;
+  if (unavailable.length > 0) return `${platform} unavailable: ${unavailable.join(", ")}`;
+  return `${platform} ok`;
 }
 
 function machineOf(report: DoctorReport, hostPlatform: NodeJS.Platform): Machine {
