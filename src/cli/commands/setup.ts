@@ -71,14 +71,20 @@ function renderReport(report: SetupReport | MachineSetupReport): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function checkMachine({ environment, token }: CommandContext): Promise<Machine> {
-  const client = await connectDaemonClient(environment, token);
+async function checkMachine(context: CommandContext): Promise<Machine> {
+  const { environment, token } = context;
   try {
-    const report = await client.runDoctor({});
-    writeDoctorFindings(environment, report);
-    return machineOf(report, environment.hostPlatform ?? process.platform);
-  } finally {
-    await client.close();
+    const client = await connectDaemonClient(environment, token);
+    try {
+      const report = await client.runDoctor({});
+      writeDoctorFindings(environment, report);
+      return machineOf(report, environment.hostPlatform ?? process.platform);
+    } finally {
+      await client.close();
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { summary: `not checked: ${message}`, findings: [] };
   }
 }
 
