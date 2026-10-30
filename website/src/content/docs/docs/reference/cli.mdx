@@ -37,6 +37,8 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Managing workers](/simlock/docs/gateway/managing-workers) |
 | [`simlock alerts`](#simlock-alerts) | Send a sample message to an alert destination | [Alerts](/simlock/docs/gateway/alerts) |
 
+`simlock --version` (or `-v`) prints the installed Simlock version and exits 0, without contacting a daemon.
+
 Every command and subcommand also accepts `--help` (or `-h`), which prints its usage and exits 0. A flag a command does not list is a usage error (exit 2).
 
 ## Global flags
@@ -263,6 +265,8 @@ Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connecte
 ## simlock status
 
 Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. With an agent token, the leases and waiting requests are only your own. See [Monitoring](/simlock/docs/worker/monitoring).
+
+The `CLI:` line below `Simlock:` is the version of the `simlock` command you ran, so an upgrade that has not restarted the daemon shows as two different versions. `--json` carries it as `cliVersion`.
 
 When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
 

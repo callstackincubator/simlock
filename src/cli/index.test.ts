@@ -5176,6 +5176,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${readPackageVersion()}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5205,6 +5206,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
             "Simlock: 0.0.0-test\n" +
+            `CLI: ${readPackageVersion()}\n` +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5223,6 +5225,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
 
       expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
+      expect(JSON.parse(output.stdout).cliVersion).toBe(readPackageVersion());
     });
 
     it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
@@ -5294,6 +5297,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${readPackageVersion()}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -5328,7 +5332,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         }),
       );
 
-      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+      expect(JSON.parse(output.stdout)).toEqual({ ...STARTING, cliVersion: readPackageVersion() });
     });
   });
 
@@ -5405,6 +5409,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${readPackageVersion()}\n` +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -5496,7 +5501,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      "Daemon: running (worker)\nSimlock: 0.0.0-test\nConsole: http://127.0.0.1:4700/\nHost: ",
+      `Daemon: running (worker)\nSimlock: 0.0.0-test\nCLI: ${readPackageVersion()}\nConsole: http://127.0.0.1:4700/\nHost: `,
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -8041,6 +8046,7 @@ describe("simlock update and simlock status", () => {
     expect(await statusLines({ version: "0.3.0" })).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
+      `CLI: ${readPackageVersion()}`,
       next,
       expect.stringMatching(/^Running global/),
     ]);
@@ -8050,9 +8056,10 @@ describe("simlock update and simlock status", () => {
       [state("installing"), "Updating to 0.4.0: installing"],
       [state("restarting"), "Updating to 0.4.0: restarting"],
     ] as const) {
-      expect((await statusLines({ version: "0.3.0", update })).slice(0, 3)).toEqual([
+      expect((await statusLines({ version: "0.3.0", update })).slice(0, 4)).toEqual([
         "Daemon: running (worker)",
         "Simlock: 0.3.0",
+        `CLI: ${readPackageVersion()}`,
         line,
       ]);
     }
@@ -8062,10 +8069,11 @@ describe("simlock update and simlock status", () => {
           version: "0.3.0",
           lastUpdateFailure: failure("installing", "npm error code EACCES"),
         })
-      ).slice(0, 3),
+      ).slice(0, 4),
     ).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
+      `CLI: ${readPackageVersion()}`,
       "Last update failed (installing): npm error code EACCES",
     ]);
   });
@@ -8096,7 +8104,7 @@ async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
         }),
     }),
   );
-  return output.stdout.split("\n").slice(0, 4);
+  return output.stdout.split("\n").slice(0, 5);
 }
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
