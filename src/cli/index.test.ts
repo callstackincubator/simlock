@@ -371,13 +371,21 @@ describe("CLI: exit codes", () => {
       ],
     ];
     let gatewayConnects = 0;
-    for (const [name, daemon, message, prefix] of [
-      ...cases.map(([n, d, m]) => [n, d, m, []] as const),
+    for (const [name, daemon, message, prefix, gatewayHome] of [
+      ...cases.map(([n, d, m]) => [n, d, m, [], false] as const),
       [
         "--gateway never connects",
         new Error("a gateway was contacted"),
         "setup does not check a gateway",
         ["--gateway"],
+        false,
+      ] as const,
+      [
+        "plain setup on a gateway-only home never connects",
+        new Error("a gateway was contacted"),
+        "setup does not check a gateway",
+        [],
+        true,
       ] as const,
     ]) {
       const output = outputCapture();
@@ -388,8 +396,17 @@ describe("CLI: exit codes", () => {
         output.environmentWith({
           hostPlatform: "darwin",
           filesystem,
+          ...(gatewayHome
+            ? {
+                daemonHome: {
+                  role: "gateway",
+                  dataDirectory: "/simlock/gateway",
+                  gatewayPresent: true,
+                } as const,
+              }
+            : {}),
           connectAdmin: async () => {
-            if (prefix.length > 0) gatewayConnects += 1;
+            if (prefix.length > 0 || gatewayHome) gatewayConnects += 1;
             if (daemon instanceof Error) throw daemon;
             return fakeClient(daemon);
           },
