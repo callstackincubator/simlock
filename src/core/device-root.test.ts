@@ -489,11 +489,7 @@ class UmaskedFilesystem extends MemoryFilesystem {
   }
 }
 
-/**
- * Reports the root as absent exactly once, so the first `mkdir` loses a race it could not
- * have seen coming -- the window every check-then-create has.
- */
-/** Refuses renaming onto the root with EPERM, as Windows does when the root exists, after `before` runs. */
+/** why: Windows refuses renaming onto an existing directory with EPERM; `before` decides whether another process published the root first. */
 class RefusingRenameFilesystem extends MemoryFilesystem {
   constructor(
     owner: number,
@@ -513,6 +509,10 @@ class RefusingRenameFilesystem extends MemoryFilesystem {
   }
 }
 
+/**
+ * Reports the root as absent exactly once, so the first `mkdir` loses a race it could not
+ * have seen coming -- the window every check-then-create has.
+ */
 class RacingFilesystem extends MemoryFilesystem {
   #absentOnce: string | undefined;
 
