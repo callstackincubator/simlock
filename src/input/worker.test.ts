@@ -69,7 +69,7 @@ function endLease(
 const REFUSED = { code: 1013, reason: "Input is unavailable for this lease" };
 
 describe("a worker's input socket", () => {
-  it("keeps the socket and sends nothing to the device when a client sends a bad message", async () => {
+  it("passes each message the device takes to its device input, every orientation name included, and keeps the socket and sends nothing to the device when a client sends a bad message", async () => {
     const { factory, worker } = await setup();
     const socket = await admitted(worker);
     const device = factory.opened[0];
@@ -79,6 +79,10 @@ describe("a worker's input socket", () => {
       message(0x04, { button: "back" }),
       message(0x06, { type: "down", usage: 4 }),
       message(0x0b, { dx: 0, dy: -0.25, x: 0.5, y: 0.5 }),
+      message(0x07, { orientation: "portrait" }),
+      message(0x07, { orientation: "portrait_upside_down" }),
+      message(0x07, { orientation: "landscape_left" }),
+      message(0x07, { orientation: "landscape_right" }),
     ];
     for (const accepted of valid) socket.receive(accepted);
     expect(device?.sent).toEqual([
@@ -86,12 +90,17 @@ describe("a worker's input socket", () => {
       { button: "back", kind: "button" },
       { kind: "key", type: "down", usage: 4 },
       { dx: 0, dy: -0.25, kind: "scroll", x: 0.5, y: 0.5 },
+      { kind: "orientation", orientation: "portrait" },
+      { kind: "orientation", orientation: "portrait_upside_down" },
+      { kind: "orientation", orientation: "landscape_left" },
+      { kind: "orientation", orientation: "landscape_right" },
     ]);
 
     const dropped = [
       Uint8Array.from([0x03, ...new TextEncoder().encode("{not json")]),
       Uint8Array.from([0x55, ...new TextEncoder().encode("{}")]),
-      message(0x07, { orientation: "landscape_left" }),
+      message(0x07, { orientation: "landscapeLeft" }),
+      message(0x07, { orientation: 4 }),
       message(0x03, { type: "begin", x: 1.5, y: 0.5 }),
       message(0x03, { type: "begin", x: 0.5, y: -0.1 }),
       message(0x03, { type: "begin", x: "0.5", y: 0.5 }),
