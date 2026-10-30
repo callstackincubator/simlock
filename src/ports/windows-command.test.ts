@@ -60,7 +60,9 @@ describe("childLaunch", () => {
   it.each([
     ["a percent sign", "%PATH%"],
     ["a double quote", 'a"b'],
-    ["a line break", "a\r\nb"],
+    ["a CRLF line break", "a\r\nb"],
+    ["a bare carriage return", "a\rb"],
+    ["a bare line feed", "a\nb"],
   ])("refuses to run a batch file with an argument holding %s", (_case, argument) => {
     expect(() => childLaunch(String.raw`C:\t.bat`, [argument], "win32", "cmd.exe")).toThrow(
       /cmd\.exe cannot pass to a batch file unchanged/,
