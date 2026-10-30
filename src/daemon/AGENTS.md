@@ -87,12 +87,8 @@ Health: `starting` → `running`, or `failed`.
 
 - `hello`, `status.get` and `daemon.update` with `query` answer at once; `status.get` while `starting` carries
   `daemon`, `host` and `load` only.
-- Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
-  (`convergence-failed`).
-- Claim or `admin.token` write fails → parked requests get `DAEMON_STARTUP_FAILED`; `start` disposes
-  what `#stop` does (engine, `settle`, `dispose`, connections, a claimed socket) without
-  `daemon.stopping` or the `admin.token` removal, then rejects; a later `stop()` gets that release's promise.
-  `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server.
+- Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops (`convergence-failed`).
+- Claim or `admin.token` write fails → parked requests get `DAEMON_STARTUP_FAILED`; `start` disposes what `#stop` does (engine, `settle`, `dispose`, connections, a claimed socket) without `daemon.stopping` or the `admin.token` removal, then rejects; a later `stop()` gets that release's promise. A stop already running (a `daemon.stop` after the claim) is the one teardown instead: `start` waits for it, then rejects with its own error. `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server.
 - A stop during converge → nothing is armed, no `daemon.started`; parked requests get `DAEMON_STOPPING`.
 - Arm: owner-routed push subscription → `daemon.started` → driver refusal events →
   health monitor and physical device watcher start.

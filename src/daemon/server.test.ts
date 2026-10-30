@@ -1782,6 +1782,57 @@ describe("DaemonServer relays during startup", () => {
   );
 });
 
+describe("DaemonServer failed start", () => {
+  it("a daemon.stop accepted while the admin.token write is pending is the one teardown when that write then fails, and the start rejects with the write's error", async () => {
+    const persisting = deferred<void>();
+    let disposals = 0;
+    let removals = 0;
+    const harness = await createHarness({
+      adminSecret: {
+        persist: () => persisting.promise,
+        remove: async () => {
+          removals += 1;
+        },
+      },
+      dispose: () => {
+        disposals += 1;
+      },
+      host: {
+        endpoint: "memory://failed-start",
+        start: async () => undefined,
+        stop: async () => undefined,
+      },
+      start: false,
+    });
+    const events: string[] = [];
+    harness.eventBus.subscribeAll((event) => {
+      if (event.event.startsWith("daemon.")) events.push(event.event);
+    });
+    const startPromise = harness.daemon.start();
+    startPromise.catch(() => undefined);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
+    await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "gw:test",
+    });
+
+    await expect(gateway.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
+    await expect.poll(() => events).toEqual(["daemon.stopping"]);
+    persisting.reject(new Error("disk is read-only"));
+    await expect(startPromise).rejects.toThrow("disk is read-only");
+    await harness.daemon.stop();
+
+    expect({ disposals, removals, events }).toEqual({
+      disposals: 1,
+      removals: 1,
+      events: ["daemon.stopping"],
+    });
+  });
+});
+
 async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

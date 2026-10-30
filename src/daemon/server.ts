@@ -467,8 +467,9 @@ export class DaemonServer {
       this.#beforeReady.reject(error);
       await Promise.allSettled(this.#parkedDispatches);
       this.#stopping = true;
-      this.#stopPromise = this.#releaseFailedStart(error);
-      await this.#stopPromise;
+      // why: a `daemon.stop` accepted after the claim already runs the one teardown; releasing again would dispose the drivers twice.
+      this.#stopPromise ??= this.#releaseFailedStart(error);
+      await this.#stopPromise.catch(() => undefined);
       throw error;
     }
     const readyPromise = this.#converge();
