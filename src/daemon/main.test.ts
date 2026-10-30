@@ -4739,6 +4739,114 @@ describe("startDaemon version check", () => {
     });
   });
 
+  it("a start of either role whose admin.token write fails after a daemon.stop was accepted rejects with the write's error, and only once that stop has run its one teardown", async () => {
+    const failedStart = async (role: "worker" | "gateway") => {
+      let seen!: (secret: string) => void;
+      const secretSeen = new Promise<string>((resolve) => {
+        seen = resolve;
+      });
+      let refuse!: () => void;
+      const refused = new Promise<void>((resolve) => {
+        refuse = resolve;
+      });
+      class SecretWithheldFilesystem extends MemoryFilesystem {
+        override async writeFileAtomic(
+          ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
+        ): Promise<void> {
+          if (!arguments_[0].endsWith("admin.token")) return super.writeFileAtomic(...arguments_);
+          seen(arguments_[1].trim());
+          await refused;
+          throw new Error("disk is read-only");
+        }
+      }
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-then-fail-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const sink = new MemoryLogSink();
+      const ipc = new MemoryIpcTransport();
+      const socketPath = join(directory, "daemon.sock");
+      const disposed: string[] = [];
+      const driver = Object.assign(
+        new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+        {
+          dispose: async () => {
+            disposed.push("ios");
+          },
+        },
+      );
+      const stoppedLines = () =>
+        sink.records.filter((record) => record.message === "Daemon stopped").length;
+      const settled = startDaemon({
+        clock,
+        // why: an HTTP frontend whose start the claim's hooks never began, so the stop's `stopAuxiliary` waits for the start to settle.
+        configOverrides:
+          role === "gateway"
+            ? {}
+            : { ...STANDALONE_OFF, http: { enabled: true, host: "127.0.0.1", port: 1 } },
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: role === "gateway" ? [] : [driver],
+        filesystem: new SecretWithheldFilesystem(),
+        hostLoadProbe: null,
+        ipc,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+        npm: new FakeNpmCli({ view: [{ ok: true, output: "0.3.0\n" }] }),
+        role,
+        socketPath,
+        version: "0.3.0",
+      } as StartDaemonOptions).then(
+        () => ({ outcome: "resolved" }),
+        (error: unknown) => ({
+          outcome: (error as Error).message,
+          stoppedBefore: stoppedLines(),
+          disposedBefore: [...disposed],
+        }),
+      );
+      const secret = await secretSeen;
+      const connection = await ipc.connect(socketPath);
+      let received = "";
+      connection.onData((chunk) => {
+        received += chunk;
+      });
+      const send = (id: number, type: string, payload: unknown) =>
+        connection.write(`${JSON.stringify({ id, payload, type })}\n`);
+      await send(1, "hello", {
+        clientVersion: "test",
+        credential: secret,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+      });
+      await expect.poll(() => received).toContain('"role":"admin"');
+      await send(2, "daemon.stop", {});
+      await expect.poll(() => received).toContain('"stopping":true');
+
+      refuse();
+      const result = await Promise.race([
+        settled,
+        new Promise<{ outcome: string }>((resolve) =>
+          setTimeout(() => resolve({ outcome: "still pending after 2 s" }), 2_000),
+        ),
+      ]);
+      return { role, ...result, stoppedAfter: stoppedLines(), disposedAfter: disposed };
+    };
+
+    expect(await failedStart("worker")).toEqual({
+      role: "worker",
+      outcome: "disk is read-only",
+      stoppedBefore: 1,
+      disposedBefore: ["ios"],
+      stoppedAfter: 1,
+      disposedAfter: ["ios"],
+    });
+    expect(await failedStart("gateway")).toEqual({
+      role: "gateway",
+      outcome: "disk is read-only",
+      stoppedBefore: 1,
+      disposedBefore: [],
+      stoppedAfter: 1,
+      disposedAfter: [],
+    });
+  });
+
   it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {
     const pending: ((outcome: NpmOutcome) => void)[] = [];
     const npm: NpmCli = {

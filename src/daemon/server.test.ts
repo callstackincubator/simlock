@@ -1783,8 +1783,10 @@ describe("DaemonServer relays during startup", () => {
 });
 
 describe("DaemonServer failed start", () => {
-  it("a daemon.stop accepted while the admin.token write is pending is the one teardown when that write then fails, and the start rejects with the write's error", async () => {
+  it("a daemon.stop accepted while the admin.token write is pending is the one teardown when that write then fails, and the start rejects with the write's error without waiting for a stop whose auxiliary waits for the start", async () => {
     const persisting = deferred<void>();
+    const startSettled = deferred<void>();
+    let stopBegun = false;
     let disposals = 0;
     let removals = 0;
     const harness = await createHarness({
@@ -1794,9 +1796,14 @@ describe("DaemonServer failed start", () => {
           removals += 1;
         },
       },
+      beginStop: () => {
+        stopBegun = true;
+      },
       dispose: () => {
         disposals += 1;
       },
+      // why: as `main.ts`'s does: the HTTP frontend's start is settled only once `start()` settles when the claim's hooks never ran.
+      stopAuxiliary: () => startSettled.promise,
       host: {
         endpoint: "memory://failed-start",
         start: async () => undefined,
@@ -1808,7 +1815,7 @@ describe("DaemonServer failed start", () => {
     harness.eventBus.subscribeAll((event) => {
       if (event.event.startsWith("daemon.")) events.push(event.event);
     });
-    const startPromise = harness.daemon.start();
+    const startPromise = harness.daemon.start().finally(() => startSettled.resolve());
     startPromise.catch(() => undefined);
     const pair = linkPair();
     harness.daemon.acceptUplink(pair.worker);
@@ -1820,12 +1827,21 @@ describe("DaemonServer failed start", () => {
     });
 
     await expect(gateway.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
-    await expect.poll(() => events).toEqual(["daemon.stopping"]);
+    await expect.poll(() => stopBegun).toBe(true);
     persisting.reject(new Error("disk is read-only"));
-    await expect(startPromise).rejects.toThrow("disk is read-only");
+    const outcome = await Promise.race([
+      startPromise.then(
+        () => "resolved",
+        (error: unknown) => (error as Error).message,
+      ),
+      relaySupport.sleep(1_000).then(() => "still pending after 1 s"),
+    ]);
+    // why: unwinds a start that waits for the stop, so a failing run ends instead of hanging the stop below.
+    startSettled.resolve();
     await harness.daemon.stop();
 
-    expect({ disposals, removals, events }).toEqual({
+    expect({ outcome, disposals, removals, events }).toEqual({
+      outcome: "disk is read-only",
       disposals: 1,
       removals: 1,
       events: ["daemon.stopping"],

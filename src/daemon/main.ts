@@ -847,7 +847,11 @@ async function composeDaemon(
     // even if `stopAuxiliary`'s own path already ran one.
     await daemon.stop("http-start-failed").catch(() => undefined);
   }
-  if (daemonResult.status === "rejected") throw daemonResult.reason;
+  if (daemonResult.status === "rejected") {
+    // why: a stop accepted before the start failed may still run, and `stopAuxiliary` above waits for the start, so the start rejects without it; waiting here keeps the entry's `process.exit` from cutting that teardown short.
+    await daemon.stop().catch(() => undefined);
+    throw daemonResult.reason;
+  }
   if (gatewayResult.status === "rejected") throw gatewayResult.reason;
   return daemon;
 }
@@ -1162,7 +1166,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     // settled fact so `daemon.stopping` cannot precede `daemon.started`.
     await daemon.stop("http-start-failed").catch(() => undefined);
   }
-  if (daemonResult.status === "rejected") throw daemonResult.reason;
+  if (daemonResult.status === "rejected") {
+    // why: as for a worker: `stopAuxiliary` waits for `httpStarted`, which only the start's settling releases here.
+    await daemon.stop().catch(() => undefined);
+    throw daemonResult.reason;
+  }
   if (httpResult.status === "rejected") throw httpResult.reason;
   return daemon;
 }
