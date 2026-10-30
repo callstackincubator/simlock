@@ -6,6 +6,7 @@ export const INPUT_TAG = {
   touch: 0x03,
   button: 0x04,
   key: 0x06,
+  orientation: 0x07,
   scroll: 0x0b,
   control: 0x10,
   config: 0x82,
@@ -31,11 +32,14 @@ export function closeReason(reason: string): string {
 
 const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
 
-export type InputOrientation =
-  | "portrait"
-  | "portrait_upside_down"
-  | "landscape_left"
-  | "landscape_right";
+const INPUT_ORIENTATIONS = [
+  "portrait",
+  "portrait_upside_down",
+  "landscape_left",
+  "landscape_right",
+] as const;
+
+export type InputOrientation = (typeof INPUT_ORIENTATIONS)[number];
 
 // why: serve-sim's `0x82` payload, which T3 Code accepts only with a width and height above 0.
 export interface InputScreenConfig {
@@ -76,7 +80,8 @@ export type InputMessage =
       readonly kind: "key";
       readonly type: "down" | "up";
       readonly usage: number;
-    };
+    }
+  | { readonly kind: "orientation"; readonly orientation: InputOrientation };
 
 // why: what turns messages into taps on one device; one per lease, shared by every socket of it.
 export interface DeviceInput {
@@ -175,7 +180,7 @@ function scrollOf(fields: Fields): InputMessage | undefined {
   };
 }
 
-// why: undefined for a message that is not one the device input takes (bad JSON, an unknown tag, a position outside the screen, an orientation request), so the caller drops it and keeps the socket.
+// why: undefined for a message that is not one the device input takes (bad JSON, an unknown tag, a position outside the screen, an orientation name serve-sim does not know), so the caller drops it and keeps the socket.
 export function parseClientMessage(
   bytes: Uint8Array,
 ): InputMessage | InputControlRequest | undefined {
@@ -203,6 +208,10 @@ export function parseClientMessage(
       return keyOf(fields);
     case INPUT_TAG.scroll:
       return scrollOf(fields);
+    case INPUT_TAG.orientation:
+      return oneOf(fields["orientation"], INPUT_ORIENTATIONS)
+        ? { kind: "orientation", orientation: fields["orientation"] }
+        : undefined;
     default:
       return undefined;
   }

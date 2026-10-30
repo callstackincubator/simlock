@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "./filesystem.js";
 import {
+  isPipeEndpoint,
   resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
@@ -59,6 +60,40 @@ describe("resolveDaemonSocketPath", () => {
 
     expect(() => resolveDaemonSocketPath(home, "darwin")).toThrow(SocketPathTooLongError);
     expect(resolveDaemonSocketPath(home, "linux")).toBe(`${home}/daemon.sock`);
+  });
+
+  describe("on Windows", () => {
+    const home = String.raw`C:\Users\me\.simlock`;
+
+    it("listens on a named pipe, the only endpoint Node can listen on there", () => {
+      const endpoint = resolveDaemonSocketPath(home, "win32");
+
+      expect(endpoint).toMatch(/^\\\\\.\\pipe\\simlock-[0-9a-f]{16}$/);
+      expect(isPipeEndpoint(endpoint)).toBe(true);
+    });
+
+    it("gives one data directory one name, whatever its case, and two directories two", () => {
+      const endpoint = resolveDaemonSocketPath(home, "win32");
+
+      expect(resolveDaemonSocketPath(home.toUpperCase(), "win32")).toBe(endpoint);
+      expect(resolveDaemonSocketPath(String.raw`C:\Users\me\.other`, "win32")).not.toBe(endpoint);
+    });
+
+    it("has no length limit, since the name does not grow with the directory", () => {
+      const endpoint = resolveDaemonSocketPath(`C:\\${"x".repeat(300)}`, "win32");
+
+      expect(isPipeEndpoint(endpoint)).toBe(true);
+    });
+  });
+});
+
+describe("isPipeEndpoint", () => {
+  it.each([
+    [String.raw`\\.\pipe\simlock-0123456789abcdef`, true],
+    ["/tmp/simlock-home/daemon.sock", false],
+    [String.raw`C:\Users\me\.simlock\daemon.sock`, false],
+  ] as const)("recognises %s as a pipe: %s", (endpoint, expected) => {
+    expect(isPipeEndpoint(endpoint)).toBe(expected);
   });
 });
 

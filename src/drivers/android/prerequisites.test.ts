@@ -43,6 +43,7 @@ function check(filesystem: MemoryFilesystem, runner: ScriptedProcessRunner) {
     env: { ANDROID_HOME: sdk },
     filesystem,
     homeDirectory: home,
+    platform: "linux",
     processRunner: runner,
   });
 }
@@ -117,6 +118,7 @@ describe("androidPrerequisites", () => {
       env: { ANDROID_HOME: "/nowhere/home", ANDROID_SDK_ROOT: "/nowhere/root" },
       filesystem: new MemoryFilesystem(),
       homeDirectory: home,
+      platform: "linux",
       processRunner: runner,
     });
 
@@ -153,6 +155,7 @@ describe("androidPrerequisites", () => {
       env: { ANDROID_HOME: "/stale-sdk" },
       filesystem,
       homeDirectory: home,
+      platform: "linux",
       processRunner: runner,
     });
 
@@ -165,6 +168,7 @@ describe("androidPrerequisites", () => {
       env: { ANDROID_HOME: "/nowhere", ANDROID_SDK_ROOT: sdk },
       filesystem,
       homeDirectory: home,
+      platform: "linux",
       processRunner: new ScriptedProcessRunner([SDKMANAGER_RUNS]),
     });
 
@@ -213,5 +217,79 @@ describe("androidPrerequisites", () => {
     ]);
 
     await expect(check(await sdkFilesystem(), runner).check()).rejects.toThrow(/did not finish/);
+  });
+});
+
+describe("androidPrerequisites on Windows", () => {
+  const winSdk = "/Users/me/AppData/Local/Android/Sdk";
+  // why: differs from the home-directory fallback, so only a read LOCALAPPDATA finds this one.
+  const localSdk = "/Volumes/Data/Local/Android/Sdk";
+  const winSdkmanager = `${winSdk}/cmdline-tools/latest/bin/sdkmanager.bat`;
+  const sdkmanagerIn = (root: string) => `${root}/cmdline-tools/latest/bin/sdkmanager.bat`;
+
+  /** why: Android Studio installs `.exe` binaries and `.bat` tools on Windows, never the bare names. */
+  async function windowsSdk(root = winSdk): Promise<MemoryFilesystem> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(root);
+    await writeFile(filesystem, sdkmanagerIn(root));
+    await writeFile(filesystem, `${root}/cmdline-tools/latest/bin/avdmanager.bat`);
+    await writeFile(filesystem, `${root}/emulator/emulator.exe`);
+    await writeFile(filesystem, `${root}/platform-tools/adb.exe`);
+    return filesystem;
+  }
+
+  function windowsCheck(
+    filesystem: MemoryFilesystem,
+    runner: ScriptedProcessRunner,
+    env: Readonly<Record<string, string>>,
+  ) {
+    return androidPrerequisites({
+      env,
+      filesystem,
+      homeDirectory: "/Users/me",
+      platform: "win32",
+      processRunner: runner,
+    });
+  }
+
+  const WINDOWS_SDKMANAGER_RUNS: ScriptedProcessExpectation = {
+    match: { args: ["--version"], command: winSdkmanager },
+    result: { code: 0, stderr: "", stdout: "12.0\n" },
+  };
+
+  it.each([
+    ["ANDROID_HOME", { ANDROID_HOME: winSdk }, winSdk],
+    ["Android Studio's %LOCALAPPDATA% default", { LOCALAPPDATA: "/Volumes/Data/Local" }, localSdk],
+  ])(
+    "finds a complete SDK of .exe and .bat tools through %s and runs its sdkmanager.bat",
+    async (_source, env, root) => {
+      const sdkmanager = sdkmanagerIn(root);
+      const runner = new ScriptedProcessRunner([
+        { ...WINDOWS_SDKMANAGER_RUNS, match: { args: ["--version"], command: sdkmanager } },
+      ]);
+
+      await expect(windowsCheck(await windowsSdk(root), runner, env).check()).resolves.toEqual([]);
+      expect(runner.calls.map((call) => [call.command, ...call.args])).toEqual([
+        [sdkmanager, "--version"],
+      ]);
+    },
+  );
+
+  it("reads a Windows SDK holding only the extensionless names as missing every tool", async () => {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(winSdk);
+    await writeFile(filesystem, `${winSdk}/cmdline-tools/latest/bin/sdkmanager`);
+    await writeFile(filesystem, `${winSdk}/cmdline-tools/latest/bin/avdmanager`);
+    await writeFile(filesystem, `${winSdk}/emulator/emulator`);
+    await writeFile(filesystem, `${winSdk}/platform-tools/adb`);
+    const runner = new ScriptedProcessRunner([]);
+
+    const missing = await windowsCheck(filesystem, runner, { ANDROID_HOME: winSdk }).check();
+
+    expect(missing.map((finding) => finding.prerequisite)).toEqual([
+      "android-cmdline-tools",
+      "android-emulator",
+      "android-platform-tools",
+    ]);
   });
 });
