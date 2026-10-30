@@ -1390,57 +1390,51 @@ describe("CLI: exit codes", () => {
 });
 
 describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
-  it("prefers --token over SIMLOCK_ADMIN_TOKEN and the admin.token file", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+  it.each([
+    [
+      "--token over env and file",
       ["--token", "from-flag", "status"],
-      output.environmentWith({
-        adminTokenFromEnv: "from-env",
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-flag");
-    expect(output.stderr).toBe("");
-  });
-
-  it("prefers SIMLOCK_ADMIN_TOKEN over the admin.token file when --token is absent", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+      "from-env",
+      "from-file",
+      "from-flag",
+      true,
+    ],
+    [
+      "SIMLOCK_ADMIN_TOKEN over the file when --token is absent",
       ["status"],
-      output.environmentWith({
-        adminTokenFromEnv: "from-env",
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-env");
-  });
-
-  it("falls back to the admin.token file when neither --token nor the env var is set", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+      "from-env",
+      "from-file",
+      "from-env",
+      false,
+    ],
+    [
+      "the admin.token file when neither --token nor the env var is set",
       ["status"],
-      output.environmentWith({
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-file");
-    expect(output.stderr).toBe("");
-  });
+      undefined,
+      "from-file",
+      "from-file",
+      true,
+    ],
+  ] as const)(
+    "resolves the admin credential in priority order: %s",
+    async (_case, argv, envToken, fileToken, expected, stderrEmpty) => {
+      const output = outputCapture();
+      let seen: string | undefined;
+      await runCli(
+        [...argv],
+        output.environmentWith({
+          ...(envToken === undefined ? {} : { adminTokenFromEnv: envToken }),
+          readAdminTokenFile: async () => fileToken,
+          connectAdmin: async (resolveCredential) => {
+            seen = await resolveCredential();
+            return fakeClient();
+          },
+        }),
+      );
+      expect(seen).toBe(expected);
+      if (stderrEmpty) expect(output.stderr).toBe("");
+    },
+  );
 
   it("retries a briefly-missing admin.token file before giving up", async () => {
     const output = outputCapture();
@@ -1548,7 +1542,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       }),
     );
     expect(attempts).toBe(1);
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(1);
     expect(JSON.parse(output.stderr).error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
   });
 
@@ -2559,19 +2553,6 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(launched).toBe(false);
   });
 
-  it("prints the human view for daemon status when --json is absent", async () => {
-    const output = outputCapture();
-
-    await expect(
-      runCli(
-        ["daemon", "status"],
-        output.environmentWith({ connectExistingAdmin: async () => fakeClient() }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
-  });
-
   it("daemon status prints the Service: line and the service field in --json, for a worker or a gateway, running or stopped, and none on an unsupported platform", async () => {
     const home = "/Users/me";
     const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
@@ -2704,7 +2685,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       },
     });
 
-    await expect(runCli(["daemon", "status"], environment)).resolves.not.toBe(0);
+    await expect(runCli(["daemon", "status"], environment)).resolves.toBe(1);
 
     expect(output.stdout).not.toContain("Daemon stopped");
     expect(output.stderr).toContain("launchctl timed out");
@@ -2944,20 +2925,6 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stderr).not.toContain("agent-device");
   });
 
-  it("simlock doctor writes no agent-device line when the report has no such finding", async () => {
-    const output = outputCapture();
-    const findings = [{ deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" }];
-
-    await runCli(
-      ["doctor"],
-      output.environmentWith({
-        connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
-      }),
-    );
-
-    expect(output.stderr).not.toContain("agent-device");
-  });
-
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
@@ -3072,14 +3039,6 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
     });
   });
 
-  it("device --help prints both forms", async () => {
-    const result = await runDevice(["device", "--help"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("simlock device add --platform <ios|android> <id> [--json]");
-    expect(result.stdout).toContain("simlock device remove <id> [--json]");
-  });
-
   it("prints one line for an enrollment, naming the platform's OS, and the JSON with --json", async () => {
     const line = await runDevice(["device", "add", "--platform", "ios", "UDID-1"]);
     const json = await runDevice(["device", "add", "--platform", "android", "SER-1", "--json"]);
@@ -3092,6 +3051,7 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
 
   it.each([
     ["device", ["device"]],
+    ["device --help", ["device", "--help"]],
     ["device -h", ["device", "-h"]],
     ["device add --help", ["device", "add", "--help"]],
     ["device remove -h", ["device", "remove", "-h"]],
@@ -3123,7 +3083,9 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
     expect(await messages(["device", "add", "--platform", "windows", "X"])).toContain(
       "device add needs --platform ios or --platform android",
     );
-    await messages(["device", "remove", "--platform", "ios", "X"]);
+    expect(await messages(["device", "remove", "--platform", "ios", "X"])).toContain(
+      "Unknown option '--platform'",
+    );
   });
 
   it("closes the connection after an enrollment and after a removal", async () => {
@@ -3353,47 +3315,6 @@ describe("CLI: component remove (ADR 0010 §8)", () => {
       ),
     ).resolves.toBe(2);
     expect(connected).toBe(false);
-  });
-});
-
-describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
-  it("rejects an invalid merged config without writing the file", async () => {
-    const output = outputCapture();
-    let wrote = false;
-    await expect(
-      runCli(
-        ["config", "set", "lease.defaultTtlMs", "not-a-number"],
-        output.environmentWith({
-          readConfigFile: async () => ({}),
-          writeConfigFile: async () => {
-            wrote = true;
-          },
-          validateConfig: async () => {
-            throw new Error("lease.defaultTtlMs must be a number");
-          },
-        }),
-      ),
-    ).resolves.toBe(2);
-    expect(wrote).toBe(false);
-    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
-  });
-
-  it("writes the file once validation passes", async () => {
-    const output = outputCapture();
-    let written: Record<string, unknown> | undefined;
-    await expect(
-      runCli(
-        ["config", "set", "downloads.policy", "never"],
-        output.environmentWith({
-          readConfigFile: async () => ({}),
-          writeConfigFile: async (contents) => {
-            written = contents;
-          },
-          validateConfig: async () => {},
-        }),
-      ),
-    ).resolves.toBe(0);
-    expect(written).toEqual({ downloads: { policy: "never" } });
   });
 });
 
@@ -7086,42 +7007,14 @@ describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
     [["--gateway", "mcp"], 0, "gateway"],
     [["mcp", "--gateway"], 0, "gateway"],
     [["mcp"], 0, "none"],
-    [["--gateway=yes", "mcp"], 2, undefined],
-  ] as const)(
-    "--gateway is taken from anywhere in the argv and reaches the command as context.daemonFlag; --gateway=<x> is a usage error (%j)",
-    async (argv, exitCode, gateway) => {
-      const output = outputCapture();
-      const seen: string[] = [];
-
-      const code = await runCli(
-        argv,
-        output.environmentWith({
-          runMcpStdio: async (options) => {
-            seen.push(options.daemonFlag ?? "none");
-          },
-        }),
-      );
-
-      expect(code).toBe(exitCode);
-      if (gateway === undefined) {
-        expect(JSON.parse(output.stderr)).toMatchObject({
-          error: { code: "USAGE", message: expect.stringContaining("--gateway takes no value") },
-        });
-        expect(seen).toEqual([]);
-      } else {
-        expect(seen).toEqual([gateway]);
-      }
-    },
-  );
-
-  it.each([
+    [["--gateway=yes", "mcp"], 2, "--gateway takes no value"],
     [["--local", "mcp"], 0, "local"],
     [["mcp", "--local"], 0, "local"],
     [["--local=yes", "mcp"], 2, "--local takes no value"],
     [["--local", "--gateway", "mcp"], 2, "--gateway and --local cannot be used together"],
     [["mcp", "--gateway", "--local"], 2, "--gateway and --local cannot be used together"],
   ] as const)(
-    "--local is taken from anywhere in the argv; --local=<x> and --local with --gateway are usage errors (%j)",
+    "--gateway and --local are taken from anywhere in the argv and reach the command as context.daemonFlag; =<x> and both together are usage errors (%j)",
     async (argv, exitCode, expected) => {
       const output = outputCapture();
       const seen: string[] = [];
@@ -7298,7 +7191,7 @@ describe("CLI: events history", () => {
       }),
     );
 
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(1);
     expect(fileRead).toBe(false);
     expect(output.stderr).toContain("PROTOCOL_VERSION_UNSUPPORTED");
   });

@@ -91,7 +91,7 @@ describe("scripts/release.mjs changelog", () => {
     "## What's Changed\n* feat: a by @x in https://example/1\n\n## New Contributors\n* @x\n";
   const released = "## [0.3.0](x/compare/v0.2.0...v0.3.0) (2026-09-03)";
 
-  it("inserts the release above the first released section, below what precedes it, with the compare link and today's date", () => {
+  it("inserts the release above the first released section, below what precedes it, with the compare link and today's date, formatted as oxfmt formats it", () => {
     const cwd = scratch({
       "CHANGELOG.md": `# Changelog\n\n## Unreleased\n\nsoon\n\n${released}\n\nold\n`,
       "notes.md": notes,
@@ -109,10 +109,12 @@ describe("scripts/release.mjs changelog", () => {
         `## [0.4.0](${REPOSITORY}/compare/v0.3.0...v0.4.0) (${today})`,
         "",
         "### What's Changed",
-        "* feat: a by @x in https://example/1",
+        "",
+        "- feat: a by @x in https://example/1",
         "",
         "### New Contributors",
-        "* @x",
+        "",
+        "- @x",
         "",
         released,
         "",
@@ -127,7 +129,7 @@ describe("scripts/release.mjs changelog", () => {
     expect(run(cwd, ["changelog", "0.1.0", "", "notes.md"]).status).toBe(0);
     const today = new Date().toISOString().slice(0, 10);
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(
-      `# Changelog\n\n## 0.1.0 (${today})\n\n### What's Changed\n* feat: a by @x in https://example/1\n\n### New Contributors\n* @x\n`,
+      `# Changelog\n\n## 0.1.0 (${today})\n\n### What's Changed\n\n- feat: a by @x in https://example/1\n\n### New Contributors\n\n- @x\n`,
     );
   });
 

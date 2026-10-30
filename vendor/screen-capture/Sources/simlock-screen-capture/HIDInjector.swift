@@ -2,7 +2,8 @@
 // see NOTICE.md and LICENSES/ in this package) and it is NOT verbatim upstream. simlock's changes
 // drop what simlock does not use or does elsewhere: the Duo hinge and cover paths, the Device Hub
 // keyboard bridge, the fold pose, and the Home, app switcher and Lock buttons (Home is the daemon's
-// `simctl launch` of SpringBoard, so it has one owner); everything else here is upstream's.
+// `simctl launch` of SpringBoard, so it has one owner), and the orientation error no longer says
+// Simulator.app must be running, which it need not be; everything else here is upstream's.
 // `NOTICE.md` prints the one command that diffs this file against pristine upstream at the commit
 // we took it from. Read that notice before editing this file.
 import Foundation
@@ -576,7 +577,7 @@ actor HIDInjector {
         var lookupError: NSError?
         let purplePort = lookup(device, lookupSel, "PurpleWorkspacePort" as NSString, &lookupError)
         if purplePort == 0 {
-            fputs("[hid] sendOrientation: PurpleWorkspacePort not found (\(lookupError?.localizedDescription ?? "no error")). Simulator.app must be running.\n", stderr)
+            fputs("[hid] sendOrientation: PurpleWorkspacePort not found (\(lookupError?.localizedDescription ?? "no error")). Is the simulator booted?\n", stderr)
             return false
         }
 
