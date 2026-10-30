@@ -515,18 +515,36 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("starts the emulator with an authenticated gRPC endpoint on its console port plus 3000", async () => {
-    const harness = await provisionedHarness();
+  // why: The gRPC port follows the reserved console port, so two parallel leases never share one.
+  it("puts the gRPC endpoint at the reserved console port plus 3000", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const launches: (readonly string[])[] = [];
+    const hostRunner = host.runner();
+    const runner: ProcessRunner = {
+      ...hostRunner,
+      spawn: (command, args) => {
+        launches.push(args);
+        return hostRunner.spawn(command, args);
+      },
+    };
+    const driver = await createDriver(filesystem, runner, {
+      ids: ["one"],
+      tcpProbe: new FakeTcpProbe([adbServerPort, 5586]),
+    });
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    await driver.resolveSpec(spec);
 
-    await harness.driver.makeReady(harness.device);
+    await driver.makeReady(await driver.provision(spec));
 
-    const launch = harness.runner.calls.find(
-      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    expect(launches[0]).toEqual(
+      expect.arrayContaining(["-port", "5588", "-grpc", "8588", "-grpc-use-token"]),
     );
-    expect(launch?.args).toEqual(expect.arrayContaining(["-port", "5586"]));
-    const args = launch?.args ?? [];
-    const at = args.indexOf("-grpc");
-    expect(args.slice(at, at + 3)).toEqual(["-grpc", "8586", "-grpc-use-token"]);
   });
 
   /**
