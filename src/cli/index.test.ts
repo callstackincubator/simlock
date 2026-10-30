@@ -1590,6 +1590,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
@@ -1625,6 +1626,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
@@ -1658,6 +1660,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(
@@ -1703,6 +1706,7 @@ describe("CLI: auto-launch's startup deadline (#663)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     };
     return { clock, ports };
@@ -1822,6 +1826,7 @@ describe("CLI: auto-launch's failed start (#672)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
@@ -1871,6 +1876,7 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
@@ -1913,6 +1919,7 @@ describe("CLI: auto-launch's daemon that exits while starting (#760)", () => {
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
@@ -1976,6 +1983,7 @@ describe("CLI: auto-launch's daemon that lost the socket to another daemon (#760
       daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
     });
     let settled = false;
@@ -2021,6 +2029,7 @@ describe("CLI: auto-launch's handshake cut short by the launched daemon (#684)",
         daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
+        hostPlatform: "linux",
         runTool: async () => ({ outcome: "not-found" }),
       });
       let settled = false;
@@ -7600,7 +7609,7 @@ describe("CLI: the daemon endpoint check", () => {
   it("buildCliEnvironment reports the daemon endpoint present only while its socket file exists", async () => {
     const filesystem = new MemoryFilesystem();
     const environment = buildCliEnvironment(realCliEnvironmentPorts(filesystem), {});
-    const socketPath = resolveDaemonSocketPath("/simlock");
+    const socketPath = resolveDaemonSocketPath("/simlock", "linux");
 
     expect(await environment.daemonEndpointPresent()).toBe(false);
     await filesystem.mkdirp("/simlock");
@@ -7608,6 +7617,37 @@ describe("CLI: the daemon endpoint check", () => {
     expect(await environment.daemonEndpointPresent()).toBe(true);
     await filesystem.rm(socketPath);
     expect(await environment.daemonEndpointPresent()).toBe(false);
+  });
+
+  it("on Windows reports the named pipe present while something answers it, and not after it closes", async () => {
+    const ipc = new MemoryIpcTransport();
+    const environment = buildCliEnvironment(
+      { ...realCliEnvironmentPorts(), ipc, hostPlatform: "win32" },
+      {},
+    );
+
+    expect(await environment.daemonEndpointPresent()).toBe(false);
+    const listener = await ipc.listen(
+      resolveDaemonSocketPath("/simlock", "win32"),
+      () => undefined,
+    );
+    expect(await environment.daemonEndpointPresent()).toBe(true);
+    await listener.close();
+    expect(await environment.daemonEndpointPresent()).toBe(false);
+  });
+
+  it("on Windows counts a pipe that does not answer in time as present, since only a refused or missing one proves it gone", async () => {
+    const connector: IpcConnector = {
+      connect: async () => {
+        throw new IpcError("connection-timeout", "timed out", undefined);
+      },
+    };
+    const environment = buildCliEnvironment(
+      { ...realCliEnvironmentPorts(), ipc: connector, hostPlatform: "win32" },
+      {},
+    );
+
+    expect(await environment.daemonEndpointPresent()).toBe(true);
   });
 });
 
@@ -8342,6 +8382,7 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
           requesterId: "test-requester",
           homeDirectory: "/home/operator",
           workingDirectory: "/work/project",
+          hostPlatform: "linux",
           runTool: async () => ({ outcome: "not-found" }),
           filesystem: new MemoryFilesystem(),
           connectAdmin: async () => fakeClient(),
@@ -8640,6 +8681,7 @@ function realCliEnvironmentPorts(
     daemonHome: { role: "worker", dataDirectory: "/simlock", gatewayPresent: false },
     homeDirectory: "/home/operator",
     workingDirectory: "/work/project",
+    hostPlatform: "linux",
     runTool: async () => ({ outcome: "not-found" }),
   };
 }
@@ -9790,6 +9832,7 @@ describe("CLI: daemon install (#830)", () => {
         daemonHome: { role: options.role, dataDirectory, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
+        hostPlatform: "linux",
         runTool: async () => ({ outcome: "not-found" }),
         service: {
           manager: serviceManager,
@@ -10206,6 +10249,7 @@ describe("CLI: a start goes through the service (#830)", () => {
         daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
+        hostPlatform: "linux",
         runTool: async () => ({ outcome: "not-found" }),
       });
 
@@ -10266,6 +10310,7 @@ describe("CLI: a start through a service that fails (#830)", () => {
           daemonHome: { role: "worker", dataDirectory: directory, gatewayPresent: false },
           homeDirectory: "/home/operator",
           workingDirectory: "/work/project",
+          hostPlatform: "linux",
           runTool: async () => ({ outcome: "not-found" }),
         });
         let settled = false;
@@ -10358,6 +10403,7 @@ describe("CLI: a service manager call fails, or the platform has none (#830)", (
       daemonHome: { role: "worker", dataDirectory: root, gatewayPresent: false },
       homeDirectory: "/home/operator",
       workingDirectory: "/work/project",
+      hostPlatform: "linux",
       runTool: async () => ({ outcome: "not-found" }),
       service: {
         manager,

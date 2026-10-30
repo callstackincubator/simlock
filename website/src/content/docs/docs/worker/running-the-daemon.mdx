@@ -139,13 +139,15 @@ Everything the worker keeps is under `~/.simlock`:
 | `state.db` | Devices, leases, enrolled physical devices, the warm pool's memory and HTTP tokens. |
 | `history.db` | The event history and usage figures behind `simlock events` and `simlock stats`. |
 | `daemon.log`, `daemon.log.1` | The daemon's log, and the one older file kept after it rotates. |
-| `daemon.sock` | The local socket the CLI and agents connect to. |
+| `daemon.sock` | The local socket the CLI and agents connect to. On Windows there is no such file: the daemon listens on a named pipe instead (see below). |
 | `admin.token` | The secret the CLI uses to connect as an admin. |
 | `devices/ios`, `devices/android` | The simulators and emulators Simlock made. These take the most space. See [Cleanup](/simlock/docs/worker/cleanup#where-devices-live). |
 
 A gateway on the same machine keeps its own files in `~/.simlock/gateway`, with its own daemon. Commands reach it with `--gateway`, for example `simlock --gateway daemon status`. See [Setting up a gateway](/simlock/docs/gateway/setup).
 
 Simlock creates `~/.simlock` (and `~/.simlock/gateway`) so only your user can open it, because anyone who can reach `daemon.sock` can lease devices as an agent. It does not change the permissions of a folder that already exists. If other users can open it, the daemon log says `data directory <path> is accessible to other users (mode <mode>); run chmod 700 <path>` at each start: run that command to close it.
+
+On Windows the daemon listens on a named pipe, `\\.\pipe\simlock-<16 hex characters>`, not on a file in that folder, so the folder's permissions do not guard it. Other accounts cannot connect to the daemon's pipe. But the pipe's name is predictable: another account that creates it before the daemon starts would receive the CLI's connection, with any admin token the CLI sends. Run Simlock on Windows only on a machine that one user account uses.
 
 To run a separate install on the same account, set `SIMLOCK_HOME` to another folder. Every command and the daemon it starts use that folder instead of `~/.simlock`. Keep the path short: the socket path must fit the system limit (104 bytes on macOS, 108 on Linux), and a longer one fails with `Point SIMLOCK_HOME at a shorter directory.`
 
