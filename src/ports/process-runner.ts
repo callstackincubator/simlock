@@ -472,7 +472,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
-    this.#killedWith ??= signal;
+    if (isRunning(this.child)) this.#killedWith ??= signal;
     killProcessTree(this.child, this.pid, signal, this.wrapped);
   }
 
@@ -549,7 +549,7 @@ const TASKKILL_TIMEOUT_MS = 10_000;
  */
 function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
   const fallback = () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    if (isRunning(child)) child.kill(signal);
   };
   const taskkill = spawnChildProcess("taskkill", ["/pid", String(pid), "/T", "/F"], {
     stdio: "ignore",
@@ -584,7 +584,7 @@ function killProcessTree(
   signal: NodeJS.Signals,
   wrapped: boolean,
 ): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (!isRunning(child)) return;
 
   if (process.platform === "win32") {
     if (wrapped) killWindowsProcessTree(child, pid, signal);
@@ -601,6 +601,12 @@ function killProcessTree(
 
     throw error;
   }
+}
+
+// why: a wrapper that already exited, its output still held open by a grandchild, is never
+// signalled, so its own exit code stands rather than a kill nobody sent.
+function isRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
 }
 
 class NodeProcessHandle implements ProcessHandle {
@@ -666,7 +672,7 @@ class NodeProcessHandle implements ProcessHandle {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
-    this.#killedWith ??= signal;
+    if (isRunning(this.child)) this.#killedWith ??= signal;
     killProcessTree(this.child, this.pid, signal, this.wrapped);
   }
 

@@ -133,6 +133,39 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
       await rm(directory, { force: true, recursive: true });
     }
   });
+
+  it("reports a batch file's own exit code when kill comes after cmd.exe exited but a grandchild still holds its output", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock bat "));
+    const pidFile = join(directory, "grandchild.pid");
+    const script = join(directory, "exits early.bat");
+    await writeFile(
+      script,
+      `@echo off
+start /b "" "${process.execPath}" -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(() => {}, 4000)" "${pidFile}"
+exit /b 0
+`,
+    );
+    let grandchildPid: number | undefined;
+    try {
+      const handle = new NodeProcessRunner({ exitDeferralCapMs: 10_000, exitGraceMs: 8_000 }).spawn(
+        script,
+        [],
+      );
+      await expect
+        .poll(() => readFile(pidFile, "utf8").catch(() => ""), { timeout: 5_000 })
+        .not.toBe("");
+      grandchildPid = Number(await readFile(pidFile, "utf8"));
+      await expect.poll(() => isAlive(handle.pid), { timeout: 5_000 }).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      handle.kill();
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: 0 });
+    } finally {
+      if (grandchildPid !== undefined && isAlive(grandchildPid)) process.kill(grandchildPid);
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });
 
 function isAlive(pid: number): boolean {
