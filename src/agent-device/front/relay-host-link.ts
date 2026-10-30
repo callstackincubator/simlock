@@ -138,6 +138,9 @@ export class RelayHostLink implements HostLink {
   }
 
   async forward(request: Request, identity: Identity, leaseId?: string): Promise<Response> {
+    // why: a client pins the daemon it read `/health` from, which with several workers is often not the lease's worker's daemon, and that daemon refuses every pinned call as an instance mismatch (409).
+    request.headers.delete("x-agent-device-instance");
+    request.headers.delete("x-agent-device-upstream-instance");
     const tenant = relayTenant(this.options.fleet.instanceId, identity.principal);
     if (leaseId === undefined) return this.#forwardBare(request, tenant);
     const placed = this.#place(leaseId);

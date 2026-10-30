@@ -79,6 +79,8 @@ import type {
   ListGetOutput,
   NukeReport,
   NukeRunInput,
+  WarmForgetInput,
+  WarmForgetOutput,
   RequestLeaseOptions,
   SimlockConfig,
   StatusGetOutput,
@@ -153,6 +155,8 @@ export type {
   ListGetOutput,
   NukeReport,
   NukeRunInput,
+  WarmForgetInput,
+  WarmForgetOutput,
   RequestLeaseOptions,
   SimlockConfig,
   StatusGetOutput,
@@ -258,6 +262,7 @@ export interface SimlockAdminClient extends SimlockClient {
   list(input?: ListGetInput): Promise<ListGetOutput>;
   runCleanup(input?: CleanupRunInput): Promise<CleanupRunOutput>;
   runNuke(input?: NukeRunInput): Promise<NukeReport>;
+  forgetWarmKind(input: WarmForgetInput): Promise<WarmForgetOutput>;
   getConfig(): Promise<SimlockConfig>;
   /** ADR §6's frozen exception: accepted by the daemon at any protocol version it has ever
    * spoken, even before `hello`/role resolve. Exposed here rather than on the base client
@@ -439,6 +444,7 @@ function buildDegradedClient(
     list: () => rejected(),
     runCleanup: () => rejected(),
     runNuke: () => rejected(),
+    forgetWarmKind: () => rejected(),
     getConfig: () => rejected(),
     stopDaemon: () => frozenCall(wire, "daemon.stop", {}),
     updateDaemon: (input = {}) => frozenCall(wire, "daemon.update", input),
@@ -675,6 +681,10 @@ class SimlockClientImpl {
 
   runNuke(input: NukeRunInput = {}): Promise<NukeReport> {
     return this.#call("nuke.run", input);
+  }
+
+  forgetWarmKind(input: WarmForgetInput): Promise<WarmForgetOutput> {
+    return this.#call("warm.forget", input);
   }
 
   getConfig(): Promise<SimlockConfig> {

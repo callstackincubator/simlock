@@ -1,6 +1,6 @@
 # 0038. The warm pool learns its kinds from leases, and boots for every queued request
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted — not yet implemented; §3, §8 and the alternative "A `warmPool.learn` key" narrowed by 0051
 - **Date:** 2026-10-20
 - **Issue:** [#771](https://github.com/callstackincubator/simlock/issues/771)
 - **Supersedes:** nothing. Narrows [ADR

@@ -13,6 +13,7 @@ import {
   type HostFacts,
   NoDriverError,
   type Nuke,
+  type WarmKindForgetter,
   redactConfig,
   UnknownPassthroughToolError,
   type CapacityReader,
@@ -160,6 +161,7 @@ export interface DaemonServerEngineOptions {
   readonly physicalDeviceWatcher?: PhysicalDeviceWatcher | undefined;
   readonly enrollment?: DispatcherOptions["enrollment"];
   readonly nuke?: Nuke;
+  readonly warmKinds?: WarmKindForgetter;
   readonly passthrough?: PassthroughResolver;
   readonly processRunner?: ProcessRunner;
   readonly relayTargets?: RelayTargets;
@@ -310,6 +312,7 @@ function buildDispatcher(
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.enrollment === undefined ? {} : { enrollment: options.enrollment }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
+    ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
@@ -1110,6 +1113,12 @@ export class DaemonServer {
       case "nuke.run":
         return this.#dispatcher.dispatch(
           "nuke.run",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "warm.forget":
+        return this.#dispatcher.dispatch(
+          "warm.forget",
           frame.payload ?? {},
           this.#session(connection),
         );

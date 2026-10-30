@@ -107,6 +107,7 @@ function harness(
   options: {
     limit?: number;
     enabled?: boolean;
+    learn?: boolean;
     refuseBoot?: boolean;
     shutdown?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
     boot?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
@@ -262,6 +263,7 @@ function harness(
     clock,
     config: {
       enabled: options.enabled ?? true,
+      ...(options.learn === undefined ? {} : { learn: options.learn }),
       maxConcurrentBoots: options.maxConcurrentBoots ?? 1,
       reserveRunning: { android: 0, ios: 0 },
       targets: options.targets ?? [],
@@ -2609,6 +2611,18 @@ describe("warm pool learned kinds", () => {
       expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],
       ]);
+      learned.learn(ipad, "pad-again", now - minute);
+      const unlearned = harness([], {
+        catalog: async () => [iosListing],
+        learn: false,
+        state,
+        targets: [phone],
+      });
+      await unlearned.pool.pass();
+      await unlearned.pool.settle();
+      expect(
+        unlearned.pool.figures().targets.map((target) => [target.model, target.origin]),
+      ).toEqual([["iPhone 15", "configured"]]);
       const fresh = harness([], { state, targets: [phone] });
       expect(fresh.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],
@@ -2729,7 +2743,71 @@ describe("warm pool learned kinds", () => {
     });
   });
 
-  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between or a forgetting resets the count, and a configured target's kind is never forgotten", async () => {
+  it("forgetKinds forgets the kinds the match names, logs each, answers them, and asks for a pass only when a kind matched, leaving their devices to the idle rules", async () => {
+    const phone = device("kept", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
+    new LearnedKinds(state).ended("l1", now - minute);
+    const pad = {
+      ...device("pad", "shutdown", 60 * minute),
+      spec: {
+        model: "iPad Pro",
+        osVersion: "26.0",
+        physical: false as const,
+        platform: "ios" as const,
+      },
+    };
+    const rig = harness([device("kept", "ready", minute), pad], {
+      catalog: async () => [iosListing],
+      state,
+      targets: [{ count: 1, model: "iPad Pro", osVersion: "26.0", platform: "ios" }],
+    });
+    expect([...(await rig.pool.targeted())]).toEqual(["kept"]);
+
+    expect(rig.pool.forgetKinds({ model: "iPhone 16", platform: "ios" })).toEqual([]);
+    await rig.pool.settle();
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.pool.forgetKinds({ model: "iPhone 15", platform: "ios" })).toEqual([phone]);
+    await rig.pool.settle();
+
+    expect(rig.bootCalls).toHaveLength(1);
+    expect([...(await rig.pool.targeted())]).toEqual(["pad"]);
+    expect(rig.shutdownCalls).toEqual([]);
+    expect(new LearnedKinds(state).kinds(now)).toEqual([]);
+    expect(
+      rig.sink.records
+        .filter((record) => record.message.includes("by the operator"))
+        .map((record) => record.fields),
+    ).toEqual([{ model: "iPhone 15", osVersion: "26.0", platform: "ios" }]);
+  });
+
+  it("forgetKinds keeps the retry backoff of a failing configured target of the forgotten kind's spec", async () => {
+    const phone = device("d1", "ready", 0).spec;
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
+    new LearnedKinds(state).ended("l1", now - minute);
+    const rig = harness([device("shut", "shutdown", 60 * minute)], {
+      boot: async () => {
+        throw new Error("simulator did not boot");
+      },
+      catalog: async () => [iosListing],
+      state,
+      targets: [{ count: 1, model: "iPhone 15", osVersion: "26.0", platform: "ios" }],
+    });
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.bootCalls).toHaveLength(1);
+
+    expect(rig.pool.forgetKinds({ model: "iPhone 15", platform: "ios" })).toEqual([phone]);
+    await rig.pool.settle();
+    expect(rig.bootCalls).toHaveLength(1);
+
+    rig.clock.advance(minute);
+    await rig.pool.settle();
+    expect(rig.bootCalls).toHaveLength(2);
+  });
+
+  it("forgets a learned kind on its third failed boot or creation in a row with one warning, and a success in between, a forgetting or an operator's forget resets the count, and a configured target's kind is never forgotten", async () => {
     const phone = device("d1", "ready", 0).spec;
     const configured: WarmTarget = {
       count: 1,
@@ -2740,7 +2818,7 @@ describe("warm pool learned kinds", () => {
     const run = async (
       outcomes: readonly ("fail" | "ok")[],
       creation: boolean,
-      options: { relearnAt?: number; targets?: WarmTarget[] } = {},
+      options: { forgetAt?: number; relearnAt?: number; targets?: WarmTarget[] } = {},
     ) => {
       const state = await openMemoryState([warmPoolOwner]);
       new LearnedKinds(state).learn(phone, "l1", now - 2 * minute);
@@ -2763,7 +2841,9 @@ describe("warm pool learned kinds", () => {
         },
       );
       for (let round = 0; round < outcomes.length; round += 1) {
-        if (round === options.relearnAt) {
+        if (round === options.forgetAt)
+          rig.pool.forgetKinds({ model: phone.model, platform: "ios" });
+        if (round === options.relearnAt || round === options.forgetAt) {
           new LearnedKinds(state).learn(phone, "l2", rig.clock.now() - 2 * minute);
           new LearnedKinds(state).ended("l2", rig.clock.now() - minute);
         }
@@ -2795,6 +2875,9 @@ describe("warm pool learned kinds", () => {
       expect(two.kinds, `creation ${creation}`).toBe(1);
       const again = await run(["fail", "fail", "fail", "fail"], creation, { relearnAt: 3 });
       expect(again.kinds, `creation ${creation}`).toBe(1);
+      const forgot = await run(["fail", "fail", "fail"], creation, { forgetAt: 2 });
+      expect(forgot.kinds, `creation ${creation}`).toBe(1);
+      expect(forgot.warnings).toEqual([]);
       const kept = await run(["fail", "fail", "fail"], creation, { targets: [configured] });
       expect(kept.kinds, `creation ${creation}`).toBe(1);
       expect(kept.warnings).toEqual([]);

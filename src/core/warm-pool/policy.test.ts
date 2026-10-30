@@ -1202,13 +1202,40 @@ describe("warm pool policy", () => {
       expect(queued.targets[0]).not.toHaveProperty("short");
     });
 
-    it("never shuts a device down to make room for a target", () => {
+    it("shuts down an idle device no configured count keeps to make room for a target, and never one a configured count keeps", () => {
       const idle = device("idle", "ready", { endedAgo: minute, spec: spec("iPad Pro") });
+      const make = { action: "provision", reason: "target", spec: kind, target: kind };
 
       const result = plan(view([idle], { limit: 1, targets: [target(1)] }));
 
-      expect(result.proposals).toEqual([]);
-      expect(result.targets[0]).toMatchObject({ short: "running-limit" });
+      expect(result.proposals).toEqual([
+        { action: "shutdown", deviceId: "idle", reason: "displaced" },
+        make,
+      ]);
+      expect(result.targets[0]).toMatchObject({ booting: 1, ready: 0 });
+      const pad = { count: 1, spec: spec("iPad Pro") };
+      expect(evaluate(view([idle], { limit: 1, targets: [target(1), pad] }))).toEqual([]);
+      expect(evaluate(view([idle], { limit: 1, targets: [pad, target(1)] }))).toEqual([]);
+    });
+
+    it("shuts down a copy past another configured kind's count, for a slot the reserve holds too, and fills every configured count before a learned peak", () => {
+      const pad = spec("iPad Pro");
+      const pads = ["a", "b"].map((id, index) =>
+        device(id, "ready", { endedAgo: (index + 1) * minute, spec: pad }),
+      );
+      const both = [{ count: 1, spec: pad }, target(1)];
+      const make = { action: "provision", reason: "target", spec: kind, target: kind };
+
+      expect(evaluate(view(pads, { limit: 2, targets: both }))).toEqual([
+        { action: "shutdown", deviceId: "b", reason: "displaced" },
+        make,
+      ]);
+      expect(
+        evaluate(view(pads, { limits: { ios: 3 }, reserve: { ios: 1 }, targets: both })),
+      ).toEqual([{ action: "shutdown", deviceId: "b", reason: "displaced" }, make]);
+      expect(
+        evaluate(view([pads[0]!], { learned: [learnedOf(pad, 2, now)], limit: 2, targets: both })),
+      ).toEqual([make]);
     });
 
     it("counts two targets resolving to one spec as one with the summed count", () => {
@@ -1760,7 +1787,7 @@ describe("warm pool policy", () => {
         ).toEqual([provision(kind)]);
       });
 
-      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request or is already shut down for the budget, for a kind short for ram-budget, device-limit or reserve, or for a configured target", () => {
+      it("displaces the least recently used idle ready device of an older learned kind for a newer one short for a running slot, and never a configured target's device, one that serves a waiting request or is already shut down for the budget, or for a kind short for ram-budget, device-limit or reserve; a configured target displaces it", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 2, now - 2 * minute)];
         const recent = device("recent", "ready", { endedAgo: 5 * minute, spec: older });
         const stale = device("stale", "ready", { endedAgo: 30 * minute, spec: older });
@@ -1828,16 +1855,17 @@ describe("warm pool policy", () => {
             }),
           ),
         ).toEqual([]);
+        const phone = spec("iPhone 15");
         expect(
           evaluate(
             view([recent], {
               learned: [learnedOf(older, 1, now)],
               limit: 1,
               maxConcurrentBoots: 2,
-              targets: [{ count: 1, spec: spec("iPhone 15") }],
+              targets: [{ count: 1, spec: phone }],
             }),
           ),
-        ).toEqual([]);
+        ).toEqual([{ ...displace, deviceId: "recent" }, provision(phone)]);
       });
     });
   });

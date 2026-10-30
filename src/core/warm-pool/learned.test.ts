@@ -158,6 +158,54 @@ describe("LearnedKinds", () => {
     expect(leaseRows(state)).toBe(33);
   });
 
+  it("forgetMatching forgets every kind of the model on its platform, narrowed by the OS, mode and image tag given, and answers them", async () => {
+    const pixel36 = spec("Pixel", { osVersion: "36", platform: "android" });
+    const pixel35 = spec("Pixel", { osVersion: "35", platform: "android" });
+    const tagged = spec("Pixel", { imageTag: "google_apis", osVersion: "35", platform: "android" });
+    const slim = spec("Pixel", { mode: "slim", osVersion: "36", platform: "android" });
+    const fill = async () => {
+      const opened = await open();
+      opened.kinds.learn(pixel36, "a", T0);
+      opened.kinds.learn(pixel35, "b", T0 + 1);
+      opened.kinds.learn(tagged, "c", T0 + 2);
+      opened.kinds.learn(slim, "d", T0 + 3);
+      opened.kinds.learn(spec("Pixel 9", { osVersion: "36", platform: "android" }), "e", T0 + 4);
+      opened.kinds.learn(spec("Pixel"), "f", T0 + 5);
+      return opened.kinds;
+    };
+    const cases: readonly {
+      readonly match: Parameters<LearnedKinds["forgetMatching"]>[0];
+      readonly forgotten: readonly VirtualSpec[];
+    }[] = [
+      {
+        forgotten: [slim, tagged, pixel35, pixel36],
+        match: { model: "Pixel", platform: "android" },
+      },
+      {
+        forgotten: [slim, pixel36],
+        match: { model: "Pixel", osVersion: "36", platform: "android" },
+      },
+      {
+        forgotten: [pixel36],
+        match: { mode: "full", model: "Pixel", osVersion: "36", platform: "android" },
+      },
+      {
+        forgotten: [tagged, pixel35],
+        match: { model: "Pixel", osVersion: "35", platform: "android" },
+      },
+      {
+        forgotten: [tagged],
+        match: { imageTag: "google_apis", model: "Pixel", platform: "android" },
+      },
+      { forgotten: [], match: { model: "Pixel 7", platform: "android" } },
+    ];
+    for (const { forgotten, match } of cases) {
+      const kinds = await fill();
+      expect(kinds.forgetMatching(match), JSON.stringify(match)).toEqual(forgotten);
+      expect(kinds.kinds(T0 + 10), JSON.stringify(match)).toHaveLength(6 - forgotten.length);
+    }
+  });
+
   it("survives a reopen of the same file, and forget and clear remove the rows", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-learned-"));
     directories.push(directory);

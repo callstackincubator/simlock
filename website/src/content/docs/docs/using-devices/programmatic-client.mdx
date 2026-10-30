@@ -178,6 +178,8 @@ The admin credential lets a program release every agent's lease and stop the dae
 
 A missing or wrong credential fails the connection with `ADMIN_AUTHENTICATION_FAILED`. An admin client has every method of the agent client too.
 
+`admin.forgetWarmKind({ platform, model, osVersion?, mode?, imageTag? })` is what `simlock warm forget` calls. It forgets every kind of the model the warm pool learned, narrowed by each field you give, and answers `{ forgotten: [{ platform, model, osVersion, mode, imageTag? }] }`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
 ### Update the daemon
 
 `admin.updateDaemon({ version?, force?, query? })` is what `simlock update` calls. It resolves the version with npm, starts the update and answers at once; the daemon then takes no new leases, waits for its leases to end (unless `force`), installs and restarts.

@@ -21,7 +21,7 @@ import { warmPoolOwner } from "./warm-pool/index.js";
 import { SerializedDecision } from "./serialized-decision.js";
 
 /**
- * Test-only: fakes and test wiring other modules' tests use. Only a `*.test.ts` file or a
+ * why: Test-only: fakes and test wiring other modules' tests use. Only a `*.test.ts` file or a
  * `test-*.ts` helper may import this file, and `pnpm lint` enforces it. Anything production code
  * also uses belongs on `index.ts`.
  */
@@ -37,12 +37,6 @@ export { FakeDriver, fakeDeviceDataTable } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 export { QuarantineCoordinator } from "./quarantine-coordinator.js";
 
-/**
- * Test-only: the decision gate and the component installer `createCore` and `createLeasing` are
- * built with, wired the way the daemon wires them -- one gate shared by both and the installer, so the
- * installer's registry writes are serialized with every other one. Unlimited free disk. A test
- * that passes its own `components` gets the gate alone.
- */
 export function testComponentWiring<
   Components extends Pick<ComponentInstaller, "claimProvision" | "install"> = ComponentInstaller,
 >(options: {
@@ -50,7 +44,6 @@ export function testComponentWiring<
   readonly drivers: readonly Driver[];
   readonly eventBus: Pick<EventBus, "emit">;
   readonly registry: Pick<Registry, "deleteComponent" | "recordComponent" | "snapshot">;
-  /** Stands in for the installer, when a test needs to see whether it was reached at all. */
   readonly components?: Components | undefined;
 }): {
   readonly components: Components | ComponentInstaller;

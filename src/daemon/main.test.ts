@@ -1007,6 +1007,18 @@ describe("startDaemon wires core and leasing together", () => {
     });
   });
 
+  it("runs the operator's warm.forget through core's warm pool, which answers the kinds it forgot", async () => {
+    const { daemon } = await start();
+
+    const report = await daemon.dispatch(
+      "warm.forget",
+      { model: "iPhone 17 Pro", platform: "ios" },
+      admin,
+    );
+
+    expect(report).toEqual({ forgotten: [] });
+  });
+
   it("grants a waiting physical request once device.add enrolls a second device of the model", async () => {
     const clock = new FakeClock(1_000);
     const phone = { apps: [], class: "phone", model: "iPhone 15 Pro", osVersion: "18.4" } as const;

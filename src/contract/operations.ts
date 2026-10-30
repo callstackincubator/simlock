@@ -47,6 +47,8 @@ import {
   inboxItemSchema,
   waitingRequestSchema,
   capabilityListSchema,
+  WARM_POOL_LEARNED_KINDS_MAX,
+  WARM_POOL_NAME_MAX,
   workerViewSchema,
 } from "./schemas.js";
 
@@ -596,6 +598,29 @@ export const nukeRun = defineOperation({
   output: nukeReportSchema,
 });
 
+const warmKindSchema = z.object({
+  platform: platformSchema,
+  model: z.string().max(WARM_POOL_NAME_MAX),
+  osVersion: z.string().max(WARM_POOL_NAME_MAX),
+  mode: z.enum(["slim", "full"]),
+  imageTag: imageTagSchema.optional(),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const warmForget = defineOperation({
+  name: "warm.forget",
+  role: "admin",
+  effect: "write",
+  input: z.object({
+    platform: platformSchema,
+    model: z.string().min(1).max(WARM_POOL_NAME_MAX),
+    osVersion: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
+    mode: z.enum(["slim", "full"]).optional(),
+    imageTag: imageTagSchema.optional(),
+  }),
+  output: z.object({ forgotten: z.array(warmKindSchema).max(WARM_POOL_LEARNED_KINDS_MAX) }),
+});
+
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
@@ -1066,6 +1091,7 @@ export const OPERATIONS = {
   "list.get": listGet,
   "cleanup.run": cleanupRun,
   "nuke.run": nukeRun,
+  "warm.forget": warmForget,
   "config.get": configGet,
   "daemon.stop": daemonStop,
   "daemon.update": daemonUpdate,

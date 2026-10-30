@@ -64,6 +64,8 @@ export type {
   ListGetOutput,
   NukeReport,
   NukeRunInput,
+  WarmForgetInput,
+  WarmForgetOutput,
   RequestLeaseOptions,
   SimlockAdminClient,
   SimlockConfig,

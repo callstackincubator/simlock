@@ -14,8 +14,8 @@
  *    `createUsageReader`), and -- as of #118 -- the lease *lifecycle*
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
  *    through `FleetLeaseCoordinator`.
- * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`
- *    and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
+ * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`,
+ *    `warm.forget` and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
  *    and `component.install` (ADR 0010 §7), which installs on one machine; its message points at
  *    `worker.install-component`, which names the workers to install on. `component.list` and
  *    `component.remove` (§8) list and remove one machine's components.
@@ -249,6 +249,7 @@ export class GatewayDispatcher {
 
       "nuke.run": unsupportedByDesign("nuke.run"),
       "cleanup.run": unsupportedByDesign("cleanup.run"),
+      "warm.forget": unsupportedByDesign("warm.forget"),
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
       "component.install": unsupportedByDesign(

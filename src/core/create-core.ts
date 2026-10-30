@@ -13,6 +13,7 @@ import type { ComponentInstaller } from "./component-installer.js";
 import type { Config } from "./config.js";
 import type {
   CapacityReader,
+  WarmKindForgetter,
   WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
@@ -98,6 +99,7 @@ export interface Core {
   readonly capacity: CapacityCoordinator;
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
+  readonly warmKinds: WarmKindForgetter;
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
@@ -332,6 +334,7 @@ export function createCore(options: CoreOptions): Core {
     capacity,
     capacityReader,
     warmPoolReader: warmPool,
+    warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     catalog: drivers,
     claims,
     claimReader: claims,

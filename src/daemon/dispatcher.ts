@@ -30,6 +30,7 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
@@ -138,6 +139,8 @@ export interface DispatcherOptions {
    * Injected because `error-code.ts` imports this module. Unset or `undefined`: `INTERNAL`. */
   readonly errorCode?: (error: unknown) => string | undefined;
   readonly nuke?: Nuke;
+  /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
+  readonly warmKinds?: WarmKindForgetter;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   readonly processRunner?: ProcessRunner;
@@ -265,6 +268,7 @@ export class Dispatcher {
       "list.get": this.#listGet,
       "cleanup.run": this.#cleanupRun,
       "nuke.run": this.#nukeRun,
+      "warm.forget": this.#warmForget,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -779,6 +783,21 @@ export class Dispatcher {
   #nukeRun: Handler<"nuke.run"> = async (input) => {
     if (this.options.nuke === undefined) throw new NukeUnavailableError();
     return this.options.nuke.run({ deleteDevices: input.deleteDevices ?? false });
+  };
+
+  #warmForget: Handler<"warm.forget"> = async (input) => {
+    if (this.options.warmKinds === undefined)
+      throw new DispatchError("INTERNAL", "The warm pool is unavailable");
+    const forgotten = this.options.warmKinds.forget(input);
+    return {
+      forgotten: forgotten.map((spec) => ({
+        platform: spec.platform,
+        model: spec.model,
+        osVersion: spec.osVersion,
+        mode: spec.mode ?? "full",
+        ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+      })),
+    };
   };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));

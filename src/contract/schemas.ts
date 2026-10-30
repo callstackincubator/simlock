@@ -475,8 +475,10 @@ export const statusCapacitySchema = z.object({
 /** why: the most configured targets the config load accepts (the block itself takes `WARM_POOL_ENTRIES_MAX`), and the longest model or OS version the block names. */
 export const WARM_POOL_TARGETS_MAX = 256;
 export const WARM_POOL_NAME_MAX = 256;
-/** why: the configured targets plus the learned kinds, 32 per platform, the pool keeps. */
-const WARM_POOL_ENTRIES_MAX = WARM_POOL_TARGETS_MAX + 64;
+/** why: the most learned kinds the pool keeps per platform, so the most one `warm.forget` answers (a match names one platform). */
+export const WARM_POOL_LEARNED_KINDS_MAX = 32;
+/** why: the configured targets plus the learned kinds of both platforms the pool keeps. */
+const WARM_POOL_ENTRIES_MAX = WARM_POOL_TARGETS_MAX + 2 * WARM_POOL_LEARNED_KINDS_MAX;
 
 const warmPoolShortSchema = z.enum([
   "disabled",
@@ -944,6 +946,7 @@ export const configSchema = z.object({
   update: z.object({ check: z.boolean() }),
   warmPool: z.object({
     enabled: z.boolean(),
+    learn: z.boolean().optional(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),
     maxConcurrentBoots: z.number(),
     targets: z.array(

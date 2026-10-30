@@ -231,6 +231,7 @@ async function buildDispatcher(
     readonly awaitReady?: () => Promise<void>;
     readonly catalog?: CatalogReader;
     readonly includeNuke?: boolean;
+    readonly warmKinds?: DispatcherOptions["warmKinds"];
     readonly includeEnrollment?: boolean;
     readonly passthroughTool?: string;
     readonly lease?: Partial<Config["lease"]>;
@@ -376,6 +377,7 @@ async function buildDispatcher(
     leases: engine,
     ...(overrides.load === undefined ? {} : { load: overrides.load }),
     ...(overrides.includeNuke === true ? { nuke: new Nuke({ executor: engine, registry }) } : {}),
+    ...(overrides.warmKinds === undefined ? {} : { warmKinds: overrides.warmKinds }),
     ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
     ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
@@ -1602,6 +1604,71 @@ describe("Dispatcher: nuke.run", () => {
     await expect(
       dispatcher.dispatch("nuke.run", {}, session({ role: "admin" })),
     ).rejects.toMatchObject({ name: "NukeUnavailableError" });
+  });
+});
+
+describe("Dispatcher: warm.forget", () => {
+  it("hands the match to the warm pool and answers each kind it forgot with its mode, full when unset, and its image tag; an agent is FORBIDDEN and nothing is forgotten", async () => {
+    const matches: unknown[] = [];
+    const { dispatcher } = await buildDispatcher({
+      warmKinds: {
+        forget: (match) => {
+          matches.push(match);
+          return [
+            { model: "Pixel", osVersion: "36", physical: false, platform: "android" },
+            {
+              imageTag: "google_apis",
+              mode: "slim",
+              model: "Pixel",
+              osVersion: "35",
+              physical: false,
+              platform: "android",
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(
+      dispatcher.dispatch(
+        "warm.forget",
+        { model: "Pixel", platform: "android" },
+        session({ role: "agent" }),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(matches).toEqual([]);
+
+    expect(
+      await dispatcher.dispatch(
+        "warm.forget",
+        { model: "Pixel", platform: "android" },
+        session({ role: "admin" }),
+      ),
+    ).toEqual({
+      forgotten: [
+        { mode: "full", model: "Pixel", osVersion: "36", platform: "android" },
+        {
+          imageTag: "google_apis",
+          mode: "slim",
+          model: "Pixel",
+          osVersion: "35",
+          platform: "android",
+        },
+      ],
+    });
+    expect(matches).toEqual([{ model: "Pixel", platform: "android" }]);
+  });
+
+  it("answers INTERNAL with no warm pool wired", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "warm.forget",
+        { model: "Pixel", platform: "android" },
+        session({ role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "INTERNAL", message: "The warm pool is unavailable" });
   });
 });
 

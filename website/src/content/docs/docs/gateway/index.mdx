@@ -34,7 +34,7 @@ Through a gateway, `simlock simctl` and `simlock adb` run on the worker that hol
 A gateway does not do these things a worker does:
 
 - It never downloads a runtime or system image while granting a lease. A request for an OS version that no worker has installed fails with `RUNTIME_MISSING`. Install it on the workers first; see [Managing workers](/simlock/docs/gateway/managing-workers#install-runtimes-and-images-on-workers).
-- `simlock cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2). Run them on the worker.
+- `simlock cleanup`, `nuke`, `doctor`, `device add`, `device remove`, `component list`, `component remove`, `warm forget`, and `component install` without `--worker` or `--all-workers` fail on a gateway with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2). Run them on the worker.
 
 ## Which daemon a command reaches
 

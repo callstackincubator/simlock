@@ -1,4 +1,5 @@
 import { connectDaemonClient } from "../connect.js";
+import { readPackageVersion } from "../../ports/index.js";
 import { commandArgs, writeResult } from "../args.js";
 import { formatStatus } from "../format.js";
 import type { CommandContext } from "../tree.js";
@@ -18,8 +19,10 @@ async function run(
   const client = await connectDaemonClient(environment, token);
   try {
     const status = await client.getStatus();
-    if (values.json) writeResult((value) => environment.stdout.write(value), status);
-    else environment.stdout.write(`${formatStatus(status, environment.clock.now())}\n`);
+    const cliVersion = readPackageVersion();
+    if (values.json)
+      writeResult((value) => environment.stdout.write(value), { ...status, cliVersion });
+    else environment.stdout.write(`${formatStatus(status, environment.clock.now(), cliVersion)}\n`);
     return 0;
   } finally {
     await client.close();

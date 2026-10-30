@@ -1,3 +1,4 @@
+import { WARM_POOL_LEARNED_KINDS_MAX } from "../../contract/index.js";
 import type { SqliteDatabase, SqliteSchemaOwner } from "../../ports/index.js";
 import type { StateDatabase } from "../../state/index.js";
 import type { Platform, VirtualSpec } from "../domain.js";
@@ -29,8 +30,6 @@ export const warmPoolOwner: SqliteSchemaOwner = {
 };
 
 const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-const LEARNED_KINDS_PER_PLATFORM = 32;
 
 export interface LearnedKind {
   readonly spec: VirtualSpec;
@@ -81,7 +80,7 @@ export class LearnedKinds {
         .prepare(
           "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
         )
-        .all(spec.platform, LEARNED_KINDS_PER_PLATFORM);
+        .all(spec.platform, WARM_POOL_LEARNED_KINDS_MAX);
       for (const { id } of surplus) {
         database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
         database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
@@ -108,23 +107,40 @@ export class LearnedKinds {
   }
 
   forget(spec: VirtualSpec): void {
-    this.#state.transaction(() => {
-      const database = this.#state.database;
-      const where = "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ?";
-      const key = [
-        spec.platform,
-        spec.model,
-        spec.osVersion,
-        spec.mode ?? "full",
-        spec.imageTag ?? "",
-      ];
-      database
+    this.#state.transaction(() => this.#delete(spec));
+  }
+
+  /** why: the operator's undo of a mistaken lease: forgets every kind of the model, narrowed by what the caller names; answers what it forgot. */
+  forgetMatching(match: LearnedKindMatch): VirtualSpec[] {
+    return this.#state.transaction(() => {
+      const forgotten = this.#state.database
         .prepare(
-          `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE ${where})`,
+          "SELECT platform, model, os_version, mode, image_tag FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
         )
-        .run(...key);
-      database.prepare(`DELETE FROM warm_kinds WHERE ${where}`).run(...key);
+        .all()
+        .map(specOf)
+        .filter((spec) => matches(spec, match));
+      for (const spec of forgotten) this.#delete(spec);
+      return forgotten;
     });
+  }
+
+  #delete(spec: VirtualSpec): void {
+    const database = this.#state.database;
+    const where = "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ?";
+    const key = [
+      spec.platform,
+      spec.model,
+      spec.osVersion,
+      spec.mode ?? "full",
+      spec.imageTag ?? "",
+    ];
+    database
+      .prepare(
+        `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE ${where})`,
+      )
+      .run(...key);
+    database.prepare(`DELETE FROM warm_kinds WHERE ${where}`).run(...key);
   }
 
   clear(): void {
@@ -157,6 +173,29 @@ export class LearnedKinds {
         };
       });
   }
+}
+
+export interface LearnedKindMatch {
+  readonly platform: Platform;
+  readonly model: string;
+  readonly osVersion?: string | undefined;
+  readonly mode?: "slim" | "full" | undefined;
+  readonly imageTag?: string | undefined;
+}
+
+// why: a field the caller left out matches every kind; mode and image tag compare as stored, full and "" when unset.
+// A given image tag is never empty (the contract refuses one), so it never matches an untagged kind.
+function matches(spec: VirtualSpec, match: LearnedKindMatch): boolean {
+  const stored: Readonly<Record<keyof LearnedKindMatch, string>> = {
+    imageTag: spec.imageTag ?? "",
+    mode: spec.mode ?? "full",
+    model: spec.model,
+    osVersion: spec.osVersion,
+    platform: spec.platform,
+  };
+  return Object.entries(match).every(
+    ([key, value]) => value === undefined || stored[key as keyof LearnedKindMatch] === value,
+  );
 }
 
 // why: a lease still held has no end, so one granted this instant counts beside the others instead of closing as it opens.

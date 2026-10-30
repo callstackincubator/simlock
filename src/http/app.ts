@@ -84,7 +84,7 @@ import {
 } from "./tracker.js";
 
 /**
- * The device fields the lease routes read: what a lease payload is built from, plus two that
+ * why: The device fields the lease routes read: what a lease payload is built from, plus two that
  * only one kind of daemon has. A worker's own registry record carries `state`, which `DELETE
  * /v1/leases/:id` reports; a gateway holds no device state of its own and leaves it out rather
  * than inventing one. A gateway's device carries the `workerId` it lives on, because a device
@@ -95,10 +95,6 @@ export interface HttpRegistryDevice extends HttpLeaseDevice {
   readonly workerId?: string;
 }
 
-/** Minimal structural read surface -- narrower than importing the `Registry` class itself. Kept
- * for the one thing dispatcher operations don't hand back: a device record for a specific
- * lease's `GET /v1/leases/:id` decoration (there is no per-id device operation). A worker
- * passes its registry; a gateway passes the devices its worker views hold in the grant shape. */
 export interface HttpRegistryReader {
   readonly snapshot: {
     readonly devices: readonly HttpRegistryDevice[];
@@ -106,22 +102,16 @@ export interface HttpRegistryReader {
 }
 
 export interface HttpGatewayDeps {
-  /** ADR 0003 §2: the exact same shared `Dispatcher` the socket path uses -- see
-   * `dispatcher-session.ts`'s `HttpDispatch`. */
   readonly dispatch: HttpDispatch;
   readonly registry: HttpRegistryReader;
-  /** The daemon's stored lease requests: a worker's request book, or a gateway's. */
   readonly leaseRequests: LeaseRequestReader;
   readonly eventBus: EventBus;
-  /** ADR §8: fed to `LeaseNoticeBuffer` instead of it subscribing to `eventBus` itself. */
   readonly ownerRoutedFacts: OwnerRoutedFacts;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
   readonly config: Config;
   readonly auth: Pick<Auth, "authenticateRequest">;
-  /** `false` on a gateway, which never downloads: `allowDownload` then does not answer the lease
-   * request `POST` early. Default `true`. */
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];
   readonly leaseRoutes?: readonly HttpLeaseRoute[];
@@ -168,7 +158,6 @@ export interface HttpMount {
 
 type Env = AuthEnv;
 
-/** Upper bound on `?wait=` long-polls; bounds how long an abandoned poll can pin resources. */
 const MAX_LONG_POLL_SECONDS = 60;
 
 function toLeaseRequestInput(body: z.infer<typeof leaseRequestBodySchema>): LeaseRequestInput {
@@ -222,7 +211,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
   const agentAuth = requireAuth(deps.auth);
 
-  // The one error boundary. Hono's `compose` catches a thrown error at the layer that threw
+  // why: The one error boundary. Hono's `compose` catches a thrown error at the layer that threw
   // it and hands it to `app.onError` right there -- it never propagates up through an outer
   // middleware's own `await next()` -- so this has to be `onError`, not a try/catch here.
   app.onError((error, c) => {
@@ -233,12 +222,10 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return errorResponse(c, error);
   });
 
-  // "One structured line per request outcome" -- by the time `next()` resolves, `onError`
-  // above has already run for a thrown error and `c.res` reflects the mapped status.
   app.use("*", async (c, next) => {
     const start = deps.clock.now();
     await next();
-    // The one unauthenticated route is also the one a tunnel/load-balancer polls: logging it
+    // why: The one unauthenticated route is also the one a tunnel/load-balancer polls: logging it
     // would let an anonymous flood drive the synchronous log sink from the event loop.
     if (c.req.path === "/v1/healthz") return;
     const identity = c.get("identity") as Identity | undefined;
@@ -353,7 +340,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
     const { wait } = c.req.valid("query");
     if (wait !== undefined) {
-      // Clamped, not rejected: an oversized wait still long-polls correctly -- the client
+      // why: Clamped, not rejected: an oversized wait still long-polls correctly -- the client
       // simply re-polls sooner than it asked -- and the clamp bounds how long an abandoned
       // poll can pin its listener and timer. Aborting the request releases them immediately.
       await tracker.waitForChange(
@@ -428,7 +415,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const lease = await findOwnedLease(deps, session, c.req.valid("param").id);
     const device = findDevice(deps, lease);
     if (device === undefined) throw unknownLease(lease.id);
-    // ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
+    // why: ADR 0004: `ttlMs` comes off the lease record itself, so a payload served after a daemon
     // restart reports the lease's real width rather than a mode default standing in for a
     // per-request value this gateway no longer remembers. `requestId` is still gateway-side
     // bookkeeping, and is still the one field a restart can drop.
@@ -475,7 +462,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     const identity = c.get("identity");
     const leaseId = c.req.valid("param").id;
     const { requesterId, ...body } = c.req.valid("json");
-    // Requester identity is the token's over HTTP, never the body's -- except for an
+    // why: Requester identity is the token's over HTTP, never the body's -- except for an
     // `operator` token, which is the proxying case `device.exec` reads it for. An agent
     // token that supplies one at all is refused, but by `device.exec`'s own `authorize`
     // hook (round 4, F4) rather than a route-level check: ADR 0003 §2 puts a contract
@@ -502,8 +489,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
         { leaseId, ...body, ...(requesterId === undefined ? {} : { requesterId }) },
         buildHttpSession(identity, {
           onStarted: () => onStarted(),
-          // The relay's answer is this chunk's SSE write, and returning it is what stops
-          // the command while a client is not reading (ADR 0005 §19e).
           onOutput: (stream, chunk) => relay.push({ chunk, stream }),
         }),
       )
@@ -512,7 +497,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
         (error: unknown) => ({ error, kind: "failed" }) as const,
       );
 
-    // An SSE response cannot take back its status code, so the decision point is the moment
+    // why: An SSE response cannot take back its status code, so the decision point is the moment
     // the process exists: every failure that can precede one -- an unowned lease, an unknown
     // one, a refused verb, an unknown tool, a daemon still starting -- lands before
     // `onStarted` and is answered as an ordinary JSON error with its own status. After it,
@@ -537,8 +522,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
           }
           end();
         });
-        // The command keeps running after a client disconnects; what ends here is this
-        // route's interest in its output, terminally.
         return () => relay.drop();
       },
     });
@@ -546,10 +529,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
   app.openapi({ ...componentInstallRoute, middleware: [agentAuth] }, async (c) => {
     const { workers, ...component } = c.req.valid("json");
-    // Progress that arrives before the stream opens is held in order and flushed when it
-    // does. After the client is gone, a write is a no-op (`pipeSse`); the install itself
-    // carries on, and a repeat of this request joins it (ADR 0010 §6). Through a gateway each
-    // update names the worker it came from (§7).
     type ProgressEvent = ComponentProgress & { readonly workerId?: string };
     const early: ProgressEvent[] = [];
     let deliver: ((progress: ProgressEvent) => void) | undefined;
@@ -566,8 +545,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       },
     });
 
-    // `workers` names the gateway's relay: it asks each worker and answers with one result per
-    // worker. Without it, the install runs on the daemon this request reached.
     const dispatched: Promise<unknown> =
       workers === undefined
         ? deps.dispatch("component.install", component, session)
@@ -577,15 +554,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       (error: unknown) => ({ error, kind: "failed" }) as const,
     );
 
-    // The same decision point as the exec route: every refusal that comes before an install
-    // (the token's role, the input, `downloads.policy`, a platform with no driver) is an
-    // ordinary JSON error with its own status. Once the installer has taken the call, the
-    // response is committed to a stream, which is what gives a call waiting behind another
-    // download its `200` and its keepalives at once. Bounded by the install's own budget,
-    // `downloads.timeoutMs`, which ends the call with `DOWNLOAD_TIMEOUT`. Through a gateway the
-    // decision point is the moment the targets are resolved: an unknown or unreachable worker
-    // named in `workers` is still a JSON error, and each worker's call is bounded by its own
-    // budget plus the gateway's backstop.
     const outcome = await Promise.race([settled, admitted.then(() => undefined)]);
     if (outcome?.kind === "failed") return errorResponse(c, outcome.error);
 
@@ -645,7 +613,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
     await deps.dispatch("lease.release", { leaseId: id }, session);
 
-    // A gateway holds no device state, so its answer is always the `reclaiming` default.
     const device = lease === undefined ? undefined : findDevice(deps, lease);
     return c.json(
       {
@@ -660,9 +627,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     c.json(await deps.dispatch("lease.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
 
-  // The token records, for a console to name a lease's holder by its token's label. `token.list`
-  // is an admin operation, so an agent token gets `FORBIDDEN`/403 from the shared dispatcher, and
-  // its output schema has no secret and no hash, so neither can reach the body.
   app.openapi({ ...tokenListRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("token.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
@@ -680,12 +644,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     return c.json(devicesReplySchema.parse({ devices }), 200);
   });
 
-  // ADR 0005 §23's worker routes, registered in both modes (ADR 0012 §3). A worker answers them
-  // as a fleet of one: `GET /v1/workers` lists this host, and the drain, undrain and remove
-  // routes answer `501 UNSUPPORTED_IN_WORKER_MODE` from its dispatcher.
-  //
-  // Operator-role in effect: `worker.*` are admin operations, so an agent token gets
-  // `FORBIDDEN`/403 from the shared dispatcher rather than from a second check here.
   app.openapi({ ...workerListRoute, middleware: [agentAuth] }, async (c) =>
     c.json(await deps.dispatch("worker.list", {}, buildHttpSession(c.get("identity"))), 200),
   );
@@ -792,7 +750,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
         return "http-sse";
       },
     });
-    // Role check + startup-readiness parking, same as every other dispatched operation; the
+    // why: Role check + startup-readiness parking, same as every other dispatched operation; the
     // actual live feed is wired below via `subscribe()`'s own return, since HTTP has no
     // persistent connection for the dispatcher's push mechanism to write through (ADR §8: "the
     // HTTP notice buffer stays, because a polling client has no connection to push to" --
@@ -842,7 +800,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   }
 
-  // `notices` holds a subscription for the app's lifetime -- exposed here rather than left to
+  // why: `notices` holds a subscription for the app's lifetime -- exposed here rather than left to
   // leak, so a caller composing this app into a longer-lived process (the daemon) can
   // unsubscribe it on shutdown.
   return Object.assign(app, {
@@ -873,7 +831,7 @@ async function findOwnedLease(
   return lease;
 }
 
-/** Best-effort lease lookup for a lease id, scoped to what the session's `lease.list` would
+/** why: Best-effort lease lookup for a lease id, scoped to what the session's `lease.list` would
  * show it (own leases; admin sees all) -- used only to decorate a response after an
  * authoritative dispatch has already decided whether the request is allowed. Never used to
  * gate access itself (see the `DELETE /v1/leases/:id` route). */
@@ -894,7 +852,6 @@ function serializeRequest(
     case "queued":
       return { ...base, queuePosition: view.state.queuePosition, state: "queued" };
     case "downloading": {
-      // `component`, `waiting` and `percent` when there is one, as the tracker built them.
       const { stage: _stage, ...download } = view.state;
       return { ...base, ...download, state: "downloading" };
     }
@@ -911,7 +868,7 @@ function serializeRequest(
   }
 }
 
-/** The device a lease names. On a gateway both carry the `workerId` they came from, and a
+/** why: The device a lease names. On a gateway both carry the `workerId` they came from, and a
  * device matches only on the lease's own worker: a device id is that worker's claim, so another
  * worker reporting the same id never answers for it. On a worker neither carries one. */
 function findDevice(
@@ -934,7 +891,7 @@ async function emptyBodyAsNone(c: Context, next: () => Promise<void>): Promise<v
   await next();
 }
 
-/** HTTP-only sugar translating `?since=5m` into the absolute `sinceTs` `events.replay` takes --
+/** why: HTTP-only sugar translating `?since=5m` into the absolute `sinceTs` `events.replay` takes --
  * not a duplicate of any daemon-side logic (the operation itself takes an absolute timestamp),
  * so it is not one of the re-implementations ADR §2 says fall away with the dispatcher move. */
 function parseDuration(value: string): number {

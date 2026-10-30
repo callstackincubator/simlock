@@ -8,15 +8,15 @@ Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGE
 
 ## Files
 
-| File               | Role                                                                                                                     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                   |
-| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                 |
-| `learned.ts`       | `warmPoolOwner` (`state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased, their 24 h peak  |
-| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered |
-| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                              |
-| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                       |
-| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                   |
+| File               | Role                                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                                    |
+| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                                  |
+| `learned.ts`       | `warmPoolOwner` (`state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased, their 24 h peak, `forgetMatching` |
+| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered                  |
+| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                                               |
+| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                                        |
+| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                                    |
 
 ## How it works
 
@@ -33,6 +33,10 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
    with the pool off); `lease.released` and `lease.expired` close its lease row; `start()` closes
    rows whose lease the registry no longer holds. Each kind's count is its peak of leases held at
    once in the last 24 h, at least 1; 32 kinds per platform, the oldest dropped.
+   **Forget** (ADR 0050) — `forgetKinds(match)` (`warm.forget`, through `core.warmKinds`) forgets every
+   kind of a platform's model, narrowed by OS, mode and image tag, drops each one's failed-boot count unless a configured target
+   shares its spec, logs one `info` line each and asks for a pass; the devices it kept are left to the reaper's idle rules, and one
+   that never served a lease to the never-leased idle rule (Plan, below).
 3. **Resolve** — each target (a learned kind needs none; the catalog check forgets one whose model,
    OS, image tag or driver is gone, and a third failed boot in a row forgets it too) through `warmPoolDemand.resolve`, downloads off, every pass.
    A kind whose platform has no catalog answer yet (read pending, failed or timed out) is kept and planned for nothing that pass.
@@ -55,8 +59,10 @@ quarantined or reserved device holds (`RunningCapacity`), per platform and globa
    - targets: merge those of one spec (counts summed); boot a shut-down device of the kind, else
      create one, after the queue's devices. Not while a waiter on its platform is one the pass could not
      serve, not while `RetrySchedule` holds the spec, not past running slots, reserve, device limit,
-     RAM or `maxConcurrentBoots`.
-   - learned kinds, newest first, after the configured targets: the same fill, a kind having its
+     RAM or `maxConcurrentBoots`. Every configured count fills before any learned count. One short for a
+     running slot or the reserve displaces the least recently used idle ready device of another kind that
+     no configured count keeps (a learned kind's, or a copy past its kind's configured count).
+   - learned kinds (none with `warmPool.learn: false`), newest first, after the configured counts: the same fill, a kind having its
      ready idle, leased and reclaiming devices. One short for a running slot displaces the least
      recently used idle ready device of an older learned kind (`displaced`; never a configured
      target's device, a spared target's, or when the capacity strategy would still refuse the kind after the shutdown).
@@ -96,6 +102,7 @@ Stop: `close()` at stop start; `drain()` finishes the pass and running boots, st
 | What                                    | Default                             | Key                              |
 | --------------------------------------- | ----------------------------------- | -------------------------------- |
 | Pool on                                 | `true`                              | `warmPool.enabled`               |
+| Plan learned kinds                      | `true`                              | `warmPool.learn`                 |
 | Running slots idle devices may not fill | 0 per platform, capped at its limit | `warmPool.reserveRunning`        |
 | Targets                                 | none, at most 256                   | `warmPool.targets`               |
 | Boots and creations in flight at once   | `max(1, floor(cpuCount / 4))`       | `warmPool.maxConcurrentBoots`    |
@@ -113,7 +120,7 @@ pool's own `state.db` tables, kept across restarts and cleared by nuke.
 - Acts only through `ManagedDeviceLifecycle` and `DeviceProvisioner`, never on a leased or
   claimed device.
 - Never installs: a missing runtime is a report, not a download.
-- A target never shuts a device down (a learned kind may displace an older learned kind's idle one); what does not fit is reported short.
+- Only displacement shuts a device down for a target or learned kind, and never one a configured count keeps; what does not fit is reported short.
 - `reserveRunning` holds slots from idle devices only; it never holds back a request.
 - Reclaim commits the driver's state and decides nothing; keep or shut down is decided here.
 

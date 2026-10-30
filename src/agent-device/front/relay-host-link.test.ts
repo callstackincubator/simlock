@@ -92,6 +92,30 @@ describe("RelayHostLink", () => {
     expect(new Set(tenants).size).toBe(principals.length);
   });
 
+  it.each([
+    {
+      leaseId: undefined,
+      row: "a health probe",
+      sent: () => new Request("http://gateway.test/v1/agent-device/health"),
+    },
+    { leaseId: "L", row: "a call on a lease", sent: () => request() },
+  ])(
+    "relays $row without the client's agent-device instance pins, which name the daemon it read /health from",
+    async ({ leaseId, sent: make }) => {
+      const { index, link, relay } = setUp();
+      index.set("L", { ownerId: "tok_a", workerId: "w1" });
+      const sent = make();
+      sent.headers.set("x-agent-device-instance", "proxy-of-another-worker");
+      sent.headers.set("x-agent-device-upstream-instance", "daemon-of-another-worker");
+
+      await link.forward(sent, agent, leaseId);
+
+      const relayed = relay.mock.calls[0]?.[1];
+      expect(relayed?.headers.has("x-agent-device-instance")).toBe(false);
+      expect(relayed?.headers.has("x-agent-device-upstream-instance")).toBe(false);
+    },
+  );
+
   it("answers the flat refusal shape for a request that is not an rpc call", async () => {
     const { link } = setUp();
 

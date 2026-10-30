@@ -353,7 +353,7 @@ function allowedGlobalArity(argument: string): "none" | "value" | undefined {
   if (argument === "-d" || argument === "-e") return "none";
   if (argument === "-s") return "value";
   if (argument === "-t") return "value";
-  if (argument.startsWith("-t") && argument.length > 2) return "none"; // fused, e.g. `-t123`
+  if (argument.startsWith("-t") && argument.length > 2) return "none";
   return undefined;
 }
 

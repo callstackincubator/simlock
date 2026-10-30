@@ -2709,6 +2709,20 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     });
   });
 
+  it("routes warm.forget from the socket to the dispatcher, which answers that the warm pool is unavailable when none is wired", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    await expect(
+      client.request("warm.forget", { model: "Pixel", platform: "android" }),
+    ).resolves.toMatchObject({
+      error: { code: "INTERNAL", message: "The warm pool is unavailable" },
+      ok: false,
+    });
+    await client.close();
+  });
+
   it("still lets an agent call doctor.run with fix:false, but not fix:true (input-dependent role)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const client = await createClient(harness.socketPath);

@@ -604,6 +604,8 @@ interface TargetPlan {
   /** why: the idle ready devices a newer learned kind may shut down for a slot, least recently used first. */
   readonly victims: VirtualDevice[];
   readonly displaced: Set<string>;
+  /** why: idle and not displaced this pass: the devices a kind still counts as its own. */
+  readonly isIdle: (device: VirtualDevice) => boolean;
   /** Pool boots and creations running or proposed, which `maxConcurrentBoots` bounds. */
   started: number;
 }
@@ -613,7 +615,7 @@ interface TargetPlan {
  * of its kind is booted before a new one is created, never while a waiter on its platform is one
  * the queue pass could not serve, never while its spec is held back after a failure, and never past the slots, the
  * device limit and RAM the capacity allows, nor past `maxConcurrentBoots` pool boots at once. A
- * target never shuts a device down: what it cannot fit it reports short.
+ * target shuts a device down only to displace it (ADR 0051): what it cannot fit it reports short.
  */
 function planTargets(
   view: WarmPolicyView,
@@ -635,6 +637,7 @@ function planTargets(
     bootable,
     displaced,
     held,
+    isIdle,
     kinds: targets,
     proposals: [],
     room,
@@ -654,25 +657,40 @@ function planTargets(
             (device) => device.id === proposal.deviceId && sameSpec(device.spec, spec),
           ),
     ).length;
-  const reports = targets.map(({ configuredCount, learnedCount, origin, spec }): TargetReport => {
-    const ready = readyOfKind(view.devices, isIdle, spec).length;
+  // why: every configured count is filled before any learned count, so a learned kind, or a
+  // configured kind's learned peak, only takes the slots the configured counts leave.
+  const first = targets.map(({ configuredCount, spec }) => {
     const filling = pending(spec);
-    const missing =
-      Math.max(configuredCount - ready, learnedCount - haveOfKind(view, isIdle, spec)) - filling;
-    const before = plan.proposals.length;
-    const short = missing > 0 ? fillTarget(plan, spec, missing, filling > 0) : undefined;
-    const report = {
-      booting: filling + plan.proposals.length - before,
-      configuredCount,
-      count: Math.max(configuredCount, learnedCount),
-      kind: kindOf(spec),
-      origin,
-      ready,
-      spec,
-      target: describeTarget(spec),
-    };
-    return short === undefined ? report : { ...report, short };
+    const missing = configuredCount - readyOfKind(view.devices, isIdle, spec).length - filling;
+    return missing > 0 ? fillTarget(plan, spec, missing, filling > 0, "configured") : { added: 0 };
   });
+  const reports = targets.map(
+    ({ configuredCount, learnedCount, origin, spec }, index): TargetReport => {
+      const ready = readyOfKind(view.devices, isIdle, spec).length;
+      const filling = pending(spec);
+      const configured = first[index] ?? { added: 0 };
+      const missing =
+        Math.max(configuredCount - ready, learnedCount - haveOfKind(view, isIdle, spec)) -
+        filling -
+        configured.added;
+      const learned =
+        configured.short === undefined && missing > 0
+          ? fillTarget(plan, spec, missing, filling + configured.added > 0, "learned")
+          : { added: 0 };
+      const short = configured.short ?? learned.short;
+      const report = {
+        booting: filling + configured.added + learned.added,
+        configuredCount,
+        count: Math.max(configuredCount, learnedCount),
+        kind: kindOf(spec),
+        origin,
+        ready,
+        spec,
+        target: describeTarget(spec),
+      };
+      return short === undefined ? report : { ...report, short };
+    },
+  );
   return { proposals: plan.proposals, reports };
 }
 
@@ -686,31 +704,55 @@ function fillTarget(
   spec: VirtualSpec,
   missing: number,
   filling: boolean,
-): TargetShort | undefined {
-  if (plan.stuck.has(spec.platform)) return undefined;
-  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) return filling ? undefined : "boot-failed";
+  count: "configured" | "learned",
+): { added: number; short?: TargetShort } {
+  if (plan.stuck.has(spec.platform)) return { added: 0 };
+  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) {
+    return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
+  }
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
-    const refused = addDisplacing(plan, spec);
-    if (refused !== undefined) return added > 0 || filling ? undefined : refused;
+    const refused = addDisplacing(plan, spec, count);
+    if (refused !== undefined) return added > 0 || filling ? { added } : { added, short: refused };
     added += 1;
   }
-  return undefined;
+  return { added };
 }
 
 /**
  * why: a learned kind short for a running slot takes the least recently used idle ready device of
- * an older learned kind: the newest kinds are the ones asked for most lately. A configured target
- * and a kind short for anything but the slot never displace; configured targets come first in
- * `kinds`, so none is older than a learned kind and none is displaced.
+ * an older learned kind: the newest kinds are the ones asked for most lately. Configured targets
+ * come first in `kinds`, so none is older than a learned kind and none is displaced for one.
  */
-function displaceFor(plan: TargetPlan, spec: VirtualSpec): boolean {
+function learnedVictim(plan: TargetPlan, spec: VirtualSpec): VirtualDevice | undefined {
   const index = plan.kinds.findIndex((entry) => sameSpec(entry.spec, spec));
-  if (plan.kinds[index]?.origin !== "learned") return false;
-  const victim = plan.victims.find((device) => {
+  if (plan.kinds[index]?.origin !== "learned") return undefined;
+  return plan.victims.find((device) => {
     const entry = plan.kinds.findIndex((candidate) => sameSpec(candidate.spec, device.spec));
     return entry > index && device.spec.platform === spec.platform;
   });
+}
+
+/**
+ * why: a configured count short for a slot takes the least recently used idle ready device that
+ * no configured count keeps: one of a learned kind, or a copy past its own kind's configured count.
+ */
+function configuredVictim(plan: TargetPlan, spec: VirtualSpec): VirtualDevice | undefined {
+  return plan.victims.find((device) => {
+    if (device.spec.platform !== spec.platform || sameSpec(device.spec, spec)) return false;
+    const kept =
+      plan.kinds.find((entry) => sameSpec(entry.spec, device.spec))?.configuredCount ?? 0;
+    return readyOfKind(plan.view.devices, plan.isIdle, device.spec).length > kept;
+  });
+}
+
+/** why: shuts down the victim for `spec`'s slot, when there is one and its slot is what `spec` lacks. */
+function displaceFor(
+  plan: TargetPlan,
+  spec: VirtualSpec,
+  count: "configured" | "learned",
+): boolean {
+  const victim = count === "configured" ? configuredVictim(plan, spec) : learnedVictim(plan, spec);
   if (victim === undefined) return false;
   // why: a slot is not all the kind lacks; when the capacity strategy still refuses it with the victim down, the shutdown would free nothing the kind can use and the victim would boot back next pass.
   if (admitted(plan, spec, new Set([...plan.displaced, victim.id])) !== undefined) return false;
@@ -721,10 +763,19 @@ function displaceFor(plan: TargetPlan, spec: VirtualSpec): boolean {
   return true;
 }
 
-/** why: a learned kind refused for a running slot tries again after each displacement it can make. */
-function addDisplacing(plan: TargetPlan, spec: VirtualSpec): TargetShort | undefined {
+/**
+ * why: a learned count refused for a running slot, or a configured count refused for a running or
+ * reserved slot, tries again after each displacement it can make.
+ */
+function addDisplacing(
+  plan: TargetPlan,
+  spec: VirtualSpec,
+  count: "configured" | "learned",
+): TargetShort | undefined {
+  const slot = (refused: TargetShort | undefined): boolean =>
+    refused === "running-limit" || (count === "configured" && refused === "reserve");
   let refused = addOne(plan, spec);
-  while (refused === "running-limit" && displaceFor(plan, spec)) refused = addOne(plan, spec);
+  while (slot(refused) && displaceFor(plan, spec, count)) refused = addOne(plan, spec);
   return refused;
 }
 

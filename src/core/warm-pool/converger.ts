@@ -37,7 +37,7 @@ import {
 } from "./policy.js";
 import type { WarmPoolFigures, WarmTargetFigures } from "./figures.js";
 import { CatalogCheck } from "./catalog-check.js";
-import { type LearnedKind, LearnedKinds } from "./learned.js";
+import { type LearnedKind, type LearnedKindMatch, LearnedKinds } from "./learned.js";
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
@@ -181,6 +181,23 @@ export class WarmPool {
     this.#learned.clear();
   }
 
+  /**
+   * why: an operator's undo of a mistaken lease. Forgets every learned kind of the model the match
+   * narrows to and asks for a pass; the kind's devices are then left to the idle rules, which shut
+   * them down and delete them. A configured target is untouched, its retry backoff included.
+   * Answers the kinds forgotten.
+   */
+  forgetKinds(match: LearnedKindMatch): VirtualSpec[] {
+    const forgotten = this.#learned.forgetMatching(match);
+    for (const spec of forgotten) {
+      if (!this.#resolved.some((configured) => sameSpec(configured.spec, spec)))
+        this.#schedule.succeeded(spec);
+      this.#logger.info("a warm pool learned kind was forgotten by the operator", kindFields(spec));
+    }
+    if (forgotten.length > 0) this.#trigger();
+    return forgotten;
+  }
+
   /** why: the pool learns from committed facts on the bus, never from the lease path (ADR 0017 §3). */
   #subscribeLearning(): void {
     const { clock, eventBus, registry } = this.options;
@@ -226,6 +243,7 @@ export class WarmPool {
 
   /** why: the learned kinds, or none when the record cannot be read; the failure is logged once per pass. */
   #learnedKinds(): LearnedKind[] {
+    if (this.options.config.learn === false) return [];
     try {
       return this.#learned.kinds(this.options.clock.now());
     } catch (error: unknown) {
@@ -886,3 +904,13 @@ const TRIGGERS = [
   "capacity.changed",
   "lease.queued",
 ] as const;
+
+function kindFields(spec: VirtualSpec): Record<string, string> {
+  return {
+    model: spec.model,
+    osVersion: spec.osVersion,
+    platform: spec.platform,
+    ...(spec.mode === undefined ? {} : { mode: spec.mode }),
+    ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+  };
+}

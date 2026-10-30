@@ -55,6 +55,7 @@ const tokenModule = () => import("./commands/token.js");
 const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
 const alertsModule = () => import("./commands/alerts.js");
+const warmModule = () => import("./commands/warm.js");
 
 export const COMMANDS: readonly CommandNode[] = [
   { name: "lease", load: leaseModule, children: [{ name: "renew", load: leaseModule }] },
@@ -66,6 +67,7 @@ export const COMMANDS: readonly CommandNode[] = [
   { name: "cleanup", load: () => import("./commands/cleanup.js") },
   { name: "doctor", load: () => import("./commands/doctor.js") },
   { name: "nuke", load: () => import("./commands/nuke.js") },
+  { name: "warm", load: warmModule, children: [{ name: "forget", load: warmModule }] },
   { name: "events", load: () => import("./commands/events.js") },
   { name: "stats", load: () => import("./commands/stats.js") },
   {

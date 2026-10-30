@@ -164,6 +164,7 @@ export {
   type CatalogReader,
   type LeaseExpirer,
   type PassthroughResolver,
+  type WarmKindForgetter,
   type WarmPoolReader,
 } from "./core-ports.js";
 export { findCatalogModel, modelClass, pairedRuntimes } from "./catalog-match.js";

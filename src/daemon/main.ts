@@ -678,6 +678,7 @@ async function composeDaemon(
     enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
     nuke,
     registry,
+    warmKinds: core.warmKinds,
     stalls: { claims: core.claimReader, drivers },
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,

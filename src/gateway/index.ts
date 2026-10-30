@@ -1,5 +1,5 @@
 /**
- * `src/gateway` -- the second implementation of the daemon contract (ADR 0005 §32), for a
+ * why: `src/gateway` -- the second implementation of the daemon contract (ADR 0005 §32), for a
  * daemon that owns no devices and fronts the workers connected to it.
  *
  * Boundaries (§33, enforced by `pnpm lint`): nothing here imports `src/drivers`, and

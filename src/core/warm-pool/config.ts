@@ -35,6 +35,8 @@ export interface WarmPoolConfig {
   readonly reserveRunning: { readonly ios: number; readonly android: number };
   /** Kinds of device kept booted ahead of demand. */
   readonly targets: readonly WarmTarget[];
+  /** why: `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
+  readonly learn?: boolean;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
 }
@@ -42,6 +44,7 @@ export interface WarmPoolConfig {
 export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
   return {
     enabled: true,
+    learn: true,
     maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
     reserveRunning: { android: 0, ios: 0 },
     targets: [],
@@ -107,6 +110,7 @@ const targetsValidator: Validator = (value, path, warn) => {
 /** The validators for the keys this module owns, composed into the `warmPool` object. */
 export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Validator>> = {
   enabled: booleanValue,
+  learn: booleanValue,
   maxConcurrentBoots: positiveInteger,
   reserveRunning: objectValidator({ android: nonNegativeInteger, ios: nonNegativeInteger }),
   targets: targetsValidator,

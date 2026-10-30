@@ -1,6 +1,6 @@
 import type { CapacityPlatform, RamBudget, RunningCapacity } from "./capacity/index.js";
-import type { WarmPoolFigures } from "./warm-pool/index.js";
-import type { Platform } from "./domain.js";
+import type { LearnedKindMatch, WarmPoolFigures } from "./warm-pool/index.js";
+import type { Platform, VirtualSpec } from "./domain.js";
 import type {
   PassthroughCommand,
   PassthroughContext,
@@ -25,6 +25,11 @@ export interface CapacityReader {
 export interface WarmPoolReader {
   /** The pool as its last pass left it. */
   figures(): WarmPoolFigures;
+}
+
+/** why: an operator's undo of a mistaken lease: forgets the learned kinds the match names, answering them. */
+export interface WarmKindForgetter {
+  forget(match: LearnedKindMatch): VirtualSpec[];
 }
 
 /** Administrative lease expiry used by doctor reconciliation. */
