@@ -152,7 +152,7 @@ describe("AdbServerSupervisor.start", () => {
   it.each([["/usr/bin/vim /etc/hosts"], [String.raw`C:\tools\notadb.exe -P 5038 nodaemon server`]])(
     "never signals a recorded pid that is no longer an adb process: %s",
     async (commandLine) => {
-      // The recycled-pid case: the number is alive, but it belongs to a stranger now, and a
+      // why: the recycled-pid case: the number is alive, but it belongs to a stranger now, and a
       // record is not a licence to kill whatever answers to its pid.
       const harness = await start({
         commandLines: [[recordedPid, [commandLine]]],
