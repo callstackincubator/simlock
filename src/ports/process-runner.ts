@@ -239,6 +239,9 @@ export class NodeProcessRunner implements ProcessRunner {
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
       stdio: options.stdio ?? "pipe",
+      // why: the daemon has no console, so on Windows a console program it starts (adb, the
+      // emulator, node) would otherwise get a new, visible one.
+      windowsHide: true,
     });
 
     if (child.pid === undefined) {
@@ -274,6 +277,8 @@ export class NodeProcessRunner implements ProcessRunner {
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
       stdio: "pipe",
+      // why: as in `spawn`: no visible console window for a child of a daemon that has none.
+      windowsHide: true,
     });
 
     if (child.pid === undefined) {
