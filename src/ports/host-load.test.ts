@@ -879,8 +879,8 @@ describe("WindowsHostLoadProbe", () => {
   });
 
   it.each([
-    ["PowerShell exits non-zero", { code: 1, stdout: "" }],
-    ["PowerShell times out", { code: null, stdout: "" }],
+    ["PowerShell exits non-zero", { code: 1, stdout: "100" }],
+    ["PowerShell times out", { code: null, stdout: "100" }],
     ["the answer is not a whole number", { stdout: "n/a" }],
   ] as const)("leaves memory out, and still reads CPU and disk, when %s", async (_why, answer) => {
     const counters = await windowsProbe(pageFileRunner(answer)).read();
