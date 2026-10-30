@@ -17,6 +17,14 @@ export class IpcError extends Error {
   }
 }
 
+/** why: only a refused or missing endpoint proves nothing listens there; any other failure cannot prove it. */
+export function isEndpointAbsent(error: unknown): boolean {
+  return (
+    error instanceof IpcError &&
+    (error.code === "connection-refused" || error.code === "endpoint-not-found")
+  );
+}
+
 export interface IpcConnection {
   readonly closed: boolean;
   onData(listener: (chunk: string) => void): () => void;
@@ -48,7 +56,7 @@ export interface NodeIpcTransportOptions {
   readonly closeGraceMs?: number;
 }
 
-/** Node's Unix-domain socket adapter. Kept at the infrastructure boundary. */
+/** why: one adapter serves both endpoint kinds, a Unix-domain socket path and a Windows named pipe. */
 export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
   readonly #connectTimeoutMs: number;
   readonly #closeGraceMs: number;

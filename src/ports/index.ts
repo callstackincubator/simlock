@@ -33,6 +33,7 @@ export {
   type IpcConnector,
   IpcError,
   type IpcListenerFactory,
+  isEndpointAbsent,
   MemoryIpcTransport,
   NodeIpcTransport,
 } from "./ipc.js";

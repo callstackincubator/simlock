@@ -220,11 +220,8 @@ async function isStoppingRefusal(error: unknown): Promise<boolean> {
  * the name check picks the candidate and `instanceof` against the real class proves it. */
 async function isUnavailable(error: unknown): Promise<boolean> {
   if (!(error instanceof Error) || error.name !== "IpcError") return false;
-  const { IpcError } = await import("../ports/index.js");
-  return (
-    error instanceof IpcError &&
-    (error.code === "connection-refused" || error.code === "endpoint-not-found")
-  );
+  const { isEndpointAbsent } = await import("../ports/index.js");
+  return isEndpointAbsent(error);
 }
 
 async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
@@ -372,7 +369,7 @@ export function buildCliEnvironment(
     connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {
-      const { IpcError, isPipeEndpoint, resolveDaemonSocketPath } =
+      const { isEndpointAbsent, isPipeEndpoint, resolveDaemonSocketPath } =
         await import("../ports/index.js");
       const endpoint = resolveDaemonSocketPath(dataDirectory);
       if (!isPipeEndpoint(endpoint)) return filesystem.exists(endpoint);
@@ -381,8 +378,7 @@ export function buildCliEnvironment(
         await (await ipc.connect(endpoint)).close();
         return true;
       } catch (error: unknown) {
-        if (!(error instanceof IpcError)) return true;
-        return error.code !== "connection-refused" && error.code !== "endpoint-not-found";
+        return !isEndpointAbsent(error);
       }
     },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
