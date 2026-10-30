@@ -50,8 +50,10 @@ import {
   type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
+  IpcError,
   JsonLinesLogger,
   MemoryFilesystem,
+  MemoryIpcTransport,
   MemoryLogSink,
   NodeFilesystem,
   NodeSqliteOpener,
@@ -3248,6 +3250,16 @@ describe("startDaemon with the agent-device edge", () => {
     return { directory, filesystem };
   }
 
+  /** why: pid 900 answers as this home's own agent-device daemon, so a supervisor that ran would read its command line and SIGTERM it. */
+  function recordedDaemonAlive(directory: string): FakeProcessSupervisor {
+    const processSupervisor = new FakeProcessSupervisor([900]);
+    processSupervisor.answerCommandLine(
+      900,
+      `${process.execPath} ${entry} --simlock-home=${directory}`,
+    );
+    return processSupervisor;
+  }
+
   function versionAndDaemon(directory: string, role?: "phones"): ScriptedProcessRunner {
     const version = {
       match: { args: [realCli, "--version"], command: process.execPath },
@@ -3560,11 +3572,11 @@ describe("startDaemon with the agent-device edge", () => {
       drivers: undefined,
     },
   ] as const)(
-    "a $role with no agent-device supervisor runs no ps and sends no signal, even with a recorded daemon on disk",
+    "a $role with no agent-device supervisor reads no command line, runs no ps and sends no signal, even with a recorded daemon on disk",
     async ({ role, config, drivers }) => {
       const setup = await setUp(await config(), { record: { pid: 900 } });
       const runner = new ScriptedProcessRunner([]);
-      const processSupervisor = new FakeProcessSupervisor([900]);
+      const processSupervisor = recordedDaemonAlive(setup.directory);
 
       const { clock } = await startEdge(setup, {
         ...(drivers === undefined ? {} : { drivers: [...drivers] }),
@@ -3575,6 +3587,7 @@ describe("startDaemon with the agent-device edge", () => {
       clock.advance(SUPERVISOR_RETRY_MS);
       await pollUntil(() => false, 100);
 
+      expect(processSupervisor.commandLineReads).toEqual([]);
       expect(runner.calls).toEqual([]);
       expect(processSupervisor.signals).toEqual([]);
     },
@@ -3632,7 +3645,7 @@ describe("startDaemon with the agent-device edge", () => {
     expect(loads).toBe(1);
   });
 
-  it("runs no ps and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
+  it("reads no command line and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
     const first = await setUp({ capabilities: { "agent-device": { enabled: false } } });
     await startEdge(first, {
       processRunner: new ScriptedProcessRunner([]),
@@ -3643,7 +3656,7 @@ describe("startDaemon with the agent-device edge", () => {
       { directory: first.directory, record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
-    const processSupervisor = new FakeProcessSupervisor([900]);
+    const processSupervisor = recordedDaemonAlive(second.directory);
     const clock = new FakeClock(1_000);
 
     await expect(
@@ -3652,6 +3665,7 @@ describe("startDaemon with the agent-device edge", () => {
     clock.advance(SUPERVISOR_RETRY_MS);
     await pollUntil(() => false, 100);
 
+    expect(processSupervisor.commandLineReads).toEqual([]);
     expect(runner.calls).toEqual([]);
     expect(processSupervisor.signals).toEqual([]);
   });
@@ -4445,6 +4459,18 @@ describe("startDaemon state.db", () => {
 
     expect(await versions()).toEqual(before);
     expect(await readFile(join(directory, "state.db"))).toEqual(bytesBefore);
+  });
+
+  it("refuses to start as already running when connecting to its endpoint times out, as a Windows pipe whose every instance is busy does", async () => {
+    const memory = new MemoryIpcTransport();
+    const ipc = {
+      connect: async () => {
+        throw new IpcError("connection-timeout", "timed out", undefined);
+      },
+      listen: memory.listen.bind(memory),
+    };
+
+    await expect(start({ ipc })).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
   });
 
   it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {

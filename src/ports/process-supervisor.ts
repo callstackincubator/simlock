@@ -1,3 +1,5 @@
+import type { ProcessResult, ProcessRunner } from "./process-runner.js";
+
 /**
  * Liveness and signalling for a process addressed by pid rather than by a handle.
  *
@@ -10,9 +12,54 @@ export interface ProcessSupervisor {
   isAlive(pid: number): boolean;
   /** Best effort; a pid that is already gone is not an error. */
   signal(pid: number, signal: NodeJS.Signals): void;
+  /**
+   * why: a recorded pid may since have been handed to another process, so a caller proves what
+   * it is from its arguments before signalling it. They come back unquoted and joined by single
+   * spaces on every platform, as `ps -o args=` prints them, so one matcher reads them all; a
+   * read that fails, times out or prints nothing is `undefined`, never a guess.
+   */
+  commandLine(pid: number): Promise<string | undefined>;
+}
+
+export interface NodeProcessSupervisorOptions {
+  readonly platform: NodeJS.Platform;
+  readonly processRunner: ProcessRunner;
 }
 
 export class NodeProcessSupervisor implements ProcessSupervisor {
+  readonly #options: NodeProcessSupervisorOptions;
+
+  constructor(options: NodeProcessSupervisorOptions) {
+    this.#options = options;
+  }
+
+  async commandLine(pid: number): Promise<string | undefined> {
+    if (!isAddressablePid(pid)) {
+      return undefined;
+    }
+
+    const windows = this.#options.platform === "win32";
+    let result: ProcessResult;
+    try {
+      result = windows
+        ? await this.#options.processRunner.run("powershell.exe", windowsCommandLineRead(pid), {
+            timeoutMs: COMMAND_LINE_TIMEOUT_MS,
+          })
+        : await this.#options.processRunner.run("ps", ["-ww", "-o", "args=", "-p", String(pid)], {
+            timeoutMs: COMMAND_LINE_TIMEOUT_MS,
+          });
+    } catch {
+      return undefined;
+    }
+
+    const line = result.code === 0 ? (result.stdout.split("\n")[0]?.trim() ?? "") : "";
+    if (line === "") {
+      return undefined;
+    }
+
+    return windows ? windowsArguments(line).join(" ") : line;
+  }
+
   isAlive(pid: number): boolean {
     if (!isAddressablePid(pid)) {
       return false;
@@ -66,7 +113,9 @@ export interface SignalRecord {
  */
 export class FakeProcessSupervisor implements ProcessSupervisor {
   readonly signals: SignalRecord[] = [];
+  readonly commandLineReads: number[] = [];
   readonly #live = new Set<number>();
+  readonly #commandLines = new Map<number, (string | undefined)[]>();
 
   constructor(livePids: readonly number[] = []) {
     for (const pid of livePids) {
@@ -89,6 +138,77 @@ export class FakeProcessSupervisor implements ProcessSupervisor {
   markDead(pid: number): void {
     this.#live.delete(pid);
   }
+
+  commandLine(pid: number): Promise<string | undefined> {
+    this.commandLineReads.push(pid);
+    const answers = this.#commandLines.get(pid) ?? [];
+    return Promise.resolve(answers.length > 1 ? answers.shift() : answers[0]);
+  }
+
+  /** why: a pid's second read can differ from its first (it exited and its number was reused), so each read takes the next answer and the last one repeats. */
+  answerCommandLine(pid: number, ...answers: (string | undefined)[]): void {
+    this.#commandLines.set(pid, [...answers]);
+  }
+}
+
+/** why: PowerShell's first start on a cold host takes seconds, and `ps` answers in milliseconds; one bound covers both. */
+const COMMAND_LINE_TIMEOUT_MS = 5_000;
+
+/**
+ * why: Windows has no `ps`; `Win32_Process` holds the command line as the parent passed it.
+ * PowerShell writes a redirected stdout in the console's code page unless told otherwise, which
+ * would turn a non-ASCII path into one no caller's marker matches.
+ */
+function windowsCommandLineRead(pid: number): string[] {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    `[Console]::OutputEncoding = [Text.Encoding]::UTF8; (Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
+  ];
+}
+
+/**
+ * why: Windows passes a child one string, quoted by its parent (libuv, for Node), and a quoted
+ * argument would not match a caller's marker. This splits it back as the C runtime does: the
+ * program name ends at its closing quote or first blank; elsewhere 2n backslashes before a quote
+ * are n and the quote toggles quoting, 2n+1 are n and a literal quote, and other backslashes
+ * are literal.
+ */
+function windowsArguments(commandLine: string): string[] {
+  const program = /^"([^"]*)"?|^[^ \t]*/.exec(commandLine) as RegExpExecArray;
+  return [program[1] ?? program[0], ...splitWindowsArguments(commandLine.slice(program[0].length))];
+}
+
+/** why: a quote with the backslashes before it is one token, as their count decides what both mean. */
+const WINDOWS_ARGUMENT_TOKEN = /(\\*)"|[ \t]+|\\+|[^\\" \t]+/g;
+
+interface ArgumentSplit {
+  readonly args: string[];
+  current: string | undefined;
+  quoted: boolean;
+}
+
+function splitWindowsArguments(rest: string): string[] {
+  const split: ArgumentSplit = { args: [], current: undefined, quoted: false };
+  for (const [token, slashes] of rest.matchAll(WINDOWS_ARGUMENT_TOKEN)) {
+    if (slashes !== undefined) appendQuote(split, slashes.length);
+    else if (!split.quoted && /^[ \t]/.test(token)) endArgument(split);
+    else split.current = (split.current ?? "") + token;
+  }
+  endArgument(split);
+  return split.args;
+}
+
+function appendQuote(split: ArgumentSplit, slashes: number): void {
+  const literal = slashes % 2 === 1;
+  split.current = `${split.current ?? ""}${"\\".repeat(Math.floor(slashes / 2))}${literal ? '"' : ""}`;
+  if (!literal) split.quoted = !split.quoted;
+}
+
+function endArgument(split: ArgumentSplit): void {
+  if (split.current !== undefined) split.args.push(split.current);
+  split.current = undefined;
 }
 
 /** The pid is gone, or belongs to a user this process may not signal. */

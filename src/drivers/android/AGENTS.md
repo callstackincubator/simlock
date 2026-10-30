@@ -28,7 +28,8 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 Start — `AndroidDriver.create`:
 
-1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` with
+1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (on Windows
+   `%LOCALAPPDATA%\Android\Sdk`, and the tools are `adb.exe`, `emulator.exe`, `avdmanager.bat`, `sdkmanager.bat`) with
    `avdmanager` + `sdkmanager` (newest `cmdline-tools/*/bin`, else `tools/bin`), `emulator`,
    `platform-tools/adb`. None → `SdkMissingError`: Android absent, no rejection.
 2. `ensureOwnedRoot`: the AVD home, default `$SIMLOCK_HOME/devices/android`.
@@ -42,7 +43,7 @@ Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no sc
 
 1. Port listening + live record → adopt. Listening, no record → `occupied`.
 2. Record alive, port silent → reap. Then spawn, write the record, wait for the port → else `start-failed`.
-3. Reap = `ps -o args=` must show `adb`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. Unreadable `ps` keeps the record.
+3. Reap = its command line (`ProcessSupervisor.commandLine`) must show `adb` or `adb.exe`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. An unreadable one keeps the record.
 4. `dispose` reaps it. Emulators are spawned unref'd and outlive the daemon.
 
 Provision — `provision`:
@@ -149,7 +150,7 @@ Reads only: the user's AVD home, devices.xml, the SDK.
 ## Known gaps
 
 - **Simlock's adb server is stopped by pid only.** `ADB_REJECT_KILL_SERVER=1` refuses its `kill-server`.
-  No record → `occupied`: find it with `lsof`, or move `drivers.android.adbServerPort` (one per instance).
+  No record → `occupied`: find it with `lsof` (Windows: `Get-NetTCPConnection -LocalPort <port>`; the message names `lsof` only), or move `drivers.android.adbServerPort` (one per instance).
 - **A physical command can restart a 5037 server of another protocol (ADR 0022 §5).** One started
   between the gate and the command is restarted by adb's client. Run every adb on the host from one platform-tools.
 - **Port checks are partial.** A port handed out but not yet booted reads free to another instance.

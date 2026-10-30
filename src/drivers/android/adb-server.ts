@@ -13,7 +13,6 @@ const START_TIMEOUT_MS = 10_000;
 /** How long a signalled server gets to disappear before the next, harder signal. */
 const STOP_TIMEOUT_MS = 5_000;
 const POLL_INTERVAL_MS = 100;
-const IDENTITY_TIMEOUT_MS = 5_000;
 /** Ports below this belong to the system, and 5037 is the shared server every tool finds. */
 const MIN_PORT = 1024;
 const MAX_PORT = 65_535;
@@ -237,39 +236,17 @@ export class AdbServerSupervisor {
   }
 
   /**
-   * What the process table says this pid is, read as a full command line.
-   *
-   * `-o comm=` would be the obvious flag and is the wrong one: it strips the arguments,
-   * which are the only thing that separates Simlock's server from the machine's shared one.
-   * "Some adb" is exactly the population a recycled pid is most likely to land in on a
-   * developer's machine, and signalling on that evidence would SIGKILL the adb server
-   * Android Studio and every other tool are sharing. `-o args=` (`command` on some BSD
-   * `ps`) keeps them, so ownership can be required rather than assumed: an adb binary, the
-   * `-P <port>` this supervisor configured, and `nodaemon`.
-   *
-   * The three answers are deliberately distinct, and only a command line that was actually
-   * read counts as `"other"` -- the stale record to drop. Everything else is `"unknown"`,
-   * where the record must survive (see `#reap`): a `ps` that is missing, not on `PATH`, too
-   * slow, or too small to know `-o args=` (BusyBox) all report as failures indistinguishable
-   * from "no such pid", and guessing "gone" from an exit code would delete the record on
-   * every shutdown on such a host.
+   * why: the arguments, not the program name, are the only thing that separates Simlock's
+   * server from the machine's shared one, and "some adb" is exactly where a recycled pid
+   * lands on a developer's machine; so ownership is required, never assumed: an adb binary,
+   * the `-P <port>` this supervisor configured, and `nodaemon`. Only a command line that was
+   * actually read counts as `"other"`, the stale record to drop; an unreadable one is
+   * `"unknown"`, where the record must survive (see `#reap`), as guessing "gone" would
+   * delete it on every shutdown of a host whose process table cannot be read.
    */
   async #identify(pid: number): Promise<"own-server" | "other" | "unknown"> {
-    let result;
-    try {
-      result = await this.#options.processRunner.run("ps", ["-o", "args=", "-p", String(pid)], {
-        timeoutMs: IDENTITY_TIMEOUT_MS,
-      });
-    } catch {
-      return "unknown";
-    }
-
-    if (result.code !== 0) {
-      return "unknown";
-    }
-
-    const commandLine = result.stdout.split("\n")[0]?.trim() ?? "";
-    if (commandLine === "") {
+    const commandLine = await this.#options.processSupervisor.commandLine(pid);
+    if (commandLine === undefined) {
       return "unknown";
     }
 
@@ -282,7 +259,7 @@ export class AdbServerSupervisor {
    */
   #isOwnServerCommand(commandLine: string): boolean {
     return (
-      /(?:^|[\s/])adb(?:\.exe)?(?=\s)/.test(commandLine) &&
+      /(?:^|[\s/\\])adb(?:\.exe)?(?=\s)/.test(commandLine) &&
       new RegExp(`(?:^|\\s)-P\\s+${this.#options.port}(?=\\s|$)`).test(commandLine) &&
       /(?:^|\s)nodaemon(?=\s|$)/.test(commandLine)
     );

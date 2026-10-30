@@ -44,6 +44,7 @@ describe("the default parent watch", () => {
         clock: new FakeClock(0),
         homeDirectory: "/home/operator",
         workingDirectory: "/work/project",
+        hostPlatform: "linux",
         runTool: async () => ({ outcome: "not-found" }),
         daemonHome: {
           role: "worker",
