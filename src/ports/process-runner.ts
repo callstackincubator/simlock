@@ -1,6 +1,8 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { constants } from "node:os";
 
+import { childLaunch } from "./windows-command.js";
+
 // `close` normally follows `exit` within the same tick, once the child's own stdio
 // pipes report EOF. But a child that forks a grandchild before it dies leaves that
 // grandchild holding the inherited write end of our pipe open -- it was handed the
@@ -234,11 +236,13 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 
   spawn(command: string, args: readonly string[], options: ProcessRunOptions = {}): ProcessHandle {
-    const child = spawnChildProcess(command, args, {
+    const launch = childLaunch(command, args);
+    const child = spawnChildProcess(launch.command, launch.args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
       stdio: options.stdio ?? "pipe",
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
     });
 
     if (child.pid === undefined) {
@@ -269,11 +273,13 @@ export class NodeProcessRunner implements ProcessRunner {
     args: readonly string[],
     options: ProcessStreamOptions,
   ): StreamingProcessHandle {
-    const child = spawnChildProcess(command, args, {
+    const launch = childLaunch(command, args);
+    const child = spawnChildProcess(launch.command, launch.args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
       stdio: "pipe",
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
     });
 
     if (child.pid === undefined) {

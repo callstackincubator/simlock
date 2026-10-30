@@ -13,14 +13,42 @@ export interface AndroidSdkPaths {
   readonly sdkmanager: string;
 }
 
+/**
+ * why: The SDK's command-line tools are `.bat` scripts on Windows and its binaries `.exe`; a path
+ * without the extension is not a file there, so a complete SDK would read as missing every tool.
+ */
+function withWindowsExtension(
+  path: string,
+  platform: NodeJS.Platform,
+  extension: ".bat" | ".exe",
+): string {
+  return platform === "win32" ? `${path}${extension}` : path;
+}
+
+/** why: Android Studio installs the SDK under `%LOCALAPPDATA%` on Windows, so a machine with no `ANDROID_HOME` still finds it there. */
+function defaultSdkRoot(
+  env: Readonly<Record<string, string | undefined>>,
+  homeDirectory: string,
+  platform: NodeJS.Platform,
+): string {
+  if (platform !== "win32") return `${homeDirectory}/Library/Android/sdk`;
+  const localAppData = env.LOCALAPPDATA;
+  return localAppData === undefined || localAppData === ""
+    ? `${homeDirectory}/AppData/Local/Android/Sdk`
+    : `${localAppData}/Android/Sdk`;
+}
+
 /** The SDK roots searched, in order: `ANDROID_HOME`, `ANDROID_SDK_ROOT`, then Android Studio's default. */
 function sdkSearchRoots(
   env: Readonly<Record<string, string | undefined>>,
   homeDirectory: string,
+  platform: NodeJS.Platform,
 ): string[] {
-  return [env.ANDROID_HOME, env.ANDROID_SDK_ROOT, `${homeDirectory}/Library/Android/sdk`].filter(
-    (root): root is string => root !== undefined && root !== "",
-  );
+  return [
+    env.ANDROID_HOME,
+    env.ANDROID_SDK_ROOT,
+    defaultSdkRoot(env, homeDirectory, platform),
+  ].filter((root): root is string => root !== undefined && root !== "");
 }
 
 /**
@@ -38,14 +66,15 @@ export async function locateSdk(
   env: Readonly<Record<string, string | undefined>>,
   homeDirectory: string,
   filesystem: Filesystem,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<SdkLocation> {
-  const searched = sdkSearchRoots(env, homeDirectory);
+  const searched = sdkSearchRoots(env, homeDirectory, platform);
   const directories: string[] = [];
   for (const root of searched) {
     if (await isDirectory(filesystem, root)) directories.push(root);
   }
   for (const root of directories) {
-    const paths = await sdkPathsAt(root, filesystem);
+    const paths = await sdkPathsAt(root, filesystem, platform);
     if (paths !== undefined) return { kind: "complete", paths };
   }
   const first = directories[0];
@@ -63,22 +92,23 @@ async function isDirectory(filesystem: Filesystem, path: string): Promise<boolea
   }
 }
 
-export function emulatorPath(root: string): string {
-  return `${root}/emulator/emulator`;
+export function emulatorPath(root: string, platform: NodeJS.Platform = process.platform): string {
+  return withWindowsExtension(`${root}/emulator/emulator`, platform, ".exe");
 }
 
-export function adbPath(root: string): string {
-  return `${root}/platform-tools/adb`;
+export function adbPath(root: string, platform: NodeJS.Platform = process.platform): string {
+  return withWindowsExtension(`${root}/platform-tools/adb`, platform, ".exe");
 }
 
 /** Every tool the driver runs, when all of them are at `root`; otherwise `undefined`. */
 async function sdkPathsAt(
   root: string,
   filesystem: Filesystem,
+  platform: NodeJS.Platform,
 ): Promise<AndroidSdkPaths | undefined> {
-  const tools = await sdkToolBin(root, filesystem);
-  const emulator = emulatorPath(root);
-  const adb = adbPath(root);
+  const tools = await sdkToolBin(root, filesystem, platform);
+  const emulator = emulatorPath(root, platform);
+  const adb = adbPath(root, platform);
   if (
     tools === undefined ||
     !(await filesystem.exists(emulator)) ||
@@ -96,11 +126,12 @@ async function sdkPathsAt(
 export async function sdkToolBin(
   root: string,
   filesystem: Filesystem,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<Pick<AndroidSdkPaths, "avdmanager" | "sdkmanager"> | undefined> {
   const bins = [...(await commandLineToolBins(root, filesystem)), `${root}/tools/bin`];
   for (const bin of bins) {
-    const avdmanager = `${bin}/avdmanager`;
-    const sdkmanager = `${bin}/sdkmanager`;
+    const avdmanager = withWindowsExtension(`${bin}/avdmanager`, platform, ".bat");
+    const sdkmanager = withWindowsExtension(`${bin}/sdkmanager`, platform, ".bat");
     if ((await filesystem.exists(avdmanager)) && (await filesystem.exists(sdkmanager))) {
       return { avdmanager, sdkmanager };
     }

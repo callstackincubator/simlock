@@ -171,7 +171,9 @@ async function validateRootDirectory(context: RootContext): Promise<void> {
     throw rejected(context, "wrong-owner", `it is owned by uid ${details.uid}, not ${uid}`);
   }
 
-  if ((details.mode & 0o077) !== 0) {
+  // why: a platform with no uids (Windows) has no POSIX mode bits either: Node reports every
+  // writable directory there as 0o666, so the check would refuse every root it ever made.
+  if (uid !== undefined && (details.mode & 0o077) !== 0) {
     throw rejected(
       context,
       "wrong-permissions",

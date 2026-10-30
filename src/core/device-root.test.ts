@@ -275,6 +275,16 @@ describe("ensureOwnedRoot", () => {
     ).resolves.toBe(root);
   });
 
+  it("accepts a root with any mode when the platform has no uids, since it has no mode bits either", async () => {
+    const filesystem = createFilesystem();
+    await ensure(filesystem);
+    filesystem.defineAttributes(root, { mode: 0o666 });
+
+    await expect(
+      ensureOwnedRoot({ filesystem, idGenerator, instanceId, path: root, platform: "ios" }),
+    ).resolves.toBe(root);
+  });
+
   it.each([0o750, 0o770, 0o701])("refuses a root reachable beyond its owner (%s)", async (mode) => {
     const filesystem = createFilesystem();
     await ensure(filesystem);
