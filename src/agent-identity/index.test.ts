@@ -22,6 +22,10 @@ describe("resolveRequesterId", () => {
     expect(resolveRequesterId({ CODEX_SESSION_ID: "xyz" }, "fallback")).toBe("codex:xyz");
   });
 
+  it("returns pi:<id> from PI_SESSION_ID when SIMLOCK_AGENT_ID is unset", () => {
+    expect(resolveRequesterId({ PI_SESSION_ID: "p1" }, "fallback")).toBe("pi:p1");
+  });
+
   it("takes CLAUDE_CODE_SESSION_ID over CODEX_SESSION_ID when both are set", () => {
     expect(
       resolveRequesterId({ CLAUDE_CODE_SESSION_ID: "abc", CODEX_SESSION_ID: "xyz" }, "fallback"),

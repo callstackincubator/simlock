@@ -17,11 +17,12 @@ Simlock counts leases per **requester**, the agent identity a lease belongs to. 
 | --- | --- | --- |
 | Claude Code | Automatic: `claude-code:<session id>` | Automatic: the same `claude-code:<session id>` |
 | Codex | Automatic: `codex:<session id>` | Automatic, but different from the CLI's: `mcp:<process id>` |
+| pi | Automatic: `pi:<session id>` | Automatic, but different from the CLI's: `mcp:<process id>` |
 | Any other tool | Set `SIMLOCK_AGENT_ID` | Automatic: `mcp:<process id>` |
 
-Under Claude Code and Codex, every `simlock` command in one session, including those its sub-agents run, uses the session's identity. So the session and its sub-agents share one lease. If your sub-agents need a device each, ask the operator to raise `lease.maxPerRequester`, as a number or per platform. See [Configuration](/simlock/docs/reference/configuration).
+Under Claude Code, Codex and pi, every `simlock` command in one session, including those its sub-agents run, uses the session's identity. So the session and its sub-agents share one lease. If your sub-agents need a device each, ask the operator to raise `lease.maxPerRequester`, as a number or per platform. See [Configuration](/simlock/docs/reference/configuration).
 
-Codex does not pass its session ID to MCP servers. Under Codex, the MCP server and the CLI are two different requesters in the same session, so the session could hold two leases. Use only one of them per session.
+Codex does not pass its session ID to MCP servers, and [pi passes `PI_SESSION_ID` only to the commands its `bash` and `powershell` tools run](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#shell-tool-session-environment). Under Codex and pi, the MCP server and the CLI are two different requesters in the same session, so the session could hold two leases. Use only one of them per session.
 
 With any other tool, export a different `SIMLOCK_AGENT_ID` in each agent session before it runs `simlock`:
 

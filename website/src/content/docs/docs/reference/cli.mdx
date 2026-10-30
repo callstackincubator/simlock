@@ -694,6 +694,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_AGENT_ID` | The requester identity. When set, it wins over the session variables below. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |
+| `PI_SESSION_ID` | Set by [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#shell-tool-session-environment) for the commands its `bash` and `powershell` tools run. Gives the identity `pi:<id>`. | — |
 
 ### Requester identity
 
@@ -703,9 +704,10 @@ Simlock limits leases per requester (one by default, or per platform when the op
 2. `SIMLOCK_AGENT_ID`, when set.
 3. `CLAUDE_CODE_SESSION_ID`, as `claude-code:<id>`, when set and not empty.
 4. `CODEX_SESSION_ID`, as `codex:<id>`, when set and not empty.
-5. An ID made from the process ID, different for every command.
+5. `PI_SESSION_ID`, as `pi:<id>`, when set and not empty.
+6. An ID made from the process ID, different for every command.
 
-Under Claude Code and Codex, every `simlock` command in one session is the same requester with no setup. `simlock mcp` resolves the same way, falling back to `mcp:<pid>`. Codex does not pass `CODEX_SESSION_ID` to an MCP server, so under Codex the MCP server and the CLI are two requesters and can hold two leases. Elsewhere, set a different `SIMLOCK_AGENT_ID` for each agent session; a single value shared by several agents makes them one requester with one lease.
+Under Claude Code, Codex and pi, every `simlock` command in one session is the same requester with no setup. `simlock mcp` resolves the same way, falling back to `mcp:<pid>`. Codex does not pass `CODEX_SESSION_ID` to an MCP server, and pi sets `PI_SESSION_ID` only for its `bash` and `powershell` tools, so under Codex and pi the MCP server and the CLI are two requesters and can hold two leases. Elsewhere, set a different `SIMLOCK_AGENT_ID` for each agent session; a single value shared by several agents makes them one requester with one lease.
 
 ### Read by a daemon the CLI starts
 

@@ -7,7 +7,7 @@ const RULES_FOR_EVERY_AGENT = `## Rules for every agent
 
 - Never run the platform tools yourself: not \`xcrun simctl\`, \`adb\`, \`avdmanager\` or \`emulator\`. They cannot see Simlock's devices and can break other agents' devices.
 - Drive only the device you leased. Never touch a device another agent holds.
-- Under Claude Code and Codex your identity is automatic: do not set \`SIMLOCK_AGENT_ID\`. Under any other tool, set a \`SIMLOCK_AGENT_ID\` of your own and keep it for the whole session. Never share one with another agent.
+- Under Claude Code, Codex and pi your identity is automatic: do not set \`SIMLOCK_AGENT_ID\`. Under any other tool, set a \`SIMLOCK_AGENT_ID\` of your own and keep it for the whole session. Never share one with another agent.
 - The operator decides how many leases you may hold. When a request fails with \`REQUESTER_ALREADY_LEASED\`, use the lease you hold, or release it first.
 - Never pass \`--allow-download\` unless a person told you to. It can download many gigabytes.
 - Never run \`simlock release --all\` or \`simlock nuke\`. They take devices away from every agent.
@@ -69,7 +69,7 @@ When Simlock is connected to you as an MCP server, it has five tools:
 - \`lease_status\`: whether you still hold a lease, and which. Call it after a context compaction.
 - \`run_on_device\`: run one \`simctl\`, \`adb\` or \`devicectl\` command on your leased device, for example install and launch an app. Leave the device out; Simlock fills it in. It returns \`exitCode\`, \`stdout\`, \`stderr\` and \`truncated\`; a non-zero exit code is the command's answer, not an error.
 
-Under Codex, the MCP server and the CLI are two identities: use only one of them per session.`;
+Under Codex and pi, the MCP server and the CLI are two identities: use only one of them per session.`;
 
 const MORE = "More: https://callstackincubator.github.io/simlock/docs/";
 

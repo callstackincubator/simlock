@@ -24,6 +24,7 @@ export const AGENT_SESSION_VARIABLES: readonly {
 }[] = [
   { tool: "claude-code", variable: "CLAUDE_CODE_SESSION_ID" },
   { tool: "codex", variable: "CODEX_SESSION_ID" },
+  { tool: "pi", variable: "PI_SESSION_ID" },
 ];
 
 export function resolveRequesterId(env: NodeJS.ProcessEnv, fallback: string): string {
