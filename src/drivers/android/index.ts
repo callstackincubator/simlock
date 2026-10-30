@@ -1537,10 +1537,10 @@ export class AndroidDriver implements Driver {
    * which must not change a leased device's hardware.
    */
   async #applyHardwareKeyboard(avdName: string): Promise<void> {
-    if (this.#hardwareKeyboard === undefined) return;
-    await this.#mergeConfigIniLines(avdName, {
-      "hw.keyboard": this.#hardwareKeyboard ? "yes" : "no",
-    });
+    const line = this.#hardwareKeyboardLine();
+    if (line === undefined) return;
+    const [key, value] = line.split("=") as [string, string];
+    await this.#mergeConfigIniLines(avdName, { [key]: value });
   }
 
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
@@ -1910,22 +1910,31 @@ export class AndroidDriver implements Driver {
     return result.stdout.trim();
   }
 
+  /**
+   * why: Hashes `hw.keyboard` as `android.emulator.hardwareKeyboard` will write it, so an estimate
+   * or reclaim made before the next prepare boot already sees a pending change as stale.
+   */
   async #avdConfig(avdName: string): Promise<string> {
+    let contents: string;
     try {
-      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
-      return (
-        contents
-          .split(/\r?\n/)
-          .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
-          // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
-          // ignores it, so counting it would invalidate the other devices' baselines.
-          .filter((line) => !line.startsWith("hw.device.hash2="))
-          .sort()
-          .join("\n")
-      );
+      contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
     } catch {
       return "";
     }
+    const keyboard = this.#hardwareKeyboardLine();
+    const lines = contents
+      .split(/\r?\n/)
+      .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+      // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
+      // ignores it, so counting it would invalidate the other devices' baselines.
+      .filter((line) => !line.startsWith("hw.device.hash2="))
+      .filter((line) => keyboard === undefined || !line.startsWith("hw.keyboard="));
+    return [...lines, ...(keyboard === undefined ? [] : [keyboard])].sort().join("\n");
+  }
+
+  #hardwareKeyboardLine(): string | undefined {
+    if (this.#hardwareKeyboard === undefined) return undefined;
+    return `hw.keyboard=${this.#hardwareKeyboard ? "yes" : "no"}`;
   }
 
   #configIniPath(avdName: string): string {

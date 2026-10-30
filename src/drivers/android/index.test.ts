@@ -982,7 +982,7 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, wipe-pending and physical boots at 70 s", async () => {
+  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, keyboard-changed, wipe-pending and physical boots at 70 s", async () => {
     const harness = await provisionedHarness();
     const booted = await harness.driver.makeReady(harness.device);
 
@@ -1074,7 +1074,25 @@ describe("AndroidDriver", () => {
     ]);
     const wipePendingDriver = await createDriver(harness.filesystem, wipePendingRunner);
     await wipePendingDriver.reclaim(booted, { clean: "full" });
+    // why: A keyboard setting the device does not have yet is written at the next prepare boot,
+    // which then rebuilds the baseline.
+    const keyboardChangedDriver = await createDriver(
+      harness.filesystem,
+      new ScriptedProcessRunner([
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]),
+      {
+        emulator: {
+          audio: true,
+          bootAnimation: true,
+          gpu: "auto",
+          hardwareKeyboard: true,
+          headless: false,
+        },
+      },
+    );
     expect({
+      keyboardChanged: await keyboardChangedDriver.estimate(prepareEstimate, spec),
       mismatchedBaselineHash: await mismatchedDriver.estimate(prepareEstimate, spec),
       physicalSpec: await restartedDriver.estimate(prepareEstimate, {
         class: "phone",
@@ -1084,7 +1102,12 @@ describe("AndroidDriver", () => {
         platform: "android",
       }),
       wipePending: await wipePendingDriver.estimate(prepareEstimate, spec),
-    }).toEqual({ mismatchedBaselineHash: 70_000, physicalSpec: 70_000, wipePending: 70_000 });
+    }).toEqual({
+      keyboardChanged: 70_000,
+      mismatchedBaselineHash: 70_000,
+      physicalSpec: 70_000,
+      wipePending: 70_000,
+    });
   });
 
   describe("android.emulator launch options", () => {

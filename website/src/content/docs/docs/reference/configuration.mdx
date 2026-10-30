@@ -210,9 +210,11 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `drivers.android.adbServerPort`    | TCP port number                    | `5038`                           | Port of Simlock's own adb server. Not `5037`, the shared server's port. If something else holds it, Android does not start. | Worker     |
 | `exec.timeoutMs`                   | positive number                    | `600000` (10 min)                | How long one command run on a device through `simlock simctl` or `simlock adb` from a gateway or over HTTP may take before it is stopped with `EXEC_TIMEOUT`. | Worker     |
 
-`android.emulator.*` changes apply at each emulator's next boot. Changing `headless` or `gpu`,
-or a `hardwareKeyboard` value that differs from the device's, makes the next boot wipe the
-device once to take a new clean snapshot.
+`android.emulator.*` changes apply at each emulator's next boot. `hardwareKeyboard` waits for
+the next boot that prepares the device for a lease: a recovery boot during a lease keeps the
+keyboard the device had. Changing `headless` or `gpu`, or a `hardwareKeyboard` value the device
+does not have, makes that boot wipe a device once to take a new clean snapshot; a device with
+no clean snapshot yet takes its first one without a wipe.
 
 ## HTTP and sign-in
 

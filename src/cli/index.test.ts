@@ -3516,6 +3516,39 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(written).toEqual({ lease: { defaultTtlMs: 2400000 } });
   });
 
+  it("simlock config set android.emulator.hardwareKeyboard stores true or false and refuses anything else with the usage error", async () => {
+    const path = "android.emulator.hardwareKeyboard";
+    const set = async (value: string) => {
+      const output = outputCapture(realCliEnvironmentPorts());
+      let written: Record<string, unknown> | undefined;
+      const exitCode = await runCli(
+        ["config", "set", path, value],
+        output.environmentWith({
+          readConfigFile: async () => ({}),
+          writeConfigFile: async (contents) => {
+            written = contents;
+          },
+        }),
+      );
+      return { exitCode, output, written };
+    };
+
+    for (const value of [true, false]) {
+      const stored = await set(String(value));
+      expect(stored.exitCode).toBe(0);
+      expect(stored.written).toEqual({ android: { emulator: { hardwareKeyboard: value } } });
+    }
+    const refused = await set("yes");
+    expect(refused.exitCode).toBe(2);
+    expect(JSON.parse(refused.output.stderr)).toEqual({
+      error: {
+        code: "USAGE",
+        message: `Invalid config after setting ${path}: Invalid config value for "${path}": expected a boolean`,
+      },
+    });
+    expect(refused.written).toBeUndefined();
+  });
+
   it.each(["teamId", "bundleId", "provisioningProfile", "signingIdentity"])(
     "simlock config set capabilities.agent-device.ios.%s stores a non-empty string and refuses an empty string or a number with the usage error",
     async (key) => {

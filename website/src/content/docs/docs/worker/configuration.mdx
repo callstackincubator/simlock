@@ -162,7 +162,7 @@ The emulator then runs without a window, which suits a machine nobody watches. I
 simlock config set android.emulator.hardwareKeyboard true
 ```
 
-Each emulator then has a hardware keyboard, the setting Android Studio calls "Enable keyboard input". Simlock's own device profiles have none. It applies the next time each emulator boots, and that boot wipes the device once.
+Each emulator then has a hardware keyboard, the setting Android Studio calls "Enable keyboard input". Simlock's own device profiles have none. It applies the next time each emulator is prepared for a lease. A device that already has a clean snapshot is wiped once then, to take a new one with the keyboard.
 
 ### Capacity, the warm pool, downloads and cleanup
 
