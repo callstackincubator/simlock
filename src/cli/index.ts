@@ -40,6 +40,7 @@ Commands:
   setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mcp] [--json]
                               Install the Simlock skill into Claude Code and Codex
 Run 'simlock <command> --help' for command usage.
+Run 'simlock --version' (or -v) to print the installed version.
 
 Pass --token <secret> anywhere on the command line to connect as admin
 explicitly; see https://github.com/callstackincubator/simlock for the default
@@ -220,6 +221,12 @@ export async function runCli(
   try {
     const { token, daemonFlag, rest } = extractGlobalFlags(argv);
     flag = daemonFlag;
+    if (rest[0] === "--version" || rest[0] === "-v") {
+      // why: loaded here, not statically, so only this request pays for the ports barrel, as a real command does.
+      const { readPackageVersion } = await import("../ports/index.js");
+      (environment?.stdout ?? process.stdout).write(`${readPackageVersion()}\n`);
+      return 0;
+    }
     if (rest.length === 0 || isHelp(rest[0])) {
       (environment?.stdout ?? process.stdout).write(`${USAGE}\n`);
       return 0;
