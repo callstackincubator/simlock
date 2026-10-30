@@ -17,11 +17,12 @@ function escapeForCmd(text: string): string {
 
 /**
  * why: under the C runtime's argv rules, backslashes before the closing quote are doubled, or they
- * would escape it. A batch file hands its arguments to `cmd.exe` once more, so the metacharacters
- * are escaped twice: once for this `cmd.exe /c`, once for the script's own expansion of `%*`.
+ * would escape it. The escapes are for this `cmd.exe /c` only: the script receives each argument
+ * quoted, and inside quotes its own lines (`if "x%~1" == "x"`, `set ARGS=%*`) read every character
+ * as text. Escaping twice would leave a `^"` there, which breaks the script's syntax.
  */
 function quoteArgument(argument: string): string {
-  return escapeForCmd(escapeForCmd(`"${argument.replace(/(\\*)$/, "$1$1")}"`));
+  return escapeForCmd(`"${argument.replace(/(\\*)$/, "$1$1")}"`);
 }
 
 /**
@@ -41,8 +42,8 @@ export function childLaunch(
     return { command, args, windowsVerbatimArguments: false };
   }
   // why: cmd.exe expands `%name%` before any escape applies, a line break ends the command, and a
-  // script that re-expands `%*` (the SDK's all do) reads an embedded `"` as the end of a quote;
-  // none can be passed through safely, and no SDK call needs any of them.
+  // script that reads its arguments inside quotes (the SDK's all do) takes an embedded `"` as the
+  // end of one; none can be passed through safely, and no SDK call needs any of them.
   const unsafe = args.find((argument) => /[%"\r\n]/.test(argument));
   if (unsafe !== undefined) {
     throw new Error(

@@ -30,7 +30,7 @@ describe("childLaunch", () => {
         "/d",
         "/s",
         "/c",
-        String.raw`"C:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat ^^^"--version^^^""`,
+        String.raw`"C:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat ^"--version^""`,
       ],
       windowsVerbatimArguments: true,
     });
@@ -47,10 +47,10 @@ describe("childLaunch", () => {
     [
       "semicolons",
       "system-images;android-36;google_apis;x86_64",
-      String.raw`^^^"system-images^^^;android-36^^^;google_apis^^^;x86_64^^^"`,
+      String.raw`^"system-images^;android-36^;google_apis^;x86_64^"`,
     ],
-    ["a command separator", "x & calc", String.raw`^^^"x^^^ ^^^&^^^ calc^^^"`],
-    ["a trailing backslash", "C:\\dir\\", String.raw`^^^"C:\dir\\^^^"`],
+    ["a command separator", "x & calc", String.raw`^"x^ ^&^ calc^"`],
+    ["a trailing backslash", "C:\\dir\\", String.raw`^"C:\dir\\^"`],
   ])("escapes an argument holding %s so cmd.exe reads it as text", (_case, argument, escaped) => {
     const line = childLaunch(String.raw`C:\t.bat`, [argument], "win32", "cmd.exe").args.at(-1);
 
@@ -70,17 +70,26 @@ describe("childLaunch", () => {
 
 describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () => {
   /**
-   * why: the SDK's batch files collect `%*` into a variable and expand it on the `java` line, so
-   * every argument is parsed by cmd.exe twice; this script does the same and prints what arrived.
+   * why: the SDK's Gradle-generated batch files test `"x%~1"`, collect `%*` into a variable and
+   * expand it on the `java` line, so cmd.exe parses every argument there twice more; this script
+   * reads its arguments with those same lines and prints what arrived.
    */
-  it("passes every argument unchanged through a batch file that forwards %* the way the SDK's do", async () => {
+  it("passes every argument unchanged through a batch file that reads them the way the SDK's do", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock bat "));
     const printer = join(directory, "print-args.cjs");
     const script = join(directory, "forward args.bat");
     await writeFile(printer, "console.log(JSON.stringify(process.argv.slice(2)));\n");
     await writeFile(
       script,
-      `@echo off\r\nset CMD_LINE_ARGS=%*\r\n"${process.execPath}" "${printer}" %CMD_LINE_ARGS%\r\n`,
+      [
+        "@echo off",
+        "set CMD_LINE_ARGS=",
+        'if "x%~1" == "x" goto execute',
+        "set CMD_LINE_ARGS=%*",
+        ":execute",
+        `"${process.execPath}" "${printer}" %CMD_LINE_ARGS%`,
+        "",
+      ].join("\r\n"),
     );
     const args = [
       "--install",
