@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -37,7 +38,7 @@ import {
   type IpcConnection,
   type IpcConnector,
 } from "../ports/index.js";
-import { FakeSystemStats, readPackageVersion } from "../ports/index.js";
+import { FakeSystemStats } from "../ports/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
@@ -119,6 +120,13 @@ afterEach(async () => {
     temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })),
   );
 });
+
+// why: read straight from the manifest so the expected version is not computed by the code under test.
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
 
 describe("readLogFile", () => {
   it("returns just the current log when there is no rotated generation", async () => {
@@ -232,7 +240,7 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(output.stdout, argv.join(" ")).toBe(`${readPackageVersion()}\n`);
+      expect(output.stdout, argv.join(" ")).toBe(`${PACKAGE_VERSION}\n`);
       expect(output.stderr, argv.join(" ")).toBe("");
       expect(connected, argv.join(" ")).toBe(false);
     }
@@ -5176,7 +5184,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
           "Simlock: 0.0.0-test\n" +
-          `CLI: ${readPackageVersion()}\n` +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5206,7 +5214,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
             "Simlock: 0.0.0-test\n" +
-            `CLI: ${readPackageVersion()}\n` +
+            `CLI: ${PACKAGE_VERSION}\n` +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5225,7 +5233,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
 
       expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
-      expect(JSON.parse(output.stdout).cliVersion).toBe(readPackageVersion());
+      expect(JSON.parse(output.stdout).cliVersion).toBe(PACKAGE_VERSION);
     });
 
     it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
@@ -5297,7 +5305,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
-          `CLI: ${readPackageVersion()}\n` +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -5332,7 +5340,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         }),
       );
 
-      expect(JSON.parse(output.stdout)).toEqual({ ...STARTING, cliVersion: readPackageVersion() });
+      expect(JSON.parse(output.stdout)).toEqual({ ...STARTING, cliVersion: PACKAGE_VERSION });
     });
   });
 
@@ -5409,7 +5417,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
-          `CLI: ${readPackageVersion()}\n` +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -5501,7 +5509,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      `Daemon: running (worker)\nSimlock: 0.0.0-test\nCLI: ${readPackageVersion()}\nConsole: http://127.0.0.1:4700/\nHost: `,
+      `Daemon: running (worker)\nSimlock: 0.0.0-test\nCLI: ${PACKAGE_VERSION}\nConsole: http://127.0.0.1:4700/\nHost: `,
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -8046,7 +8054,7 @@ describe("simlock update and simlock status", () => {
     expect(await statusLines({ version: "0.3.0" })).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
-      `CLI: ${readPackageVersion()}`,
+      `CLI: ${PACKAGE_VERSION}`,
       next,
       expect.stringMatching(/^Running global/),
     ]);
@@ -8059,7 +8067,7 @@ describe("simlock update and simlock status", () => {
       expect((await statusLines({ version: "0.3.0", update })).slice(0, 4)).toEqual([
         "Daemon: running (worker)",
         "Simlock: 0.3.0",
-        `CLI: ${readPackageVersion()}`,
+        `CLI: ${PACKAGE_VERSION}`,
         line,
       ]);
     }
@@ -8073,7 +8081,7 @@ describe("simlock update and simlock status", () => {
     ).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
-      `CLI: ${readPackageVersion()}`,
+      `CLI: ${PACKAGE_VERSION}`,
       "Last update failed (installing): npm error code EACCES",
     ]);
   });
