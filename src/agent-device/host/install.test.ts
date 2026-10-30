@@ -75,10 +75,28 @@ describe("findAgentDevice", () => {
 
   it("still splits PATH on ':' and ignores .cmd shims off Windows", async () => {
     const filesystem = await windowsNpmInstall();
+    await filesystem.mkdirp("/opt/bin");
+    await filesystem.writeFileAtomic("/opt/bin/agent-device", "#!/bin/sh\n");
+    filesystem.defineAttributes("/opt/bin/agent-device", { mode: 0o755 });
 
     await expect(
       findAgentDevice(filesystem, "agent-device", `/usr/bin:${npm}`, "linux"),
     ).resolves.toMatchObject({ ok: false, reason: "not-found" });
+    await expect(
+      findAgentDevice(filesystem, "agent-device", "/usr/bin:/opt/bin", "linux"),
+    ).resolves.toMatchObject({ ok: false, reason: "not-agent-device" });
+  });
+
+  it("takes a command with a backslash as a path on Windows only", async () => {
+    const filesystem = new MemoryFilesystem();
+    const command = "C:\\Users\\me\\agent-device.mjs";
+
+    await expect(findAgentDevice(filesystem, command, undefined, "win32")).resolves.toMatchObject({
+      message: `agent-device not found: ${command} is not an executable file`,
+    });
+    await expect(findAgentDevice(filesystem, command, undefined, "linux")).resolves.toMatchObject({
+      message: `agent-device not found: "${command}" is not on PATH`,
+    });
   });
 });
 
