@@ -278,8 +278,9 @@ describe("CLI: exit codes", () => {
         },
       ],
     };
-    const cases: readonly (readonly [DoctorReport, string, string])[] = [
+    const cases: readonly (readonly [DoctorReport, string, string, NodeJS.Platform?])[] = [
       [{ findings: [] }, "ios ok, android ok", ""],
+      [{ findings: [] }, "android ok", "", "linux"],
       [
         wrongOwner,
         "ios unavailable: wrong-owner, android ok",
@@ -291,13 +292,13 @@ describe("CLI: exit codes", () => {
         "Missing [android] android-sdk: No Android SDK. Install it.\n",
       ],
     ];
-    for (const [report, summary, stderr] of cases) {
+    for (const [report, summary, stderr, hostPlatform = "darwin"] of cases) {
       const output = outputCapture();
       const doctorInputs: unknown[] = [];
       const code = await runCli(
         ["setup", "--user", "--tool", "claude-code", "--no-mcp"],
         output.environmentWith({
-          hostPlatform: "darwin",
+          hostPlatform,
           adminTokenFromEnv: "admin-token",
           connectAdmin: async (resolveCredential) => {
             await resolveCredential();
