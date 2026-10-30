@@ -171,12 +171,14 @@ export class WindowsHostLoadProbe implements HostLoadProbe {
   }
 }
 
-// why: `[long]` turns a machine with no page file (no instances, a null sum) into 0, not an empty line.
+// why: `[long]` turns a machine with no page file (no instances, a null sum) into 0, not an empty
+// line. A failed query is only a non-terminating error, which `[long]` would also turn into 0 with
+// exit 0; `Stop` makes it end PowerShell with exit 1 and no answer, so memory is left out instead.
 const PAGEFILE_ARGS = [
   "-NoProfile",
   "-NonInteractive",
   "-Command",
-  "[long](Get-CimInstance Win32_PageFileUsage | Measure-Object -Property CurrentUsage -Sum).Sum",
+  "$ErrorActionPreference = 'Stop'; [long](Get-CimInstance Win32_PageFileUsage | Measure-Object -Property CurrentUsage -Sum).Sum",
 ];
 const PAGEFILE_TIMEOUT_MS = 5_000;
 const PAGEFILE_REFRESH_MS = 5 * 60_000;
