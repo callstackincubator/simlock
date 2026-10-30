@@ -162,7 +162,7 @@ The emulator then runs without a window, which suits a machine nobody watches. I
 simlock config set android.emulator.hardwareKeyboard true
 ```
 
-Each emulator then has a hardware keyboard, the setting Android Studio calls "Enable keyboard input". Simlock's own device profiles have none. It applies the next time each emulator is prepared for a lease. If that changes a device's keyboard and the device already has a clean snapshot, that boot wipes it once to take a new one.
+Each emulator then has a hardware keyboard, the setting Android Studio calls "Enable keyboard input". Simlock's own device profiles have none. It applies the next time each emulator is prepared for a lease. If that changes a device's keyboard and the device already has a clean snapshot, that boot wipes it once to take a new one. To take the keyboard away again, set it to `false`: deleting the key leaves each emulator with the keyboard it has.
 
 ### Capacity, the warm pool, downloads and cleanup
 
@@ -175,4 +175,4 @@ These have their own pages:
 
 ## Undo a change
 
-There is no command to remove a key. To go back to a default, set the default value with `simlock config set`, or delete the key from `~/.simlock/config.json` by hand. Then restart the daemon.
+There is no command to remove a key. To go back to a default, set the default value with `simlock config set`, or delete the key from `~/.simlock/config.json` by hand. Then restart the daemon. `android.emulator.hardwareKeyboard` has no default to go back to: set `false` instead of deleting it.
