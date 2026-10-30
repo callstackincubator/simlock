@@ -173,7 +173,7 @@ export interface AndroidEmulatorLaunchOptions {
   readonly bootAnimation: boolean;
   /**
    * why: The emulator has no flag for it, only `hw.keyboard` in `config.ini`, so it is written
-   * there before each prepare boot. Unset leaves the key as the device profile wrote it.
+   * there before each prepare boot. Unset leaves the key as it is.
    */
   readonly hardwareKeyboard?: boolean;
 }

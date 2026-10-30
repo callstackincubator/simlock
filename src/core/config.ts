@@ -395,8 +395,8 @@ export interface Config {
       readonly audio: boolean;
       readonly bootAnimation: boolean;
       /**
-       * why: Optional, unlike the four above: unset must leave each device profile's own
-       * `hw.keyboard`, which no boolean default can say.
+       * why: Optional, unlike the four above: unset must leave each emulator's `hw.keyboard`
+       * as it is (a new one: its profile's), which no boolean default can say.
        */
       readonly hardwareKeyboard?: boolean;
     };
