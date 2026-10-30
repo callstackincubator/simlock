@@ -50,9 +50,9 @@ the iOS driver, not here.
 2. `scid`: random 31-bit, written `%08x`. `<target> push <jar> /data/local/tmp/simlock-scrcpy-<scid>.jar` (40 s: the
    phone's own check plus the 30 s push).
 3. `<target> shell CLASSPATH=<that path> app_process / com.genymobile.scrcpy.Server 5.0.1 scid=<scid>
-log_level=info tunnel_forward=true video=true audio=false control=false video_codec=h264
-send_device_meta=false send_dummy_byte=true send_stream_meta=true send_frame_meta=true cleanup=true
-[stay_awake=true for a phone] max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. Only a
+   log_level=info tunnel_forward=true video=true audio=false control=false video_codec=h264
+   send_device_meta=false send_dummy_byte=true send_stream_meta=true send_frame_meta=true cleanup=true
+   [stay_awake=true for a phone] max_size=<maxDimension> max_fps=<fps> video_bit_rate=<bitrateKbps×1000>`. Only a
    phone's gets `stay_awake=true`: scrcpy sets `stay_on_while_plugged_in` to 7 and its clean-up process puts
    the old value back when the server ends. No other option changes a device setting (`show_touches`,
    `screen_off_timeout`, `power_off_on_close`); with `control=false` the server never powers the screen on, so the

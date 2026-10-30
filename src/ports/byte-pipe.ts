@@ -32,7 +32,13 @@ export interface BytePipeExit {
 
 export class NodeBytePipeLauncher implements BytePipeLauncher {
   start(command: string, args: readonly string[], options: BytePipeOptions): BytePipeProcess {
-    const child = spawn(command, [...args], { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, [...args], {
+      env: options.env,
+      stdio: ["pipe", "pipe", "pipe"],
+      // why: the daemon has no console, so on Windows the capture program would otherwise get a
+      // new, visible one.
+      windowsHide: true,
+    });
     // why: a child that exits while stdin is being closed raises EPIPE on the pipe, which is the
     // stop having worked, not a failure anyone can act on.
     child.stdin.on("error", () => undefined);

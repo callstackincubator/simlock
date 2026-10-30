@@ -37,6 +37,8 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Managing workers](/simlock/docs/gateway/managing-workers) |
 | [`simlock alerts`](#simlock-alerts) | Send a sample message to an alert destination | [Alerts](/simlock/docs/gateway/alerts) |
 
+`simlock --version` (or `-v`) prints the installed Simlock version and exits 0, without contacting a daemon.
+
 Every command and subcommand also accepts `--help` (or `-h`), which prints its usage and exits 0. A flag a command does not list is a usage error (exit 2).
 
 ## Global flags
@@ -60,7 +62,7 @@ The CLI takes these flags out of the whole command line, including the arguments
 
 With `--gateway`, the command goes to the gateway. With `--local`, it goes to the worker. With neither, it goes to the gateway only when this machine has a gateway (`~/.simlock/gateway` holds an `instance.json` or `config.json`) and no worker has started here yet (`~/.simlock/instance.json` does not exist). Otherwise it goes to the worker.
 
-`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`.
+`simlock --gateway <command>` on a machine with no gateway fails with `GATEWAY_NOT_PRESENT` (exit 2) and starts nothing. These commands are exempt, because they create the gateway, run before it or never contact a daemon: `daemon start`, `daemon install`, `daemon uninstall`, `config set`, `mcp`, `instructions` and `setup`. When the command goes to the gateway (`--gateway`, or a machine that has only a gateway), `setup` installs the skill, never connects to it and prints `machine      not checked: setup does not check a gateway`; otherwise it checks the worker.
 
 When a worker refuses a gateway-only command, such as `worker drain`, and a gateway also runs on this machine, the error message ends with `A gateway also runs on this machine: run the command again with --gateway.`
 
@@ -233,9 +235,9 @@ simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mc
 | `--user` | Install for your user, for every project. The default. |
 | `--project` | Install for the project in the current directory only. |
 | `--tool <claude-code\|codex>` | Install for this tool, even when it is not set up on this machine. Without it, `setup` installs for each tool whose directory (`~/.claude`, `~/.codex` or `$CODEX_HOME`) exists, and reports the other as `skipped`. |
-| `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. |
+| `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. It follows the scope: `claude mcp add -s user` or `-s project`; Codex has user scope only. |
 | `--no-mcp` | Do not connect it, and do not ask. |
-| `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...]}`, and ask nothing. |
+| `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...], "machine": {...}}`, and ask nothing. |
 
 In a terminal, `setup` asks for the scope (`Install only for this project (not every project)? [y/N]`) and, for each tool it installs, whether to connect the MCP server too. The defaults are the user scope and no MCP. With no terminal, or with `--json`, it asks nothing and takes the defaults unless a flag says otherwise.
 
@@ -256,17 +258,24 @@ The report has one `skill` line per tool and, when MCP was asked for, one `mcp` 
 claude-code  skill  wrote      /Users/me/.claude/skills/simlock
 claude-code  mcp    connected
 codex        skill  skipped    /Users/me/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)
+machine      ios ok, android missing: android-sdk
 ```
 
-Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connected`, `already`, `failed` and `skipped`. The command never contacts a daemon.
+Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connected`, `already`, `failed` and `skipped`.
+
+After the skill is installed, `setup` also runs the checks of [`simlock doctor`](#simlock-doctor) (without `--fix`), starting the daemon if it is not running, and ends the report with a `machine` line. The line names each platform this machine checks, iOS only on macOS: `ok`, `missing: <prerequisite>[, <prerequisite>]` or `unavailable: <reason>`, joined with `, `. Doctor's own lines about what to do go to stderr, as they do for `simlock doctor`. A missing platform is reported, never a failure: the exit code stays what it was. When the check cannot run (the daemon does not start, or it is a gateway), the line reads `not checked: <message>`.
+
+With `--json`, `machine` is `{"summary": "ios ok, android missing: android-sdk", "findings": [...]}`, where `findings` are the `doctor` findings (empty when the check did not run).
 
 ## simlock status
 
 Show the daemon's health and mode, the Simlock version it runs, its console address, capacity, devices, leases and queue depth. Works for any caller. With an agent token, the leases and waiting requests are only your own. See [Monitoring](/simlock/docs/worker/monitoring).
 
+The `CLI:` line below `Simlock:` is the version of the `simlock` command you ran, so an upgrade that has not restarted the daemon shows as two different versions. `--json` carries it as `cliVersion`.
+
 When the daemon has seen a newer Simlock version on npm, the `Simlock:` line says so: `Simlock: 0.3.0 (0.4.0 available)`. A daemon learns the newest version at start and every 24 hours after, unless `update.check` is `false`.
 
-While an update runs, the second line below `Daemon:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
+While an update runs, the line below `CLI:` reads `Updating to <version>: waiting for 2 leases` (then `installing`, `restarting`). After an update that failed, `Last update failed (<stage>): <message>` stays until the next update starts or the daemon restarts without one.
 
 ```text
 simlock status [--json]

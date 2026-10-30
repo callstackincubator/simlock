@@ -87,45 +87,17 @@ export interface FakeDriverOptions {
   readonly removalResidue?: string;
   readonly deviceRoot?: string;
   readonly estimateMs?: Partial<Record<DriverEstimateOperation, number>>;
-  /**
-   * Reclaim estimate for a `full` clean, when a test needs the two clean levels priced apart
-   * the way a real driver prices them (an Android `snapshot` against a `wipe`). Falls back to
-   * `estimateMs.reclaim`, so a test that does not care about the split says nothing.
-   */
   readonly fullCleanReclaimEstimateMs?: number;
-  /**
-   * The `DriverDevice.mode` `makeReady` reports for every boot, overriding what it would
-   * otherwise report -- settable by a test that needs a slim pass that did not happen, or the
-   * core's `mode` persistence without a real iOS driver.
-   */
   readonly mode?: DeviceMode | undefined;
-  /**
-   * The OS versions this fake can slim. A slim request on one of them resolves to a slim spec,
-   * and a prepare boot of a slim-spec device reports `"slim"`. Absent or empty: this fake knows
-   * nothing of modes, like every real driver but iOS, and every request resolves to a full spec.
-   */
   readonly slimmableOsVersions?: readonly string[];
   readonly knownModels?: readonly string[];
-  /**
-   * What `listCatalog` reports a model pairs with. A model left out pairs with every available
-   * version, which is also the default for every model.
-   */
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
-  /** What `listCatalog` reports as other names per model; none unless a test says otherwise. */
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
-  /** The built-in preference lists the driver carries, per class; none unless a test says otherwise. */
   readonly defaultModels?: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
-  /** What `listCatalog` reports as each model's class; empty unless a test says otherwise. */
   readonly modelClasses?: Readonly<Record<string, DeviceClass>>;
-  /**
-   * What `listCatalog` reports as installed images; the field is absent unless set. A request
-   * naming an image tag resolves only to a runtime listed here with that tag.
-   */
   readonly images?: readonly DriverCatalogImage[];
-  /** What `listCatalog` reports as custom models; the field is absent unless set. */
   readonly customModels?: readonly string[];
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
-  /** What a grant for this driver's devices should carry; empty unless a test says otherwise. */
   readonly leaseEnvironment?: Readonly<Record<string, string>>;
   /** why: absent by default, so two fakes in one catalog do not both answer to the same tool. */
   readonly passthroughTools?: readonly string[];
@@ -138,11 +110,6 @@ export interface FakeDriverOptions {
     context?: PassthroughContext,
   ) => PassthroughCommand;
   readonly platform: Platform;
-  /**
-   * What this driver claims to find outside its root for a given device id, keyed by
-   * `driverDeviceId`. Empty by default: a driver that has never had a pre-root life finds
-   * nothing, which is what keeps every other test's missing device simply missing.
-   */
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
   readonly reclaimResult?: "ready" | "shutdown";
   readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
@@ -207,7 +174,6 @@ export class FakeDriver implements Driver {
   readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
   readonly #legacyDevices: Map<string, LegacyDevice>;
-  /** Bumped on every `makeReady` boot -- mirrors a real driver reassigning a port per boot. */
   readonly #bootCounts = new Map<string, number>();
   readonly #addressIsDeviceId: boolean;
   #managedReality: DriverReality | undefined;
@@ -263,11 +229,6 @@ export class FakeDriver implements Driver {
     return this.#defaultModels ?? {};
   }
 
-  /**
-   * Succeeds unless a test fails it through `failOn`. A real driver re-runs the filesystem
-   * checks here; the fake only has to be refusable, since what `Doctor` does with a refusal
-   * is the behaviour under test.
-   */
   async revalidateRoot(): Promise<void> {
     await this.#beforeCall("revalidateRoot");
   }
@@ -282,7 +243,6 @@ export class FakeDriver implements Driver {
     this.#legacyDevices.delete(device.deviceId);
   }
 
-  /** Never installs: a version that is not available throws, naming it as the component. */
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
     await this.#beforeCall("resolveSpec", request);
     this.#assertMatchingPlatform(request.platform);
@@ -308,7 +268,6 @@ export class FakeDriver implements Driver {
     };
   }
 
-  /** Defaults to the newest available version; a missing one fails, naming it as the component. */
   #resolveOsVersion(requested: string | undefined): string {
     const osVersion = requested ?? newestVersion(this.#availableOsVersions);
     if (osVersion === undefined) {
@@ -320,10 +279,6 @@ export class FakeDriver implements Driver {
     return osVersion;
   }
 
-  /**
-   * A version with a scripted image (`images`) of `imageTag`: the requested one, or else the
-   * newest. None fails naming no component, so a tagged request is never offered a download.
-   */
   #resolveTaggedOsVersion(requested: string | undefined, imageTag: string): string {
     const tagged = new Set(
       (this.#images ?? []).filter((image) => image.tag === imageTag).map((image) => image.runtime),
@@ -335,18 +290,11 @@ export class FakeDriver implements Driver {
     return osVersion;
   }
 
-  /** `"latest"` is not a version, so it is never found here -- only an install run can tell. */
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
     await this.#beforeCall("findComponent", component);
     return this.#installed(component);
   }
 
-  /**
-   * Makes `component` available and logs the call. `"latest"` is the newest available version,
-   * or a version called `latest` when there is none. Scripted through `failOn("installComponent",
-   * n, error)`, `holdInstalls()` (it then waits for `releaseInstalls()` or its signal) and the
-   * `installProgress` option.
-   */
   async installComponent(
     component: string,
     options: {
@@ -370,21 +318,11 @@ export class FakeDriver implements Driver {
     return { outcome: "installed", receipt, version };
   }
 
-  /**
-   * One entry per available version, with the receipt `findComponent` and `installComponent`
-   * report for it, and the scripted size and foreign devices.
-   */
   async listComponents(): Promise<readonly DriverComponent[]> {
     await this.#beforeCall("listComponents");
     return this.#listedComponents();
   }
 
-  /**
-   * Removes the available version whose receipt this is, through the same steps every driver
-   * takes (`removeListedComponent`), reading the same listing `listComponents` answers. Scripted
-   * through `failOn("removeComponent", n, error)`, `holdRemovals()` (it then waits for
-   * `releaseRemovals()` or its signal) and the `removalResidue` option.
-   */
   async removeComponent(
     receipt: ComponentReceipt,
     options: { readonly signal: AbortSignal },
@@ -474,12 +412,6 @@ export class FakeDriver implements Driver {
     };
   }
 
-  /**
-   * Each boot re-reads a fresh address, same as the real drivers -- never the caller's.
-   * `options` is recorded on the call log (`calls`) so a test can assert what a caller passed.
-   * A slimming fake (`slimmableOsVersions`) reports `"slim"` for a prepare boot of a slim-spec
-   * device and nothing on a recover boot, as the iOS driver does; the `mode` option overrides it.
-   */
   async makeReady(
     device: DriverDevice,
     options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
@@ -695,7 +627,7 @@ export class FakeDriver implements Driver {
   }
 
   /**
-   * Stages what `listManaged` reports. Everything passed in is reported back, name and
+   * why: Stages what `listManaged` reports. Everything passed in is reported back, name and
    * all: a real driver answers from what sits inside the root it owns, so a double that
    * screened entries by prefix would be modelling ownership Simlock stopped inferring
    * (safety rule 8).
@@ -747,7 +679,7 @@ export class FakeDriver implements Driver {
   }
 }
 
-/** One 30 s read limit plus one 60 s uninstall limit: what the real physical drivers will answer. */
+/** why: One 30 s read limit plus one 60 s uninstall limit: what the real physical drivers will answer. */
 const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
 
 function preinstalledReceipts(versions: ReadonlySet<string>): Map<string, ComponentReceipt> {

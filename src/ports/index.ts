@@ -12,6 +12,7 @@ export {
   type DaemonRole,
   type DaemonFlag,
   type DaemonHome,
+  isPipeEndpoint,
   resolveDaemonHome,
   resolveDaemonSocketPath,
   resolveSimlockHome,
@@ -32,6 +33,7 @@ export {
   type IpcConnector,
   IpcError,
   type IpcListenerFactory,
+  isEndpointAbsent,
   MemoryIpcTransport,
   NodeIpcTransport,
 } from "./ipc.js";
@@ -146,6 +148,7 @@ export {
   LinuxHostLoadProbe,
   type MemoryCounters,
   productionHostLoadProbe,
+  WindowsHostLoadProbe,
 } from "./host-load.js";
 export {
   filterSqliteExperimentalWarning,
