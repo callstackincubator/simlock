@@ -468,6 +468,7 @@ describe("AndroidDriver", () => {
   it.each([
     ["its console port", 5586],
     ["the adb port above its console port", 5587],
+    ["its gRPC port", 8586],
   ])(
     "skips a console port when something listens on %s that its own adb server does not list",
     async (_, listeningPort) => {

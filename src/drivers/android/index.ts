@@ -2426,6 +2426,7 @@ async function consolePortsInUse(tcpProbe: TcpProbe, consolePort: number): Promi
   const listening = await Promise.all([
     tcpProbe.isListening(consolePort),
     tcpProbe.isListening(consolePort + 1),
+    tcpProbe.isListening(consolePort + GRPC_PORT_OFFSET),
   ]);
   return listening.includes(true);
 }
