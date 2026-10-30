@@ -497,12 +497,14 @@ describe("Android device input: send", () => {
 });
 
 describe("Android device input: keys", () => {
-  it("turns buttons and HID keys into scrcpy keycodes, holding a modifier in the meta state until it is released", async () => {
+  it("turns buttons and HID keys into scrcpy keycodes, holding a modifier in the meta state until it is released, and sends nothing for a rotation", async () => {
     const world = setup();
     const input = opened(await open(world));
     for (const button of ["home", "app_switcher", "lock", "back"] as const) {
       input.send({ button, kind: "button" });
     }
+    input.send({ kind: "orientation", orientation: "landscape_left" });
+    input.send({ kind: "orientation", orientation: "portrait" });
     const tap = (usage: number) => {
       input.send({ kind: "key", type: "down", usage });
       input.send({ kind: "key", type: "up", usage });

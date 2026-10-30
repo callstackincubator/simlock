@@ -96,8 +96,8 @@ program enforces its pin: a CoreDevice major other than 642 exits 69 with the re
 the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
 
 Input — `input` (offered with `screenCapture`, same launcher): `simlock-screen-capture <udid> --input` with the same `SIMLOCK_IOS_DEVICE_SET` rule. stdout: one `0x82` `{width,height}` (the device type's native size) within 10 s of spawn, else the open rejects (also for a missing program or an early exit; the helper is stopped).
-stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06` and scroll `0x0b`; a failed write or a later exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is logged); the app switcher, Lock and Back are dropped.
-The config is always `portrait`, with `keyboardUnavailable: true` when the runtime is iOS 27 or later or unreadable, and keys are then dropped. Close: stdin, 2 s, SIGKILL. A physical iPhone answers `{unavailable}` and starts nothing.
+stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06`, scroll `0x0b` and orientation `0x07` (`{orientation}`, one of the four names, on every runtime; the helper sends it as a GSEvent to the simulator's `PurpleWorkspacePort` and logs one it could not send); a failed write or a later exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is logged); the app switcher, Lock and Back are dropped.
+The config is always `portrait`, a rotation included, with `keyboardUnavailable: true` when the runtime is iOS 27 or later or unreadable, and keys are then dropped. Close: stdin, 2 s, SIGKILL. A physical iPhone answers `{unavailable}` and starts nothing.
 
 Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
 `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
@@ -128,7 +128,7 @@ record of a device's mode; `driverData` holds the slim signature.
 
 ## Known gaps
 
-- **Input:** no app switcher, Lock, rotation or keys on iOS 27 runtimes (#1024). The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
+- **Input:** no app switcher or Lock, and no keys on iOS 27 runtimes (#1024). Rotation was seen to work only on Xcode 26.4 with an iOS 26.4 runtime (#1080); on Xcode 27 the GSEvent is accepted but the simulator did not turn (#1024), and nothing tells the client. The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
 - **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Every reclaim erases, so the next boot re-slims: two boots each
