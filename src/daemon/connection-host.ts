@@ -7,7 +7,7 @@ import type {
   IpcListenerFactory,
   Logger,
 } from "../ports/index.js";
-import { DATA_DIRECTORY_MODE, IpcError, NoopLogger } from "../ports/index.js";
+import { DATA_DIRECTORY_MODE, IpcError, isPipeEndpoint, NoopLogger } from "../ports/index.js";
 
 export interface ConnectionHost {
   readonly endpoint: string;
@@ -25,6 +25,8 @@ export class DaemonAlreadyRunningError extends Error {
 /**
  * why: a second daemon must learn a daemon runs before it opens `state.db`, which migrates the
  * live daemon's file. A socket nobody answers is left for `DaemonEndpointHost.start` to recover.
+ * A connect that times out found a server holding the endpoint (a Windows pipe whose every
+ * instance is busy), so it refuses too.
  */
 export async function refuseWhenDaemonAnswers(options: {
   readonly connector: IpcConnector;
@@ -35,7 +37,7 @@ export async function refuseWhenDaemonAnswers(options: {
     await live.close();
   } catch (error: unknown) {
     if (error instanceof IpcError && isUnavailable(error)) return;
-    throw error;
+    if (!(error instanceof IpcError) || error.code !== "connection-timeout") throw error;
   }
   throw new DaemonAlreadyRunningError(options.endpoint);
 }
@@ -76,26 +78,33 @@ export class DaemonEndpointHost implements ConnectionHost {
     this.#logger = options.logger ?? new NoopLogger();
   }
 
-  // fallow-ignore-next-line complexity -- endpoint claim, stale recovery, and bind form one lifecycle transaction.
+  // why: a named pipe is no file, so it has no directory to make and no stale entry to remove: it is gone when its server is, and a live one makes `listen` fail `address-in-use`.
+  get #isFile(): boolean {
+    return !isPipeEndpoint(this.endpoint);
+  }
+
+  async #claimSocketFile(): Promise<void> {
+    await this.options.filesystem.mkdirp(dirname(this.endpoint), { mode: DATA_DIRECTORY_MODE });
+    if (!(await this.options.filesystem.exists(this.endpoint))) return;
+    try {
+      const live = await this.options.connector.connect(this.endpoint);
+      await live.close();
+      throw new DaemonAlreadyRunningError(this.endpoint);
+    } catch (error: unknown) {
+      if (error instanceof DaemonAlreadyRunningError) throw error;
+      if (!(error instanceof IpcError) || !isUnavailable(error)) throw error;
+      this.#logger.warn("Recovered stale daemon socket", {
+        endpoint: this.endpoint,
+        reason: error.code,
+      });
+      await this.options.filesystem.rm(this.endpoint);
+    }
+  }
+
   async start(accept: (connection: IpcConnection) => void): Promise<void> {
     if (this.#listener !== undefined || this.#stopped)
       throw new Error("Daemon endpoint host has already been started");
-    await this.options.filesystem.mkdirp(dirname(this.endpoint), { mode: DATA_DIRECTORY_MODE });
-    if (await this.options.filesystem.exists(this.endpoint)) {
-      try {
-        const live = await this.options.connector.connect(this.endpoint);
-        await live.close();
-        throw new DaemonAlreadyRunningError(this.endpoint);
-      } catch (error: unknown) {
-        if (error instanceof DaemonAlreadyRunningError) throw error;
-        if (!(error instanceof IpcError) || !isUnavailable(error)) throw error;
-        this.#logger.warn("Recovered stale daemon socket", {
-          endpoint: this.endpoint,
-          reason: error.code,
-        });
-        await this.options.filesystem.rm(this.endpoint);
-      }
-    }
+    if (this.#isFile) await this.#claimSocketFile();
     try {
       this.#listener = await this.options.listenerFactory.listen(this.endpoint, accept);
       this.#ownsEndpoint = true;
@@ -115,7 +124,7 @@ export class DaemonEndpointHost implements ConnectionHost {
     this.#listener = undefined;
     if (this.#ownsEndpoint) {
       this.#ownsEndpoint = false;
-      await this.options.filesystem.rm(this.endpoint);
+      if (this.#isFile) await this.options.filesystem.rm(this.endpoint);
       this.#logger.info("Released daemon socket", { endpoint: this.endpoint });
     }
   }

@@ -63,7 +63,7 @@ function decoded(writes: readonly Uint8Array[]): { tag: number; body: unknown }[
 }
 
 describe("iOS device input", () => {
-  it("touches, buttons, scrolls and keys on an iOS simulator reach the HID helper", async () => {
+  it("touches, buttons, scrolls, keys and rotations on an iOS simulator reach the HID helper", async () => {
     const { factory, launcher, processRunner } = setup();
     const opening = factory.open(simulator(), new AbortController().signal);
     expect(launcher.starts).toEqual([
@@ -108,12 +108,25 @@ describe("iOS device input", () => {
     input.send({ dx: -0.25, dy: 0, kind: "scroll" });
     input.send({ kind: "key", type: "down", usage: 0x04 });
     input.send({ kind: "key", type: "up", usage: 0x04 });
+    for (const orientation of [
+      "portrait",
+      "portrait_upside_down",
+      "landscape_left",
+      "landscape_right",
+    ] as const) {
+      input.send({ kind: "orientation", orientation });
+    }
     expect(decoded(launcher.last.stdinWrites.slice(writtenBefore))).toEqual([
       { body: { dx: 0, dy: 0.5, x: 0.5, y: 0.25 }, tag: INPUT_TAG.scroll },
       { body: { dx: -0.25, dy: 0 }, tag: INPUT_TAG.scroll },
       { body: { type: "down", usage: 0x04 }, tag: INPUT_TAG.key },
       { body: { type: "up", usage: 0x04 }, tag: INPUT_TAG.key },
+      { body: { orientation: "portrait" }, tag: 0x07 },
+      { body: { orientation: "portrait_upside_down" }, tag: 0x07 },
+      { body: { orientation: "landscape_left" }, tag: 0x07 },
+      { body: { orientation: "landscape_right" }, tag: 0x07 },
     ]);
+    expect(configs).toEqual([{ height: 2556, orientation: "portrait", width: 1179 }]);
     expect(isUnavailableInput(input)).toBe(false);
 
     const inXcodeSet = setup(false);
@@ -138,8 +151,10 @@ describe("iOS device input", () => {
       ]);
       limited.send({ kind: "key", type: "down", usage: 0x04 });
       limited.send({ kind: "touch", type: "begin", x: 0.5, y: 0.25 });
+      limited.send({ kind: "orientation", orientation: "landscape_left" });
       expect(decoded(other.launcher.last.stdinWrites)).toEqual([
         { body: { type: "begin", x: 0.5, y: 0.25 }, tag: INPUT_TAG.touch },
+        { body: { orientation: "landscape_left" }, tag: 0x07 },
       ]);
     }
   });

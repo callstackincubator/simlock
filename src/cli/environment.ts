@@ -220,11 +220,8 @@ async function isStoppingRefusal(error: unknown): Promise<boolean> {
  * the name check picks the candidate and `instanceof` against the real class proves it. */
 async function isUnavailable(error: unknown): Promise<boolean> {
   if (!(error instanceof Error) || error.name !== "IpcError") return false;
-  const { IpcError } = await import("../ports/index.js");
-  return (
-    error instanceof IpcError &&
-    (error.code === "connection-refused" || error.code === "endpoint-not-found")
-  );
+  const { isEndpointAbsent } = await import("../ports/index.js");
+  return isEndpointAbsent(error);
 }
 
 async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
@@ -320,7 +317,9 @@ export function buildCliEnvironment(
     // Every consumer of this path is behind a command already inside `runCli`'s own try, where
     // that throw becomes the single structured error line the CLI reference promises instead of a
     // raw stack trace, and `simlock --help` (which needs no socket at all) never resolves it.
-    const connection = await connector.connect(resolveDaemonSocketPath(dataDirectory));
+    const connection = await connector.connect(
+      resolveDaemonSocketPath(dataDirectory, ports.hostPlatform),
+    );
     const credential = await resolveCredential();
     return connectSimlockAdmin({
       connection,
@@ -373,8 +372,17 @@ export function buildCliEnvironment(
     connectAdmin: (resolveCredential, options) => autoLaunch.connect(resolveCredential, options),
     connectExistingAdmin: (resolveCredential) => connect(ipc, resolveCredential),
     daemonEndpointPresent: async () => {
-      const { resolveDaemonSocketPath } = await import("../ports/index.js");
-      return filesystem.exists(resolveDaemonSocketPath(dataDirectory));
+      const { isEndpointAbsent, isPipeEndpoint, resolveDaemonSocketPath } =
+        await import("../ports/index.js");
+      const endpoint = resolveDaemonSocketPath(dataDirectory, ports.hostPlatform);
+      if (!isPipeEndpoint(endpoint)) return filesystem.exists(endpoint);
+      // why: `stat` on a live named pipe throws `EBUSY`, so a pipe is present exactly when something answers it.
+      try {
+        await (await ipc.connect(endpoint)).close();
+        return true;
+      } catch (error: unknown) {
+        return !isEndpointAbsent(error);
+      }
     },
     ...(env.SIMLOCK_ADMIN_TOKEN === undefined
       ? {}
