@@ -2132,18 +2132,20 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
   it("disposes the worker's dispatcher, ending its bus subscriptions, when the daemon stops", async () => {
     const live = new Map<string, number>();
     const subscribe = EventBus.prototype.subscribe;
-    const spy = vi
-      .spyOn(EventBus.prototype, "subscribe")
-      .mockImplementation(function (this: EventBus, event, handler) {
-        const unsubscribe = subscribe.call(this, event, handler);
-        live.set(event, (live.get(event) ?? 0) + 1);
-        let ended = false;
-        return () => {
-          if (!ended) live.set(event, (live.get(event) ?? 0) - 1);
-          ended = true;
-          unsubscribe();
-        };
-      });
+    const spy = vi.spyOn(EventBus.prototype, "subscribe").mockImplementation(function (
+      this: EventBus,
+      event,
+      handler,
+    ) {
+      const unsubscribe = subscribe.call(this, event, handler);
+      live.set(event, (live.get(event) ?? 0) + 1);
+      let ended = false;
+      return () => {
+        if (!ended) live.set(event, (live.get(event) ?? 0) - 1);
+        ended = true;
+        unsubscribe();
+      };
+    });
     try {
       const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
       expect(live.get("component.installed")).toBeGreaterThan(0);

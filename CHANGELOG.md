@@ -158,7 +158,7 @@ specification those changes are written against.
 - **`doctor` reports an unavailable optional module as `module-unavailable`.**
   The finding carries a `module` field (`agent-device` today) and replaces
   `agent-device-unavailable`; the stderr line is `<module>  fail  <message>;
-<remedy>`. The daemon protocol is now 37.
+  <remedy>`. The daemon protocol is now 37.
 
 ### Features
 
@@ -356,7 +356,7 @@ is the daemon that exists today.
   which nothing else records — it is what answers "why did that machine never
   appear". See `docs/EVENTS.md`.
 - **contract:** five new error codes. `WORKER_UNREACHABLE` (`kind:
-"transport"`, CLI exit 1, HTTP 503 — where every other `transport`-kind
+  "transport"`, CLI exit 1, HTTP 503 — where every other `transport`-kind
   code already sits) when a worker's uplink is down; `WORKER_CONNECTED`
   (exit 2, HTTP 409) refusing `worker remove` on a connected worker;
   `UNKNOWN_WORKER` (exit 12, HTTP 404) for `worker drain`/`undrain` naming a
@@ -949,9 +949,9 @@ breaking release for every frontend's wire vocabulary; see below.
   still-live lease — there is no dispatcher operation for a single-lease
   read to defer to, so both fall back to `lease.list`'s own filter, which
   does not distinguish "unknown" from "not yours" either. `POST
-/v1/leases/:id/renew` and `DELETE /v1/leases/:id` dispatch
+  /v1/leases/:id/renew` and `DELETE /v1/leases/:id` dispatch
   `lease.renew`/`lease.release` directly instead and keep answering `403
-FORBIDDEN` for the same case, matching the socket transport exactly — see
+  FORBIDDEN` for the same case, matching the socket transport exactly — see
   `docs/HTTP-API.md#get-v1leasesid`.
 - **`token create|list|revoke`** are now daemon operations (admin role) —
   the daemon is the sole owner of `tokens.json`. `config set` and
@@ -975,7 +975,7 @@ FORBIDDEN` for the same case, matching the socket transport exactly — see
   admin may cancel on another principal's behalf).
 - **daemon:** require the admin role for `daemon.stop`.
 - **http:** `GET /v1/lease-requests/{id}` and friends now answer `404
-UNKNOWN_LEASE_REQUEST`, not `404 UNKNOWN_REQUEST` — the latter collided
+  UNKNOWN_LEASE_REQUEST`, not `404 UNKNOWN_REQUEST` — the latter collided
   with the contract's own `UNKNOWN_REQUEST` (a 400 protocol error for an
   unrecognized operation name), so a client branching on `error.code` alone
   could not tell "no such request id" from "no such operation".
