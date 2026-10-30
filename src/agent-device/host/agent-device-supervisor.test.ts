@@ -411,6 +411,50 @@ describe("AgentDeviceSupervisor finding agent-device", () => {
     expect(daemonSpawns(harness)[0]?.[1]).toBe(internalEntry);
   });
 
+  // why: a pnpm global install puts a shell-script launcher in PNPM_HOME/bin, not a symlink into
+  // the package; the launcher names its target on the exec line and in a cmd-shim-target comment.
+  const pnpmLauncher = "/opt/pnpm/bin/agent-device";
+  const pnpmLayout = async (filesystem: MemoryFilesystem) => {
+    await filesystem.mkdirp("/opt/pnpm/bin");
+    await filesystem.writeFileAtomic(
+      pnpmLauncher,
+      [
+        "#!/bin/sh",
+        'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+        'if [ -x "$basedir/node" ]; then',
+        '  exec "$basedir/node"  "$basedir/../../ad/node_modules/agent-device/bin/agent-device.mjs" "$@"',
+        "else",
+        '  exec node  "$basedir/../../ad/node_modules/agent-device/bin/agent-device.mjs" "$@"',
+        "fi",
+        `# cmd-shim-target=${realCli}`,
+        "",
+      ].join("\n"),
+    );
+    filesystem.defineAttributes(pnpmLauncher, { mode: 0o755 });
+  };
+
+  it.each([
+    ["found by name on PATH", { baseEnvironment: { PATH: "/opt/pnpm/bin" } }],
+    ["configured as the command", { command: pnpmLauncher }],
+  ])(
+    "follows a pnpm global launcher %s to the agent-device package it runs",
+    async (_case, options) => {
+      const harness = await run({ ...options, layout: pnpmLayout });
+
+      expect(harness.availability()).toEqual({
+        baseUrl: `http://127.0.0.1:${httpPort}`,
+        generation: 1,
+        leaseMaxTtlMs: 24 * 60 * 60_000,
+        platforms: ["ios", "android"],
+        state: "running",
+        token,
+        version: "0.21.28",
+      });
+      expect(commandsRun(harness)[0]).toEqual([nodePath, realCli, "--version"]);
+      expect(daemonSpawns(harness)[0]?.[1]).toBe(internalEntry);
+    },
+  );
+
   it("reports a command found nowhere as not-found with the PATH message, and runs nothing", async () => {
     const harness = await run({
       baseEnvironment: { PATH: "/nowhere" },

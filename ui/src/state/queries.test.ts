@@ -292,7 +292,7 @@ describe("a read's answers and failures", () => {
     expect(resourceOf(observer.getCurrentResult())).toEqual({});
   });
 
-  it("a read that gives up after 10 seconds marks the console disconnected", async () => {
+  it("a read that times out marks the console disconnected", async () => {
     const { connection, daemon, watch } = start(false);
     daemon.reads = () => Promise.reject(new RequestTimeoutError("/v1/workers"));
     watch("/v1/workers");
@@ -619,6 +619,8 @@ describe("a lease renewal", () => {
     gateway.watch("/v1/leases");
     gateway.watch("/v1/workers");
     await settle();
+    // why: polls land 9_999 ms after the renewal, so the checks below straddle its 60 s.
+    await vi.advanceTimersByTimeAsync(1);
     const deadline = Date.now() + 120_000;
     gateway.daemon
       .openStream()
@@ -660,10 +662,11 @@ describe("a lease renewal", () => {
     gateway.daemon.reads = (path) =>
       Promise.resolve({ body: path === "/v1/leases" ? old : fleet, date: null });
     await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(9_999);
     const still = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
     expect(still.leases[0]?.ttlDeadline).toBe(deadline);
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     const dropped = gateway.state("/v1/leases").data as { leases: { ttlDeadline: number }[] };
     expect(dropped.leases[0]?.ttlDeadline).toBe(NOW + 60_000);
   });

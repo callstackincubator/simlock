@@ -468,6 +468,7 @@ describe("AndroidDriver", () => {
   it.each([
     ["its console port", 5586],
     ["the adb port above its console port", 5587],
+    ["its gRPC port", 8586],
   ])(
     "skips a console port when something listens on %s that its own adb server does not list",
     async (_, listeningPort) => {
@@ -499,10 +500,52 @@ describe("AndroidDriver", () => {
       deviceId: "simlock_one",
     });
     expect(harness.runner.calls).toContainEqual({
-      args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
+      args: [
+        "-avd",
+        "simlock_one",
+        "-port",
+        "5586",
+        "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
+        "-no-snapshot-load",
+      ],
       command: binaries.emulator,
       options: emulatorOptions,
     });
+  });
+
+  // why: The gRPC port follows the reserved console port, so two parallel leases never share one.
+  it("puts the gRPC endpoint at the reserved console port plus 3000", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const launches: (readonly string[])[] = [];
+    const hostRunner = host.runner();
+    const runner: ProcessRunner = {
+      ...hostRunner,
+      spawn: (command, args) => {
+        launches.push(args);
+        return hostRunner.spawn(command, args);
+      },
+    };
+    const driver = await createDriver(filesystem, runner, {
+      ids: ["one"],
+      tcpProbe: new FakeTcpProbe([adbServerPort, 5586]),
+    });
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    await driver.resolveSpec(spec);
+
+    await driver.makeReady(await driver.provision(spec));
+
+    expect(launches[0]).toEqual(
+      expect.arrayContaining(["-port", "5588", "-grpc", "8588", "-grpc-use-token"]),
+    );
   });
 
   /**
@@ -623,6 +666,9 @@ describe("AndroidDriver", () => {
         "-port",
         "5586",
         "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
         "-snapshot",
         "simlock_clean_baseline",
       ],
@@ -715,6 +761,9 @@ describe("AndroidDriver", () => {
         "-port",
         "5586",
         "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
         "-wipe-data",
         "-no-snapshot-load",
       ],
@@ -816,6 +865,9 @@ describe("AndroidDriver", () => {
             "-port",
             "5586",
             "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
             "-snapshot",
             "simlock_clean_baseline",
           ],
@@ -860,6 +912,9 @@ describe("AndroidDriver", () => {
         "-port",
         "5586",
         "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
         "-snapshot",
         "simlock_clean_baseline",
       ],
@@ -912,13 +967,26 @@ describe("AndroidDriver", () => {
         await harness.driver.makeReady(harness.device);
 
         expect(emulatorLaunches(harness.runner)).toEqual([
-          ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
           [
             "-avd",
             "simlock_one",
             "-port",
             "5586",
             "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
+            "-no-snapshot-load",
+          ],
+          [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
             "-snapshot",
             "simlock_clean_baseline",
           ],
@@ -938,12 +1006,15 @@ describe("AndroidDriver", () => {
       const launches = emulatorLaunches(harness.runner);
       expect(launches).toHaveLength(2);
       for (const args of launches) {
-        expect(args.slice(0, 5 + flags.length)).toEqual([
+        expect(args.slice(0, 8 + flags.length)).toEqual([
           "-avd",
           "simlock_one",
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...flags,
         ]);
       }
@@ -961,6 +1032,9 @@ describe("AndroidDriver", () => {
         "-port",
         "5586",
         "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
         "-gpu",
         "swiftshader_indirect",
         "-no-snapshot-load",
@@ -1021,6 +1095,9 @@ describe("AndroidDriver", () => {
             "-port",
             "5586",
             "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
             ...flags,
             "-snapshot",
             "simlock_clean_baseline",
@@ -1055,6 +1132,9 @@ describe("AndroidDriver", () => {
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...flags,
           "-wipe-data",
           "-no-snapshot-load",
@@ -1081,6 +1161,9 @@ describe("AndroidDriver", () => {
             "-port",
             "5586",
             "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
             ...flags,
             "-snapshot",
             "simlock_clean_baseline",
@@ -1107,6 +1190,9 @@ describe("AndroidDriver", () => {
         "-port",
         "5586",
         "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
         ...flags,
         "-wipe-data",
         "-no-snapshot-load",
@@ -1132,6 +1218,9 @@ describe("AndroidDriver", () => {
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...flags,
           "-snapshot",
           "simlock_clean_baseline",
@@ -1182,6 +1271,9 @@ describe("AndroidDriver", () => {
               "-port",
               "5586",
               "-no-snapshot-save",
+              "-grpc",
+              "8586",
+              "-grpc-use-token",
               ...launchFlags,
               "-no-snapshot-load",
             ],
@@ -1215,6 +1307,9 @@ describe("AndroidDriver", () => {
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...flags,
           "-no-snapshot-load",
         ],
@@ -4382,7 +4477,17 @@ describe("AndroidDriver console port reservations", () => {
       {
         hangs: true,
         match: {
-          args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-no-snapshot-load"],
+          args: [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
+            "-no-snapshot-load",
+          ],
           command: binaries.emulator,
         },
       },
@@ -6163,6 +6268,9 @@ function baselineBuildExpectations(options: {
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...emulatorFlags,
           ...options.launchArgs,
         ],
@@ -6223,6 +6331,9 @@ function baselineBuildExpectations(options: {
           "-port",
           "5586",
           "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
           ...emulatorFlags,
           "-snapshot",
           "simlock_clean_baseline",

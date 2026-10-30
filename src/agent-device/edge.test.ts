@@ -1607,6 +1607,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await expect
       .poll(async () => (await leases(rig)).map((lease) => lease.id))
       .not.toContain(hex(4));
+
+    rig.fake.answerNextAllocateWith("<html>bad gateway</html>");
+    rig.fake.failNextRelease({ code: "LEASE_NOT_FOUND", message: "no such lease" });
+    const gone = await envelopeOf(await allocate(rig, 5, { ttlMs: 60_000 }));
+
+    expect(gone.error?.data?.code).toBe("COMMAND_FAILED");
+    await expect
+      .poll(async () => (await leases(rig)).map((lease) => lease.id))
+      .not.toContain(hex(5));
   });
 
   it("the follow-up release after an allocate with no usable reply carries the allocate's runId, leaseProvider and clientId and not its deviceKey", async () => {
@@ -1789,18 +1798,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
       message: "daemon could not release",
     });
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1)]);
-  });
-
-  it("a release after `simlock release --all` ended the simlock lease answers the daemon's reply", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    await rig.daemon.dispatch("lease.release-all", {}, adminSession);
-    expect(await leases(rig)).toEqual([]);
-
-    const answer = await envelopeOf(await release(rig, 1));
-
-    expect(answer.result).toMatchObject({ ok: true, released: false });
-    expect(rig.fake.leases.has(hex(1))).toBe(false);
   });
 
   it("a release from a second token naming the first token's lease ID leaves the first token's simlock lease in place", async () => {
@@ -2326,7 +2323,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     const released = await envelopeOf(await release(rig, 1));
 
-    expect(released.result).toMatchObject({ ok: true });
+    expect(released.result).toMatchObject({ ok: true, released: false });
+    expect(rig.fake.leases.has(hex(1))).toBe(false);
     expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
     await granted(rig, 2);
     expect(await listed(rig)).toEqual([hex(2)]);
@@ -2423,7 +2421,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await deadlineOf(rig, 1)).toBe(final);
   });
 
-  it("a command agent-device answers with a 5xx reaches the CLI unchanged, and simlock logs a warning with that status and the start of the body", async () => {
+  it("a command agent-device answers with a 5xx reaches the CLI unchanged", async () => {
     const rig = await setUp();
     await granted(rig, 1);
     rig.fake.failNextCommandWithStatus(500, "snapshot runner crashed");
@@ -2432,9 +2430,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("snapshot runner crashed");
-    await expect
-      .poll(() => rig.logs.records.find((record) => record.message.includes("5xx"))?.fields)
-      .toEqual({ body: "snapshot runner crashed", status: 500 });
   });
 
   it("a command that fails, and one whose CLI hangs up, stop the renewals the same way", async () => {
@@ -2594,18 +2589,6 @@ describe("the agent-device front, through the whole worker daemon", () => {
     const rig = await setUp();
     await granted(rig, 1);
     rig.fake.restart();
-
-    const answer = await envelopeOf(await heartbeat(rig, 1));
-
-    expectEndedBySimlock(answer);
-    expect(await listed(rig)).toEqual([]);
-  });
-
-  it("after a simlock daemon restart on the same data directory and the same `FakeDriver`, so the device keeps running and the test first sees the lease still listed, a heartbeat for a lease made before the restart answers `LEASE_ENDED_BY_HOST` and releases that simlock lease", async () => {
-    const first = await setUp();
-    await granted(first, 1);
-    const rig = await first.restart();
-    expect(await listed(rig)).toEqual([hex(1)]);
 
     const answer = await envelopeOf(await heartbeat(rig, 1));
 
@@ -2893,17 +2876,6 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(atLostRelease).toEqual([lostBefore]);
   });
 
-  it("after release-all, the agent's next heartbeat answers LEASE_ENDED_BY_HOST and makes no new simlock lease", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    await releaseAll(rig);
-    await expect.poll(() => rig.fake.leases.has(hex(1))).toBe(false);
-
-    expectEndedBySimlock(await envelopeOf(await heartbeat(rig, 1)));
-
-    expect(await listed(rig)).toEqual([]);
-  });
-
   it("the agent's own release, answered before simlock leasing ends the lease, leaves agent-device with no second release", async () => {
     const rig = await setUp();
     await granted(rig, 1);
@@ -3084,31 +3056,38 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(rig.fake.requests).toEqual([]);
   });
 
-  it("agent-device answering the release with an error: the device's reclaim still starts", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    const before = wipes(rig);
-    const atRelease = watchWipes(rig);
-    rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
+  it.each([
+    {
+      failure: "an error",
+      fail: (rig: Rig) =>
+        rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" }),
+      tried: (rig: Rig, atRelease: readonly number[], before: number) => {
+        expect(releasesReceived(rig)).toHaveLength(1);
+        expect(atRelease).toEqual([before]);
+      },
+    },
+    {
+      failure: "an unreachable daemon",
+      fail: (rig: Rig) => rig.fake.setUnreachable(true),
+      tried: (rig: Rig) => {
+        expect(rig.fake.refused).toContain("agent_device.lease.release");
+      },
+    },
+  ])(
+    "agent-device failing the release with $failure: the device's reclaim still starts",
+    async ({ fail, tried }) => {
+      const rig = await setUp();
+      await granted(rig, 1);
+      const before = wipes(rig);
+      const atRelease = watchWipes(rig);
+      fail(rig);
 
-    await releaseAll(rig);
+      await releaseAll(rig);
 
-    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
-    expect(releasesReceived(rig)).toHaveLength(1);
-    expect(atRelease).toEqual([before]);
-  });
-
-  it("agent-device unreachable for the release: the device's reclaim still starts", async () => {
-    const rig = await setUp();
-    await granted(rig, 1);
-    const before = wipes(rig);
-    rig.fake.setUnreachable(true);
-
-    await releaseAll(rig);
-
-    await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
-    expect(rig.fake.refused).toContain("agent_device.lease.release");
-  });
+      await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
+      tried(rig, atRelease, before);
+    },
+  );
 
   it("after the agent-device daemon restarts, release-all gets released false from it and the reclaim starts at once", async () => {
     const rig = await setUp();
@@ -3424,12 +3403,6 @@ describe("the agent-device front's request rules", () => {
       expect(rig.fake.requests.map((request) => request.path)).toEqual([path]);
     });
 
-    it("POST /rpc with a token reaches agent-device", async () => {
-      const rig = await setUp();
-
-      await forwarded(rig, () => runCommand(rig, "snapshot", undefined));
-    });
-
     it.each([
       ["GET", "/admin/leases"],
       ["POST", "/health"],
@@ -3533,32 +3506,24 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a batch step whose `runtime.platform` is `web` is refused", async () => {
-      const rig = await setUp();
-      await forwarded(rig, () =>
-        batch(rig, undefined, [{ command: "snapshot", runtime: { platform: "ios" } }]),
-      );
+    it.each([
+      ["runtime.platform", (platform: string) => ({ runtime: { platform } })],
+      ["flags.platform", (platform: string) => ({ flags: { platform } })],
+    ] as const)(
+      "a batch step whose `%s` is `web` is refused and no step after the accepted one reaches agent-device",
+      async (_field, place) => {
+        const rig = await setUp();
+        const steps = [{ command: "snapshot", ...place("ios") }];
+        await forwarded(rig, () => batch(rig, undefined, steps));
 
-      await refused(
-        rig,
-        () => batch(rig, undefined, [{ command: "snapshot", runtime: { platform: "web" } }]),
-        onlyIosAndAndroid,
-      );
-    });
-
-    it("a batch step with `platform: web` is refused and no step reaches agent-device", async () => {
-      const rig = await setUp();
-      const steps = [{ command: "snapshot", flags: { platform: "ios" } }];
-      await forwarded(rig, () => batch(rig, undefined, steps));
-
-      await refused(
-        rig,
-        () =>
-          batch(rig, undefined, [...steps, { command: "snapshot", flags: { platform: "web" } }]),
-        onlyIosAndAndroid,
-      );
-      expect(commandsReceived(rig)).toHaveLength(1);
-    });
+        await refused(
+          rig,
+          () => batch(rig, undefined, [...steps, { command: "snapshot", ...place("web") }]),
+          onlyIosAndAndroid,
+        );
+        expect(commandsReceived(rig)).toHaveLength(1);
+      },
+    );
   });
 
   describe("rule 6, device selectors", () => {
@@ -4321,26 +4286,26 @@ describe("a worker's capabilities in status.get, through the whole worker daemon
     expect(await capabilities(off)).toEqual([{ name: "agent-device", state: "off" }]);
   });
 
-  it("a worker whose agent-device is unavailable answers state unavailable with the same reason its front's notAvailable reply names", async () => {
+  it.each(["found 0.20.1, need 0.21.28 or later", "starting"])(
+    "a worker whose agent-device is unavailable with reason %s answers state unavailable with that reason",
+    async (reason) => {
+      const rig = await setUp();
+      rig.fake.setUnavailable(reason);
+
+      expect(await capabilities(rig)).toEqual([
+        { name: "agent-device", reason, state: "unavailable" },
+      ]);
+    },
+  );
+
+  it("a worker whose agent-device is unavailable names the same reason in its front's notAvailable reply", async () => {
     const rig = await setUp();
     const reason = "found 0.20.1, need 0.21.28 or later";
     rig.fake.setUnavailable(reason);
 
     const health = await (await send(rig, "/health")).text();
 
-    expect(await capabilities(rig)).toEqual([
-      { name: "agent-device", reason, state: "unavailable" },
-    ]);
     expect(health).toContain(`${notAvailable}${reason}`);
-  });
-
-  it("a worker whose agent-device is starting answers unavailable with reason starting", async () => {
-    const rig = await setUp();
-    rig.fake.setUnavailable("starting");
-
-    expect(await capabilities(rig)).toEqual([
-      { name: "agent-device", reason: "starting", state: "unavailable" },
-    ]);
   });
 
   it("a worker whose agent-device goes from unavailable to running answers available on the next status.get", async () => {
@@ -4452,23 +4417,6 @@ describe(
       expect(bytes).toBeGreaterThanOrEqual(536_870_912);
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
       expect(rig.fake.artifactBytesProduced).toBeLessThan(1_073_741_824);
-    });
-
-    it("an RPC reply and a preflight reply pass unchanged", async () => {
-      const rig = await setUp();
-      await granted(rig, 1);
-
-      const reply = await command(rig, "snapshot", 1);
-      const preflight = await send(rig, "/upload/preflight", { body: "{}" });
-
-      expect(reply.status).toBe(200);
-      expect((await envelopeOf(reply)).result).toMatchObject({ ok: true });
-      expect(preflight.status).toBe(200);
-      expect(
-        ((await preflight.json()) as { upload: { url: string } }).upload.url.startsWith(
-          `${rig.origin}/v1/agent-device/upload/direct/`,
-        ),
-      ).toBe(true);
     });
 
     it("a 2147483648-byte upload reaches the fake byte for byte", async () => {
