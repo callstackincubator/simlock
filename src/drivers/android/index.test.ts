@@ -3642,6 +3642,10 @@ describe("AndroidDriver.create", () => {
   it("stops the adb server it adopted when the daemon disposes of it", async () => {
     const filesystem = await androidFilesystem();
     const processSupervisor = new FakeProcessSupervisor([adbServerPid]);
+    processSupervisor.answerCommandLine(
+      adbServerPid,
+      `${binaries.adb} -P ${adbServerPort} nodaemon server`,
+    );
     await recordRunningAdbServer(filesystem);
     const driver = await AndroidDriver.create({
       clock: new FakeClock(),
@@ -3651,16 +3655,7 @@ describe("AndroidDriver.create", () => {
       homeDirectory: home,
       hostAbi: "arm64-v8a",
       instanceId,
-      processRunner: new ScriptedProcessRunner([
-        {
-          match: { args: ["-o", "args=", "-p", String(adbServerPid)], command: "ps" },
-          result: {
-            code: 0,
-            stderr: "",
-            stdout: `${binaries.adb} -P ${adbServerPort} nodaemon server\n`,
-          },
-        },
-      ]),
+      processRunner: new ScriptedProcessRunner([]),
       processSupervisor,
       simlockHome,
       tcpProbe: new FakeTcpProbe([adbServerPort]),
@@ -4856,7 +4851,10 @@ live(
       hostAbi: "arm64-v8a",
       instanceId: `live-${process.pid}`,
       processRunner: new NodeProcessRunner(),
-      processSupervisor: new NodeProcessSupervisor(),
+      processSupervisor: new NodeProcessSupervisor({
+        platform: process.platform,
+        processRunner: new NodeProcessRunner(),
+      }),
       simlockHome: join(tmpdir(), `simlock-live-android-${process.pid}`),
       tcpProbe: new NodeTcpProbe(),
     });

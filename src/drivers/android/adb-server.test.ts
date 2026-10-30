@@ -99,27 +99,39 @@ describe("AdbServerSupervisor.start", () => {
     await expect(harness.filesystem.exists(recordPath)).resolves.toBe(false);
   });
 
-  it("reaps a recorded adb process that is alive but serving nothing, then starts its own", async () => {
-    const harness = await start({
-      expectations: [processIdentity(recordedPid, ownServerCommand), serverSpawn()],
-      livePids: [recordedPid],
-      record: { pid: recordedPid, port, startedAt: 1 },
-      spawnStartsListening: true,
-    });
-    harness.supervisor.onSignal = (pid) => harness.supervisor.markDead(pid);
+  it.each([
+    ["macOS or Linux", ownServerCommand],
+    [
+      "Windows, the path as Simlock builds it",
+      String.raw`C:\Users\Zoë Smith\AppData\Local/Android/Sdk/platform-tools/adb.exe -P 5038 nodaemon server`,
+    ],
+    [
+      "Windows, a path of backslashes only",
+      String.raw`C:\Android\Sdk\platform-tools\adb.exe -P 5038 nodaemon server`,
+    ],
+  ])(
+    "reaps a recorded adb process that is alive but serving nothing, then starts its own, on %s",
+    async (_case, commandLine) => {
+      const harness = await start({
+        commandLines: [[recordedPid, [commandLine]]],
+        expectations: [serverSpawn()],
+        livePids: [recordedPid],
+        record: { pid: recordedPid, port, startedAt: 1 },
+        spawnStartsListening: true,
+      });
+      harness.supervisor.onSignal = (pid) => harness.supervisor.markDead(pid);
 
-    await harness.started;
+      await harness.started;
 
-    expect(harness.supervisor.signals).toEqual([{ pid: recordedPid, signal: "SIGTERM" }]);
-  });
+      expect(harness.supervisor.signals).toEqual([{ pid: recordedPid, signal: "SIGTERM" }]);
+      expect(harness.runner.calls.map((call) => call.command)).toEqual([adb]);
+    },
+  );
 
   it("escalates to SIGKILL when a recorded server ignores SIGTERM", async () => {
     const harness = await start({
-      expectations: [
-        processIdentity(recordedPid, ownServerCommand),
-        processIdentity(recordedPid, ownServerCommand),
-        serverSpawn(),
-      ],
+      commandLines: [[recordedPid, [ownServerCommand, ownServerCommand]]],
+      expectations: [serverSpawn()],
       livePids: [recordedPid],
       record: { pid: recordedPid, port, startedAt: 1 },
       spawnStartsListening: true,
@@ -137,20 +149,25 @@ describe("AdbServerSupervisor.start", () => {
     ]);
   });
 
-  it("never signals a recorded pid that is no longer an adb process", async () => {
-    // The recycled-pid case: the number is alive, but it belongs to a stranger now, and a
-    // record is not a licence to kill whatever answers to its pid.
-    const harness = await start({
-      expectations: [processIdentity(recordedPid, "/usr/bin/vim /etc/hosts"), serverSpawn()],
-      livePids: [recordedPid],
-      record: { pid: recordedPid, port, startedAt: 1 },
-      spawnStartsListening: true,
-    });
+  it.each([["/usr/bin/vim /etc/hosts"], [String.raw`C:\tools\notadb.exe -P 5038 nodaemon server`]])(
+    "never signals a recorded pid that is no longer an adb process: %s",
+    async (commandLine) => {
+      // The recycled-pid case: the number is alive, but it belongs to a stranger now, and a
+      // record is not a licence to kill whatever answers to its pid.
+      const harness = await start({
+        commandLines: [[recordedPid, [commandLine]]],
+        expectations: [serverSpawn()],
+        livePids: [recordedPid],
+        record: { pid: recordedPid, port, startedAt: 1 },
+        spawnStartsListening: true,
+      });
 
-    await harness.started;
+      await harness.started;
 
-    expect(harness.supervisor.signals).toEqual([]);
-  });
+      expect(harness.supervisor.signals).toEqual([]);
+      expect(harness.supervisor.commandLineReads).toEqual([recordedPid]);
+    },
+  );
 
   it.each([
     ["is unreadable", undefined],
@@ -169,6 +186,7 @@ describe("AdbServerSupervisor.start", () => {
 
     // Straight to the spawn: no identity read, no signal, nothing to adopt.
     expect(harness.supervisor.signals).toEqual([]);
+    expect(harness.supervisor.commandLineReads).toEqual([]);
     expect(harness.runner.calls).toHaveLength(1);
   });
 
@@ -177,10 +195,8 @@ describe("AdbServerSupervisor.start", () => {
     // exactly the population a recycled pid most often lands in, and `adb` alone is not
     // evidence of ownership -- `-P <our port>` and `nodaemon` are.
     const harness = await start({
-      expectations: [
-        processIdentity(recordedPid, "/usr/local/bin/adb -P 5037 fork-server server"),
-        serverSpawn(),
-      ],
+      commandLines: [[recordedPid, ["/usr/local/bin/adb -P 5037 fork-server server"]]],
+      expectations: [serverSpawn()],
       livePids: [recordedPid],
       record: { pid: recordedPid, port, startedAt: 1 },
       spawnStartsListening: true,
@@ -257,7 +273,8 @@ describe("AdbServerSupervisor.start", () => {
 describe("AdbServerSupervisor.stop", () => {
   it("stops the server it started by pid and drops the record", async () => {
     const harness = await start({
-      expectations: [serverSpawn(), processIdentity(1, ownServerCommand)],
+      commandLines: [[1, [ownServerCommand]]],
+      expectations: [serverSpawn()],
       spawnStartsListening: true,
     });
     await harness.started;
@@ -271,22 +288,19 @@ describe("AdbServerSupervisor.stop", () => {
     await expect(harness.filesystem.exists(recordPath)).resolves.toBe(false);
   });
 
-  it.each([
-    ["answers with an error", [unreadableProcessTable(1)]],
-    ["cannot be run at all", []],
-  ])("keeps the record when the process table %s", async (_case, identity) => {
-    // A host with no `ps` (a slim container), a stripped `PATH`, or a `ps` too small to know
-    // `-o args=`. Dropping the record here would leave the server running with nothing left
-    // to reap it by, and the next start would find a listening port it has no claim on:
-    // Android dead on that host until somebody hunts down the pid.
+  it("keeps the record and signals nothing when the server's command line cannot be read", async () => {
+    // why: dropping the record would leave the server running with nothing left to reap it by,
+    // and the next start would find a listening port it has no claim on.
     const harness = await start({
-      expectations: [serverSpawn(), ...identity],
+      commandLines: [[1, [undefined]]],
+      expectations: [serverSpawn()],
       spawnStartsListening: true,
     });
     await harness.started;
 
     await harness.adbServer.stop();
 
+    expect(harness.supervisor.commandLineReads).toEqual([1]);
     expect(harness.supervisor.signals).toEqual([]);
     await expect(harness.filesystem.exists(recordPath)).resolves.toBe(true);
   });
@@ -302,6 +316,7 @@ describe("AdbServerSupervisor.stop", () => {
 });
 
 interface StartOptions {
+  readonly commandLines?: readonly (readonly [number, readonly (string | undefined)[]])[];
   readonly expectations?: readonly ScriptedProcessExpectation[];
   readonly failRecordWrite?: boolean;
   readonly listening?: boolean;
@@ -330,6 +345,8 @@ async function start(options: StartOptions = {}) {
     options.probe ?? new FakeTcpProbe(options.listening === true ? [configuredPort] : []);
   const runner = new ScriptedProcessRunner(options.expectations ?? []);
   const supervisor = new SignallingSupervisor(options.livePids ?? []);
+  for (const [pid, lines] of options.commandLines ?? [])
+    supervisor.answerCommandLine(pid, ...lines);
   const spawned = observeSpawns({ configuredPort, options, probe, runner, supervisor });
 
   if (options.failRecordWrite === true) {
@@ -416,26 +433,6 @@ function observeSpawns(context: {
 
 function serverSpawn(): ScriptedProcessExpectation {
   return { hangs: true, match: { args: ["-P", "5038", "nodaemon", "server"], command: adb } };
-}
-
-/**
- * The `ps` read that proves a recorded pid really is *this* server before it is signalled.
- * The whole command line, because the arguments are the only thing that separates Simlock's
- * server from the shared one every other tool on the machine is talking to.
- */
-function processIdentity(pid: number, commandLine: string): ScriptedProcessExpectation {
-  return {
-    match: { args: ["-o", "args=", "-p", String(pid)], command: "ps" },
-    result: { code: 0, stderr: "", stdout: `${commandLine}\n` },
-  };
-}
-
-/** A `ps` that cannot answer: a BusyBox one that has never heard of `-o args=`, say. */
-function unreadableProcessTable(pid: number): ScriptedProcessExpectation {
-  return {
-    match: { args: ["-o", "args=", "-p", String(pid)], command: "ps" },
-    result: { code: 127, stderr: "ps: command not found", stdout: "" },
-  };
 }
 
 const ownServerCommand = `${adb} -P 5038 nodaemon server`;
