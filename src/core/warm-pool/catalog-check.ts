@@ -4,7 +4,7 @@ import type { DriverCatalog, PlatformCatalog } from "../driver-catalog.js";
 import { stableError } from "../stable-error.js";
 import type { LearnedKind } from "./learned.js";
 
-/** why: the longest the pool waits for a catalog read; `avdmanager` has no timeout of its own. */
+/** why: the longest the pool waits for a catalog read, whatever bound the driver's own read has. */
 const CATALOG_READ_LIMIT_MS = 30_000;
 
 interface CatalogCheckOptions {
