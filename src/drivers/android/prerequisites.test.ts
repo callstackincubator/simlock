@@ -222,16 +222,19 @@ describe("androidPrerequisites", () => {
 
 describe("androidPrerequisites on Windows", () => {
   const winSdk = "/Users/me/AppData/Local/Android/Sdk";
+  // why: differs from the home-directory fallback, so only a read LOCALAPPDATA finds this one.
+  const localSdk = "/Volumes/Data/Local/Android/Sdk";
   const winSdkmanager = `${winSdk}/cmdline-tools/latest/bin/sdkmanager.bat`;
+  const sdkmanagerIn = (root: string) => `${root}/cmdline-tools/latest/bin/sdkmanager.bat`;
 
   /** why: Android Studio installs `.exe` binaries and `.bat` tools on Windows, never the bare names. */
-  async function windowsSdk(): Promise<MemoryFilesystem> {
+  async function windowsSdk(root = winSdk): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp(winSdk);
-    await writeFile(filesystem, winSdkmanager);
-    await writeFile(filesystem, `${winSdk}/cmdline-tools/latest/bin/avdmanager.bat`);
-    await writeFile(filesystem, `${winSdk}/emulator/emulator.exe`);
-    await writeFile(filesystem, `${winSdk}/platform-tools/adb.exe`);
+    await filesystem.mkdirp(root);
+    await writeFile(filesystem, sdkmanagerIn(root));
+    await writeFile(filesystem, `${root}/cmdline-tools/latest/bin/avdmanager.bat`);
+    await writeFile(filesystem, `${root}/emulator/emulator.exe`);
+    await writeFile(filesystem, `${root}/platform-tools/adb.exe`);
     return filesystem;
   }
 
@@ -255,16 +258,19 @@ describe("androidPrerequisites on Windows", () => {
   };
 
   it.each([
-    ["ANDROID_HOME", { ANDROID_HOME: winSdk }],
-    ["Android Studio's %LOCALAPPDATA% default", { LOCALAPPDATA: "/Users/me/AppData/Local" }],
+    ["ANDROID_HOME", { ANDROID_HOME: winSdk }, winSdk],
+    ["Android Studio's %LOCALAPPDATA% default", { LOCALAPPDATA: "/Volumes/Data/Local" }, localSdk],
   ])(
     "finds a complete SDK of .exe and .bat tools through %s and runs its sdkmanager.bat",
-    async (_source, env) => {
-      const runner = new ScriptedProcessRunner([WINDOWS_SDKMANAGER_RUNS]);
+    async (_source, env, root) => {
+      const sdkmanager = sdkmanagerIn(root);
+      const runner = new ScriptedProcessRunner([
+        { ...WINDOWS_SDKMANAGER_RUNS, match: { args: ["--version"], command: sdkmanager } },
+      ]);
 
-      await expect(windowsCheck(await windowsSdk(), runner, env).check()).resolves.toEqual([]);
+      await expect(windowsCheck(await windowsSdk(root), runner, env).check()).resolves.toEqual([]);
       expect(runner.calls.map((call) => [call.command, ...call.args])).toEqual([
-        [winSdkmanager, "--version"],
+        [sdkmanager, "--version"],
       ]);
     },
   );

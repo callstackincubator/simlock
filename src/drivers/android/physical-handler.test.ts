@@ -1645,6 +1645,18 @@ describe("Android physical handler on Windows", () => {
   });
 
   it.each([
+    ["win32", { driverDeviceId: PHONE, osVersion: "34", present: true }],
+    ["linux", { driverDeviceId: PHONE, present: false, reason: "not-present" }],
+  ] as const)(
+    "lists an enrolled phone with no usb: path on %s as the USB rule of that host says",
+    async (platform, expected) => {
+      const handler = await windowsHandler(devicesListing(WINDOWS_LINE), platform);
+
+      await expect(handler.listPresentPhysical([PHONE])).resolves.toEqual([expected]);
+    },
+  );
+
+  it.each([
     ["a host:port", "192.168.1.5:5555"],
     ["an mDNS service", "adb-R58M123ABC-x1Yz2W._adb-tls-connect._tcp"],
     ["an emulator", "emulator-5554"],

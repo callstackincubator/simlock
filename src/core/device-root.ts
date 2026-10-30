@@ -378,11 +378,6 @@ function isMissingPathError(error: unknown): boolean {
 }
 
 /**
- * why: `rename` reports an occupied destination three ways depending on the kernel and on what
- * is sitting there: a non-empty directory, a directory replaced by a file, or a plain
- * refusal to clobber.
- */
-/**
  * why: Windows refuses to rename a directory onto one that exists with `EPERM` (or `EACCES`), not
  * `EEXIST`, so two daemons starting at once would leave the loser refusing its own root. The same
  * codes also mean a real permission problem, so the refusal is a lost race only when the root is
@@ -394,6 +389,11 @@ async function lostRaceOnWindows(context: RootContext, error: unknown): Promise<
   return (await pathDetails(context, context.root, "it")) !== undefined;
 }
 
+/**
+ * why: `rename` reports an occupied destination three ways depending on the kernel and on what
+ * is sitting there: a non-empty directory, a directory replaced by a file, or a plain
+ * refusal to clobber.
+ */
 function isOccupiedPathError(error: unknown): boolean {
   const code = errorCode(error);
 

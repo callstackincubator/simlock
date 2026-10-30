@@ -535,22 +535,6 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
   }
 }
 
-/**
- * why: Signals the child's whole process group (children are spawned `detached`, so the group is
- * the unit that actually dies), or on Windows a batch file's whole tree and any other child
- * alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
- * kill identically -- a timeout that only reached the direct child would leave a tool's own
- * subprocesses running.
- *
- * Guarded on `child.exitCode`/`child.signalCode` -- both still `null` only while the child is
- * actually running -- before ever calling `process.kill(-pid, signal)` directly: that call
- * bypasses `ChildProcess.kill`'s own "already exited" guard, and `wait()` can defer settling
- * up to `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild holding
- * stdio open, or a stalled delivery). Node frees a reaped pid for the kernel to recycle, so a
- * timeout firing in that window without this guard could signal a process group the kernel has
- * already handed to someone else -- latent before this PR, but `device.exec` is what makes the
- * timing remotely triggerable.
- */
 const TASKKILL_TIMEOUT_MS = 10_000;
 
 /**
@@ -578,6 +562,22 @@ function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS
   });
 }
 
+/**
+ * why: Signals the child's whole process group (children are spawned `detached`, so the group is
+ * the unit that actually dies), or on Windows a batch file's whole tree and any other child
+ * alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * kill identically -- a timeout that only reached the direct child would leave a tool's own
+ * subprocesses running.
+ *
+ * Guarded on `child.exitCode`/`child.signalCode` -- both still `null` only while the child is
+ * actually running -- before ever calling `process.kill(-pid, signal)` directly: that call
+ * bypasses `ChildProcess.kill`'s own "already exited" guard, and `wait()` can defer settling
+ * up to `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` past the real `exit` event (a chatty grandchild holding
+ * stdio open, or a stalled delivery). Node frees a reaped pid for the kernel to recycle, so a
+ * timeout firing in that window without this guard could signal a process group the kernel has
+ * already handed to someone else -- latent before this PR, but `device.exec` is what makes the
+ * timing remotely triggerable.
+ */
 function killProcessTree(
   child: ChildProcess,
   pid: number,

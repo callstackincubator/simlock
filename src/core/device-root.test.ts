@@ -175,16 +175,23 @@ describe("ensureOwnedRoot", () => {
     await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
   });
 
-  it("keeps a root another process published first when Windows refuses the rename with EPERM", async () => {
-    const filesystem = new RefusingRenameFilesystem(uid, async (target) => {
-      await target.mkdirp(root);
-      await target.writeFileAtomic(markerPath, marker());
-    });
+  it.each(["EPERM", "EACCES"])(
+    "keeps a root another process published first when Windows refuses the rename with %s",
+    async (code) => {
+      const filesystem = new RefusingRenameFilesystem(
+        uid,
+        async (target) => {
+          await target.mkdirp(root);
+          await target.writeFileAtomic(markerPath, marker());
+        },
+        code,
+      );
 
-    await expect(ensure(filesystem)).resolves.toBe(root);
-    await expect(filesystem.readFile(markerPath)).resolves.toBe(marker());
-    await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
-  });
+      await expect(ensure(filesystem)).resolves.toBe(root);
+      await expect(filesystem.readFile(markerPath)).resolves.toBe(marker());
+      await expect(filesystem.readdir(parent)).resolves.toEqual(["ios"]);
+    },
+  );
 
   it("still refuses a root whose rename was refused with EPERM when nothing else published it", async () => {
     const filesystem = new RefusingRenameFilesystem(uid, async () => undefined);
@@ -489,11 +496,12 @@ class UmaskedFilesystem extends MemoryFilesystem {
   }
 }
 
-/** why: Windows refuses renaming onto an existing directory with EPERM; `before` decides whether another process published the root first. */
+/** why: Windows refuses renaming onto an existing directory with EPERM or EACCES; `before` decides whether another process published the root first. */
 class RefusingRenameFilesystem extends MemoryFilesystem {
   constructor(
     owner: number,
     private readonly before: (target: MemoryFilesystem) => Promise<void>,
+    private readonly code = "EPERM",
   ) {
     super(undefined, owner);
   }
@@ -502,9 +510,9 @@ class RefusingRenameFilesystem extends MemoryFilesystem {
     if (to !== root) return super.rename(from, to);
     await this.before(this);
     const error: NodeJS.ErrnoException = new Error(
-      `EPERM: operation not permitted, rename '${from}' -> '${to}'`,
+      `${this.code}: operation not permitted, rename '${from}' -> '${to}'`,
     );
-    error.code = "EPERM";
+    error.code = this.code;
     throw error;
   }
 }
