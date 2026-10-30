@@ -256,6 +256,50 @@ describe("CLI: exit codes", () => {
     }
   });
 
+  it("simlock setup ends its report with a machine summary line and puts doctor's act-on lines on stderr", async () => {
+    const missingSdk: DoctorReport = {
+      findings: [
+        {
+          kind: "prerequisite-missing",
+          platform: "android",
+          prerequisite: "android-sdk",
+          message: "No Android SDK.",
+          remedy: "Install it.",
+        },
+      ],
+    };
+    for (const [report, summary, stderr] of [
+      [
+        missingSdk,
+        "ios ok, android missing: android-sdk",
+        "Missing [android] android-sdk: No Android SDK. Install it.\n",
+      ],
+    ] as const) {
+      const output = outputCapture();
+      const doctorInputs: unknown[] = [];
+      const code = await runCli(
+        ["setup", "--tool", "claude-code", "--no-mcp"],
+        output.environmentWith({
+          hostPlatform: "darwin",
+          connectAdmin: async () =>
+            fakeClient({
+              runDoctor: (input) => {
+                doctorInputs.push(input);
+                return Promise.resolve(report);
+              },
+            }),
+        }),
+      );
+      expect(code, summary).toBe(0);
+      expect(doctorInputs, summary).toEqual([{}]);
+      expect(output.stdout, summary).toBe(
+        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+          `machine      ${summary}\n`,
+      );
+      expect(output.stderr, summary).toBe(stderr);
+    }
+  });
+
   it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
     const HOME = "/home/operator";
     const CWD = "/work/project";
