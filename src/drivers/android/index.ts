@@ -66,11 +66,11 @@ import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js"
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
+  AvdmanagerDeviceList,
   BuiltinDeviceProfileSource,
   hiddenUserProfiles,
   containsForbiddenCharacter,
   DeviceProfileRegistry,
-  parseAvdmanagerDeviceProfiles,
   UserDeviceProfileSource,
   type DeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
@@ -507,6 +507,7 @@ export class AndroidDriver implements Driver {
   readonly #adbServerPort: number;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #acceptAndroidLicenses: boolean;
+  readonly #avdmanagerDevices: AvdmanagerDeviceList;
   readonly #clock: Clock;
   readonly #deviceProfiles: DeviceProfileRegistry;
   readonly #profileSources: ReturnType<typeof defaultDeviceProfileSources> | undefined;
@@ -579,9 +580,18 @@ export class AndroidDriver implements Driver {
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
+    // why: scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
+    this.#avdmanagerDevices = new AvdmanagerDeviceList({
+      avdmanager: sdk.avdmanager,
+      devicesXmlPath: userDevicesXmlPath(options),
+      env: () => this.#env(),
+      filesystem: options.filesystem,
+      processRunner: options.processRunner,
+      sdkRoot: sdk.root,
+    });
     const defaults =
       options.deviceProfileSources === undefined
-        ? defaultDeviceProfileSources(options, sdk, this.#onDiagnostic, () => this.#env())
+        ? defaultDeviceProfileSources(options, this.#avdmanagerDevices, this.#onDiagnostic)
         : undefined;
     this.#profileSources = defaults;
     this.#deviceProfiles = new DeviceProfileRegistry(
@@ -1468,8 +1478,7 @@ export class AndroidDriver implements Driver {
   }
 
   async #defaultAvdmanagerDeviceId(): Promise<string> {
-    const result = await this.#runOrThrow(this.#sdk.avdmanager, ["list", "device"]);
-    const [first] = parseAvdmanagerDeviceProfiles(result.stdout);
+    const [first] = await this.#avdmanagerDevices.read();
     if (first === undefined) {
       throw new DriverCrashError(
         `${this.#sdk.avdmanager} list device reported no built-in device profiles`,
@@ -2769,26 +2778,30 @@ function hasUnacceptedLicense(result: ProcessResult): boolean {
  * `ANDROID_PREFS_ROOT/.android`, else `ANDROID_SDK_HOME/.android`, else `~/.android`. Not
  * `ANDROID_AVD_HOME`, which only relocates created AVDs.
  */
+function userDevicesXmlPath(options: AndroidDriverOptions): string {
+  const { ANDROID_PREFS_ROOT, ANDROID_SDK_HOME, ANDROID_USER_HOME } = options.env;
+  return ANDROID_USER_HOME !== undefined
+    ? `${ANDROID_USER_HOME}/devices.xml`
+    : `${ANDROID_PREFS_ROOT ?? ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
+}
+
 function defaultDeviceProfileSources(
   options: AndroidDriverOptions,
-  sdk: AndroidSdkPaths,
+  avdmanagerDevices: AvdmanagerDeviceList,
   onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
-  env: () => NodeJS.ProcessEnv,
 ): {
   readonly library: DeviceProfileSource;
   readonly builtin: DeviceProfileSource;
   readonly user: DeviceProfileSource;
 } {
-  const { ANDROID_PREFS_ROOT, ANDROID_SDK_HOME, ANDROID_USER_HOME } = options.env;
-  const devicesXmlPath =
-    ANDROID_USER_HOME !== undefined
-      ? `${ANDROID_USER_HOME}/devices.xml`
-      : `${ANDROID_PREFS_ROOT ?? ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
   return {
     library: new LibraryDeviceProfileSource(),
-    // why: Scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
-    builtin: new BuiltinDeviceProfileSource(sdk.avdmanager, options.processRunner, env),
-    user: new UserDeviceProfileSource(devicesXmlPath, options.filesystem, onDiagnostic),
+    builtin: new BuiltinDeviceProfileSource(avdmanagerDevices),
+    user: new UserDeviceProfileSource(
+      userDevicesXmlPath(options),
+      options.filesystem,
+      onDiagnostic,
+    ),
   };
 }
 

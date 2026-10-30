@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import { DriverCrashError, UnknownModelError, type DeviceClass } from "../../core/index.js";
 import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 
@@ -243,25 +245,141 @@ export async function hiddenUserProfiles(
   return hidden;
 }
 
-/** Today's behavior, refactored behind `DeviceProfileSource`: resolves against `avdmanager list device`. */
-export class BuiltinDeviceProfileSource implements DeviceProfileSource {
-  readonly #avdmanager: string;
-  readonly #processRunner: ProcessRunner;
-  readonly #env: (() => NodeJS.ProcessEnv) | undefined;
+/**
+ * why: as long as the warm pool waits for a catalog read, so a hung `avdmanager` is stopped when
+ * the pool stops waiting for it rather than left running.
+ */
+const AVDMANAGER_LIST_TIMEOUT_MS = 30_000;
 
+export interface AvdmanagerDeviceListOptions {
+  readonly avdmanager: string;
+  readonly devicesXmlPath: string;
   /**
-   * `env` is a thunk, not a value: it is the driver's own scoped environment (ADR 0001,
-   * decision 4), and the driver builds it from state it only settles once the AVD root is
-   * proven. Reading it per call means this source can never be handed a snapshot that was
-   * taken before containment was established.
-   *
-   * Omitting it leaves the child's environment inherited rather than replaced -- an empty
-   * override is not "no override", it is a child spawned with no `PATH` at all.
+   * why: a thunk, not a value: it is the driver's own scoped environment (ADR 0001, decision
+   * 4), built from state the driver only settles once the AVD root is proven, so a run can
+   * never get a snapshot taken before that. Omitted, the child inherits the environment: an
+   * empty override would be a child with no `PATH` at all.
    */
-  constructor(avdmanager: string, processRunner: ProcessRunner, env?: () => NodeJS.ProcessEnv) {
-    this.#avdmanager = avdmanager;
-    this.#processRunner = processRunner;
-    this.#env = env;
+  readonly env?: (() => NodeJS.ProcessEnv) | undefined;
+  readonly filesystem: Filesystem;
+  readonly processRunner: ProcessRunner;
+  readonly sdkRoot: string;
+}
+
+/**
+ * why: `avdmanager list device` starts two JVMs (about 1 s, and 3 s of CPU) and the warm pool
+ * reads the catalog every 30 s (ADR 0015's Consequences left a cache for when the cost shows).
+ * So its answer is kept and it runs again only when a file it reads device definitions from
+ * changed: its tools package's sdklib jar and `source.properties`, the user's devices.xml, and
+ * the devices.xml of each installed system image and add-on, each keyed by its size and
+ * modified time or its absence, the image and add-on directories by their paths. While that key
+ * is unchanged the kept answer equals a fresh read. A failed run is not kept, and callers that
+ * ask while a run for the same key is under way share it.
+ */
+export class AvdmanagerDeviceList {
+  readonly #options: AvdmanagerDeviceListOptions;
+  #kept:
+    | { readonly key: string; readonly profiles: readonly AvdmanagerDeviceProfile[] }
+    | undefined;
+  #running:
+    | { readonly key: string; readonly read: Promise<readonly AvdmanagerDeviceProfile[]> }
+    | undefined;
+
+  constructor(options: AvdmanagerDeviceListOptions) {
+    this.#options = options;
+  }
+
+  /** why: in the order `avdmanager` prints them: a library provision seeds from the first. */
+  async read(): Promise<readonly AvdmanagerDeviceProfile[]> {
+    const key = await this.#inputsKey();
+    if (this.#kept?.key === key) return this.#kept.profiles;
+    if (this.#running?.key === key) return await this.#running.read;
+    const running = { key, read: this.#run() };
+    this.#running = running;
+    try {
+      const profiles = await running.read;
+      this.#kept = { key, profiles };
+      return profiles;
+    } finally {
+      if (this.#running === running) this.#running = undefined;
+    }
+  }
+
+  async #run(): Promise<readonly AvdmanagerDeviceProfile[]> {
+    const { avdmanager, env, processRunner } = this.#options;
+    const result = await processRunner.run(avdmanager, ["list", "device"], {
+      ...(env === undefined ? {} : { env: env() }),
+      timeoutMs: AVDMANAGER_LIST_TIMEOUT_MS,
+    });
+    if (result.code !== 0) {
+      const reason =
+        result.stderr ||
+        result.stdout ||
+        (result.code === null ? "stopped before it finished" : `exit code ${result.code}`);
+      throw new DriverCrashError(`${avdmanager} list device failed: ${reason}`);
+    }
+    return parseAvdmanagerDeviceProfiles(result.stdout);
+  }
+
+  /** why: the key is read before the run, so a file changed during it makes the next read run again. */
+  async #inputsKey(): Promise<string> {
+    const { avdmanager, devicesXmlPath, sdkRoot } = this.#options;
+    // why: `<package>/bin/avdmanager`, where the package is `cmdline-tools/<version>` or the
+    // legacy `tools`, whose sdklib jars sit straight in `lib/`.
+    const toolsPackage = dirname(dirname(avdmanager));
+    const legacyJars = (await this.#children(`${toolsPackage}/lib`)).filter((name) =>
+      /^sdklib.*\.jar$/.test(name),
+    );
+    const images = await this.#descendants(`${sdkRoot}/system-images`, 3);
+    const addOns = await this.#descendants(`${sdkRoot}/add-ons`, 1);
+    const paths = [
+      `${toolsPackage}/source.properties`,
+      `${toolsPackage}/lib/sdklib/sdklib.core.jar`,
+      ...legacyJars.map((name) => `${toolsPackage}/lib/${name}`),
+      devicesXmlPath,
+      ...[...images, ...addOns].map((directory) => `${directory}/devices.xml`),
+    ];
+    const stamps = await Promise.all(
+      paths.map(async (path) => `${path}=${await this.#stamp(path)}`),
+    );
+    return stamps.join("\n");
+  }
+
+  async #stamp(path: string): Promise<string> {
+    try {
+      const stat = await this.#options.filesystem.stat(path);
+      return `${stat.size}@${stat.modifiedAtMs}`;
+    } catch {
+      return "absent";
+    }
+  }
+
+  async #descendants(root: string, depth: number): Promise<readonly string[]> {
+    let level = [root];
+    for (let step = 0; step < depth; step += 1) {
+      const next = await Promise.all(
+        level.map(async (path) => (await this.#children(path)).map((name) => `${path}/${name}`)),
+      );
+      level = next.flat();
+    }
+    return level;
+  }
+
+  /** why: an absent or unreadable directory, or a file, has no entries to key on. */
+  async #children(path: string): Promise<readonly string[]> {
+    try {
+      return (await this.#options.filesystem.readdir(path)).filter((name) => !name.startsWith("."));
+    } catch {
+      return [];
+    }
+  }
+}
+
+export class BuiltinDeviceProfileSource implements DeviceProfileSource {
+  readonly #devices: AvdmanagerDeviceList;
+
+  constructor(devices: AvdmanagerDeviceList) {
+    this.#devices = devices;
   }
 
   /**
@@ -270,7 +388,7 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
    * devices.xml one whatever order `avdmanager` prints them in.
    */
   async profiles(): Promise<readonly DeviceProfile[]> {
-    const profiles = (await this.#avdmanagerProfiles()).map(
+    const profiles = (await this.#devices.read()).map(
       (profile): DeviceProfile => ({
         avdmanagerId: profile.id,
         custom: profile.oem === "User",
@@ -289,23 +407,9 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
       ...profiles.filter((profile) => isCustom(profile)),
     ];
   }
-
-  async #avdmanagerProfiles(): Promise<readonly AvdmanagerDeviceProfile[]> {
-    const result = await this.#processRunner.run(
-      this.#avdmanager,
-      ["list", "device"],
-      this.#env === undefined ? {} : { env: this.#env() },
-    );
-    if (result.code !== 0) {
-      throw new DriverCrashError(
-        `${this.#avdmanager} list device failed: ${result.stderr || result.stdout}`,
-      );
-    }
-    return parseAvdmanagerDeviceProfiles(result.stdout);
-  }
 }
 
-interface AvdmanagerDeviceProfile {
+export interface AvdmanagerDeviceProfile {
   readonly id: string;
   readonly name: string;
   /** The entry's `OEM :` line, or undefined without one. `User` marks a devices.xml profile. */

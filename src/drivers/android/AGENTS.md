@@ -18,7 +18,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | `adb-host-protocol.ts`     | adb host-protocol framing (`adbHostRequest`, `OKAY`/`FAIL`), for both callers                                                                                         |
 | `default-adb-server.ts`    | `DefaultAdbServerGate`: protocol check of the server on 5037                                                                                                          |
 | `physical-handler.ts`      | `AndroidPhysicalHandler`: enrol, presence, reclaim, passthrough for phones                                                                                            |
-| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources                                                                                                          |
+| `device-profile-source.ts` | `DeviceProfileRegistry`; SDK and devices.xml profile sources; `AvdmanagerDeviceList`, the kept `list device` answer                                                   |
 | `profiles/index.ts`        | `LibraryDeviceProfileSource`: Simlock's 16 profiles                                                                                                                   |
 | `image-fit.ts`             | `fits`, `misfitReason`: which system image a profile takes                                                                                                            |
 | `sdk-paths.ts`             | `locateSdk`: SDK root and tool paths, shared with `prerequisites.ts`                                                                                                  |
@@ -114,8 +114,12 @@ No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's
 
 Screen — `screenCapture` and `input`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md), [input](input/AGENTS.md).
 
-Plain facts: `avdmanager list device` runs on every `listCatalog`, resolve of a model the library lacks,
-and library provision (seed); nothing is cached. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
+Plain facts: `listCatalog`, a resolve of a model the library lacks and a library provision (seed) share one `AvdmanagerDeviceList`:
+`avdmanager list device` runs again only when the size or modified time of a file it reads profiles from changed, or one
+appeared or went: the tools package's `lib/sdklib/sdklib.core.jar` (legacy `tools/lib/sdklib*.jar`) and `source.properties`,
+the user's devices.xml, and `devices.xml` in each `system-images/*/*/*` and `add-ons/*` directory (a new image is a new path).
+Otherwise the last good answer is served; a failed run is not kept; concurrent callers share one run.
+The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 
 ## State and timers
 
@@ -129,6 +133,7 @@ and library provision (seed); nothing is cached. The sdkmanager catalog is never
 | `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
 | AVD path query (listing / boot) | 5 s                                     | none                                                            |
 | Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
+| `avdmanager list device`        | 30 s                                    | none                                                            |
 
 Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`).
 Reads only: the user's AVD home, devices.xml, the SDK.

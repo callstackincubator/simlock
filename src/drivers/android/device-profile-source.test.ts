@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { DeviceClass } from "../../core/index.js";
 import { MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import {
+  AvdmanagerDeviceList,
   BuiltinDeviceProfileSource,
   DeviceProfileRegistry,
   parseAvdmanagerDeviceProfiles,
@@ -20,7 +21,7 @@ const noFit = { apiRange: undefined, imageKind: undefined, playStore: true, tabl
 describe("BuiltinDeviceProfileSource", () => {
   it("lists each profile answering to its name and its avdmanager id", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const source = sdkSource(runner);
 
     await expect(source.profiles()).resolves.toEqual([
       {
@@ -41,7 +42,7 @@ describe("BuiltinDeviceProfileSource", () => {
           `id: 1 or "glasses"\n    Name: Glasses\n    OEM : Google\n    Tag : ai-glasses\n`,
       ),
     ]);
-    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const source = sdkSource(runner);
 
     const profiles = await source.profiles();
 
@@ -59,7 +60,7 @@ describe("BuiltinDeviceProfileSource", () => {
           `id: 69 or "2.7in QVGA"\n    Name: 2.7" QVGA\n    OEM : Generic\n`,
       ),
     ]);
-    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const source = sdkSource(runner);
 
     // SDK profiles first, so the User one moves after `2.7" QVGA`.
     const profiles = await source.profiles();
@@ -76,7 +77,7 @@ describe("BuiltinDeviceProfileSource", () => {
     const runner = new ScriptedProcessRunner([
       processResult(`Available devices:\nid: 0 or "TV_1080p"\n    Name: tv_1080p\n`),
     ]);
-    const source = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const source = sdkSource(runner);
 
     await expect(source.profiles()).resolves.toEqual([
       {
@@ -460,7 +461,7 @@ describe("parseDevicesXml image-fit fields", () => {
 describe("DeviceProfileRegistry", () => {
   it("resolves the first source's profile when two sources both name the same model", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const builtin = sdkSource(runner);
     const filesystem = await filesystemWithDevicesXml(
       devicesXml().replace("My Custom Phone", "Pixel 8"),
     );
@@ -479,7 +480,7 @@ describe("DeviceProfileRegistry", () => {
 
   it("falls through to a later source when the first has no match", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const builtin = sdkSource(runner);
     const filesystem = await filesystemWithDevicesXml(devicesXml());
     const user = new UserDeviceProfileSource(devicesXmlPath, filesystem);
     const registry = new DeviceProfileRegistry([builtin, user]);
@@ -508,10 +509,7 @@ describe("DeviceProfileRegistry", () => {
       await filesystemWithDevicesXml("not even close to xml {{{"),
       (diagnostic) => diagnostics.push(diagnostic),
     );
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(avdmanager, runner),
-      user,
-    ]);
+    const registry = new DeviceProfileRegistry([sdkSource(runner), user]);
 
     await expect(registry.resolve("pixel_8")).resolves.toMatchObject({ name: "Pixel 8" });
     // A read of the malformed devices.xml would have reported it.
@@ -524,9 +522,7 @@ describe("DeviceProfileRegistry", () => {
       processResult(pixelDevices),
       processResult(pixelDevices),
     ]);
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(avdmanager, runner),
-    ]);
+    const registry = new DeviceProfileRegistry([sdkSource(runner)]);
 
     for (const model of ["pixel 8", "PIXEL_8", "Pixel_8"]) {
       await expect(registry.resolve(model)).resolves.toMatchObject({ name: "Pixel 8" });
@@ -535,7 +531,7 @@ describe("DeviceProfileRegistry", () => {
 
   it("rejects an unresolvable model with UnknownModelError", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const builtin = sdkSource(runner);
     const registry = new DeviceProfileRegistry([builtin]);
 
     await expect(registry.resolve("Nope")).rejects.toMatchObject({ name: "UnknownModelError" });
@@ -543,7 +539,7 @@ describe("DeviceProfileRegistry", () => {
 
   it("lists a model's other names, only for models that have one", async () => {
     const runner = new ScriptedProcessRunner([processResult(pixelDevices)]);
-    const builtin = new BuiltinDeviceProfileSource(avdmanager, runner);
+    const builtin = sdkSource(runner);
     const user = new UserDeviceProfileSource(
       devicesXmlPath,
       await filesystemWithDevicesXml(devicesXml()),
@@ -567,9 +563,7 @@ describe("DeviceProfileRegistry", () => {
           `id: 1 or "PIXEL_8"\n    Name: Pixel 8 Copy\n`,
       ),
     ]);
-    const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(avdmanager, runner),
-    ]);
+    const registry = new DeviceProfileRegistry([sdkSource(runner)]);
 
     await expect(registry.catalog()).resolves.toEqual({
       customModels: [],
@@ -586,10 +580,7 @@ describe("DeviceProfileRegistry", () => {
       `${pixelDevices}---------\n` +
       `id: 1 or "My Custom Phone"\n    Name: My Custom Phone\n    OEM : User\n`;
     const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(withUserProfile)]),
-      ),
+      sdkSource(new ScriptedProcessRunner([processResult(withUserProfile)])),
       new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(devicesXml())),
     ]);
 
@@ -610,10 +601,7 @@ describe("DeviceProfileRegistry", () => {
     ]) {
       const output = `Available devices:\n${first}---------\n${second}`;
       const registry = new DeviceProfileRegistry([
-        new BuiltinDeviceProfileSource(
-          avdmanager,
-          new ScriptedProcessRunner([processResult(output), processResult(output)]),
-        ),
+        sdkSource(new ScriptedProcessRunner([processResult(output)])),
       ]);
 
       await expect(registry.catalog()).resolves.toMatchObject({
@@ -629,10 +617,7 @@ describe("DeviceProfileRegistry", () => {
 
   it("lists a name in both sources once, and not in customModels", async () => {
     const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(pixelDevices)]),
-      ),
+      sdkSource(new ScriptedProcessRunner([processResult(pixelDevices)])),
       new UserDeviceProfileSource(
         devicesXmlPath,
         await filesystemWithDevicesXml(devicesXml().replace("My Custom Phone", "PIXEL 8")),
@@ -655,10 +640,7 @@ describe("DeviceProfileRegistry", () => {
     for (const filesystem of [unreadable, malformed]) {
       const diagnostics: DeviceProfileSourceDiagnostic[] = [];
       const registry = new DeviceProfileRegistry([
-        new BuiltinDeviceProfileSource(
-          avdmanager,
-          new ScriptedProcessRunner([processResult(pixelDevices)]),
-        ),
+        sdkSource(new ScriptedProcessRunner([processResult(pixelDevices)])),
         new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
           diagnostics.push(diagnostic),
         ),
@@ -686,10 +668,7 @@ describe("DeviceProfileRegistry", () => {
       filesystem.exists = () => Promise.reject(Object.assign(new Error(failure.message), failure));
       const diagnostics: DeviceProfileSourceDiagnostic[] = [];
       const registry = new DeviceProfileRegistry([
-        new BuiltinDeviceProfileSource(
-          avdmanager,
-          new ScriptedProcessRunner([processResult(pixelDevices)]),
-        ),
+        sdkSource(new ScriptedProcessRunner([processResult(pixelDevices)])),
         new UserDeviceProfileSource(devicesXmlPath, filesystem, (diagnostic) =>
           diagnostics.push(diagnostic),
         ),
@@ -720,10 +699,7 @@ describe("DeviceProfileRegistry", () => {
       `${pixelDevices}---------\n` +
       `id: 68 or "iPhone 13 mini"\n    Name: iPhone 13 mini\n    OEM : User\n`;
     const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner(Array.from({ length: 3 }, () => processResult(withUserProfile))),
-      ),
+      sdkSource(new ScriptedProcessRunner([processResult(withUserProfile)])),
       new UserDeviceProfileSource(devicesXmlPath, await filesystemWithDevicesXml(twoDevices)),
     ]);
 
@@ -780,6 +756,19 @@ function processResult(stdout: string) {
   };
 }
 
+/** why: an SDK with none of the files `avdmanager` reads profiles from, so each source reads once. */
+function sdkSource(processRunner: ScriptedProcessRunner): BuiltinDeviceProfileSource {
+  return new BuiltinDeviceProfileSource(
+    new AvdmanagerDeviceList({
+      avdmanager,
+      devicesXmlPath,
+      filesystem: new MemoryFilesystem(),
+      processRunner,
+      sdkRoot: "/android-sdk",
+    }),
+  );
+}
+
 describe("device classes", () => {
   const entry = (id: string, name: string, tag?: string) =>
     `id: 1 or "${id}"\n    Name: ${name}\n    OEM : Google\n` +
@@ -788,10 +777,7 @@ describe("device classes", () => {
 
   async function modelClasses(output: string, devicesXmlText?: string) {
     const sources = [
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)]),
-      ),
+      sdkSource(new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)])),
       ...(devicesXmlText === undefined
         ? []
         : [
@@ -845,15 +831,10 @@ describe("device classes", () => {
     const sdkOutput =
       `Available devices:\n${sdkTelevision}---------\n${sdk720}---------\n${sdkWear}---------\n` +
       `id: 43 or "pixel_8"\n    Name: Pixel 8\n    OEM : Google\n---------\n`;
-    // why: `avdmanager list device` is read once for the catalog and once more for each resolve
-    // of a name the library lacks (`Television (720p)`, `tv_720p`, `My Custom Phone`, and the
-    // `tv_720p` resolve below).
-    const runner = new ScriptedProcessRunner(
-      Array.from({ length: 5 }, () => processResult(sdkOutput)),
-    );
+    const runner = new ScriptedProcessRunner([processResult(sdkOutput)]);
     const registry = new DeviceProfileRegistry([
       new LibraryDeviceProfileSource(),
-      new BuiltinDeviceProfileSource(avdmanager, runner),
+      sdkSource(runner),
       new UserDeviceProfileSource(
         devicesXmlPath,
         await filesystemWithDevicesXml(collidingDevicesXml),
@@ -896,10 +877,7 @@ describe("device classes", () => {
   it("lists no class for a profile whose tag is outside the table, and keeps the model", async () => {
     const output = entry("odd", "Odd Device", "android-toaster") + entry("pixel_8", "Pixel 8");
     const registry = new DeviceProfileRegistry([
-      new BuiltinDeviceProfileSource(
-        avdmanager,
-        new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)]),
-      ),
+      sdkSource(new ScriptedProcessRunner([processResult(`Available devices:\n${output}`)])),
     ]);
 
     const catalog = await registry.catalog();

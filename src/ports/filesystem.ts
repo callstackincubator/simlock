@@ -587,7 +587,7 @@ export class MemoryFilesystem implements Filesystem {
 
   defineAttributes(
     path: string,
-    attributes: { readonly uid?: number; readonly mode?: number },
+    attributes: { readonly uid?: number; readonly mode?: number; readonly modifiedAtMs?: number },
   ): void {
     const entry = this.#rawEntryAt(path);
 
@@ -597,6 +597,10 @@ export class MemoryFilesystem implements Filesystem {
 
     if (attributes.mode !== undefined) {
       entry.mode = attributes.mode & 0o777;
+    }
+
+    if (attributes.modifiedAtMs !== undefined) {
+      entry.modifiedAtMs = attributes.modifiedAtMs;
     }
   }
 
