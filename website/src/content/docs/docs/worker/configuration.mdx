@@ -103,6 +103,7 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Make iOS devices slim by default | `ios.defaultMode` | `full` |
 | Pick which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
 | Run Android emulators without a window | `android.emulator.headless` | `false` |
+| Give Android emulators a hardware keyboard | `android.emulator.hardwareKeyboard` | the device profile's |
 | Write more or less to the log | `log.level` | `info` |
 
 The sections below show the common changes. Each needs a restart.
@@ -154,6 +155,14 @@ simlock config set android.emulator.headless true
 ```
 
 The emulator then runs without a window, which suits a machine nobody watches. It applies the next time each emulator boots.
+
+### Give Android emulators a hardware keyboard
+
+```sh
+simlock config set android.emulator.hardwareKeyboard true
+```
+
+Each emulator then has a hardware keyboard, the setting Android Studio calls "Enable keyboard input". Simlock's own device profiles have none. It applies the next time each emulator boots, and that boot wipes the device once.
 
 ### Capacity, the warm pool, downloads and cleanup
 

@@ -1233,6 +1233,7 @@ describe("loadConfig", () => {
             audio: false,
             bootAnimation: false,
             gpu: "swiftshader_indirect",
+            hardwareKeyboard: true,
             headless: true,
           },
         },
@@ -1244,6 +1245,7 @@ describe("loadConfig", () => {
       audio: false,
       bootAnimation: false,
       gpu: "swiftshader_indirect",
+      hardwareKeyboard: true,
       headless: true,
     });
   });
@@ -1260,6 +1262,10 @@ describe("loadConfig", () => {
     ],
     [{ android: { defaultModels: {}, emulator: { gpu: "" } } }, "android.emulator.gpu"],
     [{ android: { defaultModels: {}, emulator: { gpu: true } } }, "android.emulator.gpu"],
+    [
+      { android: { defaultModels: {}, emulator: { hardwareKeyboard: "yes" } } },
+      "android.emulator.hardwareKeyboard",
+    ],
   ])("rejects a malformed android.emulator key at load, naming it", async (contents, path) => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");

@@ -1319,6 +1319,55 @@ describe("AndroidDriver", () => {
       },
     );
 
+    it.each([
+      [true, "hw.keyboard=yes"],
+      [false, "hw.keyboard=no"],
+    ] as const)(
+      "writes hardwareKeyboard %s into config.ini as %s before the next boot, and rebuilds the clean baseline it changes",
+      async (hardwareKeyboard, line) => {
+        const { filesystem, runner } = await bootAfterRestartWith(
+          { ...defaults, hardwareKeyboard },
+          rebuild,
+          [],
+        );
+
+        expect(
+          (await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`)).split("\n"),
+        ).toContain(line);
+        expect(emulatorLaunches(runner)[0]).toEqual([
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          "-wipe-data",
+          "-no-snapshot-load",
+        ]);
+      },
+    );
+
+    it("keeps the clean baseline and boots from it while hardwareKeyboard stays the same", async () => {
+      const emulator = { ...defaults, hardwareKeyboard: true };
+      const { filesystem, runner } = await bootAfterRestartWith(emulator, restore, [], {
+        emulator,
+      });
+
+      expect(emulatorLaunches(runner)).toEqual([
+        [
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          "-snapshot",
+          "simlock_clean_baseline",
+        ],
+      ]);
+      expect(
+        (await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`)).split("\n"),
+      ).toContain("hw.keyboard=yes");
+    });
+
     it("rebuilds the clean baseline on the next boot after gpu changes from one explicit mode to another", async () => {
       const flags = ["-gpu", "swiftshader_indirect"];
       const { filesystem, runner } = await bootAfterRestartWith(
@@ -1403,7 +1452,7 @@ describe("AndroidDriver", () => {
       expect(emulatorLaunches(runner)[0]).not.toContain("-wipe-data");
     });
 
-    it("recovering a leased device after a restart boots it cold, never wiping it or loading a snapshot, even when headless changed", async () => {
+    it("recovering a leased device after a restart boots it cold, never wiping it, loading a snapshot or changing its keyboard, even when headless and hardwareKeyboard changed", async () => {
       const flags = ["-no-window"];
       const coldBoot = (launchFlags: readonly string[]): ScriptedProcessExpectation[] => [
         {
@@ -1442,7 +1491,7 @@ describe("AndroidDriver", () => {
         ),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
-        { ...defaults, headless: true },
+        { ...defaults, hardwareKeyboard: true, headless: true },
         coldBoot,
         flags,
         {},
@@ -1466,6 +1515,9 @@ describe("AndroidDriver", () => {
       await expect(
         filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
       ).resolves.toBe(true);
+      await expect(
+        filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`),
+      ).resolves.not.toContain("hw.keyboard");
       expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(0);
       // why: A recovered device is re-marked like any other ready device: the mark is what proves
       // the device is still Simlock's on the next reconcile.

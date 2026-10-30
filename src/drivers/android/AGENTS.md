@@ -56,11 +56,13 @@ Provision — `provision`:
    into `config.ini`; a library profile replaces the seed's `hw.*`/`skin.*` keys, sets
    `PlayStore.enabled`, writes `boot.prop`.
 4. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` /
-   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD), and `headless`/`gpu` when not default.
+   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD;
+   `hw.keyboard` as `android.emulator.hardwareKeyboard` will write it, when set), and `headless`/`gpu` when not default.
 
 Boot — `makeReady` (per-device lock):
 
-1. Baseline: stored hash matches → `-snapshot simlock_clean_baseline`; differs → delete
+1. `android.emulator.hardwareKeyboard` set → `hw.keyboard=yes|no` in `config.ini` first, before the
+   hash is read; unset → untouched; not on a recovery boot. Then the baseline: stored hash matches → `-snapshot simlock_clean_baseline`; differs → delete
    the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
    `adb devices`, not reserved, port, port+1 and port+3000 (gRPC) not listening.
@@ -125,6 +127,7 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 | Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
 | adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
 | Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| `hw.keyboard` in `config.ini`   | unchanged (a new AVD: the profile's)    | `android.emulator.hardwareKeyboard`                             |
 | Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
 | adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
 | `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
