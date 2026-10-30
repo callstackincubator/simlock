@@ -116,6 +116,8 @@ actor H264Encoder {
                 // only place that answer can be reported.
                 if status != noErr {
                     continuation.resume(returning: (status, [], nil))
+                } else {
+                    VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: presentationTime)
                 }
             }
 
@@ -199,6 +201,8 @@ actor H264Encoder {
             // reordering decoder has to hold frames to put them back, and that is latency
             // we are here to remove.
             (kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse!),
+            // The capture loop waits for each frame's output, so the encoder may hold none back.
+            (kVTCompressionPropertyKey_MaxFrameDelayCount, NSNumber(value: 0)),
             (kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: bitrate)),
             (kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps)),
             // An IDR is several times the size of a delta, so spacing them out keeps the
