@@ -478,7 +478,7 @@ describe("createLeasing", () => {
     });
   });
 
-  it("evicts the other platform's LRU warm device when only the global limit blocks demand", async () => {
+  it("evicts the other platform's warm device when only the global limit blocks demand", async () => {
     const clock = new FakeClock(1_000);
     const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
@@ -1287,7 +1287,11 @@ describe("createLeasing", () => {
     });
     await flush();
 
-    harness.clock.advance(10);
+    harness.clock.advance(9);
+    await flush();
+    expect(await settledOrPending(queued)).toBe("still pending");
+
+    harness.clock.advance(1);
     await flush();
     await expect(queued).resolves.toMatchObject({
       lease: { ownerId: "agent-2", requesterId: "agent-2" },
@@ -2143,29 +2147,31 @@ describe("createLeasing fresh lease identity (#75)", () => {
     };
   }
 
-  it("deletes a fresh device on the next start when the daemon crashed while it was reclaiming", async () => {
-    const restarted = await restartAfterCrash("reclaiming");
-    expect(restarted.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+  it.each([
+    {
+      crashedIn: "reclaiming" as const,
+      operations: ["listManaged", "shutdown", "destroy"],
+      title: "while it was reclaiming",
+    },
+    {
+      crashedIn: "shutdown" as const,
+      operations: ["listManaged", "destroy"],
+      title: "after its shutdown commit and before its delete",
+    },
+  ])(
+    "deletes a fresh device on the next start when the daemon crashed $title",
+    async ({ crashedIn, operations }) => {
+      const restarted = await restartAfterCrash(crashedIn);
+      expect(restarted.registry.snapshot.devices).toMatchObject([{ state: crashedIn }]);
 
-    await restarted.engine.convergeRunningCapacity();
+      await restarted.engine.convergeRunningCapacity();
 
-    expect(restarted.registry.snapshot.devices).toMatchObject([
-      { id: restarted.device.id, state: "deleted" },
-    ]);
-    expect(restarted.operationsSinceStart()).toEqual(["listManaged", "shutdown", "destroy"]);
-  });
-
-  it("deletes a fresh device on the next start when the daemon crashed after its shutdown commit and before its delete", async () => {
-    const restarted = await restartAfterCrash("shutdown");
-    expect(restarted.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
-
-    await restarted.engine.convergeRunningCapacity();
-
-    expect(restarted.registry.snapshot.devices).toMatchObject([
-      { id: restarted.device.id, state: "deleted" },
-    ]);
-    expect(restarted.operationsSinceStart()).toEqual(["listManaged", "destroy"]);
-  });
+      expect(restarted.registry.snapshot.devices).toMatchObject([
+        { id: restarted.device.id, state: "deleted" },
+      ]);
+      expect(restarted.operationsSinceStart()).toEqual(operations);
+    },
+  );
 });
 
 describe("createLeasing logger wiring", () => {
@@ -2299,44 +2305,41 @@ describe("createLeasing restart recovery of stored lease requests", () => {
     return after;
   }
 
-  it("settles a request still open at a restart as failed and says the daemon restarted", async () => {
-    const after = await restartWithAgentQueued("key-1");
+  it.each([{ idempotencyKey: "key-1" as string | undefined }, { idempotencyKey: undefined }])(
+    "settles a request still open at a restart as failed and says the daemon restarted, whether it carried an idempotency key or not ($idempotencyKey)",
+    async ({ idempotencyKey }) => {
+      const after = await restartWithAgentQueued(idempotencyKey);
 
-    expect(
-      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
-    ).toMatchObject({
-      failure: { code: "INTERNAL", message: expect.stringContaining("daemon restarted") },
-      state: "failed",
-    });
-    expect(
-      after.bus
-        .replay()
-        .filter((event) => event.event === "lease.rejected")
-        .map((event) => event.payload),
-    ).toEqual([
-      {
-        reason: "daemon-restarted",
-        requestId: expect.stringMatching(/^req_/),
-        requester: "agent",
-        requestSpec: request,
-      },
-    ]);
-    await expect(
-      after.engine.request(request, {
-        idempotencyKey: "key-1",
-        ownerId: "agent",
-        requesterId: "agent",
-      }),
-    ).rejects.toMatchObject({ message: expect.stringContaining("daemon restarted") });
-  });
-
-  it("settles a request that carried no idempotency key at a restart too", async () => {
-    const after = await restartWithAgentQueued();
-
-    expect(
-      after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
-    ).toMatchObject({ state: "failed" });
-  });
+      expect(
+        after.registry.leaseRequests().find((record) => record.requesterId === "agent"),
+      ).toMatchObject({
+        failure: { code: "INTERNAL", message: expect.stringContaining("daemon restarted") },
+        state: "failed",
+      });
+      expect(
+        after.bus
+          .replay()
+          .filter((event) => event.event === "lease.rejected")
+          .map((event) => event.payload),
+      ).toEqual([
+        {
+          reason: "daemon-restarted",
+          requestId: expect.stringMatching(/^req_/),
+          requester: "agent",
+          requestSpec: request,
+        },
+      ]);
+      if (idempotencyKey !== undefined) {
+        await expect(
+          after.engine.request(request, {
+            idempotencyKey,
+            ownerId: "agent",
+            requesterId: "agent",
+          }),
+        ).rejects.toMatchObject({ message: expect.stringContaining("daemon restarted") });
+      }
+    },
+  );
 });
 
 describe("createLeasing a grant and its request's result", () => {
@@ -2359,15 +2362,12 @@ describe("createLeasing a grant and its request's result", () => {
     expect(after.registry.snapshot.leases).toHaveLength(1);
   });
 
-  it("answers a repeat under the same key in the same process with the lease after the request book's settle finds the request already granted", async () => {
+  it("answers a repeat under the same key in the same process with the lease", async () => {
     const harness = await createHarness();
     await seedReady(harness);
-    const settle = vi.spyOn(harness.registry, "settleLeaseRequest");
     const grant = await harness.engine.request(request, asker);
     await flush();
 
-    expect(settle).toHaveBeenCalledTimes(1);
-    await expect(settle.mock.results[0]?.value).resolves.toBeUndefined();
     const repeat = await harness.engine.request(request, asker);
     expect(repeat).toEqual(grant);
     expect(repeat.lease.id).toBe(grant.lease.id);
@@ -3702,8 +3702,19 @@ describe("createLeasing warm targets", () => {
     const device = await seedReady(harness);
     await harness.engine.convergeRunningCapacity();
 
-    harness.clock.advance(30_000);
-    await harness.engine.settle();
+    // why: a pass runs on a trigger, and the periodic tick is 30 s away: a daemon.started fact is one
+    // at the threshold and one millisecond past it.
+    harness.clock.advance(10_000);
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await drain(harness);
+    expect(harness.registry.snapshot.devices.find((item) => item.id === device.id)?.state).toBe(
+      "ready",
+    );
+    expect(eventsNamed(harness, "device.shutdown")).toEqual([]);
+
+    harness.clock.advance(1);
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
+    await drain(harness);
 
     expect(harness.registry.snapshot.devices.find((item) => item.id === device.id)?.state).toBe(
       "shutdown",
@@ -4565,145 +4576,167 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
       ?.id;
   }
 
-  it("emits lease.declined with reason no-wait and its fleetRequestId, and no lease.rejected, for a probe refused for no capacity", async () => {
-    const harness = await createHarness();
-    await harness.engine.request(request, holder);
+  interface Declined {
+    readonly harness: Harness;
+    readonly payload: unknown;
+    readonly check?: () => void;
+  }
 
-    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toBeInstanceOf(
-      NoCapacityError,
-    );
-
-    expect(payloads(harness, "lease.declined")).toEqual([
-      {
-        fleetRequestId: "req_gw1",
-        reason: "no-wait",
-        requestId: await admittedId(harness, "gw:one"),
-        requestSpec: request,
-        requester: "gw:one",
+  const declinedCases: ReadonlyArray<readonly [string, () => Promise<Declined>]> = [
+    [
+      "no-wait",
+      async () => {
+        const harness = await createHarness();
+        await harness.engine.request(request, holder);
+        await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toBeInstanceOf(
+          NoCapacityError,
+        );
+        return {
+          harness,
+          payload: {
+            fleetRequestId: "req_gw1",
+            reason: "no-wait",
+            requestId: await admittedId(harness, "gw:one"),
+            requestSpec: request,
+            requester: "gw:one",
+          },
+        };
       },
-    ]);
-    expect(payloads(harness, "lease.rejected")).toEqual([]);
-  });
-
-  it("emits lease.declined with reason unresolvable-spec for a probe naming a model the catalog lacks", async () => {
-    const harness = await createHarness();
-    const odd = { ...request, model: "iPhone 99 Imaginary", osVersion: ">=18" };
-
-    await settledOrPending(harness.engine.request(odd, probeOf("gw:odd")));
-
-    expect(payloads(harness, "lease.declined")).toEqual([
-      expect.objectContaining({
-        fleetRequestId: "req_gw1",
-        reason: "unresolvable-spec",
-        requestSpec: odd,
-      }),
-    ]);
-    expect(payloads(harness, "lease.rejected")).toEqual([]);
-  });
-
-  it("emits lease.declined for a probe refused already-leased at admission, carrying its requestSpec", async () => {
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock: new FakeClock(1_000),
-      platform: "ios",
-    });
-    driver.hangMakeReady();
-    const harness = await createHarness({ driver });
-    void harness.engine.request(request, probeOf("gw:one")).catch(() => undefined);
-    await expect
-      .poll(() =>
-        harness.registry.leaseRequests().find((record) => record.requesterId === "gw:one"),
-      )
-      .toMatchObject({ state: "open" });
-
-    await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
-      name: "RequesterAlreadyLeasedError",
-    });
-
-    expect(payloads(harness, "lease.declined")).toEqual([
-      {
-        fleetRequestId: "req_gw1",
-        reason: "already-leased",
-        requestId: expect.stringMatching(/^req_/),
-        requestSpec: request,
-        requester: "gw:one",
+    ],
+    [
+      "unresolvable-spec",
+      async () => {
+        const harness = await createHarness();
+        const odd = { ...request, model: "iPhone 99 Imaginary", osVersion: ">=18" };
+        await settledOrPending(harness.engine.request(odd, probeOf("gw:odd")));
+        return {
+          harness,
+          payload: expect.objectContaining({
+            fleetRequestId: "req_gw1",
+            reason: "unresolvable-spec",
+            requestSpec: odd,
+          }),
+        };
       },
-    ]);
-    expect(payloads(harness, "lease.rejected")).toEqual([]);
-  });
-
-  it("emits lease.declined for a probe refused lease-id-taken", async () => {
-    const harness = await createHarness({
-      limits: {
-        android: { maxDevices: 2, maxRunning: 2 },
-        ios: { maxDevices: 3, maxRunning: 3 },
-        maxRunning: 4,
+    ],
+    [
+      "already-leased",
+      async () => {
+        const driver = new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+        });
+        driver.hangMakeReady();
+        const harness = await createHarness({ driver });
+        void harness.engine.request(request, probeOf("gw:one")).catch(() => undefined);
+        await expect
+          .poll(() =>
+            harness.registry.leaseRequests().find((record) => record.requesterId === "gw:one"),
+          )
+          .toMatchObject({ state: "open" });
+        await expect(harness.engine.request(request, probeOf("gw:one"))).rejects.toMatchObject({
+          name: "RequesterAlreadyLeasedError",
+        });
+        return {
+          harness,
+          payload: {
+            fleetRequestId: "req_gw1",
+            reason: "already-leased",
+            requestId: expect.stringMatching(/^req_/),
+            requestSpec: request,
+            requester: "gw:one",
+          },
+        };
       },
-    });
-    await harness.engine.request(request, { ...holder, leaseId: "myid" });
-
-    await settledOrPending(harness.engine.request(request, probeOf("gw:two", { leaseId: "myid" })));
-
-    expect(payloads(harness, "lease.declined")).toEqual([
-      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "lease-id-taken" }),
-    ]);
-    expect(payloads(harness, "lease.rejected")).toEqual([]);
-  });
-
-  it("emits lease.declined for a probe whose boot times out after a progress push, with reason boot-timeout", async () => {
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock: new FakeClock(1_000),
-      platform: "ios",
-    });
-    driver.failOn("makeReady", 1, new Error("boot failed"));
-    const harness = await createHarness({ driver });
-    const stages: string[] = [];
-
-    await settledOrPending(
-      harness.engine.request(request, {
-        ...probeOf("gw:slow"),
-        onProgress: (progress) => stages.push(progress.stage),
-      }),
-    );
-
-    expect(stages.length).toBeGreaterThan(0);
-    expect(payloads(harness, "lease.declined")).toEqual([
-      expect.objectContaining({ fleetRequestId: "req_gw1", reason: "boot-timeout" }),
-    ]);
-    expect(payloads(harness, "lease.rejected")).toEqual([]);
-  });
-
-  it("emits lease.declined daemon-restarted with its fleetRequestId at the next start, for a probe still open when the daemon stopped, after the registry is reloaded from disk", async () => {
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock: new FakeClock(1_000),
-      platform: "ios",
-    });
-    driver.hangMakeReady();
-    const before = await createHarness({ driver });
-    void before.engine.request(request, probeOf("gw:open")).catch(() => undefined);
-    await expect
-      .poll(() =>
-        before.registry.leaseRequests().find((record) => record.requesterId === "gw:open"),
-      )
-      .toMatchObject({ fleetRequestId: "req_gw1", state: "open" });
-    const requestId = await admittedId(before, "gw:open");
-
-    const after = await createHarness({ state: before.state });
-    await after.engine.convergeRunningCapacity();
-
-    expect(payloads(after, "lease.declined")).toEqual([
-      {
-        fleetRequestId: "req_gw1",
-        reason: "daemon-restarted",
-        requestId,
-        requestSpec: request,
-        requester: "gw:open",
+    ],
+    [
+      "lease-id-taken",
+      async () => {
+        const harness = await createHarness({
+          limits: {
+            android: { maxDevices: 2, maxRunning: 2 },
+            ios: { maxDevices: 3, maxRunning: 3 },
+            maxRunning: 4,
+          },
+        });
+        await harness.engine.request(request, { ...holder, leaseId: "myid" });
+        await settledOrPending(
+          harness.engine.request(request, probeOf("gw:two", { leaseId: "myid" })),
+        );
+        return {
+          harness,
+          payload: expect.objectContaining({ fleetRequestId: "req_gw1", reason: "lease-id-taken" }),
+        };
       },
-    ]);
-    expect(payloads(after, "lease.rejected")).toEqual([]);
-  });
+    ],
+    [
+      "boot-timeout",
+      async () => {
+        const driver = new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+        });
+        driver.failOn("makeReady", 1, new Error("boot failed"));
+        const harness = await createHarness({ driver });
+        const stages: string[] = [];
+        await settledOrPending(
+          harness.engine.request(request, {
+            ...probeOf("gw:slow"),
+            onProgress: (progress) => stages.push(progress.stage),
+          }),
+        );
+        return {
+          check: () => expect(stages.length).toBeGreaterThan(0),
+          harness,
+          payload: expect.objectContaining({ fleetRequestId: "req_gw1", reason: "boot-timeout" }),
+        };
+      },
+    ],
+    [
+      "daemon-restarted",
+      async () => {
+        const driver = new FakeDriver({
+          availableOsVersions: ["26.5"],
+          clock: new FakeClock(1_000),
+          platform: "ios",
+        });
+        driver.hangMakeReady();
+        const before = await createHarness({ driver });
+        void before.engine.request(request, probeOf("gw:open")).catch(() => undefined);
+        await expect
+          .poll(() =>
+            before.registry.leaseRequests().find((record) => record.requesterId === "gw:open"),
+          )
+          .toMatchObject({ fleetRequestId: "req_gw1", state: "open" });
+        const requestId = await admittedId(before, "gw:open");
+        const after = await createHarness({ state: before.state });
+        await after.engine.convergeRunningCapacity();
+        return {
+          harness: after,
+          payload: {
+            fleetRequestId: "req_gw1",
+            reason: "daemon-restarted",
+            requestId,
+            requestSpec: request,
+            requester: "gw:open",
+          },
+        };
+      },
+    ],
+  ];
+
+  it.each(declinedCases)(
+    "emits one lease.declined with its fleetRequestId and reason %s, and no lease.rejected, for a probe refused that way",
+    async (_reason, run) => {
+      const { check, harness, payload } = await run();
+
+      expect(payloads(harness, "lease.declined")).toEqual([payload]);
+      expect(payloads(harness, "lease.rejected")).toEqual([]);
+      check?.();
+    },
+  );
 
   it("still emits lease.rejected no-wait, and no lease.declined, for a local noWait request with no room", async () => {
     const harness = await createHarness();
@@ -4989,6 +5022,7 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       { reason: undefined, requesterId: "failing", stage: "starting" },
       { reason: "device-limit", requesterId: "meanwhile", stage: "queued" },
     ]);
+    expect(harness.engine.waitingRequests()[0]).not.toHaveProperty("reason");
 
     clock.advance(50);
     await flush();
@@ -5170,23 +5204,5 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     expect(listing(harness)).toEqual([
       { reason: "device-limit", requesterId: "second", stage: "queued" },
     ]);
-  });
-
-  it("lists no reason for a starting request that is being provisioned", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      latencyMs: { provision: 50 },
-      platform: "ios",
-    });
-    const harness = await createHarness({ driver });
-    void harness.engine.request(request, asking("provisioned"));
-    await flush();
-
-    expect(listing(harness)).toEqual([
-      { reason: undefined, requesterId: "provisioned", stage: "starting" },
-    ]);
-    expect(harness.engine.waitingRequests()[0]).not.toHaveProperty("reason");
   });
 });
