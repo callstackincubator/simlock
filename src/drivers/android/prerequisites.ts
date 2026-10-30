@@ -9,6 +9,8 @@ interface AndroidPrerequisitesOptions {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
   readonly homeDirectory: string;
+  /** why: the SDK's file names depend on the host (`adb.exe` on Windows); injected so either can be tested anywhere. */
+  readonly platform?: NodeJS.Platform;
   readonly processRunner: ProcessRunner;
 }
 
@@ -27,7 +29,13 @@ export function androidPrerequisites(options: AndroidPrerequisitesOptions): Prer
 async function missingAndroidPrerequisites(
   options: AndroidPrerequisitesOptions,
 ): Promise<readonly MissingPrerequisite[]> {
-  const location = await locateSdk(options.env, options.homeDirectory, options.filesystem);
+  const platform = options.platform ?? process.platform;
+  const location = await locateSdk(
+    options.env,
+    options.homeDirectory,
+    options.filesystem,
+    platform,
+  );
   if (location.kind === "absent") {
     // One finding, not one per tool: with no SDK at all, every tool is missing for the same reason.
     return [
@@ -44,7 +52,7 @@ async function missingAndroidPrerequisites(
   // The SDK discovery runs, when it found one; otherwise the first root there is.
   const root = location.kind === "complete" ? location.paths.root : location.root;
   const missing: MissingPrerequisite[] = [];
-  const tools = await sdkToolBin(root, options.filesystem);
+  const tools = await sdkToolBin(root, options.filesystem, platform);
   if (tools === undefined) {
     missing.push({
       message: `The Android SDK command-line tools (sdkmanager, avdmanager) are not in ${root}.`,
@@ -54,14 +62,14 @@ async function missingAndroidPrerequisites(
         `${root}/cmdline-tools/latest; sdkmanager cannot install itself.`,
     });
   }
-  if (!(await options.filesystem.exists(emulatorPath(root)))) {
+  if (!(await options.filesystem.exists(emulatorPath(root, platform)))) {
     missing.push({
       message: `The Android emulator package is not installed in ${root}.`,
       prerequisite: "android-emulator",
       remedy: "Run `sdkmanager --install emulator`.",
     });
   }
-  if (!(await options.filesystem.exists(adbPath(root)))) {
+  if (!(await options.filesystem.exists(adbPath(root, platform)))) {
     missing.push({
       message: `The Android platform-tools package (adb) is not installed in ${root}.`,
       prerequisite: "android-platform-tools",

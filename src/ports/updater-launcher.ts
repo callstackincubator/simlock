@@ -46,6 +46,8 @@ export class NodeUpdaterLauncher implements UpdaterLauncher {
           detached: true,
           env: { ...process.env, SIMLOCK_HOME: options.simlockHome },
           stdio: ["ignore", "pipe", log.fd],
+          // why: on Windows a detached child gets a console window of its own, and closing it ends the update.
+          windowsHide: true,
         },
       );
       const exited = new Promise<number | null>((resolve) => {

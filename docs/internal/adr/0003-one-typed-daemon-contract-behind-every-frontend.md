@@ -123,6 +123,12 @@ docs say this plainly.
   Records written before this field exist load with `ownerId` equal to
   `requesterId`.
 
+**Amendment, 2026-10-30 (maintainer-authorized 2026-10-30).** On Windows the
+endpoint is a named pipe whose name is derived from the data directory, and no
+directory mode guards it. Another local account can create that pipe first and
+receive the hello, and any token with it. Windows hosts are supported on
+single-user machines only.
+
 ### 5. Admin authority comes from a credential in the handshake, never from the socket
 
 `hello` carries the protocol range, capabilities, the principal, and an
