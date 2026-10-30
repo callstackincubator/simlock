@@ -28,7 +28,8 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 Start — `AndroidDriver.create`:
 
-1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` with
+1. `locateSdk`: first of `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Library/Android/sdk` (on Windows
+   `%LOCALAPPDATA%\Android\Sdk`, and the tools are `adb.exe`, `emulator.exe`, `avdmanager.bat`, `sdkmanager.bat`) with
    `avdmanager` + `sdkmanager` (newest `cmdline-tools/*/bin`, else `tools/bin`), `emulator`,
    `platform-tools/adb`. None → `SdkMissingError`: Android absent, no rejection.
 2. `ensureOwnedRoot`: the AVD home, default `$SIMLOCK_HOME/devices/android`.

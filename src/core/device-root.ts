@@ -126,7 +126,7 @@ async function createRoot(context: RootContext): Promise<boolean> {
   } catch (error: unknown) {
     await discard(filesystem, staging);
 
-    if (isOccupiedPathError(error)) {
+    if (isOccupiedPathError(error) || (await lostRaceOnWindows(context, error))) {
       return false;
     }
 
@@ -171,7 +171,9 @@ async function validateRootDirectory(context: RootContext): Promise<void> {
     throw rejected(context, "wrong-owner", `it is owned by uid ${details.uid}, not ${uid}`);
   }
 
-  if ((details.mode & 0o077) !== 0) {
+  // why: a platform with no uids (Windows) has no POSIX mode bits either: Node reports every
+  // writable directory there as 0o666, so the check would refuse every root it ever made.
+  if (uid !== undefined && (details.mode & 0o077) !== 0) {
     throw rejected(
       context,
       "wrong-permissions",
@@ -373,6 +375,18 @@ function formatMode(mode: number): string {
 
 function isMissingPathError(error: unknown): boolean {
   return errorCode(error) === "ENOENT";
+}
+
+/**
+ * why: Windows refuses to rename a directory onto one that exists with `EPERM` (or `EACCES`), not
+ * `EEXIST`, so two daemons starting at once would leave the loser refusing its own root. The same
+ * codes also mean a real permission problem, so the refusal is a lost race only when the root is
+ * there now; the caller then validates it like any root another process made first.
+ */
+async function lostRaceOnWindows(context: RootContext, error: unknown): Promise<boolean> {
+  const code = errorCode(error);
+  if (code !== "EPERM" && code !== "EACCES") return false;
+  return (await pathDetails(context, context.root, "it")) !== undefined;
 }
 
 /**

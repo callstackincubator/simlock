@@ -71,14 +71,18 @@ export class AndroidPhysicalHandler {
   readonly #env: NodeJS.ProcessEnv;
   readonly #processRunner: ProcessRunner;
   readonly #isBareShell: (args: readonly string[]) => boolean;
+  readonly #platform: NodeJS.Platform;
 
   constructor(
     options: Omit<DefaultAdbServerGateOptions, "env"> & {
       readonly baseEnv: NodeJS.ProcessEnv;
       // why: the driver's own test, so one place decides what the interactive shell is.
       readonly isBareShell: (args: readonly string[]) => boolean;
+      // why: how a USB transport is told apart depends on the host's adb; injected so Windows can be tested anywhere.
+      readonly platform?: NodeJS.Platform;
     },
   ) {
+    this.#platform = options.platform ?? process.platform;
     this.#isBareShell = options.isBareShell;
     this.#adb = options.adb;
     this.#processRunner = options.processRunner;
@@ -135,7 +139,7 @@ export class AndroidPhysicalHandler {
     if (listing.kind !== "ok") return this.#refusal(listing, "the device list (adb devices -l)");
 
     const unusable = unenrollable(
-      parseDevices(listing.stdout).filter((entry) => entry.serial === id),
+      parseDevices(listing.stdout, this.#platform).filter((entry) => entry.serial === id),
     );
     if (unusable !== undefined) return unusable;
     return this.#readDevice(id);
@@ -166,7 +170,7 @@ export class AndroidPhysicalHandler {
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
     const listing = await this.#run(["devices", "-l"], READ_TIMEOUT_MS);
-    const entries = listing.kind === "ok" ? parseDevices(listing.stdout) : [];
+    const entries = listing.kind === "ok" ? parseDevices(listing.stdout, this.#platform) : [];
     const answers: PresentPhysical[] = [];
     for (const driverDeviceId of enrolledIds) {
       const usb = entries.filter((entry) => entry.serial === driverDeviceId && entry.usb);
@@ -323,15 +327,27 @@ function failure(read: string, ran: Ran): Error {
     : new Error(`physical reclaim could not read ${read}`);
 }
 
-function parseDevices(output: string): ListedTransport[] {
+function parseDevices(output: string, platform: NodeJS.Platform): ListedTransport[] {
   const entries: ListedTransport[] = [];
   for (const line of output.split("\n")) {
     const tokens = line.trim().split(/\s+/);
     const [serial, state] = tokens;
     if (serial === undefined || state === undefined) continue;
-    entries.push({ serial, state, usb: tokens.some((token) => token.startsWith("usb:")) });
+    const usb =
+      tokens.some((token) => token.startsWith("usb:")) ||
+      (platform === "win32" && !isNetworkOrEmulatorSerial(serial));
+    entries.push({ serial, state, usb });
   }
   return entries;
+}
+
+/**
+ * why: adb on Windows lists no `usb:` path for any transport, so there the serial tells the kinds
+ * apart: a network transport is `host:port` or an mDNS service name (`..._adb-tls-connect._tcp`),
+ * an emulator is `emulator-<port>`, and anything else is a USB device.
+ */
+function isNetworkOrEmulatorSerial(serial: string): boolean {
+  return /:\d+$/.test(serial) || serial.includes("._tcp") || /^emulator-\d+$/.test(serial);
 }
 
 function unenrollable(matching: readonly ListedTransport[]): Refusal | undefined {
