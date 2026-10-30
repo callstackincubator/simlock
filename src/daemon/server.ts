@@ -49,7 +49,7 @@ import {
   type StatusLoad,
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
-import type { ConnectionHost } from "./connection-host.js";
+import { DaemonAlreadyRunningError, type ConnectionHost } from "./connection-host.js";
 import {
   resolveAgentRole,
   type Auth,
@@ -219,8 +219,9 @@ export interface DaemonServerCommonOptions {
    */
   readonly beginStop?: () => void;
   /**
-   * why: Releases what the daemon holds beyond its own state on shutdown: timers the lease
-   * subsystem armed (quarantine retries), and every driver's own external resources.
+   * why: Releases what the daemon holds beyond its own state on shutdown, and on a start that
+   * fails at the claim or the `admin.token` write: timers the lease subsystem armed (quarantine
+   * retries), and every driver's own external resources.
    * Awaited, because a driver's release is asynchronous and a stop that returned before it
    * finished would report a shutdown that had not happened.
    */
@@ -451,19 +452,23 @@ export class DaemonServer {
   }
 
   async #start(): Promise<void> {
-    await this.options.host.start((connection) => this.#accept(connection));
-    // why: ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
-    // the start race throws out of `host.start()` and never reaches this line, so it never
-    // touches `admin.token`. Awaited before convergence starts (not raced with it): the file
-    // landing is not itself gated on convergence -- `hello` already verifies the in-memory
-    // hash regardless -- but there is no reason to let two startup-time writes race each other
-    // for no benefit.
-    this.options.hostLoad?.start();
     try {
+      await this.options.host.start((connection) => this.#accept(connection));
+      // why: ADR §5: written only after the socket claim above has succeeded -- a daemon that loses
+      // the start race throws out of `host.start()` and never reaches this line, so it never
+      // touches `admin.token`. Awaited before convergence starts (not raced with it): the file
+      // landing is not itself gated on convergence -- `hello` already verifies the in-memory
+      // hash regardless -- but there is no reason to let two startup-time writes race each other
+      // for no benefit.
+      this.options.hostLoad?.start();
       await this.options.adminSecret?.persist();
     } catch (error: unknown) {
-      // why: startDaemon does not call stop() on a rejected start, and a pending timer would keep the process alive.
-      this.options.hostLoad?.dispose();
+      // why: as on a convergence failure below, a request already parked (an uplink's, or a socket's after the claim) gets its DAEMON_STARTUP_FAILED written before the release closes its connection.
+      this.#beforeReady.reject(error);
+      await Promise.allSettled(this.#parkedDispatches);
+      this.#stopping = true;
+      this.#stopPromise = this.#releaseFailedStart(error);
+      await this.#stopPromise;
       throw error;
     }
     const readyPromise = this.#converge();
@@ -638,6 +643,52 @@ export class DaemonServer {
     await this.options.stopAuxiliary?.();
     this.#logger.info("Daemon stopping", { reason });
     this.options.eventBus.emit("daemon.stopping", { reason }, "daemon");
+    await this.#disposeEngine();
+    // why: a stop releases nothing; leases persist with their deadline. Only work already in
+    // flight is drained, so `daemon stop` finishes on a settled pool. Disposal follows rather than
+    // precedes it, so a retry timer armed by a reclaim that settles into quarantine is still cancelled.
+    await this.options.settle?.();
+    await this.options.dispose?.();
+    await this.#closeConnections();
+    // why: releasing the endpoint lets a replacement write its credential, so removal must happen while this daemon still owns it.
+    // why: a failed removal must still release the endpoint, or the stopping daemon keeps listening and blocks its replacement.
+    try {
+      await this.options.adminSecret?.remove();
+    } finally {
+      await this.options.host.stop();
+    }
+    this.#logger.info("Daemon stopped", { reason });
+  }
+
+  /**
+   * why: a start that fails at the claim or the `admin.token` write never reaches `#stop`, and
+   * `startDaemon` hands its caller no daemon to stop, so the reaper's tick and every timer or
+   * child the composition armed would keep the process alive with nothing to serve. It runs
+   * `#stop`'s order without the stop's facts: no `daemon.stopping` for a daemon that never
+   * started, and no `admin.token` removal, since this start never wrote one. Never rejects, so
+   * the start's own error is the one its caller sees.
+   */
+  async #releaseFailedStart(error: unknown): Promise<void> {
+    try {
+      await this.#disposeEngine();
+      // why: a start that lost the race to a live daemon on this folder keeps the composition's
+      // parts: its Android driver may have adopted that daemon's adb server through its record,
+      // and disposing the driver would reap the server from under the winner.
+      if (!(error instanceof DaemonAlreadyRunningError)) {
+        await this.options.settle?.();
+        await this.options.dispose?.();
+      }
+      await this.#closeConnections();
+      // why: a host that never claimed owns no endpoint, so this removes nothing a live daemon holds.
+      await this.options.host.stop();
+    } catch (releaseError: unknown) {
+      this.#logger.error("Could not release a failed start", {
+        message: errorMessage(releaseError),
+      });
+    }
+  }
+
+  async #disposeEngine(): Promise<void> {
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
     this.options.hostLoad?.dispose();
@@ -650,22 +701,12 @@ export class DaemonServer {
     // why: a health tick or recovery reboot already running still acts on a device; it ends before the drivers are disposed.
     await this.#engine?.healthMonitor?.settle();
     this.#engine?.physicalDeviceWatcher?.dispose();
-    // why: a stop releases nothing; leases persist with their deadline. Only work already in
-    // flight is drained, so `daemon stop` finishes on a settled pool. Disposal follows rather than
-    // precedes it, so a retry timer armed by a reclaim that settles into quarantine is still cancelled.
-    await this.options.settle?.();
-    await this.options.dispose?.();
+  }
+
+  async #closeConnections(): Promise<void> {
     for (const connection of this.#connections) {
       await connection.socket.close();
     }
-    // why: releasing the endpoint lets a replacement write its credential, so removal must happen while this daemon still owns it.
-    // why: a failed removal must still release the endpoint, or the stopping daemon keeps listening and blocks its replacement.
-    try {
-      await this.options.adminSecret?.remove();
-    } finally {
-      await this.options.host.stop();
-    }
-    this.#logger.info("Daemon stopped", { reason });
   }
 
   /**

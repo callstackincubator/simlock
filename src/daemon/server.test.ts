@@ -1617,10 +1617,11 @@ describe("DaemonServer stored lease requests", () => {
 });
 
 describe("DaemonServer relays during startup", () => {
-  async function startParked(relayTargets: RelayTargets) {
+  async function startParked(relayTargets: RelayTargets, host?: ConnectionHost) {
     const converge = deferred<void>();
     const harness = await createHarness({
       converge: () => converge.promise,
+      ...(host === undefined ? {} : { host }),
       relayTargets,
       start: false,
     });
@@ -1752,22 +1753,33 @@ describe("DaemonServer relays during startup", () => {
     expect(calls).toBe(0);
   });
 
-  it("a parked relay whose startup fails answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted", async () => {
-    const { converge, pair, startPromise } = await startParked({
-      echo: () => Promise.resolve(new Response("ok")),
-    });
-    const uplink = await wireOf(pair);
-    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
-    await relaySupport.sleep(100);
+  it.each(["convergence", "socket claim"] as const)(
+    "a parked relay whose startup fails at its %s answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted",
+    async (failing) => {
+      const claim = deferred<void>();
+      const host: ConnectionHost = {
+        endpoint: "/claim-refused/daemon.sock",
+        start: () => claim.promise,
+        stop: async () => undefined,
+      };
+      const { converge, pair, startPromise } = await startParked(
+        { echo: () => Promise.resolve(new Response("ok")) },
+        failing === "socket claim" ? host : undefined,
+      );
+      const uplink = await wireOf(pair);
+      const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
+      await relaySupport.sleep(100);
 
-    converge.reject(new Error("boom"));
-    await startPromise.catch(() => undefined);
-    const outcome = await relaySupport.settleWithin(relay.result);
-    const read = await relay.readError();
+      if (failing === "socket claim") claim.reject(new Error("listen EACCES"));
+      else converge.reject(new Error("boom"));
+      await startPromise.catch(() => undefined);
+      const outcome = await relaySupport.settleWithin(relay.result);
+      const read = await relay.readError();
 
-    expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
-    expect(read).toEqual({ ended: false, reason: "aborted" });
-  });
+      expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
+      expect(read).toEqual({ ended: false, reason: "aborted" });
+    },
+  );
 });
 
 async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {

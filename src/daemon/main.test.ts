@@ -50,8 +50,10 @@ import {
   type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
+  IpcError,
   JsonLinesLogger,
   MemoryFilesystem,
+  MemoryIpcTransport,
   MemoryLogSink,
   NodeFilesystem,
   NodeSqliteOpener,
@@ -4630,7 +4632,7 @@ describe("startDaemon version check", () => {
     ((await daemon.dispatch("status.get", {}, operator)) as { daemon: { latestVersion: unknown } })
       .daemon.latestVersion;
 
-  it("a start that fails after the version check began leaves no timer and asks npm no more", async () => {
+  it("a start of either role that fails at the socket claim or the admin.token write leaves no timer and asks npm no more", async () => {
     class SecretRefusingFilesystem extends MemoryFilesystem {
       override async writeFileAtomic(
         ...arguments_: Parameters<MemoryFilesystem["writeFileAtomic"]>
@@ -4639,7 +4641,12 @@ describe("startDaemon version check", () => {
         return super.writeFileAtomic(...arguments_);
       }
     }
-    const failedStart = async (check: boolean) => {
+    class ListenRefusingTransport extends MemoryIpcTransport {
+      override async listen(endpoint: string): Promise<never> {
+        throw new IpcError("unknown", `listen EACCES: permission denied ${endpoint}`, undefined);
+      }
+    }
+    const failedStart = async (role: "worker" | "gateway", refused: "listen" | "admin.token") => {
       const npm = new FakeNpmCli({ view: [{ ok: true, output: "0.4.0\n" }] });
       const directory = await mkdtemp(join(tmpdir(), "simlock-main-version-fail-"));
       temporaryDirectories.push(directory);
@@ -4647,28 +4654,89 @@ describe("startDaemon version check", () => {
       await expect(
         startDaemon({
           clock,
-          configOverrides: { ...STANDALONE_OFF, update: { check } },
+          configOverrides: role === "gateway" ? {} : STANDALONE_OFF,
           dataDirectory: directory,
           drivers: [],
-          filesystem: new SecretRefusingFilesystem(),
+          filesystem:
+            refused === "admin.token" ? new SecretRefusingFilesystem() : new MemoryFilesystem(),
           hostLoadProbe: null,
+          ipc: refused === "listen" ? new ListenRefusingTransport() : new MemoryIpcTransport(),
           logger: new NoopLogger(),
           npm,
+          role,
           socketPath: join(directory, "daemon.sock"),
           version: "0.3.0",
         } as StartDaemonOptions),
-      ).rejects.toThrow("disk is read-only");
+      ).rejects.toThrow(refused === "listen" ? "listen EACCES" : "disk is read-only");
       // why: the answer is processed after the call; wait it out so a leaked next-check timer exists before it is counted.
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
       const pending = clock.pendingTimerCount;
       clock.advance(2 * 24 * 60 * 60 * 1000);
-      return { calls: npm.calls.length, pending };
+      return { role, refused, calls: npm.calls.length, pending };
     };
 
-    const checked = await failedStart(true);
-    const unchecked = await failedStart(false);
+    const outcomes = [];
+    for (const role of ["worker", "gateway"] as const) {
+      for (const refused of ["listen", "admin.token"] as const) {
+        outcomes.push(await failedStart(role, refused));
+      }
+    }
 
-    expect(checked).toEqual({ calls: 1, pending: unchecked.pending });
+    expect(outcomes).toEqual([
+      { role: "worker", refused: "listen", calls: 1, pending: 0 },
+      { role: "worker", refused: "admin.token", calls: 1, pending: 0 },
+      { role: "gateway", refused: "listen", calls: 1, pending: 0 },
+      { role: "gateway", refused: "admin.token", calls: 1, pending: 0 },
+    ]);
+  });
+
+  it("a worker whose socket claim is refused disposes its drivers, and one that loses the claim to a live daemon leaves them to that daemon", async () => {
+    class ListenFailingTransport extends MemoryIpcTransport {
+      constructor(readonly code: "address-in-use" | "unknown") {
+        super();
+      }
+      override async listen(endpoint: string): Promise<never> {
+        throw new IpcError(this.code, `listen failed: ${endpoint}`, undefined);
+      }
+    }
+    const failedStart = async (code: "address-in-use" | "unknown") => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-claim-drivers-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const disposed: string[] = [];
+      const driver = Object.assign(
+        new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+        {
+          dispose: async () => {
+            disposed.push("ios");
+          },
+        },
+      );
+      const error: unknown = await startDaemon({
+        clock,
+        configOverrides: STANDALONE_OFF,
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver],
+        filesystem: new MemoryFilesystem(),
+        hostLoadProbe: null,
+        ipc: new ListenFailingTransport(code),
+        logger: new NoopLogger(),
+        npm: new FakeNpmCli({ view: [{ ok: true, output: "0.3.0\n" }] }),
+        socketPath: join(directory, "daemon.sock"),
+        version: "0.3.0",
+      } as StartDaemonOptions).then(
+        () => undefined,
+        (rejection: unknown) => rejection,
+      );
+      return { name: (error as Error | undefined)?.name, disposed };
+    };
+
+    expect(await failedStart("unknown")).toEqual({ name: "IpcError", disposed: ["ios"] });
+    expect(await failedStart("address-in-use")).toEqual({
+      name: "DaemonAlreadyRunningError",
+      disposed: [],
+    });
   });
 
   it("a daemon runs the version check at start without delaying ready, then after 24 h, and reports a newer latest in status.get and the daemon.update query; npm failing or answering junk keeps the last value; a stopped daemon never schedules the next check", async () => {

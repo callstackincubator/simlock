@@ -1748,11 +1748,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       .catch((error: unknown) => {
         if (error instanceof DaemonAlreadyRunningError) {
           logAlreadyRunning(role, error);
-          return;
+        } else {
+          logFatalStart(role, error instanceof Error ? error.message : String(error), {
+            stack: error instanceof Error ? error.stack : undefined,
+          });
         }
-        logFatalStart(role, error instanceof Error ? error.message : String(error), {
-          stack: error instanceof Error ? error.stack : undefined,
-        });
+        // why: a start that lost the claim leaves its drivers to the live daemon, so a child one of them spawned (Simlock's adb server) can still hold this process open with nothing to serve; the line above is written synchronously.
+        process.exit();
       });
     process.once("SIGTERM", () => {
       if (running === undefined) {

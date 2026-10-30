@@ -85,6 +85,11 @@ Arm (skipped when a stop already ran):
 
 Converge throws → health `failed`; parked requests get `DAEMON_STARTUP_FAILED`;
 stop `convergence-failed`; the start rejects.
+The claim (step 11) or the `admin.token` write (step 13) throws → parked requests get
+`DAEMON_STARTUP_FAILED`; the start runs Stop's steps 4 to 6 and closes connections and a claimed
+socket, with no `daemon.stopping` and no `admin.token` removal, then rejects; the entry logs it
+and exits. A `DaemonAlreadyRunningError` skips steps 5 and 6: the live daemon may share what the
+drivers hold (Simlock's adb server, adopted through its record).
 HTTP fails to bind → the converge hook waits for the listener before step 22's `running`, so health `failed`, no `daemon.started`, stop `http-start-failed`; the start rejects.
 
 ### Lease reconciler outcomes (ADR 0019)

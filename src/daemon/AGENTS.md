@@ -89,6 +89,10 @@ Health: `starting` → `running`, or `failed`.
   `daemon`, `host` and `load` only.
 - Converge fails → parked requests get `DAEMON_STARTUP_FAILED`; daemon stops
   (`convergence-failed`).
+- Claim or `admin.token` write fails → parked requests get `DAEMON_STARTUP_FAILED`; `start` disposes
+  what `#stop` does (engine, `settle`, `dispose`, connections, a claimed socket) without
+  `daemon.stopping` or the `admin.token` removal, then rejects; a later `stop()` gets that release's promise.
+  `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server.
 - A stop during converge → nothing is armed, no `daemon.started`; parked requests get `DAEMON_STOPPING`.
 - Arm: owner-routed push subscription → `daemon.started` → driver refusal events →
   health monitor and physical device watcher start.
@@ -136,7 +140,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   `eventLog.maxBytes` (256 MiB); usage rows are kept `metrics.retention` (90 days). `onSocketClaimed`
   starts it in both modes with the role and `metrics.retention`; `dispose` stops it last. A file that fails costs only history. A start the history refuses (a newer stored projection version, a
   failed migration) stops the daemon with reason `history-refused` and exit 1. `status.get` carries its `history`, also while starting. `inbox.get` (worker mode) runs `inboxItems` over its own `worker.list` view, `lease.list` and its queue. `usage.get` (both dispatchers, `usageAnswer` in `dispatch.ts`) reads the same file's usage rows through `core/usage` on a read thread; `main.ts` passes `historyPath` in both modes, and `dispose` stops the thread. `history.status().opened` false → `HISTORY_UNAVAILABLE`; a window ending before the oldest row → `HISTORY_NOT_KEPT`.
-- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
+- SIGTERM to a running daemon runs `stop("signal")` and exits 0; one that arrives before the start finishes exits 0 at once (one handler in `main.ts`, the entry). A start that finds a daemon answering logs `Daemon already running` at `info` to the role's `daemon.log` and exits 0. A start that throws is logged by a fallback logger to the role's `daemon.log`; exit 1. Both exit at once (`process.exit`) after the line, since a start that lost the claim keeps its drivers' children. An entry argument other than none or `--gateway` is logged to `<root>/daemon.log` as "Daemon failed to start"; exit 1.
 
 ## Rules
 
