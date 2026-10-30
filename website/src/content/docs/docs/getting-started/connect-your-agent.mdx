@@ -47,7 +47,9 @@ simlock setup
 
 In a terminal, `setup` asks for the scope and, for each tool, whether to connect Simlock's MCP server too. Pass `--user` or `--project`, `--tool claude-code` or `--tool codex`, and `--mcp` or `--no-mcp` to answer for a script. See [`simlock setup`](/simlock/docs/reference/cli#simlock-setup) for the paths and the report.
 
-## Use the CLI
+## Or paste the rules
+
+The skill and the pasted rules are alternatives, not a pair. Use the skill when your tool supports skills, and do not also paste the rules: the agent would read them twice. Paste the rules only for a tool without skills.
 
 Run `simlock instructions` and paste its output into your project's `AGENTS.md` or `CLAUDE.md`. It prints the current rules for using Simlock: what every agent must do, then agent-device, iOS builds, the `simlock` CLI and MCP. Paste it again after you update Simlock, so your agents follow the rules your version has.
 
@@ -91,7 +93,7 @@ Add the server to `.mcp.json` at the root of your project:
 }
 ```
 
-Or let `simlock setup --mcp` run `claude mcp add -s user simlock -- simlock mcp` for you.
+Or let `simlock setup --mcp` run it for you. It follows the scope: at user scope it runs `claude mcp add -s user simlock -- simlock mcp`, which writes `~/.claude.json`; with `--project` it runs `claude mcp add -s project simlock -- simlock mcp`, which writes `.mcp.json`.
 
 The server takes the Claude Code session's identity, the same one the CLI uses in that session.
 
@@ -102,7 +104,7 @@ The server takes the Claude Code session's identity, the same one the CLI uses i
 codex mcp add simlock -- simlock mcp
 ```
 
-Or let `simlock setup --mcp` run it for you, at the user scope.
+Or let `simlock setup --mcp` run it for you. Codex has user scope only: with `--project`, `--mcp` reports Codex as `skipped`.
 
 The server gets its own identity from its process ID. It is not the identity the CLI has in the same session.
 

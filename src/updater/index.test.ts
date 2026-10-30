@@ -755,6 +755,11 @@ describe("parseUpdaterArgs", () => {
       parsed: undefined,
     },
     {
+      name: "a version of exactly 64 characters",
+      argv: ["--from", "0.3.0", "--to", "1".repeat(64), "--pid", "7"],
+      parsed: { from: "0.3.0", to: "1".repeat(64), pid: 7, role: "worker" },
+    },
+    {
       name: "an argument it does not know",
       argv: ["--from", "0.3.0", "--to", "0.4.0", "--pid", "7", "--force"],
       parsed: undefined,

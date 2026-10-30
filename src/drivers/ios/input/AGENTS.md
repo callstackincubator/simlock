@@ -1,6 +1,6 @@
 # iOS device input
 
-Does: taps, scrolls, Home and keys on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
+Does: taps, scrolls, Home, keys and rotations on an iOS simulator, through `simlock-screen-capture <udid> --input`; a physical iPhone answers unavailable.
 Entry: `index.ts` → `createIosDeviceInput(options)`, built by `IosSimctlDriver` as its `input` whenever it has a `screenCapture`. It is the implementation of core's `DeviceInputFactory` (`core/input.ts`).
 Uses: core (`DeviceInput`, `InputMessage`, the screen envelope), ports (`BytePipeLauncher`, `Clock`, `Logger`, `ProcessRunner`), `../runtime-version.ts`, `../screen-capture.ts` (`stopProgram`). Parent: [iOS driver](../AGENTS.md). Consumer: [input](../../../input/AGENTS.md).
 

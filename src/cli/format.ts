@@ -201,7 +201,7 @@ export function serviceLine(service: ServiceReport): string {
   return `Service: not loaded ${who}: commands start the daemon without it`;
 }
 
-function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
+function daemonLines(daemon: StatusGetOutput["daemon"], cliVersion: string | undefined): string[] {
   const { update, lastUpdateFailure, latestVersion } = daemon;
   const available =
     latestVersion !== null && isNewerVersion(latestVersion, daemon.version)
@@ -210,6 +210,7 @@ function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
   return [
     `Daemon: ${daemon.health} (${daemon.mode})`,
     `Simlock: ${daemon.version}${available}`,
+    ...(cliVersion === undefined ? [] : [`CLI: ${cliVersion}`]),
     ...(update === null
       ? []
       : [
@@ -227,7 +228,7 @@ function daemonLines(daemon: StatusGetOutput["daemon"]): string[] {
 }
 
 // fallow-ignore-next-line complexity -- stable human status rendering is intentionally a single formatter.
-export function formatStatus(status: StatusGetOutput, now: number): string {
+export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: string): string {
   const { capacity, daemon, devices, host, installs, leases, queueDepth, workers } = status;
   if (
     capacity === undefined ||
@@ -236,7 +237,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
     queueDepth === undefined
   ) {
     return [
-      ...daemonLines(daemon),
+      ...daemonLines(daemon, cliVersion),
       `Host: ${formatHost(host)}`,
       ...loadLines(status),
       "Devices, leases and capacity appear once startup finishes.",
@@ -281,7 +282,7 @@ export function formatStatus(status: StatusGetOutput, now: number): string {
       `Lease ${lease.id}: ${lease.requesterId}${lease.workerId === undefined ? "" : ` on ${lease.workerId}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
-    ...daemonLines(daemon),
+    ...daemonLines(daemon, cliVersion),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
     ...historyLines(status.history),
