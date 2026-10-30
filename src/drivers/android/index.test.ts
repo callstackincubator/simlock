@@ -732,6 +732,7 @@ describe("AndroidDriver", () => {
       unsettledPmAnswers: [
         { code: 1, stderr: "cmd: Can't find service: package", stdout: "" },
         { code: 0, stderr: "", stdout: "Error: could not access the Package Manager\n" },
+        { code: 1, stderr: "", stdout: "package:/system/framework/framework-res.apk\n" },
       ],
     });
     const ready = harness.driver.makeReady(harness.device);
@@ -739,7 +740,7 @@ describe("AndroidDriver", () => {
     void ready.then(settled, settled);
     const pmCalls = () => harness.runner.calls.filter((call) => call.args.includes("pm")).length;
 
-    for (const asked of [1, 2]) {
+    for (const asked of [1, 2, 3]) {
       await vi.waitFor(() => expect(pmCalls()).toBe(asked));
       expect(settled, `ready after ${asked} unanswered pm`).not.toHaveBeenCalled();
       harness.clock.advance(2_000);
