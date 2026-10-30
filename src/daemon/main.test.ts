@@ -3355,6 +3355,16 @@ describe("startDaemon with the agent-device edge", () => {
     return { directory, filesystem };
   }
 
+  /** why: pid 900 answers as this home's own agent-device daemon, so a supervisor that ran would read its command line and SIGTERM it. */
+  function recordedDaemonAlive(directory: string): FakeProcessSupervisor {
+    const processSupervisor = new FakeProcessSupervisor([900]);
+    processSupervisor.answerCommandLine(
+      900,
+      `${process.execPath} ${entry} --simlock-home=${directory}`,
+    );
+    return processSupervisor;
+  }
+
   function versionAndDaemon(directory: string, role?: "phones"): ScriptedProcessRunner {
     const version = {
       match: { args: [realCli, "--version"], command: process.execPath },
@@ -3649,7 +3659,7 @@ describe("startDaemon with the agent-device edge", () => {
     expect(runner.calls).toEqual([]);
   });
 
-  it("builds no supervisor in gateway mode: no ps and no agent-device process run, and no signal is sent", async () => {
+  it("builds no supervisor in gateway mode: no command line is read, no agent-device process runs, and no signal is sent", async () => {
     const setup = await setUp(
       {
         capabilities: { "agent-device": { command, enabled: true } },
@@ -3658,7 +3668,7 @@ describe("startDaemon with the agent-device edge", () => {
       { record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
-    const processSupervisor = new FakeProcessSupervisor([900]);
+    const processSupervisor = recordedDaemonAlive(setup.directory);
 
     await startEdge(setup, {
       drivers: [],
@@ -3668,6 +3678,7 @@ describe("startDaemon with the agent-device edge", () => {
     });
     await pollUntil(() => false, 100);
 
+    expect(processSupervisor.commandLineReads).toEqual([]);
     expect(runner.calls).toEqual([]);
     expect(processSupervisor.signals).toEqual([]);
   });
@@ -3724,22 +3735,23 @@ describe("startDaemon with the agent-device edge", () => {
     expect(loads).toBe(1);
   });
 
-  it("a worker with agent-device off starts no supervisor: no ps runs and no signal is sent, even with a recorded daemon on disk", async () => {
+  it("a worker with agent-device off starts no supervisor: no command line is read and no signal is sent, even with a recorded daemon on disk", async () => {
     const setup = await setUp(
       { capabilities: { "agent-device": { command, enabled: false } } },
       { record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
-    const processSupervisor = new FakeProcessSupervisor([900]);
+    const processSupervisor = recordedDaemonAlive(setup.directory);
 
     await startEdge(setup, { processRunner: runner, processSupervisor });
     await pollUntil(() => false, 100);
 
+    expect(processSupervisor.commandLineReads).toEqual([]);
     expect(runner.calls).toEqual([]);
     expect(processSupervisor.signals).toEqual([]);
   });
 
-  it("runs no ps and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
+  it("reads no command line and sends no signal in a second daemon on the same home that loses the socket claim", async () => {
     const first = await setUp({ capabilities: { "agent-device": { enabled: false } } });
     await startEdge(first, {
       processRunner: new ScriptedProcessRunner([]),
@@ -3750,13 +3762,14 @@ describe("startDaemon with the agent-device edge", () => {
       { directory: first.directory, record: { pid: 900 } },
     );
     const runner = new ScriptedProcessRunner([]);
-    const processSupervisor = new FakeProcessSupervisor([900]);
+    const processSupervisor = recordedDaemonAlive(second.directory);
 
     await expect(
       startEdge(second, { processRunner: runner, processSupervisor }),
     ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
     await pollUntil(() => false, 100);
 
+    expect(processSupervisor.commandLineReads).toEqual([]);
     expect(runner.calls).toEqual([]);
     expect(processSupervisor.signals).toEqual([]);
   });
