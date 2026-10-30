@@ -73,6 +73,7 @@ async function arrange(version: string) {
     filesystem,
     healthProbe: health,
     home,
+    hostPlatform: "linux",
     leaseMaxTtlMs,
     logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
     nodePath,

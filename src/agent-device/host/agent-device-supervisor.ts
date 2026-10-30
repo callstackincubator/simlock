@@ -24,7 +24,7 @@ import {
   NO_ANDROID_DEVICE_SERIAL,
 } from "../shared/daemon-environment.js";
 import type { AgentDeviceHealthProbe } from "./health.js";
-import { findAgentDevice } from "./install.js";
+import { findAgentDevice, pathVariableOf } from "./install.js";
 
 export type AgentDevicePlatform = "ios" | "android";
 
@@ -90,6 +90,7 @@ export interface AgentDeviceSupervisorOptions {
   readonly filesystem: Filesystem;
   readonly healthProbe: AgentDeviceHealthProbe;
   readonly home: string;
+  readonly hostPlatform: NodeJS.Platform;
   readonly ios?: AgentDeviceIosSigning;
   readonly leaseMaxTtlMs: number;
   readonly logger: Logger;
@@ -324,7 +325,8 @@ export class AgentDeviceSupervisor {
     const install = await findAgentDevice(
       o.filesystem,
       o.config.command,
-      o.baseEnvironment["PATH"],
+      pathVariableOf(o.baseEnvironment),
+      o.hostPlatform,
     );
     if (!install.ok) {
       this.#fail(install.reason, install.message);

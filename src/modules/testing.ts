@@ -186,6 +186,7 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
       name,
       nodePath: "/usr/bin/node",
       nodeVersion: "22.0.0",
+      hostPlatform: "linux",
       platforms: ["ios"],
       processRunner,
       processSupervisor,

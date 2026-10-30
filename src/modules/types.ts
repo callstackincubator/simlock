@@ -213,6 +213,7 @@ export interface WorkerContext<C> {
   readonly environment: NodeJS.ProcessEnv;
   readonly nodePath: string;
   readonly nodeVersion: string;
+  readonly hostPlatform: NodeJS.Platform;
   readonly platforms: readonly Platform[];
   readonly leaseEnvironment: Readonly<Record<string, string>>;
   readonly registry: ModuleRegistryView;

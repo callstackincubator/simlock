@@ -127,6 +127,7 @@ export function createWorkerWith(
         logger: ctx.logger,
         nodePath: ctx.nodePath,
         nodeVersion: ctx.nodeVersion,
+        hostPlatform: ctx.hostPlatform,
         platforms: ctx.platforms,
         processRunner: ctx.processRunner,
         processSupervisor: ctx.processSupervisor,
