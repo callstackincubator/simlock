@@ -235,7 +235,7 @@ simlock setup [--user | --project] [--tool <claude-code|codex>] [--mcp | --no-mc
 | `--tool <claude-code\|codex>` | Install for this tool, even when it is not set up on this machine. Without it, `setup` installs for each tool whose directory (`~/.claude`, `~/.codex` or `$CODEX_HOME`) exists, and reports the other as `skipped`. |
 | `--mcp` | Also connect Simlock's MCP server, by running the tool's own `mcp add` command. |
 | `--no-mcp` | Do not connect it, and do not ask. |
-| `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...]}`, and ask nothing. |
+| `--json` | Print the report as one JSON object, `{"scope": ..., "tools": [...], "machine": {...}}`, and ask nothing. |
 
 In a terminal, `setup` asks for the scope (`Install only for this project (not every project)? [y/N]`) and, for each tool it installs, whether to connect the MCP server too. The defaults are the user scope and no MCP. With no terminal, or with `--json`, it asks nothing and takes the defaults unless a flag says otherwise.
 
@@ -256,9 +256,14 @@ The report has one `skill` line per tool and, when MCP was asked for, one `mcp` 
 claude-code  skill  wrote      /Users/me/.claude/skills/simlock
 claude-code  mcp    connected
 codex        skill  skipped    /Users/me/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)
+machine      ios ok, android missing: android-sdk
 ```
 
-Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connected`, `already`, `failed` and `skipped`. The command never contacts a daemon.
+Skill statuses are `wrote`, `replaced` and `skipped`; MCP statuses are `connected`, `already`, `failed` and `skipped`.
+
+After the skill is installed, `setup` also runs the checks of [`simlock doctor`](#simlock-doctor) (without `--fix`), starting the daemon if it is not running, and ends the report with a `machine` line. The line names each platform this machine checks, iOS only on macOS: `ok`, `missing: <prerequisite>[, <prerequisite>]` or `unavailable: <reason>`, joined with `, `. Doctor's own lines about what to do go to stderr, as they do for `simlock doctor`. A missing platform is reported, never a failure: the exit code stays what it was. When the check cannot run (the daemon does not start, or it is a gateway), the line reads `not checked: <message>`.
+
+With `--json`, `machine` is `{"summary": "ios ok, android missing: android-sdk", "findings": [...]}`, where `findings` are the `doctor` findings (empty when the check did not run).
 
 ## simlock status
 

@@ -104,8 +104,13 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 11. **`simlock setup [--user | --project] [--tool <t>] [--mcp | --no-mcp] [--json]`** — installs the
     router skill through `setupAgentTools`, with `environment.homeDirectory`, `workingDirectory`,
     `codexHome`, `filesystem` and `runTool` (the composition root reads `homedir()`, `process.cwd()`
-    and `CODEX_HOME`); never connects to a daemon. Prompts only without `--json`. A refusal is
-    `SETUP_REFUSED` (exit 2); a failed `mcp add` prints the report, then `SETUP_MCP_FAILED` (exit 1).
+    and `CODEX_HOME`). Then it connects to the daemon (starting it, as `doctor` does), asks
+    `doctor.run` with no `fix`, writes doctor's act-on lines to stderr (`writeDoctorFindings`) and adds
+    a `machine` line (`ios ok, android missing: android-sdk`; iOS only when `hostPlatform` is
+    `darwin`) and a `machine` object `{ summary, findings }` to `--json`. A check that cannot run
+    (no daemon, or `UNSUPPORTED_IN_GATEWAY_MODE`) is `not checked: <message>`; a missing platform
+    never changes the exit code. Prompts only without `--json`. A refusal is `SETUP_REFUSED`
+    (exit 2); a failed `mcp add` prints the report with its `machine` line, then `SETUP_MCP_FAILED` (exit 1).
 
 ## Rules
 
