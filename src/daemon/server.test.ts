@@ -1596,10 +1596,11 @@ describe("DaemonServer stored lease requests", () => {
 });
 
 describe("DaemonServer relays during startup", () => {
-  async function startParked(relayTargets: RelayTargets) {
+  async function startParked(relayTargets: RelayTargets, host?: ConnectionHost) {
     const converge = deferred<void>();
     const harness = await createHarness({
       converge: () => converge.promise,
+      ...(host === undefined ? {} : { host }),
       relayTargets,
       start: false,
     });
@@ -1731,21 +1732,99 @@ describe("DaemonServer relays during startup", () => {
     expect(calls).toBe(0);
   });
 
-  it("a parked relay whose startup fails answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted", async () => {
-    const { converge, pair, startPromise } = await startParked({
-      echo: () => Promise.resolve(new Response("ok")),
+  it.each(["convergence", "socket claim"] as const)(
+    "a parked relay whose startup fails at its %s answers DAEMON_STARTUP_FAILED and leaves its channel errored aborted",
+    async (failing) => {
+      const claim = deferred<void>();
+      const host: ConnectionHost = {
+        endpoint: "/claim-refused/daemon.sock",
+        start: () => claim.promise,
+        stop: async () => undefined,
+      };
+      const { converge, pair, startPromise } = await startParked(
+        { echo: () => Promise.resolve(new Response("ok")) },
+        failing === "socket claim" ? host : undefined,
+      );
+      const uplink = await wireOf(pair);
+      const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
+      await relaySupport.sleep(100);
+
+      if (failing === "socket claim") claim.reject(new Error("listen EACCES"));
+      else converge.reject(new Error("boom"));
+      await startPromise.catch(() => undefined);
+      const outcome = await relaySupport.settleWithin(relay.result);
+      const read = await relay.readError();
+
+      expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
+      expect(read).toEqual({ ended: false, reason: "aborted" });
+    },
+  );
+});
+
+describe("DaemonServer failed start", () => {
+  it("a daemon.stop accepted while the admin.token write is pending is the one teardown when that write then fails, and the start rejects with the write's error without waiting for a stop whose auxiliary waits for the start", async () => {
+    const persisting = deferred<void>();
+    const startSettled = deferred<void>();
+    let stopBegun = false;
+    let disposals = 0;
+    let removals = 0;
+    const harness = await createHarness({
+      adminSecret: {
+        persist: () => persisting.promise,
+        remove: async () => {
+          removals += 1;
+        },
+      },
+      beginStop: () => {
+        stopBegun = true;
+      },
+      dispose: () => {
+        disposals += 1;
+      },
+      // why: as `main.ts`'s does: the HTTP frontend's start is settled only once `start()` settles when the claim's hooks never ran.
+      stopAuxiliary: () => startSettled.promise,
+      host: {
+        endpoint: "memory://failed-start",
+        start: async () => undefined,
+        stop: async () => undefined,
+      },
+      start: false,
     });
-    const uplink = await wireOf(pair);
-    const relay = await relaySupport.openRelay(uplink, relaySupport.relayInput());
-    await relaySupport.sleep(100);
+    const events: string[] = [];
+    harness.eventBus.subscribeAll((event) => {
+      if (event.event.startsWith("daemon.")) events.push(event.event);
+    });
+    const startPromise = harness.daemon.start().finally(() => startSettled.resolve());
+    startPromise.catch(() => undefined);
+    const pair = linkPair();
+    harness.daemon.acceptUplink(pair.worker);
+    const gateway = driveConnection(pair.gateway);
+    await gateway.request("hello", {
+      clientVersion: "gateway",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      principal: "gw:test",
+    });
 
-    converge.reject(new Error("boom"));
-    await startPromise.catch(() => undefined);
-    const outcome = await relaySupport.settleWithin(relay.result);
-    const read = await relay.readError();
+    await expect(gateway.request("daemon.stop", {})).resolves.toMatchObject({ ok: true });
+    await expect.poll(() => stopBegun).toBe(true);
+    persisting.reject(new Error("disk is read-only"));
+    const outcome = await Promise.race([
+      startPromise.then(
+        () => "resolved",
+        (error: unknown) => (error as Error).message,
+      ),
+      relaySupport.sleep(1_000).then(() => "still pending after 1 s"),
+    ]);
+    // why: unwinds a start that waits for the stop, so a failing run ends instead of hanging the stop below.
+    startSettled.resolve();
+    await harness.daemon.stop();
 
-    expect(outcome).toMatchObject({ code: "DAEMON_STARTUP_FAILED", state: "rejected" });
-    expect(read).toEqual({ ended: false, reason: "aborted" });
+    expect({ outcome, disposals, removals, events }).toEqual({
+      outcome: "disk is read-only",
+      disposals: 1,
+      removals: 1,
+      events: ["daemon.stopping"],
+    });
   });
 });
 
@@ -2053,18 +2132,20 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
   it("disposes the worker's dispatcher, ending its bus subscriptions, when the daemon stops", async () => {
     const live = new Map<string, number>();
     const subscribe = EventBus.prototype.subscribe;
-    const spy = vi
-      .spyOn(EventBus.prototype, "subscribe")
-      .mockImplementation(function (this: EventBus, event, handler) {
-        const unsubscribe = subscribe.call(this, event, handler);
-        live.set(event, (live.get(event) ?? 0) + 1);
-        let ended = false;
-        return () => {
-          if (!ended) live.set(event, (live.get(event) ?? 0) - 1);
-          ended = true;
-          unsubscribe();
-        };
-      });
+    const spy = vi.spyOn(EventBus.prototype, "subscribe").mockImplementation(function (
+      this: EventBus,
+      event,
+      handler,
+    ) {
+      const unsubscribe = subscribe.call(this, event, handler);
+      live.set(event, (live.get(event) ?? 0) + 1);
+      let ended = false;
+      return () => {
+        if (!ended) live.set(event, (live.get(event) ?? 0) - 1);
+        ended = true;
+        unsubscribe();
+      };
+    });
     try {
       const harness = await createHarness({ resolveRole: { resolve: () => "admin" } });
       expect(live.get("component.installed")).toBeGreaterThan(0);

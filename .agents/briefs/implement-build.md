@@ -47,7 +47,7 @@ For each line, one cycle:
    on a named assertion, for the reason the line gives, not on a typo, a
    thrown stub or a timeout (testing rule 2). Commit the test and its
    stubs, one test per commit: `git commit -m "test: <the line's claim>
-(#<N>)"`. A test that passes before you change code either proves
+   (#<N>)"`. A test that passes before you change code either proves
    behaviour the repo had before this issue (delete it when an existing
    test proves the line, else keep it and list the line under `open` as
    `already green: <line>`), or code an earlier cycle built ahead of its

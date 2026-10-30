@@ -396,20 +396,18 @@ export class BuiltinDeviceProfileSource implements DeviceProfileSource {
    * devices.xml one whatever order `avdmanager` prints them in.
    */
   async profiles(): Promise<readonly DeviceProfile[]> {
-    const profiles = (await this.#devices.read()).map(
-      (profile): DeviceProfile => ({
-        avdmanagerId: profile.id,
-        custom: profile.oem === "User",
-        deviceClass: classOfTag(profile.tag),
-        kind: "builtin",
-        name: profile.name,
-        names:
-          profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
-            ? [profile.name]
-            : [profile.name, profile.id],
-        tag: profile.tag,
-      }),
-    );
+    const profiles = (await this.#devices.read()).map((profile): DeviceProfile => ({
+      avdmanagerId: profile.id,
+      custom: profile.oem === "User",
+      deviceClass: classOfTag(profile.tag),
+      kind: "builtin",
+      name: profile.name,
+      names:
+        profile.id.toLocaleLowerCase() === profile.name.toLocaleLowerCase()
+          ? [profile.name]
+          : [profile.name, profile.id],
+      tag: profile.tag,
+    }));
     return [
       ...profiles.filter((profile) => !isCustom(profile)),
       ...profiles.filter((profile) => isCustom(profile)),
