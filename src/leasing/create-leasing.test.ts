@@ -4201,9 +4201,9 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
       const outcome = harness.engine.request(next, asking("agent-1")).catch((e: unknown) => e);
 
       await harness.engine.settle();
-      const state = await Promise.race([outcome, Promise.resolve("waiting")]);
+      const state = await settledOrPending(outcome);
       if (refusal === undefined) {
-        expect(state).toBe("waiting");
+        expect(state).toBe("still pending");
         expect(openOf("agent-1")).toHaveLength(2);
       } else {
         expect(state).toMatchObject({ message: refusal, name: "RequesterAlreadyLeasedError" });
@@ -4287,9 +4287,9 @@ describe("createLeasing: a requester may hold up to lease.maxPerRequester leases
       const outcome = harness.engine.request(next, asking("agent-1")).catch((e: unknown) => e);
 
       await harness.engine.settle();
-      const state = await Promise.race([outcome, Promise.resolve("waiting")]);
+      const state = await settledOrPending(outcome);
       if (refusal === undefined) {
-        expect(state).toBe("waiting");
+        expect(state).toBe("still pending");
       } else {
         expect(state).toMatchObject({ message: refusal, name: "RequesterAlreadyLeasedError" });
       }
