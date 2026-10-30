@@ -499,7 +499,17 @@ describe("AndroidDriver", () => {
       deviceId: "simlock_one",
     });
     expect(harness.runner.calls).toContainEqual({
-      args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-grpc", "8586", "-grpc-use-token", "-no-snapshot-load"],
+      args: [
+        "-avd",
+        "simlock_one",
+        "-port",
+        "5586",
+        "-no-snapshot-save",
+        "-grpc",
+        "8586",
+        "-grpc-use-token",
+        "-no-snapshot-load",
+      ],
       command: binaries.emulator,
       options: emulatorOptions,
     });
@@ -938,7 +948,17 @@ describe("AndroidDriver", () => {
         await harness.driver.makeReady(harness.device);
 
         expect(emulatorLaunches(harness.runner)).toEqual([
-          ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-grpc", "8586", "-grpc-use-token", "-no-snapshot-load"],
+          [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
+            "-no-snapshot-load",
+          ],
           [
             "-avd",
             "simlock_one",
@@ -4443,7 +4463,17 @@ describe("AndroidDriver console port reservations", () => {
       {
         hangs: true,
         match: {
-          args: ["-avd", "simlock_one", "-port", "5586", "-no-snapshot-save", "-grpc", "8586", "-grpc-use-token", "-no-snapshot-load"],
+          args: [
+            "-avd",
+            "simlock_one",
+            "-port",
+            "5586",
+            "-no-snapshot-save",
+            "-grpc",
+            "8586",
+            "-grpc-use-token",
+            "-no-snapshot-load",
+          ],
           command: binaries.emulator,
         },
       },
