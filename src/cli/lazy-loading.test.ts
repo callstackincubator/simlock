@@ -61,6 +61,7 @@ async function environment(): Promise<CliEnvironment> {
     daemonHome: { role: "worker", dataDirectory: home, gatewayPresent: false },
     homeDirectory: "/home/operator",
     workingDirectory: "/work/project",
+    platform: "linux",
     runTool: async () => ({ outcome: "not-found" }),
     filesystem: new MemoryFilesystem(),
     ipc: new MemoryIpcTransport(),

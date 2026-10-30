@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
 
@@ -77,7 +77,8 @@ export function resolveDaemonSocketPath(
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform === "win32") return windowsPipeName(dataDirectory);
-  const socketPath = join(dataDirectory, "daemon.sock");
+  // why: past the pipe, the platform is POSIX, so the path is too, whatever host computes it.
+  const socketPath = posix.join(dataDirectory, "daemon.sock");
   const maxLength = maxSocketPathLength(platform);
   if (Buffer.byteLength(socketPath) > maxLength) {
     throw new SocketPathTooLongError(socketPath, maxLength);

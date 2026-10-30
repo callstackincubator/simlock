@@ -102,6 +102,8 @@ export interface CliEnvironmentPorts {
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly codexHome?: string | undefined;
+  /** why: on `win32` the daemon's endpoint is a named pipe, not a socket file. */
+  readonly platform: NodeJS.Platform;
   readonly runTool: RunTool;
   readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
