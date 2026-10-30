@@ -37,7 +37,7 @@ import {
   type IpcConnection,
   type IpcConnector,
 } from "../ports/index.js";
-import { FakeSystemStats } from "../ports/index.js";
+import { FakeSystemStats, readPackageVersion } from "../ports/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
@@ -214,6 +214,28 @@ describe("CLI: exit codes", () => {
       error: { code: "GATEWAY_NOT_PRESENT", message: NO_GATEWAY_MESSAGE },
     });
     expect(connected).toBe(false);
+  });
+
+  it("simlock --version and -v print the package version and exit 0 with no environment built", async () => {
+    for (const argv of [["--version"], ["-v"], ["--gateway", "--version"]]) {
+      const output = outputCapture();
+      let connected = false;
+
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(output.stdout, argv.join(" ")).toBe(`${readPackageVersion()}\n`);
+      expect(output.stderr, argv.join(" ")).toBe("");
+      expect(connected, argv.join(" ")).toBe(false);
+    }
   });
 
   it("simlock --help lists --gateway", async () => {
