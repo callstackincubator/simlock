@@ -71,6 +71,7 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
 
 ## Known gaps
 
-- **Under Codex the session id is not visible.** Codex strips `CODEX_*` from MCP servers,
-  so `simlock mcp` is `mcp:<pid>` while the CLI is `codex:<id>`: two requesters, two leases.
+- **Under Codex and pi the session id is not visible.** Codex strips `CODEX_*` from MCP servers,
+  and pi sets `PI_SESSION_ID` only for commands its `bash` and `powershell` tools run, so
+  `simlock mcp` is `mcp:<pid>` while the CLI is `codex:<id>` or `pi:<id>`: two requesters, two leases.
   Use one interface per session, or set the same `SIMLOCK_AGENT_ID` for both.
