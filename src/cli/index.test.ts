@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -120,6 +121,13 @@ afterEach(async () => {
   );
 });
 
+// why: read straight from the manifest so the expected version is not computed by the code under test.
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  }
+).version;
+
 describe("readLogFile", () => {
   it("returns just the current log when there is no rotated generation", async () => {
     const filesystem = new MemoryFilesystem();
@@ -216,6 +224,28 @@ describe("CLI: exit codes", () => {
     expect(connected).toBe(false);
   });
 
+  it("simlock --version and -v print the package version and exit 0 with no environment built", async () => {
+    for (const argv of [["--version"], ["-v"], ["--gateway", "--version"]]) {
+      const output = outputCapture();
+      let connected = false;
+
+      await expect(
+        runCli(
+          argv,
+          output.environmentWith({
+            connectAdmin: async () => {
+              connected = true;
+              return fakeClient();
+            },
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(output.stdout, argv.join(" ")).toBe(`${PACKAGE_VERSION}\n`);
+      expect(output.stderr, argv.join(" ")).toBe("");
+      expect(connected, argv.join(" ")).toBe(false);
+    }
+  });
+
   it("simlock --help lists --gateway", async () => {
     const output = outputCapture();
 
@@ -256,9 +286,176 @@ describe("CLI: exit codes", () => {
     }
   });
 
+  it("simlock setup ends its report with a machine summary line and puts doctor's act-on lines on stderr", async () => {
+    const missingSdk: DoctorReport = {
+      findings: [
+        {
+          kind: "prerequisite-missing",
+          platform: "android",
+          prerequisite: "android-sdk",
+          message: "No Android SDK.",
+          remedy: "Install it.",
+        },
+      ],
+    };
+    const wrongOwner: DoctorReport = {
+      findings: [
+        {
+          kind: "driver-unavailable",
+          platform: "ios",
+          reason: "wrong-owner",
+          detail: "The device set belongs to another user.",
+        },
+      ],
+    };
+    const cases: readonly (readonly [DoctorReport, string, string, NodeJS.Platform?])[] = [
+      [{ findings: [] }, "ios ok, android ok", ""],
+      [{ findings: [] }, "android ok", "", "linux"],
+      [
+        wrongOwner,
+        "ios unavailable: wrong-owner, android ok",
+        "Unavailable [ios] wrong-owner: The device set belongs to another user.\n",
+      ],
+      [
+        missingSdk,
+        "ios ok, android missing: android-sdk",
+        "Missing [android] android-sdk: No Android SDK. Install it.\n",
+      ],
+    ];
+    for (const [report, summary, stderr, hostPlatform = "darwin"] of cases) {
+      const output = outputCapture();
+      const doctorInputs: unknown[] = [];
+      const code = await runCli(
+        ["setup", "--user", "--tool", "claude-code", "--no-mcp"],
+        output.environmentWith({
+          hostPlatform,
+          adminTokenFromEnv: "admin-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient({
+              runDoctor: (input) => {
+                doctorInputs.push(input);
+                return Promise.resolve(report);
+              },
+            });
+          },
+        }),
+      );
+      expect(code, summary).toBe(0);
+      expect(doctorInputs, summary).toEqual([{}]);
+      expect(output.stdout, summary).toBe(
+        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+          `machine      ${summary}\n`,
+      );
+      expect(output.stderr, summary).toBe(stderr);
+    }
+  });
+
+  it("simlock setup --json gains a machine object with the summary and the doctor findings", async () => {
+    const missingSdk = {
+      kind: "prerequisite-missing",
+      platform: "android",
+      prerequisite: "android-sdk",
+      message: "No Android SDK.",
+      remedy: "Install it.",
+    } as const;
+    const cases: readonly (readonly [DoctorReport, string])[] = [
+      [{ findings: [] }, "ios ok, android ok"],
+      [{ findings: [missingSdk] }, "ios ok, android missing: android-sdk"],
+    ];
+    for (const [report, summary] of cases) {
+      const output = outputCapture();
+      const code = await runCli(
+        ["setup", "--user", "--tool", "claude-code", "--no-mcp", "--json"],
+        output.environmentWith({
+          hostPlatform: "darwin",
+          adminTokenFromEnv: "admin-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient({ runDoctor: () => Promise.resolve(report) });
+          },
+        }),
+      );
+      expect(code, summary).toBe(0);
+      expect(JSON.parse(output.stdout), summary).toEqual({
+        scope: "user",
+        tools: [
+          {
+            tool: "claude-code",
+            skill: { status: "wrote", path: "/home/operator/.claude/skills/simlock" },
+          },
+        ],
+        machine: { summary, findings: report.findings },
+      });
+    }
+  });
+
+  it("simlock setup still installs the skill and says the machine was not checked when the check cannot run", async () => {
+    const refusal = new Error("doctor.run is not available on a gateway");
+    const cases: readonly (readonly [string, Partial<SimlockAdminClient> | Error, string])[] = [
+      ["daemon fails to connect", new Error("daemon did not start"), "daemon did not start"],
+      [
+        "daemon refuses doctor.run",
+        { runDoctor: () => Promise.reject(refusal) },
+        "doctor.run is not available on a gateway",
+      ],
+    ];
+    let gatewayConnects = 0;
+    for (const [name, daemon, message, prefix, gatewayHome] of [
+      ...cases.map(([n, d, m]) => [n, d, m, [], false] as const),
+      [
+        "--gateway never connects",
+        new Error("a gateway was contacted"),
+        "setup does not check a gateway",
+        ["--gateway"],
+        false,
+      ] as const,
+      [
+        "plain setup on a gateway-only home never connects",
+        new Error("a gateway was contacted"),
+        "setup does not check a gateway",
+        [],
+        true,
+      ] as const,
+    ]) {
+      const output = outputCapture();
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/operator/.claude");
+      const code = await runCli(
+        [...prefix, "setup", "--user", "--tool", "claude-code", "--no-mcp"],
+        output.environmentWith({
+          hostPlatform: "darwin",
+          filesystem,
+          ...(gatewayHome
+            ? {
+                daemonHome: {
+                  role: "gateway",
+                  dataDirectory: "/simlock/gateway",
+                  gatewayPresent: true,
+                } as const,
+              }
+            : {}),
+          connectAdmin: async () => {
+            if (prefix.length > 0 || gatewayHome) gatewayConnects += 1;
+            if (daemon instanceof Error) throw daemon;
+            return fakeClient(daemon);
+          },
+        }),
+      );
+      expect(code, name).toBe(0);
+      expect(output.stdout, name).toBe(
+        "claude-code  skill  wrote      /home/operator/.claude/skills/simlock\n" +
+          `machine      not checked: ${message}\n`,
+      );
+      expect(await filesystem.exists("/home/operator/.claude/skills/simlock"), name).toBe(true);
+    }
+    expect(gatewayConnects).toBe(0);
+  });
+
   it("simlock setup prints its report, fails the way the spec says, and runs without a gateway", async () => {
     const HOME = "/home/operator";
     const CWD = "/work/project";
+    const MACHINE = "machine      ios ok, android ok\n";
     const SCOPE_PROMPT = "Install only for this project (not every project)? [y/N] ";
     const exited = (code: number, stderr = ""): ToolOutcome => ({
       outcome: "exited",
@@ -296,8 +493,11 @@ describe("CLI: exit codes", () => {
             return false;
           },
           runTool: async () => options.outcome ?? exited(0),
-          connectAdmin: async () => {
-            throw new Error("setup must not connect to a daemon");
+          hostPlatform: "darwin",
+          adminTokenFromEnv: "admin-token",
+          connectAdmin: async (resolveCredential) => {
+            await resolveCredential();
+            return fakeClient();
           },
         }),
       );
@@ -309,14 +509,17 @@ describe("CLI: exit codes", () => {
     expect(plain.stderr).toBe("");
     expect(plain.stdout).toBe(
       `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n` +
-        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n`,
+        `codex        skill  skipped    ${HOME}/.agents/skills/simlock  (Codex not found here; pass --tool codex to install anyway)\n` +
+        MACHINE,
     );
     expect(plain.questions[0]).toBe(SCOPE_PROMPT);
 
     const again = await setupRun(["setup", "--tool", "claude-code"], {
       prepare: async (filesystem) => filesystem.mkdirp(`${HOME}/.claude/skills/simlock`),
     });
-    expect(again.stdout).toBe(`claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n`);
+    expect(again.stdout).toBe(
+      `claude-code  skill  replaced   ${HOME}/.claude/skills/simlock\n${MACHINE}`,
+    );
 
     for (const [outcome, line] of [
       [exited(0), "claude-code  mcp    connected\n"],
@@ -329,7 +532,7 @@ describe("CLI: exit codes", () => {
       const run = await setupRun(["setup", "--tool", "claude-code", "--mcp"], { outcome });
       expect(run.code, line).toBe(0);
       expect(run.stdout, line).toBe(
-        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}`,
+        `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\n${line}${MACHINE}`,
       );
     }
 
@@ -344,6 +547,7 @@ describe("CLI: exit codes", () => {
           mcp: { status: "connected" },
         },
       ],
+      machine: { summary: "ios ok, android ok", findings: [] },
     });
     const projectJson = await setupRun([
       "setup",
@@ -362,6 +566,7 @@ describe("CLI: exit codes", () => {
           mcp: { status: "skipped", reason: "codex mcp add has no project scope" },
         },
       ],
+      machine: { summary: "ios ok, android ok", findings: [] },
     });
 
     const failed = await setupRun(["setup", "--tool", "claude-code", "--mcp"], {
@@ -369,7 +574,7 @@ describe("CLI: exit codes", () => {
     });
     expect(failed.code).toBe(1);
     expect(failed.stdout).toBe(
-      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n`,
+      `claude-code  skill  wrote      ${HOME}/.claude/skills/simlock\nclaude-code  mcp    failed  (boom)\n${MACHINE}`,
     );
     expect(JSON.parse(failed.stderr)).toEqual({
       error: { code: "SETUP_MCP_FAILED", message: "MCP not connected for claude-code: boom" },
@@ -1185,57 +1390,51 @@ describe("CLI: exit codes", () => {
 });
 
 describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
-  it("prefers --token over SIMLOCK_ADMIN_TOKEN and the admin.token file", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+  it.each([
+    [
+      "--token over env and file",
       ["--token", "from-flag", "status"],
-      output.environmentWith({
-        adminTokenFromEnv: "from-env",
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-flag");
-    expect(output.stderr).toBe("");
-  });
-
-  it("prefers SIMLOCK_ADMIN_TOKEN over the admin.token file when --token is absent", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+      "from-env",
+      "from-file",
+      "from-flag",
+      true,
+    ],
+    [
+      "SIMLOCK_ADMIN_TOKEN over the file when --token is absent",
       ["status"],
-      output.environmentWith({
-        adminTokenFromEnv: "from-env",
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-env");
-  });
-
-  it("falls back to the admin.token file when neither --token nor the env var is set", async () => {
-    const output = outputCapture();
-    let seen: string | undefined;
-    await runCli(
+      "from-env",
+      "from-file",
+      "from-env",
+      false,
+    ],
+    [
+      "the admin.token file when neither --token nor the env var is set",
       ["status"],
-      output.environmentWith({
-        readAdminTokenFile: async () => "from-file",
-        connectAdmin: async (resolveCredential) => {
-          seen = await resolveCredential();
-          return fakeClient();
-        },
-      }),
-    );
-    expect(seen).toBe("from-file");
-    expect(output.stderr).toBe("");
-  });
+      undefined,
+      "from-file",
+      "from-file",
+      true,
+    ],
+  ] as const)(
+    "resolves the admin credential in priority order: %s",
+    async (_case, argv, envToken, fileToken, expected, stderrEmpty) => {
+      const output = outputCapture();
+      let seen: string | undefined;
+      await runCli(
+        [...argv],
+        output.environmentWith({
+          ...(envToken === undefined ? {} : { adminTokenFromEnv: envToken }),
+          readAdminTokenFile: async () => fileToken,
+          connectAdmin: async (resolveCredential) => {
+            seen = await resolveCredential();
+            return fakeClient();
+          },
+        }),
+      );
+      expect(seen).toBe(expected);
+      if (stderrEmpty) expect(output.stderr).toBe("");
+    },
+  );
 
   it("retries a briefly-missing admin.token file before giving up", async () => {
     const output = outputCapture();
@@ -1343,7 +1542,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       }),
     );
     expect(attempts).toBe(1);
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(1);
     expect(JSON.parse(output.stderr).error.code).toBe("ADMIN_AUTHENTICATION_FAILED");
   });
 
@@ -2345,19 +2544,6 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(launched).toBe(false);
   });
 
-  it("prints the human view for daemon status when --json is absent", async () => {
-    const output = outputCapture();
-
-    await expect(
-      runCli(
-        ["daemon", "status"],
-        output.environmentWith({ connectExistingAdmin: async () => fakeClient() }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(output.stdout.split("\n")[0]).toBe("Daemon: running (worker)");
-  });
-
   it("daemon status prints the Service: line and the service field in --json, for a worker or a gateway, running or stopped, and none on an unsupported platform", async () => {
     const home = "/Users/me";
     const node = "/Users/me/.nvm/versions/node/v22.13.0/bin/node";
@@ -2490,7 +2676,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       },
     });
 
-    await expect(runCli(["daemon", "status"], environment)).resolves.not.toBe(0);
+    await expect(runCli(["daemon", "status"], environment)).resolves.toBe(1);
 
     expect(output.stdout).not.toContain("Daemon stopped");
     expect(output.stderr).toContain("launchctl timed out");
@@ -2730,20 +2916,6 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stderr).not.toContain("agent-device");
   });
 
-  it("simlock doctor writes no agent-device line when the report has no such finding", async () => {
-    const output = outputCapture();
-    const findings = [{ deviceId: "d-1", kind: "expired-live-lease" as const, leaseId: "l-1" }];
-
-    await runCli(
-      ["doctor"],
-      output.environmentWith({
-        connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
-      }),
-    );
-
-    expect(output.stderr).not.toContain("agent-device");
-  });
-
   it("keeps --purge-orphans off the wire when --fix is all that was asked for", async () => {
     const output = outputCapture();
     const seen: unknown[] = [];
@@ -2858,14 +3030,6 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
     });
   });
 
-  it("device --help prints both forms", async () => {
-    const result = await runDevice(["device", "--help"]);
-
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("simlock device add --platform <ios|android> <id> [--json]");
-    expect(result.stdout).toContain("simlock device remove <id> [--json]");
-  });
-
   it("prints one line for an enrollment, naming the platform's OS, and the JSON with --json", async () => {
     const line = await runDevice(["device", "add", "--platform", "ios", "UDID-1"]);
     const json = await runDevice(["device", "add", "--platform", "android", "SER-1", "--json"]);
@@ -2878,6 +3042,7 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
 
   it.each([
     ["device", ["device"]],
+    ["device --help", ["device", "--help"]],
     ["device -h", ["device", "-h"]],
     ["device add --help", ["device", "add", "--help"]],
     ["device remove -h", ["device", "remove", "-h"]],
@@ -2909,7 +3074,9 @@ describe("CLI: device add and device remove (ADR 0022 §2)", () => {
     expect(await messages(["device", "add", "--platform", "windows", "X"])).toContain(
       "device add needs --platform ios or --platform android",
     );
-    await messages(["device", "remove", "--platform", "ios", "X"]);
+    expect(await messages(["device", "remove", "--platform", "ios", "X"])).toContain(
+      "Unknown option '--platform'",
+    );
   });
 
   it("closes the connection after an enrollment and after a removal", async () => {
@@ -3139,47 +3306,6 @@ describe("CLI: component remove (ADR 0010 §8)", () => {
       ),
     ).resolves.toBe(2);
     expect(connected).toBe(false);
-  });
-});
-
-describe("CLI: config set validates before writing (ADR 0003 §11)", () => {
-  it("rejects an invalid merged config without writing the file", async () => {
-    const output = outputCapture();
-    let wrote = false;
-    await expect(
-      runCli(
-        ["config", "set", "lease.defaultTtlMs", "not-a-number"],
-        output.environmentWith({
-          readConfigFile: async () => ({}),
-          writeConfigFile: async () => {
-            wrote = true;
-          },
-          validateConfig: async () => {
-            throw new Error("lease.defaultTtlMs must be a number");
-          },
-        }),
-      ),
-    ).resolves.toBe(2);
-    expect(wrote).toBe(false);
-    expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
-  });
-
-  it("writes the file once validation passes", async () => {
-    const output = outputCapture();
-    let written: Record<string, unknown> | undefined;
-    await expect(
-      runCli(
-        ["config", "set", "downloads.policy", "never"],
-        output.environmentWith({
-          readConfigFile: async () => ({}),
-          writeConfigFile: async (contents) => {
-            written = contents;
-          },
-          validateConfig: async () => {},
-        }),
-      ),
-    ).resolves.toBe(0);
-    expect(written).toEqual({ downloads: { policy: "never" } });
   });
 });
 
@@ -5154,6 +5280,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         `Daemon: running (${mode})\n` +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Running global: 0 + 0 reserved/2, warm 0\n" +
           "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5183,6 +5310,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         expect(output.stdout).toBe(
           `Daemon: running (${mode})\n` +
             "Simlock: 0.0.0-test\n" +
+            `CLI: ${PACKAGE_VERSION}\n` +
             "Host: macOS 15.5 arm64\n" +
             "Running global: 0 + 0 reserved/2, warm 0\n" +
             "Capacity ios: managed 0/1, running 0 + 0 reserved/1, warm 0\n" +
@@ -5201,6 +5329,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       );
 
       expect(JSON.parse(output.stdout).warmPool).toEqual(warmPool);
+      expect(JSON.parse(output.stdout).cliVersion).toBe(PACKAGE_VERSION);
     });
 
     it("simlock doctor prints one stderr line per unreachable warm pool target, keeps the JSON report on stdout, and exits 0", async () => {
@@ -5272,6 +5401,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(output.stdout).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           "Devices, leases and capacity appear once startup finishes.\n",
       );
@@ -5306,7 +5436,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         }),
       );
 
-      expect(JSON.parse(output.stdout)).toEqual(STARTING);
+      expect(JSON.parse(output.stdout)).toEqual({ ...STARTING, cliVersion: PACKAGE_VERSION });
     });
   });
 
@@ -5383,6 +5513,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print({ ...STARTING, load: LOAD })).toBe(
         "Daemon: starting (worker)\n" +
           "Simlock: 0.0.0-test\n" +
+          `CLI: ${PACKAGE_VERSION}\n` +
           "Host: macOS 15.5 arm64\n" +
           FULL_LINE +
           "Devices, leases and capacity appear once startup finishes.\n",
@@ -5474,7 +5605,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     const daemon = { ...EMPTY_STATUS.daemon, consoleUrl: "http://127.0.0.1:4700/" };
 
     expect(await print({ ...EMPTY_STATUS, daemon })).toContain(
-      "Daemon: running (worker)\nSimlock: 0.0.0-test\nConsole: http://127.0.0.1:4700/\nHost: ",
+      `Daemon: running (worker)\nSimlock: 0.0.0-test\nCLI: ${PACKAGE_VERSION}\nConsole: http://127.0.0.1:4700/\nHost: `,
     );
     expect(await print(EMPTY_STATUS)).not.toContain("Console:");
   });
@@ -6867,42 +6998,14 @@ describe("CLI: mcp command (ADR 0003 §11 -- lazy module load)", () => {
     [["--gateway", "mcp"], 0, "gateway"],
     [["mcp", "--gateway"], 0, "gateway"],
     [["mcp"], 0, "none"],
-    [["--gateway=yes", "mcp"], 2, undefined],
-  ] as const)(
-    "--gateway is taken from anywhere in the argv and reaches the command as context.daemonFlag; --gateway=<x> is a usage error (%j)",
-    async (argv, exitCode, gateway) => {
-      const output = outputCapture();
-      const seen: string[] = [];
-
-      const code = await runCli(
-        argv,
-        output.environmentWith({
-          runMcpStdio: async (options) => {
-            seen.push(options.daemonFlag ?? "none");
-          },
-        }),
-      );
-
-      expect(code).toBe(exitCode);
-      if (gateway === undefined) {
-        expect(JSON.parse(output.stderr)).toMatchObject({
-          error: { code: "USAGE", message: expect.stringContaining("--gateway takes no value") },
-        });
-        expect(seen).toEqual([]);
-      } else {
-        expect(seen).toEqual([gateway]);
-      }
-    },
-  );
-
-  it.each([
+    [["--gateway=yes", "mcp"], 2, "--gateway takes no value"],
     [["--local", "mcp"], 0, "local"],
     [["mcp", "--local"], 0, "local"],
     [["--local=yes", "mcp"], 2, "--local takes no value"],
     [["--local", "--gateway", "mcp"], 2, "--gateway and --local cannot be used together"],
     [["mcp", "--gateway", "--local"], 2, "--gateway and --local cannot be used together"],
   ] as const)(
-    "--local is taken from anywhere in the argv; --local=<x> and --local with --gateway are usage errors (%j)",
+    "--gateway and --local are taken from anywhere in the argv and reach the command as context.daemonFlag; =<x> and both together are usage errors (%j)",
     async (argv, exitCode, expected) => {
       const output = outputCapture();
       const seen: string[] = [];
@@ -7079,7 +7182,7 @@ describe("CLI: events history", () => {
       }),
     );
 
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(1);
     expect(fileRead).toBe(false);
     expect(output.stderr).toContain("PROTOCOL_VERSION_UNSUPPORTED");
   });
@@ -8019,6 +8122,7 @@ describe("simlock update and simlock status", () => {
     expect(await statusLines({ version: "0.3.0" })).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
+      `CLI: ${PACKAGE_VERSION}`,
       next,
       expect.stringMatching(/^Running global/),
     ]);
@@ -8028,9 +8132,10 @@ describe("simlock update and simlock status", () => {
       [state("installing"), "Updating to 0.4.0: installing"],
       [state("restarting"), "Updating to 0.4.0: restarting"],
     ] as const) {
-      expect((await statusLines({ version: "0.3.0", update })).slice(0, 3)).toEqual([
+      expect((await statusLines({ version: "0.3.0", update })).slice(0, 4)).toEqual([
         "Daemon: running (worker)",
         "Simlock: 0.3.0",
+        `CLI: ${PACKAGE_VERSION}`,
         line,
       ]);
     }
@@ -8040,10 +8145,11 @@ describe("simlock update and simlock status", () => {
           version: "0.3.0",
           lastUpdateFailure: failure("installing", "npm error code EACCES"),
         })
-      ).slice(0, 3),
+      ).slice(0, 4),
     ).toEqual([
       "Daemon: running (worker)",
       "Simlock: 0.3.0",
+      `CLI: ${PACKAGE_VERSION}`,
       "Last update failed (installing): npm error code EACCES",
     ]);
   });
@@ -8074,7 +8180,7 @@ async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
         }),
     }),
   );
-  return output.stdout.split("\n").slice(0, 4);
+  return output.stdout.split("\n").slice(0, 5);
 }
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {

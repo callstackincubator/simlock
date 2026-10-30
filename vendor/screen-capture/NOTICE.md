@@ -138,7 +138,9 @@ Hub keyboard bridge (`DeviceHubKeyboardBridge`), the fold pose (`DevicePose`) an
 `xcrun simctl --set <set> launch <udid> com.apple.springboard` (`src/drivers/ios/input/`),
 the way upstream does it on Xcode 26 and later ("Xcode 26+ silently drops the Indigo
 HID home-button press"), so it has one owner; the app switcher and Lock are Indigo
-button presses and are out of scope (#1024). Touch, scroll, key and the rest are
+button presses and are out of scope (#1024). `sendOrientation`'s error for a missing
+`PurpleWorkspacePort` no longer says Simulator.app must be running: a simulator
+with no Simulator.app rotates (#1080). Touch, scroll, key and the rest are
 upstream's. The file's own `MODIFIED FILE` header is the authoritative wording.
 
 **4. `FrameCapture.nativeScreenSizes(for:)` is internal, not private.** The input

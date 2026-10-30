@@ -58,6 +58,8 @@ export interface CliEnvironment {
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly codexHome?: string | undefined;
+  /** why: `setup` lists iOS in its machine summary only on a macOS host, where the daemon has an iOS driver. */
+  readonly hostPlatform?: NodeJS.Platform | undefined;
   readonly runTool: RunTool;
   readonly filesystem: Filesystem;
   /** why: `untilStarted` makes a launch return only once the daemon has left `starting`, so a start that fails after its first answer is reported as the daemon's own error. */
@@ -102,6 +104,7 @@ export interface CliEnvironmentPorts {
   readonly homeDirectory: string;
   readonly workingDirectory: string;
   readonly codexHome?: string | undefined;
+  readonly hostPlatform?: NodeJS.Platform | undefined;
   readonly runTool: RunTool;
   readonly service?: ServiceSetup;
   readonly parentWatch?: ParentWatch;
