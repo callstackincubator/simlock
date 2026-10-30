@@ -173,8 +173,8 @@ importers:
   .:
     dependencies:
       '@agent-device/proxy':
-        specifier: 0.21.32
-        version: 0.21.32
+        specifier: 0.21.35
+        version: 0.21.35
       '@hono/node-server':
         specifier: 2.1.5
         version: 2.1.5(hono@4.13.14)
@@ -290,8 +290,8 @@ importers:
 
 packages:
 
-  '@agent-device/proxy@0.21.32':
-    resolution: {integrity: sha512-ZljNbFtyXzzjPZPRRxd1WPKyjxUovFmvRrYGtGAHq/KLzPcA+vo7NVDy2biUeCAh8zrdKgUF4j9Gw2CaupgjLg==}
+  '@agent-device/proxy@0.21.35':
+    resolution: {integrity: sha512-4ThmkBjcwnXEyRm8sguZ+y/OlqqEq6nW0aU1chzxZOMevovp4zt5vGrcTUvzVHBCADTwfeC8KC2grnzklgR9MQ==}
     engines: {node: '>=22.12'}
 
   '@apidevtools/json-schema-ref-parser@15.5.2':
@@ -3705,7 +3705,7 @@ packages:
 
 snapshots:
 
-  '@agent-device/proxy@0.21.32': {}
+  '@agent-device/proxy@0.21.35': {}
 
   '@apidevtools/json-schema-ref-parser@15.5.2(@types/json-schema@7.0.15)':
     dependencies:
