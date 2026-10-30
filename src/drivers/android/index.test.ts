@@ -505,6 +505,20 @@ describe("AndroidDriver", () => {
     });
   });
 
+  it("starts the emulator with an authenticated gRPC endpoint on its console port plus 3000", async () => {
+    const harness = await provisionedHarness();
+
+    await harness.driver.makeReady(harness.device);
+
+    const launch = harness.runner.calls.find(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    expect(launch?.args).toEqual(expect.arrayContaining(["-port", "5586"]));
+    const args = launch?.args ?? [];
+    const at = args.indexOf("-grpc");
+    expect(args.slice(at, at + 3)).toEqual(["-grpc", "8586", "-grpc-use-token"]);
+  });
+
   /**
    * why: The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
    * release the event loop -- the ChildProcess handle does -- so without the `unref` a
