@@ -107,6 +107,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    writes `ready` with `enrolledApps`, or re-enrols under `enrollment`; `remove` unenrols. Busy: `DeviceBusyError`.
 10. **Ownership** — `loadInstanceId` creates `instance.json` once (exclusive create, `0600`). `ensureOwnedRoot`
     stages a root with `.simlock-owned.json` (instance id, platform), mode `0700`; doubt is `OwnedRootError`.
+    With no `uid` (Windows) it checks neither the owner nor the mode, which that platform does not have.
 11. **Components** — `ComponentInstaller`, the only caller of `installComponent`/`removeComponent`.
     One FIFO per platform; a call for the same component joins. At the front: `stillNeeded` →
     `findComponent` → `DiskSpaceGuard.reserve` (one guard, both platforms) → driver → record (lock) →
