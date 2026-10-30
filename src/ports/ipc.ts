@@ -38,10 +38,29 @@ export interface IpcListenerFactory {
   listen(endpoint: string, accept: (connection: IpcConnection) => void): Promise<IpcListener>;
 }
 
+// why: a local socket or pipe answers in milliseconds; past this, a Windows pipe whose every
+// instance is busy, or a peer that never ends its side, would hold the caller forever.
+const CONNECT_TIMEOUT_MS = 10_000;
+const CLOSE_GRACE_MS = 2_000;
+
+export interface NodeIpcTransportOptions {
+  readonly connectTimeoutMs?: number;
+  readonly closeGraceMs?: number;
+}
+
 /** Node's Unix-domain socket adapter. Kept at the infrastructure boundary. */
 export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
+  readonly #connectTimeoutMs: number;
+  readonly #closeGraceMs: number;
+
+  constructor(options: NodeIpcTransportOptions = {}) {
+    this.#connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
+    this.#closeGraceMs = options.closeGraceMs ?? CLOSE_GRACE_MS;
+  }
+
   async connect(endpoint: string): Promise<IpcConnection> {
     const socket = connect(endpoint);
+    let timer: NodeJS.Timeout | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         const onConnect = () => {
@@ -54,19 +73,34 @@ export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
         };
         socket.once("connect", onConnect);
         socket.once("error", onError);
+        timer = setTimeout(() => {
+          socket.off("connect", onConnect);
+          socket.off("error", onError);
+          reject(
+            new IpcError(
+              "unknown",
+              `Timed out connecting to ${endpoint} after ${this.#connectTimeoutMs} ms`,
+              undefined,
+            ),
+          );
+        }, this.#connectTimeoutMs);
       });
     } catch (error: unknown) {
       socket.destroy();
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    return new NodeIpcConnection(socket);
+    return new NodeIpcConnection(socket, this.#closeGraceMs);
   }
 
   async listen(
     endpoint: string,
     accept: (connection: IpcConnection) => void,
   ): Promise<IpcListener> {
-    const server = createServer((socket) => accept(new NodeIpcConnection(socket)));
+    const server = createServer((socket) =>
+      accept(new NodeIpcConnection(socket, this.#closeGraceMs)),
+    );
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (error: Error) => reject(normalizeIpcError(error));
@@ -87,7 +121,10 @@ export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
 class NodeIpcConnection implements IpcConnection {
   #closed = false;
 
-  constructor(private readonly socket: Socket) {
+  constructor(
+    private readonly socket: Socket,
+    private readonly closeGraceMs: number,
+  ) {
     socket.setEncoding("utf8");
     socket.once("close", () => {
       this.#closed = true;
@@ -127,7 +164,12 @@ class NodeIpcConnection implements IpcConnection {
   close(): Promise<void> {
     if (this.closed) return Promise.resolve();
     return new Promise((resolve) => {
-      this.socket.once("close", resolve);
+      // why: a peer that never ends its side never lets the socket close; after the grace it is destroyed, so no caller waits on the peer.
+      const grace = setTimeout(() => this.socket.destroy(), this.closeGraceMs);
+      this.socket.once("close", () => {
+        clearTimeout(grace);
+        resolve();
+      });
       // why: a connection nobody read from is paused, so it never sees the peer's end and never closes -- which would hang its listener's close.
       this.socket.resume();
       this.socket.end();
