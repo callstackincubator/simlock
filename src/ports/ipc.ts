@@ -55,20 +55,24 @@ const CLOSE_GRACE_MS = 2_000;
 export interface NodeIpcTransportOptions {
   readonly connectTimeoutMs?: number;
   readonly closeGraceMs?: number;
+  /** why: a test needs a socket that never connects, which no real endpoint gives reliably. */
+  readonly socketFor?: (endpoint: string) => Socket;
 }
 
 /** why: one adapter serves both endpoint kinds, a Unix-domain socket path and a Windows named pipe. */
 export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
   readonly #connectTimeoutMs: number;
   readonly #closeGraceMs: number;
+  readonly #socketFor: (endpoint: string) => Socket;
 
   constructor(options: NodeIpcTransportOptions = {}) {
     this.#connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
     this.#closeGraceMs = options.closeGraceMs ?? CLOSE_GRACE_MS;
+    this.#socketFor = options.socketFor ?? ((endpoint) => connect(endpoint));
   }
 
   async connect(endpoint: string): Promise<IpcConnection> {
-    const socket = connect(endpoint);
+    const socket = this.#socketFor(endpoint);
     let timer: NodeJS.Timeout | undefined;
     try {
       await new Promise<void>((resolve, reject) => {

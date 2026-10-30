@@ -50,8 +50,10 @@ import {
   type ServiceState,
   FakeSystemStats,
   FakeTcpProbe,
+  IpcError,
   JsonLinesLogger,
   MemoryFilesystem,
+  MemoryIpcTransport,
   MemoryLogSink,
   NodeFilesystem,
   NodeSqliteOpener,
@@ -4552,6 +4554,18 @@ describe("startDaemon state.db", () => {
 
     expect(await versions()).toEqual(before);
     expect(await readFile(join(directory, "state.db"))).toEqual(bytesBefore);
+  });
+
+  it("refuses to start as already running when connecting to its endpoint times out, as a Windows pipe whose every instance is busy does", async () => {
+    const memory = new MemoryIpcTransport();
+    const ipc = {
+      connect: async () => {
+        throw new IpcError("connection-timeout", "timed out", undefined);
+      },
+      listen: memory.listen.bind(memory),
+    };
+
+    await expect(start({ ipc })).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
   });
 
   it("a SIMLOCK_DRIVERS_MODULE without a deviceDataTables export fails start naming it", async () => {

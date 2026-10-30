@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { createServer, type Socket } from "node:net";
+import { createServer, Socket } from "node:net";
 import { join } from "node:path";
 
-import { resolveDaemonSocketPath } from "./index.js";
+import { IpcError, resolveDaemonSocketPath } from "./index.js";
 import { MemoryIpcTransport, NodeIpcTransport } from "./ipc.js";
 
 const implementations = [
@@ -96,6 +96,17 @@ describe.each(implementations)("IpcTransport contract: $name", ({ create }) => {
 });
 
 describe("NodeIpcTransport", () => {
+  it("gives up on a connect that never completes with connection-timeout, and destroys its socket", async () => {
+    const socket = new Socket();
+    const transport = new NodeIpcTransport({ connectTimeoutMs: 20, socketFor: () => socket });
+
+    const failure = await transport.connect("/never/answers").catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(IpcError);
+    expect(failure).toMatchObject({ code: "connection-timeout" });
+    expect(socket.destroyed).toBe(true);
+  });
+
   // why: a Windows pipe closes on `end()` whatever the peer does; only a socket can be held half-open.
   it.skipIf(process.platform === "win32")(
     "close() destroys a connection whose peer never ends its side, once the grace has passed",

@@ -16,11 +16,7 @@ import {
   type IpcConnector,
   type IpcListenerFactory,
 } from "../ports/index.js";
-import {
-  DaemonAlreadyRunningError,
-  DaemonEndpointHost,
-  refuseWhenDaemonAnswers,
-} from "./connection-host.js";
+import { DaemonAlreadyRunningError, DaemonEndpointHost } from "./connection-host.js";
 
 const endpoint = "/simlock/daemon.sock";
 
@@ -188,37 +184,6 @@ describe("DaemonEndpointHost", () => {
     );
     expect(recoveredIndex).toBeLessThan(claimedIndex);
     await host.stop();
-  });
-});
-
-describe("refuseWhenDaemonAnswers", () => {
-  const failingWith = (code: "connection-timeout" | "endpoint-not-found" | "unknown") => ({
-    connect: async (): Promise<IpcConnection> => {
-      throw new IpcError(code, code, undefined);
-    },
-  });
-
-  it("refuses when the endpoint accepts a connection", async () => {
-    const ipc = new MemoryIpcTransport();
-    await ipc.listen(endpoint, () => undefined);
-    await expect(refuseWhenDaemonAnswers({ connector: ipc, endpoint })).rejects.toBeInstanceOf(
-      DaemonAlreadyRunningError,
-    );
-  });
-
-  it("refuses when connecting times out, since a held endpoint has a live server", async () => {
-    await expect(
-      refuseWhenDaemonAnswers({ connector: failingWith("connection-timeout"), endpoint }),
-    ).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
-  });
-
-  it("passes a missing endpoint and propagates an unknown failure", async () => {
-    await expect(
-      refuseWhenDaemonAnswers({ connector: failingWith("endpoint-not-found"), endpoint }),
-    ).resolves.toBeUndefined();
-    await expect(
-      refuseWhenDaemonAnswers({ connector: failingWith("unknown"), endpoint }),
-    ).rejects.toThrow("unknown");
   });
 });
 
