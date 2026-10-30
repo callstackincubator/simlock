@@ -185,13 +185,15 @@ class AndroidDeviceInput implements DeviceInput {
     ];
   }
 
+  // why: a rotation is dropped: scrcpy's only one (ROTATE_DEVICE) toggles between rotations 0 and 1
+  // through the window manager's rotation lock, so it can name neither upside down nor a landscape side.
   send(message: InputMessage): void {
     const size = this.#config;
     if (size === undefined) return;
     if (message.kind === "touch") this.#write(touchPacket(message, size));
     else if (message.kind === "scroll") this.#write(scrollPacket(message, size));
     else if (message.kind === "button") this.#press(BUTTON_KEYCODES[message.button]);
-    else this.#key(message.type, message.usage);
+    else if (message.kind === "key") this.#key(message.type, message.usage);
   }
 
   #press(keycode: number): void {
