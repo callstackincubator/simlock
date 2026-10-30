@@ -8,7 +8,7 @@ Imported by: daemon (`daemon/main.ts`, for a worker and for a gateway).
 ## How it works
 
 1. `daemon/main.ts` builds the probe: `productionHostLoadProbe` in `ports/host-load.ts`
-   (`DarwinHostLoadProbe` on macOS: `os.cpus()`, `sysctl`; `LinuxHostLoadProbe` elsewhere).
+   (`DarwinHostLoadProbe` on macOS: `os.cpus()`, `sysctl`; `WindowsHostLoadProbe` on Windows: `os.cpus()`, `os.freemem()`, the page file from one PowerShell query kept 5 min; `LinuxHostLoadProbe` elsewhere).
    `hostLoadProbe: null` turns sampling off; no sampler, no `load` field.
 2. `DaemonServer` calls `start()` at start and `dispose()` at stop.
 3. Each tick calls `probe.read()`, bounded at 10 s. One read in flight at a time.
