@@ -4,7 +4,7 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - "@agent-device/proxy@0.21.28"
 overrides:
-  "@hono/node-server": 2.0.10
+  "@hono/node-server": 2.1.5
   ip-address: ">=10.3.1"
 packageExtensions:
   # dependency-cruiser parses TypeScript with the typescript package beside it, and supports only typescript <7; the project itself builds with 7.
