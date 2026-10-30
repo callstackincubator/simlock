@@ -4,6 +4,7 @@ export type IpcErrorCode =
   | "address-in-use"
   | "connection-refused"
   | "endpoint-not-found"
+  | "connection-timeout"
   | "unknown";
 
 export class IpcError extends Error {
@@ -86,7 +87,7 @@ export class NodeIpcTransport implements IpcConnector, IpcListenerFactory {
           socket.off("error", onError);
           reject(
             new IpcError(
-              "unknown",
+              "connection-timeout",
               `Timed out connecting to ${endpoint} after ${this.#connectTimeoutMs} ms`,
               undefined,
             ),
