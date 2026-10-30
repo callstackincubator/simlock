@@ -28,17 +28,24 @@ async function run(
   const client = await connectDaemonClient(environment, token);
   try {
     const response = await client.runDoctor({ fix: values.fix === true, purgeOrphans });
-    writeDriverAdvisoryWarnings(environment, response);
-    writeUnavailableDrivers(environment, response);
-    writeMissingPrerequisites(environment, response);
-    writeBrokenService(environment, response);
-    writeUnreachableWarmTargets(environment, response);
-    writeModuleUnavailable(environment, response);
+    writeDoctorFindings(environment, response);
     writeResult((value) => environment.stdout.write(value), response);
     return 0;
   } finally {
     await client.close();
   }
+}
+
+function writeDoctorFindings(
+  environment: CommandContext["environment"],
+  report: DoctorReport,
+): void {
+  writeDriverAdvisoryWarnings(environment, report);
+  writeUnavailableDrivers(environment, report);
+  writeMissingPrerequisites(environment, report);
+  writeBrokenService(environment, report);
+  writeUnreachableWarmTargets(environment, report);
+  writeModuleUnavailable(environment, report);
 }
 
 function writeDriverAdvisoryWarnings(
@@ -112,4 +119,4 @@ function writeModuleUnavailable(
   }
 }
 
-export { run };
+export { run, writeDoctorFindings };

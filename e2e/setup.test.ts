@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -25,7 +24,7 @@ async function fakeClaude(env: TestEnv): Promise<{ bin: string; record: string }
 }
 
 describe("simlock setup", () => {
-  it("writes the skill where each tool reads it and connects MCP through the tool's command, for real, and starts no daemon", async () => {
+  it("writes the skill where each tool reads it and connects MCP through the tool's command, for real, and reports the machine", async () => {
     const env = await withDaemon({ mode: "auto" });
     const { home, project } = await operatorDirectories(env);
 
@@ -35,13 +34,12 @@ describe("simlock setup", () => {
     });
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(
+      /^machine {6}(not checked: .+|(ios (ok|missing|unavailable)[^,\n]*, )?android .+)$/m,
+    );
     expect(await readFile(join(home, ".claude/skills/simlock/SKILL.md"), "utf8")).toBe(
       renderSkill(),
     );
-    // why: `mode: "auto"` leaves the daemon unstarted; any daemon-touching command would have
-    // auto-started one and left its socket here.
-    expect(existsSync(env.socketPath)).toBe(false);
 
     const { bin, record } = await fakeClaude(env);
     const mcp = await env.cli(["setup", "--tool", "claude-code", "--mcp"], {
