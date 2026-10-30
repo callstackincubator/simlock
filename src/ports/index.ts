@@ -146,6 +146,7 @@ export {
   LinuxHostLoadProbe,
   type MemoryCounters,
   productionHostLoadProbe,
+  WindowsHostLoadProbe,
 } from "./host-load.js";
 export {
   filterSqliteExperimentalWarning,

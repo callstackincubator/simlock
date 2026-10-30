@@ -12,6 +12,7 @@ import {
   NodeProcessRunner,
   productionHostLoadProbe,
   ScriptedProcessRunner,
+  WindowsHostLoadProbe,
   type CpuTimes,
   type HostLoadCounters,
 } from "./index.js";
@@ -719,7 +720,10 @@ describe("productionHostLoadProbe", () => {
     vi.restoreAllMocks();
   });
 
-  it("builds the macOS probe on darwin and the Linux probe elsewhere", () => {
+  it("builds the macOS probe on darwin, the Windows probe on win32 and the Linux probe elsewhere", () => {
+    expect(productionHostLoadProbe({ dataDirectory: tmpdir(), platform: "win32" })).toBeInstanceOf(
+      WindowsHostLoadProbe,
+    );
     expect(productionHostLoadProbe({ dataDirectory: tmpdir(), platform: "darwin" })).toBeInstanceOf(
       DarwinHostLoadProbe,
     );
@@ -802,4 +806,101 @@ describe("productionHostLoadProbe", () => {
       expect(counters.disk?.totalBytes).toBeGreaterThan(0);
     },
   );
+});
+
+describe("WindowsHostLoadProbe", () => {
+  const GIB = 1024 * MIB;
+  const PAGEFILE_QUERY = [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    /Win32_PageFileUsage/,
+  ] as const;
+
+  function pageFileRunner(
+    ...answers: readonly { readonly stdout: string; readonly code?: number | null }[]
+  ): ScriptedProcessRunner {
+    return new ScriptedProcessRunner(
+      answers.map(({ code = 0, stdout }) => ({
+        match: { args: PAGEFILE_QUERY, command: "powershell.exe" },
+        result: { code, stderr: "", stdout },
+      })),
+    );
+  }
+
+  function windowsProbe(
+    processRunner: ScriptedProcessRunner,
+    options: { readonly now?: () => number; readonly freemem?: number } = {},
+  ): WindowsHostLoadProbe {
+    return new WindowsHostLoadProbe({
+      cpus: () => [{ times: CORE }, { times: CORE }],
+      dataDirectory: "C:/data",
+      filesystem: new MemoryFilesystem(5_000),
+      freemem: () => options.freemem ?? 3 * GIB,
+      now: options.now ?? (() => 0),
+      processRunner,
+      totalmem: () => 32 * GIB,
+    });
+  }
+
+  it("reads CPU from the per-core times, memory from Node, and swap from the page file in MiB, in one bounded query", async () => {
+    const processRunner = pageFileRunner({ stdout: "2802\r\n" });
+
+    const counters = await windowsProbe(processRunner).read();
+
+    expect(counters).toEqual({
+      cpu: { busyTime: 330, cores: 2, limited: false, totalTime: 930 },
+      disk: { freeBytes: 5_000, totalBytes: 5_000 },
+      memory: {
+        availableBytes: 3 * GIB,
+        limited: false,
+        swapUsedBytes: 2802 * MIB,
+        totalBytes: 32 * GIB,
+      },
+    });
+    expect(processRunner.calls).toHaveLength(1);
+    expect(processRunner.calls[0]?.options.timeoutMs).toBe(5_000);
+  });
+
+  it("asks for the page file again only once its last answer is 5 minutes old", async () => {
+    let now = 0;
+    const processRunner = pageFileRunner({ stdout: "100" }, { stdout: "200" });
+    const probe = windowsProbe(processRunner, { now: () => now });
+
+    await probe.read();
+    now = 5 * 60_000 - 1;
+    const cached = await probe.read();
+    now = 5 * 60_000;
+    const fresh = await probe.read();
+
+    expect(cached.memory?.swapUsedBytes).toBe(100 * MIB);
+    expect(fresh.memory?.swapUsedBytes).toBe(200 * MIB);
+    expect(processRunner.calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["PowerShell exits non-zero", { code: 1, stdout: "" }],
+    ["PowerShell times out", { code: null, stdout: "" }],
+    ["the answer is not a whole number", { stdout: "n/a" }],
+  ] as const)("leaves memory out, and still reads CPU and disk, when %s", async (_why, answer) => {
+    const counters = await windowsProbe(pageFileRunner(answer)).read();
+
+    expect(counters.memory).toBeUndefined();
+    expect(counters.cpu?.cores).toBe(2);
+    expect(counters.disk).toEqual({ freeBytes: 5_000, totalBytes: 5_000 });
+  });
+
+  it("reports no swap used on a machine with no page file", async () => {
+    const counters = await windowsProbe(pageFileRunner({ stdout: "0\r\n" })).read();
+
+    expect(counters.memory?.swapUsedBytes).toBe(0);
+  });
+
+  it("leaves memory out when Node reports more free memory than there is", async () => {
+    const counters = await windowsProbe(pageFileRunner({ stdout: "0" }), {
+      freemem: 33 * GIB,
+    }).read();
+
+    expect(counters.memory).toBeUndefined();
+  });
 });

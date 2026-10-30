@@ -1,4 +1,4 @@
-import { cpus } from "node:os";
+import { cpus, freemem, totalmem } from "node:os";
 
 import { type Filesystem, NodeFilesystem } from "./filesystem.js";
 import { NodeProcessRunner, type ProcessRunner } from "./process-runner.js";
@@ -63,21 +63,7 @@ export class DarwinHostLoadProbe implements HostLoadProbe {
   }
 
   async #cpu(): Promise<CpuCounters | undefined> {
-    try {
-      const cores = this.options.cpus();
-      if (cores.length === 0) return undefined;
-      let busyTime = 0;
-      let totalTime = 0;
-      for (const { times } of cores) {
-        const busy = times.user + times.nice + times.sys + times.irq;
-        busyTime += busy;
-        totalTime += busy + times.idle;
-      }
-      if (![busyTime, totalTime].every(Number.isFinite)) return undefined;
-      return { busyTime, cores: cores.length, limited: false, totalTime };
-    } catch {
-      return undefined;
-    }
+    return machineCpu(this.options.cpus);
   }
 
   async #memory(): Promise<MemoryCounters | undefined> {
@@ -105,6 +91,95 @@ export class DarwinHostLoadProbe implements HostLoadProbe {
     }
   }
 }
+
+// why: Node's per-core times, which macOS and Windows both report; the busy share is a ratio of two reads.
+function machineCpu(cpus: () => readonly { readonly times: CpuTimes }[]): CpuCounters | undefined {
+  try {
+    const cores = cpus();
+    if (cores.length === 0) return undefined;
+    let busyTime = 0;
+    let totalTime = 0;
+    for (const { times } of cores) {
+      const busy = times.user + times.nice + times.sys + times.irq;
+      busyTime += busy;
+      totalTime += busy + times.idle;
+    }
+    if (![busyTime, totalTime].every(Number.isFinite)) return undefined;
+    return { busyTime, cores: cores.length, limited: false, totalTime };
+  } catch {
+    return undefined;
+  }
+}
+
+export interface WindowsHostLoadProbeOptions {
+  readonly processRunner: ProcessRunner;
+  readonly filesystem: Pick<Filesystem, "diskSpace">;
+  readonly dataDirectory: string;
+  readonly cpus: () => readonly { readonly times: CpuTimes }[];
+  readonly totalmem: () => number;
+  readonly freemem: () => number;
+  readonly now: () => number;
+}
+
+/**
+ * why: Windows has neither `/proc` nor `sysctl`. Node reads the CPU times and the physical memory
+ * itself (`os.freemem()` is what Windows counts as available), but not the page file, so swap comes
+ * from one PowerShell CIM query. That costs about a second, so its answer is kept for
+ * `PAGEFILE_REFRESH_MS`: swap moves slowly, and the sampler reads every 15 s. A query that fails
+ * leaves memory out, as an unreadable swap line does on macOS.
+ */
+export class WindowsHostLoadProbe implements HostLoadProbe {
+  #pageFile: { readonly usedBytes: number; readonly readAt: number } | undefined;
+
+  constructor(private readonly options: WindowsHostLoadProbeOptions) {}
+
+  async read(): Promise<HostLoadCounters> {
+    const [cpu, memory, disk] = await Promise.all([
+      machineCpu(this.options.cpus),
+      this.#memory(),
+      readDisk(this.options.filesystem, this.options.dataDirectory),
+    ]);
+    return { ...(cpu && { cpu }), ...(memory && { memory }), ...(disk && { disk }) };
+  }
+
+  async #memory(): Promise<MemoryCounters | undefined> {
+    try {
+      const totalBytes = this.options.totalmem();
+      const availableBytes = this.options.freemem();
+      if (!(totalBytes > 0) || !(availableBytes >= 0) || availableBytes > totalBytes)
+        return undefined;
+      const swapUsedBytes = await this.#pageFileUsed();
+      if (swapUsedBytes === undefined) return undefined;
+      return { availableBytes, limited: false, swapUsedBytes, totalBytes };
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #pageFileUsed(): Promise<number | undefined> {
+    const now = this.options.now();
+    if (this.#pageFile !== undefined && now - this.#pageFile.readAt < PAGEFILE_REFRESH_MS) {
+      return this.#pageFile.usedBytes;
+    }
+    const result = await this.options.processRunner.run("powershell.exe", PAGEFILE_ARGS, {
+      timeoutMs: PAGEFILE_TIMEOUT_MS,
+    });
+    const mebibytes = result.stdout.trim();
+    if (result.code !== 0 || !/^\d+$/.test(mebibytes)) return undefined;
+    this.#pageFile = { readAt: now, usedBytes: Number(mebibytes) * 1024 * 1024 };
+    return this.#pageFile.usedBytes;
+  }
+}
+
+// why: `[long]` turns a machine with no page file (no instances, a null sum) into 0, not an empty line.
+const PAGEFILE_ARGS = [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "[long](Get-CimInstance Win32_PageFileUsage | Measure-Object -Property CurrentUsage -Sum).Sum",
+];
+const PAGEFILE_TIMEOUT_MS = 5_000;
+const PAGEFILE_REFRESH_MS = 5 * 60_000;
 
 const SYSCTL_ARGS = [
   "-n",
@@ -383,6 +458,17 @@ export function productionHostLoadProbe(options: ProductionHostLoadProbeOptions)
       dataDirectory: options.dataDirectory,
       filesystem,
       processRunner: new NodeProcessRunner(),
+    });
+  }
+  if (options.platform === "win32") {
+    return new WindowsHostLoadProbe({
+      cpus,
+      dataDirectory: options.dataDirectory,
+      filesystem,
+      freemem,
+      now: () => Date.now(),
+      processRunner: new NodeProcessRunner(),
+      totalmem,
     });
   }
   return new LinuxHostLoadProbe({
