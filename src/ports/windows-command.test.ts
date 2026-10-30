@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -108,4 +108,38 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
       await rm(directory, { force: true, recursive: true });
     }
   });
+
+  it("ends what a batch file started when its run times out, not only the cmd.exe running it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock bat "));
+    const pidFile = join(directory, "child.pid");
+    const script = join(directory, "long running.bat");
+    await writeFile(
+      script,
+      `@echo off\r\n"${process.execPath}" -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)" "${pidFile}"\r\n`,
+    );
+    let childPid: number | undefined;
+    try {
+      const run = new NodeProcessRunner().run(script, [], { timeoutMs: 1_000 });
+      await expect
+        .poll(() => readFile(pidFile, "utf8").catch(() => ""), { timeout: 5_000 })
+        .not.toBe("");
+      childPid = Number(await readFile(pidFile, "utf8"));
+
+      await expect(run).resolves.toMatchObject({ code: null });
+
+      await expect.poll(() => isAlive(childPid ?? 0), { timeout: 5_000 }).toBe(false);
+    } finally {
+      if (childPid !== undefined && isAlive(childPid)) process.kill(childPid);
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
