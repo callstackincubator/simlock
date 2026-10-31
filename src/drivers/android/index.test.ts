@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
+  DeviceTcpError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
@@ -14,6 +15,7 @@ import {
 import {
   FakeClock,
   FakeProcessSupervisor,
+  FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
   type Filesystem,
@@ -3359,6 +3361,143 @@ describe("AndroidDriver", () => {
   });
 });
 
+describe("AndroidDriver deviceTcp", () => {
+  const emulator = {
+    address: "emulator-5586",
+    deviceId: "simlock_one",
+    driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
+    physical: false,
+  } as const;
+  const reverseArgs = (port: number) => [
+    "reverse",
+    "--no-rebind",
+    "tcp:5173",
+    `tcp:${String(port)}`,
+  ];
+  const ok = { code: 0, stderr: "", stdout: "" };
+  const adb = (...args: string[]) => ({ args, command: binaries.adb });
+  const signal = () => new AbortController().signal;
+
+  async function driverWith(
+    expectations: ScriptedProcessExpectation[],
+    listeners = new FakeTcpListenerFactory(),
+    tcpProbe?: FakeTcpProbe,
+  ) {
+    const runner = new ScriptedProcessRunner(expectations);
+    const driver = await createDriver(await androidFilesystem(), runner, {
+      tcpListener: listeners,
+      ...(tcpProbe === undefined ? {} : { tcpProbe }),
+    });
+    return { driver, listeners, runner };
+  }
+
+  it("sets adb reverse --no-rebind to a loopback listener in 47000-47999 and removes it on close, as an emulator or a phone", async () => {
+    const { driver, listeners, runner } = await driverWith([
+      { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_002)), result: ok },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: ok,
+      },
+    ]);
+    listeners.busy.add(47_000).add(47_001);
+    const reverse = await driver.deviceTcp?.reverse(emulator, 5173, signal());
+    expect(reverse?.hostPort).toBe(47_002);
+    expect(runner.calls[0]?.options.env).toEqual(scopedEnv);
+    const arrived: unknown[] = [];
+    reverse?.onConnection((stream) => arrived.push(stream));
+    listeners.listeners[0]?.connect();
+    expect(arrived).toHaveLength(1);
+    await reverse?.close();
+    expect(runner.calls[1]?.args).toEqual([
+      "-P",
+      "5038",
+      "-s",
+      "emulator-5586",
+      "reverse",
+      "--remove",
+      "tcp:5173",
+    ]);
+    expect(listeners.listeners[0]?.closed).toBe(true);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phoneRun = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, ...reverseArgs(47_000)),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    const phone = await phoneRun.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5173, signal());
+    expect(phone?.hostPort).toBe(47_000);
+    expect(phoneRun.runner.calls[1]?.options.env?.ANDROID_ADB_SERVER_PORT).toBe("5037");
+
+    const stuck = await driverWith([
+      { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)), result: ok },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: { code: 1, stderr: "device offline", stdout: "" },
+      },
+    ]);
+    const held = await stuck.driver.deviceTcp?.reverse(emulator, 5173, signal());
+    const delivered: unknown[] = [];
+    held?.onConnection((stream) => delivered.push(stream));
+    await held?.close().catch(() => undefined);
+    expect(stuck.listeners.listeners[0]?.closed).toBe(false);
+    const late = stuck.listeners.listeners[0]?.connect();
+    expect({ closed: late?.closed, delivered: delivered.length }).toEqual({
+      closed: true,
+      delivered: 0,
+    });
+  });
+
+  it("refuses a reverse with TUNNEL_PORT_IN_USE when adb cannot rebind, TUNNEL_FAILED for any other adb failure or when every tunnel port is busy, and frees the port it took", async () => {
+    const cannotRebind = await driverWith([
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)),
+        result: { code: 1, stderr: "adb.exe: error: cannot rebind existing socket", stdout: "" },
+      },
+    ]);
+    await expect(cannotRebind.driver.deviceTcp?.reverse(emulator, 5173, signal())).rejects.toEqual(
+      expect.objectContaining({ code: "TUNNEL_PORT_IN_USE" }),
+    );
+    expect(cannotRebind.listeners.listeners[0]?.closed).toBe(true);
+
+    const failed = await driverWith([
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)),
+        result: { code: 1, stderr: "x".repeat(300), stdout: "" },
+      },
+    ]);
+    const error = await failed.driver.deviceTcp
+      ?.reverse(emulator, 5173, signal())
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DeviceTcpError);
+    expect(error).toEqual(
+      expect.objectContaining({ code: "TUNNEL_FAILED", message: "x".repeat(200) }),
+    );
+    expect(failed.listeners.listeners[0]?.closed).toBe(true);
+
+    const busy = new FakeTcpListenerFactory();
+    for (let port = 47_000; port < 48_000; port += 1) busy.busy.add(port);
+    const exhausted = await driverWith([], busy);
+    await expect(exhausted.driver.deviceTcp?.reverse(emulator, 5173, signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: "no free tunnel port on the worker",
+      }),
+    );
+    expect(exhausted.runner.calls).toEqual([]);
+  });
+});
+
 describe("AndroidDriver screen capture", () => {
   const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
   const running = {
@@ -6254,6 +6393,7 @@ async function createDriver(
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
     readonly scrcpyServerPath?: string;
+    readonly tcpListener?: FakeTcpListenerFactory;
     readonly tcpProbe?: FakeTcpProbe;
     readonly tcpStreamConnector?: FakeTcpStreamConnector;
   } = {},

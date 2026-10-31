@@ -13,6 +13,22 @@ export interface TcpStream {
   close(): void;
 }
 
+// why: after connect or accept an error ends the readable through `Readable.toWeb`; a listener must
+// still exist or Node raises it as an uncaught exception and takes the daemon down.
+export function tcpStreamOf(socket: Socket): TcpStream {
+  socket.on("error", () => undefined);
+  return {
+    close: () => {
+      socket.destroy();
+    },
+    readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
+    write: (bytes) =>
+      new Promise<void>((done, failed) => {
+        socket.write(bytes, (error) => (error ? failed(error) : done()));
+      }),
+  };
+}
+
 export class NodeTcpStreamConnector implements TcpStreamConnector {
   connect(port: number, timeoutMs: number): Promise<TcpStream> {
     return new Promise<TcpStream>((resolve, reject) => {
@@ -34,19 +50,7 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
       socket.once("connect", () => {
         socket.setTimeout(0);
         socket.off("error", fail);
-        // why: after connect an error ends the readable through `Readable.toWeb`; a listener must
-        // still exist or Node raises it as an uncaught exception and takes the daemon down.
-        socket.on("error", () => undefined);
-        resolve({
-          close: () => {
-            socket.destroy();
-          },
-          readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
-          write: (bytes) =>
-            new Promise<void>((done, failed) => {
-              socket.write(bytes, (error) => (error ? failed(error) : done()));
-            }),
-        });
+        resolve(tcpStreamOf(socket));
       });
     });
   }

@@ -103,6 +103,7 @@ import {
   type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   daemonDataDirectory,
   resolveDaemonSocketPath,
@@ -1424,6 +1425,7 @@ async function discoverAndroidDriver(
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,
       tcpStreamConnector: new NodeTcpStreamConnector(),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the

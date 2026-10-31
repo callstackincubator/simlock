@@ -1,6 +1,17 @@
 import type { TcpStream } from "../ports/index.js";
 import type { PhysicalDriverDevice, VirtualDriverDevice } from "./driver.js";
 
+// why: the two refusals a driver can name; the tunnel module passes the code on to the holder.
+export class DeviceTcpError extends Error {
+  constructor(
+    readonly code: "TUNNEL_PORT_IN_USE" | "TUNNEL_FAILED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "DeviceTcpError";
+  }
+}
+
 // why: one device port reversed to a loopback listener on the worker; every connection the device
 // opens to that port arrives on `onConnection`, until `close` removes the rule and the listener.
 export interface DeviceReverse {
