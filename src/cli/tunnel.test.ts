@@ -9,6 +9,7 @@ import {
   FakeSystemStats,
   FakeTcpStreamConnector,
   FakeWebSocketClientConnector,
+  WebSocketRefusedError,
   MemoryFilesystem,
   MemoryIpcTransport,
 } from "../ports/index.js";
@@ -372,5 +373,173 @@ describe("simlock tunnel carrying connections", () => {
     });
     page.cli.signals.emit("SIGINT");
     expect(await page.exit).toBe(0);
+  });
+});
+
+function refusedFrame(code: string, message: string): Uint8Array {
+  return encodeTunnelFrame(TUNNEL_TAG.refused, 0, JSON.stringify({ code, message }));
+}
+
+function errorBody(code: string, message: string) {
+  return { error: { code, message } };
+}
+
+describe("simlock tunnel that is refused or loses its worker", () => {
+  it("exits with the worker's code and one JSON line, and a Ctrl-C closes and waits at most 2 s", async () => {
+    const line = (cli: ReturnType<typeof command>) => JSON.parse(cli.err.join("")) as unknown;
+    const upgrades: readonly {
+      readonly refusal: WebSocketRefusedError;
+      readonly code: string;
+      readonly message: string;
+    }[] = [
+      {
+        code: "UNAUTHENTICATED",
+        message: "No valid token",
+        refusal: new WebSocketRefusedError(
+          401,
+          JSON.stringify(errorBody("UNAUTHENTICATED", "No valid token")),
+        ),
+      },
+      {
+        code: "UNKNOWN_LEASE",
+        message: "Unknown lease L1",
+        refusal: new WebSocketRefusedError(
+          404,
+          JSON.stringify(errorBody("UNKNOWN_LEASE", "Unknown lease L1")),
+        ),
+      },
+      {
+        code: "TUNNEL_UNAVAILABLE",
+        message: "Tunnels are off",
+        refusal: new WebSocketRefusedError(
+          503,
+          JSON.stringify(errorBody("TUNNEL_UNAVAILABLE", "Tunnels are off")),
+        ),
+      },
+      {
+        code: "UNKNOWN_LEASE",
+        message: "Lease L1 is not known to this worker",
+        refusal: new WebSocketRefusedError(404, "Not Found"),
+      },
+    ];
+    for (const { code, message, refusal } of upgrades) {
+      const cli = command(ENV);
+      cli.webSocket.failure = refusal;
+      expect(await cli.run(["tunnel", "reverse", "5173", "--lease", "L1"])).toBe(1);
+      expect(line(cli)).toEqual(errorBody(code, message));
+    }
+
+    const lookups: readonly {
+      readonly identity?: { status: number; body: unknown };
+      readonly code: string;
+      readonly message: string;
+    }[] = [
+      {
+        code: "UNAUTHENTICATED",
+        identity: { body: errorBody("UNAUTHENTICATED", "No valid token"), status: 401 },
+        message: "No valid token",
+      },
+      {
+        code: "FORBIDDEN",
+        identity: { body: errorBody("FORBIDDEN", "Not allowed"), status: 403 },
+        message: "Not allowed",
+      },
+      {
+        code: "TUNNEL_DISCONNECTED",
+        message: "No answer from http://127.0.0.1:7300",
+      },
+    ];
+    for (const { code, identity, message } of lookups) {
+      const cli = command(ENV);
+      if (identity !== undefined)
+        cli.httpJson.answers.set("http://127.0.0.1:7300/v1/identity", identity);
+      expect(await cli.run(["tunnel", "reverse", "5173"])).toBe(1);
+      expect(line(cli)).toEqual(errorBody(code, message));
+      expect(cli.webSocket.connections).toEqual([]);
+    }
+
+    const refused = await started(["reverse", "80"]);
+    refused.peer.receive(refusedFrame("TUNNEL_BAD_PORT", "Device port 80 is below 1024"));
+    expect(await refused.exit).toBe(1);
+    expect(line(refused.cli)).toEqual(
+      errorBody("TUNNEL_BAD_PORT", "Lease L1: Device port 80 is below 1024"),
+    );
+
+    const losses: readonly {
+      readonly drop: [number, string];
+      readonly exit: number;
+      readonly error: unknown;
+    }[] = [
+      {
+        drop: [4001, "device released"],
+        error: errorBody("TUNNEL_LEASE_ENDED", "Lease L1 ended: device released"),
+        exit: 14,
+      },
+      ...[1011, 1001, 1006].map((code) => ({
+        drop: [code, ""] as [number, string],
+        error: errorBody("TUNNEL_DISCONNECTED", "Lease L1: the connection to the worker was lost"),
+        exit: 1,
+      })),
+    ];
+    for (const { drop, error, exit } of losses) {
+      const lost = await started(["reverse", "5173"]);
+      lost.peer.dropped(...drop);
+      expect(await lost.exit).toBe(exit);
+      expect(line(lost.cli)).toEqual(error);
+    }
+
+    const silent = await started(["reverse", "5173"]);
+    silent.cli.clock.advance(30_000);
+    silent.peer.ping();
+    silent.cli.clock.advance(44_999);
+    expect(silent.cli.err).toEqual([]);
+    silent.peer.receive(open(1, 5173));
+    silent.cli.clock.advance(44_999);
+    expect(silent.cli.err).toEqual([]);
+    silent.cli.clock.advance(1);
+    expect(await silent.exit).toBe(1);
+    expect(line(silent.cli)).toEqual(
+      errorBody("TUNNEL_DISCONNECTED", "Lease L1: nothing was heard from the worker for 45 s"),
+    );
+
+    const noReady = command(ENV);
+    const noReadyExit = noReady.run(["tunnel", "reverse", "5173", "--lease", "L1"]);
+    await vi.waitFor(() => expect(noReady.webSocket.connections).toHaveLength(1));
+    const quietPeer = noReady.webSocket.connections[0]?.peer;
+    for (let at = 0; at < 89_999; at += 15_000) {
+      noReady.clock.advance(Math.min(15_000, 89_999 - at));
+      quietPeer?.ping();
+    }
+    expect(noReady.err).toEqual([]);
+    noReady.clock.advance(1);
+    expect(await noReadyExit).toBe(1);
+    expect(line(noReady)).toEqual(
+      errorBody("TUNNEL_DISCONNECTED", "Lease L1: no READY from the worker within 90 s"),
+    );
+
+    const idle = await started(["reverse", "5173"]);
+    for (let at = 0; at < 90_000; at += 15_000) {
+      idle.cli.clock.advance(15_000);
+      idle.peer.ping();
+    }
+    expect(idle.cli.err).toEqual([]);
+    expect(idle.peer.closedWith).toBeUndefined();
+    idle.cli.signals.emit("SIGINT");
+    expect(idle.peer.closedWith?.code).toBe(1000);
+    let settled = false;
+    void idle.exit.then(() => {
+      settled = true;
+    });
+    idle.cli.clock.advance(1_999);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    idle.cli.clock.advance(1);
+    expect(await idle.exit).toBe(0);
+
+    const term = await started(["reverse", "5173"]);
+    term.cli.signals.emit("SIGTERM");
+    expect(term.peer.closedWith?.code).toBe(1000);
+    term.peer.dropped(1000, "");
+    expect(await term.exit).toBe(0);
   });
 });
