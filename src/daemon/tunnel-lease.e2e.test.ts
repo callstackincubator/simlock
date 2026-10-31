@@ -42,6 +42,8 @@ interface OpenedSocket {
   readonly code: string | undefined;
   readonly messages: Buffer[];
   readonly socket: WebSocket;
+  // why: how the socket closed, once it has; read it again after waiting, it changes.
+  readonly closed: { code: number; reason: string } | undefined;
 }
 
 const sockets: WebSocket[] = [];
@@ -53,6 +55,10 @@ async function openTunnel(url: string, token: string | undefined): Promise<Opene
   sockets.push(socket);
   const messages: Buffer[] = [];
   socket.on("message", (data) => messages.push(data as Buffer));
+  const state: { closed: { code: number; reason: string } | undefined } = { closed: undefined };
+  socket.on("close", (code, reason) => {
+    state.closed = { code, reason: reason.toString("utf8") };
+  });
   const outcome = await new Promise<{ status: number; code: string | undefined }>(
     (resolve, reject) => {
       socket.once("open", () => resolve({ code: undefined, status: 101 }));
@@ -74,7 +80,14 @@ async function openTunnel(url: string, token: string | undefined): Promise<Opene
       socket.once("error", reject);
     },
   );
-  return { ...outcome, messages, socket };
+  return {
+    ...outcome,
+    get closed() {
+      return state.closed;
+    },
+    messages,
+    socket,
+  };
 }
 
 function hello(devicePort: number): Buffer {
@@ -264,6 +277,22 @@ describe("a lease's tunnel socket", () => {
     async () => {
       const through = await fleet({ gatewayTunnel: true, workerTunnel: true });
       await expectReady(through.url(), through.holder, 5173);
+
+      const carried = await openTunnel(through.url(), through.holder);
+      carried.socket.send(hello(5174));
+      await vi.waitFor(() => expect(carried.messages).toHaveLength(1), { timeout: 10_000 });
+      const device = through.deviceTcp.connect(5174);
+      await vi.waitFor(() => expect(carried.messages).toHaveLength(2), { timeout: 10_000 });
+      expect(carried.messages[1]?.[0]).toBe(0x02);
+      device.send(new Uint8Array(65_536).fill(7));
+      await vi.waitFor(() => expect(carried.messages).toHaveLength(3), { timeout: 10_000 });
+      expect(carried.messages[2]?.length).toBe(65_541);
+      expect(carried.messages[2]?.[0]).toBe(0x03);
+
+      const refusedHello = await openTunnel(through.url(), through.holder);
+      refusedHello.socket.send(hello(80));
+      await vi.waitFor(() => expect(refusedHello.closed?.code).toBe(4003), { timeout: 10_000 });
+      expect(refusedHello.messages.map((entry) => entry[0])).toEqual([0x82]);
 
       const workerOff = await fleet({ gatewayTunnel: true, workerTunnel: false });
       const refused = await openTunnel(workerOff.url(), workerOff.holder);
