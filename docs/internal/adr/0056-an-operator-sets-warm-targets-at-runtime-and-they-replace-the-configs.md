@@ -110,8 +110,8 @@ for a running slot or the reserve may displace (ADR 0051 §2).
 ### 4. A change that keeps fewer devices shuts them down at once
 
 `warm.set` stores the rows and answers at once; it never waits for a pass.
-Every pass starts by reading the stored rows. When they differ from the
-rows the last pass that planned used, the pass takes the devices that
+Every pass starts by reading the stored rows and `learn`. When they differ
+from those the last pass that planned used, the pass takes the devices that
 last plan kept (`targeted()`), resolves the new effective list, and takes
 them again. The devices kept before and not after are the **lowered
 set**. In the same pass it shuts down each device of the set that is
@@ -121,7 +121,7 @@ names the reason `target-lowered`; `device.shutdown` carries no reason, as
 today. The idle rules (`idle-destroy`) then delete it, as any shut-down
 device.
 
-The rows count as used only once a pass has planned with them. Two
+The rows and `learn` count as used only once a pass has planned with them. Two
 changes between passes are compared together, from the rows of the last
 plan. A pass that does not plan (under nuke, while stopping) or that fails
 leaves the comparison to the next one that plans. After a restart there is
