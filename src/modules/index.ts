@@ -24,7 +24,6 @@ export type {
   ModuleRegistryView,
   ModuleRelayTarget,
   ModuleRelayTwoWayTarget,
-  ModuleTwoWayPipe,
   ModuleTwoWayRelay,
   ModuleTokenRecord,
   ModuleTokens,
