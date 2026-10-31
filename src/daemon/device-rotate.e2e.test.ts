@@ -260,7 +260,7 @@ describe("device.rotate", () => {
   );
 
   it(
-    "refuses a holder's rotate with INPUT_UNAVAILABLE and the reason when the helper cannot start or the write fails",
+    "refuses a holder's rotate with INPUT_UNAVAILABLE and the reason when the helper cannot start or the write fails, and closes a socket whose write fails 1013 while the daemon keeps running",
     { timeout: 60_000 },
     async () => {
       const screen = { height: 2556, orientation: "portrait", width: 1179 } as const;
@@ -327,6 +327,16 @@ describe("device.rotate", () => {
         ).toEqual(input.opened.map(() => 1));
         await daemons.pop()?.stop("test");
       }
+
+      const failing = new FakeInputFactory(screen);
+      failing.sendFailure = new Error("pipe closed");
+      const { daemon, leaseId, openSocket, session } = await holderWithSocketAccess(failing);
+      const socket = await openSocket();
+      sockets.at(-1)?.send(Buffer.concat([Buffer.from([0x04]), Buffer.from('{"button":"lock"}')]));
+      await vi.waitFor(() => expect(socket.code).toBe(1013), { timeout: 10_000 });
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation: "portrait" }, session),
+      ).rejects.toMatchObject({ code: "INPUT_UNAVAILABLE", details: { reason: "pipe closed" } });
     },
   );
 
