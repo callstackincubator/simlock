@@ -8,6 +8,7 @@ export const TUNNEL_TAG = {
   open: 0x02,
   ready: 0x81,
   refused: 0x82,
+  reset: 0x06,
 } as const;
 
 export interface TunnelFrame {
@@ -47,3 +48,5 @@ export const TUNNEL_REFUSED_CLOSE = 4003;
 
 export const TUNNEL_WINDOW_BYTES = 262_144;
 export const TUNNEL_MAX_DATA_BYTES = 65_536;
+export const TUNNEL_WINDOW_LIMIT = 2 ** 31;
+export const TUNNEL_HELLO_MAX_BYTES = 4096;
