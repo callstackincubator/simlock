@@ -180,7 +180,9 @@ export function createTunnelSessions(options: {
           if (connection.closed) return;
         }
         if (pending === undefined) {
-          const step = await reader.read();
+          // why: a forwarded connection whose device connect failed has a readable that errors; the RESET it got is its whole ending.
+          const step = await reader.read().catch(() => undefined);
+          if (step === undefined) return;
           if (step.done) {
             socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
             connection.deviceEnded = true;
@@ -213,17 +215,27 @@ export function createTunnelSessions(options: {
     function openForward(conn: number, payload: Uint8Array): void {
       lastCallerConnection = conn;
       const devicePort = field(JSON.parse(new TextDecoder().decode(payload)), "devicePort");
-      register(
-        conn,
-        pendingStream(
-          options.deviceTcp.connect(
-            device.spec.platform,
-            toDriverDevice(device),
-            Number(devicePort),
-            new AbortController().signal,
-          ),
-        ),
+      const connecting = options.deviceTcp.connect(
+        device.spec.platform,
+        toDriverDevice(device),
+        Number(devicePort),
+        new AbortController().signal,
       );
+      register(conn, pendingStream(connecting));
+      connecting.catch((error: unknown) => {
+        const connection = connections.get(conn);
+        if (connection === undefined) return;
+        connection.closed = true;
+        connection.wake?.();
+        connections.delete(conn);
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.reset,
+            conn,
+            JSON.stringify({ reason: error instanceof Error ? error.message : String(error) }),
+          ),
+        );
+      });
     }
 
     function refuse(refused: Refusal): void {
@@ -314,7 +326,7 @@ export function createTunnelSessions(options: {
         return;
       }
       connection.inbound -= payload.length;
-      void received(conn, connection, payload);
+      received(conn, connection, payload).catch(() => undefined);
     }
 
     function onCredit(connection: Connection, payload: Uint8Array): void {
