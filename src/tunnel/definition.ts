@@ -30,6 +30,7 @@ export const tunnelModule: OptionalModuleDefinition<TunnelModuleConfig> = {
       },
     ],
   },
+  loadGateway: () => import("./gateway.js"),
   loadWorker: () => import("./worker.js"),
   name: "tunnel",
 };
