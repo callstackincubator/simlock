@@ -85,7 +85,7 @@ export type InputMessage =
 
 // why: what turns messages into taps on one device; one per lease, shared by every socket of it.
 export interface DeviceInput {
-  send(message: InputMessage): void;
+  send(message: InputMessage): Promise<void>;
   // why: calls the listener with the current screen config at once, then on each change, so a socket
   // that joins late learns the size as it is now.
   onConfig(listener: (config: InputScreenConfig) => void): () => void;

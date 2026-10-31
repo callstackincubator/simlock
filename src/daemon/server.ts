@@ -163,6 +163,7 @@ export interface DaemonServerEngineOptions {
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
   readonly passthrough?: PassthroughResolver;
+  readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
   readonly relayTargets?: RelayTargets;
   readonly relayTwoWayTargets?: TwoWayRelayTargets;
@@ -315,6 +316,7 @@ function buildDispatcher(
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
     ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
+    ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
     queue: options.queue,

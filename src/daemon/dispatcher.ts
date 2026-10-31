@@ -34,9 +34,11 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
+  isUnavailableInput,
   createUsageReader,
   type UsageReader,
 } from "../core/index.js";
+import type { ModuleInputs } from "../modules/index.js";
 import {
   type DeviceModeReader,
   LeaseIdTakenError,
@@ -143,6 +145,8 @@ export interface DispatcherOptions {
   readonly warmKinds?: WarmKindForgetter;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
+  /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
+  readonly inputs?: ModuleInputs;
   readonly processRunner?: ProcessRunner;
   /**
    * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
@@ -658,10 +662,31 @@ export class Dispatcher {
    * so a command that writes a gigabyte costs this process nothing, and a client sees the
    * first line while the command is still running.
    */
-  #deviceRotate: Handler<"device.rotate"> = async (input) => ({
-    leaseId: input.leaseId,
-    orientation: "portrait",
-  });
+  #deviceRotate: Handler<"device.rotate"> = async (input) => {
+    if (this.options.inputs === undefined) {
+      throw new DispatchError("INTERNAL", "Device input is unavailable");
+    }
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const record = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
+    const opened = await this.options.inputs.openInput(
+      record.spec.platform,
+      toDriverDevice(record),
+      new AbortController().signal,
+    );
+    if (isUnavailableInput(opened)) throw new Error(opened.unavailable);
+    try {
+      await opened.send({ kind: "orientation", orientation: input.orientation });
+    } finally {
+      await opened.close();
+    }
+    return { leaseId: input.leaseId, orientation: input.orientation };
+  };
 
   #deviceExec: Handler<"device.exec"> = async (input, session) => {
     if (this.options.passthrough === undefined) {

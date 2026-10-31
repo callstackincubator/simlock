@@ -665,6 +665,9 @@ async function composeDaemon(
     logger: logger.child("server"),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
+    inputs: {
+      openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+    },
     processRunner,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,

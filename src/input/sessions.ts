@@ -189,7 +189,7 @@ export function createInputSessions(options: {
         );
         return;
       }
-      opened.send(message);
+      opened.send(message).catch(() => undefined);
     });
   }
 

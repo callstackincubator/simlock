@@ -18,8 +18,9 @@ class FakeDeviceInput implements DeviceInput {
     this.#config = config;
   }
 
-  send(message: InputMessage): void {
+  send(message: InputMessage): Promise<void> {
     this.sent.push(message);
+    return Promise.resolve();
   }
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
