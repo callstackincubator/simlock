@@ -906,6 +906,29 @@ describe("MCP run_on_device alongside other tools", () => {
   });
 });
 
+describe("MCP rotate_device", () => {
+  it("rotates the session's held lease and returns its id and the canonical orientation", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    client.rotateImpl = (leaseId, orientation) => Promise.resolve({ leaseId, orientation });
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const result = await call(mcpClient, "rotate_device", { orientation: "landscape-left" });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        leaseId: "lease-1",
+        orientation: "landscape_left",
+      });
+      expect(client.calls.filter((entry) => entry.method === "rotate")).toEqual([
+        { input: { leaseId: "lease-1", orientation: "landscape_left" }, method: "rotate" },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
     { method: "tools/call", params: { arguments: arguments_, name } },
