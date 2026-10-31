@@ -2,23 +2,21 @@
 
 Does: lets a lease's holder (or an operator) reverse device ports of its Android device to its own machine, or forward its own loopback ports to the device's, over `WS /v1/leases/{id}/tunnel`, on a lone worker or through a gateway.
 Entry: `index.ts` -> `tunnelModule`, an optional module (ADR 0054): `worker.ts` `createWorker` and `gateway.ts` `createGateway`, loaded by the module host only when turned on.
-Uses: contract (`src/contract/tunnel-frames.ts`), core (`DeviceReverse`, `DeviceTcpError`, `closeReason`), modules (the context, socket and relay types), ports (`LeaseSocket`, `Clock`).
+Uses: contract (`src/contract/tunnel-frames.ts`), core (`DeviceReverse`, `DeviceTcpError`, `closeReason`), modules (the context, socket and relay types, and `modules/relay-channel.ts`: the channel framing, `channelSocket`, the close mapping and the 404, 426 and 503 bodies), ports (`LeaseSocket`, `Clock`).
 Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
 Off unless `capabilities.tunnel.enabled` (false). Off: nothing loaded, and the `tunnel` capability reads `off`.
 
 ## Files
 
-| File                | Role                                                                                                        |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `definition.ts`     | `tunnelModule`: name `tunnel`, empty config section, `http` route data, the two loaders                     |
-| `worker.ts`         | The worker side from the host's context: capability, hooks, lease route (426), socket, relay                |
-| `gateway.ts`        | The gateway side: lease route (426), socket, `beforeDrain`                                                  |
-| `gateway-link.ts`   | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain                            |
-| `channel.ts`        | Worker: a relay channel as a `LeaseSocket`; heartbeat, `0xF1` close                                         |
-| `framing.ts`        | `[len u32][tag u8][payload]` frames (a message up to 65541 bytes), `readFrames`, the `0xF0` and `0xF1` tags |
-| `pending-stream.ts` | A forwarded connection's stream before its device connect settles: writes, END and close wait in order      |
-| `sessions.ts`       | One session per socket: HELLO, rules, connections, window and credit, lease end, drain                      |
-| `refusal.ts`        | The 404 `UNKNOWN_LEASE` and 426 bodies                                                                      |
+| File                | Role                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `definition.ts`     | `tunnelModule`: name `tunnel`, empty config section, `http` route data, the two loaders                |
+| `worker.ts`         | The worker side from the host's context: capability, hooks, lease route (426), socket, relay           |
+| `gateway.ts`        | The gateway side: lease route (426), socket, `beforeDrain`                                             |
+| `gateway-link.ts`   | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain                       |
+| `limits.ts`         | `MAX_TUNNEL_MESSAGE_BYTES` (65541): the longest message a channel frame carries                        |
+| `pending-stream.ts` | A forwarded connection's stream before its device connect settles: writes, END and close wait in order |
+| `sessions.ts`       | One session per socket: HELLO, rules, connections, window and credit, lease end, drain                 |
 
 ## How it works
 

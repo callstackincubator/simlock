@@ -1,14 +1,18 @@
 import { closeReason, MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
-import type {
-  FleetLeases,
-  ModuleIdentity,
-  ModuleLease,
-  ModuleLeaseSocketAccept,
-  ModuleTwoWayRelay,
+import {
+  CHANNEL_TAG,
+  closeOf,
+  encodeFrame,
+  type FleetLeases,
+  type ModuleIdentity,
+  type ModuleLease,
+  type ModuleLeaseSocketAccept,
+  type ModuleTwoWayRelay,
+  readFrames,
+  relayRefusal,
+  unavailable,
 } from "../modules/index.js";
 import type { Clock, LeaseSocket, TimerHandle } from "../ports/index.js";
-import { CHANNEL_TAG, encodeFrame, readFrames } from "./framing.js";
-import { unavailable } from "./refusal.js";
 
 export interface GatewayInputLinkOptions {
   readonly relayTwoWay: (
@@ -87,7 +91,7 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
       controller.abort();
     });
     void (async () => {
-      for await (const frame of readFrames(relay.readable)) {
+      for await (const frame of readFrames(relay.readable, MAX_INPUT_MESSAGE_BYTES + 1)) {
         if (frame.tag === CHANNEL_TAG.close) {
           const closing = closeOf(frame.payload);
           // why: a worker that is stopping says 1001, which is a statement about the gateway to a client; to the client the worker is gone.
@@ -138,7 +142,10 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
             `Worker ${workerId} did not answer the input socket within 10 s`,
           );
         }
-        return refusalFor(error, workerId, lease.id);
+        return relayRefusal(error, workerId, {
+          code: "INPUT_UNAVAILABLE",
+          message: `Worker ${workerId} does not take input for lease ${lease.id}; turn on capabilities.input.enabled there`,
+        });
       } finally {
         options.clock.cancel(timer);
       }
@@ -150,42 +157,7 @@ export function createGatewayInputLink(options: GatewayInputLinkOptions): {
   };
 }
 
-// why: the relay fails with the fleet's own codes -- a worker that takes no input (`RELAY_TARGET_MISSING`),
-// a worker gone (`WORKER_UNREACHABLE`) -- and a client must get a 503 that says which, before the upgrade;
-// an error with no code is a real fault and goes on to the HTTP layer's 500.
-function refusalFor(error: unknown, workerId: string, leaseId: string): Response {
-  const code = (error as { readonly code?: unknown }).code;
-  if (code === "RELAY_TARGET_MISSING") {
-    return unavailable(
-      "INPUT_UNAVAILABLE",
-      `Worker ${workerId} does not take input for lease ${leaseId}; turn on capabilities.input.enabled there`,
-    );
-  }
-  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
-    return unavailable(
-      code,
-      error instanceof Error ? error.message : `Worker ${workerId} could not be reached`,
-    );
-  }
-  throw error;
-}
-
 interface Bridge {
   readonly leaseGone: () => void;
   readonly stop: (code: number, reason: string) => void;
-}
-
-// why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
-function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
-  try {
-    const { code, reason } = JSON.parse(new TextDecoder().decode(payload)) as Record<
-      string,
-      unknown
-    >;
-    if (typeof code !== "number" || !Number.isInteger(code)) return undefined;
-    if (code !== 1001 && code !== 1013 && (code < 4000 || code > 4999)) return undefined;
-    return typeof reason === "string" ? { code, reason: closeReason(reason) } : undefined;
-  } catch {
-    return undefined;
-  }
 }
