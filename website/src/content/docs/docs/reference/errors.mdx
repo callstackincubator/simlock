@@ -22,7 +22,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED` | The command failed. Read the code and the message. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `INPUT_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED` | The command failed. Read the code and the message. |
 | 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `SETUP_REFUSED`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
@@ -80,6 +80,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | `UNKNOWN_PASSTHROUGH_TOOL` | 2 | 422 | A tool Simlock does not wrap. | Use `simctl` or `adb`. |
 | `EXEC_TIMEOUT` | 10 | 504 | A command run on a device through a gateway ran longer than `exec.timeoutMs` (10 minutes by default) and was stopped. | Split the work, or raise `exec.timeoutMs` on the worker. |
 | `ROTATION_UNSUPPORTED` | 12 | 422 | The lease is not on an iOS phone or tablet simulator, so `POST /v1/leases/{id}/rotate` has nothing to turn. The message names what it is on: an Apple TV, Apple Watch or Apple Vision simulator, another iOS model, an Android emulator or phone or tablet, an iPhone or an iPad. | Rotate a lease on an iPhone or iPad simulator. |
+| `INPUT_UNAVAILABLE` | 1 | 503 | The lease's simulator could not take the rotation: its input helper did not start within 10 seconds, or writing to it failed. The message ends with the driver's reason, cut to 200 characters. | Run it again. If it repeats, check `simlock daemon logs`. |
 
 ## Daemon and connection
 

@@ -298,6 +298,7 @@ describe("device.rotate", () => {
           input.opened.map((opened) => opened.closes),
           name,
         ).toEqual(input.opened.map(() => 1));
+        await daemons.pop()?.stop("test");
       }
     },
   );

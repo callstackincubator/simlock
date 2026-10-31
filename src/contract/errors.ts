@@ -107,6 +107,8 @@ export interface ErrorDetailsMap {
     readonly physical: boolean;
     readonly class: string;
   };
+  /** why: `device.rotate` could not reach the lease's input helper; `reason` is the driver's text, cut to 200 characters. */
+  INPUT_UNAVAILABLE: { readonly leaseId: string; readonly reason: string };
   DOCTOR_UNAVAILABLE: Record<string, never>;
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
@@ -201,6 +203,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   COMPONENT_IN_USE: true,
   UNKNOWN_LEASE: true,
   ROTATION_UNSUPPORTED: true,
+  INPUT_UNAVAILABLE: true,
   DEVICE_NOT_ENROLLABLE: true,
   DEVICE_BUSY: true,
   UNKNOWN_DEVICE: true,
@@ -359,6 +362,8 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 12,
     httpStatus: 422,
   },
+  // why: the helper that takes the touch is down, like `DOCTOR_UNAVAILABLE`: 503 and 1.
+  INPUT_UNAVAILABLE: { code: "INPUT_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
   DOWNLOAD_TIMEOUT: {
     code: "DOWNLOAD_TIMEOUT",
     kind: "domain",

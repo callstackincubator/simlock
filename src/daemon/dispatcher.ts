@@ -677,16 +677,20 @@ export class Dispatcher {
     if (record === undefined) throw new UnknownLeaseError(input.leaseId);
     const refusal = rotationRefusal(input.leaseId, record.spec);
     if (refusal !== undefined) throw refusal;
-    const opened = await this.options.inputs.openInput(
-      record.spec.platform,
-      toDriverDevice(record),
-      new AbortController().signal,
-    );
-    if (isUnavailableInput(opened)) throw new Error(opened.unavailable);
     try {
-      await opened.send({ kind: "orientation", orientation: input.orientation });
-    } finally {
-      await opened.close();
+      const opened = await this.options.inputs.openInput(
+        record.spec.platform,
+        toDriverDevice(record),
+        new AbortController().signal,
+      );
+      if (isUnavailableInput(opened)) throw new Error(opened.unavailable);
+      try {
+        await opened.send({ kind: "orientation", orientation: input.orientation });
+      } finally {
+        await opened.close();
+      }
+    } catch (error) {
+      throw inputUnavailable(input.leaseId, error);
     }
     return { leaseId: input.leaseId, orientation: input.orientation };
   };
@@ -1133,6 +1137,18 @@ function describeEnrollmentError(error: unknown): unknown {
     return new DispatchError("UNKNOWN_DEVICE", error.message, { id: error.id });
   }
   return error;
+}
+
+const INPUT_REASON_MAX = 200;
+
+function inputUnavailable(leaseId: string, error: unknown): DispatchError {
+  const text = error instanceof Error ? error.message : String(error);
+  const reason = text === "" ? "unknown error" : text.slice(0, INPUT_REASON_MAX);
+  return new DispatchError(
+    "INPUT_UNAVAILABLE",
+    `Lease ${leaseId}'s simulator cannot take input: ${reason}`,
+    { leaseId, reason },
+  );
 }
 
 function unsupportedOnWorker(
