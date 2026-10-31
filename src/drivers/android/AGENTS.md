@@ -74,7 +74,7 @@ Boot — `makeReady` (per-device lock):
 Reclaim — `reclaim`:
 
 - `full` → shut down; wipe on the next `makeReady`. Returns `shutdown` / `wipe`.
-- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
+- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` (60 s on the driver clock; a timeout kills the load, and a timeout, non-zero exit or no OK is a failed load: shut down and wipe) → readiness → mark. Returns `ready` / `snapshot`.
 - Hash changed or load failed → as `full`.
 - Physical → uninstall every user app not on the enrollment list. Returns `ready` / `uninstall`.
 
