@@ -97,3 +97,4 @@ the status is stale.
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
 | [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
+| [0057](0057-the-daemon-owns-config-json-while-it-runs-and-the-console-edits-every-setting-through-it.md) | The daemon owns config.json while it runs, and the console edits every setting through it | Proposed |
