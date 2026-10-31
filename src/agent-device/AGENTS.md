@@ -22,6 +22,7 @@ On unless `capabilities.agent-device.enabled` is set false, on a standalone work
 | `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                                                                                                                           |
 | `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                                                                                                                                     |
 | `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                                                                                                                        |
+| `front/orientation.ts`                                        | `orientation` on an iOS phone or tablet simulator lease: `device.rotate`, answered unconfirmed; anything else forwarded                                                                |
 | `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                                                                                                                          |
 | `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                                                                                                                                   |
 | `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                                                                                                                                    |
@@ -79,6 +80,7 @@ Front (`createFront`, prefix `agent-device`):
 8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
    capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, a streamed `type: "response"` line, or a
    batch's `data`) → `front/ended.ts` ends each simlock lease this token holds, as a release does.
+   `orientation` (not a batch step) on an `ios`, not physical lease (an adopted one: physical unknown) whose model is an iPhone or iPad → `device.rotate`, answered with agent-device's unconfirmed reply, `INVALID_ARGS` for an unknown name (an adopted lease forwards it); `ROTATION_UNSUPPORTED`, `UNKNOWN_LEASE` and `FORBIDDEN` forward the command; `WORKER_UNREACHABLE` answers the try-again reply; any other error `COMMAND_FAILED`. Every other lease is forwarded before the name is read.
 
 Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request, and `authenticate` sets tenant = requester id, overwriting the client's. Rewrites `/v1/agent-device` → `/agent-device`. Download: `Content-Length` > 2 GiB → 413 before
 any byte; no length → counted, errors past 2 GiB.

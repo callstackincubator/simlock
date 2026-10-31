@@ -14,6 +14,13 @@ import type { RpcRead } from "../shared/rpc.js";
 import { asRecord, commandName } from "../shared/selectors.js";
 import type { FrontContext } from "./context.js";
 
+// why: these say the lease is not one Simlock can rotate (or no longer knows), so agent-device answers as it does for any other lease.
+const FORWARDED_CODES: ReadonlySet<string> = new Set([
+  "ROTATION_UNSUPPORTED",
+  "UNKNOWN_LEASE",
+  "FORBIDDEN",
+]);
+
 type RpcRequest = RpcRead & { readonly kind: "request" };
 
 export function isOrientationCall(read: RpcRequest): boolean {
@@ -55,6 +62,7 @@ export async function answerOrientation(
     held === undefined ||
     held.identity.principal !== identity.principal ||
     held.platform !== "ios" ||
+    held.physical === true ||
     held.model === undefined ||
     !isRotatableModel(held.model)
   ) {
@@ -62,7 +70,8 @@ export async function answerOrientation(
   }
   const typed = typedName(read);
   const parsed = parseOrientation(typed);
-  if (!parsed.ok) return frontReply(refusal(parsed.message), read);
+  if (!parsed.ok)
+    return held.adopted === true ? undefined : frontReply(refusal(parsed.message), read);
   try {
     await context.dispatch(
       "device.rotate",
@@ -70,7 +79,9 @@ export async function answerOrientation(
       buildHttpSession(identity),
     );
   } catch (error) {
-    if (mapError(error).code === "WORKER_UNREACHABLE") {
+    const code = mapError(error).code;
+    if (FORWARDED_CODES.has(code)) return undefined;
+    if (code === "WORKER_UNREACHABLE") {
       return markUnreachableAnswer(frontReply(workerUnreachable(), read));
     }
     return frontReply(failure(error instanceof Error ? error.message : String(error)), read);
