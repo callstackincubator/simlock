@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  REPO_ROOT,
+  type TestEnv,
+  waitFor,
+  waitForDeviceState,
+  withDaemon,
+} from "./helpers/index.js";
 
 // why: `admin.token` is written before startup finishes, and a SIGTERM before then takes the
 // exit-at-once path, which never logs `Daemon stopping`. A daemon is up once it logged
@@ -238,6 +245,48 @@ describe("daemon lifecycle & recovery", () => {
       timeout: 10_000,
       label: "daemon socket removed",
     });
+  });
+
+  // why: #1056. The expectation is the maintainer's decision on that issue, not today's behaviour.
+  it("daemon stop shuts down every idle device it booted, one still reclaiming included, and leaves the leased one running", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16", "iPhone 17"], availableOsVersions: ["18.4"] },
+      android: { knownModels: ["Pixel 8"], availableOsVersions: ["34"] },
+    });
+    const lease = async (platform: string, model: string) => {
+      const agent = `stop-${platform}-${model.replace(" ", "-")}`;
+      const result = await env.cli([
+        "lease",
+        "--platform",
+        platform,
+        "--device",
+        model,
+        "--agent-id",
+        agent,
+        "--detach",
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      return result.json as { lease: { id: string }; device: { driverDeviceId: string } };
+    };
+    const idle = await lease("ios", "iPhone 16");
+    const reclaiming = await lease("android", "Pixel 8");
+    const held = await lease("ios", "iPhone 17");
+    expect((await env.cli(["release", idle.lease.id])).code).toBe(0);
+    await waitForDeviceState(env, idle.device.driverDeviceId, "ready");
+    await env.driverLog.clear();
+
+    expect((await env.cli(["release", reclaiming.lease.id])).code).toBe(0);
+    expect((await env.cli(["daemon", "stop"])).code).toBe(0);
+    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+
+    const shutdowns = (await env.driverLog.calls())
+      .filter((call) => call.operation === "shutdown")
+      .map((call) => (call.arguments[0] as { deviceId: string }).deviceId);
+    expect(shutdowns.sort()).toEqual(
+      [idle.device.driverDeviceId, reclaiming.device.driverDeviceId].sort(),
+    );
+    expect(shutdowns).not.toContain(held.device.driverDeviceId);
   });
 });
 
