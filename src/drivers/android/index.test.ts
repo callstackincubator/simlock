@@ -3590,9 +3590,10 @@ describe("AndroidDriver deviceTcp", () => {
     tcp.connections[2]?.peer.send("OKAY");
     await dial(2, `${transport}0008tcp:9231`);
     clock.advance(4_999);
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     clock.advance(1);
+    await vi.waitFor(() => expect(settled).toBe(true), { timeout: 2_000 });
     const timedOut = await silence;
     expect(timedOut).toBeInstanceOf(DeviceTcpError);
     expect((timedOut as DeviceTcpError).message).toBe("timeout");
@@ -3631,7 +3632,7 @@ describe("AndroidDriver deviceTcp", () => {
       [
         {
           match: adb("version"),
-          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.40\n" },
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
         },
       ],
       new FakeTcpListenerFactory(),
