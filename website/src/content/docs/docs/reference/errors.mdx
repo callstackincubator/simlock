@@ -80,7 +80,7 @@ A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabil
 | --- | --- | --- | --- | --- |
 | `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iOS simulator or an iPhone. | Use an Android emulator or phone. |
 | `TUNNEL_PORT_IN_USE` | 1 | 409 | The device port is already reversed on the device, for example by an `adb reverse` run through `device.exec`. | Remove that rule first. |
-| `TUNNEL_BAD_PORT` | 1 | 422 | A device port is not an integer from 1024 to 65535. | Name a port in that range. |
+| `TUNNEL_BAD_PORT` | 1 | 422 | A device port is an integer outside 1024 to 65535. A port that is not an integer at all is refused `BAD_REQUEST`. | Name a port in that range. |
 | `TUNNEL_LIMIT` | 1 | 409 | The lease would have more than 8 tunnels across its sockets. | Close a tunnel first. |
 | `TUNNEL_FAILED` | 1 | 502 | `adb` could not set the tunnel up, or the worker has no free loopback port in its reserved range. The message carries adb's own words. | Read the message; try again. |
 | `TUNNEL_UNAVAILABLE` | 1 | 503 | A gateway's worker has tunnels off. | Turn on `capabilities.tunnel.enabled` on the worker. |

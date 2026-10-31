@@ -12,6 +12,13 @@ export class DeviceTcpError extends Error {
   }
 }
 
+// why: one wording for a lease whose device cannot take a tunnel, so the catalog's refusal and the tunnel module's read the same to the holder.
+export function unsupportedTunnelMessage(platform: string, physical: boolean): string {
+  let noun = `a ${platform} device`;
+  if (platform === "ios") noun = physical ? "an iPhone" : "an iOS simulator";
+  return `the lease is on ${noun}; tunnels need an Android emulator or phone`;
+}
+
 // why: one device port reversed to a loopback listener on the worker; every connection the device
 // opens to that port arrives on `onConnection`, until `close` removes the rule and the listener.
 export interface DeviceReverse {
@@ -20,12 +27,18 @@ export interface DeviceReverse {
   close(): Promise<void>;
 }
 
+// why: the sweep treats a leased device differently from an idle one, and only the registry knows which is which.
+export interface SweptDevice {
+  readonly device: VirtualDriverDevice | PhysicalDriverDevice;
+  readonly leased: boolean;
+}
+
 // why: an optional driver member beside `input`; a platform whose device cannot reach a worker port
 // leaves it out, and the tunnel module learns that from its absence rather than from a platform name.
 export interface DeviceTcp {
   supports(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
-  // why: called once at daemon start, before any lease is served: removes the rules a stopped daemon's tunnels left on devices proved Simlock's own, leased or idle.
-  sweep(devices: readonly (VirtualDriverDevice | PhysicalDriverDevice)[]): Promise<void>;
+  // why: called once at daemon start, before any lease is served: removes the rules a stopped daemon's tunnels left on idle devices proved Simlock's own; a leased device's rules stay until its reclaim, and the ports they point to are kept from new tunnels.
+  sweep(devices: readonly SweptDevice[]): Promise<void>;
   reverse(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     devicePort: number,

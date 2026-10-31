@@ -6,7 +6,11 @@ import { unknownLease, upgradeRequired } from "./refusal.js";
 import { createTunnelSessions } from "./sessions.js";
 
 export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModule {
-  const sessions = createTunnelSessions({ deviceTcp: ctx.deviceTcp, logger: ctx.logger });
+  const sessions = createTunnelSessions({
+    clock: ctx.clock,
+    deviceTcp: ctx.deviceTcp,
+    logger: ctx.logger,
+  });
   return {
     capability: { name: ctx.name, read: () => Promise.resolve({ state: "available" }) },
     hooks: {

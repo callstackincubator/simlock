@@ -354,4 +354,58 @@ describe("a lease's tunnel socket", () => {
       });
     },
   );
+
+  it(
+    "sweeps each platform's driver at start with its devices, a leased one marked leased, before any request is served",
+    { timeout: 120_000 },
+    async () => {
+      const path = await mkdtemp(join(tmpdir(), "simlock-e2e-sweep-"));
+      directories.push(path);
+      const start = async (deviceTcp: FakeDeviceTcp): Promise<DaemonServer> =>
+        await startDaemon({
+          configOverrides: { http: { enabled: false } },
+          dataDirectory: path,
+          deviceDataTables: fakeDeviceDataTables,
+          drivers: [
+            new FakeDriver({
+              availableOsVersions: ["18.0"],
+              clock: new SystemClock(),
+              deviceTcp,
+              knownModels: ["Pixel-A"],
+              platform: "android",
+            }),
+          ],
+          filesystem: new MemoryFilesystem(),
+          logger: new NoopLogger(),
+          version: "1.0.0-e2e",
+        });
+
+      const empty = new FakeDeviceTcp();
+      const first = await start(empty);
+      expect(empty.sweeps).toEqual([[]]);
+      const holder = await first.dispatch(
+        "token.create",
+        { label: "holder", role: "agent" },
+        admin,
+      );
+      const session = { ...agent, principal: holder.token.id };
+      await first.dispatch("lease.request", { model: "Pixel-A", platform: "android" }, session);
+      await first.stop("test");
+
+      const whileLeased = new FakeDeviceTcp();
+      const second = await start(whileLeased);
+      expect(whileLeased.sweeps).toHaveLength(1);
+      expect(whileLeased.sweeps[0]).toEqual([
+        { device: expect.objectContaining({ physical: false }), leased: true },
+      ]);
+      await second.stop("test");
+
+      const idle = new FakeDeviceTcp();
+      daemons.push(await start(idle));
+      expect(idle.sweeps).toHaveLength(1);
+      expect(idle.sweeps[0]).toEqual([
+        { device: expect.objectContaining({ physical: false }), leased: false },
+      ]);
+    },
+  );
 });

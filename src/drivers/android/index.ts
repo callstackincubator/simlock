@@ -41,7 +41,6 @@ import {
   type ReclaimResult,
   removeListedComponent,
   type DeviceInputFactory,
-  type DeviceTcp,
   type ScreenCapture,
   ScreenUnavailableError,
   RuntimeMissingError,
@@ -63,7 +62,7 @@ import {
   type TcpStreamConnector,
   type TimerHandle,
 } from "../../ports/index.js";
-import { createAndroidDeviceTcp, removeDeviceRules } from "./device-tcp.js";
+import { createAndroidDeviceTcp, removeDeviceRules, type AndroidDeviceTcp } from "./device-tcp.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
@@ -544,7 +543,7 @@ export class AndroidDriver implements Driver {
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
-  readonly deviceTcp: DeviceTcp | undefined;
+  readonly deviceTcp: AndroidDeviceTcp | undefined;
 
   private constructor(
     options: AndroidDriverOptions,
@@ -1143,7 +1142,17 @@ export class AndroidDriver implements Driver {
       : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
+  // why: the loopback ports held for a device's tunnels are freed only after its reclaim removed the rules they serve.
   async reclaim(
+    device: DriverDevice,
+    options: { readonly clean: "standard" | "full" },
+  ): Promise<ReclaimResult> {
+    const result = await this.#reclaimDevice(device, options);
+    await this.deviceTcp?.release(device);
+    return result;
+  }
+
+  async #reclaimDevice(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
