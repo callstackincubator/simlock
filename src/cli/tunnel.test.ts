@@ -524,6 +524,7 @@ describe("simlock tunnel that is refused or loses its worker", () => {
     }
     expect(idle.cli.err).toEqual([]);
     expect(idle.peer.closedWith).toBeUndefined();
+    idle.peer.silentOnClose = true;
     idle.cli.signals.emit("SIGINT");
     expect(idle.peer.closedWith?.code).toBe(1000);
     let settled = false;
@@ -539,7 +540,6 @@ describe("simlock tunnel that is refused or loses its worker", () => {
     const term = await started(["reverse", "5173"]);
     term.cli.signals.emit("SIGTERM");
     expect(term.peer.closedWith?.code).toBe(1000);
-    term.peer.dropped(1000, "");
     expect(await term.exit).toBe(0);
   });
 });

@@ -116,6 +116,8 @@ export class NodeWebSocketClientConnector implements WebSocketClientConnector {
 export class FakeWebSocketPeer implements WebSocketClient {
   readonly sent: Uint8Array[] = [];
   closedWith: { readonly code: number; readonly reason: string } | undefined;
+  // why: a real socket answers `close` with its own close event; a test sets this to play a server that never answers.
+  silentOnClose = false;
   readonly #messages: ((bytes: Uint8Array) => void)[] = [];
   readonly #pings: (() => void)[] = [];
   readonly #closes: ((code: number, reason: string) => void)[] = [];
@@ -126,6 +128,8 @@ export class FakeWebSocketPeer implements WebSocketClient {
 
   close(code: number, reason: string): void {
     this.closedWith = { code, reason };
+    if (this.silentOnClose) return;
+    for (const listener of this.#closes) listener(code, reason);
   }
 
   onMessage(listener: (bytes: Uint8Array) => void): void {

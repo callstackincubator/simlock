@@ -2,7 +2,6 @@ import {
   decodeTunnelFrame,
   encodeTunnelFrame,
   ERROR_TABLE,
-  SimlockError,
   type SimlockErrorCode,
   TUNNEL_MAX_DATA_BYTES,
   TUNNEL_MAX_DEVICE_PORT,
@@ -10,7 +9,12 @@ import {
   TUNNEL_TAG,
   TUNNEL_WINDOW_BYTES,
 } from "../../contract/index.js";
-import type { TcpStream, WebSocketClient } from "../../ports/index.js";
+import {
+  type TcpStream,
+  type TimerHandle,
+  type WebSocketClient,
+  WebSocketRefusedError,
+} from "../../ports/index.js";
 import { commandArgs, UsageError } from "../args.js";
 import { selectOnlyLease } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
@@ -100,21 +104,6 @@ function field(value: unknown, name: string): unknown {
   return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
 }
 
-async function leaseToUse(
-  environment: CliEnvironment,
-  base: string,
-  token: string,
-  lease: string | undefined,
-): Promise<string> {
-  if (lease !== undefined) return lease;
-  const identity = await environment.httpJson.get(`${base}/v1/identity`, token);
-  const leases = await environment.httpJson.get(`${base}/v1/leases`, token);
-  return selectOnlyLease(
-    (field(leases.body, "leases") as { id: string; requesterId: string }[] | undefined) ?? [],
-    field(identity.body, "role") === "admin" ? "admin" : "agent",
-  );
-}
-
 // why: one caller connection per device connection. The stream's writes are chained so bytes reach the caller's port in the order the worker sent them, and each write is followed by a CREDIT that returns its bytes to the worker's window; the caller's own bytes leave only while the worker's window for them has room.
 function relayConnections(
   socket: WebSocketClient,
@@ -198,37 +187,124 @@ function relayConnections(
   };
 }
 
-async function run(
-  argv: readonly string[],
-  { environment, token }: CommandContext,
-): Promise<number> {
-  const { help, lease, positionals, url } = commandArgs(argv, {
-    help: { type: "boolean", short: "h" },
-    lease: { type: "string" },
-    url: { type: "string" },
-  });
-  if (help) {
-    environment.stdout.write(
-      "Usage: simlock tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <id>] [--url <url>]\n",
-    );
-    return 0;
+const HELLO_TIMEOUT_MS = 90_000;
+const SILENCE_TIMEOUT_MS = 45_000;
+const CLOSE_WAIT_MS = 2_000;
+const CLOSE_LEASE_ENDED = 4001;
+
+// why: a failure here carries the worker's own code, which can be one the contract's table does not hold (an HTTP 401 answers `UNAUTHENTICATED`), so the command prints its one JSON line itself.
+class TunnelFailure extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly exitCode: number,
+  ) {
+    super(message);
   }
-  const specs = parseReverses(positionals);
-  const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
-  const secret = checkedToken(token ?? environment.tunnelToken);
-  const leaseId = await leaseToUse(
-    environment,
-    base,
-    secret,
-    typeof lease === "string" ? lease : undefined,
+}
+
+function disconnected(message: string): TunnelFailure {
+  return new TunnelFailure("TUNNEL_DISCONNECTED", message, 1);
+}
+
+function bodyError(body: unknown): { code: string; message: string } | undefined {
+  const error = field(body, "error");
+  const code = field(error, "code");
+  const message = field(error, "message");
+  return typeof code === "string" && typeof message === "string" ? { code, message } : undefined;
+}
+
+function refusedTo(status: number, text: string, leaseId: string): TunnelFailure {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = undefined;
+  }
+  const answered = bodyError(body);
+  if (answered !== undefined) {
+    return new TunnelFailure(
+      answered.code,
+      answered.message,
+      answered.code in ERROR_TABLE ? ERROR_TABLE[answered.code as SimlockErrorCode].cliExitCode : 1,
+    );
+  }
+  return status === 404
+    ? new TunnelFailure("UNKNOWN_LEASE", `Lease ${leaseId} is not known to this worker`, 1)
+    : disconnected(`Lease ${leaseId}: the worker answered ${String(status)}`);
+}
+
+async function lookup(environment: CliEnvironment, url: string, token: string) {
+  let answer: Awaited<ReturnType<CliEnvironment["httpJson"]["get"]>>;
+  try {
+    answer = await environment.httpJson.get(url, token);
+  } catch {
+    throw disconnected(`No answer from ${new URL(url).origin}`);
+  }
+  if (answer.status < 200 || answer.status > 299) {
+    const failed = bodyError(answer.body);
+    throw new TunnelFailure(
+      failed?.code ?? "TUNNEL_DISCONNECTED",
+      failed?.message ?? `The worker answered ${String(answer.status)}`,
+      1,
+    );
+  }
+  return answer;
+}
+
+async function leaseToUse(
+  environment: CliEnvironment,
+  base: string,
+  token: string,
+  lease: string | undefined,
+): Promise<string> {
+  if (lease !== undefined) return lease;
+  const identity = await lookup(environment, `${base}/v1/identity`, token);
+  const leases = await lookup(environment, `${base}/v1/leases`, token);
+  return selectOnlyLease(
+    (field(leases.body, "leases") as { id: string; requesterId: string }[] | undefined) ?? [],
+    field(identity.body, "role") === "admin" ? "admin" : "agent",
   );
-  const socket = await environment.webSocket.connect(
-    `${base.replace(/^http/, "ws")}/v1/leases/${encodeURIComponent(leaseId)}/tunnel`,
-    {
-      handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
-      headers: { authorization: `Bearer ${secret}` },
-    },
+}
+
+async function openSocket(
+  environment: CliEnvironment,
+  base: string,
+  secret: string,
+  leaseId: string,
+): Promise<WebSocketClient> {
+  try {
+    return await environment.webSocket.connect(
+      `${base.replace(/^http/, "ws")}/v1/leases/${encodeURIComponent(leaseId)}/tunnel`,
+      {
+        handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+        headers: { authorization: `Bearer ${secret}` },
+      },
+    );
+  } catch (error) {
+    if (error instanceof WebSocketRefusedError) throw refusedTo(error.status, error.body, leaseId);
+    throw disconnected(`Lease ${leaseId}: no connection to the worker`);
+  }
+}
+
+function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFailure {
+  const refusal: unknown = JSON.parse(new TextDecoder().decode(frame.payload));
+  const code = field(refusal, "code");
+  const known =
+    typeof code === "string" && code in ERROR_TABLE ? (code as SimlockErrorCode) : "TUNNEL_FAILED";
+  return new TunnelFailure(
+    known,
+    `Lease ${leaseId}: ${String(field(refusal, "message"))}`,
+    ERROR_TABLE[known].cliExitCode,
   );
+}
+
+function serve(
+  environment: CliEnvironment,
+  socket: WebSocketClient,
+  specs: readonly ReverseSpec[],
+  leaseId: string,
+): Promise<number> {
   const warned = new Map<number, number>();
   const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
     const now = environment.clock.now();
@@ -242,37 +318,63 @@ async function run(
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
   return new Promise<number>((resolve, reject) => {
-    const settle = () => {
+    let silence: TimerHandle | undefined;
+    let finished = false;
+    let stopping = false;
+    const helloTimer = environment.clock.setTimer(HELLO_TIMEOUT_MS, () => {
+      end(disconnected(`Lease ${leaseId}: no READY from the worker within 90 s`));
+    });
+    const heard = () => {
+      if (silence !== undefined) environment.clock.cancel(silence);
+      silence = environment.clock.setTimer(SILENCE_TIMEOUT_MS, () => {
+        end(disconnected(`Lease ${leaseId}: nothing was heard from the worker for 45 s`));
+      });
+    };
+    function end(failure: TunnelFailure | undefined): void {
+      if (finished) return;
+      finished = true;
       environment.signals.off("SIGINT", stop);
       environment.signals.off("SIGTERM", stop);
-    };
-    const stop = () => {
-      settle();
+      environment.clock.cancel(helloTimer);
+      if (silence !== undefined) environment.clock.cancel(silence);
+      if (failure === undefined) resolve(0);
+      else reject(failure);
+    }
+    function stop(): void {
+      if (finished) return;
+      stopping = true;
+      environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
       socket.close(CLOSE_NORMAL, "");
-      resolve(0);
-    };
+    }
     environment.signals.on("SIGINT", stop);
     environment.signals.on("SIGTERM", stop);
+    heard();
+    socket.onPing(heard);
+    socket.onClose((code, reason) => {
+      if (stopping) {
+        end(undefined);
+        return;
+      }
+      end(
+        code === CLOSE_LEASE_ENDED
+          ? new TunnelFailure(
+              "TUNNEL_LEASE_ENDED",
+              `Lease ${leaseId} ended: ${reason}`,
+              ERROR_TABLE.TUNNEL_LEASE_ENDED.cliExitCode,
+            )
+          : disconnected(`Lease ${leaseId}: the connection to the worker was lost`),
+      );
+    });
     socket.onMessage((bytes) => {
+      heard();
       const frame = decodeTunnelFrame(bytes);
       if (frame === undefined) return;
       if (frame.tag === TUNNEL_TAG.refused) {
-        settle();
-        const refusal: unknown = JSON.parse(new TextDecoder().decode(frame.payload));
-        const code = field(refusal, "code");
-        reject(
-          new SimlockError(
-            typeof code === "string" && code in ERROR_TABLE
-              ? (code as SimlockErrorCode)
-              : "TUNNEL_FAILED",
-            "domain",
-            `Lease ${leaseId}: ${String(field(refusal, "message"))}`,
-            {} as never,
-          ),
-        );
+        end(frameFailure(frame, leaseId));
         return;
       }
       if (frame.tag === TUNNEL_TAG.ready) {
+        environment.clock.cancel(helloTimer);
         for (const { callerPort, devicePort } of specs) {
           environment.stdout.write(
             `reverse device:${String(devicePort)} -> localhost:${String(callerPort)} (lease ${leaseId})\n`,
@@ -300,6 +402,42 @@ async function run(
       ),
     );
   });
+}
+
+async function run(
+  argv: readonly string[],
+  { environment, token }: CommandContext,
+): Promise<number> {
+  const { help, lease, positionals, url } = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    lease: { type: "string" },
+    url: { type: "string" },
+  });
+  if (help) {
+    environment.stdout.write(
+      "Usage: simlock tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <id>] [--url <url>]\n",
+    );
+    return 0;
+  }
+  const specs = parseReverses(positionals);
+  const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
+  const secret = checkedToken(token ?? environment.tunnelToken);
+  try {
+    const leaseId = await leaseToUse(
+      environment,
+      base,
+      secret,
+      typeof lease === "string" ? lease : undefined,
+    );
+    const socket = await openSocket(environment, base, secret, leaseId);
+    return await serve(environment, socket, specs, leaseId);
+  } catch (error) {
+    if (!(error instanceof TunnelFailure)) throw error;
+    environment.stderr.write(
+      `${JSON.stringify({ error: { code: error.code, message: error.message } })}\n`,
+    );
+    return error.exitCode;
+  }
 }
 
 export { run };
