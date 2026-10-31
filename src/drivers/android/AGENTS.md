@@ -80,7 +80,9 @@ Reclaim — `reclaim`:
 
 Ownership gate: before any `emu kill` or snapshot load, `adb emu avd path` (5 s timeout, asked every time, never cached) must name this device's own AVD directory; unreachable, timed out or another path → nothing is sent (a snapshot reclaim then shuts down and wipes).
 
-`shutdown`: gate, then `adb emu kill`, wait, SIGKILL. `destroy`: kills the emulator this process started, or after a restart each attached
+`shutdown`: gate, then `adb emu kill`, wait, SIGKILL.
+The emulator alone is spawned with `killTree`, so a kill of its handle (that SIGKILL, a boot timeout) also ends its qemu child on Windows; elsewhere its process group. No adb command asks for it: an adb client can start the 5037 server as its child, so a kill ends that client alone.
+`destroy`: kills the emulator this process started, or after a restart each attached
 emulator whose bounded `emu avd path` names this AVD (any serial that cannot answer → refuse), then `avdmanager delete avd`, frees the port. `listManaged`: `<root>/*.avd` + `adb devices` + `ro.boot.qemu.avd_name` per serial; only root members count.
 
 Profiles — library (`profiles/`), SDK (`avdmanager list device`), devices.xml
