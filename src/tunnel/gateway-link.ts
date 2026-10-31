@@ -6,6 +6,7 @@ import type {
 } from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
 import { unavailable } from "./refusal.js";
+import { encodeTunnelFrame, TUNNEL_REFUSED_CLOSE, TUNNEL_TAG } from "../contract/index.js";
 import { closeReason } from "../core/index.js";
 import { CHANNEL_TAG, encodeFrame, MAX_TUNNEL_MESSAGE_BYTES, readFrames } from "./framing.js";
 
@@ -61,7 +62,20 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
     const writer = relay.writable.getWriter();
     let writes: Promise<unknown> = Promise.resolve();
     socket.onMessage((data) => {
-      if (data.length > MAX_TUNNEL_MESSAGE_BYTES) return;
+      if (data.length > MAX_TUNNEL_MESSAGE_BYTES) {
+        // why: a frame over the limit would break the channel for the whole lease, so the gateway refuses it as the worker refuses a bad frame.
+        const message = `a frame is longer than ${String(MAX_TUNNEL_MESSAGE_BYTES)} bytes`;
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.refused,
+            0,
+            JSON.stringify({ code: "BAD_REQUEST", message }),
+          ),
+        );
+        socket.close(TUNNEL_REFUSED_CLOSE, message);
+        controller.abort();
+        return;
+      }
       const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
       writes = writes.then(() => writer.write(frame)).catch(() => undefined);
     });
