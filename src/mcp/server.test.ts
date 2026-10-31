@@ -8,12 +8,14 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 
-import { SimlockError } from "../client/index.js";
+import { SimlockError, type StatusGetOutput } from "../client/index.js";
 import { FakeClock } from "../ports/index.js";
 import { FakeSimlockClient, sampleGrant } from "./test-support.js";
 import { McpSession } from "./session.js";
 import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
+
+type StatusDevice = NonNullable<StatusGetOutput["devices"]>[number];
 
 describe("MCP server (smoke)", () => {
   it("advertises exactly the lease, catalog, status and run_on_device tools, and walks lease -> list -> status -> release", async () => {
@@ -905,6 +907,91 @@ describe("MCP run_on_device alongside other tools", () => {
     }
   });
 });
+
+describe("MCP list_devices physicalDevices", () => {
+  it("lists the catalog plus each enrolled phone's platform, model, OS version, class and state, and no holder", async () => {
+    const client = new FakeSimlockClient();
+    client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = () =>
+      Promise.resolve(
+        statusOutput([
+          statusDevice({
+            id: "phone-1",
+            physical: true,
+            platform: "ios",
+            model: "iPhone 15",
+            osVersion: "26.4",
+            class: "phone",
+            state: "ready",
+          }),
+        ]),
+      );
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const result = await call(mcpClient, "list_devices", {});
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        platforms: [],
+        physicalDevices: [
+          {
+            platform: "ios",
+            model: "iPhone 15",
+            osVersion: "26.4",
+            class: "phone",
+            state: "ready",
+          },
+        ],
+      });
+    } finally {
+      await close();
+    }
+  });
+});
+
+interface StatusDeviceFixture {
+  readonly id: string;
+  readonly physical: boolean;
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly class?: "phone" | "tablet";
+  readonly state: StatusDevice["state"];
+  readonly absentReason?: StatusDevice["absentReason"];
+  readonly workerId?: string;
+}
+
+function statusDevice(fixture: StatusDeviceFixture): StatusDevice {
+  return {
+    id: fixture.id,
+    spec: {
+      physical: fixture.physical,
+      platform: fixture.platform,
+      model: fixture.model,
+      osVersion: fixture.osVersion,
+    },
+    state: fixture.state,
+    physical: fixture.physical,
+    servesDefaultMode: false,
+    ...(fixture.class === undefined ? {} : { class: fixture.class }),
+    ...(fixture.absentReason === undefined ? {} : { absentReason: fixture.absentReason }),
+    ...(fixture.workerId === undefined ? {} : { workerId: fixture.workerId }),
+  };
+}
+
+function statusOutput(devices: StatusDevice[] | undefined): StatusGetOutput {
+  return {
+    ...(devices === undefined ? {} : { devices }),
+    daemon: {
+      health: devices === undefined ? "starting" : "running",
+      mode: "worker",
+      version: "0.0.0",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    },
+    host: { os: "darwin", osVersion: "26.0", arch: "arm64", tools: [] },
+  };
+}
 
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(
