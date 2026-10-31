@@ -13,6 +13,7 @@ import {
   type TunnelFrame,
 } from "../contract/index.js";
 import {
+  DeviceTcpError,
   stableError,
   toDriverDevice,
   type DeviceRecord,
@@ -213,15 +214,33 @@ export function createTunnelSessions(options: {
         refuse(refused);
         return;
       }
+      const target = toDriverDevice(device);
+      if (!options.deviceTcp.supports(device.spec.platform, target)) {
+        refuse({
+          code: "TUNNEL_UNSUPPORTED",
+          message: `${device.spec.platform} devices take no tunnel`,
+        });
+        return;
+      }
       counts.set(leaseId, held + tunnels.length);
       reserved = tunnels.length;
       for (const tunnel of tunnels) {
-        const reverse = await options.deviceTcp.reverse(
-          device.spec.platform,
-          toDriverDevice(device),
-          tunnel.devicePort,
-          new AbortController().signal,
-        );
+        let reverse: DeviceReverse;
+        try {
+          reverse = await options.deviceTcp.reverse(
+            device.spec.platform,
+            target,
+            tunnel.devicePort,
+            new AbortController().signal,
+          );
+        } catch (error) {
+          await finish(true);
+          refuse({
+            code: error instanceof DeviceTcpError ? error.code : "TUNNEL_FAILED",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
         reverses.push(reverse);
         reverse.onConnection((stream) => {
           const conn = nextConnection;

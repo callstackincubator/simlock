@@ -103,6 +103,13 @@ export class DriverCatalog {
     return await factory.open(device, signal);
   }
 
+  supportsDeviceTcp(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean {
+    return this.#drivers.get(platform)?.deviceTcp?.supports(device) ?? false;
+  }
+
   async reverseDevicePort(
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,

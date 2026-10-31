@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DeviceRecord, LeaseRecord } from "../core/index.js";
+import { DeviceTcpError } from "../core/index.js";
 import { FakeDeviceTcp } from "../core/testing.js";
 import type { WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
@@ -46,7 +47,7 @@ function hello(...tunnels: { kind: string; devicePort: number }[]): Uint8Array {
   return frame(0x01, 0, JSON.stringify({ tunnels }));
 }
 
-async function setup(): Promise<{
+async function setup(platform = "android"): Promise<{
   readonly worker: WorkerModule;
   readonly deviceTcp: FakeDeviceTcp;
 }> {
@@ -54,7 +55,7 @@ async function setup(): Promise<{
   const deviceTcp = new FakeDeviceTcp();
   const registry = {
     snapshot: {
-      devices: [{ id: "dev_1", spec: { platform: "android" } } as unknown as DeviceRecord],
+      devices: [{ id: "dev_1", spec: { platform } } as unknown as DeviceRecord],
       leases: [{ deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord],
     },
   };
@@ -62,6 +63,7 @@ async function setup(): Promise<{
   const worker = loaded.createWorker({
     ...ctx,
     deviceTcp: {
+      supports: (named) => named === "android",
       reverse: (_platform, device, port, signal) => deviceTcp.reverse(device, port, signal),
     },
     registry,
@@ -130,9 +132,36 @@ describe("a worker's tunnel socket", () => {
         message: "forward tunnels are not available yet",
         tunnels: [reverse(5173), { devicePort: 9229, kind: "forward" }],
       },
+      {
+        code: "TUNNEL_UNSUPPORTED",
+        message: "ios devices take no tunnel",
+        platform: "ios",
+        tunnels: [reverse(5173)],
+      },
+      {
+        code: "TUNNEL_PORT_IN_USE",
+        failures: new Map([
+          [5174, new DeviceTcpError("TUNNEL_PORT_IN_USE", "port 5174 is reversed")],
+        ]),
+        message: "port 5174 is reversed",
+        tunnels: [reverse(5173), reverse(5174)],
+      },
+      {
+        code: "TUNNEL_FAILED",
+        failures: new Map([[5174, new DeviceTcpError("TUNNEL_FAILED", "device offline")]]),
+        message: "device offline",
+        tunnels: [reverse(5173), reverse(5174)],
+      },
+      {
+        code: "TUNNEL_FAILED",
+        failures: new Map([[5174, new Error("adb exploded")]]),
+        message: "adb exploded",
+        tunnels: [reverse(5173), reverse(5174)],
+      },
     ];
     for (const refused of cases) {
-      const { deviceTcp, worker } = await setup();
+      const { deviceTcp, worker } = await setup(refused.platform);
+      for (const [port, failure] of refused.failures ?? []) deviceTcp.failures.set(port, failure);
       const socket = await attach(worker);
       socket.receive(hello(...refused.tunnels));
       await vi.waitFor(() =>

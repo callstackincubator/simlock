@@ -199,6 +199,7 @@ export interface ModuleInputs {
 
 // why: the drivers' device ports, routed by platform, without handing a module the drivers.
 export interface ModuleDeviceTcp {
+  supports(platform: Platform, device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
   reverse(
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,

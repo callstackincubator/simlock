@@ -44,6 +44,7 @@ async function listenInRange(listeners: TcpListenerFactory): Promise<TcpListener
 
 export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): DeviceTcp {
   return {
+    supports: () => true,
     async reverse(device, devicePort): Promise<DeviceReverse> {
       const listener = await listenInRange(options.listeners);
       const refuse = async (error: DeviceTcpError): Promise<never> => {

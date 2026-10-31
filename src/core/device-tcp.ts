@@ -23,6 +23,7 @@ export interface DeviceReverse {
 // why: an optional driver member beside `input`; a platform whose device cannot reach a worker port
 // leaves it out, and the tunnel module learns that from its absence rather than from a platform name.
 export interface DeviceTcp {
+  supports(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
   reverse(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     devicePort: number,

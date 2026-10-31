@@ -191,7 +191,10 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
       processRunner,
       processSupervisor,
       registry: { snapshot: { devices: [], leases: [] } },
-      deviceTcp: { reverse: () => Promise.reject(new Error("no device port in a fake context")) },
+      deviceTcp: {
+        reverse: () => Promise.reject(new Error("no device port in a fake context")),
+        supports: () => false,
+      },
       inputs: { openInput: () => Promise.resolve({ unavailable: "no input in a fake context" }) },
       screens: {
         openScreen: () => Promise.reject(new Error("no screen in a fake context")),
