@@ -16,15 +16,20 @@ import {
   DeviceTcpError,
   stableError,
   toDriverDevice,
+  unsupportedTunnelMessage,
   type DeviceRecord,
   type DeviceReverse,
 } from "../core/index.js";
 import type { ModuleDeviceTcp } from "../modules/index.js";
-import type { LeaseSocket, Logger, TcpStream } from "../ports/index.js";
+import type { Clock, LeaseSocket, Logger, TcpStream, TimerHandle } from "../ports/index.js";
 
 const CLOSE_LEASE_ENDED = 4001;
 const CLOSE_GOING_AWAY = 1001;
 const MAX_CONNECTIONS = 256;
+// why: a WebSocket close reason is at most 123 bytes, and `ws` throws on a longer one, so a long message is cut for the close and sent whole in REFUSED.
+const CLOSE_REASON_MAX_BYTES = 123;
+const REMOVAL_TIMEOUT_MS = 10_000;
+const CREDIT_BYTES = 4;
 
 interface Tunnel {
   readonly kind: "reverse" | "forward";
@@ -83,11 +88,17 @@ function parseHello(payload: Uint8Array): readonly Tunnel[] | string {
   return tunnels;
 }
 
+function closeReason(message: string): string {
+  const bytes = new TextEncoder().encode(message);
+  if (bytes.length <= CLOSE_REASON_MAX_BYTES) return message;
+  return new TextDecoder().decode(bytes.subarray(0, CLOSE_REASON_MAX_BYTES)).replace(/�+$/u, "");
+}
+
 function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined {
   if (held + tunnels.length > TUNNEL_MAX_TUNNELS) {
     return {
       code: "TUNNEL_LIMIT",
-      message: `the lease already has ${String(held + tunnels.length)} tunnels; at most ${String(TUNNEL_MAX_TUNNELS)}`,
+      message: `the lease already has ${String(held)} tunnels; at most ${String(TUNNEL_MAX_TUNNELS)}`,
     };
   }
   for (const { devicePort, kind } of tunnels) {
@@ -107,7 +118,7 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
 // why: one socket's state that the lease's end and the daemon's stop reach from outside: `finish` closes its connections and, unless the reclaim that follows does it, removes its rules.
 interface Session {
   readonly socket: LeaseSocket;
-  finish(removeRules: boolean): Promise<void>;
+  finish(removeRules: boolean, signal?: AbortSignal): Promise<void>;
 }
 
 export interface TunnelSessions {
@@ -119,6 +130,7 @@ export interface TunnelSessions {
 export function createTunnelSessions(options: {
   readonly deviceTcp: ModuleDeviceTcp;
   readonly logger: Logger;
+  readonly clock: Clock;
 }): TunnelSessions {
   // why: the 8-tunnel limit counts every socket of one lease, so the count is the lease's, not the socket's.
   const counts = new Map<string, number>();
@@ -129,11 +141,16 @@ export function createTunnelSessions(options: {
     let greeted = false;
     let reserved = 0;
     let finished: Promise<void> | undefined;
+    // why: a rule that arrives after `finish` read the list is removed only if the end that finished the session removed its own.
+    let endedWith:
+      | { readonly remove: boolean; readonly signal: AbortSignal | undefined }
+      | undefined;
     const connections = new Map<number, Connection>();
     const reverses: DeviceReverse[] = [];
 
-    function finish(removeRules: boolean): Promise<void> {
+    function finish(removeRules: boolean, signal?: AbortSignal): Promise<void> {
       finished ??= (async () => {
+        endedWith = { remove: removeRules, signal };
         sessions.get(leaseId)?.delete(session);
         counts.set(leaseId, (counts.get(leaseId) ?? 0) - reserved);
         for (const connection of connections.values()) {
@@ -143,9 +160,26 @@ export function createTunnelSessions(options: {
         }
         connections.clear();
         if (!removeRules) return;
-        await Promise.all(reverses.map(removeRule));
+        // why: one after another, so a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
+        for (const reverse of reverses) {
+          if (signal?.aborted === true) return;
+          await bounded(removeRule(reverse));
+        }
       })();
       return finished;
+    }
+
+    // why: an adb call that never answers must not hold the lease's end or the daemon's stop, so each removal waits at most 10 s.
+    async function bounded(work: Promise<void>): Promise<void> {
+      let handle: TimerHandle | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        handle = options.clock.setTimer(REMOVAL_TIMEOUT_MS, () => {
+          options.logger.warn("A tunnel's device rule removal timed out", {});
+          resolve();
+        });
+      });
+      await Promise.race([work, timeout]);
+      if (handle !== undefined) options.clock.cancel(handle);
     }
 
     function removeRule(reverse: DeviceReverse): Promise<void> {
@@ -169,6 +203,14 @@ export function createTunnelSessions(options: {
       connections.delete(conn);
     }
 
+    // why: a connection a RESET or a failure already closed sends no END for the device's end.
+    function deviceEnded(conn: number, connection: Connection): void {
+      if (connection.closed) return;
+      socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+      connection.deviceEnded = true;
+      settle(conn, connection);
+    }
+
     // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
     async function pump(conn: number, connection: Connection): Promise<void> {
       const reader = connection.stream.readable.getReader();
@@ -183,9 +225,7 @@ export function createTunnelSessions(options: {
         if (pending === undefined) {
           const step = await reader.read();
           if (step.done) {
-            socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
-            connection.deviceEnded = true;
-            settle(conn, connection);
+            deviceEnded(conn, connection);
             return;
           }
           pending = step.value;
@@ -199,11 +239,27 @@ export function createTunnelSessions(options: {
 
     function refuse(refused: Refusal): void {
       socket.send(encodeTunnelFrame(TUNNEL_TAG.refused, 0, JSON.stringify(refused)));
-      socket.close(TUNNEL_REFUSED_CLOSE, refused.message);
+      socket.close(TUNNEL_REFUSED_CLOSE, closeReason(refused.message));
     }
 
     function badRequest(message: string): void {
       refuse({ code: "BAD_REQUEST", message });
+    }
+
+    // why: a connection whose device stream failed ends alone, with RESET, so one broken device socket never takes the others or the daemon down.
+    function drop(conn: number, connection: Connection): void {
+      if (connections.get(conn) !== connection) return;
+      connection.closed = true;
+      connection.stream.close();
+      connection.wake?.();
+      connections.delete(conn);
+      socket.send(
+        encodeTunnelFrame(
+          TUNNEL_TAG.reset,
+          conn,
+          JSON.stringify({ reason: "the device connection failed" }),
+        ),
+      );
     }
 
     async function received(
@@ -211,7 +267,12 @@ export function createTunnelSessions(options: {
       connection: Connection,
       payload: Uint8Array,
     ): Promise<void> {
-      await connection.stream.write(payload);
+      try {
+        await connection.stream.write(payload);
+      } catch {
+        drop(conn, connection);
+        return;
+      }
       connection.inbound += payload.length;
       const granted = new Uint8Array(4);
       new DataView(granted.buffer).setUint32(0, payload.length);
@@ -236,7 +297,7 @@ export function createTunnelSessions(options: {
       if (!options.deviceTcp.supports(device.spec.platform, target)) {
         refuse({
           code: "TUNNEL_UNSUPPORTED",
-          message: `${device.spec.platform} devices take no tunnel`,
+          message: unsupportedTunnelMessage(device.spec.platform, target.physical),
         });
         return;
       }
@@ -253,20 +314,27 @@ export function createTunnelSessions(options: {
           );
         } catch (error) {
           await finish(true);
-          refuse({
-            code: error instanceof DeviceTcpError ? error.code : "TUNNEL_FAILED",
-            message: error instanceof Error ? error.message : String(error),
-          });
+          const message = error instanceof Error ? error.message : String(error);
+          refuse(
+            error instanceof DeviceTcpError
+              ? { code: error.code, message }
+              : {
+                  code: "TUNNEL_FAILED",
+                  message: `${tunnel.kind} ${String(tunnel.devicePort)}: ${message}`,
+                },
+          );
           return;
         }
         // why: the socket can close while `reverse` is awaited, after `finish` read the list; a rule that arrives then is removed here.
         if (finished !== undefined) {
-          await removeRule(reverse);
+          if (endedWith?.remove === true && endedWith.signal?.aborted !== true) {
+            await bounded(removeRule(reverse));
+          }
           return;
         }
         reverses.push(reverse);
         reverse.onConnection((stream) => {
-          if (connections.size >= MAX_CONNECTIONS) {
+          if (finished !== undefined || connections.size >= MAX_CONNECTIONS) {
             stream.close();
             return;
           }
@@ -283,13 +351,17 @@ export function createTunnelSessions(options: {
             window: TUNNEL_WINDOW_BYTES,
           };
           connections.set(conn, connection);
-          void pump(conn, connection);
+          void pump(conn, connection).catch(() => drop(conn, connection));
         });
       }
       socket.send(encodeTunnelFrame(TUNNEL_TAG.ready, 0, JSON.stringify({ tunnels })));
     }
 
     function onData(conn: number, connection: Connection, payload: Uint8Array): void {
+      if (payload.length === 0 || payload.length > TUNNEL_MAX_DATA_BYTES) {
+        badRequest(`DATA is 1 to ${String(TUNNEL_MAX_DATA_BYTES)} bytes`);
+        return;
+      }
       if (payload.length > connection.inbound) {
         badRequest("DATA is past the granted window");
         return;
@@ -299,6 +371,10 @@ export function createTunnelSessions(options: {
     }
 
     function onCredit(connection: Connection, payload: Uint8Array): void {
+      if (payload.length !== CREDIT_BYTES) {
+        badRequest(`CREDIT is ${String(CREDIT_BYTES)} bytes`);
+        return;
+      }
       const granted = new DataView(payload.buffer, payload.byteOffset, payload.length).getUint32(0);
       if (connection.window + granted > TUNNEL_WINDOW_LIMIT) {
         badRequest(`the window is above ${String(TUNNEL_WINDOW_LIMIT)}`);
@@ -316,7 +392,11 @@ export function createTunnelSessions(options: {
           return;
         }
         greeted = true;
-        void hello(frame.payload);
+        void hello(frame.payload).catch((error: unknown) => {
+          options.logger.warn("A tunnel's HELLO failed", { error: stableError(error) });
+          void finish(true);
+          refuse({ code: "TUNNEL_FAILED", message: "the worker could not set the tunnels up" });
+        });
         return;
       }
       if (frame.tag === TUNNEL_TAG.hello) {
@@ -353,10 +433,16 @@ export function createTunnelSessions(options: {
       }
     }
 
+    // why: wire input never throws past this handler: whatever a frame does to the session, the holder gets BAD_REQUEST and the daemon goes on.
     socket.onMessage((data) => {
-      const frame = decodeTunnelFrame(data);
-      if (frame === undefined) badRequest("a frame is shorter than its 5-byte header");
-      else handle(frame);
+      try {
+        const frame = decodeTunnelFrame(data);
+        if (frame === undefined) badRequest("a frame is shorter than its 5-byte header");
+        else handle(frame);
+      } catch (error) {
+        options.logger.warn("A tunnel frame could not be handled", { error: stableError(error) });
+        badRequest("a frame could not be handled");
+      }
     });
   }
 
@@ -365,22 +451,23 @@ export function createTunnelSessions(options: {
     code: number,
     reason: string,
     removeRules: boolean,
+    signal?: AbortSignal,
   ): Promise<void> {
     const ending =
       leaseId === undefined
         ? [...sessions.values()].flatMap((set) => [...set])
         : [...(sessions.get(leaseId) ?? [])];
     // why: a close that races the end must not remove a rule twice, so each session finishes once, with the end's choice about removal.
-    const done = ending.map((session) => session.finish(removeRules));
-    for (const session of ending) session.socket.close(code, reason);
+    const done = ending.map((session) => session.finish(removeRules, signal));
+    for (const session of ending) session.socket.close(code, closeReason(reason));
     await Promise.all(done);
   }
 
   return {
     attach,
     drain: () => endSessions(undefined, CLOSE_GOING_AWAY, "Simlock is stopping", true),
-    // why: with the signal already aborted the daemon is stopping or in maintenance, and reclaim removes the rules, so no removal runs after reclaim began.
+    // why: with the signal aborted the daemon is stopping or in maintenance, and reclaim removes the rules, so no removal starts after that; the hook returns only when the removals it began are done.
     end: (leaseId, reason, signal) =>
-      endSessions(leaseId, CLOSE_LEASE_ENDED, reason, !signal.aborted),
+      endSessions(leaseId, CLOSE_LEASE_ENDED, reason, !signal.aborted, signal),
   };
 }
