@@ -3382,11 +3382,17 @@ describe("AndroidDriver deviceTcp", () => {
     expectations: ScriptedProcessExpectation[],
     listeners = new FakeTcpListenerFactory(),
     tcpProbe?: FakeTcpProbe,
+    extra: {
+      readonly clock?: FakeClock;
+      readonly driverConfig?: Readonly<Record<string, number>>;
+      readonly tcpStreamConnector?: FakeTcpStreamConnector;
+    } = {},
   ) {
     const runner = new ScriptedProcessRunner(expectations);
     const driver = await createDriver(await androidFilesystem(), runner, {
       tcpListener: listeners,
       ...(tcpProbe === undefined ? {} : { tcpProbe }),
+      ...extra,
     });
     return { driver, listeners, runner };
   }
@@ -3456,6 +3462,111 @@ describe("AndroidDriver deviceTcp", () => {
       closed: true,
       delivered: 0,
     });
+  });
+
+  it("opens a device port through adb's host protocol with no adb forward, on the emulator's configured server port or the phone's 5037 behind the gate, and fails with the reason on FAIL, a closed gate or no answer in 5 s", async () => {
+    const tcp = new FakeTcpStreamConnector();
+    const clock = new FakeClock();
+    const world = await driverWith([], new FakeTcpListenerFactory(), undefined, {
+      clock,
+      driverConfig: { adbServerPort: 5599 },
+      tcpStreamConnector: tcp,
+    });
+    const requested = (index: number) => tcp.connections[index]?.peer.writtenText();
+    const dial = async (index: number, request: string) => {
+      await vi.waitFor(() => expect(requested(index)).toBe(request));
+      return tcp.connections[index]?.peer;
+    };
+    const transport = "001chost:transport:emulator-5586";
+
+    const opening = world.driver.deviceTcp?.connect(emulator, 9229, signal());
+    expect(await dial(0, transport)).toBeDefined();
+    expect(tcp.connections[0]?.port).toBe(5599);
+    const peer = tcp.connections[0]?.peer;
+    peer?.send("OKAY");
+    await dial(0, `${transport}0008tcp:9229`);
+    peer?.send("OKAYdevice-ok");
+    const stream = await opening;
+    const reader = stream?.readable.getReader();
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe("device-ok");
+    await stream?.write("from-caller");
+    expect(requested(0)).toBe(`${transport}0008tcp:9229from-caller`);
+    stream?.end();
+    expect(peer?.writeEnded).toBe(true);
+    expect(world.runner.calls).toEqual([]);
+
+    const failed = world.driver.deviceTcp?.connect(emulator, 9230, signal());
+    const failing = failed?.catch((error: unknown) => error);
+    await dial(1, transport);
+    tcp.connections[1]?.peer.send("OKAY");
+    await dial(1, `${transport}0008tcp:9230`);
+    tcp.connections[1]?.peer.send("FAIL0006closed");
+    const refused = await failing;
+    expect(refused).toBeInstanceOf(DeviceTcpError);
+    expect((refused as DeviceTcpError).code).toBe("TUNNEL_FAILED");
+    expect((refused as DeviceTcpError).message).toBe("closed");
+    expect(tcp.connections[1]?.peer.closed).toBe(true);
+
+    const silent = world.driver.deviceTcp?.connect(emulator, 9231, signal());
+    let settled = false;
+    const silence = silent?.catch((error: unknown) => error).finally(() => (settled = true));
+    await dial(2, transport);
+    tcp.connections[2]?.peer.send("OKAY");
+    await dial(2, `${transport}0008tcp:9231`);
+    clock.advance(4_999);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    clock.advance(1);
+    const timedOut = await silence;
+    expect(timedOut).toBeInstanceOf(DeviceTcpError);
+    expect((timedOut as DeviceTcpError).message).toBe("timeout");
+    expect(tcp.connections[2]?.peer.closed).toBe(true);
+
+    const phoneTcp = new FakeTcpStreamConnector();
+    const open = new FakeTcpProbe([5038, 5037]);
+    open.replyWith("OKAY00040029");
+    const phone = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      open,
+      { tcpStreamConnector: phoneTcp },
+    );
+    const phoneOpening = phone.driver.deviceTcp?.connect(PHYSICAL_DEVICE, 9229, signal());
+    await vi.waitFor(() => expect(phoneTcp.connections.map((c) => c.port)).toEqual([5037]));
+    expect(phoneTcp.connections[0]?.peer.writtenText()).toBe("0019host:transport:R58M123ABC");
+    phoneTcp.connections[0]?.peer.send("OKAY");
+    await vi.waitFor(() =>
+      expect(phoneTcp.connections[0]?.peer.writtenText()).toBe(
+        "0019host:transport:R58M123ABC0008tcp:9229",
+      ),
+    );
+    phoneTcp.connections[0]?.peer.send("OKAY");
+    expect(await phoneOpening).toBeDefined();
+
+    const closedGate = new FakeTcpProbe([5038, 5037]);
+    closedGate.replyWith("OKAY00040028");
+    const gated = new FakeTcpStreamConnector();
+    const shut = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.40\n" },
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      closedGate,
+      { tcpStreamConnector: gated },
+    );
+    const gateError = await shut.driver.deviceTcp
+      ?.connect(PHYSICAL_DEVICE, 9229, signal())
+      .catch((error: unknown) => error);
+    expect((gateError as Error).message).toMatch(/speaks protocol 40/);
+    expect(gated.connections).toEqual([]);
   });
 
   it("sweeps at start only the reverse rules into 47000-47999 on a device proved its own, and removes nothing on an emulator that answers as another's", async () => {
