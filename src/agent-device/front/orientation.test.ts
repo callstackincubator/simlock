@@ -29,6 +29,7 @@ interface RigOptions {
   readonly adopted?: boolean;
   readonly platform?: "ios" | "android";
   readonly physical?: boolean;
+  readonly owner?: typeof agent;
   readonly rotate?: () => Promise<unknown>;
 }
 
@@ -40,7 +41,7 @@ function rig(options: RigOptions): Rig {
   const entry = {
     address: "udid-1",
     deadline: clock.now() + ttlMs,
-    identity: agent,
+    identity: options.owner ?? agent,
     model: options.model,
     platform: options.platform ?? "ios",
     ...(options.physical === undefined ? {} : { physical: options.physical }),
@@ -214,6 +215,10 @@ describe("the agent-device front's orientation command", () => {
         rotate: () => Promise.reject(error),
       });
       const response = await handle("orientation", ["landscape-left"]);
+      const unreachable = expected.status === 503;
+      expect(clock.pendingTimerCount, `${expected.message} renewal before the body is read`).toBe(
+        unreachable ? 0 : 2,
+      );
       const body = await answer(response);
       const { status, ...data } = expected;
       expect(response.status, data.message).toBe(status);
@@ -229,6 +234,8 @@ describe("the agent-device front's orientation command", () => {
       { label: "Android phone", platform: "android", model: "Pixel 8", physical: true },
       { label: "iPhone", physical: true, model: "iPhone 17 Pro" },
       { label: "Apple TV simulator", model: "Apple TV 4K (3rd generation)" },
+      { label: "Android on an iPhone model", platform: "android", model: "iPhone 17 Pro" },
+      { label: "another token's lease", owner: tokenIdentity("tok_b"), model: "iPhone 17 Pro" },
     ] as const;
     for (const { label, ...lease } of cases) {
       for (const typed of ["landscape-left", "auto"]) {
