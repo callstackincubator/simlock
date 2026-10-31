@@ -8279,6 +8279,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
     exec: () => Promise.resolve({ exitCode: 0 }),
+    rotate: (leaseId, orientation) => Promise.resolve({ leaseId, orientation }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
@@ -10671,5 +10672,163 @@ describe("simlock worker update", () => {
         },
       ]);
     }
+  });
+});
+
+describe("simlock rotate", () => {
+  const heldLease = {
+    deviceId: "dev_1",
+    grantedAt: 0,
+    id: "lse_mine",
+    lastRenewedAt: 0,
+    idChosenByRequester: false,
+    ownerId: "some-other-principal",
+    requesterId: "test-requester",
+    ttlDeadline: 60_000,
+    ttlMs: 60_000,
+  };
+
+  const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
+
+  async function rotateWith(
+    argv: readonly string[],
+    leases: readonly (typeof heldLease)[],
+    role: "admin" | "agent" = "admin",
+  ) {
+    const output = outputCapture();
+    const rotations: unknown[] = [];
+    let closes = 0;
+    const exitCode = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            role,
+            close: () => {
+              closes += 1;
+              return Promise.resolve();
+            },
+            listLeases: () => Promise.resolve({ leases: [...leases] }),
+            rotate: (leaseId, orientation, options) => {
+              rotations.push({ leaseId, orientation, options });
+              return Promise.resolve({ leaseId: `${leaseId}_answered`, orientation });
+            },
+          }),
+      }),
+    );
+    return { closes: () => closes, exitCode, output, rotations };
+  }
+
+  it("a user runs simlock rotate <orientation> [--lease <id>] and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
+    const only = await rotateWith(["rotate", "landscape-left"], [heldLease]);
+    expect(only.exitCode).toBe(0);
+    expect(only.rotations).toEqual([
+      {
+        leaseId: "lse_mine",
+        orientation: "landscape_left",
+        options: { requesterId: "test-requester" },
+      },
+    ]);
+    expect(only.output.stdout).toBe("Rotated lease lse_mine_answered to landscape_left\n");
+    expect(only.closes()).toBe(1);
+
+    const asAgent = await rotateWith(["rotate", "landscape-left"], [heldLease], "agent");
+    expect(asAgent.exitCode).toBe(0);
+    expect(asAgent.rotations).toEqual([
+      { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
+    ]);
+
+    for (const argv of [
+      ["rotate", "--lease", "lse_other", "left"],
+      ["rotate", "left", "--lease", "lse_other"],
+      ["rotate", "left", "--lease=lse_other"],
+    ]) {
+      const named = await rotateWith(argv, two);
+      expect(named.exitCode).toBe(0);
+      expect(named.rotations).toEqual([
+        {
+          leaseId: "lse_other",
+          orientation: "landscape_left",
+          options: { requesterId: "test-requester" },
+        },
+      ]);
+    }
+
+    for (const [spelling, orientation] of [
+      ["LEFT", "landscape_left"],
+      [" left ", "landscape_left"],
+      ["upside-down", "portrait_upside_down"],
+    ]) {
+      const spelled = await rotateWith(["rotate", spelling as string], [heldLease]);
+      expect(spelled.exitCode).toBe(0);
+      expect(spelled.output.stdout).toBe(`Rotated lease lse_mine_answered to ${orientation}\n`);
+    }
+
+    const refusals: [readonly string[], readonly (typeof heldLease)[], RegExp][] = [
+      [["rotate", "sideways"], [heldLease], /^Unknown orientation sideways; use portrait,/],
+      [["rotate", "auto"], [heldLease], /^Unknown orientation auto;/],
+      [["rotate", "landscapeLeft"], [heldLease], /^Unknown orientation landscapeLeft;/],
+      [["rotate"], [heldLease], /^Expected orientation/],
+      [["rotate", "left"], [], /test-requester/],
+      [["rotate", "left"], two, /lse_mine.*lse_other.*--lease <id>/s],
+    ];
+    for (const [argv, leases, message] of refusals) {
+      const refused = await rotateWith(argv, leases);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.rotations).toEqual([]);
+      expect(JSON.parse(refused.output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringMatching(message) },
+      });
+    }
+
+    const unsupported = outputCapture();
+    let unsupportedCloses = 0;
+    await expect(
+      runCli(
+        ["rotate", "left", "--lease", "lse_android"],
+        unsupported.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              close: () => {
+                unsupportedCloses += 1;
+                return Promise.resolve();
+              },
+              rotate: () =>
+                Promise.reject(
+                  new SimlockError(
+                    "ROTATION_UNSUPPORTED",
+                    "domain",
+                    "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+                    {
+                      class: "emulator",
+                      leaseId: "lse_android",
+                      physical: false,
+                      platform: "android",
+                    },
+                  ),
+                ),
+            }),
+        }),
+      ),
+    ).resolves.toBe(12);
+    expect(JSON.parse(unsupported.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: {
+        code: "ROTATION_UNSUPPORTED",
+        message:
+          "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+      },
+    });
+    expect(unsupported.stdout).toBe("");
+    expect(unsupportedCloses).toBe(1);
+
+    const help = await rotateWith(["rotate", "--help"], [heldLease]);
+    expect(help.exitCode).toBe(0);
+    expect(help.output.stdout).toBe(
+      "Usage: simlock rotate <portrait|portrait-upside-down|landscape-left|landscape-right> [--lease <id>]\n",
+    );
+    expect(help.rotations).toEqual([]);
+    const listing = outputCapture();
+    await runCli(["--help"], listing.environmentWith());
+    expect(listing.stdout).toContain("  rotate <orientation> [--lease <id>]");
   });
 });

@@ -38,6 +38,9 @@ export type DriverPassthroughInput = OpInput<"driver.passthrough">;
 /** The scoped command `simlock simctl` / `simlock adb` runs; see `passthroughCommandSchema`. */
 export type PassthroughCommand = OpOutput<"driver.passthrough">;
 export type ExecInput = OpInput<"device.exec">;
+export type RotateInput = OpInput<"device.rotate">;
+/** `{ leaseId, orientation }`: what the lease's simulator was turned to. */
+export type RotateOutput = OpOutput<"device.rotate">;
 /** `{ exitCode }` -- the output itself arrived as `onOutput` chunks while the command ran
  * (ADR 0005 §19a). */
 export type ExecOutput = OpOutput<"device.exec">;

@@ -96,6 +96,7 @@ A route with a `socket` handler also takes a WebSocket upgrade: `app.leaseSocket
 - `POST /v1/update` (optional body `{version, force}`, strict) → `daemon.update`: 202 when the call began the update (`started`), 200 when it followed one or found nothing to do (`upToDate`). The route declares both (`alsoStatus`). The role check is the dispatcher's; on a gateway it updates the gateway itself, with no lease wait.
 - `POST /v1/workers/{id}/update` (optional body `{version, force}`, strict) → `worker.update`: the same 202 and 200; `UNKNOWN_WORKER` 404, `WORKER_NOT_CONNECTED` 409, and a worker daemon answers 501.
 - `GET /v1/leases/{id}/events` — the lease's notices; ends on `lease_lost`.
+- `POST /v1/leases/{id}/rotate` (body `{orientation}`, one of the four names, strict) → `device.rotate`: 200 with `{leaseId, orientation}`; `ROTATION_UNSUPPORTED` 422, `INPUT_UNAVAILABLE` 503, 403 for another requester's lease, 404 for an unknown one (`src/http/lease-declarations.ts`, `src/http/app.ts`).
 - `POST /v1/leases/{id}/exec` → `device.exec`. The stream opens on `onStarted`; a failure
   before that is a plain error response. Events: `output`, then `exit` or `error`.
 - `POST /v1/components/install` → `component.install`, or `worker.install-component` with

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DeviceRecord, LeaseRecord } from "../core/index.js";
+import { isUnavailableInput, type DeviceRecord, type LeaseRecord } from "../core/index.js";
 import { FakeInputFactory } from "../core/testing.js";
 import type { ModuleEndedLease, WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
@@ -32,7 +32,12 @@ async function setup(): Promise<{
   const loaded = await inputModule.loadWorker();
   const worker = loaded.createWorker({
     ...ctx,
-    inputs: { openInput: () => factory.open() },
+    inputs: {
+      leaseInput: async () => {
+        const input = await factory.open();
+        return { input, release: () => void (isUnavailableInput(input) || input.close()) };
+      },
+    },
     registry,
   });
   return { clock, factory, leases, worker };

@@ -8,6 +8,7 @@ import {
   type LeaseRequestInput,
   type SimlockClient,
 } from "../client/index.js";
+import { parseOrientation } from "../contract/index.js";
 import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
@@ -23,6 +24,8 @@ import type {
   ListDevicesOutput,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
+  RotateDeviceInput,
+  RotateDeviceOutput,
   RunOnDeviceInput,
 } from "./contracts.js";
 
@@ -298,6 +301,22 @@ export class McpSession {
     }
     const client = await this.#clientForUse();
     return client.exec({ ...input, leaseId }, { onOutput });
+  }
+
+  // why: not on `#mutate`, like `runOnDevice`; the parse is first so a bad spelling never reaches the daemon.
+  async rotateDevice(input: RotateDeviceInput): Promise<RotateDeviceOutput> {
+    this.#throwIfClosed();
+    const parsed = parseOrientation(input.orientation);
+    if (!parsed.ok) throw new McpSessionError("BAD_REQUEST", parsed.message);
+    const leaseId = this.#heldLeaseId;
+    if (leaseId === undefined) {
+      throw new McpSessionError(
+        "NO_LEASE",
+        "This MCP session holds no lease. Call lease_simulator first.",
+      );
+    }
+    const client = await this.#clientForUse();
+    return client.rotate(leaseId, parsed.orientation);
   }
 
   /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
