@@ -26,6 +26,7 @@ const CLOSE_NORMAL = 1000;
 const WARN_EVERY_MS = 10_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
+const MAX_LEASE_CHARS = 256;
 
 interface ReverseSpec {
   readonly devicePort: number;
@@ -98,6 +99,22 @@ function checkedToken(text: string | undefined): string {
     throw new UsageError("No token: pass --token or set SIMLOCK_TOKEN");
   }
   return text;
+}
+
+function checkedLease(text: string | undefined): string | undefined {
+  if (text !== undefined && (text === "" || text.length > MAX_LEASE_CHARS)) {
+    throw new UsageError(`--lease must be 1 to ${String(MAX_LEASE_CHARS)} characters`);
+  }
+  return text;
+}
+
+// why: a frame's JSON body comes off the wire, so a body that does not parse is read as having no fields instead of throwing out of the socket's listener.
+function payloadJson(payload: Uint8Array): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(payload));
+  } catch {
+    return undefined;
+  }
 }
 
 function field(value: unknown, name: string): unknown {
@@ -296,13 +313,14 @@ async function openSocket(
 }
 
 function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFailure {
-  const refusal: unknown = JSON.parse(new TextDecoder().decode(frame.payload));
+  const refusal = payloadJson(frame.payload);
   const code = field(refusal, "code");
+  const message = field(refusal, "message");
   const known =
     typeof code === "string" && code in ERROR_TABLE ? (code as SimlockErrorCode) : "TUNNEL_FAILED";
   return new TunnelFailure(
     known,
-    `Lease ${leaseId}: ${String(field(refusal, "message"))}`,
+    `Lease ${leaseId}: ${typeof message === "string" ? message : "the worker refused the tunnel"}`,
     ERROR_TABLE[known].cliExitCode,
   );
 }
@@ -393,9 +411,7 @@ function serve(
       const opened =
         frame.tag === TUNNEL_TAG.open
           ? specs.find(
-              ({ devicePort }) =>
-                field(JSON.parse(new TextDecoder().decode(frame.payload)), "devicePort") ===
-                devicePort,
+              ({ devicePort }) => field(payloadJson(frame.payload), "devicePort") === devicePort,
             )
           : undefined;
       handled = handled.then(() => relay(opened, frame)).catch(() => undefined);
@@ -430,13 +446,9 @@ async function run(
   const specs = parseReverses(positionals);
   const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
   const secret = checkedToken(token ?? environment.tunnelToken);
+  const named = checkedLease(typeof lease === "string" ? lease : undefined);
   try {
-    const leaseId = await leaseToUse(
-      environment,
-      base,
-      secret,
-      typeof lease === "string" ? lease : undefined,
-    );
+    const leaseId = await leaseToUse(environment, base, secret, named);
     const socket = await openSocket(environment, base, secret, leaseId);
     return await serve(environment, socket, specs, leaseId);
   } catch (error) {

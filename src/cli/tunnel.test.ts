@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { TUNNEL_TAG, decodeTunnelFrame, encodeTunnelFrame } from "../contract/index.js";
+import {
+  TUNNEL_MAX_DATA_BYTES,
+  TUNNEL_TAG,
+  decodeTunnelFrame,
+  encodeTunnelFrame,
+} from "../contract/index.js";
 import { buildCliEnvironment, runCli } from "./index.js";
 import {
   FakeClock,
@@ -88,14 +93,28 @@ describe("simlock tunnel that cannot run", () => {
     accepted.signals.emit("SIGINT");
     expect(await acceptedExit).toBe(0);
 
+    const longest = command({
+      SIMLOCK_TOKEN: "t".repeat(4096),
+      SIMLOCK_URL: `https://${"a".repeat(2040)}`,
+    });
+    const longestExit = longest.run(["tunnel", "reverse", "5173", "--lease", "L".repeat(256)]);
+    await vi.waitFor(() => expect(longest.webSocket.connections).toHaveLength(1));
+    longest.signals.emit("SIGINT");
+    expect(await longestExit).toBe(0);
+
     const cases: readonly {
       readonly argv: readonly string[];
       readonly env?: NodeJS.ProcessEnv;
+      readonly lease?: string;
       readonly message: string;
     }[] = [
       {
         argv: ["reverse", "70000"],
         message: 'device port "70000" is not an integer from 1 to 65535',
+      },
+      {
+        argv: ["reverse", "65536"],
+        message: 'device port "65536" is not an integer from 1 to 65535',
       },
       { argv: ["reverse", "abc"], message: 'device port "abc" is not an integer from 1 to 65535' },
       {
@@ -129,10 +148,34 @@ describe("simlock tunnel that cannot run", () => {
         env: { SIMLOCK_URL: "http://127.0.0.1:7300" },
         message: "No token: pass --token or set SIMLOCK_TOKEN",
       },
+      {
+        argv: ["reverse", "5173"],
+        lease: "",
+        message: "--lease must be 1 to 256 characters",
+      },
+      {
+        argv: ["reverse", "5173"],
+        lease: "L".repeat(257),
+        message: "--lease must be 1 to 256 characters",
+      },
+      {
+        argv: ["reverse", "5173"],
+        env: { ...ENV, SIMLOCK_URL: `https://${"a".repeat(2041)}` },
+        message: "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
+      },
+      {
+        argv: ["reverse", "5173"],
+        env: { ...ENV, SIMLOCK_TOKEN: "t".repeat(4097) },
+        message: "No token: pass --token or set SIMLOCK_TOKEN",
+      },
+      {
+        argv: Array.from({ length: 9 }, (_, index) => ["reverse", String(5000 + index)]).flat(),
+        message: "At most 8 tunnels",
+      },
     ];
-    for (const { argv, env, message } of cases) {
+    for (const { argv, env, lease, message } of cases) {
       const cli = command(env ?? ENV);
-      const exit = cli.run(["tunnel", ...argv, "--lease", "L1"]);
+      const exit = cli.run(["tunnel", ...argv, "--lease", lease ?? "L1"]);
       await vi.waitFor(() =>
         expect({ argv, err: cli.err.join("") }).not.toEqual({ argv, err: "" }),
       );
@@ -156,6 +199,11 @@ describe("simlock tunnel that runs", () => {
       readonly url: string;
       readonly authorization?: string;
     }[] = [
+      {
+        argv: ["reverse", "65535:1", "--lease", "L1"],
+        lines: ["reverse device:65535 -> localhost:1 (lease L1)"],
+        url: "ws://127.0.0.1:7300/v1/leases/L1/tunnel",
+      },
       {
         argv: ["reverse", "5173", "--lease", "L1"],
         lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
@@ -184,6 +232,11 @@ describe("simlock tunnel that runs", () => {
         lines: ["reverse device:5173 -> localhost:5173 (lease L 2)"],
         url: "wss://worker.example:7400/v1/leases/L%202/tunnel",
       },
+      ...["localhost", "[::1]"].map((host) => ({
+        argv: ["--url", `http://${host}:7300`, "reverse", "5173", "--lease", "L1"],
+        lines: ["reverse device:5173 -> localhost:5173 (lease L1)"],
+        url: `ws://${host}:7300/v1/leases/L1/tunnel`,
+      })),
       {
         argv: ["reverse", "5173"],
         lines: ["reverse device:5173 -> localhost:5173 (lease only)"],
@@ -205,6 +258,15 @@ describe("simlock tunnel that runs", () => {
       const connection = cli.webSocket.connections[0];
       expect(connection?.url).toBe(url);
       expect(connection?.options.headers.authorization).toBe(authorization ?? "Bearer sk_agent_x");
+      expect(connection?.options.handshakeTimeoutMs).toBe(10_000);
+      const hello = decodeTunnelFrame(connection?.peer.sent[0] ?? new Uint8Array());
+      expect(hello?.tag).toBe(TUNNEL_TAG.hello);
+      expect(JSON.parse(new TextDecoder().decode(hello?.payload))).toEqual({
+        tunnels: lines.map((text) => ({
+          devicePort: Number(/device:(\d+)/.exec(text)?.[1]),
+          kind: "reverse",
+        })),
+      });
       connection?.peer.receive(READY);
       await vi.waitFor(() => expect(cli.out.join("").split("\n").slice(0, -1)).toEqual(lines));
       cli.signals.emit("SIGINT");
@@ -247,7 +309,9 @@ describe("simlock tunnel that runs", () => {
         body: { leases },
         status: 200,
       });
-      expect(await cli.run(["tunnel", "reverse", "5173"])).toBe(2);
+      const exit = cli.run(["tunnel", "reverse", "5173"]);
+      await vi.waitFor(() => expect(cli.err.join("")).not.toBe(""));
+      expect(await exit).toBe(2);
       expect(JSON.parse(cli.err.join(""))).toEqual({ error: { code: "USAGE", message } });
       expect(cli.webSocket.connections).toEqual([]);
     }
@@ -277,8 +341,8 @@ async function started(argv: readonly string[]) {
 
 describe("simlock tunnel carrying connections", () => {
   it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
-    const quiet = await started(["reverse", "5173", "reverse", "6000"]);
-    quiet.cli.tcpStreams.refusedPorts.add(5173);
+    const quiet = await started(["reverse", "5173:5174", "reverse", "6000"]);
+    quiet.cli.tcpStreams.refusedPorts.add(5174);
     quiet.cli.tcpStreams.refusedPorts.add(6000);
     const opening = async (conn: number, port: number) => {
       quiet.peer.receive(open(conn, port));
@@ -293,37 +357,40 @@ describe("simlock tunnel carrying connections", () => {
         .join("")
         .split("\n")
         .filter((line) => line !== "");
+    quiet.peer.receive(open(9, 7000));
     await opening(1, 5173);
-    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5173"]);
+    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
     quiet.cli.clock.advance(9_999);
     await opening(3, 5173);
-    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5173"]);
+    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
     await opening(5, 6000);
     expect(warnings()).toEqual([
-      "reverse 5173: nothing listening on localhost:5173",
+      "reverse 5173: nothing listening on localhost:5174",
       "reverse 6000: nothing listening on localhost:6000",
     ]);
     quiet.cli.clock.advance(1);
     await opening(7, 5173);
     expect(warnings()).toHaveLength(3);
-    expect(warnings()[2]).toBe("reverse 5173: nothing listening on localhost:5173");
+    expect(warnings()[2]).toBe("reverse 5173: nothing listening on localhost:5174");
     expect(
       sentFrames(quiet.cli)
         .filter((f) => f.tag === TUNNEL_TAG.reset)
         .map((f) => f.conn),
     ).toEqual([1, 3, 5, 7]);
+    expect(quiet.cli.tcpStreams.connections).toEqual([]);
     expect(quiet.peer.closedWith).toBeUndefined();
     quiet.cli.signals.emit("SIGINT");
     expect(await quiet.exit).toBe(0);
 
-    const page = await started(["reverse", "5173"]);
+    const page = await started(["reverse", "5173:5174"]);
     page.peer.receive(open(1, 5173));
     await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(1));
+    expect(page.cli.tcpStreams.connections[0]?.port).toBe(5174);
     const local = page.cli.tcpStreams.connections[0]?.peer;
     if (local === undefined) throw new Error("no local connection");
     const response = Uint8Array.from({ length: 1_048_576 }, (_, index) => index % 251);
-    for (let at = 0; at < response.length; at += 65_536)
-      local.send(response.subarray(at, at + 65_536));
+    for (let at = 0; at < response.length; at += 131_072)
+      local.send(response.subarray(at, at + 131_072));
     local.end();
     const received: number[] = [];
     let ended = false;
@@ -336,7 +403,7 @@ describe("simlock tunnel carrying connections", () => {
     const drain = () => {
       const frames = sentFrames(page.cli);
       for (const frame of frames.slice(before)) {
-        if (frame.tag === TUNNEL_TAG.data) received.push(...frame.payload);
+        if (frame.tag === TUNNEL_TAG.data) for (const byte of frame.payload) received.push(byte);
         else if (frame.tag === TUNNEL_TAG.end) ended = true;
       }
       before = frames.length;
@@ -358,6 +425,11 @@ describe("simlock tunnel carrying connections", () => {
     }
     expect(received).toHaveLength(1_048_576);
     expect(Uint8Array.from(received)).toEqual(response);
+    const dataSizes = sentFrames(page.cli)
+      .filter((f) => f.tag === TUNNEL_TAG.data)
+      .map((f) => f.payload.length);
+    expect(Math.max(...dataSizes)).toBe(TUNNEL_MAX_DATA_BYTES);
+    expect(dataSizes.every((size) => size <= TUNNEL_MAX_DATA_BYTES)).toBe(true);
 
     for (const size of [65_536, 30_000]) {
       page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(size)));
@@ -371,10 +443,23 @@ describe("simlock tunnel carrying connections", () => {
         .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
       expect(credits).toEqual([65_536, 30_000]);
     });
+    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
+    await vi.waitFor(() => expect(local.writeEnded).toBe(true));
+    page.peer.receive(open(3, 5173));
+    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(2));
+    const second = page.cli.tcpStreams.connections[1]?.peer;
+    expect(second?.closed).toBe(false);
+    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, 3));
+    await vi.waitFor(() => expect(second?.closed).toBe(true));
     page.cli.signals.emit("SIGINT");
     expect(await page.exit).toBe(0);
   });
 });
+
+// why: a failure reaches stderr through a chain of promises, so a check that nothing was written lets them run first.
+function settle(): Promise<void> {
+  return new Promise((done) => setTimeout(done, 0));
+}
 
 function refusedFrame(code: string, message: string): Uint8Array {
   return encodeTunnelFrame(TUNNEL_TAG.refused, 0, JSON.stringify({ code, message }));
@@ -391,6 +476,7 @@ function line(cli: ReturnType<typeof command>): unknown {
 async function upgradeRefusals(): Promise<void> {
   const upgrades: readonly {
     readonly refusal: WebSocketRefusedError;
+    readonly exit?: number;
     readonly code: string;
     readonly message: string;
   }[] = [
@@ -423,11 +509,25 @@ async function upgradeRefusals(): Promise<void> {
       message: "Lease L1 is not known to this worker",
       refusal: new WebSocketRefusedError(404, "Not Found"),
     },
+    {
+      code: "BAD_REQUEST",
+      exit: 2,
+      message: "Bad upgrade",
+      refusal: new WebSocketRefusedError(
+        400,
+        JSON.stringify(errorBody("BAD_REQUEST", "Bad upgrade")),
+      ),
+    },
+    {
+      code: "TUNNEL_DISCONNECTED",
+      message: "Lease L1: the worker answered 502",
+      refusal: new WebSocketRefusedError(502, "<html>Bad Gateway</html>"),
+    },
   ];
-  for (const { code, message, refusal } of upgrades) {
+  for (const { code, exit, message, refusal } of upgrades) {
     const cli = command(ENV);
     cli.webSocket.failure = refusal;
-    expect(await cli.run(["tunnel", "reverse", "5173", "--lease", "L1"])).toBe(1);
+    expect(await cli.run(["tunnel", "reverse", "5173", "--lease", "L1"])).toBe(exit ?? 1);
     expect(line(cli)).toEqual(errorBody(code, message));
   }
 }
@@ -447,6 +547,11 @@ async function lookupFailures(): Promise<void> {
       code: "FORBIDDEN",
       identity: { body: errorBody("FORBIDDEN", "Not allowed"), status: 403 },
       message: "Not allowed",
+    },
+    {
+      code: "TUNNEL_DISCONNECTED",
+      identity: { body: undefined, status: 502 },
+      message: "The worker answered 502",
     },
     {
       code: "TUNNEL_DISCONNECTED",
@@ -470,6 +575,19 @@ async function refusalFrame(): Promise<void> {
   expect(line(refused.cli)).toEqual(
     errorBody("TUNNEL_BAD_PORT", "Lease L1: Device port 80 is below 1024"),
   );
+  const unknown = await started(["reverse", "5173"]);
+  unknown.peer.receive(refusedFrame("NOT_A_CODE", "something new"));
+  expect(await unknown.exit).toBe(1);
+  expect(line(unknown.cli)).toEqual(errorBody("TUNNEL_FAILED", "Lease L1: something new"));
+  const garbled = await started(["reverse", "5173"]);
+  garbled.peer.receive(open(1, 7000));
+  garbled.peer.receive(encodeTunnelFrame(TUNNEL_TAG.open, 3, "not json"));
+  garbled.peer.receive(encodeTunnelFrame(TUNNEL_TAG.refused, 0, "not json"));
+  expect(await garbled.exit).toBe(1);
+  expect(line(garbled.cli)).toEqual(
+    errorBody("TUNNEL_FAILED", "Lease L1: the worker refused the tunnel"),
+  );
+  expect(garbled.cli.tcpStreams.connections).toEqual([]);
 }
 
 async function lossesOfTheSocket(): Promise<void> {
@@ -502,11 +620,15 @@ async function silentSocket(): Promise<void> {
   silent.cli.clock.advance(30_000);
   silent.peer.ping();
   silent.cli.clock.advance(44_999);
+  await settle();
   expect(silent.cli.err).toEqual([]);
   silent.peer.receive(open(1, 5173));
   silent.cli.clock.advance(44_999);
+  await settle();
   expect(silent.cli.err).toEqual([]);
   silent.cli.clock.advance(1);
+  await settle();
+  expect(silent.cli.err).toHaveLength(1);
   expect(await silent.exit).toBe(1);
   expect(line(silent.cli)).toEqual(
     errorBody("TUNNEL_DISCONNECTED", "Lease L1: nothing was heard from the worker for 45 s"),
@@ -522,8 +644,11 @@ async function noReadySocket(): Promise<void> {
     noReady.clock.advance(Math.min(15_000, 89_999 - at));
     quietPeer?.ping();
   }
+  await settle();
   expect(noReady.err).toEqual([]);
   noReady.clock.advance(1);
+  await settle();
+  expect(noReady.err).toHaveLength(1);
   expect(await noReadyExit).toBe(1);
   expect(line(noReady)).toEqual(
     errorBody("TUNNEL_DISCONNECTED", "Lease L1: no READY from the worker within 90 s"),
@@ -536,6 +661,7 @@ async function ctrlC(): Promise<void> {
     idle.cli.clock.advance(15_000);
     idle.peer.ping();
   }
+  await settle();
   expect(idle.cli.err).toEqual([]);
   expect(idle.peer.closedWith).toBeUndefined();
   idle.peer.silentOnClose = true;
@@ -546,9 +672,11 @@ async function ctrlC(): Promise<void> {
     settled = true;
   });
   idle.cli.clock.advance(1_999);
-  await Promise.resolve();
+  await settle();
   expect(settled).toBe(false);
   idle.cli.clock.advance(1);
+  await settle();
+  expect(settled).toBe(true);
   expect(await idle.exit).toBe(0);
 }
 
