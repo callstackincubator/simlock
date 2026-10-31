@@ -12,6 +12,7 @@ import type {
   Config,
   DeviceInput,
   DeviceRecord,
+  DeviceReverse,
   UnavailableDeviceInput,
   LeaseRecord,
   PhysicalDriverDevice,
@@ -196,6 +197,17 @@ export interface ModuleInputs {
   ): Promise<DeviceInput | UnavailableDeviceInput>;
 }
 
+// why: the drivers' device ports, routed by platform, without handing a module the drivers.
+export interface ModuleDeviceTcp {
+  supports(platform: Platform, device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  reverse(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<DeviceReverse>;
+}
+
 export interface WorkerContext<C> {
   readonly name: string;
   readonly instanceId: string;
@@ -219,6 +231,7 @@ export interface WorkerContext<C> {
   readonly registry: ModuleRegistryView;
   readonly screens: ModuleScreens;
   readonly inputs: ModuleInputs;
+  readonly deviceTcp: ModuleDeviceTcp;
   cancelPending(requesterId: string): Promise<unknown>;
   readonly events: {
     subscribe<Event extends EventName>(event: Event, handler: EventHandler<Event>): () => void;

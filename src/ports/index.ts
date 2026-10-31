@@ -106,6 +106,13 @@ export type { ProcessSupervisor } from "./process-supervisor.js";
 export type { SignalRecord } from "./process-supervisor.js";
 export { FakeTcpProbe, NodeTcpProbe } from "./tcp-probe.js";
 export {
+  FakeTcpListenerFactory,
+  NodeTcpListenerFactory,
+  type TcpListener,
+  type TcpListenerFactory,
+} from "./tcp-listener.js";
+export {
+  FakeTcpPeer,
   FakeTcpStreamConnector,
   NodeTcpStreamConnector,
   type TcpStream,

@@ -22,13 +22,13 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED` | The command failed. Read the code and the message. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED`, `TUNNEL_UNSUPPORTED`, `TUNNEL_PORT_IN_USE`, `TUNNEL_BAD_PORT`, `TUNNEL_LIMIT`, `TUNNEL_FAILED`, `TUNNEL_UNAVAILABLE`, `TUNNEL_DISCONNECTED`, `TUNNEL_CALLER_PORT_IN_USE` | The command failed. Read the code and the message. |
 | 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `SETUP_REFUSED`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
 | 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
 | 13 | `REQUESTER_ALREADY_LEASED`, `LEASE_ID_TAKEN` | The request clashes with a lease or request that already exists. |
-| 14 | — | `simlock lease` without `--detach`: the daemon ended the lease before you did (expiry, an operator's release, or a device that could not be recovered). The `lease-lost` line on stderr gives the reason. |
+| 14 | `TUNNEL_LEASE_ENDED` | `simlock lease` without `--detach`: the daemon ended the lease before you did (expiry, an operator's release, or a device that could not be recovered). The `lease-lost` line on stderr gives the reason. |
 | 15 | — | `simlock component install` with `--worker` or `--all-workers`: at least one worker did not end `installed` or `already-installed`. The result on stdout says which. |
 
 `simlock simctl` and `simlock adb` exit with the wrapped tool's own exit code, which can be any of these numbers. For those two commands, look for the `{"error":...}` line on stderr, which only Simlock writes.
@@ -71,6 +71,22 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | `DEVICE_NOT_ENROLLABLE` | 12 | 422 | `device add` of a device that cannot be enrolled. The reason is one of: not connected, network only, not trusted, Developer Mode off, OS too old, unsupported kind, locked, unreadable, a simulator or emulator, or enrolled on the other platform. | Fix what the message names (connect it by USB, trust this computer, turn on Developer Mode, unlock it) and run `device add` again. |
 | `DEVICE_BUSY` | 11 | 409 | `device add` or `device remove` of a device that is leased, being cleaned, or held by another operation. | Try again once that ends. |
 | `UNKNOWN_DEVICE` | 12 | 404 | `device remove` of an ID that is not an enrolled device. | Check the ID with `simlock list --devices`. |
+
+## Tunnels
+
+A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabilities.tunnel.enabled`) refuses a `HELLO` with one of these codes in a `REFUSED` frame and closes with 4003.
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iOS simulator or an iPhone, or the tunnel is a `forward` tunnel, which is not available yet. | Use an Android emulator or phone, and `reverse` tunnels. |
+| `TUNNEL_PORT_IN_USE` | 1 | 409 | The device port is already reversed on the device, for example by an `adb reverse` run through `device.exec`. | Remove that rule first. |
+| `TUNNEL_BAD_PORT` | 1 | 422 | A device port is an integer outside 1024 to 65535. A port that is not an integer at all is refused `BAD_REQUEST`. | Name a port in that range. |
+| `TUNNEL_LIMIT` | 1 | 409 | The lease would have more than 8 tunnels across its sockets. | Close a tunnel first. |
+| `TUNNEL_FAILED` | 1 | 502 | `adb` could not set the tunnel up, or the worker has no free loopback port in its reserved range. The message carries adb's own words. | Read the message; try again. |
+| `TUNNEL_UNAVAILABLE` | 1 | 503 | A gateway's worker has tunnels off. | Turn on `capabilities.tunnel.enabled` on the worker. |
+| `TUNNEL_DISCONNECTED` | 1 | 503 | The tunnel client lost its connection. | Open the tunnel again. |
+| `TUNNEL_CALLER_PORT_IN_USE` | 1 | 409 | The port the tunnel client listens on is in use on its machine. | Pick another caller port. |
+| `TUNNEL_LEASE_ENDED` | 14 | 410 | The lease ended while the tunnel was open. | Take a new lease. |
 
 ## Running commands on a device
 

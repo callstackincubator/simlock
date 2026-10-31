@@ -23,6 +23,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod)                                                                       |
 | `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                                                                                                 |
 | `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                                                                                                 |
+| `tunnel-frames.ts` | The tunnel socket's frame codec, tags and limits (`encodeTunnelFrame`, `decodeTunnelFrame`, `TUNNEL_*`); a helper with no wire shape, listed in the protocol-bump check                                                                                 |
 | `console-url.ts`   | The console address `status.get` reports                                                                                                                                                                                                                |
 
 ## Operations
@@ -57,7 +58,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 66, max: 66 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 67, max: 67 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
