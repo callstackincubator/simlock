@@ -833,6 +833,21 @@ describe("AndroidDriver", () => {
     });
   });
 
+  it("restores the clean baseline on a standard reclaim after a hw.device.hash2 line is added to config.ini", async () => {
+    const harness = await provisionedHarness({ forBaselineReclaim: true });
+    const ready = await harness.driver.makeReady(harness.device);
+    const configPath = `${avdDirectory}/simlock_one.avd/config.ini`;
+    await harness.filesystem.writeFileAtomic(
+      configPath,
+      `${await harness.filesystem.readFile(configPath)}hw.device.hash2=MD5:3db3250dab5d0d93b29353040181c7e9\n`,
+    );
+
+    await expect(harness.driver.reclaim(ready, { clean: "standard" })).resolves.toEqual({
+      state: "ready",
+      strategy: "snapshot",
+    });
+  });
+
   it("reclaims from persisted baseline metadata after a driver restart", async () => {
     const harness = await provisionedHarness();
     await harness.filesystem.writeFileAtomic(
