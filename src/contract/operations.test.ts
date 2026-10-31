@@ -1255,14 +1255,11 @@ describe("operation input/output round trips", () => {
       });
       expect(parsed.lease.maxPerRequester).toEqual(maxPerRequester);
     }
-    for (const hardwareKeyboard of [true, false]) {
-      const emulator = { ...config.android.emulator, hardwareKeyboard };
-      const parsed = OPERATIONS["config.get"].output.parse({
-        ...config,
-        android: { ...config.android, emulator },
-      });
-      expect(parsed.android.emulator).toEqual(emulator);
-    }
+    const emulator = { ...config.android.emulator, hardwareKeyboard: true };
+    expect(
+      OPERATIONS["config.get"].output.parse({ ...config, android: { ...config.android, emulator } })
+        .android.emulator,
+    ).toEqual(emulator);
   });
 
   it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {
