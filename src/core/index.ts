@@ -102,6 +102,7 @@ export {
   type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export type { DeviceReverse, DeviceTcp } from "./device-tcp.js";
 export {
   closeReason,
   type DeviceInput,

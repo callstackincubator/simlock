@@ -10,6 +10,7 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
+import type { DeviceReverse } from "./device-tcp.js";
 import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
@@ -100,6 +101,17 @@ export class DriverCatalog {
     const factory = this.#drivers.get(platform)?.input;
     if (factory === undefined) return { unavailable: `${platform} devices take no input` };
     return await factory.open(device, signal);
+  }
+
+  async reverseDevicePort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<DeviceReverse> {
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp === undefined) throw new Error(`${platform} devices take no tunnel`);
+    return await deviceTcp.reverse(device, devicePort, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

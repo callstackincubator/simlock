@@ -516,6 +516,10 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
+      deviceTcp: {
+        reverse: (platform, device, devicePort, signal) =>
+          catalog.reverseDevicePort(platform, device, devicePort, signal),
+      },
       inputs: {
         openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
       },
