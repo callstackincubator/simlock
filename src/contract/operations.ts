@@ -486,16 +486,7 @@ export const deviceExec = defineOperation({
    * authorized, the same convention `ownsLease` uses, so the handler's own `UNKNOWN_LEASE`
    * surfaces instead of a misleading `FORBIDDEN`.
    */
-  authorize: (input, context) => {
-    if (context.role !== "admin") {
-      if (input.requesterId !== undefined) return false;
-      const ownerId = context.ownerId(input.leaseId);
-      return ownerId === undefined || ownerId === context.principal;
-    }
-    const requesterId = input.requesterId ?? context.principal;
-    const leaseRequesterId = context.leaseRequesterId(input.leaseId);
-    return leaseRequesterId === undefined || leaseRequesterId === requesterId;
-  },
+  authorize: authorizeOneLeaseCall,
 });
 
 /**
@@ -1076,6 +1067,23 @@ const identityGet = defineOperation({
 });
 
 /**
+ * why: `device.exec`'s and `device.rotate`'s one rule, so a gateway's admin session is held to the lease's requester on both.
+ */
+function authorizeOneLeaseCall(
+  input: { readonly leaseId: string; readonly requesterId?: string | undefined },
+  context: AuthorizeContext,
+): boolean {
+  if (context.role !== "admin") {
+    if (input.requesterId !== undefined) return false;
+    const ownerId = context.ownerId(input.leaseId);
+    return ownerId === undefined || ownerId === context.principal;
+  }
+  const requesterId = input.requesterId ?? context.principal;
+  const leaseRequesterId = context.leaseRequesterId(input.leaseId);
+  return leaseRequesterId === undefined || leaseRequesterId === requesterId;
+}
+
+/**
  * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
  */
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
@@ -1091,6 +1099,7 @@ export const deviceRotate = defineOperation({
     })
     .strict(),
   output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),
+  authorize: authorizeOneLeaseCall,
 });
 
 export const OPERATIONS = {

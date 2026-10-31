@@ -45,7 +45,7 @@ every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `lease.renew`, `lease.release` — `ownsLease`: admin, or `ownerId` = principal.
 - `lease.cancel` — admin, or the pending request's owner = principal.
-- `device.exec` — agent: owns the lease and names no `requesterId`. Admin: the lease's
+- `device.exec`, `device.rotate` — agent: owns the lease and names no `requesterId`. Admin: the lease's
   requester = `requesterId` (default: principal).
 
 Three identities:
