@@ -20,7 +20,7 @@ export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModu
       if (lease === undefined || device === undefined) {
         return Promise.resolve(unknownLease(leaseId ?? ""));
       }
-      sessions.attach(lease.id, device, channelSocket(pipe));
+      sessions.attach(lease.id, device, channelSocket(pipe, ctx.clock));
       return Promise.resolve(new Response(null, { status: 200 }));
     },
     socket: {

@@ -136,6 +136,7 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
           stop(closing.code, closing.reason);
           return;
         }
+        if (frame.tag === CHANNEL_TAG.heartbeat) continue;
         const message = new Uint8Array(1 + frame.payload.length);
         message[0] = frame.tag;
         message.set(frame.payload, 1);

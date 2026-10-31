@@ -99,10 +99,12 @@ describe("a gateway's tunnel bridge", () => {
     reasoned.removeLease(REMOVED);
     reasoned.clock.advance(1_999);
     expect(reasoned.client.closed).toBeUndefined();
+    await reasoned.worker.write(Uint8Array.from([0, 0, 0, 1, 0xf0]));
     await reasoned.worker.write(closeFrame(4001, "expired"));
     await vi.waitFor(() =>
       expect(reasoned.client.closed).toEqual({ code: 4001, reason: "expired" }),
     );
+    expect(reasoned.client.sent).toEqual([]);
 
     const silent = await attached();
     silent.removeLease(REMOVED);
