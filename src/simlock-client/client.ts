@@ -51,6 +51,8 @@ import type {
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
+  RotateInput,
+  RotateOutput,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
@@ -123,6 +125,8 @@ export type {
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
+  RotateInput,
+  RotateOutput,
   DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
@@ -237,6 +241,14 @@ export interface SimlockClient {
    * line-oriented commands work and full-screen ones do not (§19c).
    */
   exec(input: ExecInput, options?: ExecOptions): Promise<ExecOutput>;
+  /**
+   * why: turns the lease's iOS phone or tablet simulator to `orientation`, whether or not the daemon's input module is on. `requesterId` is for an operator that acts for the lease's requester, as `exec`'s is.
+   */
+  rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options?: { readonly requesterId?: string },
+  ): Promise<RotateOutput>;
 
   /**
    * Reports a lease the *daemon* ended -- an expiry, an operator release, an unrecoverable
@@ -429,6 +441,7 @@ function buildDegradedClient(
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),
     exec: () => rejected(),
+    rotate: () => rejected(),
 
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -621,6 +634,14 @@ class SimlockClientImpl {
       onStarted: options.onStarted,
     });
     return this.#parseOutput("device.exec", payload);
+  }
+
+  rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options: { readonly requesterId?: string } = {},
+  ): Promise<RotateOutput> {
+    return this.#call("device.rotate", { leaseId, orientation, ...options });
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {

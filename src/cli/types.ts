@@ -10,11 +10,14 @@ import type {
   DaemonHome,
   DaemonLauncher,
   Filesystem,
+  HttpJsonClient,
   IpcConnector,
   ParentWatch,
   ServiceDefinition,
   ServiceManager,
   SystemStats,
+  TcpStreamConnector,
+  WebSocketClientConnector,
 } from "../ports/index.js";
 
 export interface Signals {
@@ -92,6 +95,13 @@ export interface CliEnvironment {
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   readonly readStdin?: () => Promise<string | undefined>;
+  /** why: `simlock tunnel` reaches a worker or gateway over HTTP and WebSocket, not the daemon's socket; each port loads its adapter on first use. */
+  readonly webSocket: WebSocketClientConnector;
+  readonly httpJson: HttpJsonClient;
+  readonly tcpStreams: TcpStreamConnector;
+  /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the daemon `simlock tunnel` calls and the credential it sends. */
+  readonly tunnelUrl?: string;
+  readonly tunnelToken?: string;
 }
 
 export interface CliEnvironmentPorts {
@@ -115,4 +125,7 @@ export interface CliEnvironmentPorts {
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
   readonly readStdin?: () => Promise<string | undefined>;
   readonly parentPid?: number;
+  readonly webSocket?: WebSocketClientConnector;
+  readonly httpJson?: HttpJsonClient;
+  readonly tcpStreams?: TcpStreamConnector;
 }

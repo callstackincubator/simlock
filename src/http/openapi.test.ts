@@ -395,7 +395,7 @@ describe("buildOpenApiDocument with a module that carries http", () => {
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
       ),
     ).toEqual([]);
-    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["input", "stream"]);
+    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["input", "stream", "tunnel"]);
   });
 });
 
@@ -410,6 +410,13 @@ describe("buildOpenApiDocument with the input module", () => {
     expect(errorCodes(input, "404")).toEqual(["UNKNOWN_LEASE"]);
     expect(errorCodes(input, "426")).toEqual(["BAD_REQUEST"]);
     expect(errorCodes(input, "503")).toEqual(["INPUT_UNAVAILABLE", "WORKER_UNREACHABLE"]);
+
+    const tunnel = document.paths?.["/v1/leases/{id}/tunnel"]?.get;
+    expect(tunnel?.tags).toEqual(["tunnel"]);
+    expect(sortedKeys(tunnel?.responses)).toEqual(["101", "401", "403", "404", "426", "503"]);
+    expect(errorCodes(tunnel, "404")).toEqual(["UNKNOWN_LEASE"]);
+    expect(errorCodes(tunnel, "426")).toEqual(["BAD_REQUEST"]);
+    expect(errorCodes(tunnel, "503")).toEqual(["TUNNEL_UNAVAILABLE", "WORKER_UNREACHABLE"]);
   });
 });
 
