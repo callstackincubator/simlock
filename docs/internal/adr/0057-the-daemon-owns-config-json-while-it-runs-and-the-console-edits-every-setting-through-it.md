@@ -134,7 +134,11 @@ minutes, else exit 1). No install, no
 database copy, no rollback. A restart keeps leases as any restart does; a
 lease request still waiting fails, as any restart makes it. During an
 update it answers `DAEMON_UPDATING`. A second call while one runs answers
-`{ restarting: true }` again and starts nothing.
+`{ restarting: true }` again and starts nothing. While a restart runs, a
+`daemon.update` that would start an update answers `DAEMON_STOPPING`;
+`daemon.update {query}` answers as before, since `daemon.update` is frozen.
+A restart is not an update: it shows in no update field and a failed one
+emits no `daemon.update-failed`.
 
 A daemon that does not start again is reported on the updater's stderr,
 which is `daemon.log`, as an update's failed start is.
