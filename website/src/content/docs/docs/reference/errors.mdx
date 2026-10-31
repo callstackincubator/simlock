@@ -80,7 +80,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | `UNKNOWN_PASSTHROUGH_TOOL` | 2 | 422 | A tool Simlock does not wrap. | Use `simctl` or `adb`. |
 | `EXEC_TIMEOUT` | 10 | 504 | A command run on a device through a gateway ran longer than `exec.timeoutMs` (10 minutes by default) and was stopped. | Split the work, or raise `exec.timeoutMs` on the worker. |
 | `ROTATION_UNSUPPORTED` | 12 | 422 | The lease is not on an iOS phone or tablet simulator, so `POST /v1/leases/{id}/rotate` has nothing to turn. The message names what it is on: an Apple TV, Apple Watch or Apple Vision simulator, another iOS model, an Android emulator or phone or tablet, an iPhone or an iPad. | Rotate a lease on an iPhone or iPad simulator. |
-| `INPUT_UNAVAILABLE` | 1 | 503 | The lease's simulator could not take the rotation: its input helper did not start within 10 seconds, or writing to it failed. The message ends with the driver's reason, cut to 200 characters. | Run it again. If it repeats, check `simlock daemon logs`. |
+| `INPUT_UNAVAILABLE` | 1 | 503 | The lease's simulator cannot take input. For `POST /v1/leases/{id}/rotate`, its input helper did not start within 10 seconds or writing to it failed, and the message ends with the driver's reason, cut to 200 characters. Through a gateway, the same code answers an input socket whose worker has input off. | Run it again. If it repeats, check `simlock daemon logs`. |
 
 ## Daemon and connection
 
