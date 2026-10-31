@@ -29,7 +29,7 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
 2. **Rules** (`server.ts`) — the server options carry `MCP_SERVER_INSTRUCTIONS` (at most 4096
    characters), and the resource `simlock://instructions` (`text/markdown`) returns `AGENT_INSTRUCTIONS`,
    the text `simlock instructions` prints.
-3. **Tools** (`server.ts`), each one call on the typed client:
+3. **Tools** (`server.ts`), each one typed-client call, except `list_devices`, which makes two:
    - `lease_simulator` → `lease.request`. Input: the contract's lease fields minus
      `requesterId`, `fleetRequestId`, `requires`. Progress goes out as
      `notifications/progress`, only when the call carried a progress token.
