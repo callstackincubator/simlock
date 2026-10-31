@@ -15,6 +15,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock release`](#simlock-release) | Give a lease back | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
 | [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
+| [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
@@ -185,6 +186,21 @@ simlock adb [--lease <lease-id>] <adb-args...>
 
 The command exits with `adb`'s own exit code. Simlock refuses `adb kill-server`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
 
+## simlock rotate
+
+Turn your leased iOS simulator to an orientation, on a worker or through a gateway. It calls `device.rotate`, so only an iOS phone or tablet simulator turns.
+
+```text
+simlock rotate <orientation> [--lease <lease-id>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `<orientation>` | `portrait`, `portrait-upside-down`, `landscape-left` or `landscape-right`. `left`, `right` and `upside-down` are short for the last three, case and surrounding spaces do not matter, and the underscore spellings (`landscape_left`) work too. | — |
+| `--lease <lease-id>` | The lease to turn, before or after the orientation. | Your only lease |
+
+It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12); an input helper that cannot start fails with `INPUT_UNAVAILABLE` (exit 1).
+
 ## simlock catalog
 
 Show what you can lease: per platform, the installed runtimes and the default, the models grouped by class with the default model of each class, and, on Android, the installed system images. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
@@ -200,7 +216,7 @@ simlock catalog [--platform <ios|android>] [--json]
 
 ## simlock mcp
 
-Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers the tools `list_devices`, `lease_simulator`, `release_simulator`, `lease_status` and `run_on_device`. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
+Start Simlock's MCP server on stdin and stdout, for an agent to call. It offers the tools `list_devices`, `lease_simulator`, `release_simulator`, `lease_status`, `run_on_device` and `rotate_device`. See [Connect your agent](/simlock/docs/getting-started/connect-your-agent).
 
 ```text
 simlock mcp
