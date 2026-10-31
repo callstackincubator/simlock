@@ -221,12 +221,20 @@ describe("simlock tunnel against a lone worker", () => {
     const lone = await worker();
     lone.deviceTcp.listening.add(9229);
     const callerPort = await freeLoopbackPort();
+    const closedPort = await freeLoopbackPort();
     const cli = command({ SIMLOCK_TOKEN: lone.token, SIMLOCK_URL: lone.url });
 
-    const exit = cli.run(["tunnel", "forward", `9229:${String(callerPort)}`]);
+    const exit = cli.run([
+      "tunnel",
+      "forward",
+      `9229:${String(callerPort)}`,
+      "forward",
+      `9230:${String(closedPort)}`,
+    ]);
     await vi.waitFor(() => expect(cli.out.join("")).not.toBe(""), { timeout: 10_000 });
     expect(cli.out.join("")).toBe(
       `forward localhost:${String(callerPort)} -> device:9229 (lease ${lone.leaseId})
+forward localhost:${String(closedPort)} -> device:9230 (lease ${lone.leaseId})
 `,
     );
 
@@ -243,6 +251,15 @@ describe("simlock tunnel against a lone worker", () => {
     });
     device?.peer.send("from-device");
     await vi.waitFor(() => expect(received.join("")).toBe("from-device"), { timeout: 10_000 });
+
+    expect(device?.peer.writeEnded).toBe(false);
+    client.end();
+    await vi.waitFor(() => expect(device?.peer.writeEnded).toBe(true), { timeout: 10_000 });
+
+    const refused = await callerClient(closedPort, []);
+    refused.write("nobody home");
+    await vi.waitFor(() => expect(refused.readyState).toBe("closed"), { timeout: 10_000 });
+    expect(lone.deviceTcp.connections).toHaveLength(1);
 
     cli.signals.emit("SIGINT");
     expect(await exit).toBe(0);
