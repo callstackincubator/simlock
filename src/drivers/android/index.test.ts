@@ -812,6 +812,98 @@ describe("AndroidDriver", () => {
     expect(saves).toHaveLength(1);
   });
 
+  it.each([
+    {
+      name: "never answers",
+      load: { hangs: true } as const,
+      settlesBetween: [60, 61] as const,
+    },
+    {
+      name: "exits non-zero",
+      load: { result: { code: 1, stderr: "", stdout: "OK\r\n" } } as const,
+      settlesBetween: [0, 1] as const,
+    },
+  ])(
+    "ends a standard reclaim whose clean-baseline load $name: the load is stopped, the emulator shut down, and the next boot wipes",
+    async ({ load, settlesBetween }) => {
+      const loadArgs = [
+        "-s",
+        "emulator-5586",
+        "emu",
+        "avd",
+        "snapshot",
+        "load",
+        "simlock_clean_baseline",
+      ];
+      const harness = await provisionedHarness({
+        afterwards: [
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+          avdPathExpectation("emulator-5586"),
+          { ...load, match: { args: loadArgs, command: binaries.adb } },
+          avdPathExpectation("emulator-5586"),
+          processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+          // why: The console port stays reserved from the first boot, so no `adb devices` precedes the launch.
+          ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }).slice(
+            1,
+          ),
+          markWriteExpectation("emulator-5586", "device-3"),
+        ],
+      });
+      const ready = await harness.driver.makeReady(harness.device);
+
+      let outcome: unknown = "still running";
+      void harness.driver.reclaim(ready, { clean: "standard" }).then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run;
+      // the second the load process ends pins the 60 s load deadline from both sides.
+      let loadEndedAt = -1;
+      let watched = false;
+      let elapsed = 0;
+      for (let second = 0; second < 600 && outcome === "still running"; second += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        const handle =
+          harness.runner.handles[
+            harness.runner.calls.findIndex((call) => call.args.join(" ") === loadArgs.join(" "))
+          ];
+        if (handle !== undefined && !watched) {
+          watched = true;
+          void handle.wait().then(() => {
+            loadEndedAt = loadEndedAt < 0 ? elapsed : loadEndedAt;
+          });
+        }
+        harness.clock.advance(1_000);
+        elapsed = second + 1;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(loadEndedAt).toBeGreaterThanOrEqual(settlesBetween[0]);
+      expect(loadEndedAt).toBeLessThanOrEqual(settlesBetween[1]);
+      expect(outcome).toEqual({ state: "shutdown", strategy: "wipe" });
+      const loadIndex = harness.runner.calls.findIndex(
+        (call) => call.args.join(" ") === loadArgs.join(" "),
+      );
+      let loadEnded = false;
+      void harness.runner.handles[loadIndex]?.wait().then(() => {
+        loadEnded = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(loadEnded).toBe(true);
+      expect(harness.runner.calls.slice(loadIndex).map((call) => call.args.join(" "))).toContain(
+        "-s emulator-5586 emu kill",
+      );
+      await harness.driver.makeReady(ready);
+      const nextBoot = harness.runner.calls
+        .slice(loadIndex)
+        .find((call) => call.command === binaries.emulator && call.args.includes("-avd"));
+      expect(nextBoot).toMatchObject({ args: expect.arrayContaining(["-wipe-data"]) });
+    },
+  );
+
   it("tags the baseline with the emulator-normalized post-boot configuration", async () => {
     const harness = await provisionedHarness({ forBaselineReclaim: true });
     await harness.filesystem.writeFileAtomic(
