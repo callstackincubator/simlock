@@ -664,6 +664,43 @@ describe("pushes", () => {
     expect(onOutput).toHaveBeenCalledTimes(2);
   });
 
+  it("rotate sends device.rotate for the lease and answers its output, or throws the daemon's typed refusal", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const rotated = client.rotate("lease_1", "landscape_left");
+    await flushMicrotasks();
+    expect(connection.sent.map((frame) => frame.type)).toContain("device.rotate");
+    const call = connection.lastSentOf("device.rotate")!;
+    expect(call.payload).toEqual({ leaseId: "lease_1", orientation: "landscape_left" });
+    connection.reply(call.id, { leaseId: "lease_1", orientation: "landscape_left" });
+    await expect(rotated).resolves.toEqual({ leaseId: "lease_1", orientation: "landscape_left" });
+
+    const refused = client.rotate("lease_2", "portrait", { requesterId: "agent-1" });
+    await flushMicrotasks();
+    const refusedCall = connection.lastSentOf("device.rotate")!;
+    expect(refusedCall.payload).toEqual({
+      leaseId: "lease_2",
+      orientation: "portrait",
+      requesterId: "agent-1",
+    });
+    const details = { class: "tv", leaseId: "lease_2", physical: false, platform: "ios" };
+    connection.fail(
+      refusedCall.id,
+      "ROTATION_UNSUPPORTED",
+      "Lease lease_2 is on an Apple TV simulator; only an iOS simulator can be rotated",
+      details,
+    );
+    await expect(refused).rejects.toMatchObject({
+      code: "ROTATION_UNSUPPORTED",
+      details,
+      kind: "domain",
+    });
+  });
+
   it("routes a device.exec started push to that call's onStarted, once, before output, and not to another call in flight", async () => {
     // ADR 0005 §19a: `started` is request-scoped like `output` -- the fact a transport chooses
     // its response shape on. Round 5 review: the send site and this route could both be deleted

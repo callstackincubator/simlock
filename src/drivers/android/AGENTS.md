@@ -56,7 +56,7 @@ Provision — `provision`:
    into `config.ini`; a library profile replaces the seed's `hw.*`/`skin.*` keys, sets
    `PlayStore.enabled`, writes `boot.prop`.
 4. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` /
-   `image.sysdir.1` / `disk.dataPartition.*` lines, and `headless`/`gpu` when not default.
+   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD), and `headless`/`gpu` when not default.
 
 Boot — `makeReady` (per-device lock):
 
@@ -64,8 +64,9 @@ Boot — `makeReady` (per-device lock):
    the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
    `adb devices`, not reserved, port, port+1 and port+3000 (gRPC) not listening.
-3. Ready = `sys.boot_completed` 1, `init.svc.bootanim` stopped or unset, and `adb emu avd path`
-   names `<root>/<avd>.avd` (or the same `realpath`), else `DriverCrashError`. Silent serial past 5 s → re-announce.
+3. Ready = `sys.boot_completed` 1, `init.svc.bootanim` stopped or unset, `adb emu avd path`
+   names `<root>/<avd>.avd` (or the same `realpath`), else `DriverCrashError`, and
+   `adb shell pm path android` exits 0 printing `package:` (else keep polling). Silent serial past 5 s → re-announce.
 4. No baseline → `emu avd snapshot save`, check `snapshot list`, write `simlock-clean-baseline.json`, reboot from it.
 5. Write the mark: `simlock.mark=<token>` in `config.ini` and `/data/local/tmp/simlock-mark.json`.
 6. `purpose: "recover"`: cold boot only. No wipe, no baseline capture.
@@ -73,7 +74,7 @@ Boot — `makeReady` (per-device lock):
 Reclaim — `reclaim`:
 
 - `full` → shut down; wipe on the next `makeReady`. Returns `shutdown` / `wipe`.
-- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
+- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` (60 s on the driver clock; a timeout kills the load, and a timeout, non-zero exit or no OK is a failed load: shut down and wipe) → readiness → mark. Returns `ready` / `snapshot`.
 - Hash changed or load failed → as `full`.
 - Physical → uninstall every user app not on the enrollment list. Returns `ready` / `uninstall`.
 

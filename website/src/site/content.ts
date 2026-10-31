@@ -195,7 +195,7 @@ export const home = {
         lang: "json",
         code: code.mcp,
         pkg: "simlock mcp",
-        note: "Five tools for agents that speak MCP: list, lease, release, status and run a command.",
+        note: "Six tools for agents that speak MCP: list, lease, release, status, run a command and rotate.",
         href: docs.connect,
       },
       {

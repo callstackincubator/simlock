@@ -14,6 +14,7 @@
 import { z } from "zod";
 
 import {
+  INPUT_ORIENTATIONS,
   leaseRecordSchema,
   leaseRequestFields,
   OPERATIONS,
@@ -103,4 +104,13 @@ export type ListDevicesOutput = z.infer<typeof listDevicesOutputSchema>;
 export type ReleaseSimulatorInput = z.infer<typeof releaseSimulatorInputSchema>;
 export type ReleaseSimulatorOutput = z.infer<typeof releaseSimulatorOutputSchema>;
 export type LeaseStatusOutput = z.infer<typeof leaseStatusOutputSchema>;
+export const rotateDeviceInputSchema = z.object({ orientation: z.string().min(1).max(64) });
+
+export const rotateDeviceOutputSchema = z.object({
+  leaseId: z.string(),
+  orientation: z.enum(INPUT_ORIENTATIONS),
+});
+
+export type RotateDeviceInput = z.infer<typeof rotateDeviceInputSchema>;
+export type RotateDeviceOutput = z.infer<typeof rotateDeviceOutputSchema>;
 export type RunOnDeviceInput = z.infer<typeof runOnDeviceInputSchema>;

@@ -295,8 +295,8 @@ Each destination:
 }
 ```
 
-`simlock config` shows alert URLs and secrets as written. The daemon log and the `daemon.started`
-event show them as `[redacted]`. See [Alerts](/simlock/docs/gateway/alerts) for the message format
+`simlock config` shows alert URLs and secrets as `[redacted]`, as do the daemon log and the
+`daemon.started` event. `simlock config --show-secrets` prints them as written. See [Alerts](/simlock/docs/gateway/alerts) for the message format
 and delivery.
 
 ## Optional modules

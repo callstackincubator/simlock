@@ -414,6 +414,60 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.4.2](https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2) (2026-10-31)
+
+### What's Changed
+
+- fix(e2e): slow-ios-smoke comment names the real reason the simulator stays Booted by @V3RON in https://github.com/callstackincubator/simlock/pull/1136
+- fix(agents): pr-body-check ignores an indented line after a non-checklist line by @V3RON in https://github.com/callstackincubator/simlock/pull/1142
+- fix(ios): read the version from a device-specific runtime id by @V3RON in https://github.com/callstackincubator/simlock/pull/1141
+- fix(android): leave hw.device.hash2 out of the config hash by @V3RON in https://github.com/callstackincubator/simlock/pull/1147
+- fix(ports): survive a client reset during uplink authenticate by @V3RON in https://github.com/callstackincubator/simlock/pull/1140
+- fix(android): bound the clean-baseline snapshot load at 60 s by @V3RON in https://github.com/callstackincubator/simlock/pull/1149
+- fix(cli): report an invalid config.json as USAGE, exit 2 by @V3RON in https://github.com/callstackincubator/simlock/pull/1148
+- fix(daemon): daemon stop shuts down idle devices (#1056) by @V3RON in https://github.com/callstackincubator/simlock/pull/1150
+- fix(config): config.get redacts secrets unless showSecrets is asked by @V3RON in https://github.com/callstackincubator/simlock/pull/1157
+- fix(android): give emulator console snapshot save, snapshot list and emu kill a deadline by @V3RON in https://github.com/callstackincubator/simlock/pull/1159
+- fix(e2e): warmUp releases its warm-up leases when a later one fails by @V3RON in https://github.com/callstackincubator/simlock/pull/1160
+- fix(e2e): keep each daemon's log when teardown deletes its home by @V3RON in https://github.com/callstackincubator/simlock/pull/1161
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2
+
+## [0.4.1](https://github.com/callstackincubator/simlock/compare/v0.4.0...v0.4.1) (2026-10-31)
+
+### What's Changed
+
+- ci(release): read the npm version from npm, not process.versions by @V3RON in https://github.com/callstackincubator/simlock/pull/1073
+- fix(release): keep capture programs executable; follow pnpm launchers to agent-device by @V3RON in https://github.com/callstackincubator/simlock/pull/1075
+- test(audit): 13 fewer tests in cli, daemon, edge and five more files, since 19a11eb by @V3RON in https://github.com/callstackincubator/simlock/pull/1039
+- test(audit): 9 fewer tests in ios, leasing, dispatcher and http, since 19a11eb by @V3RON in https://github.com/callstackincubator/simlock/pull/1086
+- feat(input): rotate a leased iOS simulator with 0x07 by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1081
+- fix(android): start emulators with an authenticated gRPC endpoint by @joelfickson in https://github.com/callstackincubator/simlock/pull/1083
+- fix(ports): the daemon listens on a named pipe on Windows by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1052
+- fix(drivers,ports,core): Android on Windows by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1053
+- fix(ports): read a pid's command line on Windows, so a crashed daemon's children are reaped by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1078
+- fix(daemon): a start that fails at the socket claim exits by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1077
+- chore(deps): bump the npm-minor-and-patch group across 1 directory with 25 updates by @dependabot[bot] in https://github.com/callstackincubator/simlock/pull/1050
+- fix(ports): the daemon's children open no console window on Windows by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1076
+- chore(deps): bump vitest from 4.1.10 to 5.0.5 by @dependabot[bot] in https://github.com/callstackincubator/simlock/pull/1022
+- perf(android): keep the avdmanager list device answer while its inputs are unchanged by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1079
+- feat(ports): read CPU, memory and swap on Windows by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1054
+- fix(agent-device): find an npm-installed agent-device on Windows by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1055
+- feat(agent-identity): read pi's PI_SESSION_ID as pi:<id> by @tobimori in https://github.com/callstackincubator/simlock/pull/1046
+- chore(deps): bump @agent-device/proxy to 0.21.35 by @V3RON in https://github.com/callstackincubator/simlock/pull/1094
+- fix(e2e): keep the Android smoke lease from teaching the warm pool by @V3RON in https://github.com/callstackincubator/simlock/pull/1096
+- fix(capture): a software H.264 encoder holds no frame back (#1090) by @TUNA-NOPE in https://github.com/callstackincubator/simlock/pull/1092
+- fix(android): readiness waits for the package manager (#1089) by @TUNA-NOPE in https://github.com/callstackincubator/simlock/pull/1093
+
+### New Contributors
+
+- @leonardoxr made their first contribution in https://github.com/callstackincubator/simlock/pull/1081
+- @joelfickson made their first contribution in https://github.com/callstackincubator/simlock/pull/1083
+- @tobimori made their first contribution in https://github.com/callstackincubator/simlock/pull/1046
+- @TUNA-NOPE made their first contribution in https://github.com/callstackincubator/simlock/pull/1092
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.0...v0.4.1
+
 ## [0.4.0](https://github.com/callstackincubator/simlock/compare/v0.2.0...v0.4.0) (2026-10-30)
 
 ### What's Changed

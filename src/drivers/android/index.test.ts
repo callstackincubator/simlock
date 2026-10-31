@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
+  DriverCrashError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
@@ -727,6 +728,28 @@ describe("AndroidDriver", () => {
     await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
   });
 
+  it("is not ready until `pm path android` exits 0 and prints a package", async () => {
+    const harness = await provisionedHarness({
+      unsettledPmAnswers: [
+        { code: 1, stderr: "cmd: Can't find service: package", stdout: "" },
+        { code: 0, stderr: "", stdout: "Error: could not access the Package Manager\n" },
+        { code: 1, stderr: "", stdout: "package:/system/framework/framework-res.apk\n" },
+      ],
+    });
+    const ready = harness.driver.makeReady(harness.device);
+    const settled = vi.fn();
+    void ready.then(settled, settled);
+    const pmCalls = () => harness.runner.calls.filter((call) => call.args.includes("pm")).length;
+
+    for (const asked of [1, 2, 3]) {
+      await vi.waitFor(() => expect(pmCalls()).toBe(asked));
+      expect(settled, `ready after ${asked} unanswered pm`).not.toHaveBeenCalled();
+      harness.clock.advance(2_000);
+    }
+
+    await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
+  });
+
   it("invalidates stale quickboot snapshots and flags the next boot to wipe data", async () => {
     const harness = await provisionedHarness({ forReclaim: true });
     await harness.filesystem.mkdirp(`${avdDirectory}/simlock_one.avd/snapshots/default_boot`);
@@ -790,6 +813,177 @@ describe("AndroidDriver", () => {
     expect(saves).toHaveLength(1);
   });
 
+  it.each([
+    {
+      name: "never answers",
+      load: { hangs: true } as const,
+      settlesBetween: [60, 61] as const,
+    },
+    {
+      name: "exits non-zero",
+      load: { result: { code: 1, stderr: "", stdout: "OK\r\n" } } as const,
+      settlesBetween: [0, 1] as const,
+    },
+  ])(
+    "ends a standard reclaim whose clean-baseline load $name: the load is stopped, the emulator shut down, and the next boot wipes",
+    async ({ load, settlesBetween }) => {
+      const loadArgs = [
+        "-s",
+        "emulator-5586",
+        "emu",
+        "avd",
+        "snapshot",
+        "load",
+        "simlock_clean_baseline",
+      ];
+      const harness = await provisionedHarness({
+        afterwards: [
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+          avdPathExpectation("emulator-5586"),
+          { ...load, match: { args: loadArgs, command: binaries.adb } },
+          avdPathExpectation("emulator-5586"),
+          processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+          // why: The console port stays reserved from the first boot, so no `adb devices` precedes the launch.
+          ...baselineBuildExpectations({ launchArgs: ["-wipe-data", "-no-snapshot-load"] }).slice(
+            1,
+          ),
+          markWriteExpectation("emulator-5586", "device-3"),
+        ],
+      });
+      const ready = await harness.driver.makeReady(harness.device);
+
+      let outcome: unknown = "still running";
+      void harness.driver.reclaim(ready, { clean: "standard" }).then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run;
+      // the second the load process ends pins the 60 s load deadline from both sides.
+      let loadEndedAt = -1;
+      let watched = false;
+      let elapsed = 0;
+      for (let second = 0; second < 600 && outcome === "still running"; second += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        const handle =
+          harness.runner.handles[
+            harness.runner.calls.findIndex((call) => call.args.join(" ") === loadArgs.join(" "))
+          ];
+        if (handle !== undefined && !watched) {
+          watched = true;
+          void handle.wait().then(() => {
+            loadEndedAt = loadEndedAt < 0 ? elapsed : loadEndedAt;
+          });
+        }
+        harness.clock.advance(1_000);
+        elapsed = second + 1;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(loadEndedAt).toBeGreaterThanOrEqual(settlesBetween[0]);
+      expect(loadEndedAt).toBeLessThanOrEqual(settlesBetween[1]);
+      expect(outcome).toEqual({ state: "shutdown", strategy: "wipe" });
+      const loadIndex = harness.runner.calls.findIndex(
+        (call) => call.args.join(" ") === loadArgs.join(" "),
+      );
+      let loadEnded = false;
+      void harness.runner.handles[loadIndex]?.wait().then(() => {
+        loadEnded = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(loadEnded).toBe(true);
+      expect(harness.runner.calls.slice(loadIndex).map((call) => call.args.join(" "))).toContain(
+        "-s emulator-5586 emu kill",
+      );
+      await harness.driver.makeReady(ready);
+      const nextBoot = harness.runner.calls
+        .slice(loadIndex)
+        .find((call) => call.command === binaries.emulator && call.args.includes("-avd"));
+      expect(nextBoot).toMatchObject({ args: expect.arrayContaining(["-wipe-data"]) });
+    },
+  );
+
+  it.each([
+    {
+      call: "emu avd snapshot save simlock_clean_baseline",
+      outcome: { error: expect.stringContaining("snapshot save") },
+      ending: "makeReady fails",
+    },
+    {
+      call: "emu avd snapshot list",
+      outcome: { error: expect.stringContaining("snapshot list") },
+      ending: "makeReady fails",
+    },
+    { call: "emu kill", outcome: { ready: "emulator-5586" }, ending: "the boot still completes" },
+  ])(
+    "ends a first boot whose emulator console never answers $call: the hung adb call is stopped and $ending",
+    async ({ call, outcome }) => {
+      const clock = new FakeClock();
+      const expectations: ScriptedProcessExpectation[] = [
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_5",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }).map((expected) =>
+          expected.match.args.slice(2).join(" ") === call && expected.match.command === binaries.adb
+            ? { hangs: true, match: expected.match }
+            : expected,
+        ),
+        markWriteExpectation("emulator-5586", "device-2"),
+      ];
+      const runner = new ClockDeadlineRunner(expectations, clock);
+      const driver = await createDriver(
+        await androidFilesystem({ config: "hw.ramSize=2048\n" }),
+        runner,
+        { clock, ids: ["one"], tcpProbe: new FakeTcpProbe([adbServerPort]) },
+      );
+      const device = await driver.provision(
+        await driver.resolveSpec({ model: "Pixel 5", osVersion: "34", platform: "android" }),
+      );
+
+      let settled: unknown = "still running";
+      void driver.makeReady(device).then(
+        (ready) => {
+          settled = { ready: ready.address };
+        },
+        (error: unknown) => {
+          settled = { error: error instanceof DriverCrashError ? error.message : error };
+        },
+      );
+      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run.
+      for (let second = 0; second < 600 && settled === "still running"; second += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        clock.advance(1_000);
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const hungIndex = runner.calls.findIndex(
+        (invocation) =>
+          invocation.command === binaries.adb && invocation.args.slice(2).join(" ") === call,
+      );
+      let hungEnded = false;
+      void runner.handles[hungIndex]?.wait().then(() => {
+        hungEnded = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect({ hungCallSeen: hungIndex >= 0, hungEnded, settled }).toEqual({
+        hungCallSeen: true,
+        hungEnded: true,
+        settled: outcome,
+      });
+    },
+  );
+
   it("tags the baseline with the emulator-normalized post-boot configuration", async () => {
     const harness = await provisionedHarness({ forBaselineReclaim: true });
     await harness.filesystem.writeFileAtomic(
@@ -808,6 +1002,21 @@ describe("AndroidDriver", () => {
       args: ["-s", "emulator-5586", "emu", "kill"],
       command: binaries.adb,
       options: scopedOptions,
+    });
+  });
+
+  it("restores the clean baseline on a standard reclaim after a hw.device.hash2 line is added to config.ini", async () => {
+    const harness = await provisionedHarness({ forBaselineReclaim: true });
+    const ready = await harness.driver.makeReady(harness.device);
+    const configPath = `${avdDirectory}/simlock_one.avd/config.ini`;
+    await harness.filesystem.writeFileAtomic(
+      configPath,
+      `${await harness.filesystem.readFile(configPath)}hw.device.hash2=MD5:3db3250dab5d0d93b29353040181c7e9\n`,
+    );
+
+    await expect(harness.driver.reclaim(ready, { clean: "standard" })).resolves.toEqual({
+      state: "ready",
+      strategy: "snapshot",
     });
   });
 
@@ -838,6 +1047,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -885,6 +1099,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-0"),
     ]);
     const restartedDriver = await createDriver(harness.filesystem, restartedRunner);
@@ -1116,6 +1335,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
     ];
 
     it.each([
@@ -1291,6 +1515,11 @@ describe("AndroidDriver", () => {
           "",
         ),
         avdPathExpectation("emulator-5586"),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
         { ...defaults, headless: true },
@@ -2096,6 +2325,11 @@ describe("AndroidDriver", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", "device-3"),
     ]);
     const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
@@ -4417,6 +4651,39 @@ describe("AndroidDriver emulator registration", () => {
   });
 });
 
+/**
+ * why: Honours `timeoutMs` the way `NodeProcessRunner` does -- the child is killed once it
+ * passes -- but on the driver's fake clock, so a deadline given to `run` is visible to a test
+ * that moves that clock. A bare `ScriptedProcessRunner` ignores `timeoutMs`.
+ */
+class ClockDeadlineRunner extends ScriptedProcessRunner {
+  readonly #clock: FakeClock;
+
+  constructor(expectations: readonly ScriptedProcessExpectation[], clock: FakeClock) {
+    super(expectations);
+    this.#clock = clock;
+  }
+
+  override async run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    const handle = this.spawn(command, args, options);
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : this.#clock.setTimer(options.timeoutMs, () => {
+            handle.kill("SIGKILL");
+          });
+    try {
+      return await handle.wait();
+    } finally {
+      if (timer !== undefined) this.#clock.cancel(timer);
+    }
+  }
+}
+
 function recordKillTimeout(
   into: (number | undefined)[],
   command: string,
@@ -4762,6 +5029,11 @@ describe("AndroidDriver console port reservations", () => {
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       processResult(binaries.adb, [
         "-s",
         "emulator-5586",
@@ -5260,6 +5532,7 @@ async function provisionedHarness(
     readonly forReclaim?: boolean;
     readonly ids?: readonly string[];
     readonly initialAdbFailures?: number;
+    readonly unsettledPmAnswers?: readonly ProcessResult[];
     readonly readinessTimeoutMs?: number;
     readonly firstMarkToken?: string;
     readonly afterwards?: readonly ScriptedProcessExpectation[];
@@ -5306,6 +5579,7 @@ async function provisionedHarness(
         emulatorFlags: options.emulatorFlags,
         initialAdbFailures: options.initialAdbFailures,
         launchArgs: ["-no-snapshot-load"],
+        unsettledPmAnswers: options.unsettledPmAnswers,
       }),
     );
     if ((options.bootCompleted ?? "1\n").trim() === "1") {
@@ -5333,6 +5607,11 @@ async function provisionedHarness(
         "",
       ),
       avdPathExpectation("emulator-5586"),
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+        "package:/system/framework/framework-res.apk\n",
+      ),
       markWriteExpectation("emulator-5586", secondMarkToken),
     );
   }
@@ -6510,6 +6789,7 @@ function baselineBuildExpectations(options: {
   readonly emulatorFlags?: readonly string[] | undefined;
   readonly initialAdbFailures?: number | undefined;
   readonly launchArgs: readonly string[];
+  readonly unsettledPmAnswers?: readonly ProcessResult[] | undefined;
 }): ScriptedProcessExpectation[] {
   const bootCompleted = options.bootCompleted ?? "1\n";
   const emulatorFlags = options.emulatorFlags ?? [];
@@ -6554,6 +6834,28 @@ function baselineBuildExpectations(options: {
     return expectations;
   }
 
+  for (const answer of options.unsettledPmAnswers ?? []) {
+    expectations.push(
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+        "",
+      ),
+      avdPathExpectation("emulator-5586"),
+      {
+        match: {
+          args: ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          command: binaries.adb,
+        },
+        result: answer,
+      },
+      processResult(
+        binaries.adb,
+        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+        "1\n",
+      ),
+    );
+  }
   expectations.push(
     processResult(
       binaries.adb,
@@ -6561,6 +6863,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
     processResult(binaries.adb, [
       "-s",
       "emulator-5586",
@@ -6608,6 +6915,11 @@ function baselineBuildExpectations(options: {
       "",
     ),
     avdPathExpectation("emulator-5586"),
+    processResult(
+      binaries.adb,
+      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
   );
   return expectations;
 }
@@ -6815,6 +7127,7 @@ class RecordingRunner implements ProcessRunner {
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
   ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
   ["emu avd snapshot list", "simlock_clean_baseline\n"],
   ["emu avd snapshot load simlock_clean_baseline", "OK\n"],

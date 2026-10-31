@@ -130,7 +130,13 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+// why: Saving the clean baseline writes the whole guest RAM and disk to the host, far slower than
+// the console's other commands; past this the emulator's console is taken as hung (#1138).
+const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+// why: A snapshot load on a loaded machine has hung for 18 minutes (#1047); past this the reclaim gives
+// the load up and takes the shutdown-and-wipe path, so the device's slot comes back.
+const SNAPSHOT_LOAD_TIMEOUT_MS = 60_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -1138,16 +1144,11 @@ export class AndroidDriver implements Driver {
         state.baselineCaptured = false;
         return { state: "shutdown", strategy: "wipe" };
       }
-      const restored = await this.#runOrThrow(this.#sdk.adb, [
-        "-s",
-        data.serial,
-        "emu",
-        "avd",
-        "snapshot",
-        "load",
-        CLEAN_BASELINE,
-      ]);
-      if (!/OK|loaded|success/i.test(`${restored.stdout}\n${restored.stderr}`)) {
+      const restored = await this.#loadCleanBaseline(data);
+      if (
+        restored === undefined ||
+        !/OK|loaded|success/i.test(`${restored.stdout}\n${restored.stderr}`)
+      ) {
         await this.#shutdown(data, state);
         state.needsWipe = true;
         state.baselineCaptured = false;
@@ -1894,11 +1895,16 @@ export class AndroidDriver implements Driver {
   async #avdConfig(avdName: string): Promise<string> {
     try {
       const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
-      return contents
-        .split(/\r?\n/)
-        .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
-        .sort()
-        .join("\n");
+      return (
+        contents
+          .split(/\r?\n/)
+          .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+          // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
+          // ignores it, so counting it would invalidate the other devices' baselines.
+          .filter((line) => !line.startsWith("hw.device.hash2="))
+          .sort()
+          .join("\n")
+      );
     } catch {
       return "";
     }
@@ -2015,23 +2021,36 @@ export class AndroidDriver implements Driver {
         continue;
       }
       if (completed.stdout.trim() === "1") {
-        const bootAnimation = await this.#runOrThrow(this.#sdk.adb, [
-          "-s",
-          data.serial,
-          "shell",
-          "getprop",
-          "init.svc.bootanim",
-        ]);
-        if (bootAnimation.stdout.trim() === "" || bootAnimation.stdout.trim() === "stopped") {
-          await this.#confirmAvdAnswers(data);
-          return;
-        }
+        if (await this.#bootSettled(data)) return;
       }
 
       await this.#delay(
         Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)),
       );
     }
+  }
+
+  /**
+   * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted
+   * then fails its first install or package query.
+   */
+  async #bootSettled(data: AndroidDriverData): Promise<boolean> {
+    const bootAnimation = await this.#runOrThrow(this.#sdk.adb, [
+      "-s",
+      data.serial,
+      "shell",
+      "getprop",
+      "init.svc.bootanim",
+    ]);
+    const stopped = bootAnimation.stdout.trim();
+    if (stopped !== "" && stopped !== "stopped") return false;
+    await this.#confirmAvdAnswers(data);
+    const answer = await this.#processRunner.run(
+      this.#sdk.adb,
+      ["-s", data.serial, "shell", "pm", "path", "android"],
+      { env: this.#env() },
+    );
+    return answer.code === 0 && answer.stdout.includes("package:");
   }
 
   /**
@@ -2206,23 +2225,16 @@ export class AndroidDriver implements Driver {
   }
 
   async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#runOrThrow(this.#sdk.adb, [
-      "-s",
-      data.serial,
-      "emu",
-      "avd",
-      "snapshot",
-      "save",
-      CLEAN_BASELINE,
-    ]);
-    const snapshots = await this.#runOrThrow(this.#sdk.adb, [
-      "-s",
-      data.serial,
-      "emu",
-      "avd",
-      "snapshot",
-      "list",
-    ]);
+    await this.#runOrThrow(
+      this.#sdk.adb,
+      ["-s", data.serial, "emu", "avd", "snapshot", "save", CLEAN_BASELINE],
+      { timeoutMs: SNAPSHOT_SAVE_TIMEOUT_MS },
+    );
+    const snapshots = await this.#runOrThrow(
+      this.#sdk.adb,
+      ["-s", data.serial, "emu", "avd", "snapshot", "list"],
+      { timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+    );
     if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
       throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
     }
@@ -2258,6 +2270,7 @@ export class AndroidDriver implements Driver {
     if (data.port > 0 && (await this.#serialIsOwn(data))) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
     }
     const handle = state.handle;
@@ -2271,6 +2284,21 @@ export class AndroidDriver implements Driver {
       await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
     }
     state.handle = undefined;
+  }
+
+  async #loadCleanBaseline(data: AndroidDriverData): Promise<ProcessResult | undefined> {
+    const handle = this.#processRunner.spawn(
+      this.#sdk.adb,
+      ["-s", data.serial, "emu", "avd", "snapshot", "load", CLEAN_BASELINE],
+      { env: this.#env() },
+    );
+    if (!(await this.#waitForExit(handle, SNAPSHOT_LOAD_TIMEOUT_MS))) {
+      handle.kill("SIGKILL");
+      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
+      return undefined;
+    }
+    const result = await handle.wait();
+    return result.code === 0 ? result : undefined;
   }
 
   async #waitForExit(handle: ProcessHandle, timeoutMs: number): Promise<boolean> {

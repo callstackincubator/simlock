@@ -304,6 +304,7 @@ class Machine {
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
   ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
   ["emu avd snapshot list", "simlock_clean_baseline\n"],
 ]);

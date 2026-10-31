@@ -91,7 +91,8 @@ describe.skipIf(!hasAndroidSdk)(
       async () => {
         const env = await withDaemon({
           driver: "real",
-          configOverrides: { idle: { shutdownAfterMs: 300 } },
+          // why: a learned warm kind would re-boot the emulator the idle shutdown just stopped.
+          configOverrides: { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } },
         });
         const { adbServerPort } = env;
         if (adbServerPort === undefined) {
