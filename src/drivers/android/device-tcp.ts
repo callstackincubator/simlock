@@ -1,3 +1,4 @@
+import { type ChunkReader, openDeviceSocket } from "./screen/index.js";
 import {
   DeviceTcpError,
   type DeviceReverse,
@@ -6,6 +7,7 @@ import {
   type VirtualDriverDevice,
 } from "../../core/index.js";
 import type {
+  Clock,
   ProcessResult,
   TcpListener,
   TcpListenerFactory,
@@ -17,11 +19,17 @@ const TUNNEL_PORT_FIRST = 47_000;
 const TUNNEL_PORT_LAST = 47_999;
 
 const ADB_TIMEOUT_MS = 10_000;
+const CONNECT_TIMEOUT_MS = 5_000;
 const MESSAGE_LIMIT = 200;
 const CANNOT_REBIND = "cannot rebind existing socket";
 
 export interface AndroidDeviceTcpOptions {
   readonly listeners: TcpListenerFactory;
+  readonly clock: Clock;
+  // why: the driver decides which adb server a device is reached through, and for a phone which check it passes first; a target without a connector cannot open a device port.
+  readonly target:
+    | ((device: VirtualDriverDevice | PhysicalDriverDevice) => Promise<DeviceSocketTarget>)
+    | undefined;
   // why: a sweep acts on a device only once the driver proved it Simlock's own; an emulator on a recorded serial may answer as another's (#284).
   readonly isOwn: (device: VirtualDriverDevice | PhysicalDriverDevice) => Promise<boolean>;
   readonly warn: (message: string, detail: Record<string, unknown>) => void;
@@ -31,6 +39,34 @@ export interface AndroidDeviceTcpOptions {
     args: readonly string[],
     timeoutMs: number,
   ) => Promise<ProcessResult>;
+}
+
+interface DeviceSocketTarget {
+  readonly serial: string;
+  connect(timeoutMs: number): Promise<TcpStream>;
+}
+
+// why: `openDeviceSocket` read the adb reply through a reader that may already hold the first bytes of the device's answer, so the stream handed on reads through it.
+function streamThrough(stream: TcpStream, reader: ChunkReader): TcpStream {
+  return {
+    close: () => {
+      stream.close();
+    },
+    end: () => {
+      stream.end();
+    },
+    readable: new ReadableStream<Uint8Array>({
+      cancel: () => {
+        stream.close();
+      },
+      pull: async (controller) => {
+        const chunk = await reader.read();
+        if (chunk === undefined) controller.close();
+        else controller.enqueue(chunk);
+      },
+    }),
+    write: (bytes) => stream.write(bytes),
+  };
 }
 
 function cut(message: string): string {
@@ -106,8 +142,50 @@ async function removeTunnelRules(run: RunAdb, warn: Warn, device: Target): Promi
 export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): DeviceTcp {
   return {
     supports: () => true,
-    async connect(): Promise<TcpStream> {
-      throw new DeviceTcpError("TUNNEL_FAILED", "forward tunnels are not built yet");
+    // why: the host protocol reaches a device port through the target's adb server with no `adb forward` rule, so a worker that dies leaves nothing listening; both answers share one 5 s limit.
+    async connect(device, devicePort, signal): Promise<TcpStream> {
+      if (options.target === undefined) {
+        throw new DeviceTcpError("TUNNEL_FAILED", "this driver has no adb connection to open");
+      }
+      const target = await options.target(device);
+      const limit = new AbortController();
+      let timedOut = false;
+      const timer = options.clock.setTimer(CONNECT_TIMEOUT_MS, () => {
+        timedOut = true;
+        limit.abort();
+      });
+      const relay = () => limit.abort();
+      signal.addEventListener("abort", relay, { once: true });
+      try {
+        const outcome = await openDeviceSocket({
+          connect: (timeoutMs) => target.connect(timeoutMs),
+          serial: target.serial,
+          service: `tcp:${String(devicePort)}`,
+          signal: limit.signal,
+          timeoutMs: CONNECT_TIMEOUT_MS,
+        });
+        if (timedOut) {
+          if (outcome.kind === "open") outcome.stream.close();
+          throw new DeviceTcpError("TUNNEL_FAILED", "timeout");
+        }
+        if (outcome.kind === "open") return streamThrough(outcome.stream, outcome.reader);
+        throw new DeviceTcpError(
+          "TUNNEL_FAILED",
+          cut(
+            outcome.kind === "refused"
+              ? outcome.reason
+              : `adb cannot reach ${target.serial}: ${outcome.reason}`,
+          ),
+        );
+      } catch (error) {
+        if (timedOut && !(error instanceof DeviceTcpError)) {
+          throw new DeviceTcpError("TUNNEL_FAILED", "timeout");
+        }
+        throw error;
+      } finally {
+        options.clock.cancel(timer);
+        signal.removeEventListener("abort", relay);
+      }
     },
     async sweep(devices): Promise<void> {
       await Promise.all(
