@@ -31,6 +31,7 @@ describe("device.rotate", () => {
   async function worker(options: {
     readonly inputModule: boolean;
     readonly input: FakeInputFactory;
+    readonly androidInput?: FakeInputFactory;
   }) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-"));
     directories.push(dataDirectory);
@@ -43,8 +44,23 @@ describe("device.rotate", () => {
           availableOsVersions: ["18.0"],
           clock: new SystemClock(),
           input: options.input,
-          knownModels: ["iPhone 15"],
+          knownModels: ["iPhone 15", "iPad Pro", "Apple TV 4K", "Mystery Box"],
+          physicalDevices: [
+            { class: "phone", ids: ["PHONE-1"], model: "iPhone 15", osVersion: "18.0" },
+            { class: "tablet", ids: ["TABLET-1"], model: "iPad Pro", osVersion: "18.0" },
+          ],
           platform: "ios",
+        }),
+        new FakeDriver({
+          availableOsVersions: ["15"],
+          clock: new SystemClock(),
+          ...(options.androidInput === undefined ? {} : { input: options.androidInput }),
+          knownModels: ["Pixel 8"],
+          physicalDevices: [
+            { class: "phone", ids: ["DROID-1"], model: "Pixel 8", osVersion: "15" },
+            { class: "tablet", ids: ["DROID-2"], model: "Pixel Tablet", osVersion: "15" },
+          ],
+          platform: "android",
         }),
       ],
       filesystem: new MemoryFilesystem(),
@@ -112,6 +128,105 @@ describe("device.rotate", () => {
         ).rejects.toMatchObject(expected);
       }
       expect(input.opened).toHaveLength(1);
+    },
+  );
+
+  it(
+    "refuses a holder's rotate of a lease not on an iOS phone or tablet simulator with ROTATION_UNSUPPORTED naming it",
+    { timeout: 60_000 },
+    async () => {
+      const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
+      const androidInput = new FakeInputFactory({
+        height: 2400,
+        orientation: "portrait",
+        width: 1080,
+      });
+      const { daemon } = await worker({ androidInput, input, inputModule: false });
+      const admin: DispatchSession = { ...holder, principal: "admin-1", role: "admin" };
+      const orientation = "landscape_left";
+
+      async function lease(principal: string, request: object, enroll?: string) {
+        const session: DispatchSession = { ...holder, principal };
+        if (enroll !== undefined) {
+          await daemon.dispatch(
+            "device.add",
+            { id: enroll, platform: (request as { platform: "ios" | "android" }).platform },
+            admin,
+          );
+        }
+        const granted = await daemon.dispatch("lease.request", request as never, session);
+        return { id: (granted as { lease: { id: string } }).lease.id, session };
+      }
+
+      const cases: readonly (readonly [string, object, string | undefined, string, object])[] = [
+        [
+          "tv",
+          { model: "Apple TV 4K", platform: "ios" },
+          undefined,
+          "an Apple TV simulator",
+          { class: "tv", physical: false, platform: "ios" },
+        ],
+        [
+          "unknown family",
+          { model: "Mystery Box", platform: "ios" },
+          undefined,
+          "a Mystery Box simulator",
+          { class: "unknown", physical: false, platform: "ios" },
+        ],
+        [
+          "emulator",
+          { model: "Pixel 8", platform: "android" },
+          undefined,
+          "an Android emulator",
+          { class: "emulator", physical: false, platform: "android" },
+        ],
+        [
+          "android phone",
+          { model: "Pixel 8", physical: true, platform: "android" },
+          "DROID-1",
+          "an Android phone",
+          { class: "phone", physical: true, platform: "android" },
+        ],
+        [
+          "android tablet",
+          { model: "Pixel Tablet", physical: true, platform: "android" },
+          "DROID-2",
+          "an Android tablet",
+          { class: "tablet", physical: true, platform: "android" },
+        ],
+        [
+          "iphone",
+          { model: "iPhone 15", physical: true, platform: "ios" },
+          "PHONE-1",
+          "an iPhone",
+          { class: "phone", physical: true, platform: "ios" },
+        ],
+        [
+          "ipad",
+          { model: "iPad Pro", physical: true, platform: "ios" },
+          "TABLET-1",
+          "an iPad",
+          { class: "tablet", physical: true, platform: "ios" },
+        ],
+      ];
+      for (const [name, request, enroll, phrase, details] of cases) {
+        const { id, session } = await lease(`holder-${name}`, request, enroll);
+        await expect(
+          daemon.dispatch("device.rotate", { leaseId: id, orientation }, session),
+          name,
+        ).rejects.toMatchObject({
+          code: "ROTATION_UNSUPPORTED",
+          details: { leaseId: id, ...details },
+          message: `Lease ${id} is on ${phrase}; only an iOS simulator can be rotated`,
+        });
+      }
+
+      const ipad = await lease("holder-ipad-simulator", { model: "iPad Pro", platform: "ios" });
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId: ipad.id, orientation }, ipad.session),
+      ).resolves.toEqual({ leaseId: ipad.id, orientation });
+      expect(input.opened).toHaveLength(1);
+      expect(androidInput.opened).toHaveLength(0);
     },
   );
 });
