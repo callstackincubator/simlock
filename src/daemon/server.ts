@@ -1211,6 +1211,8 @@ export class DaemonServer {
         // why: Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
+      case "device.rotate":
+        return this.#dispatcher.dispatch("device.rotate", frame.payload, this.#session(connection));
       case "relay.request":
         return this.#relayRequest(connection, frame.id, frame.payload, relayChannel);
       case "relay.cancel":

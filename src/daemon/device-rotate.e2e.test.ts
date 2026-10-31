@@ -470,7 +470,7 @@ describe("device.rotate", () => {
           const text = await response.text();
           return {
             body: (text.startsWith("{") ? JSON.parse(text) : {}) as {
-              error?: { code: string; message: string };
+              error?: Record<string, unknown>;
               leaseId?: string;
               orientation?: string;
             },
@@ -503,7 +503,11 @@ describe("device.rotate", () => {
         const android = await rotate(emulatorId, emulator!.secret, { orientation });
         expect(android.status).toBe(422);
         expect(android.body.error).toEqual({
+          class: "emulator",
           code: "ROTATION_UNSUPPORTED",
+          leaseId: emulatorId,
+          physical: false,
+          platform: "android",
           message: `Lease ${emulatorId} is on an Android emulator; only an iOS simulator can be rotated`,
         });
 
@@ -512,6 +516,8 @@ describe("device.rotate", () => {
         expect(missing.status).toBe(503);
         expect(missing.body.error).toEqual({
           code: "INPUT_UNAVAILABLE",
+          leaseId: phoneId,
+          reason: "helper is gone",
           message: `Lease ${phoneId}'s simulator cannot take input: helper is gone`,
         });
         input.failWith = undefined;

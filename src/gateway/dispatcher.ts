@@ -139,6 +139,7 @@ export interface GatewayDispatcherOptions {
     | "release"
     | "releaseAll"
     | "exec"
+    | "rotate"
     | "queueDepth"
     | "physicalQueueDepth"
     | "ownerId"
@@ -731,10 +732,11 @@ export class GatewayDispatcher {
     return { leaseIds: [...leaseIds] };
   };
 
-  #deviceRotate: Handler<"device.rotate"> = async (input) => ({
-    leaseId: input.leaseId,
-    orientation: "portrait",
-  });
+  #deviceRotate: Handler<"device.rotate"> = async (input, session) =>
+    this.options.coordinator.rotate(
+      { leaseId: input.leaseId, orientation: input.orientation },
+      session,
+    );
 
   #deviceExec: Handler<"device.exec"> = async (input, session) =>
     this.options.coordinator.exec(
