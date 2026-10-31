@@ -134,7 +134,10 @@ export class DriverCatalog {
   ): Promise<TcpStream> {
     const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
     if (deviceTcp === undefined) {
-      throw new DeviceTcpError("TUNNEL_UNSUPPORTED", `${platform} devices take no tunnel`);
+      throw new DeviceTcpError(
+        "TUNNEL_UNSUPPORTED",
+        unsupportedTunnelMessage(platform, device.physical),
+      );
     }
     return await deviceTcp.connect(device, devicePort, signal);
   }

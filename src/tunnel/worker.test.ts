@@ -490,6 +490,11 @@ describe("a worker's tunnel socket", () => {
         send: (socket) => socket.receive(credit(2, 1)),
       },
       {
+        message: "connection 0 was never opened",
+        ready: true,
+        send: (socket) => socket.receive(frame(0x03, 0, "x")),
+      },
+      {
         message: "the window is above 2147483648",
         ready: true,
         send: (socket) => {

@@ -106,6 +106,13 @@ describe("simlock tunnel that cannot run", () => {
     longest.signals.emit("SIGINT");
     expect(await longestExit).toBe(0);
 
+    const floor = command(ENV);
+    const floorExit = floor.run(["tunnel", "forward", "9229:1024", "--lease", "L1"]);
+    await vi.waitFor(() => expect(floor.webSocket.connections).toHaveLength(1));
+    expect(floor.tcpListeners.listeners.map((listener) => listener.port)).toEqual([1024]);
+    floor.signals.emit("SIGINT");
+    expect(await floorExit).toBe(0);
+
     const cases: readonly {
       readonly argv: readonly string[];
       readonly env?: NodeJS.ProcessEnv;
@@ -140,6 +147,10 @@ describe("simlock tunnel that cannot run", () => {
       {
         argv: ["forward", "9229:80"],
         message: 'forward caller port "80" is below 1024',
+      },
+      {
+        argv: ["forward", "9229:1023"],
+        message: 'forward caller port "1023" is below 1024',
       },
       {
         argv: ["reverse", "5173", "forward", "5173"],
@@ -716,7 +727,7 @@ describe("simlock tunnel that is refused or loses its worker", () => {
 });
 
 describe("simlock tunnel forward listening on the caller's loopback", () => {
-  it("binds each caller port before HELLO, holds connections until READY, announces them with even ids and closes every listener however the command ends", async () => {
+  it("binds each caller port before HELLO, holds connections until READY, announces them with even ids and closes every listener however the command ends, and sends a device's OPEN to the reverse tunnel when a forward names the same device port", async () => {
     const busy = command(ENV);
     busy.tcpListeners.busy.add(9229);
     expect(await busy.run(["tunnel", "forward", "9229", "--lease", "L1"])).toBe(1);
@@ -731,7 +742,7 @@ describe("simlock tunnel forward listening on the caller's loopback", () => {
       "forward",
       "9229:19229",
       "reverse",
-      "5173",
+      "9229:5173",
       "--lease",
       "L1",
     ]);
@@ -757,6 +768,9 @@ describe("simlock tunnel forward listening on the caller's loopback", () => {
     });
     waiting.tcpListeners.listeners[0]?.connect();
     await vi.waitFor(() => expect(sentFrames(waiting).at(-1)?.conn).toBe(4));
+    peer.receive(open(1, 9229));
+    await vi.waitFor(() => expect(waiting.tcpStreams.connections).toHaveLength(1));
+    expect(waiting.tcpStreams.connections[0]?.port).toBe(5173);
     waiting.signals.emit("SIGINT");
     expect(await exit).toBe(0);
 

@@ -257,7 +257,6 @@ forward localhost:${String(closedPort)} -> device:9230 (lease ${lone.leaseId})
     await vi.waitFor(() => expect(device?.peer.writeEnded).toBe(true), { timeout: 10_000 });
 
     const refused = await callerClient(closedPort, []);
-    refused.write("nobody home");
     await vi.waitFor(() => expect(refused.readyState).toBe("closed"), { timeout: 10_000 });
     expect(lone.deviceTcp.connections).toHaveLength(1);
 
