@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
+import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/android-sdk.js";
 import { withDaemon, waitFor, type RecordedEvent, type TestEnv } from "./helpers/index.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 
@@ -22,10 +22,6 @@ const execFileAsync = promisify(execFile);
  * Run only through `scripts/slow-e2e.sh e2e/slow-warm-pool.test.ts`, never in CI.
  */
 
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
 /** The ABI an emulator runs natively on this host; an image of the other ABI is listed but cannot boot. */
 const HOST_ABI = process.arch === "arm64" ? "arm64-v8a" : "x86_64";
 
@@ -110,16 +106,11 @@ async function installedIosRuntimes(): Promise<string[]> {
   }
 }
 
-/** Whether an emulator, adb and a system image of the host's ABI (`system-images/<api>/<tag>/<abi>`) exist. */
+/** why: the daemon boots only an image of the host's ABI (`system-images/<api>/<tag>/<abi>`) from the SDK it finds, so the image is looked for under that SDK's root. */
 function installedAndroidImages(): boolean {
-  const root = join(ANDROID_HOME, "system-images");
-  if (
-    !existsSync(join(ANDROID_HOME, "emulator", "emulator")) ||
-    !existsSync(join(ANDROID_HOME, "platform-tools", "adb")) ||
-    !existsSync(root)
-  ) {
-    return false;
-  }
+  if (ANDROID_SDK === undefined) return false;
+  const root = join(ANDROID_SDK.root, "system-images");
+  if (!existsSync(root)) return false;
   try {
     return readdirSync(root).some((api) =>
       readdirSync(join(root, api)).some((tag) => existsSync(join(root, api, tag, HOST_ABI))),
@@ -135,17 +126,20 @@ async function missingPlatform(): Promise<string | undefined> {
     return "iOS is missing: no macOS host with an installed iOS runtime";
   }
   if (!installedAndroidImages()) {
-    return `Android is missing: no emulator, adb and installed ${HOST_ABI} system image`;
+    return `Android is missing: no complete SDK with an installed ${HOST_ABI} system image`;
   }
   return undefined;
 }
 
 /** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
 async function onlineEmulators(adbServerPort: number): Promise<string[]> {
-  const adb = join(ANDROID_HOME, "platform-tools", "adb");
-  const { stdout } = await execFileAsync(adb, ["-P", String(adbServerPort), "devices"], {
-    timeout: QUERY_TIMEOUT,
-  }).catch((error: unknown) => {
+  const { stdout } = await runSdkTool(
+    requireAndroidSdk().adb,
+    ["-P", String(adbServerPort), "devices"],
+    {
+      timeout: QUERY_TIMEOUT,
+    },
+  ).catch((error: unknown) => {
     // A timed-out adb is a hang to report, not "no emulator online".
     if ((error as { killed?: boolean }).killed === true) throw error;
     return { stdout: "" };
