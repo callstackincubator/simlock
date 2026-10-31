@@ -87,17 +87,25 @@ flowchart LR
    refused.
 6. A tunnel lives while its socket does. When the socket closes, the
    worker removes its `reverse` rules and closes its listeners and
-   connections. When the lease ends, every socket of it closes. Android
-   reclaim removes every `reverse` rule on the device, the tunnel's and any
-   an agent made through `exec`, and every `forward` rule the adb server
-   holds for that device's serial. It never runs `forward --remove-all`:
-   forward rules live in the server, which other devices and tools share.
-7. The socket's messages are the module's, not a contract shape: no
+   connections; the removal is awaited before lease end lets reclaim run,
+   and a removal that fails keeps its loopback port reserved until reclaim.
+   When the lease ends, every socket of it closes. Android reclaim, once the
+   device is proved Simlock's own, removes every `reverse` rule on the
+   device, the tunnel's and any an agent made through `exec`, and every
+   `forward` rule the adb server holds for that device's serial. It never
+   runs `forward --remove-all`: forward rules live in the server, which
+   other devices and tools share. At start, before any lease is granted, the
+   worker removes `reverse` rules on every Android device it proves its own,
+   so a rule left by a restart never points at a port a new tunnel is given.
+7. The socket's frames are not daemon-contract operations, but both ends
+   must agree on them: their codec is a helper in the contract, which the
+   CLI and the module both import. The tunnel's refusals are contract error
+   codes, so every surface reports them the same way; adding them is one
    protocol bump.
-8. `simlock tunnel` opens the socket with `ws`, through a port adapter only
-   that command loads: Node 22's built-in WebSocket client cannot send the
-   `Authorization` header the daemons require. Every other CLI command and
-   the MCP server still never load `ws`.
+8. `simlock tunnel` opens the socket with Node's built-in `WebSocket`,
+   which sends the `Authorization` header (Node 22.13's undici accepts
+   `headers`). The CLI never loads `ws`; the comment that said Node 22
+   cannot set headers is corrected.
 
 ```mermaid
 sequenceDiagram
@@ -132,7 +140,7 @@ sequenceDiagram
   a lease field.
 - Reclaim gains a step on Android, and rules made by hand no longer leak
   into the next lease.
-- A third file imports `ws`, loaded by one CLI command only.
+- The first daemon-contract helper for a module's own socket protocol.
 - iOS simulators are not covered: their `reverse` would be a port on the
   worker shared by every lease, the host-port problem #162 owns.
 
