@@ -6,7 +6,8 @@ import type {
 } from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
 import { unavailable } from "./refusal.js";
-import { encodeFrame, MAX_TUNNEL_MESSAGE_BYTES, readFrames } from "./framing.js";
+import { closeReason } from "../core/index.js";
+import { CHANNEL_TAG, encodeFrame, MAX_TUNNEL_MESSAGE_BYTES, readFrames } from "./framing.js";
 
 export interface GatewayTunnelLinkOptions {
   readonly relayTwoWay: (
@@ -27,6 +28,21 @@ function refusalFor(error: unknown, workerId: string): Response {
     );
   }
   throw error;
+}
+
+// why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
+function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
+  try {
+    const { code, reason } = JSON.parse(new TextDecoder().decode(payload)) as Record<
+      string,
+      unknown
+    >;
+    if (typeof code !== "number" || !Number.isInteger(code)) return undefined;
+    if (code !== 1001 && code !== 1013 && (code < 4000 || code > 4999)) return undefined;
+    return typeof reason === "string" ? { code, reason: closeReason(reason) } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
@@ -52,6 +68,15 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
     socket.onClose(() => controller.abort());
     void (async () => {
       for await (const frame of readFrames(relay.readable)) {
+        if (frame.tag === CHANNEL_TAG.close) {
+          const closing = closeOf(frame.payload);
+          if (closing !== undefined) {
+            socket.close(closing.code, closing.reason);
+            controller.abort();
+            return;
+          }
+          break;
+        }
         const message = new Uint8Array(1 + frame.payload.length);
         message[0] = frame.tag;
         message.set(frame.payload, 1);

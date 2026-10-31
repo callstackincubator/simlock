@@ -5,6 +5,10 @@ import { TUNNEL_MAX_DATA_BYTES } from "../contract/index.js";
 // why: a tunnel message is `[tag][conn u32][payload]` with a payload of at most one DATA's bytes, and the channel carries one message per frame.
 export const MAX_TUNNEL_MESSAGE_BYTES = 5 + TUNNEL_MAX_DATA_BYTES;
 
+// why: the two channel-only tags: a heartbeat the worker sends while it is alive, and the worker's close
+// `{code, reason}`; neither reaches a client, and a client's tags are the tunnel's own.
+export const CHANNEL_TAG = { close: 0xf1, heartbeat: 0xf0 } as const;
+
 export interface ChannelFrame {
   readonly tag: number;
   readonly payload: Uint8Array;

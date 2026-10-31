@@ -1,6 +1,6 @@
 import type { ModuleTwoWayPipe } from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
-import { encodeFrame, readFrames } from "./framing.js";
+import { CHANNEL_TAG, encodeFrame, readFrames } from "./framing.js";
 
 // why: a worker's tunnel session talks to a gateway's client through a relay channel, and the session
 // takes a `LeaseSocket` whichever door the client came in by; this is the channel's end of that port,
@@ -30,7 +30,10 @@ export function channelSocket(pipe: ModuleTwoWayPipe): LeaseSocket {
   })();
   pipe.signal.addEventListener("abort", markClosed, { once: true });
   return {
-    close: () => {
+    close: (code, reason) => {
+      write(
+        encodeFrame(CHANNEL_TAG.close, new TextEncoder().encode(JSON.stringify({ code, reason }))),
+      );
       writes = writes.then(() => writer.close()).catch(() => undefined);
       markClosed();
     },
