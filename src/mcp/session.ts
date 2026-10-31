@@ -256,7 +256,18 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      return client.getCatalog(input);
+      const catalog = await client.getCatalog(input);
+      const status = await client.getStatus();
+      const physicalDevices = (status.devices ?? [])
+        .filter((device) => device.physical)
+        .map((device) => ({
+          platform: device.spec.platform,
+          model: device.spec.model,
+          osVersion: device.spec.osVersion,
+          ...(device.class === undefined ? {} : { class: device.class }),
+          state: device.state,
+        }));
+      return { ...catalog, physicalDevices };
     });
   }
 

@@ -240,3 +240,17 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
     },
   };
 }
+
+export function startingStatus(): StatusGetOutput {
+  return {
+    daemon: {
+      health: "starting",
+      mode: "worker",
+      version: "0.0.0",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    },
+    host: { os: "darwin", osVersion: "26.0", arch: "arm64", tools: [] },
+  };
+}

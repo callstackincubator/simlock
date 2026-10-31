@@ -14,9 +14,13 @@
 import { z } from "zod";
 
 import {
+  absentReasonSchema,
+  deviceStateSchema,
   leaseRecordSchema,
   leaseRequestFields,
   OPERATIONS,
+  physicalClassSchema,
+  platformSchema,
   refuseModelWithClass,
 } from "../contract/index.js";
 
@@ -56,7 +60,20 @@ export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;
 // ---- list_devices -------------------------------------------------------------------------
 
 export const listDevicesInputSchema = OPERATIONS["catalog.get"].input;
-export const listDevicesOutputSchema = OPERATIONS["catalog.get"].output;
+
+const physicalDeviceSchema = z.object({
+  workerId: z.string().optional(),
+  platform: platformSchema,
+  model: z.string(),
+  osVersion: z.string(),
+  class: physicalClassSchema.optional(),
+  state: deviceStateSchema,
+  absentReason: absentReasonSchema.optional(),
+});
+
+export const listDevicesOutputSchema = OPERATIONS["catalog.get"].output.extend({
+  physicalDevices: z.array(physicalDeviceSchema),
+});
 
 // ---- release_simulator ---------------------------------------------------------------------
 

@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { SimlockError, type StatusGetOutput } from "../client/index.js";
 import { FakeClock } from "../ports/index.js";
-import { FakeSimlockClient, sampleGrant } from "./test-support.js";
+import { FakeSimlockClient, sampleGrant, startingStatus } from "./test-support.js";
 import { McpSession } from "./session.js";
 import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
@@ -37,6 +37,7 @@ describe("MCP server (smoke)", () => {
           },
         ],
       });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
     let listed = false;
     client.listLeasesImpl = () => {
@@ -70,9 +71,10 @@ describe("MCP server (smoke)", () => {
         "lease_status",
         "run_on_device",
       ]);
-      expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
-        "modelClasses",
-      );
+      const listDescription = tools.tools.find((tool) => tool.name === "list_devices")?.description;
+      expect(listDescription).toContain("modelClasses");
+      expect(listDescription).toContain("physicalDevices");
+      expect(listDescription).toContain("empty while the daemon is still starting");
       const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
       expect(Object.keys(leaseTool?.inputSchema.properties ?? {}).sort()).toEqual(
         Object.keys(leaseSimulatorInputSchema.shape).sort(),
@@ -116,6 +118,7 @@ describe("MCP server (smoke)", () => {
             runtimes: ["26.5"],
           },
         ],
+        physicalDevices: [],
       });
 
       const status = await call(mcpClient, "lease_status", {});
@@ -215,22 +218,23 @@ describe("MCP server (smoke)", () => {
       { model: 7, platform: "ios" },
       "requestLease",
     ],
-    ["list_devices", {}, { platform: 7 }, "getCatalog"],
+    ["list_devices", {}, { platform: 7 }, "getCatalog", "getStatus"],
     ["release_simulator", { leaseId: "lease-1" }, { leaseId: 7 }, "releaseLease"],
     ["lease_status", {}, undefined, "listLeases"],
   ] as const)(
     "%s reaches the client with a valid input, and a wrong-type input is refused through the registered schema before touching the client",
-    async (tool, valid, wrong, method) => {
+    async (tool, valid, wrong, ...methods) => {
       const client = new FakeSimlockClient();
       client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
       client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.getStatusImpl = () => Promise.resolve(startingStatus());
       client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
       client.listLeasesImpl = () => Promise.resolve({ leases: [] });
       const { mcpClient, close } = await connectedServer(client);
       try {
         const ok = await call(mcpClient, tool, valid);
         expect(ok.isError).not.toBe(true);
-        expect(client.calls.map((entry) => entry.method)).toEqual([method]);
+        expect(client.calls.map((entry) => entry.method)).toEqual(methods);
 
         if (wrong === undefined) return;
         client.calls.length = 0;
@@ -978,19 +982,8 @@ function statusDevice(fixture: StatusDeviceFixture): StatusDevice {
   };
 }
 
-function statusOutput(devices: StatusDevice[] | undefined): StatusGetOutput {
-  return {
-    ...(devices === undefined ? {} : { devices }),
-    daemon: {
-      health: devices === undefined ? "starting" : "running",
-      mode: "worker",
-      version: "0.0.0",
-      update: null,
-      lastUpdateFailure: null,
-      latestVersion: null,
-    },
-    host: { os: "darwin", osVersion: "26.0", arch: "arm64", tools: [] },
-  };
+function statusOutput(devices: StatusDevice[]): StatusGetOutput {
+  return { ...startingStatus(), devices };
 }
 
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
