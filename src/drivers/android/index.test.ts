@@ -3458,6 +3458,35 @@ describe("AndroidDriver deviceTcp", () => {
     });
   });
 
+  it("sweeps at start only the reverse rules into 47000-47999 on a device proved its own, and removes nothing on an emulator that answers as another's", async () => {
+    const own = await driverWith([
+      avdPathExpectation("emulator-5586"),
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--list"),
+        result: {
+          code: 0,
+          stderr: "",
+          stdout:
+            "host-19 tcp:5173 tcp:47003\nhost-19 tcp:8081 tcp:8082\nhost-19 tcp:3000 tcp:47999\n",
+        },
+      },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: ok,
+      },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:3000"),
+        result: ok,
+      },
+    ]);
+    await own.driver.deviceTcp?.sweep([emulator]);
+    expect(own.runner.calls.filter((call) => call.args.includes("--remove"))).toHaveLength(2);
+
+    const foreign = await driverWith([avdPathExpectation("emulator-5586", "simlock_two")]);
+    await foreign.driver.deviceTcp?.sweep([emulator]);
+    expect(foreign.runner.calls.some((call) => call.args.includes("reverse"))).toBe(false);
+  });
+
   it("refuses a reverse with TUNNEL_PORT_IN_USE when adb cannot rebind, TUNNEL_FAILED for any other adb failure or when every tunnel port is busy, and frees the port it took", async () => {
     const cannotRebind = await driverWith([
       {

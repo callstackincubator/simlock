@@ -1,10 +1,10 @@
 import type { TcpStream } from "../ports/index.js";
 import type { PhysicalDriverDevice, VirtualDriverDevice } from "./driver.js";
 
-// why: the two refusals a driver can name; the tunnel module passes the code on to the holder.
+// why: the refusals a driver or the catalog can name; the tunnel module passes the code on to the holder.
 export class DeviceTcpError extends Error {
   constructor(
-    readonly code: "TUNNEL_PORT_IN_USE" | "TUNNEL_FAILED",
+    readonly code: "TUNNEL_PORT_IN_USE" | "TUNNEL_FAILED" | "TUNNEL_UNSUPPORTED",
     message: string,
   ) {
     super(message);
@@ -24,6 +24,8 @@ export interface DeviceReverse {
 // leaves it out, and the tunnel module learns that from its absence rather than from a platform name.
 export interface DeviceTcp {
   supports(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  // why: called once at daemon start, before any lease is served: removes the rules a stopped daemon's tunnels left on devices proved Simlock's own, leased or idle.
+  sweep(devices: readonly (VirtualDriverDevice | PhysicalDriverDevice)[]): Promise<void>;
   reverse(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     devicePort: number,

@@ -34,6 +34,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   closeFailure: Error | undefined;
   // why: a test sets a device port's failure to make its `reverse` refuse, as adb does for a port already reversed.
   readonly failures = new Map<number, Error>();
+  // why: a test sets this to hold every `reverse` until it settles, as an adb call that is slow to answer does.
+  gate: Promise<void> | undefined;
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
 
@@ -45,11 +47,14 @@ export class FakeDeviceTcp implements DeviceTcp {
     return true;
   }
 
+  async sweep(): Promise<void> {}
+
   async reverse(
     _device: unknown,
     devicePort: number,
     _signal?: AbortSignal,
   ): Promise<DeviceReverse> {
+    await this.gate;
     const failure = this.failures.get(devicePort);
     if (failure !== undefined) throw failure;
     const hostPort = this.#nextHostPort;

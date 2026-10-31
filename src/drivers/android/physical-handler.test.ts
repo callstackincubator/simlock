@@ -1131,6 +1131,26 @@ describe("Android physical handler: reclaim", () => {
     expect(runner.installed).toEqual(["com.example.kept"]);
   });
 
+  it("removes every reverse rule of the phone and only its own forwards, and goes on when a removal fails", async () => {
+    const { driver, runner } = await world();
+    runner.override((rest) =>
+      rest.slice(2).join(" ") === "forward --list"
+        ? OK(`${PHONE} tcp:18790 tcp:18791\nOTHER tcp:18792 tcp:18793\n`)
+        : rest.slice(2).join(" ") === "reverse --remove-all"
+          ? FAILED
+          : undefined,
+    );
+
+    const result = await driver.reclaim(PHYSICAL, { clean: "standard" });
+
+    expect(result).toMatchObject({ strategy: "uninstall" });
+    expect(runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward")).toEqual([
+      ["-s", PHONE, "reverse", "--remove-all"],
+      ["-s", PHONE, "forward", "--list"],
+      ["-s", PHONE, "forward", "--remove", "tcp:18790"],
+    ]);
+  });
+
   it("with nothing off the list runs no uninstall", async () => {
     const { driver, runner } = await world();
     runner.installed.splice(0, runner.installed.length, "com.example.kept");

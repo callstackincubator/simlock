@@ -54,6 +54,7 @@ function field(value: unknown, name: string): unknown {
 }
 
 // why: the HELLO is wire input from a holder, so its size and shape are checked before any of it is used; a string is what was wrong with it.
+// fallow-ignore-next-line complexity -- one validator: each branch is one refusal the spec words.
 function parseHello(payload: Uint8Array): readonly Tunnel[] | string {
   if (payload.length > TUNNEL_HELLO_MAX_BYTES) {
     return `HELLO is longer than ${String(TUNNEL_HELLO_MAX_BYTES)} bytes`;
@@ -142,17 +143,17 @@ export function createTunnelSessions(options: {
         }
         connections.clear();
         if (!removeRules) return;
-        await Promise.all(
-          reverses.map((reverse) =>
-            reverse.close().catch((error: unknown) => {
-              options.logger.warn("A tunnel's device rule could not be removed", {
-                error: stableError(error),
-              });
-            }),
-          ),
-        );
+        await Promise.all(reverses.map(removeRule));
       })();
       return finished;
+    }
+
+    function removeRule(reverse: DeviceReverse): Promise<void> {
+      return reverse.close().catch((error: unknown) => {
+        options.logger.warn("A tunnel's device rule could not be removed", {
+          error: stableError(error),
+        });
+      });
     }
 
     const session: Session = { finish, socket };
@@ -217,6 +218,7 @@ export function createTunnelSessions(options: {
       socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, granted));
     }
 
+    // fallow-ignore-next-line complexity -- one HELLO answer: each branch is one refusal or step the spec lists.
     async function hello(payload: Uint8Array): Promise<void> {
       const named = parseHello(payload);
       if (typeof named === "string") {
@@ -255,6 +257,11 @@ export function createTunnelSessions(options: {
             code: error instanceof DeviceTcpError ? error.code : "TUNNEL_FAILED",
             message: error instanceof Error ? error.message : String(error),
           });
+          return;
+        }
+        // why: the socket can close while `reverse` is awaited, after `finish` read the list; a rule that arrives then is removed here.
+        if (finished !== undefined) {
+          await removeRule(reverse);
           return;
         }
         reverses.push(reverse);
@@ -301,6 +308,7 @@ export function createTunnelSessions(options: {
       connection.wake?.();
     }
 
+    // fallow-ignore-next-line complexity -- one frame dispatcher: each branch is one tag or refusal the spec lists.
     function handle(frame: TunnelFrame): void {
       if (!greeted) {
         if (frame.tag !== TUNNEL_TAG.hello) {
