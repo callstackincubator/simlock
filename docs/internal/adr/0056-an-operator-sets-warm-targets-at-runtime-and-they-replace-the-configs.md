@@ -77,17 +77,18 @@ A runtime row is written like a configured target: `platform`, `model`,
 optional `osVersion` (a version or a range), optional `mode`, and `count`,
 an integer from 0 to 256. Its **key** is its written `platform`, `model`,
 `osVersion` and `mode`, exactly as given; an absent field is part of the
-key. Two rows of one list with the same key are refused, and so is a list
-whose effective list (§2) would hold more than 256 rows, so status stays
-within the bound it has today.
+key. A list holds at most 256 rows, and two rows of one list with the same
+key are refused.
 
-### 2. A runtime row replaces the configured target with the same key
+### 2. A runtime row replaces the configured targets with the same key
 
-The **effective list** is the configured targets in config order, each one
-whose key a runtime row has replaced by that row, then the runtime rows no
-configured target has, in their list's order. `config.json` may hold two
-targets of one key; a runtime row of that key replaces all of them, once, at
-the first one's place. The pool plans from the
+The **effective list** has one row per key. Configured targets come first,
+in config order; `config.json` may hold two targets of one key, and they
+make one row at the first one's place, counts summed. A runtime row
+replaces the row of its key, in place; the runtime rows no configured
+target has follow, in their list's order. It holds at most 512 rows (256
+configured keys and 256 runtime ones), and status's bound on warm-pool
+entries rises to fit it with the learned kinds. The pool plans from the
 effective list exactly as it planned from `warmPool.targets`: rows that
 resolve to one spec merge, counts summed (ADR 0017).
 
@@ -108,13 +109,19 @@ for a running slot or the reserve may displace (ADR 0051 §2).
 
 ### 4. A change that keeps fewer devices shuts them down at once
 
-When a change takes effect, the pool compares the devices it kept before
-(`targeted()`) with those it keeps after. Every device kept before and not
-after that is still `ready`, unleased, unclaimed and serves no waiting
-request is shut down in the pass the change asks for, with initiator
-`warm-pool`. The daemon log line names the reason `target-lowered`;
-`device.shutdown` carries no reason, as today. It is then deleted by the
-idle rules (`idle-destroy`), as any shut-down device.
+A change is applied between passes, never inside one. The pool takes the
+devices it keeps (`targeted()`) under the old list, stores the new one,
+resolves it, and takes them again. The devices kept before and not after
+are the **lowered set**. The next pass that plans shuts down each device of
+the set that is still `ready`, unleased and unclaimed and that this pass
+does not keep, with initiator `warm-pool`, then drops the set. The daemon
+log line names the reason `target-lowered`; `device.shutdown` carries no
+reason, as today. The idle rules (`idle-destroy`) then delete it, as any
+shut-down device.
+
+A second change before that pass adds its own lowered set to the first. A
+pass that does not plan (under nuke, while stopping) or that fails drops
+the set, and so does a restart: those devices are left to the idle rules.
 
 A boot or creation already running for a lowered row finishes. Its device
 is kept if the effective list still wants it, and otherwise left to the
@@ -125,19 +132,22 @@ never-leased idle rule.
 - `warm.list` (admin, read) answers the effective list, each row with its
   origin (`configured` or `runtime`), for a runtime row that replaced
   configured ones their summed count, the OS version and mode it resolved
-  to, and the learned peak of that spec; the stored runtime list and `learn`, as stored; the
-  effective `learn` and its origin; and the learned kinds with their
-  counts. A client that raises a count raises it from the larger of the
-  row's count and that peak, so a raise never keeps fewer.
+  to, and the learned peak the pool plans for it (0 on a runtime row, whose
+  count is exact); the stored runtime list and `learn`, as stored; the
+  effective `learn`, its origin and the config's value; and the learned
+  kinds with their counts. A client that raises a row raises it from the
+  larger of its count and that peak, so a raise never keeps fewer.
 - `warm.set` (admin, write) takes the whole runtime list and an optional
   `learn`, and replaces both. The same list, in the same order, with the
-  same `learn`, changes nothing. Two operators writing at once: the last write wins.
+  same `learn`, changes nothing. Two operators writing at once: the last
+  write wins.
 - A change emits `warm-pool.targets-changed` with the runtime list, the
   runtime `learn` when set, and the caller's principal as `requesterId` (as
-  the lease events name it), then asks for
-  a pass. A `warm.set` that changes nothing emits nothing.
-- The status figures' `origin` gains `runtime`, and
-  `warm-pool.target-missed` covers runtime rows with origin `runtime`.
+  `component.removed` names an admin's), then asks for a pass. A `warm.set`
+  that changes nothing emits nothing.
+- The status figures' `origin` gains `runtime` (a merged report is
+  `runtime` when any of its rows is), and `warm-pool.target-missed` covers
+  runtime rows with origin `runtime`, once per miss of a row's key.
 
 The protocol version rises by one.
 
@@ -186,6 +196,8 @@ sequenceDiagram
 - `config.json` stays the base and is never written by the daemon. A
   runtime row hides the configured target with its key until it is
   removed; `simlock warm list` shows which rows are runtime.
+- Status may list up to 576 warm-pool entries (512 rows and 64 learned
+  kinds), up from 320.
 - Rolling back to a Simlock before this change refuses to open `state.db`
   ("this Simlock knows up to"): the `warm-pool` owner is one version
   higher. Moving `state.db` away loses the learned kinds and runtime rows.
