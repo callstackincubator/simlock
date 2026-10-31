@@ -215,6 +215,8 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   // why: public so the upgrade router, which owns the server's one `upgrade` listener, hands this
   // factory the requests for `/v1/uplink` exactly as `attach` does.
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    // why: a client that resets while `authenticate` is pending would emit `error` on a raw socket nothing listens to yet, and that ends the process; `ws` takes the socket's errors over once it upgrades.
+    socket.on("error", () => undefined);
     const handlers = this.#handlers;
     if (handlers === undefined) {
       // why: Nothing is listening for uplinks (a daemon mid-shutdown): refuse rather than leave the
@@ -262,6 +264,7 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       else respondAndDestroy(socket, 403, "Forbidden");
       return;
     }
+    if (socket.destroyed) return;
     const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
       const connection = new WebSocketUplinkConnection(client);
