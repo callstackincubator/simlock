@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { TUNNEL_TAG, encodeTunnelFrame } from "../contract/index.js";
+import { TUNNEL_TAG, decodeTunnelFrame, encodeTunnelFrame } from "../contract/index.js";
 import { buildCliEnvironment, runCli } from "./index.js";
 import {
   FakeClock,
@@ -250,5 +250,127 @@ describe("simlock tunnel that runs", () => {
       expect(JSON.parse(cli.err.join(""))).toEqual({ error: { code: "USAGE", message } });
       expect(cli.webSocket.connections).toEqual([]);
     }
+  });
+});
+
+function open(conn: number, devicePort: number): Uint8Array {
+  return encodeTunnelFrame(TUNNEL_TAG.open, conn, JSON.stringify({ devicePort, kind: "reverse" }));
+}
+
+function sentFrames(cli: ReturnType<typeof command>) {
+  return (cli.webSocket.connections[0]?.peer.sent ?? []).flatMap((bytes) => {
+    const frame = decodeTunnelFrame(bytes);
+    return frame === undefined ? [] : [frame];
+  });
+}
+
+async function started(argv: readonly string[]) {
+  const cli = command(ENV);
+  const exit = cli.run(["tunnel", ...argv, "--lease", "L1"]);
+  await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+  const peer = cli.webSocket.connections[0]?.peer;
+  if (peer === undefined) throw new Error("no socket");
+  peer.receive(READY);
+  return { cli, exit, peer };
+}
+
+describe("simlock tunnel carrying connections", () => {
+  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
+    const quiet = await started(["reverse", "5173", "reverse", "6000"]);
+    quiet.cli.tcpStreams.refusedPorts.add(5173);
+    quiet.cli.tcpStreams.refusedPorts.add(6000);
+    const opening = async (conn: number, port: number) => {
+      quiet.peer.receive(open(conn, port));
+      await vi.waitFor(() =>
+        expect(sentFrames(quiet.cli).filter((f) => f.tag === TUNNEL_TAG.reset)).toHaveLength(
+          (conn + 1) / 2,
+        ),
+      );
+    };
+    const warnings = () =>
+      quiet.cli.err
+        .join("")
+        .split("\n")
+        .filter((line) => line !== "");
+    await opening(1, 5173);
+    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5173"]);
+    quiet.cli.clock.advance(9_999);
+    await opening(3, 5173);
+    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5173"]);
+    await opening(5, 6000);
+    expect(warnings()).toEqual([
+      "reverse 5173: nothing listening on localhost:5173",
+      "reverse 6000: nothing listening on localhost:6000",
+    ]);
+    quiet.cli.clock.advance(1);
+    await opening(7, 5173);
+    expect(warnings()).toHaveLength(3);
+    expect(warnings()[2]).toBe("reverse 5173: nothing listening on localhost:5173");
+    expect(
+      sentFrames(quiet.cli)
+        .filter((f) => f.tag === TUNNEL_TAG.reset)
+        .map((f) => f.conn),
+    ).toEqual([1, 3, 5, 7]);
+    expect(quiet.peer.closedWith).toBeUndefined();
+    quiet.cli.signals.emit("SIGINT");
+    expect(await quiet.exit).toBe(0);
+
+    const page = await started(["reverse", "5173"]);
+    page.peer.receive(open(1, 5173));
+    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(1));
+    const local = page.cli.tcpStreams.connections[0]?.peer;
+    if (local === undefined) throw new Error("no local connection");
+    const response = Uint8Array.from({ length: 1_048_576 }, (_, index) => index % 251);
+    for (let at = 0; at < response.length; at += 65_536)
+      local.send(response.subarray(at, at + 65_536));
+    local.end();
+    const received: number[] = [];
+    let ended = false;
+    let before = 0;
+    const credit = (conn: number, size: number) => {
+      const granted = new Uint8Array(4);
+      new DataView(granted.buffer).setUint32(0, size);
+      page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.credit, conn, granted));
+    };
+    const drain = () => {
+      const frames = sentFrames(page.cli);
+      for (const frame of frames.slice(before)) {
+        if (frame.tag === TUNNEL_TAG.data) received.push(...frame.payload);
+        else if (frame.tag === TUNNEL_TAG.end) ended = true;
+      }
+      before = frames.length;
+    };
+    await vi.waitFor(() => {
+      drain();
+      expect(received.length).toBe(262_144);
+    });
+    await new Promise((done) => setTimeout(done, 20));
+    drain();
+    expect(received).toHaveLength(262_144);
+    while (!ended) {
+      const have = received.length;
+      credit(1, 65_536);
+      await vi.waitFor(() => {
+        drain();
+        expect(received.length > have || ended).toBe(true);
+      });
+    }
+    expect(received).toHaveLength(1_048_576);
+    expect(Uint8Array.from(received)).toEqual(response);
+
+    for (const size of [65_536, 30_000]) {
+      page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(size)));
+    }
+    await vi.waitFor(() =>
+      expect(local.written.map((chunk) => chunk.length)).toEqual([65_536, 30_000]),
+    );
+    await vi.waitFor(() => {
+      const credits = sentFrames(page.cli)
+        .filter((f) => f.tag === TUNNEL_TAG.credit)
+        .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
+      expect(credits).toEqual([65_536, 30_000]);
+    });
+    page.cli.signals.emit("SIGINT");
+    expect(await page.exit).toBe(0);
   });
 });
