@@ -203,6 +203,14 @@ export function createTunnelSessions(options: {
       connections.delete(conn);
     }
 
+    // why: a connection a RESET or a failure already closed sends no END for the device's end.
+    function deviceEnded(conn: number, connection: Connection): void {
+      if (connection.closed) return;
+      socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+      connection.deviceEnded = true;
+      settle(conn, connection);
+    }
+
     // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
     async function pump(conn: number, connection: Connection): Promise<void> {
       const reader = connection.stream.readable.getReader();
@@ -217,10 +225,7 @@ export function createTunnelSessions(options: {
         if (pending === undefined) {
           const step = await reader.read();
           if (step.done) {
-            if (connection.closed) return;
-            socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
-            connection.deviceEnded = true;
-            settle(conn, connection);
+            deviceEnded(conn, connection);
             return;
           }
           pending = step.value;

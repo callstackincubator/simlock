@@ -3406,6 +3406,7 @@ describe("AndroidDriver deviceTcp", () => {
     return { driver, listeners, runner };
   }
 
+  // fallow-ignore-next-line complexity -- one Tests line: the driver's reverse, its close and each refusal are the cases of one scenario.
   it("sets adb reverse --no-rebind to a loopback listener in 47000-47999 and removes it on close, as an emulator or a phone, keeps the port of a rule that could not be removed until the device's reclaim, and refuses with TUNNEL_PORT_IN_USE when adb cannot rebind and TUNNEL_FAILED for any other adb failure or when every tunnel port is busy", async () => {
     const { driver, listeners, runner } = await driverWith([
       { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_002)), result: ok },
