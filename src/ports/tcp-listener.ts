@@ -18,7 +18,8 @@ export interface TcpListenerFactory {
 export class NodeTcpListenerFactory implements TcpListenerFactory {
   listen(port: number): Promise<TcpListener | undefined> {
     return new Promise((resolve, reject) => {
-      const server = createServer();
+      // why: END is a half-close, so the device ending its bytes must not end the worker's side too.
+      const server = createServer({ allowHalfOpen: true });
       const listeners: ((stream: TcpStream) => void)[] = [];
       const open = new Set<Socket>();
       server.on("connection", (socket) => {

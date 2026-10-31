@@ -24,6 +24,7 @@ import type { LeaseSocket, Logger, TcpStream } from "../ports/index.js";
 
 const CLOSE_LEASE_ENDED = 4001;
 const CLOSE_GOING_AWAY = 1001;
+const MAX_CONNECTIONS = 256;
 
 interface Tunnel {
   readonly kind: "reverse" | "forward";
@@ -37,6 +38,9 @@ interface Connection {
   // why: how many bytes the caller may still send before the worker grants more credit.
   inbound: number;
   closed: boolean;
+  // why: a connection is done only when both directions have said END, so each side's END is remembered.
+  deviceEnded: boolean;
+  callerEnded: boolean;
   wake: (() => void) | undefined;
 }
 
@@ -157,6 +161,13 @@ export function createTunnelSessions(options: {
     sessions.set(leaseId, mine);
     socket.onClose(() => void finish(true));
 
+    function settle(conn: number, connection: Connection): void {
+      if (!connection.deviceEnded || !connection.callerEnded) return;
+      connection.closed = true;
+      connection.stream.close();
+      connections.delete(conn);
+    }
+
     // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
     async function pump(conn: number, connection: Connection): Promise<void> {
       const reader = connection.stream.readable.getReader();
@@ -170,7 +181,12 @@ export function createTunnelSessions(options: {
         }
         if (pending === undefined) {
           const step = await reader.read();
-          if (step.done) return;
+          if (step.done) {
+            socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+            connection.deviceEnded = true;
+            settle(conn, connection);
+            return;
+          }
           pending = step.value;
         }
         const size = Math.min(pending.length, connection.window, TUNNEL_MAX_DATA_BYTES);
@@ -243,11 +259,17 @@ export function createTunnelSessions(options: {
         }
         reverses.push(reverse);
         reverse.onConnection((stream) => {
+          if (connections.size >= MAX_CONNECTIONS) {
+            stream.close();
+            return;
+          }
           const conn = nextConnection;
           nextConnection += 2;
           socket.send(encodeTunnelFrame(TUNNEL_TAG.open, conn, JSON.stringify(tunnel)));
           const connection: Connection = {
+            callerEnded: false,
             closed: false,
+            deviceEnded: false,
             inbound: TUNNEL_WINDOW_BYTES,
             stream,
             wake: undefined,
@@ -296,6 +318,7 @@ export function createTunnelSessions(options: {
       if (
         frame.tag !== TUNNEL_TAG.data &&
         frame.tag !== TUNNEL_TAG.credit &&
+        frame.tag !== TUNNEL_TAG.end &&
         frame.tag !== TUNNEL_TAG.reset
       ) {
         badRequest(`unknown frame tag ${String(frame.tag)}`);
@@ -310,7 +333,11 @@ export function createTunnelSessions(options: {
       if (connection === undefined) return;
       if (frame.tag === TUNNEL_TAG.data) onData(frame.conn, connection, frame.payload);
       else if (frame.tag === TUNNEL_TAG.credit) onCredit(connection, frame.payload);
-      else {
+      else if (frame.tag === TUNNEL_TAG.end) {
+        connection.stream.end();
+        connection.callerEnded = true;
+        settle(frame.conn, connection);
+      } else {
         connection.closed = true;
         connection.stream.close();
         connection.wake?.();
