@@ -74,10 +74,7 @@ function parseReverses(words: readonly string[]): readonly ReverseSpec[] {
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
-function checkedUrl(text: string | undefined): string {
-  if (text === undefined || text === "") {
-    throw new UsageError("No worker URL: pass --url or set SIMLOCK_URL");
-  }
+function parsedUrl(text: string): URL {
   const refusal = new UsageError(
     "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
   );
@@ -91,9 +88,20 @@ function checkedUrl(text: string | undefined): string {
     parsed.protocol === "https:" ||
     (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname));
   if (!allowed || text.length > MAX_URL_CHARS) throw refusal;
+  return parsed;
+}
+
+function checkedOrigin(parsed: URL, text: string): void {
   if (parsed.pathname !== "/" || /[?#]/.test(text)) {
     throw new UsageError("--url must be the worker's origin only: no path, query or fragment");
   }
+}
+
+function checkedUrl(text: string | undefined): string {
+  if (text === undefined || text === "") {
+    throw new UsageError("No worker URL: pass --url or set SIMLOCK_URL");
+  }
+  checkedOrigin(parsedUrl(text), text);
   return text.replace(/\/$/, "");
 }
 

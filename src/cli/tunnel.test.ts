@@ -12,6 +12,7 @@ import {
   FakeDaemonLauncher,
   FakeHttpJsonClient,
   FakeSystemStats,
+  FakeTcpPeer,
   FakeTcpStreamConnector,
   FakeWebSocketClientConnector,
   WebSocketRefusedError,
@@ -361,144 +362,162 @@ async function started(argv: readonly string[]) {
   return { cli, exit, peer };
 }
 
-describe("simlock tunnel carrying connections", () => {
-  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
-    const quiet = await started(["reverse", "5173:5174", "reverse", "6000"]);
-    quiet.cli.tcpStreams.refusedPorts.add(5174);
-    quiet.cli.tcpStreams.refusedPorts.add(6000);
-    const opening = async (conn: number, port: number) => {
-      quiet.peer.receive(open(conn, port));
-      await vi.waitFor(() =>
-        expect(sentFrames(quiet.cli).filter((f) => f.tag === TUNNEL_TAG.reset)).toHaveLength(
-          (conn + 1) / 2,
-        ),
-      );
-    };
-    const warnings = () =>
-      quiet.cli.err
-        .join("")
-        .split("\n")
-        .filter((line) => line !== "");
-    quiet.peer.receive(open(9, 7000));
-    await opening(1, 5173);
-    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
-    quiet.cli.clock.advance(9_999);
-    await opening(3, 5173);
-    expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
-    await opening(5, 6000);
-    expect(warnings()).toEqual([
-      "reverse 5173: nothing listening on localhost:5174",
-      "reverse 6000: nothing listening on localhost:6000",
-    ]);
-    quiet.cli.clock.advance(1);
-    await opening(7, 5173);
-    expect(warnings()).toHaveLength(3);
-    expect(warnings()[2]).toBe("reverse 5173: nothing listening on localhost:5174");
-    expect(
-      sentFrames(quiet.cli)
-        .filter((f) => f.tag === TUNNEL_TAG.reset)
-        .map((f) => f.conn),
-    ).toEqual([1, 3, 5, 7]);
-    expect(quiet.cli.tcpStreams.connections).toEqual([]);
-    expect(quiet.peer.closedWith).toBeUndefined();
-    quiet.cli.signals.emit("SIGINT");
-    expect(await quiet.exit).toBe(0);
+async function warningsPerTunnel(): Promise<void> {
+  const quiet = await started(["reverse", "5173:5174", "reverse", "6000"]);
+  quiet.cli.tcpStreams.refusedPorts.add(5174);
+  quiet.cli.tcpStreams.refusedPorts.add(6000);
+  const opening = async (conn: number, port: number) => {
+    quiet.peer.receive(open(conn, port));
+    await vi.waitFor(() =>
+      expect(sentFrames(quiet.cli).filter((f) => f.tag === TUNNEL_TAG.reset)).toHaveLength(
+        (conn + 1) / 2,
+      ),
+    );
+  };
+  const warnings = () =>
+    quiet.cli.err
+      .join("")
+      .split("\n")
+      .filter((line) => line !== "");
+  quiet.peer.receive(open(9, 7000));
+  await opening(1, 5173);
+  expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
+  quiet.cli.clock.advance(9_999);
+  await opening(3, 5173);
+  expect(warnings()).toEqual(["reverse 5173: nothing listening on localhost:5174"]);
+  await opening(5, 6000);
+  expect(warnings()).toEqual([
+    "reverse 5173: nothing listening on localhost:5174",
+    "reverse 6000: nothing listening on localhost:6000",
+  ]);
+  quiet.cli.clock.advance(1);
+  await opening(7, 5173);
+  expect(warnings()).toHaveLength(3);
+  expect(warnings()[2]).toBe("reverse 5173: nothing listening on localhost:5174");
+  expect(
+    sentFrames(quiet.cli)
+      .filter((f) => f.tag === TUNNEL_TAG.reset)
+      .map((f) => f.conn),
+  ).toEqual([1, 3, 5, 7]);
+  expect(quiet.cli.tcpStreams.connections).toEqual([]);
+  expect(quiet.peer.closedWith).toBeUndefined();
+  quiet.cli.signals.emit("SIGINT");
+  expect(await quiet.exit).toBe(0);
+}
 
-    const page = await started(["reverse", "5173:5174"]);
-    page.peer.receive(open(1, 5173));
-    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(1));
-    expect(page.cli.tcpStreams.connections[0]?.port).toBe(5174);
-    const local = page.cli.tcpStreams.connections[0]?.peer;
-    if (local === undefined) throw new Error("no local connection");
-    const response = Uint8Array.from({ length: 1_048_576 }, (_, index) => index % 251);
-    for (let at = 0; at < response.length; at += 131_072)
-      local.send(response.subarray(at, at + 131_072));
-    local.end();
-    const received: number[] = [];
-    let ended = false;
-    let before = 0;
-    const credit = (conn: number, size: number) => {
-      const granted = new Uint8Array(4);
-      new DataView(granted.buffer).setUint32(0, size);
-      page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.credit, conn, granted));
-    };
-    const drain = () => {
-      const frames = sentFrames(page.cli);
-      for (const frame of frames.slice(before)) {
-        if (frame.tag === TUNNEL_TAG.data) for (const byte of frame.payload) received.push(byte);
-        else if (frame.tag === TUNNEL_TAG.end) ended = true;
-      }
-      before = frames.length;
-    };
+async function responseThroughTheTunnel() {
+  const page = await started(["reverse", "5173:5174"]);
+  page.peer.receive(open(1, 5173));
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(1));
+  expect(page.cli.tcpStreams.connections[0]?.port).toBe(5174);
+  const local = page.cli.tcpStreams.connections[0]?.peer;
+  if (local === undefined) throw new Error("no local connection");
+  const response = Uint8Array.from({ length: 1_048_576 }, (_, index) => index % 251);
+  for (let at = 0; at < response.length; at += 131_072)
+    local.send(response.subarray(at, at + 131_072));
+  local.end();
+  const received: number[] = [];
+  let ended = false;
+  let before = 0;
+  const credit = (conn: number, size: number) => {
+    const granted = new Uint8Array(4);
+    new DataView(granted.buffer).setUint32(0, size);
+    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.credit, conn, granted));
+  };
+  const drain = () => {
+    const frames = sentFrames(page.cli);
+    for (const frame of frames.slice(before)) {
+      if (frame.tag === TUNNEL_TAG.data) for (const byte of frame.payload) received.push(byte);
+      else if (frame.tag === TUNNEL_TAG.end) ended = true;
+    }
+    before = frames.length;
+  };
+  await vi.waitFor(() => {
+    drain();
+    expect(received.length).toBe(262_144);
+  });
+  await new Promise((done) => setTimeout(done, 20));
+  drain();
+  expect(received).toHaveLength(262_144);
+  while (!ended) {
+    const have = received.length;
+    credit(1, 65_536);
     await vi.waitFor(() => {
       drain();
-      expect(received.length).toBe(262_144);
+      expect(received.length > have || ended).toBe(true);
     });
-    await new Promise((done) => setTimeout(done, 20));
-    drain();
-    expect(received).toHaveLength(262_144);
-    while (!ended) {
-      const have = received.length;
-      credit(1, 65_536);
-      await vi.waitFor(() => {
-        drain();
-        expect(received.length > have || ended).toBe(true);
-      });
-    }
-    expect(received).toHaveLength(1_048_576);
-    expect(Uint8Array.from(received)).toEqual(response);
-    const dataSizes = sentFrames(page.cli)
-      .filter((f) => f.tag === TUNNEL_TAG.data)
-      .map((f) => f.payload.length);
-    expect(Math.max(...dataSizes)).toBe(TUNNEL_MAX_DATA_BYTES);
-    expect(dataSizes.every((size) => size <= TUNNEL_MAX_DATA_BYTES)).toBe(true);
+  }
+  expect(received).toHaveLength(1_048_576);
+  expect(Uint8Array.from(received)).toEqual(response);
+  const dataSizes = sentFrames(page.cli)
+    .filter((f) => f.tag === TUNNEL_TAG.data)
+    .map((f) => f.payload.length);
+  expect(Math.max(...dataSizes)).toBe(TUNNEL_MAX_DATA_BYTES);
+  expect(dataSizes.every((size) => size <= TUNNEL_MAX_DATA_BYTES)).toBe(true);
 
-    for (const size of [65_536, 30_000]) {
-      page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(size)));
-    }
-    await vi.waitFor(() =>
-      expect(local.written.map((chunk) => chunk.length)).toEqual([65_536, 30_000]),
-    );
-    await vi.waitFor(() => {
-      const credits = sentFrames(page.cli)
-        .filter((f) => f.tag === TUNNEL_TAG.credit)
-        .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
-      expect(credits).toEqual([65_536, 30_000]);
-    });
-    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
-    await vi.waitFor(() => expect(local.writeEnded).toBe(true));
-    page.peer.receive(open(3, 5173));
-    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(2));
-    const second = page.cli.tcpStreams.connections[1]?.peer;
-    expect(second?.closed).toBe(false);
-    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, 3));
-    await vi.waitFor(() => expect(second?.closed).toBe(true));
+  return { local, page };
+}
 
-    page.peer.receive(open(5, 5173));
-    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(3));
-    const broken = page.cli.tcpStreams.connections[2]?.peer;
-    if (broken === undefined) throw new Error("no third connection");
-    broken.writeFailure = new Error("write EPIPE");
-    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 5, new Uint8Array(10)));
-    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 5));
-    await vi.waitFor(() =>
-      expect(
-        sentFrames(page.cli)
-          .filter((f) => f.tag === TUNNEL_TAG.reset)
-          .map((f) => f.conn),
-      ).toEqual([5]),
-    );
-    await settle();
-    expect(broken.closed).toBe(true);
-    expect(sentFrames(page.cli).filter((f) => f.tag === TUNNEL_TAG.credit && f.conn === 5)).toEqual(
-      [],
-    );
-    expect(page.cli.err).toEqual([]);
-    page.peer.receive(open(7, 5173));
-    await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(4));
-    expect(page.cli.tcpStreams.connections[3]?.peer.closed).toBe(false);
-    page.cli.signals.emit("SIGINT");
-    expect(await page.exit).toBe(0);
+async function writesToTheCaller(
+  page: Awaited<ReturnType<typeof started>>,
+  local: FakeTcpPeer,
+): Promise<void> {
+  for (const size of [65_536, 30_000]) {
+    page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(size)));
+  }
+  await vi.waitFor(() =>
+    expect(local.written.map((chunk) => chunk.length)).toEqual([65_536, 30_000]),
+  );
+  await vi.waitFor(() => {
+    const credits = sentFrames(page.cli)
+      .filter((f) => f.tag === TUNNEL_TAG.credit)
+      .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
+    expect(credits).toEqual([65_536, 30_000]);
+  });
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
+  await vi.waitFor(() => expect(local.writeEnded).toBe(true));
+  page.peer.receive(open(3, 5173));
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(2));
+  const second = page.cli.tcpStreams.connections[1]?.peer;
+  expect(second?.closed).toBe(false);
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, 3));
+  await vi.waitFor(() => expect(second?.closed).toBe(true));
+}
+
+async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<void> {
+  page.peer.receive(open(5, 5173));
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(3));
+  const broken = page.cli.tcpStreams.connections[2]?.peer;
+  if (broken === undefined) throw new Error("no third connection");
+  broken.writeFailure = new Error("write EPIPE");
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 5, new Uint8Array(10)));
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 5));
+  await vi.waitFor(() =>
+    expect(
+      sentFrames(page.cli)
+        .filter((f) => f.tag === TUNNEL_TAG.reset)
+        .map((f) => f.conn),
+    ).toEqual([5]),
+  );
+  await settle();
+  expect(broken.closed).toBe(true);
+  expect(sentFrames(page.cli).filter((f) => f.tag === TUNNEL_TAG.credit && f.conn === 5)).toEqual(
+    [],
+  );
+  expect(page.cli.err).toEqual([]);
+  page.peer.receive(open(7, 5173));
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(4));
+  expect(page.cli.tcpStreams.connections[3]?.peer.closed).toBe(false);
+  page.cli.signals.emit("SIGINT");
+  expect(await page.exit).toBe(0);
+}
+
+describe("simlock tunnel carrying connections", () => {
+  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
+    await warningsPerTunnel();
+    const { local, page } = await responseThroughTheTunnel();
+    await writesToTheCaller(page, local);
+    await brokenWrite(page);
   });
 });
 
