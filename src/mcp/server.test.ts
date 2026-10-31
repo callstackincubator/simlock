@@ -913,41 +913,57 @@ describe("MCP run_on_device alongside other tools", () => {
 });
 
 describe("MCP list_devices physicalDevices", () => {
-  it("lists the catalog plus each enrolled phone's platform, model, OS version, class and state, and no holder", async () => {
-    const client = new FakeSimlockClient();
-    client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
-    client.getStatusImpl = () =>
-      Promise.resolve(
-        statusOutput([
-          statusDevice({
-            id: "phone-1",
-            physical: true,
-            platform: "ios",
-            model: "iPhone 15",
-            osVersion: "26.4",
-            class: "phone",
-            state: "ready",
-          }),
-        ]),
-      );
-    const { mcpClient, close } = await connectedServer(client);
-    try {
-      const result = await call(mcpClient, "list_devices", {});
-      expect(result.isError).not.toBe(true);
-      expect(result.structuredContent).toEqual({
-        platforms: [],
-        physicalDevices: [
-          {
-            platform: "ios",
-            model: "iPhone 15",
-            osVersion: "26.4",
-            class: "phone",
-            state: "ready",
-          },
-        ],
-      });
-    } finally {
-      await close();
+  const phone = {
+    physical: true,
+    platform: "ios",
+    model: "iPhone 15",
+    osVersion: "26.4",
+    class: "phone",
+  } as const;
+  const listed = {
+    platform: "ios",
+    model: "iPhone 15",
+    osVersion: "26.4",
+    class: "phone",
+  } as const;
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly devices: StatusDevice[];
+    readonly expected: unknown[];
+  }> = [
+    {
+      name: "a ready phone",
+      devices: [statusDevice({ ...phone, id: "p1", state: "ready" })],
+      expected: [{ ...listed, state: "ready" }],
+    },
+    {
+      name: "a leased phone, with no holder field",
+      devices: [statusDevice({ ...phone, id: "p1", state: "leased" })],
+      expected: [{ ...listed, state: "leased" }],
+    },
+    ...(["locked", "untrusted", "not-present"] as const).map((absentReason) => ({
+      name: `an absent phone, reason ${absentReason}`,
+      devices: [statusDevice({ ...phone, id: "p1", state: "absent", absentReason })],
+      expected: [{ ...listed, state: "absent", absentReason }],
+    })),
+  ];
+
+  it("lists the catalog plus each enrolled phone's worker, platform, model, OS version, class, state and absent reason, and no holder", async () => {
+    for (const { name, devices, expected } of cases) {
+      const client = new FakeSimlockClient();
+      client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.getStatusImpl = () => Promise.resolve(statusOutput(devices));
+      const { mcpClient, close } = await connectedServer(client);
+      try {
+        const result = await call(mcpClient, "list_devices", {});
+        expect(result.isError, name).not.toBe(true);
+        expect(result.structuredContent, name).toEqual({
+          platforms: [],
+          physicalDevices: expected,
+        });
+      } finally {
+        await close();
+      }
     }
   });
 });
