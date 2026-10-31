@@ -32,7 +32,7 @@ export type OrientationParse =
   | { readonly ok: true; readonly orientation: Orientation }
   | { readonly ok: false; readonly message: string };
 
-// why: the CLI, MCP and the agent-device front take these spellings; HTTP and the client take only the four names.
+// why: the spellings `parseOrientation` accepts for a caller that takes more than the four names; HTTP and the client take only the four names.
 const ALIASES: Readonly<Record<string, Orientation>> = {
   "landscape-left": "landscape_left",
   "landscape-right": "landscape_right",
