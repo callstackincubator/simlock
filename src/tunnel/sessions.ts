@@ -142,17 +142,17 @@ export function createTunnelSessions(options: {
         }
         connections.clear();
         if (!removeRules) return;
-        await Promise.all(
-          reverses.map((reverse) =>
-            reverse.close().catch((error: unknown) => {
-              options.logger.warn("A tunnel's device rule could not be removed", {
-                error: stableError(error),
-              });
-            }),
-          ),
-        );
+        await Promise.all(reverses.map(removeRule));
       })();
       return finished;
+    }
+
+    function removeRule(reverse: DeviceReverse): Promise<void> {
+      return reverse.close().catch((error: unknown) => {
+        options.logger.warn("A tunnel's device rule could not be removed", {
+          error: stableError(error),
+        });
+      });
     }
 
     const session: Session = { finish, socket };
@@ -255,6 +255,11 @@ export function createTunnelSessions(options: {
             code: error instanceof DeviceTcpError ? error.code : "TUNNEL_FAILED",
             message: error instanceof Error ? error.message : String(error),
           });
+          return;
+        }
+        // why: the socket can close while `reverse` is awaited, after `finish` read the list; a rule that arrives then is removed here.
+        if (finished !== undefined) {
+          await removeRule(reverse);
           return;
         }
         reverses.push(reverse);

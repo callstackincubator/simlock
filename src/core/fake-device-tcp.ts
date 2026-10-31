@@ -52,6 +52,7 @@ export class FakeDeviceTcp implements DeviceTcp {
     devicePort: number,
     _signal?: AbortSignal,
   ): Promise<DeviceReverse> {
+    await this.gate;
     const failure = this.failures.get(devicePort);
     if (failure !== undefined) throw failure;
     const hostPort = this.#nextHostPort;
