@@ -78,14 +78,14 @@ A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabil
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iOS simulator or an iPhone, or the tunnel is a `forward` tunnel, which is not available yet. | Use an Android emulator or phone, and `reverse` tunnels. |
+| `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iOS simulator or an iPhone. | Use an Android emulator or phone. |
 | `TUNNEL_PORT_IN_USE` | 1 | 409 | The device port is already reversed on the device, for example by an `adb reverse` run through `device.exec`. | Remove that rule first. |
 | `TUNNEL_BAD_PORT` | 1 | 422 | A device port is not an integer from 1024 to 65535. | Name a port in that range. |
 | `TUNNEL_LIMIT` | 1 | 409 | The lease would have more than 8 tunnels across its sockets. | Close a tunnel first. |
 | `TUNNEL_FAILED` | 1 | 502 | `adb` could not set the tunnel up, or the worker has no free loopback port in its reserved range. The message carries adb's own words. | Read the message; try again. |
 | `TUNNEL_UNAVAILABLE` | 1 | 503 | A gateway's worker has tunnels off. | Turn on `capabilities.tunnel.enabled` on the worker. |
 | `TUNNEL_DISCONNECTED` | 1 | 503 | The tunnel client lost its connection. | Open the tunnel again. |
-| `TUNNEL_CALLER_PORT_IN_USE` | 1 | 409 | The port the tunnel client listens on is in use on its machine. | Pick another caller port. |
+| `TUNNEL_CALLER_PORT_IN_USE` | 1 | 409 | The caller port a `forward` tunnel listens on is in use on your machine. | Pick another caller port. |
 | `TUNNEL_LEASE_ENDED` | 14 | 410 | The lease ended while the tunnel was open. | Take a new lease. |
 
 ## Running commands on a device

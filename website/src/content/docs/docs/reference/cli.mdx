@@ -202,20 +202,21 @@ It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spel
 
 ## simlock tunnel
 
-Reach your leased Android emulator back to ports on your own machine, from another machine, while the command runs. It talks to a lone worker or a gateway over HTTP and WebSocket, so it needs no local daemon.
+Reach your leased Android emulator back to ports on your own machine, and ports on the device from your machine, from another machine, while the command runs. It talks to a lone worker or a gateway over HTTP and WebSocket, so it needs no local daemon.
 
 ```text
-simlock tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <lease-id>] [--url <url>]
+simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ...] [--lease <lease-id>] [--url <url>]
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `reverse <device-port>[:<caller-port>]` | Make the device's `localhost:<device-port>` reach `localhost:<caller-port>` on this machine. Both are integers 1 to 65535; the worker accepts device ports from 1024. Repeat the word `reverse` for up to 8 tunnels; a caller port may appear once. | The caller port is the device port |
+| `reverse <device-port>[:<caller-port>]` | Make the device's `localhost:<device-port>` reach `localhost:<caller-port>` on this machine. Both are integers 1 to 65535; the worker accepts device ports from 1024. Repeat the word `reverse` for up to 8 tunnels, counting `forward` ones; a caller port may appear once across both. | The caller port is the device port |
+| `forward <device-port>[:<caller-port>]` | Make `localhost:<caller-port>` on this machine reach `localhost:<device-port>` on the device, through adb's host protocol with no `adb forward` rule. The caller port is 1024 to 65535 and listens on loopback only; the command binds it before it asks the worker for anything. | The caller port is the device port |
 | `--lease <lease-id>` | The lease to reach, 1 to 256 characters. | An agent token's only lease; an operator token must name one |
 | `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; at most 2048 characters. | `SIMLOCK_URL` |
 | `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
 
-It prints one line per tunnel, `reverse device:<device-port> -> localhost:<caller-port> (lease <lease-id>)`, and runs until you press Ctrl-C or the process gets SIGTERM, which close the tunnels and exit 0. A tunnel whose caller port has nothing listening writes a warning to stderr at most once every 10 seconds and stays open. A missing `--url`, token or lease, an invalid port, or a repeated caller port is a usage error (exit 2). A refusal exits 1 with its code, for example `TUNNEL_BAD_PORT` for a device port below 1024. A lost connection, 45 seconds with no message or ping, or 90 seconds with no answer to the request exits 1 with `TUNNEL_DISCONNECTED`; the lease ending exits 14 with `TUNNEL_LEASE_ENDED`.
+It prints one line per tunnel, `reverse device:<device-port> -> localhost:<caller-port> (lease <lease-id>)` or `forward localhost:<caller-port> -> device:<device-port> (lease <lease-id>)`, and runs until you press Ctrl-C or the process gets SIGTERM, which close the tunnels and exit 0. A reverse tunnel whose caller port has nothing listening writes a warning to stderr at most once every 10 seconds and stays open. A connection to a forward tunnel waits until the worker confirms the tunnels, and closes if the worker refuses; one to a device port with nothing listening is closed. A forward caller port already in use exits 1 with `TUNNEL_CALLER_PORT_IN_USE` before anything is set up on the device. Every caller port is closed when the command ends. A missing `--url`, token or lease, an invalid port, a forward caller port below 1024, or a repeated caller port is a usage error (exit 2). A refusal exits 1 with its code, for example `TUNNEL_BAD_PORT` for a device port below 1024. A lost connection, 45 seconds with no message or ping, or 90 seconds with no answer to the request exits 1 with `TUNNEL_DISCONNECTED`; the lease ending exits 14 with `TUNNEL_LEASE_ENDED`.
 
 ## simlock catalog
 
