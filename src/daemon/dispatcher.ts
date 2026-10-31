@@ -39,6 +39,7 @@ import {
   type UsageReader,
 } from "../core/index.js";
 import type { ModuleInputs } from "../modules/index.js";
+import { rotationRefusal } from "./rotation-refusal.js";
 import {
   type DeviceModeReader,
   LeaseIdTakenError,
@@ -674,6 +675,8 @@ export class Dispatcher {
       (candidate) => candidate.id === lease.deviceId,
     );
     if (record === undefined) throw new UnknownLeaseError(input.leaseId);
+    const refusal = rotationRefusal(input.leaseId, record.spec);
+    if (refusal !== undefined) throw refusal;
     const opened = await this.options.inputs.openInput(
       record.spec.platform,
       toDriverDevice(record),

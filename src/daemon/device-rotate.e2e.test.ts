@@ -35,34 +35,35 @@ describe("device.rotate", () => {
   }) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-"));
     directories.push(dataDirectory);
+    const drivers = [
+      new FakeDriver({
+        availableOsVersions: ["18.0"],
+        clock: new SystemClock(),
+        input: options.input,
+        knownModels: ["iPhone 15", "iPad Pro", "Apple TV 4K", "Mystery Box"],
+        physicalDevices: [
+          { class: "phone", ids: ["PHONE-1"], model: "iPhone 15", osVersion: "18.0" },
+          { class: "tablet", ids: ["TABLET-1"], model: "iPad Pro", osVersion: "18.0" },
+        ],
+        platform: "ios",
+      }),
+      new FakeDriver({
+        availableOsVersions: ["15"],
+        clock: new SystemClock(),
+        ...(options.androidInput === undefined ? {} : { input: options.androidInput }),
+        knownModels: ["Pixel 8"],
+        physicalDevices: [
+          { class: "phone", ids: ["DROID-1"], model: "Pixel 8", osVersion: "15" },
+          { class: "tablet", ids: ["DROID-2"], model: "Pixel Tablet", osVersion: "15" },
+        ],
+        platform: "android",
+      }),
+    ];
     const daemon = await startDaemon({
       configOverrides: { capabilities: { input: { enabled: options.inputModule } } },
       dataDirectory,
       deviceDataTables: fakeDeviceDataTables,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          clock: new SystemClock(),
-          input: options.input,
-          knownModels: ["iPhone 15", "iPad Pro", "Apple TV 4K", "Mystery Box"],
-          physicalDevices: [
-            { class: "phone", ids: ["PHONE-1"], model: "iPhone 15", osVersion: "18.0" },
-            { class: "tablet", ids: ["TABLET-1"], model: "iPad Pro", osVersion: "18.0" },
-          ],
-          platform: "ios",
-        }),
-        new FakeDriver({
-          availableOsVersions: ["15"],
-          clock: new SystemClock(),
-          ...(options.androidInput === undefined ? {} : { input: options.androidInput }),
-          knownModels: ["Pixel 8"],
-          physicalDevices: [
-            { class: "phone", ids: ["DROID-1"], model: "Pixel 8", osVersion: "15" },
-            { class: "tablet", ids: ["DROID-2"], model: "Pixel Tablet", osVersion: "15" },
-          ],
-          platform: "android",
-        }),
-      ],
+      drivers,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
       version: "1.0.0-e2e",
@@ -73,7 +74,7 @@ describe("device.rotate", () => {
       { model: "iPhone 15", platform: "ios" },
       holder,
     );
-    return { daemon, leaseId: (granted as { lease: { id: string } }).lease.id };
+    return { daemon, drivers, leaseId: (granted as { lease: { id: string } }).lease.id };
   }
 
   it(
@@ -141,13 +142,14 @@ describe("device.rotate", () => {
         orientation: "portrait",
         width: 1080,
       });
-      const { daemon } = await worker({ androidInput, input, inputModule: false });
+      const { daemon, drivers } = await worker({ androidInput, input, inputModule: false });
       const admin: DispatchSession = { ...holder, principal: "admin-1", role: "admin" };
       const orientation = "landscape_left";
 
       async function lease(principal: string, request: object, enroll?: string) {
         const session: DispatchSession = { ...holder, principal };
         if (enroll !== undefined) {
+          for (const driver of drivers) driver.setPhysicalPresence(enroll, true);
           await daemon.dispatch(
             "device.add",
             { id: enroll, platform: (request as { platform: "ios" | "android" }).platform },

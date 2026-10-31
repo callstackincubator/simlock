@@ -25,6 +25,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                                      |
 | `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                  |
 | `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                         |
+| `rotation-refusal.ts`   | `rotationRefusal`: `device.rotate`'s `ROTATION_UNSUPPORTED`, with how it names the device                                                      |
 | `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                 |
 | `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                               |
 
