@@ -164,16 +164,19 @@ sequenceDiagram
 
 ### 6. The console's Settings page
 
-A Settings page, last in the sidebar, groups the rows by their first key
-segment. Each row shows its value (a secret: "Set" or "Not set"), its
+A Settings page, in a Configure group last in the sidebar, groups the rows by their first key
+segment. Each row shows its running value (and, when pending, its saved
+one; a secret: "Set" or "Not set"), its
 default, and `Live` or `On restart` (`Restart pending` when pending). An
 edit sends `PUT /v1/config/{key}`; `GET /v1/config` reads the rows;
 `POST /v1/restart` restarts. A page with a pending row offers **Restart
 daemon** behind a confirm that says a waiting lease request fails.
 
 Keys that can cut the console off ask first, naming the risk:
-`http.enabled`, `http.host`, `http.port`, `http.proxyAuth`, `gateway.url`
-and `gateway.token`. After such a save the page shows the address the
+`http.enabled`, `http.host`, `http.port` and `http.proxyAuth`. Not
+`gateway.url` or `gateway.token`: the loader refuses either saved alone,
+and a worker with both set has its own HTTP off, so its console is never
+reached. After such a save the page shows the address the
 console will have after the restart, computed from the saved `http` values
 the way `status.get` computes `consoleUrl`, or that the console will be
 off.
