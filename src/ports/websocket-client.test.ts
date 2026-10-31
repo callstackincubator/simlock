@@ -42,8 +42,10 @@ describe("NodeWebSocketClientConnector", () => {
     const http = createServer();
     const wss = new WebSocketServer({ server: http });
     let authorization: string | undefined;
+    const clientCloses: [number, string][] = [];
     wss.on("connection", (socket, request) => {
       authorization = request.headers.authorization;
+      socket.on("close", (code, reason) => clientCloses.push([code, reason.toString("utf8")]));
       let hellos = 0;
       socket.on("message", (data) => {
         hellos += 1;
@@ -68,6 +70,20 @@ describe("NodeWebSocketClientConnector", () => {
     expect(authorization).toBe("Bearer sk_x");
     client.send(new Uint8Array([9, 9]));
     await vi.waitFor(() => expect(closes).toEqual([[4001, "got 2"]]));
+    const second = await connector.connect(
+      `ws://127.0.0.1:${String((http.address() as AddressInfo).port)}`,
+      options,
+    );
+    second.close(1000, "bye");
+    await vi.waitFor(() => expect(clientCloses).toContainEqual([1000, "bye"]));
+
+    const silent = createServer();
+    const held: { destroy(): void }[] = [];
+    silent.on("upgrade", (_request, socket) => held.push(socket));
+    await expect(
+      connector.connect(await listen(silent), { ...options, handshakeTimeoutMs: 100 }),
+    ).rejects.toThrow();
+    for (const socket of held) socket.destroy();
     const late: [number, string][] = [];
     client.onClose((code, reason) => late.push([code, reason]));
     expect(late).toEqual([[4001, "got 2"]]);

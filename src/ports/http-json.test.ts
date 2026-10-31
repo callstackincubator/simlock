@@ -32,7 +32,7 @@ describe("FetchHttpJsonClient", () => {
       } else if (request.url === "/big") {
         response.writeHead(200).end("x".repeat(1_048_577));
       } else if (request.url === "/edge") {
-        response.writeHead(200).end(JSON.stringify({ pad: "x".repeat(1_048_576 - 12) }));
+        response.writeHead(200).end(JSON.stringify({ pad: "x".repeat(1_048_576 - 10) }));
       } else if (request.url === "/text") {
         response.writeHead(502).end("bad gateway");
       } else {
