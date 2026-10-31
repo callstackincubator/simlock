@@ -25,3 +25,13 @@ export function isRotatableModel(model: string): boolean {
   const family = modelFamily(model);
   return family === "phone" || family === "tablet";
 }
+
+export type Orientation = (typeof INPUT_ORIENTATIONS)[number];
+
+export type OrientationParse =
+  | { readonly ok: true; readonly orientation: Orientation }
+  | { readonly ok: false; readonly message: string };
+
+export function parseOrientation(_input: string): OrientationParse {
+  return { message: "", ok: false };
+}
