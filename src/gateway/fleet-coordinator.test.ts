@@ -1109,6 +1109,51 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(client.calls).toContain(`device.exec:${GATEWAY_PREFIX}agent-1`);
   });
 
+  it("forwards device.rotate to the worker's own lease id with the namespaced requester, answers and names the caller's lease id", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({
+      grant: grantFixture({
+        lease: {
+          ...grantFixture().lease,
+          id: "lse_9",
+          ownerId: "agent-1",
+          requesterId: `${GATEWAY_PREFIX}agent-1`,
+        },
+      }),
+      kind: "grant",
+    });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    const session = {
+      manageEventSubscription: () => undefined,
+      via: "socket",
+      principal: "agent-1",
+      role: "agent",
+    } as const;
+
+    await expect(
+      coordinator.rotate({ leaseId: grant.lease.id, orientation: "landscape_left" }, session),
+    ).resolves.toEqual({ leaseId: grant.lease.id, orientation: "landscape_left" });
+    expect(client.calls).toContain(`device.rotate:lse_9:${GATEWAY_PREFIX}agent-1`);
+
+    client.rotateErrors.push(
+      fromWireError(
+        "ROTATION_UNSUPPORTED",
+        "Lease lse_9 is on an Apple TV simulator; only an iOS simulator can be rotated",
+        { class: "tv", leaseId: "lse_9", physical: false, platform: "ios" },
+      ),
+    );
+    await expect(
+      coordinator.rotate({ leaseId: grant.lease.id, orientation: "portrait" }, session),
+    ).rejects.toMatchObject({
+      code: "ROTATION_UNSUPPORTED",
+      details: { class: "tv", leaseId: grant.lease.id, physical: false, platform: "ios" },
+      message: `Lease ${grant.lease.id} is on an Apple TV simulator; only an iOS simulator can be rotated`,
+    });
+  });
+
   it("announces started from the worker's own push, before any output (ADR §19a)", async () => {
     const { coordinator, directory, workers } = harness();
     const client = new ScriptedWorkerClient();

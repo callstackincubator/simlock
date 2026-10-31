@@ -1086,8 +1086,7 @@ function authorizeOneLeaseCall(
 /**
  * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
  */
-// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
-export const deviceRotate = defineOperation({
+const deviceRotate = defineOperation({
   name: "device.rotate",
   role: "agent",
   effect: "write",
