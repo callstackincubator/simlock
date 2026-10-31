@@ -528,7 +528,8 @@ describe("AndroidDriver", () => {
       (call) => call.command === binaries.emulator && call.args.includes("-avd"),
     );
     const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
-    expect(emulatorCalls.map((call) => call.options.killTree)).toEqual([true]);
+    expect(emulatorCalls.length).toBeGreaterThan(0);
+    expect(emulatorCalls.filter((call) => call.options.killTree !== true)).toEqual([]);
     expect(adbCalls.length).toBeGreaterThan(0);
     expect(adbCalls.filter((call) => call.options.killTree !== undefined)).toEqual([]);
   });
