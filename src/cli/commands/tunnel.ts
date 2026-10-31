@@ -1,6 +1,9 @@
 import {
   decodeTunnelFrame,
   encodeTunnelFrame,
+  ERROR_TABLE,
+  SimlockError,
+  type SimlockErrorCode,
   TUNNEL_MAX_DATA_BYTES,
   TUNNEL_TAG,
 } from "../../contract/index.js";
@@ -127,10 +130,13 @@ async function run(
   const relay = relayConnections(socket, environment);
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
-  return new Promise<number>((resolve) => {
-    const stop = () => {
+  return new Promise<number>((resolve, reject) => {
+    const settle = () => {
       environment.signals.off("SIGINT", stop);
       environment.signals.off("SIGTERM", stop);
+    };
+    const stop = () => {
+      settle();
       socket.close(CLOSE_NORMAL, "");
       resolve(0);
     };
@@ -139,6 +145,22 @@ async function run(
     socket.onMessage((bytes) => {
       const frame = decodeTunnelFrame(bytes);
       if (frame === undefined) return;
+      if (frame.tag === TUNNEL_TAG.refused) {
+        settle();
+        const refusal: unknown = JSON.parse(new TextDecoder().decode(frame.payload));
+        const code = field(refusal, "code");
+        reject(
+          new SimlockError(
+            typeof code === "string" && code in ERROR_TABLE
+              ? (code as SimlockErrorCode)
+              : "TUNNEL_FAILED",
+            "domain",
+            `Lease ${leaseId}: ${String(field(refusal, "message"))}`,
+            {} as never,
+          ),
+        );
+        return;
+      }
       if (frame.tag === TUNNEL_TAG.ready) {
         for (const { callerPort, devicePort } of specs) {
           environment.stdout.write(
