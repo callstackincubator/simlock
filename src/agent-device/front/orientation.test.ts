@@ -132,100 +132,112 @@ function unconfirmed(name: string) {
 const unknownMessage = (input: string) =>
   `Unknown orientation ${input}; use portrait, portrait-upside-down, landscape-left or landscape-right`;
 
+const rotated = [
+  ["landscape-left", "landscape_left", "landscape-left"],
+  ["Left", "landscape_left", "landscape-left"],
+  ["right", "landscape_right", "landscape-right"],
+  ["upside-down", "portrait_upside_down", "portrait-upside-down"],
+  ["portrait", "portrait", "portrait"],
+] as const;
+
+async function expectRotated(gateway: boolean, model: string, row: (typeof rotated)[number]) {
+  const [typed, sent, named] = row;
+  const { handle, rotations, forwarded, clock } = rig({ gateway, model });
+  const body = await answer(await handle("orientation", [typed]));
+  const label = `${gateway ? "gateway" : "worker"} ${model} ${typed}`;
+  expect(body.id, label).toBe(7);
+  expect(body.result, label).toEqual({ data: unconfirmed(named), ok: true });
+  expect(rotations, label).toEqual([{ leaseId, orientation: sent }]);
+  expect(forwarded, label).toEqual([]);
+  expect(clock.pendingTimerCount, label).toBe(0);
+}
+
+async function expectAdoptedRotated() {
+  const adopted = rig({ adopted: true, gateway: true, model: "iPhone 17 Pro" });
+  const body = await answer(await adopted.handle("orientation", ["landscape-right"]));
+  expect(body.result).toEqual({ data: unconfirmed("landscape-right"), ok: true });
+  expect(adopted.rotations).toEqual([{ leaseId, orientation: "landscape_right" }]);
+  expect(adopted.forwarded).toEqual([]);
+}
+
+async function expectInvalid(typed: readonly string[]) {
+  const { handle, rotations, forwarded } = rig({ gateway: false, model: "iPad Pro 13-inch (M5)" });
+  const response = await handle("orientation", typed);
+  const body = await answer(response);
+  expect(response.status).toBe(400);
+  expect(body.error?.data).toEqual({
+    code: "INVALID_ARGS",
+    message: unknownMessage(typed[0] ?? ""),
+  });
+  expect(rotations).toEqual([]);
+  expect(forwarded).toEqual([]);
+}
+
+interface Failure {
+  readonly error: Error;
+  readonly expected: {
+    readonly code: string;
+    readonly message: string;
+    readonly status: number;
+    readonly details?: { readonly reason: string };
+  };
+}
+
+const failures: readonly Failure[] = [
+  {
+    error: new DispatchError("INPUT_UNAVAILABLE", "the input helper could not start", {
+      leaseId,
+      reason: "x",
+    }),
+    expected: { code: "COMMAND_FAILED", message: "the input helper could not start", status: 502 },
+  },
+  {
+    error: new Error("rotate blew up"),
+    expected: { code: "COMMAND_FAILED", message: "rotate blew up", status: 502 },
+  },
+  {
+    error: new DispatchError("WORKER_UNREACHABLE", "worker w1 is not connected", {
+      workerId: "w1",
+    }),
+    expected: {
+      code: "COMMAND_FAILED",
+      details: { reason: "WORKER_UNREACHABLE" },
+      message:
+        "agent-device is not available on this simlock: the worker holding this device is not connected to the gateway; try again",
+      status: 503,
+    },
+  },
+];
+
+async function expectFailure({ error, expected }: Failure) {
+  const { handle, forwarded, clock } = rig({
+    gateway: true,
+    model: "iPhone 17 Pro",
+    rotate: () => Promise.reject(error),
+  });
+  const response = await handle("orientation", ["landscape-left"]);
+  const renewing = expected.status === 503 ? 0 : 2;
+  expect(clock.pendingTimerCount, `${expected.message} renewal before the body is read`).toBe(
+    renewing,
+  );
+  const body = await answer(response);
+  const { status, ...data } = expected;
+  expect(response.status, data.message).toBe(status);
+  expect(body.error?.data, data.message).toEqual(data);
+  expect(forwarded, data.message).toEqual([]);
+  expect(clock.pendingTimerCount, data.message).toBe(0);
+}
+
 describe("the agent-device front's orientation command", () => {
   it("answers `orientation <name>` on a Simlock iOS-simulator lease with agent-device's unconfirmed reply through device.rotate, without the command reaching agent-device; `auto` or an unknown name is `INVALID_ARGS`, a missing helper `COMMAND_FAILED`, a gone worker the worker-unreachable reply", async () => {
-    const rotated = [
-      ["landscape-left", "landscape_left", "landscape-left"],
-      ["Left", "landscape_left", "landscape-left"],
-      ["right", "landscape_right", "landscape-right"],
-      ["upside-down", "portrait_upside_down", "portrait-upside-down"],
-      ["portrait", "portrait", "portrait"],
-    ] as const;
     for (const gateway of [true, false]) {
       for (const model of ["iPhone 17 Pro", "iPad Pro 13-inch (M5)"]) {
-        for (const [typed, sent, named] of rotated) {
-          const { handle, rotations, forwarded, clock } = rig({ gateway, model });
-          const response = await handle("orientation", [typed]);
-          const body = await answer(response);
-          const label = `${gateway ? "gateway" : "worker"} ${model} ${typed}`;
-          expect(body.id, label).toBe(7);
-          expect(body.result, label).toEqual({ data: unconfirmed(named), ok: true });
-          expect(rotations, label).toEqual([{ leaseId, orientation: sent }]);
-          expect(forwarded, label).toEqual([]);
-          expect(clock.pendingTimerCount, label).toBe(0);
-        }
+        for (const row of rotated) await expectRotated(gateway, model, row);
       }
     }
-
-    const adopted = rig({ adopted: true, gateway: true, model: "iPhone 17 Pro" });
-    const adoptedBody = await answer(await adopted.handle("orientation", ["landscape-right"]));
-    expect(adoptedBody.result).toEqual({ data: unconfirmed("landscape-right"), ok: true });
-    expect(adopted.rotations).toEqual([{ leaseId, orientation: "landscape_right" }]);
-    expect(adopted.forwarded).toEqual([]);
-
-    for (const typed of [["auto"], ["sideways"], []]) {
-      const { handle, rotations, forwarded } = rig({
-        gateway: false,
-        model: "iPad Pro 13-inch (M5)",
-      });
-      const response = await handle("orientation", typed);
-      const body = await answer(response);
-      expect(response.status).toBe(400);
-      expect(body.error?.data).toEqual({
-        code: "INVALID_ARGS",
-        message: unknownMessage(typed[0] ?? ""),
-      });
-      expect(rotations).toEqual([]);
-      expect(forwarded).toEqual([]);
-    }
-
-    const failures = [
-      {
-        error: new DispatchError("INPUT_UNAVAILABLE", "the input helper could not start", {
-          leaseId,
-          reason: "x",
-        }),
-        expected: {
-          code: "COMMAND_FAILED",
-          message: "the input helper could not start",
-          status: 502,
-        },
-      },
-      {
-        error: new Error("rotate blew up"),
-        expected: { code: "COMMAND_FAILED", message: "rotate blew up", status: 502 },
-      },
-      {
-        error: new DispatchError("WORKER_UNREACHABLE", "worker w1 is not connected", {
-          workerId: "w1",
-        }),
-        expected: {
-          code: "COMMAND_FAILED",
-          details: { reason: "WORKER_UNREACHABLE" },
-          message:
-            "agent-device is not available on this simlock: the worker holding this device is not connected to the gateway; try again",
-          status: 503,
-        },
-      },
-    ];
-    for (const { error, expected } of failures) {
-      const { handle, forwarded, clock } = rig({
-        gateway: true,
-        model: "iPhone 17 Pro",
-        rotate: () => Promise.reject(error),
-      });
-      const response = await handle("orientation", ["landscape-left"]);
-      const unreachable = expected.status === 503;
-      expect(clock.pendingTimerCount, `${expected.message} renewal before the body is read`).toBe(
-        unreachable ? 0 : 2,
-      );
-      const body = await answer(response);
-      const { status, ...data } = expected;
-      expect(response.status, data.message).toBe(status);
-      expect(body.error?.data, data.message).toEqual(data);
-      expect(forwarded, data.message).toEqual([]);
-      expect(clock.pendingTimerCount, data.message).toBe(0);
-    }
+    await expectAdoptedRotated();
+    for (const typed of [["auto"], ["sideways"], []]) await expectInvalid(typed);
+    for (const failure of failures) await expectFailure(failure);
   });
 
   it("forwards `orientation <name>` to agent-device when the lease is not on an iOS phone or tablet simulator, or Simlock no longer knows it", async () => {
