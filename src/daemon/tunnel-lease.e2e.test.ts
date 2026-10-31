@@ -94,6 +94,12 @@ describe("a lease's tunnel socket", () => {
     );
   });
 
+  async function directory(name: string): Promise<string> {
+    const path = await mkdtemp(join(tmpdir(), `simlock-e2e-tunnel-${name}-`));
+    directories.push(path);
+    return path;
+  }
+
   async function standalone(enabled: boolean) {
     const port = await freeLoopbackPort();
     const path = await mkdtemp(join(tmpdir(), "simlock-e2e-tunnel-"));
@@ -140,6 +146,79 @@ describe("a lease's tunnel socket", () => {
     };
   }
 
+  async function fleet(options: {
+    readonly gatewayTunnel: boolean;
+    readonly workerTunnel: boolean;
+  }) {
+    const port = await freeLoopbackPort();
+    const gateway = await startDaemon({
+      configOverrides: {
+        capabilities: { tunnel: { enabled: options.gatewayTunnel } },
+        http: { enabled: true, host: "127.0.0.1", port },
+      },
+      dataDirectory: await directory("gateway"),
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      role: "gateway",
+      version: "1.0.0-e2e",
+    });
+    daemons.push(gateway);
+    const token = (await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin))
+      .secret;
+    const deviceTcp = new FakeDeviceTcp();
+    const worker = await startDaemon({
+      configOverrides: {
+        capabilities: { tunnel: { enabled: options.workerTunnel } },
+        gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
+      },
+      dataDirectory: await directory("worker"),
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [
+        new FakeDriver({
+          availableOsVersions: ["18.0"],
+          clock: new SystemClock(),
+          deviceTcp,
+          knownModels: ["Pixel-A"],
+          platform: "android",
+        }),
+      ],
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      version: "1.0.0-e2e",
+    });
+    daemons.push(worker);
+    await vi.waitFor(
+      async () => {
+        const { workers } = await gateway.dispatch("worker.list", {}, admin);
+        expect(workers[0]?.catalog?.length).toBeGreaterThan(0);
+      },
+      { timeout: 10_000 },
+    );
+    const holder = await gateway.dispatch(
+      "token.create",
+      { label: "holder", role: "agent" },
+      admin,
+    );
+    const granted = await gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", platform: "android" },
+      { ...agent, principal: holder.token.id },
+    );
+    const leaseId = (granted as { lease: { id: string } }).lease.id;
+    await vi.waitFor(
+      () => gateway.dispatch("lease.get", { leaseId }, { ...agent, principal: holder.token.id }),
+      { timeout: 10_000 },
+    );
+    return {
+      deviceTcp,
+      gateway,
+      holder: holder.secret,
+      leaseId,
+      url: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/tunnel`,
+      worker,
+    };
+  }
+
   async function expectReady(url: string, token: string, devicePort: number): Promise<void> {
     const opened = await openTunnel(url, token);
     expect(opened.status).toBe(101);
@@ -176,6 +255,15 @@ describe("a lease's tunnel socket", () => {
         code: undefined,
         status: 404,
       });
+    },
+  );
+
+  it(
+    "opens the tunnel socket through a gateway and relays it to the lease's worker",
+    { timeout: 60_000 },
+    async () => {
+      const through = await fleet({ gatewayTunnel: true, workerTunnel: true });
+      await expectReady(through.url(), through.holder, 5173);
     },
   );
 });
