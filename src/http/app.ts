@@ -48,6 +48,7 @@ import {
   leaseGetRoute,
   leaseListRoute,
   leaseReleaseRoute,
+  leaseRotateRoute,
   leaseRenewRoute,
   leaseRequestCancelRoute,
   leaseRequestCreateRoute,
@@ -595,6 +596,17 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       },
       identity.expiresAt,
     );
+  });
+
+  app.openapi({ ...leaseRotateRoute, middleware: [agentAuth] }, async (c) => {
+    const { orientation } = c.req.valid("json");
+    // why: dispatched directly, like `exec`, so `device.rotate`'s own authorize answers 403 for another requester's lease and the handler 404 for an unknown one.
+    const rotated = await deps.dispatch(
+      "device.rotate",
+      { leaseId: c.req.valid("param").id, orientation },
+      buildHttpSession(c.get("identity")),
+    );
+    return c.json(rotated, 200);
   });
 
   app.openapi({ ...leaseReleaseRoute, middleware: [agentAuth] }, async (c) => {

@@ -81,7 +81,7 @@ async function attemptConnection(
       connect: (timeoutMs) => target.connect(timeoutMs),
       serial: target.serial,
       signal,
-      socketName: `scrcpy_${request.scidHex}`,
+      service: `localabstract:scrcpy_${request.scidHex}`,
       timeoutMs: Math.max(1, request.deadlineAt - request.clock.now()),
     });
     if (outcome.kind === "no-transport") {

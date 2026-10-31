@@ -42,6 +42,10 @@ vi.mock("../contract/index.js", async (importOriginal) => {
   loaded.add("contract");
   return await importOriginal();
 });
+vi.mock("ws", async (importOriginal) => {
+  loaded.add("ws");
+  return await importOriginal();
+});
 vi.mock("../ports/index.js", async (importOriginal) => {
   loaded.add("ports");
   return await importOriginal();
@@ -55,7 +59,7 @@ async function loadsDuring(run: () => Promise<unknown>): Promise<string[]> {
 
 const home = mkdtempSync(join(tmpdir(), "simlock-cli-lazy-"));
 
-async function environment(): Promise<CliEnvironment> {
+async function environment(env: NodeJS.ProcessEnv = {}): Promise<CliEnvironment> {
   const ports: CliEnvironmentPorts = {
     clock: new FakeClock(0),
     daemonHome: { role: "worker", dataDirectory: home, gatewayPresent: false },
@@ -71,7 +75,7 @@ async function environment(): Promise<CliEnvironment> {
     systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 }),
   };
   const { buildCliEnvironment } = await import("./environment.js");
-  return buildCliEnvironment(ports, {});
+  return buildCliEnvironment(ports, env);
 }
 
 describe("the CLI loads what a command asks for, not the whole control plane", () => {
@@ -113,5 +117,28 @@ describe("the CLI loads what a command asks for, not the whole control plane", (
       const module = await node.load();
       expect(module.run, node.name).toBeTypeOf("function");
     }
+  });
+
+  it("loads ws for simlock tunnel alone, not for any other command nor the MCP entry", async () => {
+    const { runCli } = await import("./index.js");
+    const others = [["--help"], ["config", "set", "leaseTtlMs", "60000"], ["bogus"]];
+    for (const argv of others) {
+      const cli = await environment();
+      expect(await loadsDuring(() => runCli(argv, cli))).not.toContain("ws");
+    }
+    expect(await loadsDuring(() => import("../mcp/main.js"))).not.toContain("ws");
+    const { COMMANDS } = await import("./tree.js");
+    const nodes = COMMANDS.flatMap((node) => [node, ...(node.children ?? [])]);
+    expect(await loadsDuring(() => Promise.all(nodes.map((node) => node.load())))).not.toContain(
+      "ws",
+    );
+
+    const cli = await environment({
+      SIMLOCK_TOKEN: "sk_agent_x",
+      SIMLOCK_URL: "http://127.0.0.1:1",
+    });
+    expect(
+      await loadsDuring(() => runCli(["tunnel", "reverse", "5173", "--lease", "L1"], cli)),
+    ).toContain("ws");
   });
 });

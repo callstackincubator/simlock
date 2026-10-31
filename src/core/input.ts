@@ -1,4 +1,5 @@
 import type { PhysicalDriverDevice, VirtualDriverDevice } from "./driver.js";
+import { INPUT_ORIENTATIONS, type Orientation } from "../contract/index.js";
 
 // why: the one table in TypeScript for the input socket's tags, in the messages expo's serve-sim speaks
 // (ADR 0049 section 3): a client that already speaks them drives a lease with no Simlock-specific code.
@@ -32,14 +33,7 @@ export function closeReason(reason: string): string {
 
 const INPUT_BUTTONS = ["home", "app_switcher", "lock", "back"] as const;
 
-const INPUT_ORIENTATIONS = [
-  "portrait",
-  "portrait_upside_down",
-  "landscape_left",
-  "landscape_right",
-] as const;
-
-export type InputOrientation = (typeof INPUT_ORIENTATIONS)[number];
+export type InputOrientation = Orientation;
 
 // why: serve-sim's `0x82` payload, which T3 Code accepts only with a width and height above 0.
 export interface InputScreenConfig {
@@ -85,7 +79,7 @@ export type InputMessage =
 
 // why: what turns messages into taps on one device; one per lease, shared by every socket of it.
 export interface DeviceInput {
-  send(message: InputMessage): void;
+  send(message: InputMessage): Promise<void>;
   // why: calls the listener with the current screen config at once, then on each change, so a socket
   // that joins late learns the size as it is now.
   onConfig(listener: (config: InputScreenConfig) => void): () => void;

@@ -41,7 +41,9 @@ import {
   warmPoolOwner,
   Nuke,
   SerializedDecision,
+  stableError,
   sweepWriteLeftovers,
+  toDriverDevice,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
@@ -103,6 +105,7 @@ import {
   type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   daemonDataDirectory,
   resolveDaemonSocketPath,
@@ -135,6 +138,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
@@ -492,6 +496,9 @@ async function composeDaemon(
   // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const catalog = new DriverCatalog(drivers);
+  const leaseInputs = createLeaseInputs({
+    openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+  });
   const moduleHost = await createModuleHost({
     config,
     defaulted,
@@ -516,9 +523,14 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
-      inputs: {
-        openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+      deviceTcp: {
+        connect: (platform, device, devicePort, signal) =>
+          catalog.connectDevicePort(platform, device, devicePort, signal),
+        supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
+        reverse: (platform, device, devicePort, signal) =>
+          catalog.reverseDevicePort(platform, device, devicePort, signal),
       },
+      inputs: leaseInputs,
       screens: catalog,
       tcpProbe,
     },
@@ -536,7 +548,7 @@ async function composeDaemon(
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
+    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
@@ -612,6 +624,28 @@ async function composeDaemon(
       processSupervisor,
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
     });
+    // why: before any request is served, so a tunnel rule a stopped daemon left is gone before a lease uses its device; each driver proves a device its own first.
+    await Promise.all(
+      drivers.map(async (driver) => {
+        try {
+          await driver.deviceTcp?.sweep(
+            registry.snapshot.devices
+              .filter(
+                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
+              )
+              .map((device) => ({
+                device: toDriverDevice(device),
+                leased: device.state === "leased",
+              })),
+          );
+        } catch (error) {
+          logger.warn("A driver's start sweep of tunnel rules failed", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+        }
+      }),
+    );
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
@@ -665,6 +699,7 @@ async function composeDaemon(
     logger: logger.child("server"),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
+    inputs: leaseInputs,
     processRunner,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,
@@ -1420,6 +1455,7 @@ async function discoverAndroidDriver(
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,
       tcpStreamConnector: new NodeTcpStreamConnector(),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the

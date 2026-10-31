@@ -130,6 +130,8 @@ export const COMMANDS: readonly CommandNode[] = [
   },
   { name: "simctl", load: () => import("./commands/passthrough.js") },
   { name: "adb", load: () => import("./commands/passthrough.js") },
+  { name: "rotate", load: () => import("./commands/rotate.js") },
+  { name: "tunnel", load: () => import("./commands/tunnel.js") },
   { name: "mcp", load: () => import("./commands/mcp.js") },
   { name: "instructions", load: () => import("./commands/instructions.js") },
   { name: "setup", load: () => import("./commands/setup.js") },

@@ -22,7 +22,9 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                                                                                            |
 | `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod)                                                                       |
 | `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                                                                                                 |
+| `orientation.ts`   | `INPUT_ORIENTATIONS`, `parseOrientation` (the aliases a spelling maps to an orientation or the unknown message), `isRotatableModel`, `modelFamily`; no wire shape                                                                                       |
 | `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                                                                                                 |
+| `tunnel-frames.ts` | The tunnel socket's frame codec, tags and limits (`encodeTunnelFrame`, `decodeTunnelFrame`, `TUNNEL_*`); a helper with no wire shape, listed in the protocol-bump check                                                                                 |
 | `console-url.ts`   | The console address `status.get` reports                                                                                                                                                                                                                |
 
 ## Operations
@@ -33,7 +35,7 @@ park on readiness (all but `status.get`) → handler → parse output.
 every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `agent`: `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
-  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`,
+  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`, `device.rotate`,
   `doctor.run` without `fix` or `purgeOrphans`.
 - `admin`: every other operation (`list.get`, `config.get`, `inbox.get`, `daemon.stop`, `events.*`,
   `token.*`, `worker.*`, `component.install`, `device.add`, `relay.request`, ...).
@@ -45,7 +47,7 @@ every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `lease.renew`, `lease.release` — `ownsLease`: admin, or `ownerId` = principal.
 - `lease.cancel` — admin, or the pending request's owner = principal.
-- `device.exec` — agent: owns the lease and names no `requesterId`. Admin: the lease's
+- `device.exec`, `device.rotate` — agent: owns the lease and names no `requesterId`. Admin: the lease's
   requester = `requesterId` (default: principal).
 
 Three identities:
@@ -57,7 +59,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 66, max: 66 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 67, max: 67 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
