@@ -237,7 +237,6 @@ describe("MCP server (smoke)", () => {
         client.calls.length = 0;
         const refused = await call(mcpClient, tool, wrong);
         expect(refused.isError).toBe(true);
-        expect(text(refused)).toBe("DBG");
         expect(text(refused)).toContain("Input validation error");
         expect(client.calls).toEqual([]);
       } finally {
