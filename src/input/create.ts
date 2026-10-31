@@ -1,13 +1,13 @@
-import type {
-  ModuleEndedLease,
-  ModuleLeaseHandler,
-  ModuleLeaseSocketHandler,
-  ModuleRelayTwoWayTarget,
-  WorkerContext,
+import {
+  type ModuleEndedLease,
+  type ModuleLeaseHandler,
+  type ModuleLeaseSocketHandler,
+  type ModuleRelayTwoWayTarget,
+  upgradeRequired,
+  type WorkerContext,
 } from "../modules/index.js";
 import type { Clock, Logger } from "../ports/index.js";
 import { createGatewayInputLink, type GatewayInputLinkOptions } from "./gateway-link.js";
-import { upgradeRequired } from "./refusal.js";
 import { createWorkerInputLink, type InputRegistry } from "./worker-link.js";
 
 export interface WorkerInputOptions {

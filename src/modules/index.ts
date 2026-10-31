@@ -35,3 +35,14 @@ export type {
   WorkerView,
 } from "./types.js";
 export { createModuleHost } from "./host.js";
+export {
+  CHANNEL_TAG,
+  channelSocket,
+  closeOf,
+  encodeFrame,
+  readFrames,
+  relayRefusal,
+  unavailable,
+  unknownLease,
+  upgradeRequired,
+} from "./relay-channel.js";

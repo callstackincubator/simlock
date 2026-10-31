@@ -16,11 +16,12 @@ async function freePort(): Promise<number> {
 
 // why: an adapter over node:net, proven by what a real loopback socket does, which the fake cannot show.
 describe("NodeTcpListenerFactory", () => {
-  it("hands out a loopback port whose connections arrive as streams, answers undefined for a taken port, and frees the port on close", async () => {
+  it("hands out a loopback port whose connections arrive as streams, lets the worker answer after the peer half-closed, answers undefined for a taken port, and frees the port on close", async () => {
     const port = await freePort();
     const factory = new NodeTcpListenerFactory();
     const listener = await factory.listen(port);
     expect(listener?.port).toBe(port);
+    expect(listener?.address).toBe("127.0.0.1");
     expect(await factory.listen(port)).toBeUndefined();
 
     const received = new Promise<string>((resolve) => {
@@ -29,6 +30,8 @@ describe("NodeTcpListenerFactory", () => {
           const chunks: Uint8Array[] = [];
           for await (const chunk of stream.readable) chunks.push(chunk);
           resolve(Buffer.concat(chunks).toString());
+          await stream.write("reply");
+          stream.end();
         })();
       });
     });
@@ -36,6 +39,9 @@ describe("NodeTcpListenerFactory", () => {
     await client.write("hello");
     client.end();
     expect(await received).toBe("hello");
+    const reply: Uint8Array[] = [];
+    for await (const chunk of client.readable) reply.push(chunk);
+    expect(Buffer.concat(reply).toString()).toBe("reply");
     client.close();
 
     await listener?.close();

@@ -18,7 +18,9 @@ export interface TcpStream {
 function readableOf(socket: Socket): ReadableStream<Uint8Array> {
   let finished = false;
   return new ReadableStream<Uint8Array>({
+    // why: a cancelled stream is already closed, and the `close` the destroy raises must not close it again, which throws outside any handler.
     cancel: () => {
+      finished = true;
       socket.destroy();
     },
     pull: () => {
@@ -42,8 +44,7 @@ function readableOf(socket: Socket): ReadableStream<Uint8Array> {
   });
 }
 
-// why: after connect or accept an error ends the readable through `Readable.toWeb`; a listener must
-// still exist or Node raises it as an uncaught exception and takes the daemon down.
+// why: a socket error with no listener is raised by Node as an uncaught exception and takes the daemon down, so one always exists; `readableOf` ends the readable on it.
 export function tcpStreamOf(socket: Socket): TcpStream {
   socket.on("error", () => undefined);
   return {
@@ -91,6 +92,10 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
 export class FakeTcpPeer {
   readonly written: Uint8Array[] = [];
   closed = false;
+  // why: the device's side ended its bytes, which a test tells from the worker having closed the connection.
+  ended = false;
+  // why: a test sets this to make every write to the device fail, as a broken device socket does.
+  writeFailure: Error | undefined;
   // why: the driver half-closed its side, as `stream.end()` does; `end()` on the peer is the device's side ending.
   writeEnded = false;
   #controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -109,17 +114,14 @@ export class FakeTcpPeer {
       close: () => {
         if (this.closed) return;
         this.closed = true;
-        try {
-          this.#controller.close();
-        } catch {
-          // why: a cancelled readable is already closed; closing the connection is still done.
-        }
+        this.#closeReadable();
       },
       end: () => {
         this.writeEnded = true;
       },
       readable,
       write: async (bytes) => {
+        if (this.writeFailure !== undefined) throw this.writeFailure;
         this.written.push(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
       },
     };
@@ -132,13 +134,22 @@ export class FakeTcpPeer {
 
   // fallow-ignore-next-line unused-class-member -- the device's side of a fake stream, called by tests.
   send(bytes: Uint8Array | string): void {
-    if (this.closed) return;
+    if (this.closed || this.ended) return;
     this.#controller.enqueue(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
   }
 
   // fallow-ignore-next-line unused-class-member -- the device's side ending, called by tests.
   end(): void {
-    this.stream.close();
+    this.ended = true;
+    this.#closeReadable();
+  }
+
+  #closeReadable(): void {
+    try {
+      this.#controller.close();
+    } catch {
+      // why: a cancelled or already ended readable is closed; ending the connection is still done.
+    }
   }
 }
 

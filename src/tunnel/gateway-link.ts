@@ -1,15 +1,20 @@
-import type {
-  FleetLeases,
-  ModuleIdentity,
-  ModuleLease,
-  ModuleLeaseSocketAccept,
-  ModuleTwoWayRelay,
+import {
+  CHANNEL_TAG,
+  closeOf,
+  encodeFrame,
+  type FleetLeases,
+  type ModuleIdentity,
+  type ModuleLease,
+  type ModuleLeaseSocketAccept,
+  type ModuleTwoWayRelay,
+  readFrames,
+  relayRefusal,
+  unavailable,
 } from "../modules/index.js";
 import type { Clock, LeaseSocket, TimerHandle } from "../ports/index.js";
-import { unavailable } from "./refusal.js";
 import { encodeTunnelFrame, TUNNEL_REFUSED_CLOSE, TUNNEL_TAG } from "../contract/index.js";
 import { closeReason } from "../core/index.js";
-import { CHANNEL_TAG, encodeFrame, MAX_TUNNEL_MESSAGE_BYTES, readFrames } from "./framing.js";
+import { MAX_TUNNEL_MESSAGE_BYTES } from "./limits.js";
 
 export interface GatewayTunnelLinkOptions {
   readonly relayTwoWay: (
@@ -31,35 +36,9 @@ const OPEN_BOUND_MS = 10_000;
 // waits this long for it before closing a socket whose lease it saw go.
 const LEASE_END_WAIT_MS = 2_000;
 
-// why: a worker with tunnels off has no relay target, and a holder must get a 503 that says to turn the capability on there, before the upgrade; an error with no such code is a real fault and goes on to the HTTP layer's 500.
-function refusalFor(error: unknown, workerId: string): Response {
-  if ((error as { readonly code?: unknown }).code === "RELAY_TARGET_MISSING") {
-    return unavailable(
-      "TUNNEL_UNAVAILABLE",
-      `Tunnels are off on worker ${workerId}; turn on capabilities.tunnel.enabled there`,
-    );
-  }
-  throw error;
-}
-
 interface Bridge {
   readonly leaseGone: () => void;
   readonly stop: (code: number, reason: string) => void;
-}
-
-// why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
-function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
-  try {
-    const { code, reason } = JSON.parse(new TextDecoder().decode(payload)) as Record<
-      string,
-      unknown
-    >;
-    if (typeof code !== "number" || !Number.isInteger(code)) return undefined;
-    if (code !== 1001 && code !== 1013 && (code < 4000 || code > 4999)) return undefined;
-    return typeof reason === "string" ? { code, reason: closeReason(reason) } : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
@@ -128,7 +107,7 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
       controller.abort();
     });
     void (async () => {
-      for await (const frame of readFrames(relay.readable)) {
+      for await (const frame of readFrames(relay.readable, MAX_TUNNEL_MESSAGE_BYTES)) {
         if (frame.tag === CHANNEL_TAG.close) {
           const closing = closeOf(frame.payload);
           // why: a worker that is stopping says 1001, which is a statement about the gateway to a holder; to the holder the worker is gone.
@@ -178,7 +157,10 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
             `Worker ${workerId} did not answer the tunnel socket within 10 s`,
           );
         }
-        return refusalFor(error, workerId);
+        return relayRefusal(error, workerId, {
+          code: "TUNNEL_UNAVAILABLE",
+          message: `Tunnels are off on worker ${workerId}; turn on capabilities.tunnel.enabled there`,
+        });
       } finally {
         options.clock.cancel(timer);
       }

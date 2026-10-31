@@ -60,12 +60,18 @@ function closeFrame(code: number, reason: string): Uint8Array {
 
 async function attached() {
   const pair = relayPair();
-  const built = await gatewayWith({ relayTwoWay: () => Promise.resolve(pair.relay) });
+  const signals: AbortSignal[] = [];
+  const built = await gatewayWith({
+    relayTwoWay: (request) => {
+      signals.push(request.signal);
+      return Promise.resolve(pair.relay);
+    },
+  });
   const accept = await built.socket.open(new Request("http://simlock/tunnel"), IDENTITY, LEASE);
   if (typeof accept !== "function") throw new Error("the socket was refused");
   const client = new MemoryLeaseSocket();
   (accept as ModuleLeaseSocketAccept)(client);
-  return { ...built, client, worker: pair.worker };
+  return { ...built, client, signal: signals[0] as AbortSignal, worker: pair.worker };
 }
 
 describe("a gateway's tunnel bridge", () => {
@@ -112,5 +118,52 @@ describe("a gateway's tunnel bridge", () => {
     expect(silent.client.closed).toBeUndefined();
     silent.clock.advance(1);
     expect(silent.client.closed).toEqual({ code: 4001, reason: "lease ended" });
+  });
+
+  it("aborts the relay when the holder closes, when a worker frame is over the message limit and when an upgrade fails, and answers a coded relay failure 503", async () => {
+    const closed = await attached();
+    expect(closed.signal.aborted).toBe(false);
+    closed.client.drop();
+    expect(closed.signal.aborted).toBe(true);
+
+    const oversize = await attached();
+    const over = new Uint8Array(4);
+    new DataView(over.buffer).setUint32(0, 5 + 65_536 + 1);
+    await oversize.worker.write(over);
+    await vi.waitFor(() =>
+      expect(oversize.client.closed).toEqual({ code: 1011, reason: "Worker w1 stopped answering" }),
+    );
+    expect(oversize.signal.aborted).toBe(true);
+
+    const pair = relayPair();
+    let abandoned: AbortSignal | undefined;
+    const built = await gatewayWith({
+      relayTwoWay: (request) => {
+        abandoned = request.signal;
+        return Promise.resolve(pair.relay);
+      },
+    });
+    const accept = await built.socket.open(new Request("http://simlock/tunnel"), IDENTITY, LEASE);
+    if (typeof accept !== "function") throw new Error("the socket was refused");
+    expect(abandoned?.aborted).toBe(false);
+    accept.abandon?.();
+    expect(abandoned?.aborted).toBe(true);
+
+    const unreachable = await gatewayWith({
+      relayTwoWay: () =>
+        Promise.reject(
+          Object.assign(new Error("Worker w1 is gone"), { code: "WORKER_UNREACHABLE" }),
+        ),
+    });
+    const refusal = await unreachable.socket.open(
+      new Request("http://simlock/tunnel"),
+      IDENTITY,
+      LEASE,
+    );
+    expect(refusal).toBeInstanceOf(Response);
+    expect((refusal as Response).status).toBe(503);
+    expect(await (refusal as Response).json()).toEqual({
+      error: { code: "WORKER_UNREACHABLE", message: "Worker w1 is gone" },
+    });
   });
 });

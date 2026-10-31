@@ -1,12 +1,21 @@
 import type { LeaseRecord } from "../core/index.js";
-import type { WorkerContext, WorkerModule } from "../modules/index.js";
+import {
+  channelSocket,
+  unknownLease,
+  upgradeRequired,
+  type WorkerContext,
+  type WorkerModule,
+} from "../modules/index.js";
+import { MAX_TUNNEL_MESSAGE_BYTES } from "./limits.js";
 import type { TunnelModuleConfig } from "./definition.js";
-import { channelSocket } from "./channel.js";
-import { unknownLease, upgradeRequired } from "./refusal.js";
 import { createTunnelSessions } from "./sessions.js";
 
 export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModule {
-  const sessions = createTunnelSessions({ deviceTcp: ctx.deviceTcp, logger: ctx.logger });
+  const sessions = createTunnelSessions({
+    clock: ctx.clock,
+    deviceTcp: ctx.deviceTcp,
+    logger: ctx.logger,
+  });
   return {
     capability: { name: ctx.name, read: () => Promise.resolve({ state: "available" }) },
     hooks: {
@@ -20,7 +29,7 @@ export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModu
       if (lease === undefined || device === undefined) {
         return Promise.resolve(unknownLease(leaseId ?? ""));
       }
-      sessions.attach(lease.id, device, channelSocket(pipe, ctx.clock));
+      sessions.attach(lease.id, device, channelSocket(pipe, ctx.clock, MAX_TUNNEL_MESSAGE_BYTES));
       return Promise.resolve(new Response(null, { status: 200 }));
     },
     socket: {

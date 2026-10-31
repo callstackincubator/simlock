@@ -6,6 +6,8 @@ import { FakeTcpPeer, type TcpStream, tcpStreamOf } from "./tcp-stream.js";
 // that port for as long as the rule stands, and every connection to it arrives on `onConnection`.
 export interface TcpListener {
   readonly port: number;
+  // why: the interface the listener is bound to, so a test can prove a tunnel's port is reachable from this machine only.
+  readonly address: string;
   onConnection(listener: (stream: TcpStream) => void): void;
   close(): Promise<void>;
 }
@@ -34,7 +36,9 @@ export class NodeTcpListenerFactory implements TcpListenerFactory {
       });
       server.listen(port, "127.0.0.1", () => {
         server.on("error", () => undefined);
+        const bound = server.address();
         resolve({
+          address: typeof bound === "object" && bound !== null ? bound.address : "",
           close: () =>
             new Promise<void>((done) => {
               server.close(() => done());
@@ -53,6 +57,8 @@ export class NodeTcpListenerFactory implements TcpListenerFactory {
 class FakeTcpListener implements TcpListener {
   closed = false;
   readonly #listeners: ((stream: TcpStream) => void)[] = [];
+
+  readonly address = "127.0.0.1";
 
   constructor(readonly port: number) {}
 
