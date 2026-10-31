@@ -6,6 +6,7 @@ export const TUNNEL_TAG = {
   hello: 0x01,
   open: 0x02,
   ready: 0x81,
+  refused: 0x82,
 } as const;
 
 export interface TunnelFrame {
@@ -37,3 +38,8 @@ export function decodeTunnelFrame(bytes: Uint8Array): TunnelFrame | undefined {
     tag: bytes[0] ?? 0,
   };
 }
+
+export const TUNNEL_MAX_TUNNELS = 8;
+export const TUNNEL_MIN_DEVICE_PORT = 1024;
+export const TUNNEL_MAX_DEVICE_PORT = 65_535;
+export const TUNNEL_REFUSED_CLOSE = 4003;

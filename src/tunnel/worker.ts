@@ -15,7 +15,7 @@ export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModu
         const device = ctx.registry.snapshot.devices.find((entry) => entry.id === lease?.deviceId);
         if (device === undefined) return Promise.resolve(new Response(null, { status: 404 }));
         return Promise.resolve((socket) => {
-          sessions.attach(device, socket);
+          sessions.attach(held.id, device, socket);
         });
       },
     },
