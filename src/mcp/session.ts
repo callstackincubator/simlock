@@ -259,8 +259,9 @@ export class McpSession {
       const catalog = await client.getCatalog(input);
       const status = await client.getStatus();
       const physicalDevices = (status.devices ?? [])
-        .filter((device) => device.physical)
+        .filter((device) => device.physical && device.state !== "deleted")
         .map((device) => ({
+          ...(device.workerId === undefined ? {} : { workerId: device.workerId }),
           platform: device.spec.platform,
           model: device.spec.model,
           osVersion: device.spec.osVersion,
