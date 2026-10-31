@@ -524,7 +524,9 @@ describe("AndroidDriver", () => {
 
     await harness.driver.makeReady(harness.device);
 
-    const emulatorCalls = harness.runner.calls.filter((call) => call.command === binaries.emulator);
+    const emulatorCalls = harness.runner.calls.filter(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
     const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
     expect(emulatorCalls.map((call) => call.options.killTree)).toEqual([true]);
     expect(adbCalls.length).toBeGreaterThan(0);
