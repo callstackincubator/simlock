@@ -2146,7 +2146,9 @@ export class AndroidDriver implements Driver {
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
-      { env: this.#env(), stdio: "ignore" },
+      // why: on Windows a kill otherwise ends `emulator.exe` alone, and its qemu child keeps
+      // running with the guest's RAM; no adb command asks for this (the 5037 server rule).
+      { env: this.#env(), killTree: true, stdio: "ignore" },
     );
     handle.unref();
     state.handle = handle;
