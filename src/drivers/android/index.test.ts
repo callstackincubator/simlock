@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
+  DriverCrashError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
   PassthroughRefusedError,
@@ -901,6 +902,85 @@ describe("AndroidDriver", () => {
         .slice(loadIndex)
         .find((call) => call.command === binaries.emulator && call.args.includes("-avd"));
       expect(nextBoot).toMatchObject({ args: expect.arrayContaining(["-wipe-data"]) });
+    },
+  );
+
+  it.each([
+    {
+      call: "emu avd snapshot save simlock_clean_baseline",
+      outcome: { error: expect.stringContaining("snapshot save") },
+      ending: "makeReady fails",
+    },
+    {
+      call: "emu avd snapshot list",
+      outcome: { error: expect.stringContaining("snapshot list") },
+      ending: "makeReady fails",
+    },
+    { call: "emu kill", outcome: { ready: "emulator-5586" }, ending: "the boot still completes" },
+  ])(
+    "ends a first boot whose emulator console never answers $call: the hung adb call is stopped and $ending",
+    async ({ call, outcome }) => {
+      const clock = new FakeClock();
+      const expectations: ScriptedProcessExpectation[] = [
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock_one",
+          "-k",
+          /.+/,
+          "-d",
+          "pixel_5",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }).map((expected) =>
+          expected.match.args.slice(2).join(" ") === call && expected.match.command === binaries.adb
+            ? { hangs: true, match: expected.match }
+            : expected,
+        ),
+        markWriteExpectation("emulator-5586", "device-2"),
+      ];
+      const runner = new ClockDeadlineRunner(expectations, clock);
+      const driver = await createDriver(
+        await androidFilesystem({ config: "hw.ramSize=2048\n" }),
+        runner,
+        { clock, ids: ["one"], tcpProbe: new FakeTcpProbe([adbServerPort]) },
+      );
+      const device = await driver.provision(
+        await driver.resolveSpec({ model: "Pixel 5", osVersion: "34", platform: "android" }),
+      );
+
+      let settled: unknown = "still running";
+      void driver.makeReady(device).then(
+        (ready) => {
+          settled = { ready: ready.address };
+        },
+        (error: unknown) => {
+          settled = { error: error instanceof DriverCrashError ? error.message : error };
+        },
+      );
+      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run.
+      for (let second = 0; second < 600 && settled === "still running"; second += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        clock.advance(1_000);
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const hungIndex = runner.calls.findIndex(
+        (invocation) =>
+          invocation.command === binaries.adb && invocation.args.slice(2).join(" ") === call,
+      );
+      let hungEnded = false;
+      void runner.handles[hungIndex]?.wait().then(() => {
+        hungEnded = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect({ hungCallSeen: hungIndex >= 0, hungEnded, settled }).toEqual({
+        hungCallSeen: true,
+        hungEnded: true,
+        settled: outcome,
+      });
     },
   );
 
@@ -4570,6 +4650,39 @@ describe("AndroidDriver emulator registration", () => {
     });
   });
 });
+
+/**
+ * why: Honours `timeoutMs` the way `NodeProcessRunner` does -- the child is killed once it
+ * passes -- but on the driver's fake clock, so a deadline given to `run` is visible to a test
+ * that moves that clock. A bare `ScriptedProcessRunner` ignores `timeoutMs`.
+ */
+class ClockDeadlineRunner extends ScriptedProcessRunner {
+  readonly #clock: FakeClock;
+
+  constructor(expectations: readonly ScriptedProcessExpectation[], clock: FakeClock) {
+    super(expectations);
+    this.#clock = clock;
+  }
+
+  override async run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    const handle = this.spawn(command, args, options);
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : this.#clock.setTimer(options.timeoutMs, () => {
+            handle.kill("SIGKILL");
+          });
+    try {
+      return await handle.wait();
+    } finally {
+      if (timer !== undefined) this.#clock.cancel(timer);
+    }
+  }
+}
 
 function recordKillTimeout(
   into: (number | undefined)[],
