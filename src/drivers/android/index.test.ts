@@ -1216,7 +1216,10 @@ describe("AndroidDriver", () => {
      */
     const bootAfterRestartWith = async (
       emulator: AndroidEmulatorLaunchOptions,
-      expectations: (flags: readonly string[]) => ScriptedProcessExpectation[],
+      expectations: (
+        flags: readonly string[],
+        filesystem: MemoryFilesystem,
+      ) => ScriptedProcessExpectation[],
       flags: readonly string[],
       capturedUnder: {
         readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -1234,7 +1237,7 @@ describe("AndroidDriver", () => {
         ...(purpose === "recover"
           ? []
           : [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")]),
-        ...expectations(flags),
+        ...expectations(flags, harness.filesystem),
         markWriteExpectation("emulator-5586", "device-0"),
       ]);
       const driver = await createDriver(harness.filesystem, runner, { emulator });
@@ -1348,15 +1351,26 @@ describe("AndroidDriver", () => {
     ] as const)(
       "writes hardwareKeyboard %s into config.ini as %s before the next boot, and rebuilds the clean baseline it changes",
       async (hardwareKeyboard, line) => {
-        const { filesystem, runner } = await bootAfterRestartWith(
+        let configAtLaunch: Promise<string> | undefined;
+        const { runner } = await bootAfterRestartWith(
           { ...defaults, hardwareKeyboard },
-          rebuild,
+          (flags, filesystem) =>
+            rebuild(flags).map((expectation) =>
+              expectation.match.args[0] === "-avd"
+                ? {
+                    ...expectation,
+                    onSpawn: () => {
+                      configAtLaunch ??= filesystem.readFile(
+                        `${avdDirectory}/simlock_one.avd/config.ini`,
+                      );
+                    },
+                  }
+                : expectation,
+            ),
           [],
         );
 
-        expect(
-          (await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`)).split("\n"),
-        ).toContain(line);
+        expect((await configAtLaunch)?.split("\n")).toContain(line);
         expect(emulatorLaunches(runner)[0]).toEqual([
           "-avd",
           "simlock_one",
