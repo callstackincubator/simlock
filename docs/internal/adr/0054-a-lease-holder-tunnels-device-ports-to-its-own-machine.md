@@ -1,6 +1,6 @@
 # 0054. A lease holder tunnels device ports to its own machine
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-10-30
 - **Issue:** [#1110](https://github.com/callstackincubator/simlock/issues/1110)
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) Non-goals ("A
@@ -98,7 +98,8 @@ flowchart LR
    47000 to 47999, reserved for tunnels. At start, before any lease is
    served, the worker removes, on every Android device it proves its own,
    leased or idle, each `reverse` rule whose host side is in that range:
-   only a tunnel can have set one, and no tunnel survives a restart. Rules
+   the range is reserved for tunnels (a holder's own rule pointed there is
+   removed too, and the docs say so), and no tunnel survives a restart. Rules
    pointing elsewhere, a holder's own made through `exec`, stay, so leases
    kept across a restart (ADR 0019) keep them.
 7. The socket's frames are not daemon-contract operations, but both ends
