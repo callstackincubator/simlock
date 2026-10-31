@@ -27,6 +27,8 @@ interface RigOptions {
   readonly gateway: boolean;
   readonly model: string;
   readonly adopted?: boolean;
+  readonly platform?: "ios" | "android";
+  readonly physical?: boolean;
   readonly rotate?: () => Promise<unknown>;
 }
 
@@ -40,7 +42,8 @@ function rig(options: RigOptions): Rig {
     deadline: clock.now() + ttlMs,
     identity: agent,
     model: options.model,
-    platform: "ios" as const,
+    platform: options.platform ?? "ios",
+    ...(options.physical === undefined ? {} : { physical: options.physical }),
     target: "mobile",
     ttlMs,
   };
@@ -218,5 +221,41 @@ describe("the agent-device front's orientation command", () => {
       expect(forwarded, data.message).toEqual([]);
       expect(clock.pendingTimerCount, data.message).toBe(0);
     }
+  });
+
+  it("forwards `orientation <name>` to agent-device when the lease is not on an iOS phone or tablet simulator, or Simlock no longer knows it", async () => {
+    const cases = [
+      { label: "Android emulator", platform: "android", model: "Pixel 8" },
+      { label: "Android phone", platform: "android", model: "Pixel 8", physical: true },
+      { label: "iPhone", physical: true, model: "iPhone 17 Pro" },
+      { label: "Apple TV simulator", model: "Apple TV 4K (3rd generation)" },
+    ] as const;
+    for (const { label, ...lease } of cases) {
+      for (const typed of ["landscape-left", "auto"]) {
+        const { handle, rotations, forwarded } = rig({ gateway: false, ...lease });
+        const body = await answer(await handle("orientation", [typed]));
+        expect(body.result?.data, `${label} ${typed}`).toEqual(forwardedAnswer);
+        expect(forwarded, `${label} ${typed}`).toHaveLength(1);
+        expect(rotations, `${label} ${typed}`).toEqual([]);
+      }
+    }
+
+    for (const code of ["UNKNOWN_LEASE", "FORBIDDEN", "ROTATION_UNSUPPORTED"]) {
+      const { handle, rotations, forwarded } = rig({
+        gateway: true,
+        model: "iPhone 17 Pro",
+        rotate: () => Promise.reject(new DispatchError(code, "not rotatable here")),
+      });
+      const body = await answer(await handle("orientation", ["landscape-left"]));
+      expect(body.result?.data, code).toEqual(forwardedAnswer);
+      expect(forwarded, code).toHaveLength(1);
+      expect(rotations, code).toHaveLength(1);
+    }
+
+    const adopted = rig({ adopted: true, gateway: true, model: "iPhone 17 Pro" });
+    const body = await answer(await adopted.handle("orientation", ["auto"]));
+    expect(body.result?.data).toEqual(forwardedAnswer);
+    expect(adopted.forwarded).toHaveLength(1);
+    expect(adopted.rotations).toEqual([]);
   });
 });
