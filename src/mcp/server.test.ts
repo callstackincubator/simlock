@@ -16,6 +16,7 @@ import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
 
 type StatusDevice = NonNullable<StatusGetOutput["devices"]>[number];
+type WorkerView = NonNullable<StatusGetOutput["workers"]>[number];
 
 describe("MCP server (smoke)", () => {
   it("advertises exactly the lease, catalog, status and run_on_device tools, and walks lease -> list -> status -> release", async () => {
@@ -929,12 +930,27 @@ describe("MCP list_devices physicalDevices", () => {
   const cases: ReadonlyArray<{
     readonly name: string;
     readonly devices: StatusDevice[];
+    readonly workers?: WorkerView[];
     readonly expected: unknown[];
   }> = [
     {
       name: "a ready phone",
       devices: [statusDevice({ ...phone, id: "p1", state: "ready" })],
       expected: [{ ...listed, state: "ready" }],
+    },
+    {
+      name: "a phone through a gateway, with its worker",
+      devices: [statusDevice({ ...phone, id: "p1", state: "ready", workerId: "mac-mini-2" })],
+      workers: [workerView("mac-mini-2", {})],
+      expected: [{ ...listed, workerId: "mac-mini-2", state: "ready" }],
+    },
+    {
+      name: "a removed phone is left out",
+      devices: [
+        statusDevice({ ...phone, id: "p1", state: "deleted" }),
+        statusDevice({ ...phone, id: "p2", model: "iPhone 16", state: "ready" }),
+      ],
+      expected: [{ ...listed, model: "iPhone 16", state: "ready" }],
     },
     {
       name: "a leased phone, with no holder field",
@@ -949,10 +965,10 @@ describe("MCP list_devices physicalDevices", () => {
   ];
 
   it("lists the catalog plus each enrolled phone's worker, platform, model, OS version, class, state and absent reason, and no holder", async () => {
-    for (const { name, devices, expected } of cases) {
+    for (const { name, devices, workers, expected } of cases) {
       const client = new FakeSimlockClient();
       client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
-      client.getStatusImpl = () => Promise.resolve(statusOutput(devices));
+      client.getStatusImpl = () => Promise.resolve(statusOutput(devices, workers));
       const { mcpClient, close } = await connectedServer(client);
       try {
         const result = await call(mcpClient, "list_devices", {});
@@ -998,8 +1014,20 @@ function statusDevice(fixture: StatusDeviceFixture): StatusDevice {
   };
 }
 
-function statusOutput(devices: StatusDevice[]): StatusGetOutput {
-  return { ...startingStatus(), devices };
+function statusOutput(devices: StatusDevice[], workers?: WorkerView[]): StatusGetOutput {
+  return { ...startingStatus(), devices, ...(workers === undefined ? {} : { workers }) };
+}
+
+function workerView(
+  id: string,
+  state: { readonly connection?: WorkerView["connection"]; readonly drained?: boolean },
+): WorkerView {
+  return {
+    id,
+    connection: state.connection ?? "connected",
+    drained: state.drained ?? false,
+    lastSeenAt: 0,
+  };
 }
 
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
