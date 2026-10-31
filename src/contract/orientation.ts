@@ -32,6 +32,27 @@ export type OrientationParse =
   | { readonly ok: true; readonly orientation: Orientation }
   | { readonly ok: false; readonly message: string };
 
-export function parseOrientation(_input: string): OrientationParse {
-  return { message: "", ok: false };
+// why: the CLI, MCP and the agent-device front take these spellings; HTTP and the client take only the four names.
+const ALIASES: Readonly<Record<string, Orientation>> = {
+  "landscape-left": "landscape_left",
+  "landscape-right": "landscape_right",
+  landscape_left: "landscape_left",
+  landscape_right: "landscape_right",
+  left: "landscape_left",
+  portrait: "portrait",
+  "portrait-upside-down": "portrait_upside_down",
+  portrait_upside_down: "portrait_upside_down",
+  right: "landscape_right",
+  "upside-down": "portrait_upside_down",
+};
+
+export function parseOrientation(input: string): OrientationParse {
+  const orientation = Object.hasOwn(ALIASES, input.trim().toLowerCase())
+    ? ALIASES[input.trim().toLowerCase()]
+    : undefined;
+  if (orientation !== undefined) return { ok: true, orientation };
+  return {
+    message: `Unknown orientation ${input}; use portrait, portrait-upside-down, landscape-left or landscape-right`,
+    ok: false,
+  };
 }
