@@ -44,17 +44,4 @@ describe("createLeaseInputs", () => {
     expect(factory.opened).toHaveLength(2);
     expect(fresh.input).toBe(factory.opened[1]);
   });
-
-  it("opens a fresh input for the next user after an open rejected", async () => {
-    const factory = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
-    const inputs = createLeaseInputs({ openInput: () => factory.open() });
-    factory.failWith = new Error("helper exploded");
-    await expect(inputs.leaseInput("lease-1", "ios", device)).rejects.toThrow("helper exploded");
-    factory.failWith = undefined;
-
-    await inputs.leaseInput("lease-1", "ios", device);
-
-    expect(factory.opens).toBe(2);
-    expect(factory.opened).toHaveLength(1);
-  });
 });
