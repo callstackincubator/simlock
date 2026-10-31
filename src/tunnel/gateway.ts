@@ -10,6 +10,7 @@ export function createGateway(ctx: GatewayContext<TunnelModuleConfig>): GatewayM
     requesterPrefix: ctx.requesterPrefix,
   });
   return {
+    hooks: { beforeDrain: () => Promise.resolve(link.drain()) },
     leaseRoute: () => Promise.resolve(upgradeRequired()),
     socket: { open: link.open },
   };

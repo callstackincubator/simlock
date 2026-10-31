@@ -31,6 +31,10 @@ function refusalFor(error: unknown, workerId: string): Response {
   throw error;
 }
 
+interface Bridge {
+  readonly stop: (code: number, reason: string) => void;
+}
+
 // why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
 function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
   try {
@@ -52,7 +56,10 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
     identity: ModuleIdentity,
     lease: ModuleLease,
   ): Promise<Response | ModuleLeaseSocketAccept>;
+  drain(): void;
 } {
+  const bridges = new Set<Bridge>();
+
   function bridge(
     socket: LeaseSocket,
     relay: ModuleTwoWayRelay,
@@ -61,6 +68,16 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
   ): void {
     const writer = relay.writable.getWriter();
     let writes: Promise<unknown> = Promise.resolve();
+    let ended = false;
+    const mine: Bridge = { stop: (code, reason) => stop(code, reason) };
+    bridges.add(mine);
+    function stop(code: number, reason: string): void {
+      if (ended) return;
+      ended = true;
+      bridges.delete(mine);
+      socket.close(code, closeReason(reason));
+      controller.abort();
+    }
     socket.onMessage((data) => {
       if (data.length > MAX_TUNNEL_MESSAGE_BYTES) {
         // why: a frame over the limit would break the channel for the whole lease, so the gateway refuses it as the worker refuses a bad frame.
@@ -72,36 +89,39 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
             JSON.stringify({ code: "BAD_REQUEST", message }),
           ),
         );
-        socket.close(TUNNEL_REFUSED_CLOSE, message);
-        controller.abort();
+        stop(TUNNEL_REFUSED_CLOSE, message);
         return;
       }
       const frame = encodeFrame(data[0] ?? 0, data.subarray(1));
       writes = writes.then(() => writer.write(frame)).catch(() => undefined);
     });
-    socket.onClose(() => controller.abort());
+    socket.onClose(() => {
+      ended = true;
+      bridges.delete(mine);
+      controller.abort();
+    });
     void (async () => {
       for await (const frame of readFrames(relay.readable)) {
         if (frame.tag === CHANNEL_TAG.close) {
           const closing = closeOf(frame.payload);
-          if (closing !== undefined) {
-            socket.close(closing.code, closing.reason);
-            controller.abort();
-            return;
-          }
-          break;
+          // why: a worker that is stopping says 1001, which is a statement about the gateway to a holder; to the holder the worker is gone.
+          if (closing === undefined || closing.code === 1001) break;
+          stop(closing.code, closing.reason);
+          return;
         }
         const message = new Uint8Array(1 + frame.payload.length);
         message[0] = frame.tag;
         message.set(frame.payload, 1);
         socket.send(message);
       }
-      socket.close(1011, `Worker ${lease.workerId ?? ""} stopped answering`);
-      controller.abort();
+      stop(1011, `Worker ${lease.workerId ?? ""} stopped answering`);
     })();
   }
 
   return {
+    drain: () => {
+      for (const each of bridges) each.stop(1001, "Simlock is stopping");
+    },
     open: async (_request, identity, lease) => {
       const controller = new AbortController();
       const workerId = lease.workerId ?? "";
