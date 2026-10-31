@@ -18,6 +18,8 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   const { command, flagArgs } = subcommand(argv, context.path);
   if (command === undefined || command === "--show-secrets") {
     const values = commandArgs(argv, SECRET_FLAG);
+    const [word] = values.positionals;
+    if (word !== undefined) throw new UsageError(`Unknown config command: ${word}`);
     const client = await connectDaemonClient(environment, token);
     try {
       writeResult(

@@ -70,6 +70,7 @@ describe("simlock config hides secrets unless asked", () => {
         "gateway.alerts.destinations",
         "--show-secrets",
       ]),
+      flagBeforeGet: await printed(worker, ["config", "--show-secrets", "get", "gateway.token"]),
     };
 
     expect(outputs).toEqual({
@@ -81,6 +82,7 @@ describe("simlock config hides secrets unless asked", () => {
       workerGetShown: joinToken,
       gatewayConfigShown: DESTINATIONS,
       gatewayGetShown: DESTINATIONS,
+      flagBeforeGet: `exit 2: {"error":{"code":"USAGE","message":"Unknown config command: get"}}`,
     });
   });
 });
