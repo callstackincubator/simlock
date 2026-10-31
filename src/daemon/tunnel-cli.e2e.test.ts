@@ -167,7 +167,7 @@ describe("simlock tunnel against a lone worker", () => {
     };
   }
 
-  it("opens a reverse tunnel, carries bytes, and its rules are gone after Ctrl-C", async () => {
+  it("opens a reverse tunnel, carries bytes, refuses with the worker's code, and its rules are gone after Ctrl-C", async () => {
     const lone = await worker();
     const received: string[] = [];
     const callerPort = await callerServer(received);
@@ -191,5 +191,17 @@ describe("simlock tunnel against a lone worker", () => {
     expect(await exit).toBe(0);
     await vi.waitFor(() => expect(lone.deviceTcp.reversed).toEqual([]), { timeout: 10_000 });
     expect(cli.err.join("")).toBe("");
+
+    const refused = command({ SIMLOCK_TOKEN: lone.token, SIMLOCK_URL: lone.url });
+    const refusedExit = refused.run(["tunnel", "reverse", "80"]);
+    await vi.waitFor(() => expect(refused.err.join("")).not.toBe(""), { timeout: 10_000 });
+    expect(await refusedExit).toBe(1);
+    expect(refused.out.join("")).toBe("");
+    expect(JSON.parse(refused.err.join(""))).toEqual({
+      error: {
+        code: "TUNNEL_BAD_PORT",
+        message: `Lease ${lone.leaseId}: reverse 80: device ports are 1024 to 65535`,
+      },
+    });
   });
 });
