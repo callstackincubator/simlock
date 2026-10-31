@@ -14,11 +14,15 @@ class FakeDeviceInput implements DeviceInput {
   readonly #failedListeners = new Set<(error: Error) => void>();
   #config: InputScreenConfig;
 
+  // why: a test sets this to make every write fail, as a helper whose pipe broke does.
+  sendFailure: Error | undefined;
+
   constructor(config: InputScreenConfig) {
     this.#config = config;
   }
 
   send(message: InputMessage): Promise<void> {
+    if (this.sendFailure !== undefined) return Promise.reject(this.sendFailure);
     this.sent.push(message);
     return Promise.resolve();
   }
@@ -57,6 +61,8 @@ export class FakeInputFactory implements DeviceInputFactory {
   failWith: Error | undefined;
   // why: a test sets this to hold every open until it resolves, to end a lease while a socket is still opening.
   gate: Promise<void> | undefined;
+  // why: a test sets this to make the writes of the inputs it opens next fail.
+  sendFailure: Error | undefined;
   opens = 0;
 
   constructor(private readonly config: InputScreenConfig) {}
@@ -66,6 +72,7 @@ export class FakeInputFactory implements DeviceInputFactory {
     await this.gate;
     if (this.failWith !== undefined) throw this.failWith;
     const input = new FakeDeviceInput(this.config);
+    input.sendFailure = this.sendFailure;
     this.opened.push(input);
     return input;
   }

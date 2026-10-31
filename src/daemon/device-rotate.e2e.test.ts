@@ -30,7 +30,7 @@ describe("device.rotate", () => {
 
   async function worker(options: {
     readonly inputModule: boolean;
-    readonly input: FakeInputFactory;
+    readonly input: FakeInputFactory | undefined;
     readonly androidInput?: FakeInputFactory;
   }) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-"));
@@ -39,7 +39,7 @@ describe("device.rotate", () => {
       new FakeDriver({
         availableOsVersions: ["18.0"],
         clock: new SystemClock(),
-        input: options.input,
+        ...(options.input === undefined ? {} : { input: options.input }),
         knownModels: ["iPhone 15", "iPad Pro", "Apple TV 4K", "Mystery Box"],
         physicalDevices: [
           { class: "phone", ids: ["PHONE-1"], model: "iPhone 15", osVersion: "18.0" },
@@ -229,6 +229,76 @@ describe("device.rotate", () => {
       ).resolves.toEqual({ leaseId: ipad.id, orientation });
       expect(input.opened).toHaveLength(1);
       expect(androidInput.opened).toHaveLength(0);
+    },
+  );
+
+  it(
+    "refuses a holder's rotate with INPUT_UNAVAILABLE and the reason when the helper cannot start or the write fails",
+    { timeout: 60_000 },
+    async () => {
+      const screen = { height: 2556, orientation: "portrait", width: 1179 } as const;
+      const cut = "x".repeat(300);
+      const cases: readonly (readonly [
+        string,
+        (input: FakeInputFactory) => void,
+        string,
+        boolean,
+      ])[] = [
+        ["no factory", () => undefined, "ios devices take no input", false],
+        [
+          "open rejects",
+          (input) => {
+            input.failWith = new Error("helper exploded");
+          },
+          "helper exploded",
+          true,
+        ],
+        [
+          "open rejects with a long message",
+          (input) => {
+            input.failWith = new Error(cut);
+          },
+          "x".repeat(200),
+          true,
+        ],
+        [
+          "open rejects with no message",
+          (input) => {
+            input.failWith = new Error("");
+          },
+          "unknown error",
+          true,
+        ],
+        [
+          "write rejects",
+          (input) => {
+            input.sendFailure = new Error("pipe closed");
+          },
+          "pipe closed",
+          true,
+        ],
+      ];
+      for (const [name, arrange, reason, hasFactory] of cases) {
+        const input = new FakeInputFactory(screen);
+        arrange(input);
+        const { daemon, leaseId } = await worker({
+          input: hasFactory ? input : undefined,
+          inputModule: false,
+        });
+
+        await expect(
+          daemon.dispatch("device.rotate", { leaseId, orientation: "landscape_left" }, holder),
+          name,
+        ).rejects.toMatchObject({
+          code: "INPUT_UNAVAILABLE",
+          details: { leaseId, reason },
+          message: `Lease ${leaseId}'s simulator cannot take input: ${reason}`,
+        });
+        expect(
+          input.opened.map((opened) => opened.closes),
+          name,
+        ).toEqual(input.opened.map(() => 1));
+      }
     },
   );
 });
