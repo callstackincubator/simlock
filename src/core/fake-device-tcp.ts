@@ -1,5 +1,5 @@
 import { FakeTcpPeer, type TcpStream } from "../ports/index.js";
-import type { DeviceReverse, DeviceTcp } from "./device-tcp.js";
+import type { DeviceReverse, DeviceTcp, SweptDevice } from "./device-tcp.js";
 
 class FakeReverse implements DeviceReverse {
   closed = false;
@@ -9,6 +9,7 @@ class FakeReverse implements DeviceReverse {
     readonly hostPort: number,
     private readonly onClose: () => void,
     private readonly failure: () => Error | undefined,
+    private readonly gate: () => Promise<void> | undefined,
   ) {}
 
   onConnection(listener: (stream: TcpStream) => void): void {
@@ -16,6 +17,7 @@ class FakeReverse implements DeviceReverse {
   }
 
   async close(): Promise<void> {
+    await this.gate();
     const failure = this.failure();
     if (failure !== undefined) throw failure;
     this.closed = true;
@@ -38,6 +40,10 @@ export class FakeDeviceTcp implements DeviceTcp {
   readonly reverseLog: number[] = [];
   // why: a test sets this to hold every `reverse` until it settles, as an adb call that is slow to answer does.
   gate: Promise<void> | undefined;
+  // why: a test sets this to hold every rule removal until it settles, as an adb call that is slow to answer does.
+  closeGate: Promise<void> | undefined;
+  // why: every device list a `sweep` was given, in order, so a test can tell what the daemon asked a platform's driver to sweep.
+  readonly sweeps: (readonly SweptDevice[])[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
 
@@ -49,7 +55,9 @@ export class FakeDeviceTcp implements DeviceTcp {
     return true;
   }
 
-  async sweep(): Promise<void> {}
+  async sweep(devices: readonly SweptDevice[]): Promise<void> {
+    this.sweeps.push(devices);
+  }
 
   async reverse(
     _device: unknown,
@@ -68,6 +76,7 @@ export class FakeDeviceTcp implements DeviceTcp {
         this.#reverses.delete(devicePort);
       },
       () => this.closeFailure,
+      () => this.closeGate,
     );
     this.#reverses.set(devicePort, reverse);
     return reverse;

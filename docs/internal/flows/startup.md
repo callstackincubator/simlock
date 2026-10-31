@@ -54,7 +54,7 @@ reaches its settle step, the steps after the read are skipped. Before step 16 it
 removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
 the data directory (`sweepWriteLeftovers`).
 
-Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47999 a stopped daemon's tunnels left, on its owned devices, leased or idle (Android: `AndroidDriver` manual); a failure is a `warn`.
+Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47999 a stopped daemon's tunnels left, on its idle owned devices; on a leased one it only reads the rules and reserves their ports, and its reclaim removes them (Android: `AndroidDriver` manual); a failure is a `warn`.
 
 16. Settle open requests — `leasing.settleRequests`: every `open` request fails
     `INTERNAL`; `lease.rejected` with reason `daemon-restarted`.

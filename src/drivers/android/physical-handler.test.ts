@@ -8,6 +8,7 @@ import {
 import {
   FakeClock,
   FakeProcessSupervisor,
+  FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
   type Filesystem,
@@ -282,6 +283,7 @@ async function world(
     readonly filesystem?: Filesystem;
     readonly processRunner?: (phone: PhoneAdb) => ProcessRunner;
     readonly serverReply?: string;
+    readonly listeners?: FakeTcpListenerFactory;
   } = {},
 ): Promise<World> {
   const log: string[] = [];
@@ -306,6 +308,7 @@ async function world(
     processRunner: options.processRunner?.(runner) ?? runner,
     processSupervisor: new FakeProcessSupervisor([4242]),
     simlockHome,
+    ...(options.listeners === undefined ? {} : { tcpListener: options.listeners }),
     tcpProbe: probe,
   });
   return { driver, filesystem, log: runner.log, probe, runner };
@@ -1135,20 +1138,28 @@ describe("Android physical handler: reclaim", () => {
     expect(runner.installed).toEqual(["com.example.kept"]);
   });
 
-  it("removes every reverse rule of the phone and only its own forwards, and goes on when a removal fails", async () => {
-    const { driver, runner } = await world();
-    runner.override((rest) =>
-      rest.slice(2).join(" ") === "forward --list"
-        ? OK(`${PHONE} tcp:18790 tcp:18791\nOTHER tcp:18792 tcp:18793\n`)
-        : rest.slice(2).join(" ") === "reverse --remove-all"
-          ? FAILED
-          : undefined,
-    );
+  it("removes every reverse rule of the phone and only its own forwards, goes on when a removal fails, and frees the loopback port a failed tunnel removal kept", async () => {
+    const listeners = new FakeTcpListenerFactory();
+    const { driver, runner } = await world({ listeners });
+    runner.override((rest) => {
+      const body = rest.slice(2).join(" ");
+      if (body === "forward --list") {
+        return OK(`${PHONE} tcp:18790 tcp:18791\nOTHER tcp:18792 tcp:18793\n`);
+      }
+      if (body === "reverse --remove-all" || body === "reverse --remove tcp:5173") return FAILED;
+      return body.startsWith("reverse --no-rebind") ? OK() : undefined;
+    });
+    const kept = await driver.deviceTcp?.reverse(PHYSICAL, 5173, new AbortController().signal);
+    await kept?.close().catch(() => undefined);
+    expect(listeners.listeners[0]?.closed).toBe(false);
 
     const result = await driver.reclaim(PHYSICAL, { clean: "standard" });
 
+    expect(listeners.listeners[0]?.closed).toBe(true);
     expect(result).toMatchObject({ strategy: "uninstall" });
-    expect(runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward")).toEqual([
+    expect(
+      runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward").slice(2),
+    ).toEqual([
       ["-s", PHONE, "reverse", "--remove-all"],
       ["-s", PHONE, "forward", "--list"],
       ["-s", PHONE, "forward", "--remove", "tcp:18790"],

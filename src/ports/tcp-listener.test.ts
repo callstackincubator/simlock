@@ -21,6 +21,7 @@ describe("NodeTcpListenerFactory", () => {
     const factory = new NodeTcpListenerFactory();
     const listener = await factory.listen(port);
     expect(listener?.port).toBe(port);
+    expect(listener?.address).toBe("127.0.0.1");
     expect(await factory.listen(port)).toBeUndefined();
 
     const received = new Promise<string>((resolve) => {

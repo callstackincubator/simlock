@@ -629,7 +629,10 @@ async function composeDaemon(
               .filter(
                 (device) => device.spec.platform === driver.platform && device.state !== "deleted",
               )
-              .map((device) => toDriverDevice(device)),
+              .map((device) => ({
+                device: toDriverDevice(device),
+                leased: device.state === "leased",
+              })),
           );
         } catch (error) {
           logger.warn("A driver's start sweep of tunnel rules failed", {
