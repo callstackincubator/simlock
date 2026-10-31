@@ -88,7 +88,6 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
   }
 }
 
-// fallow-ignore-next-line unused-export -- the public shape of FakeTcpStreamConnector.connections.
 export class FakeTcpPeer {
   readonly written: Uint8Array[] = [];
   closed = false;
@@ -126,15 +125,18 @@ export class FakeTcpPeer {
     };
   }
 
+  // fallow-ignore-next-line unused-class-member -- read by the tests that drive a fake stream.
   writtenText(): string {
     return this.written.map((chunk) => new TextDecoder().decode(chunk)).join("");
   }
 
+  // fallow-ignore-next-line unused-class-member -- the device's side of a fake stream, called by tests.
   send(bytes: Uint8Array | string): void {
     if (this.closed) return;
     this.#controller.enqueue(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);
   }
 
+  // fallow-ignore-next-line unused-class-member -- the device's side ending, called by tests.
   end(): void {
     this.stream.close();
   }

@@ -13,8 +13,8 @@ import type {
 } from "../../ports/index.js";
 
 // why: the worker keeps these loopback ports for tunnels, so a rule into them is Simlock's own and a sweep may remove it.
-export const TUNNEL_PORT_FIRST = 47_000;
-export const TUNNEL_PORT_LAST = 47_999;
+const TUNNEL_PORT_FIRST = 47_000;
+const TUNNEL_PORT_LAST = 47_999;
 
 const ADB_TIMEOUT_MS = 10_000;
 const MESSAGE_LIMIT = 200;
