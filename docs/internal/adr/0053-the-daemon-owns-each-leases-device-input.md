@@ -60,7 +60,8 @@ flowchart LR
 4. `device.rotate {leaseId, orientation, requesterId?}` is a core contract
    operation, role `agent`, authorized as `device.exec` is. It is always on,
    independent of `capabilities.input.enabled`. On a lease of an iOS
-   simulator of class `phone` or `tablet` it takes the lease's device input,
+   simulator whose model is an iPhone or iPad (its name starts with `iPhone`
+   or `iPad`, the iOS driver's phone and tablet families) it takes the lease's device input,
    sends `0x07 {orientation}`, awaits the write and answers
    `{leaseId, orientation}`, then lets the input go. It reports no new
    orientation and does not wait for the screen.
@@ -79,7 +80,7 @@ sequenceDiagram
   participant H as iOS helper
   C->>G: device.rotate {w1.3f9c, landscape_left}
   G->>W: device.rotate {3f9c, landscape_left, requesterId}
-  alt not an iOS phone or tablet simulator
+  alt not an iPhone or iPad simulator
     W-->>G: ROTATION_UNSUPPORTED (3f9c)
     G-->>C: ROTATION_UNSUPPORTED (w1.3f9c)
   else helper cannot open, or the write fails
