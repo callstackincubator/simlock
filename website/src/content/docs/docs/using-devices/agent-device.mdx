@@ -101,6 +101,7 @@ When several agents use agent-device on one machine, each sets its own `AGENT_DE
 - **`close` gives the device back.** Simlock ends the lease and wipes the device for the next agent.
 - **`install` sends the app from your machine.** The path is on the agent's machine, and agent-device uploads it. A path on the worker is refused with `refused: send the app from your machine as an upload`.
 - **`devices` lists only your devices**, and an empty list before `open`.
+- **`orientation` on an iPhone or iPad simulator goes through Simlock.** `agent-device orientation landscape-left` turns the simulator with Simlock's input helper, not agent-device's own rotation, and replies `Rotation requested: landscape-left (unconfirmed)`: the rotation was requested and nothing confirms the result. `portrait`, `portrait-upside-down`, `landscape-left` and `landscape-right` work, with the aliases `upside-down`, `left` and `right`; `auto` or any other name is refused with `Unknown orientation <name>; use portrait, portrait-upside-down, landscape-left or landscape-right`. A helper that cannot start fails the command with Simlock's `INPUT_UNAVAILABLE` message. On any other lease (Android, a physical iPhone or iPad, an Apple TV simulator) the command goes to agent-device as usual, and so does `orientation` as a step of a `batch`.
 
 ## On the same Mac
 

@@ -8,6 +8,7 @@ interface DeviceFacts {
   readonly model?: string;
   readonly name?: string;
   readonly target?: string;
+  readonly physical?: boolean;
   readonly deviceKey?: string;
   // why: an adopted entry was rebuilt after a gateway restart and has no device key until a call names one.
   readonly adopted?: boolean;
