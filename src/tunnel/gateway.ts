@@ -5,6 +5,8 @@ import { upgradeRequired } from "./refusal.js";
 
 export function createGateway(ctx: GatewayContext<TunnelModuleConfig>): GatewayModule {
   const link = createGatewayTunnelLink({
+    clock: ctx.clock,
+    leases: ctx.leases,
     relayTwoWay: (workerId, request, tenant, leaseId) =>
       ctx.relayTwoWay(workerId, request, tenant, leaseId),
     requesterPrefix: ctx.requesterPrefix,

@@ -1,10 +1,11 @@
 import type {
+  FleetLeases,
   ModuleIdentity,
   ModuleLease,
   ModuleLeaseSocketAccept,
   ModuleTwoWayRelay,
 } from "../modules/index.js";
-import type { LeaseSocket } from "../ports/index.js";
+import type { Clock, LeaseSocket, TimerHandle } from "../ports/index.js";
 import { unavailable } from "./refusal.js";
 import { encodeTunnelFrame, TUNNEL_REFUSED_CLOSE, TUNNEL_TAG } from "../contract/index.js";
 import { closeReason } from "../core/index.js";
@@ -18,7 +19,17 @@ export interface GatewayTunnelLinkOptions {
     leaseId?: string,
   ) => Promise<Response | ModuleTwoWayRelay>;
   readonly requesterPrefix: string;
+  readonly clock: Clock;
+  readonly leases: FleetLeases;
 }
+
+// why: the relay's own head deadline is 330 s, far too long for a person waiting on a socket; the
+// socket's open is bounded here and aborts the relay's open when it runs out.
+const OPEN_BOUND_MS = 10_000;
+
+// why: the worker's `0xF1` usually follows the relayed lease event, and it carries the reason; the gateway
+// waits this long for it before closing a socket whose lease it saw go.
+const LEASE_END_WAIT_MS = 2_000;
 
 // why: a worker with tunnels off has no relay target, and a holder must get a 503 that says to turn the capability on there, before the upgrade; an error with no such code is a real fault and goes on to the HTTP layer's 500.
 function refusalFor(error: unknown, workerId: string): Response {
@@ -32,6 +43,7 @@ function refusalFor(error: unknown, workerId: string): Response {
 }
 
 interface Bridge {
+  readonly leaseGone: () => void;
   readonly stop: (code: number, reason: string) => void;
 }
 
@@ -58,7 +70,10 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
   ): Promise<Response | ModuleLeaseSocketAccept>;
   drain(): void;
 } {
-  const bridges = new Set<Bridge>();
+  const bridges = new Map<string, Set<Bridge>>();
+  options.leases.onRemoved((entry) => {
+    for (const each of bridges.get(entry.gatewayLeaseId) ?? []) each.leaseGone();
+  });
 
   function bridge(
     socket: LeaseSocket,
@@ -69,12 +84,25 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
     const writer = relay.writable.getWriter();
     let writes: Promise<unknown> = Promise.resolve();
     let ended = false;
-    const mine: Bridge = { stop: (code, reason) => stop(code, reason) };
-    bridges.add(mine);
+    let wait: TimerHandle | undefined;
+    const mine: Bridge = {
+      leaseGone: () => {
+        wait ??= options.clock.setTimer(LEASE_END_WAIT_MS, () => stop(4001, "lease ended"));
+      },
+      stop: (code, reason) => stop(code, reason),
+    };
+    const set = bridges.get(lease.id) ?? new Set<Bridge>();
+    set.add(mine);
+    bridges.set(lease.id, set);
+    function forget(): void {
+      ended = true;
+      if (wait !== undefined) options.clock.cancel(wait);
+      set.delete(mine);
+      if (set.size === 0) bridges.delete(lease.id);
+    }
     function stop(code: number, reason: string): void {
       if (ended) return;
-      ended = true;
-      bridges.delete(mine);
+      forget();
       socket.close(code, closeReason(reason));
       controller.abort();
     }
@@ -96,8 +124,7 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
       writes = writes.then(() => writer.write(frame)).catch(() => undefined);
     });
     socket.onClose(() => {
-      ended = true;
-      bridges.delete(mine);
+      forget();
       controller.abort();
     });
     void (async () => {
@@ -120,12 +147,19 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
 
   return {
     drain: () => {
-      for (const each of bridges) each.stop(1001, "Simlock is stopping");
+      for (const set of bridges.values()) {
+        for (const each of set) each.stop(1001, "Simlock is stopping");
+      }
     },
     open: async (_request, identity, lease) => {
       const controller = new AbortController();
       const workerId = lease.workerId ?? "";
       let relay: Response | ModuleTwoWayRelay;
+      let timedOut = false;
+      const timer = options.clock.setTimer(OPEN_BOUND_MS, () => {
+        timedOut = true;
+        controller.abort();
+      });
       try {
         relay = await options.relayTwoWay(
           workerId,
@@ -137,7 +171,15 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
           lease.workerLeaseId,
         );
       } catch (error) {
+        if (timedOut) {
+          return unavailable(
+            "WORKER_UNREACHABLE",
+            `Worker ${workerId} did not answer the tunnel socket within 10 s`,
+          );
+        }
         return refusalFor(error, workerId);
+      } finally {
+        options.clock.cancel(timer);
       }
       if (relay instanceof Response) return relay;
       return Object.assign((socket: LeaseSocket) => bridge(socket, relay, controller, lease), {
