@@ -1,17 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { ANDROID_SDK } from "./helpers/android-sdk.js";
 import { DEVICE_READY_MS, deviceStreamUrl, waitFor, withHttpDaemon } from "./helpers/index.js";
-
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
 
 const TAG = { alive: 0x06, description: 0x01, keyframe: 0x02, delta: 0x03, meta: 0x05 } as const;
 
@@ -50,7 +41,7 @@ async function readFrames(
   return frames;
 }
 
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "Android screen stream (real emulator)",
   { tags: ["slow", "android"] },
   () => {
@@ -221,10 +212,15 @@ describe.skipIf(!hasAndroidSdk)(
           expect(release.code, release.stderr).toBe(0);
           await Promise.race([draining, new Promise((resolve) => setTimeout(resolve, 15_000))]);
           expect(lastEnded, "the stream outlived its lease").toBe(true);
-          const hostShells = await new Promise<string>((resolve) => {
-            execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
-          });
-          expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
+          // why: Windows has no pgrep, and src/ports has no way to list processes by command
+          // line (ProcessSupervisor reads one known pid), so this host-side check runs on macOS
+          // and Linux only; the device-side checks above still run everywhere.
+          if (process.platform !== "win32") {
+            const hostShells = await new Promise<string>((resolve) => {
+              execFile("pgrep", ["-fl", "[s]imlock-scrcpy-"], (_error, stdout) => resolve(stdout));
+            });
+            expect(hostShells, "a host adb shell for the capture outlived the lease").toBe("");
+          }
         } finally {
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
