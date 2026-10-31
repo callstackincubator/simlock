@@ -276,6 +276,8 @@ describe("daemon lifecycle & recovery", () => {
     await waitForDeviceState(env, idle.device.driverDeviceId, "ready");
     await env.driverLog.clear();
 
+    // why: the reclaim outlasts the stop request, so only a shutdown that waits for it sees the device ready.
+    await env.driverScript.merge({ android: { latencyMs: { reclaim: 1_500 } } });
     expect((await env.cli(["release", reclaiming.lease.id])).code).toBe(0);
     expect((await env.cli(["daemon", "stop"])).code).toBe(0);
     await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
@@ -287,6 +289,55 @@ describe("daemon lifecycle & recovery", () => {
       [idle.device.driverDeviceId, reclaiming.device.driverDeviceId].sort(),
     );
     expect(shutdowns).not.toContain(held.device.driverDeviceId);
+  });
+
+  it("daemon stop still completes when an idle device fails to shut down, and logs the failure", async () => {
+    const env = await withDaemon();
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    const lease = await env.cli([
+      "lease",
+      "--platform",
+      "ios",
+      "--device",
+      "iPhone 16",
+      "--agent-id",
+      "stop-failing-shutdown",
+      "--detach",
+    ]);
+    expect(lease.code, lease.stderr).toBe(0);
+    const { lease: leased, device } = lease.json as {
+      lease: { id: string };
+      device: { driverDeviceId: string };
+    };
+    expect((await env.cli(["release", leased.id])).code).toBe(0);
+    await waitForDeviceState(env, device.driverDeviceId, "ready");
+    await env.driverScript.merge({
+      ios: {
+        failures: { shutdown: { type: "generic", message: "scripted shutdown failure 9c1e" } },
+      },
+    });
+
+    expect((await env.cli(["daemon", "stop"])).code).toBe(0);
+    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+
+    const lines = (await readFile(env.logPath, "utf8"))
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map(
+        (line) =>
+          JSON.parse(line) as { level: string; message: string; fields?: Record<string, unknown> },
+      );
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "shutdown of an idle device at daemon stop failed",
+        fields: expect.objectContaining({
+          error: expect.stringContaining("scripted shutdown failure 9c1e"),
+        }),
+      }),
+    );
   });
 });
 
