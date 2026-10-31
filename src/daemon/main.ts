@@ -138,6 +138,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
@@ -495,6 +496,9 @@ async function composeDaemon(
   // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const catalog = new DriverCatalog(drivers);
+  const leaseInputs = createLeaseInputs({
+    openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+  });
   const moduleHost = await createModuleHost({
     config,
     defaulted,
@@ -524,9 +528,7 @@ async function composeDaemon(
         reverse: (platform, device, devicePort, signal) =>
           catalog.reverseDevicePort(platform, device, devicePort, signal),
       },
-      inputs: {
-        openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
-      },
+      inputs: leaseInputs,
       screens: catalog,
       tcpProbe,
     },
@@ -544,7 +546,7 @@ async function composeDaemon(
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
+    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
@@ -692,6 +694,7 @@ async function composeDaemon(
     logger: logger.child("server"),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
+    inputs: leaseInputs,
     processRunner,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,

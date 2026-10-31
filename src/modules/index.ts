@@ -14,6 +14,7 @@ export type {
   ModuleFinding,
   ModuleHttpResponse,
   ModuleIdentity,
+  LeaseInputHandle,
   ModuleInputs,
   ModuleLease,
   ModuleLeaseEndParticipant,

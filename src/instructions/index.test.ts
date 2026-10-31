@@ -31,6 +31,7 @@ const TOOL_NAMES = [
   "release_simulator",
   "lease_status",
   "run_on_device",
+  "rotate_device",
 ];
 
 const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> = {
@@ -99,6 +100,7 @@ const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> =
     ...REFUSED_ADB_SEQUENCES.map(({ sequence }) => `\`simlock adb ${sequence.join(" ")}\``),
     "`simlock adb` refuses any option before the subcommand other than `-s`, `-t`, `-d` or `-e`",
     "`simlock adb shell`",
+    "`simlock rotate <orientation>`",
     ...[
       ERROR_TABLE.QUEUE_TIMEOUT.cliExitCode,
       ERROR_TABLE.NO_CAPACITY.cliExitCode,
