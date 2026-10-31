@@ -114,7 +114,7 @@ simlock daemon stop
 Daemon stopping
 ```
 
-Stopping the daemon does not end leases and does not shut down devices. Running simulators and emulators keep running, and the next daemon picks them up. See [What a restart keeps](#what-a-restart-keeps).
+Stopping the daemon does not end leases. Before it exits, it shuts down every idle device, one that is not leased and not in use, a device still being reset after a release included. A leased device keeps running, and the next daemon picks it up. See [What a restart keeps](#what-a-restart-keeps).
 
 `daemon stop` returns as soon as the daemon has agreed to stop. The daemon then finishes the work already in progress, such as a device reset, before it exits, which can take a while. A command sent in the meantime fails with `DAEMON_STOPPING`.
 

@@ -134,6 +134,8 @@ platform runs the deferred reclaim (step 21.2).
    recovery reboot in flight to end; dispose physical watcher.
 5. Settle — later converge steps are skipped; leasing drains the physical
    watcher and background reclaims; core drains the warm pool.
+   Then core shuts down every ready device with no lease (`core.shutdownIdle`, initiator
+   `daemon-stop`; leased devices keep running), before any driver is disposed.
 6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
    stop, every driver's `dispose` (all tried; failures logged), then the event history stops
    (cancels its prune timer, closes `history.db`), so the stop's own events are written.
