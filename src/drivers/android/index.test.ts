@@ -816,14 +816,16 @@ describe("AndroidDriver", () => {
     {
       name: "never answers",
       load: { hangs: true } as const,
+      settlesBetween: [60, 61] as const,
     },
     {
       name: "exits non-zero",
       load: { result: { code: 1, stderr: "", stdout: "OK\r\n" } } as const,
+      settlesBetween: [0, 1] as const,
     },
   ])(
     "ends a standard reclaim whose clean-baseline load $name: the load is stopped, the emulator shut down, and the next boot wipes",
-    async ({ load }) => {
+    async ({ load, settlesBetween }) => {
       const loadArgs = [
         "-s",
         "emulator-5586",
@@ -858,13 +860,29 @@ describe("AndroidDriver", () => {
           outcome = error;
         },
       );
-      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run.
+      // why: Ten minutes on the driver's clock, a second at a time, letting each step's work run;
+      // the second the load process ends pins the 60 s load deadline from both sides.
+      let loadEndedAt = -1;
+      let watched = false;
+      let elapsed = 0;
       for (let second = 0; second < 600 && outcome === "still running"; second += 1) {
         await new Promise((resolve) => setImmediate(resolve));
+        const handle =
+          harness.runner.handles[
+            harness.runner.calls.findIndex((call) => call.args.join(" ") === loadArgs.join(" "))
+          ];
+        if (handle !== undefined && !watched) {
+          watched = true;
+          void handle.wait().then(() => {
+            loadEndedAt = loadEndedAt < 0 ? elapsed : loadEndedAt;
+          });
+        }
         harness.clock.advance(1_000);
+        elapsed = second + 1;
       }
       await new Promise((resolve) => setImmediate(resolve));
-
+      expect(loadEndedAt).toBeGreaterThanOrEqual(settlesBetween[0]);
+      expect(loadEndedAt).toBeLessThanOrEqual(settlesBetween[1]);
       expect(outcome).toEqual({ state: "shutdown", strategy: "wipe" });
       const loadIndex = harness.runner.calls.findIndex(
         (call) => call.args.join(" ") === loadArgs.join(" "),
