@@ -109,6 +109,7 @@ class Peer {
       close: () => {
         this.close();
       },
+      end: () => undefined,
       readable,
       write: async (bytes) => {
         this.written.push(typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes);

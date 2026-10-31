@@ -15,6 +15,7 @@ const NOT_SHAPES = new Set([
   "console-url.ts",
   "duration.ts",
   "os-range.ts",
+  "tunnel-frames.ts",
   "version-order.ts",
 ]);
 const RANGE = /PROTOCOL_VERSION_RANGE[^=]*=\s*\{\s*min:\s*(\d+),\s*max:\s*(\d+)/;

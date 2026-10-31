@@ -3,7 +3,7 @@
 Does: lets a lease's holder (or an operator) send taps, keys, buttons and rotations to its device over `WS /v1/leases/{id}/input`, on a worker and through a gateway, in expo serve-sim's messages.
 Entry: `index.ts` → `inputModule`, an optional module (ADR 0030, ADR 0049): `worker.ts` `createWorker`,
 `gateway.ts` `createGateway`, loaded by the module host only when turned on.
-Uses: core (`DeviceInput`, the message types), modules (the context, socket and relay types), ports (`LeaseSocket`).
+Uses: core (`DeviceInput`, the message types), modules (the context, socket and relay types, and `modules/relay-channel.ts`: the channel framing, `channelSocket`, the close mapping and the 404, 426 and 503 bodies), ports (`LeaseSocket`).
 Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
 Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `input` capability reads `off`.
 
@@ -17,10 +17,7 @@ Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `i
 | `create.ts`       | The two factories; the 426 lease route                                                         |
 | `worker-link.ts`  | Worker: finds the lease in the registry; the socket door and the relay door, both to a session |
 | `sessions.ts`     | Worker: one device input per lease, its sockets, config, failure, lease end, drain             |
-| `channel.ts`      | Worker: a relay channel as a `LeaseSocket`; heartbeat, `0xF1` close                            |
 | `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain               |
-| `framing.ts`      | `[len u32][tag u8][payload]` frames, `readFrames`, the `0xF0` and `0xF1` tags                  |
-| `refusal.ts`      | The 404, 426 and 503 bodies                                                                    |
 
 ## How it works
 
@@ -52,14 +49,14 @@ gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls w
 
 Memory only: a device input per lease, its sockets, its config, the failed-open memory.
 
-| What                         | Default | Key                              |
-| ---------------------------- | ------- | -------------------------------- |
-| Sockets per lease            | 8       | fixed, `sessions.ts`             |
-| Failed-open memory           | 10 s    | fixed, `sessions.ts`             |
-| Gateway relay open           | 10 s    | fixed, `gateway-link.ts`         |
-| Worker heartbeat (`0xF0`)    | 5 s     | fixed, `channel.ts`              |
-| Wait for the worker's `0xF1` | 2 s     | fixed, `gateway-link.ts`         |
-| Client ping (ports router)   | 15 s    | fixed, `ports/upgrade-router.ts` |
+| What                         | Default | Key                               |
+| ---------------------------- | ------- | --------------------------------- |
+| Sockets per lease            | 8       | fixed, `sessions.ts`              |
+| Failed-open memory           | 10 s    | fixed, `sessions.ts`              |
+| Gateway relay open           | 10 s    | fixed, `gateway-link.ts`          |
+| Worker heartbeat (`0xF0`)    | 5 s     | fixed, `modules/relay-channel.ts` |
+| Wait for the worker's `0xF1` | 2 s     | fixed, `gateway-link.ts`          |
+| Client ping (ports router)   | 15 s    | fixed, `ports/upgrade-router.ts`  |
 
 ## Rules
 

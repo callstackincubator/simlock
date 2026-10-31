@@ -1,6 +1,7 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
+import type { DeviceTcp } from "./device-tcp.js";
 import type { DeviceInputFactory } from "./input.js";
 import type { ScreenCapture } from "./screen.js";
 import type {
@@ -306,6 +307,8 @@ export interface Driver {
   // why: optional like `screenCapture`: a platform whose device takes no input leaves it out, and a
   // lease's input socket then says the device is unavailable.
   readonly input?: DeviceInputFactory | undefined;
+  // why: optional like `input`: a platform whose device cannot reach a port on the worker leaves it out, and a tunnel is then refused as unsupported.
+  readonly deviceTcp?: DeviceTcp | undefined;
   /** why: `device.exec` has no pseudo-terminal (ADR 0005 §19c), so a driver may refuse there what it allows locally. */
   passthrough?(
     tool: string,

@@ -41,7 +41,9 @@ import {
   warmPoolOwner,
   Nuke,
   SerializedDecision,
+  stableError,
   sweepWriteLeftovers,
+  toDriverDevice,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
@@ -103,6 +105,7 @@ import {
   type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   daemonDataDirectory,
   resolveDaemonSocketPath,
@@ -516,6 +519,11 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
+      deviceTcp: {
+        supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
+        reverse: (platform, device, devicePort, signal) =>
+          catalog.reverseDevicePort(platform, device, devicePort, signal),
+      },
       inputs: {
         openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
       },
@@ -612,6 +620,28 @@ async function composeDaemon(
       processSupervisor,
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
     });
+    // why: before any request is served, so a tunnel rule a stopped daemon left is gone before a lease uses its device; each driver proves a device its own first.
+    await Promise.all(
+      drivers.map(async (driver) => {
+        try {
+          await driver.deviceTcp?.sweep(
+            registry.snapshot.devices
+              .filter(
+                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
+              )
+              .map((device) => ({
+                device: toDriverDevice(device),
+                leased: device.state === "leased",
+              })),
+          );
+        } catch (error) {
+          logger.warn("A driver's start sweep of tunnel rules failed", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+        }
+      }),
+    );
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
@@ -1420,6 +1450,7 @@ async function discoverAndroidDriver(
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,
       tcpStreamConnector: new NodeTcpStreamConnector(),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
