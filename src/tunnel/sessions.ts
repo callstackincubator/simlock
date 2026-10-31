@@ -130,6 +130,7 @@ export function createTunnelSessions(options: {
     let finished: Promise<void> | undefined;
     const connections = new Map<number, Connection>();
     const reverses: DeviceReverse[] = [];
+    const forwards = new Set<number>();
 
     function finish(removeRules: boolean): Promise<void> {
       finished ??= (async () => {
@@ -212,13 +213,44 @@ export function createTunnelSessions(options: {
       void pump(conn, connection);
     }
 
+    // why: the OPEN is wire input from the caller, so its JSON may be anything; the port it names is trusted only when it is one of this socket's forward tunnels.
+    function forwardPortOf(payload: Uint8Array): number | undefined {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(new TextDecoder().decode(payload));
+      } catch {
+        return undefined;
+      }
+      const devicePort = field(parsed, "devicePort");
+      const named = field(parsed, "kind") === "forward" && typeof devicePort === "number";
+      return named && forwards.has(devicePort) ? devicePort : undefined;
+    }
+
     function openForward(conn: number, payload: Uint8Array): void {
+      if (conn % 2 !== 0 || conn <= lastCallerConnection) {
+        badRequest("OPEN needs an even connection id above the last");
+        return;
+      }
+      const devicePort = forwardPortOf(payload);
+      if (devicePort === undefined) {
+        badRequest("OPEN must name a forward tunnel of this socket");
+        return;
+      }
       lastCallerConnection = conn;
-      const devicePort = field(JSON.parse(new TextDecoder().decode(payload)), "devicePort");
+      if (connections.size >= MAX_CONNECTIONS) {
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.reset,
+            conn,
+            JSON.stringify({ reason: `${String(MAX_CONNECTIONS)} connections are open` }),
+          ),
+        );
+        return;
+      }
       const connecting = options.deviceTcp.connect(
         device.spec.platform,
         toDriverDevice(device),
-        Number(devicePort),
+        devicePort,
         new AbortController().signal,
       );
       register(conn, pendingStream(connecting));
@@ -281,9 +313,12 @@ export function createTunnelSessions(options: {
         });
         return;
       }
+      for (const { devicePort, kind } of tunnels) if (kind === "forward") forwards.add(devicePort);
       counts.set(leaseId, held + tunnels.length);
       reserved = tunnels.length;
       for (const tunnel of tunnels) {
+        // why: a forward tunnel sets nothing on the device; each caller connection opens its own device socket.
+        if (tunnel.kind === "forward") continue;
         let reverse: DeviceReverse;
         try {
           reverse = await options.deviceTcp.reverse(

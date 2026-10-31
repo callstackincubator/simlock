@@ -567,6 +567,7 @@ describe("a worker's tunnel socket with forward tunnels", () => {
     const socket = await attach(worker);
     socket.receive(hello(...tunnels));
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+    expect(deviceTcp.reversed).toEqual([5173]);
     return { deviceTcp, socket, worker };
   }
 
