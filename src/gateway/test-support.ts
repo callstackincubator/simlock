@@ -16,7 +16,6 @@ import type {
   ExecInput,
   ExecOptions,
   ExecOutput,
-  RotateOutput,
   LeaseGrant,
   LeaseRecord,
   LeaseReleaseInput,
@@ -332,8 +331,6 @@ export class ScriptedWorkerClient {
    * a test sets this to relay that event from inside the call. */
   onReleaseLease: ((leaseId: string) => void) | undefined;
   readonly execQueue: ExecOutcome[] = [];
-  /** why: a test queues the error the worker's next `device.rotate` throws; an empty queue answers the rotation. */
-  readonly rotateErrors: Error[] = [];
   /**
    * H4 (round 3 review): the `options` most recently passed to `exec` -- captured before
    * `execQueue`'s own outcome is even read, so a `"hang"` outcome (whose returned promise never
@@ -497,19 +494,6 @@ export class ScriptedWorkerClient {
     if (outcome?.kind === "hang") return new Promise<never>(() => {});
     for (const chunk of outcome?.output ?? []) onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };
-  }
-
-  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
-  async rotate(
-    leaseId: string,
-    orientation: RotateOutput["orientation"],
-    options: { readonly requesterId?: string } = {},
-  ): Promise<RotateOutput> {
-    this.calls.push(`device.rotate:${leaseId}:${options.requesterId ?? ""}`);
-    this.#throwIfFailing();
-    const error = this.rotateErrors.shift();
-    if (error !== undefined) throw error;
-    return { leaseId, orientation };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
-import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import { FakeSystemStats, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -88,6 +88,7 @@ describe("device.rotate", () => {
       drivers,
       filesystem: new MemoryFilesystem(),
       logger: new NoopLogger(),
+      systemStats: new FakeSystemStats({ cpuCount: 16, totalRamBytes: 64 * 1024 ** 3 }),
       version: "1.0.0-e2e",
     });
     daemons.push(daemon);
@@ -105,24 +106,28 @@ describe("device.rotate", () => {
   }
 
   it(
-    "answers a holder's rotate of its iOS-simulator lease and sends the helper that orientation",
+    "answers a holder's rotate of its iOS-simulator lease to each of the four orientation names and sends the helper that orientation",
     { timeout: 60_000 },
     async () => {
       const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
       const { daemon, leaseId } = await worker({ input, inputModule: false });
 
-      const answer = await daemon.dispatch(
-        "device.rotate",
-        { leaseId, orientation: "landscape_left" },
-        holder,
-      );
+      const names = [
+        "landscape_left",
+        "portrait_upside_down",
+        "landscape_right",
+        "portrait",
+      ] as const;
+      for (const [index, orientation] of names.entries()) {
+        const answer = await daemon.dispatch("device.rotate", { leaseId, orientation }, holder);
 
-      expect(answer).toEqual({ leaseId, orientation: "landscape_left" });
-      expect(input.opened).toHaveLength(1);
-      expect(input.opened[0]?.sent).toEqual([
-        { kind: "orientation", orientation: "landscape_left" },
-      ]);
-      expect(input.opened[0]?.closes).toBe(1);
+        expect(answer, orientation).toEqual({ leaseId, orientation });
+        expect(input.opened, orientation).toHaveLength(index + 1);
+        expect(input.opened[index]?.sent, orientation).toEqual([
+          { kind: "orientation", orientation },
+        ]);
+        expect(input.opened[index]?.closes, orientation).toBe(1);
+      }
     },
   );
 
@@ -260,7 +265,7 @@ describe("device.rotate", () => {
   );
 
   it(
-    "refuses a holder's rotate with INPUT_UNAVAILABLE and the reason when the helper cannot start or the write fails",
+    "refuses a holder's rotate with INPUT_UNAVAILABLE and the reason when the helper cannot start or the write fails, and closes a socket whose write fails 1013 while the daemon keeps running",
     { timeout: 60_000 },
     async () => {
       const screen = { height: 2556, orientation: "portrait", width: 1179 } as const;
@@ -327,6 +332,16 @@ describe("device.rotate", () => {
         ).toEqual(input.opened.map(() => 1));
         await daemons.pop()?.stop("test");
       }
+
+      const failing = new FakeInputFactory(screen);
+      failing.sendFailure = new Error("pipe closed");
+      const { daemon, leaseId, openSocket, session } = await holderWithSocketAccess(failing);
+      const socket = await openSocket();
+      sockets.at(-1)?.send(Buffer.concat([Buffer.from([0x04]), Buffer.from('{"button":"lock"}')]));
+      await vi.waitFor(() => expect(socket.code).toBe(1013), { timeout: 10_000 });
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation: "portrait" }, session),
+      ).rejects.toMatchObject({ code: "INPUT_UNAVAILABLE", details: { reason: "pipe closed" } });
     },
   );
 
@@ -375,12 +390,22 @@ describe("device.rotate", () => {
   }
 
   it(
-    "gives an input socket opened after a rotate's helper closed a fresh helper, keeps a socket's helper through a rotate, and answers UNKNOWN_LEASE when the lease is reclaimed while the rotate's helper opens",
+    "gives a rotate after a failed open, an input socket opened after a rotate's helper closed, and a rotate after the shared helper failed a fresh helper, keeps a socket's helper through a rotate, and answers UNKNOWN_LEASE when the lease is reclaimed while the rotate's helper opens",
     { timeout: 60_000 },
     async () => {
       const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
       const { daemon, leaseId, openSocket, session } = await holderWithSocketAccess(input);
       const orientation = "landscape_right";
+
+      input.failWith = new Error("helper exploded");
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation }, session),
+      ).rejects.toMatchObject({
+        code: "INPUT_UNAVAILABLE",
+        details: { reason: "helper exploded" },
+      });
+      input.failWith = undefined;
+      expect(input.opened).toHaveLength(0);
 
       await daemon.dispatch("device.rotate", { leaseId, orientation }, session);
       expect(input.opened).toHaveLength(1);
@@ -398,12 +423,13 @@ describe("device.rotate", () => {
       expect(input.opened[1]?.closes).toBe(0);
 
       input.opened[1]?.fail(new Error("pipe closed"));
-      await vi.waitFor(() => expect(socket.code).toBe(1013), { timeout: 10_000 });
       await expect(
         daemon.dispatch("device.rotate", { leaseId, orientation }, session),
       ).resolves.toEqual({ leaseId, orientation });
       expect(input.opened).toHaveLength(3);
+      expect(input.opened[1]?.sent).toEqual([{ kind: "orientation", orientation: "portrait" }]);
       expect(input.opened[2]?.sent).toEqual([{ kind: "orientation", orientation }]);
+      await vi.waitFor(() => expect(socket.code).toBe(1013), { timeout: 10_000 });
 
       let open: () => void = () => undefined;
       input.gate = new Promise<void>((resolve) => {
@@ -411,7 +437,7 @@ describe("device.rotate", () => {
       });
       const rotating = daemon.dispatch("device.rotate", { leaseId, orientation }, session);
       const outcome = expect(rotating).rejects.toMatchObject({ name: "UnknownLeaseError" });
-      await vi.waitFor(() => expect(input.opens).toBe(4), { timeout: 10_000 });
+      await vi.waitFor(() => expect(input.opens).toBe(5), { timeout: 10_000 });
       await daemon.dispatch("lease.release", { leaseId }, session);
       open();
       await outcome;
@@ -449,6 +475,7 @@ describe("device.rotate", () => {
         httpPort: number,
         input: FakeInputFactory,
         ready: () => Promise<void>,
+        reclaimOnWorker?: (leaseId: string) => Promise<void>,
       ) {
         const [phone, emulator] = await agentTokens(daemon, ["phone", "emulator"]);
         const phoneId = await leaseFor(daemon, phone!.principal, {
@@ -521,6 +548,21 @@ describe("device.rotate", () => {
           message: `Lease ${phoneId}'s simulator cannot take input: helper is gone`,
         });
         input.failWith = undefined;
+
+        if (reclaimOnWorker !== undefined) {
+          let open: () => void = () => undefined;
+          input.gate = new Promise<void>((resolve) => {
+            open = resolve;
+          });
+          const opensBefore = input.opens;
+          const rotating = rotate(phoneId, phone!.secret, { orientation });
+          await vi.waitFor(() => expect(input.opens).toBe(opensBefore + 1), { timeout: 10_000 });
+          await reclaimOnWorker(phoneId);
+          open();
+          const gone = await rotating;
+          expect([gone.status, gone.body.error?.code]).toEqual([404, "UNKNOWN_LEASE"]);
+          expect(gone.body.error?.message).toBe(`Unknown lease: ${phoneId}`);
+        }
       }
 
       const workerPort = await freeLoopbackPort();
@@ -550,7 +592,7 @@ describe("device.rotate", () => {
         await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin)
       ).secret;
       const fleetInput = new FakeInputFactory(screen);
-      await startWorker({
+      const { daemon: fleetWorker } = await startWorker({
         gateway: { label: "w", token: workerToken, url: `ws://127.0.0.1:${String(gatewayPort)}` },
         input: fleetInput,
         inputModule: false,
@@ -562,15 +604,31 @@ describe("device.rotate", () => {
         },
         { timeout: 10_000 },
       );
-      await exercise(gateway, gatewayPort, fleetInput, async () => {
-        await vi.waitFor(
-          async () => {
-            const { leases } = await gateway.dispatch("lease.list", {}, admin);
-            expect(leases).toHaveLength(2);
-          },
-          { timeout: 10_000 },
-        );
-      });
+      await exercise(
+        gateway,
+        gatewayPort,
+        fleetInput,
+        async () => {
+          await vi.waitFor(
+            async () => {
+              const { leases } = await gateway.dispatch("lease.list", {}, admin);
+              expect(leases).toHaveLength(2);
+            },
+            { timeout: 10_000 },
+          );
+        },
+        async (leaseId) => {
+          const { leases } = await gateway.dispatch("lease.list", {}, admin);
+          const owner = leases.find((lease) => lease.id === leaseId)?.requesterId;
+          const held = await fleetWorker.dispatch("lease.list", {}, admin);
+          const workerLease = held.leases.find((lease) => lease.requesterId.endsWith(owner ?? ""));
+          await fleetWorker.dispatch(
+            "lease.release",
+            { leaseId: workerLease?.id ?? "", requesterId: workerLease?.requesterId ?? "" },
+            admin,
+          );
+        },
+      );
     },
   );
 });

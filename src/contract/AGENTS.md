@@ -22,7 +22,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                                                                                            |
 | `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod)                                                                       |
 | `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                                                                                                 |
-| `orientation.ts`   | `INPUT_ORIENTATIONS`, `parseOrientation` (the aliases the CLI, MCP and agent-device front take), `isRotatableModel`, `modelFamily`; no wire shape                                                                                                       |
+| `orientation.ts`   | `INPUT_ORIENTATIONS`, `parseOrientation` (the aliases a spelling maps to an orientation or the unknown message), `isRotatableModel`, `modelFamily`; no wire shape                                                                                       |
 | `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                                                                                                 |
 | `tunnel-frames.ts` | The tunnel socket's frame codec, tags and limits (`encodeTunnelFrame`, `decodeTunnelFrame`, `TUNNEL_*`); a helper with no wire shape, listed in the protocol-bump check                                                                                 |
 | `console-url.ts`   | The console address `status.get` reports                                                                                                                                                                                                                |
@@ -35,7 +35,7 @@ park on readiness (all but `status.get`) → handler → parse output.
 every operation but `daemon.stop`, which `DaemonServer` answers.
 
 - `agent`: `catalog.get`, `status.get`, `component.list`, `lease.request`, `lease.cancel`,
-  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`,
+  `lease.renew`, `lease.release`, `lease.list`, `lease.get`, `driver.passthrough`, `device.exec`, `device.rotate`,
   `doctor.run` without `fix` or `purgeOrphans`.
 - `admin`: every other operation (`list.get`, `config.get`, `inbox.get`, `daemon.stop`, `events.*`,
   `token.*`, `worker.*`, `component.install`, `device.add`, `relay.request`, ...).

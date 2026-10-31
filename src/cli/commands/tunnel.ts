@@ -81,10 +81,7 @@ function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
-function checkedUrl(text: string | undefined): string {
-  if (text === undefined || text === "") {
-    throw new UsageError("No worker URL: pass --url or set SIMLOCK_URL");
-  }
+function parsedUrl(text: string): URL {
   const refusal = new UsageError(
     "--url must be https://, or http:// only for 127.0.0.1, [::1] or localhost",
   );
@@ -98,6 +95,20 @@ function checkedUrl(text: string | undefined): string {
     parsed.protocol === "https:" ||
     (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname));
   if (!allowed || text.length > MAX_URL_CHARS) throw refusal;
+  return parsed;
+}
+
+function checkedOrigin(parsed: URL, text: string): void {
+  if (parsed.pathname !== "/" || /[?#]/.test(text)) {
+    throw new UsageError("--url must be the worker's origin only: no path, query or fragment");
+  }
+}
+
+function checkedUrl(text: string | undefined): string {
+  if (text === undefined || text === "") {
+    throw new UsageError("No worker URL: pass --url or set SIMLOCK_URL");
+  }
+  checkedOrigin(parsedUrl(text), text);
   return text.replace(/\/$/, "");
 }
 
@@ -154,12 +165,20 @@ function relayConnections(
           });
           continue;
         }
+        if (streams.get(conn) !== relayed) return;
         relayed.window -= size;
         socket.send(encodeTunnelFrame(TUNNEL_TAG.data, conn, step.value.subarray(at, at + size)));
         at += size;
       }
     }
-    socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+    if (streams.get(conn) === relayed) socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+  };
+  // why: a write the caller's port refused (it ended the connection) resets that one connection and leaves the tunnel and its other connections up.
+  const failed = (conn: number, relayed: Relayed): void => {
+    if (streams.get(conn) !== relayed) return;
+    streams.delete(conn);
+    relayed.stream.close();
+    socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, conn));
   };
   const grant = (conn: number, size: number): void => {
     const credit = new Uint8Array(4);
@@ -194,7 +213,8 @@ function relayConnections(
     if (frame.tag === TUNNEL_TAG.data) {
       connection.writes = connection.writes
         .then(() => connection.stream.write(frame.payload))
-        .then(() => grant(frame.conn, frame.payload.length));
+        .then(() => grant(frame.conn, frame.payload.length))
+        .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.credit) {
       connection.window += new DataView(
         frame.payload.buffer,
@@ -203,7 +223,9 @@ function relayConnections(
       ).getUint32(0);
       connection.wake?.();
     } else if (frame.tag === TUNNEL_TAG.end) {
-      connection.writes = connection.writes.then(() => connection.stream.end());
+      connection.writes = connection.writes
+        .then(() => connection.stream.end())
+        .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
       connection.stream.close();
       streams.delete(frame.conn);
@@ -220,7 +242,21 @@ function relayConnections(
     const connection = streams.get(frame.conn);
     if (connection !== undefined) onFrame(connection, frame);
   };
-  return { adopt, relay };
+  const closeAll = (): void => {
+    const open = [...streams.values()];
+    streams.clear();
+    for (const { stream, wake } of open) {
+      stream.close();
+      wake?.();
+    }
+  };
+  return { adopt, closeAll, relay };
+}
+
+// why: a forward listener accepts at bind, before the lease and the socket exist, so its connections wait here until READY and the command closes what is left when it ends.
+interface ForwardGate {
+  open: ((spec: TunnelSpec, stream: TcpStream) => void) | undefined;
+  readonly held: { spec: TunnelSpec; stream: TcpStream }[];
 }
 
 const HELLO_TIMEOUT_MS = 90_000;
@@ -340,11 +376,11 @@ function serve(
   environment: CliEnvironment,
   socket: WebSocketClient,
   specs: readonly TunnelSpec[],
-  listeners: ReadonlyMap<TunnelSpec, TcpListener>,
+  gate: ForwardGate,
   leaseId: string,
 ): Promise<number> {
   const warned = new Map<number, number>();
-  const { adopt, relay } = relayConnections(socket, environment, (devicePort, callerPort) => {
+  const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
     const now = environment.clock.now();
     const last = warned.get(devicePort);
     if (last !== undefined && now - last < WARN_EVERY_MS) return;
@@ -354,38 +390,26 @@ function serve(
     );
   });
   let nextCallerConnection = 2;
-  // why: a connection accepted before READY is held, because the worker has not yet said the tunnels are set up; it is closed if the worker refuses.
-  let ready = false;
-  const held: (() => void)[] = [];
-  const heldStreams: TcpStream[] = [];
-  for (const [spec, listener] of listeners) {
-    listener.onConnection((stream) => {
-      const announce = (): void => {
-        const conn = nextCallerConnection;
-        nextCallerConnection += 2;
-        socket.send(
-          encodeTunnelFrame(
-            TUNNEL_TAG.open,
-            conn,
-            JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
-          ),
-        );
-        adopt(conn, stream);
-      };
-      if (ready) {
-        announce();
-        return;
-      }
-      held.push(announce);
-      heldStreams.push(stream);
-    });
-  }
+  const announce = (spec: TunnelSpec, stream: TcpStream): void => {
+    const conn = nextCallerConnection;
+    nextCallerConnection += 2;
+    socket.send(
+      encodeTunnelFrame(
+        TUNNEL_TAG.open,
+        conn,
+        JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
+      ),
+    );
+    relay.adopt(conn, stream);
+  };
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
+  let socketClosed = false;
   return new Promise<number>((resolve, reject) => {
     let silence: TimerHandle | undefined;
     let finished = false;
     let stopping = false;
+    let closeTimer: TimerHandle | undefined;
     const helloTimer = environment.clock.setTimer(HELLO_TIMEOUT_MS, () => {
       end(disconnected(`Lease ${leaseId}: no READY from the worker within 90 s`));
     });
@@ -402,14 +426,17 @@ function serve(
       environment.signals.off("SIGTERM", stop);
       environment.clock.cancel(helloTimer);
       if (silence !== undefined) environment.clock.cancel(silence);
-      if (!ready) for (const stream of heldStreams) stream.close();
+      if (closeTimer !== undefined) environment.clock.cancel(closeTimer);
+      gate.open = undefined;
+      relay.closeAll();
+      if (!socketClosed) socket.close(CLOSE_NORMAL, "");
       if (failure === undefined) resolve(0);
       else reject(failure);
     }
     function stop(): void {
       if (finished) return;
       stopping = true;
-      environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
+      closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
       socket.close(CLOSE_NORMAL, "");
     }
     environment.signals.on("SIGINT", stop);
@@ -417,6 +444,7 @@ function serve(
     heard();
     socket.onPing(heard);
     socket.onClose((code, reason) => {
+      socketClosed = true;
       if (stopping) {
         end(undefined);
         return;
@@ -441,8 +469,8 @@ function serve(
       }
       if (frame.tag === TUNNEL_TAG.ready) {
         environment.clock.cancel(helloTimer);
-        ready = true;
-        for (const announce of held.splice(0)) announce();
+        gate.open = announce;
+        for (const { spec, stream } of gate.held.splice(0)) announce(spec, stream);
         for (const { callerPort, devicePort, kind } of specs) {
           const route =
             kind === "reverse"
@@ -460,7 +488,7 @@ function serve(
                 field(payloadJson(frame.payload), "devicePort") === devicePort,
             )
           : undefined;
-      handled = handled.then(() => relay(opened, frame)).catch(() => undefined);
+      handled = handled.then(() => relay.relay(opened, frame)).catch(() => undefined);
     });
     socket.send(
       encodeTunnelFrame(
@@ -493,7 +521,8 @@ async function run(
   const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
   const secret = checkedToken(token ?? environment.tunnelToken);
   const named = checkedLease(typeof lease === "string" ? lease : undefined);
-  const listeners = new Map<TunnelSpec, TcpListener>();
+  const listeners: TcpListener[] = [];
+  const gate: ForwardGate = { held: [], open: undefined };
   try {
     for (const spec of specs) {
       if (spec.kind !== "forward") continue;
@@ -505,11 +534,15 @@ async function run(
           ERROR_TABLE.TUNNEL_CALLER_PORT_IN_USE.cliExitCode,
         );
       }
-      listeners.set(spec, listener);
+      listener.onConnection((stream) => {
+        if (gate.open === undefined) gate.held.push({ spec, stream });
+        else gate.open(spec, stream);
+      });
+      listeners.push(listener);
     }
     const leaseId = await leaseToUse(environment, base, secret, named);
     const socket = await openSocket(environment, base, secret, leaseId);
-    return await serve(environment, socket, specs, listeners, leaseId);
+    return await serve(environment, socket, specs, gate, leaseId);
   } catch (error) {
     if (!(error instanceof TunnelFailure)) throw error;
     environment.stderr.write(
@@ -517,7 +550,8 @@ async function run(
     );
     return error.exitCode;
   } finally {
-    await Promise.all([...listeners.values()].map((listener) => listener.close()));
+    await Promise.all(listeners.map((listener) => listener.close()));
+    for (const { stream } of gate.held.splice(0)) stream.close();
   }
 }
 
