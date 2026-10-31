@@ -796,7 +796,7 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("captures a named clean baseline once and restores it on a standard reclaim", async () => {
+  it("captures a named clean baseline once and restores it on a standard reclaim, after removing the emulator's adb rules", async () => {
     const harness = await provisionedHarness({ forBaselineReclaim: true });
     const ready = await harness.driver.makeReady(harness.device);
 
@@ -812,6 +812,13 @@ describe("AndroidDriver", () => {
     });
     const saves = harness.runner.calls.filter((call) => call.args.includes("save"));
     expect(saves).toHaveLength(1);
+    const commands = harness.runner.calls.map((call) => call.args.join(" "));
+    const removed = commands.indexOf("-P 5038 -s emulator-5586 reverse --remove-all");
+    expect(removed).toBeGreaterThan(-1);
+    expect(commands.indexOf("-P 5038 -s emulator-5586 forward --list")).toBe(removed + 1);
+    expect(commands.indexOf("-s emulator-5586 emu avd snapshot load simlock_clean_baseline")).toBe(
+      removed + 2,
+    );
   });
 
   it("tags the baseline with the emulator-normalized post-boot configuration", async () => {
@@ -846,6 +853,7 @@ describe("AndroidDriver", () => {
     const restartedRunner = new ScriptedProcessRunner([
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
+      ...ruleCleanupExpectations("emulator-5586"),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -4759,7 +4767,7 @@ describe("AndroidDriver console ports across a restart", () => {
   });
 
   it.each(["shutdown", "full reclaim", "standard reclaim"] as const)(
-    "%s after a restart sends neither kill nor snapshot load to another device on the stored serial (#284)",
+    "%s after a restart sends no kill, snapshot load or rule removal to another device on the stored serial (#284)",
     async (operation) => {
       const spec = {
         physical: false,
@@ -4792,6 +4800,14 @@ describe("AndroidDriver console ports across a restart", () => {
 
       expect({
         running: host.avdAnswering(running.address),
+        ruleCalls: runner.calls
+          .slice(callStart)
+          .filter(
+            (call) =>
+              call.args.includes(running.address) &&
+              (call.args.includes("reverse") || call.args.includes("forward")),
+          )
+          .map((call) => call.args),
         mutations: runner.calls
           .slice(callStart)
           .filter(
@@ -4802,7 +4818,7 @@ describe("AndroidDriver console ports across a restart", () => {
                 call.args.slice(2, 6).join(" ") === "emu avd snapshot load"),
           )
           .map((call) => call.args),
-      }).toEqual({ running: "simlock_two", mutations: [] });
+      }).toEqual({ running: "simlock_two", ruleCalls: [], mutations: [] });
     },
   );
 
@@ -5539,6 +5555,7 @@ async function provisionedHarness(
     expectations.push(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
+      ...ruleCleanupExpectations("emulator-5586"),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -6468,9 +6485,11 @@ function onlyProvided(options: {
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
   readonly scrcpyServerPath?: string;
+  readonly tcpListener?: FakeTcpListenerFactory;
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
+    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
     ...(options.scrcpyServerPath === undefined
       ? {}
       : { scrcpyServerPath: options.scrcpyServerPath }),
@@ -7123,6 +7142,15 @@ function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedPr
     ["-s", serial, "emu", "avd", "path"],
     `${avdDirectory}/${avdName}.avd\r\nOK\r\n`,
   );
+}
+
+// why: a reclaim that passed its ownership probe removes the device's rules before it loads the snapshot: every reverse rule, then a look at the forwards (none here).
+function ruleCleanupExpectations(serial: string): ScriptedProcessExpectation[] {
+  const onServer = ["-P", String(adbServerPort), "-s", serial];
+  return [
+    processResult(binaries.adb, [...onServer, "reverse", "--remove-all"]),
+    processResult(binaries.adb, [...onServer, "forward", "--list"]),
+  ];
 }
 
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
