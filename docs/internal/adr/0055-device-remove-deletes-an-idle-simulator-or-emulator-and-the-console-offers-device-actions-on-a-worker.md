@@ -59,7 +59,7 @@ click, at most a typed name to confirm.
 | `leased`                                 | 409 `DEVICE_BUSY`, reason `leased`         |
 | `reclaiming`, or a `reclaim` claim       | 409 `DEVICE_BUSY`, reason `reclaiming`     |
 | any other state, or any other claim      | 409 `DEVICE_BUSY`, reason `busy`           |
-| `deleted`, or no such id                 | 404 `UNKNOWN_DEVICE`                       |
+| `deleted`, no such id, or a phone's own `dev_…` | 404 `UNKNOWN_DEVICE`                |
 
 A device that moves between the check and the claim (a grant, a boot, a
 reclaim) answers `DEVICE_BUSY` `busy`: `dispose` answered nothing, so
@@ -111,6 +111,7 @@ delete did. The idle rules delete a `shutdown` device later, as for any.
 `device.remove` and `device.add` stay refused on a gateway with
 `UNSUPPORTED_IN_GATEWAY_MODE`. Deleting or enrolling across a fleet from
 one endpoint is the fleet-wide command `docs/internal/IDEAS.md` defers.
+The refusal's message no longer says the command only unenrols.
 
 ### 3. The console offers device actions on a worker only
 
@@ -122,10 +123,15 @@ page's device rows, the device drawer and ⌘K like every other list:
 | Remove phone  | `DELETE /v1/devices/{id}` | worker mode, a physical device `ready`, `absent` or `quarantined` | a confirm naming the phone                      |
 | Delete device | `DELETE /v1/devices/{id}` | worker mode, a virtual device `ready` or `shutdown`              | a confirm naming the model and that disk goes   |
 
-The worker gains **Enrol phone…** in worker mode: a dialog with the
-platform and the phone's id, which sends `POST /v1/devices`. It is the
-console's first action with a form; the form is a `ds/` component, and
-the action list holds its fields.
+The worker gains **Enrol phone…** in worker mode, on its Fleet row, its
+page and ⌘K: a dialog with the platform and the phone's id, which sends
+`POST /v1/devices`. It is the console's first action with a form; the form
+is a `ds/` component, and the action list holds its fields. The console
+checks only that the id is not empty: the daemon's rule stays in one
+place, and its refusal shows in the error toast.
+
+A removed phone and a deleted device stay in the list and read
+`deleted`, as every deleted device does today.
 
 The console reads the mode as ADR 0037 §4 says, and offers none of these
 when it is `gateway` or unknown. Results show as for every action: a
