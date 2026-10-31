@@ -914,8 +914,12 @@ describe("MCP rotate_device", () => {
     const client = new FakeSimlockClient();
     client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
     client.rotateImpl = (leaseId, orientation) => Promise.resolve({ leaseId, orientation });
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
     const { mcpClient, close } = await connectedServer(client);
     try {
+      const never = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(never.isError).toBe(true);
+      expect(JSON.parse(text(never)).code).toBe("NO_LEASE");
       await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
       const result = await call(mcpClient, "rotate_device", { orientation: "landscape-left" });
       expect(result.isError).not.toBe(true);
@@ -926,6 +930,40 @@ describe("MCP rotate_device", () => {
       expect(client.calls.filter((entry) => entry.method === "rotate")).toEqual([
         { input: { leaseId: "lease-1", orientation: "landscape_left" }, method: "rotate" },
       ]);
+
+      const accepted = [{ orientation: "LEFT" }, { orientation: " upside-down " }];
+      for (const entry of accepted) {
+        expect((await call(mcpClient, "rotate_device", entry)).isError).not.toBe(true);
+      }
+      const unknown = await call(mcpClient, "rotate_device", { orientation: "sideways" });
+      expect(unknown.isError).toBe(true);
+      expect(JSON.parse(text(unknown))).toEqual({
+        code: "BAD_REQUEST",
+        message:
+          "Unknown orientation sideways; use portrait, portrait-upside-down, landscape-left or landscape-right",
+      });
+      const unsupported = new SimlockError(
+        "ROTATION_UNSUPPORTED",
+        "domain",
+        "Lease lease-1 is on an Android emulator; only an iOS simulator can be rotated",
+        { class: "emulator", leaseId: "lease-1", physical: false, platform: "android" },
+      );
+      client.rotateImpl = () => Promise.reject(unsupported);
+      const refusal = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(refusal.isError).toBe(true);
+      expect(JSON.parse(text(refusal))).toEqual({
+        code: "ROTATION_UNSUPPORTED",
+        message: unsupported.message,
+      });
+      client.rotateImpl = (leaseId, orientation) => Promise.resolve({ leaseId, orientation });
+
+      await call(mcpClient, "release_simulator", { leaseId: "lease-1" });
+      const released = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(released.isError).toBe(true);
+      expect(JSON.parse(text(released))).toEqual({
+        code: "NO_LEASE",
+        message: "This MCP session holds no lease. Call lease_simulator first.",
+      });
     } finally {
       await close();
     }
