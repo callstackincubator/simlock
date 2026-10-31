@@ -5,6 +5,7 @@ import type {
   ModuleTwoWayRelay,
 } from "../modules/index.js";
 import type { LeaseSocket } from "../ports/index.js";
+import { unavailable } from "./refusal.js";
 import { encodeFrame, MAX_TUNNEL_MESSAGE_BYTES, readFrames } from "./framing.js";
 
 export interface GatewayTunnelLinkOptions {
@@ -15,6 +16,17 @@ export interface GatewayTunnelLinkOptions {
     leaseId?: string,
   ) => Promise<Response | ModuleTwoWayRelay>;
   readonly requesterPrefix: string;
+}
+
+// why: a worker with tunnels off has no relay target, and a holder must get a 503 that says to turn the capability on there, before the upgrade; an error with no such code is a real fault and goes on to the HTTP layer's 500.
+function refusalFor(error: unknown, workerId: string): Response {
+  if ((error as { readonly code?: unknown }).code === "RELAY_TARGET_MISSING") {
+    return unavailable(
+      "TUNNEL_UNAVAILABLE",
+      `Tunnels are off on worker ${workerId}; turn on capabilities.tunnel.enabled there`,
+    );
+  }
+  throw error;
 }
 
 export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
@@ -53,15 +65,21 @@ export function createGatewayTunnelLink(options: GatewayTunnelLinkOptions): {
   return {
     open: async (_request, identity, lease) => {
       const controller = new AbortController();
-      const relay = await options.relayTwoWay(
-        lease.workerId ?? "",
-        new Request(`http://simlock-worker/tunnel/leases/${encodeURIComponent(lease.id)}`, {
-          method: "GET",
-          signal: controller.signal,
-        }),
-        `${options.requesterPrefix}${identity.principal}`,
-        lease.workerLeaseId,
-      );
+      const workerId = lease.workerId ?? "";
+      let relay: Response | ModuleTwoWayRelay;
+      try {
+        relay = await options.relayTwoWay(
+          workerId,
+          new Request(`http://simlock-worker/tunnel/leases/${encodeURIComponent(lease.id)}`, {
+            method: "GET",
+            signal: controller.signal,
+          }),
+          `${options.requesterPrefix}${identity.principal}`,
+          lease.workerLeaseId,
+        );
+      } catch (error) {
+        return refusalFor(error, workerId);
+      }
       if (relay instanceof Response) return relay;
       return Object.assign((socket: LeaseSocket) => bridge(socket, relay, controller, lease), {
         abandon: () => controller.abort(),
