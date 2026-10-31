@@ -91,3 +91,4 @@ the status is stale.
 | [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted |
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
 | [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
+| [0056](0056-an-operator-sets-warm-targets-at-runtime-and-they-replace-the-configs.md) | An operator sets warm targets at runtime, and they replace the config's | Proposed; supersedes 0017's deferred runtime-targets alternative; narrows 0017 §5 step 3 and §8, 0050 (HTTP route) and 0051 §1 and §3 |
