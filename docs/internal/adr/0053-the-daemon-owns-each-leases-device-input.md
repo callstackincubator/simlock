@@ -1,6 +1,6 @@
 # 0053. The daemon owns each lease's device input, and `device.rotate` uses it
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-30
 - **Issue:** [#1105](https://github.com/callstackincubator/simlock/issues/1105)
 - **Narrows:** [ADR 0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md)
