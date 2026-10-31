@@ -116,6 +116,7 @@ export const runOnDeviceOutputSchema = z.object({
 export type LeaseSimulatorInput = z.infer<typeof leaseSimulatorInputSchema>;
 export type LeaseSimulatorOutput = z.infer<typeof leaseSimulatorOutputSchema>;
 export type ListDevicesInput = z.infer<typeof listDevicesInputSchema>;
+export type PhysicalDevice = ListDevicesOutput["physicalDevices"][number];
 export type ListDevicesOutput = z.infer<typeof listDevicesOutputSchema>;
 export type ReleaseSimulatorInput = z.infer<typeof releaseSimulatorInputSchema>;
 export type ReleaseSimulatorOutput = z.infer<typeof releaseSimulatorOutputSchema>;
