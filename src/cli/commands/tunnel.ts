@@ -10,6 +10,7 @@ import {
   TUNNEL_WINDOW_BYTES,
 } from "../../contract/index.js";
 import {
+  type TcpListener,
   type TcpStream,
   type TimerHandle,
   type WebSocketClient,
@@ -27,7 +28,8 @@ const WARN_EVERY_MS = 10_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
 
-interface ReverseSpec {
+interface TunnelSpec {
+  readonly kind: "reverse" | "forward";
   readonly devicePort: number;
   readonly callerPort: number;
 }
@@ -40,10 +42,10 @@ function portOf(text: string, what: string): number {
   return port;
 }
 
-function parseReverse(words: readonly string[], index: number): ReverseSpec {
+function parseTunnel(words: readonly string[], index: number): TunnelSpec {
   const kind = words[index] as string;
-  if (kind !== "reverse") {
-    throw new UsageError(`Unknown tunnel kind "${kind}": only reverse is available`);
+  if (kind !== "reverse" && kind !== "forward") {
+    throw new UsageError(`Unknown tunnel kind "${kind}": use reverse or forward`);
   }
   const text = words[index + 1] ?? "";
   const colon = text.indexOf(":");
@@ -52,15 +54,16 @@ function parseReverse(words: readonly string[], index: number): ReverseSpec {
   return {
     callerPort: portOf(colon === -1 ? device : text.slice(colon + 1), "caller"),
     devicePort,
+    kind,
   };
 }
 
-function parseReverses(words: readonly string[]): readonly ReverseSpec[] {
+function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
   if (words.length === 0) {
-    throw new UsageError("Name at least one tunnel: reverse <device-port>[:<caller-port>]");
+    throw new UsageError("Name at least one tunnel: reverse|forward <device-port>[:<caller-port>]");
   }
-  const specs: ReverseSpec[] = [];
-  for (let index = 0; index < words.length; index += 2) specs.push(parseReverse(words, index));
+  const specs: TunnelSpec[] = [];
+  for (let index = 0; index < words.length; index += 2) specs.push(parseTunnel(words, index));
   if (specs.length > TUNNEL_MAX_TUNNELS)
     throw new UsageError(`At most ${String(TUNNEL_MAX_TUNNELS)} tunnels`);
   const callerPorts = specs.map(({ callerPort }) => callerPort);
@@ -142,15 +145,7 @@ function relayConnections(
     new DataView(credit.buffer).setUint32(0, size);
     socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
   };
-  const openConnection = async (spec: ReverseSpec, conn: number): Promise<void> => {
-    let stream: TcpStream;
-    try {
-      stream = await environment.tcpStreams.connect(spec.callerPort, CALLER_CONNECT_TIMEOUT_MS);
-    } catch {
-      warn(spec.devicePort, spec.callerPort);
-      socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, conn));
-      return;
-    }
+  const adopt = (conn: number, stream: TcpStream): void => {
     const relayed: Relayed = {
       stream,
       wake: undefined,
@@ -159,6 +154,17 @@ function relayConnections(
     };
     streams.set(conn, relayed);
     void pump(conn, relayed);
+  };
+  const openConnection = async (spec: TunnelSpec, conn: number): Promise<void> => {
+    let stream: TcpStream;
+    try {
+      stream = await environment.tcpStreams.connect(spec.callerPort, CALLER_CONNECT_TIMEOUT_MS);
+    } catch {
+      warn(spec.devicePort, spec.callerPort);
+      socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, conn));
+      return;
+    }
+    adopt(conn, stream);
   };
   const onFrame = (
     connection: Relayed,
@@ -182,8 +188,8 @@ function relayConnections(
       streams.delete(frame.conn);
     }
   };
-  return async (
-    spec: ReverseSpec | undefined,
+  const relay = async (
+    spec: TunnelSpec | undefined,
     frame: { tag: number; conn: number; payload: Uint8Array },
   ): Promise<void> => {
     if (frame.tag === TUNNEL_TAG.open) {
@@ -193,6 +199,7 @@ function relayConnections(
     const connection = streams.get(frame.conn);
     if (connection !== undefined) onFrame(connection, frame);
   };
+  return { adopt, relay };
 }
 
 const HELLO_TIMEOUT_MS = 90_000;
@@ -310,11 +317,12 @@ function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFa
 function serve(
   environment: CliEnvironment,
   socket: WebSocketClient,
-  specs: readonly ReverseSpec[],
+  specs: readonly TunnelSpec[],
+  listeners: ReadonlyMap<TunnelSpec, TcpListener>,
   leaseId: string,
 ): Promise<number> {
   const warned = new Map<number, number>();
-  const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
+  const { adopt, relay } = relayConnections(socket, environment, (devicePort, callerPort) => {
     const now = environment.clock.now();
     const last = warned.get(devicePort);
     if (last !== undefined && now - last < WARN_EVERY_MS) return;
@@ -323,6 +331,21 @@ function serve(
       `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
     );
   });
+  let nextCallerConnection = 2;
+  for (const [spec, listener] of listeners) {
+    listener.onConnection((stream) => {
+      const conn = nextCallerConnection;
+      nextCallerConnection += 2;
+      socket.send(
+        encodeTunnelFrame(
+          TUNNEL_TAG.open,
+          conn,
+          JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
+        ),
+      );
+      adopt(conn, stream);
+    });
+  }
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
   return new Promise<number>((resolve, reject) => {
@@ -383,19 +406,22 @@ function serve(
       }
       if (frame.tag === TUNNEL_TAG.ready) {
         environment.clock.cancel(helloTimer);
-        for (const { callerPort, devicePort } of specs) {
-          environment.stdout.write(
-            `reverse device:${String(devicePort)} -> localhost:${String(callerPort)} (lease ${leaseId})\n`,
-          );
+        for (const { callerPort, devicePort, kind } of specs) {
+          const route =
+            kind === "reverse"
+              ? `reverse device:${String(devicePort)} -> localhost:${String(callerPort)}`
+              : `forward localhost:${String(callerPort)} -> device:${String(devicePort)}`;
+          environment.stdout.write(`${route} (lease ${leaseId})\n`);
         }
         return;
       }
       const opened =
         frame.tag === TUNNEL_TAG.open
           ? specs.find(
-              ({ devicePort }) =>
+              ({ devicePort, kind }) =>
+                kind === "reverse" &&
                 field(JSON.parse(new TextDecoder().decode(frame.payload)), "devicePort") ===
-                devicePort,
+                  devicePort,
             )
           : undefined;
       handled = handled.then(() => relay(opened, frame)).catch(() => undefined);
@@ -405,7 +431,7 @@ function serve(
         TUNNEL_TAG.hello,
         0,
         JSON.stringify({
-          tunnels: specs.map(({ devicePort }) => ({ devicePort, kind: "reverse" })),
+          tunnels: specs.map(({ devicePort, kind }) => ({ devicePort, kind })),
         }),
       ),
     );
@@ -423,14 +449,27 @@ async function run(
   });
   if (help) {
     environment.stdout.write(
-      "Usage: simlock tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <id>] [--url <url>]\n",
+      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
     );
     return 0;
   }
-  const specs = parseReverses(positionals);
+  const specs = parseTunnels(positionals);
   const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
   const secret = checkedToken(token ?? environment.tunnelToken);
+  const listeners = new Map<TunnelSpec, TcpListener>();
   try {
+    for (const spec of specs) {
+      if (spec.kind !== "forward") continue;
+      const listener = await environment.tcpListeners.listen(spec.callerPort);
+      if (listener === undefined) {
+        throw new TunnelFailure(
+          "TUNNEL_CALLER_PORT_IN_USE",
+          `forward ${String(spec.devicePort)}: localhost:${String(spec.callerPort)} is already in use`,
+          ERROR_TABLE.TUNNEL_CALLER_PORT_IN_USE.cliExitCode,
+        );
+      }
+      listeners.set(spec, listener);
+    }
     const leaseId = await leaseToUse(
       environment,
       base,
@@ -438,13 +477,15 @@ async function run(
       typeof lease === "string" ? lease : undefined,
     );
     const socket = await openSocket(environment, base, secret, leaseId);
-    return await serve(environment, socket, specs, leaseId);
+    return await serve(environment, socket, specs, listeners, leaseId);
   } catch (error) {
     if (!(error instanceof TunnelFailure)) throw error;
     environment.stderr.write(
       `${JSON.stringify({ error: { code: error.code, message: error.message } })}\n`,
     );
     return error.exitCode;
+  } finally {
+    await Promise.all([...listeners.values()].map((listener) => listener.close()));
   }
 }
 

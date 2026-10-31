@@ -187,8 +187,9 @@ describe("a worker's tunnel socket", () => {
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "forward tunnels are not available yet",
-        tunnels: [reverse(5173), { devicePort: 9229, kind: "forward" }],
+        message: "ios devices take no tunnel",
+        platform: "ios",
+        tunnels: [{ devicePort: 9229, kind: "forward" }],
       },
       {
         code: "TUNNEL_UNSUPPORTED",

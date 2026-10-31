@@ -106,14 +106,17 @@ describe("simlock tunnel that cannot run", () => {
         argv: ["reverse", "5173:0"],
         message: 'caller port "0" is not an integer from 1 to 65535',
       },
-      { argv: [], message: "Name at least one tunnel: reverse <device-port>[:<caller-port>]" },
+      {
+        argv: [],
+        message: "Name at least one tunnel: reverse|forward <device-port>[:<caller-port>]",
+      },
       {
         argv: ["reverse", "5173", "reverse", "6000:5173"],
         message: "Caller port 5173 is named by two tunnels",
       },
       {
-        argv: ["forward", "5173"],
-        message: 'Unknown tunnel kind "forward": only reverse is available',
+        argv: ["sideways", "5173"],
+        message: 'Unknown tunnel kind "sideways": use reverse or forward',
       },
       {
         argv: ["--url", "http://10.0.0.5:7300", "reverse", "5173"],

@@ -418,6 +418,12 @@ export function buildCliEnvironment(
         return new NodeTcpStreamConnector().connect(port, timeoutMs);
       },
     },
+    tcpListeners: ports.tcpListeners ?? {
+      listen: async (port) => {
+        const { NodeTcpListenerFactory } = await import("../ports/index.js");
+        return new NodeTcpListenerFactory().listen(port);
+      },
+    },
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
     writeConfigFile: async (contents) => {

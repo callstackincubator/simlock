@@ -21,6 +21,7 @@ import {
 } from "../core/index.js";
 import type { ModuleDeviceTcp } from "../modules/index.js";
 import type { LeaseSocket, Logger, TcpStream } from "../ports/index.js";
+import { pendingStream } from "./pending-stream.js";
 
 const CLOSE_LEASE_ENDED = 4001;
 const CLOSE_GOING_AWAY = 1001;
@@ -98,9 +99,6 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
       };
     }
   }
-  if (tunnels.some(({ kind }) => kind === "forward")) {
-    return { code: "TUNNEL_UNSUPPORTED", message: "forward tunnels are not available yet" };
-  }
   return undefined;
 }
 
@@ -126,6 +124,7 @@ export function createTunnelSessions(options: {
 
   function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void {
     let nextConnection = 1;
+    let lastCallerConnection = 0;
     let greeted = false;
     let reserved = 0;
     let finished: Promise<void> | undefined;
@@ -195,6 +194,36 @@ export function createTunnelSessions(options: {
         connection.window -= size;
         pending = size === pending.length ? undefined : pending.subarray(size);
       }
+    }
+
+    function register(conn: number, stream: TcpStream): void {
+      const connection: Connection = {
+        callerEnded: false,
+        closed: false,
+        deviceEnded: false,
+        inbound: TUNNEL_WINDOW_BYTES,
+        stream,
+        wake: undefined,
+        window: TUNNEL_WINDOW_BYTES,
+      };
+      connections.set(conn, connection);
+      void pump(conn, connection);
+    }
+
+    function openForward(conn: number, payload: Uint8Array): void {
+      lastCallerConnection = conn;
+      const devicePort = field(JSON.parse(new TextDecoder().decode(payload)), "devicePort");
+      register(
+        conn,
+        pendingStream(
+          options.deviceTcp.connect(
+            device.spec.platform,
+            toDriverDevice(device),
+            Number(devicePort),
+            new AbortController().signal,
+          ),
+        ),
+      );
     }
 
     function refuse(refused: Refusal): void {
@@ -273,17 +302,7 @@ export function createTunnelSessions(options: {
           const conn = nextConnection;
           nextConnection += 2;
           socket.send(encodeTunnelFrame(TUNNEL_TAG.open, conn, JSON.stringify(tunnel)));
-          const connection: Connection = {
-            callerEnded: false,
-            closed: false,
-            deviceEnded: false,
-            inbound: TUNNEL_WINDOW_BYTES,
-            stream,
-            wake: undefined,
-            window: TUNNEL_WINDOW_BYTES,
-          };
-          connections.set(conn, connection);
-          void pump(conn, connection);
+          register(conn, stream);
         });
       }
       socket.send(encodeTunnelFrame(TUNNEL_TAG.ready, 0, JSON.stringify({ tunnels })));
@@ -323,6 +342,10 @@ export function createTunnelSessions(options: {
         badRequest("HELLO came twice");
         return;
       }
+      if (frame.tag === TUNNEL_TAG.open) {
+        openForward(frame.conn, frame.payload);
+        return;
+      }
       if (
         frame.tag !== TUNNEL_TAG.data &&
         frame.tag !== TUNNEL_TAG.credit &&
@@ -332,8 +355,9 @@ export function createTunnelSessions(options: {
         badRequest(`unknown frame tag ${String(frame.tag)}`);
         return;
       }
-      // why: the worker opens odd ids, rising from 1, so an even id or one above the last it opened was never a connection; one it opened and closed is ignored.
-      if (frame.conn % 2 === 0 || frame.conn > nextConnection - 2) {
+      // why: the worker opens odd ids and the caller even ones, each rising, so an id above the last of its side was never a connection; one opened and closed is ignored.
+      const last = frame.conn % 2 === 0 ? lastCallerConnection : nextConnection - 2;
+      if (frame.conn === 0 || frame.conn > last) {
         badRequest(`connection ${String(frame.conn)} was never opened`);
         return;
       }
