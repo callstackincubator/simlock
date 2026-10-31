@@ -21,6 +21,7 @@ import { selectOnlyLease } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
 
+const FORWARD_CALLER_PORT_MIN = 1024;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const CALLER_CONNECT_TIMEOUT_MS = 5_000;
 const CLOSE_NORMAL = 1000;
@@ -51,11 +52,14 @@ function parseTunnel(words: readonly string[], index: number): TunnelSpec {
   const colon = text.indexOf(":");
   const device = colon === -1 ? text : text.slice(0, colon);
   const devicePort = portOf(device, "device");
-  return {
-    callerPort: portOf(colon === -1 ? device : text.slice(colon + 1), "caller"),
-    devicePort,
-    kind,
-  };
+  const callerText = colon === -1 ? device : text.slice(colon + 1);
+  const callerPort = portOf(callerText, "caller");
+  if (kind === "forward" && callerPort < FORWARD_CALLER_PORT_MIN) {
+    throw new UsageError(
+      `forward caller port "${callerText}" is below ${String(FORWARD_CALLER_PORT_MIN)}`,
+    );
+  }
+  return { callerPort, devicePort, kind };
 }
 
 function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
