@@ -264,6 +264,13 @@ describe("a lease's tunnel socket", () => {
     async () => {
       const through = await fleet({ gatewayTunnel: true, workerTunnel: true });
       await expectReady(through.url(), through.holder, 5173);
+
+      const workerOff = await fleet({ gatewayTunnel: true, workerTunnel: false });
+      const refused = await openTunnel(workerOff.url(), workerOff.holder);
+      expect({ code: refused.code, status: refused.status }).toEqual({
+        code: "TUNNEL_UNAVAILABLE",
+        status: 503,
+      });
     },
   );
 });
