@@ -40,33 +40,33 @@ function portOf(text: string, what: string): number {
   return port;
 }
 
+function parseReverse(words: readonly string[], index: number): ReverseSpec {
+  const kind = words[index] as string;
+  if (kind !== "reverse") {
+    throw new UsageError(`Unknown tunnel kind "${kind}": only reverse is available`);
+  }
+  const text = words[index + 1] ?? "";
+  const colon = text.indexOf(":");
+  const device = colon === -1 ? text : text.slice(0, colon);
+  const devicePort = portOf(device, "device");
+  return {
+    callerPort: portOf(colon === -1 ? device : text.slice(colon + 1), "caller"),
+    devicePort,
+  };
+}
+
 function parseReverses(words: readonly string[]): readonly ReverseSpec[] {
   if (words.length === 0) {
     throw new UsageError("Name at least one tunnel: reverse <device-port>[:<caller-port>]");
   }
   const specs: ReverseSpec[] = [];
-  for (let index = 0; index < words.length; index += 2) {
-    const kind = words[index] as string;
-    if (kind !== "reverse") {
-      throw new UsageError(`Unknown tunnel kind "${kind}": only reverse is available`);
-    }
-    const text = words[index + 1] ?? "";
-    const colon = text.indexOf(":");
-    const device = colon === -1 ? text : text.slice(0, colon);
-    const devicePort = portOf(device, "device");
-    specs.push({
-      callerPort: portOf(colon === -1 ? device : text.slice(colon + 1), "caller"),
-      devicePort,
-    });
-  }
+  for (let index = 0; index < words.length; index += 2) specs.push(parseReverse(words, index));
   if (specs.length > TUNNEL_MAX_TUNNELS)
     throw new UsageError(`At most ${String(TUNNEL_MAX_TUNNELS)} tunnels`);
-  const seen = new Set<number>();
-  for (const { callerPort } of specs) {
-    if (seen.has(callerPort)) {
-      throw new UsageError(`Caller port ${String(callerPort)} is named by two tunnels`);
-    }
-    seen.add(callerPort);
+  const callerPorts = specs.map(({ callerPort }) => callerPort);
+  const repeated = callerPorts.find((port, at) => callerPorts.indexOf(port) !== at);
+  if (repeated !== undefined) {
+    throw new UsageError(`Caller port ${String(repeated)} is named by two tunnels`);
   }
   return specs;
 }
@@ -142,31 +142,28 @@ function relayConnections(
     new DataView(credit.buffer).setUint32(0, size);
     socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
   };
-  return async (
-    spec: ReverseSpec | undefined,
-    frame: { tag: number; conn: number; payload: Uint8Array },
-  ): Promise<void> => {
-    if (frame.tag === TUNNEL_TAG.open && spec !== undefined) {
-      let stream: TcpStream;
-      try {
-        stream = await environment.tcpStreams.connect(spec.callerPort, CALLER_CONNECT_TIMEOUT_MS);
-      } catch {
-        warn(spec.devicePort, spec.callerPort);
-        socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, frame.conn));
-        return;
-      }
-      const relayed: Relayed = {
-        stream,
-        wake: undefined,
-        window: TUNNEL_WINDOW_BYTES,
-        writes: Promise.resolve(),
-      };
-      streams.set(frame.conn, relayed);
-      void pump(frame.conn, relayed);
+  const openConnection = async (spec: ReverseSpec, conn: number): Promise<void> => {
+    let stream: TcpStream;
+    try {
+      stream = await environment.tcpStreams.connect(spec.callerPort, CALLER_CONNECT_TIMEOUT_MS);
+    } catch {
+      warn(spec.devicePort, spec.callerPort);
+      socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, conn));
       return;
     }
-    const connection = streams.get(frame.conn);
-    if (connection === undefined) return;
+    const relayed: Relayed = {
+      stream,
+      wake: undefined,
+      window: TUNNEL_WINDOW_BYTES,
+      writes: Promise.resolve(),
+    };
+    streams.set(conn, relayed);
+    void pump(conn, relayed);
+  };
+  const onFrame = (
+    connection: Relayed,
+    frame: { tag: number; conn: number; payload: Uint8Array },
+  ): void => {
     if (frame.tag === TUNNEL_TAG.data) {
       connection.writes = connection.writes
         .then(() => connection.stream.write(frame.payload))
@@ -184,6 +181,17 @@ function relayConnections(
       connection.stream.close();
       streams.delete(frame.conn);
     }
+  };
+  return async (
+    spec: ReverseSpec | undefined,
+    frame: { tag: number; conn: number; payload: Uint8Array },
+  ): Promise<void> => {
+    if (frame.tag === TUNNEL_TAG.open) {
+      if (spec !== undefined) await openConnection(spec, frame.conn);
+      return;
+    }
+    const connection = streams.get(frame.conn);
+    if (connection !== undefined) onFrame(connection, frame);
   };
 }
 

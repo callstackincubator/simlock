@@ -113,7 +113,7 @@ export class NodeWebSocketClientConnector implements WebSocketClientConnector {
   }
 }
 
-export class FakeWebSocketPeer implements WebSocketClient {
+class FakeWebSocketPeer implements WebSocketClient {
   readonly sent: Uint8Array[] = [];
   closedWith: { readonly code: number; readonly reason: string } | undefined;
   // why: a real socket answers `close` with its own close event; a test sets this to play a server that never answers.
@@ -144,17 +144,14 @@ export class FakeWebSocketPeer implements WebSocketClient {
     this.#closes.push(listener);
   }
 
-  // fallow-ignore-next-line unused-class-member -- the server's side of a fake socket, called by tests.
   receive(bytes: Uint8Array): void {
     for (const listener of this.#messages) listener(bytes);
   }
 
-  // fallow-ignore-next-line unused-class-member -- the server's side of a fake socket, called by tests.
   ping(): void {
     for (const listener of this.#pings) listener();
   }
 
-  // fallow-ignore-next-line unused-class-member -- the server's side of a fake socket, called by tests.
   dropped(code: number, reason: string): void {
     for (const listener of this.#closes) listener(code, reason);
   }
