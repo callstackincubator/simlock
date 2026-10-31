@@ -264,7 +264,6 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
       else respondAndDestroy(socket, 403, "Forbidden");
       return;
     }
-    if (socket.destroyed) return;
     const tokenId = uplinkTokenId(result);
     this.#server.handleUpgrade(request, socket, head, (client) => {
       const connection = new WebSocketUplinkConnection(client);
