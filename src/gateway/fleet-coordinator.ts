@@ -589,7 +589,7 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * why: `device.rotate` forwarded to the worker that owns the lease, with the lease's own namespaced requester, bounded by `gateway.execTimeoutMs` like `exec`. A worker names the lease by its own id in a refusal; the caller holds the gateway's id, so the refusal names that instead.
+   * why: `device.rotate` forwarded to the worker that owns the lease, with the lease's own namespaced requester, bounded by `gateway.execTimeoutMs` like `exec`. A worker names the lease by its own id in any coded error; the caller holds the gateway's id, so the error names that instead.
    */
   // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option.
   async rotate(input: FleetRotateInput, _session: DispatchSession): Promise<RotateOutput> {
@@ -612,13 +612,15 @@ export class FleetLeaseCoordinator {
 
   #namedForCaller(error: unknown, entry: FleetLeaseEntry): unknown {
     if (!(error instanceof DispatchError)) return error;
-    if (error.code !== "ROTATION_UNSUPPORTED" && error.code !== "INPUT_UNAVAILABLE") return error;
     const details =
-      typeof error.details === "object" && error.details !== null ? error.details : {};
+      typeof error.details === "object" && error.details !== null ? error.details : undefined;
+    const names = (details as { leaseId?: unknown } | undefined)?.leaseId === entry.workerLeaseId;
+    const message = replaceWholeId(error.message, entry.workerLeaseId, entry.gatewayLeaseId);
+    if (!names && message === error.message) return error;
     return new DispatchError(
       error.code,
-      error.message.replaceAll(entry.workerLeaseId, entry.gatewayLeaseId),
-      { ...details, leaseId: entry.gatewayLeaseId },
+      message,
+      names ? { ...details, leaseId: entry.gatewayLeaseId } : error.details,
     );
   }
 
@@ -1596,4 +1598,19 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
   };
+}
+
+// why: a lease id is replaced only as a whole token, so a short id inside a longer word or id is left alone.
+function replaceWholeId(text: string, id: string, replacement: string): string {
+  const isIdCharacter = (character: string | undefined): boolean =>
+    character !== undefined && /[\w-]/.test(character);
+  let result = "";
+  let from = 0;
+  for (let at = text.indexOf(id); at !== -1; at = text.indexOf(id, from)) {
+    const end = at + id.length;
+    const whole = !isIdCharacter(text[at - 1]) && !isIdCharacter(text[end]);
+    result += text.slice(from, at) + (whole ? replacement : id);
+    from = end;
+  }
+  return result + text.slice(from);
 }
