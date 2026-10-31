@@ -945,6 +945,22 @@ describe("MCP list_devices physicalDevices", () => {
       expected: [{ ...listed, workerId: "mac-mini-2", state: "ready" }],
     },
     {
+      name: "phones on a lost, an incompatible and a drained worker are left out",
+      devices: [
+        statusDevice({ ...phone, id: "p1", state: "ready", workerId: "lost" }),
+        statusDevice({ ...phone, id: "p2", state: "ready", workerId: "old" }),
+        statusDevice({ ...phone, id: "p3", state: "ready", workerId: "drained" }),
+        statusDevice({ ...phone, id: "p4", model: "iPhone 16", state: "ready", workerId: "ok" }),
+      ],
+      workers: [
+        workerView("lost", { connection: "disconnected" }),
+        workerView("old", { connection: "incompatible" }),
+        workerView("drained", { drained: true }),
+        workerView("ok", {}),
+      ],
+      expected: [{ ...listed, model: "iPhone 16", workerId: "ok", state: "ready" }],
+    },
+    {
       name: "a removed phone is left out",
       devices: [
         statusDevice({ ...phone, id: "p1", state: "deleted" }),
