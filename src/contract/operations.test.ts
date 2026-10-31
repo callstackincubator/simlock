@@ -49,6 +49,11 @@ const ROLE_MATRIX: ReadonlyArray<{
     input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
     role: "agent",
   },
+  {
+    name: "device.rotate",
+    input: { leaseId: "lease_1", orientation: "landscape_left" },
+    role: "agent",
+  },
   { name: "identity.get", input: {}, role: "agent" },
   { name: "token.list", input: {}, role: "admin" },
   { name: "token.revoke", input: { id: "tok_1" }, role: "admin" },
@@ -136,6 +141,11 @@ const EFFECT_MATRIX: ReadonlyArray<{
   {
     name: "device.exec",
     input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    effect: "write",
+  },
+  {
+    name: "device.rotate",
+    input: { leaseId: "lease_1", orientation: "landscape_left" },
     effect: "write",
   },
   { name: "identity.get", input: {}, effect: "read" },
