@@ -338,6 +338,29 @@ describe("pr-body-check.mjs", { timeout: 20_000 }, () => {
     ]);
   });
 
+  it("walks the Done when lines past an indented line after an unindented or blank line, appending it to no checklist line", () => {
+    const issue = {
+      "issues/7": { body: "## Done when\n\n- The website build passes.\n" },
+      "issues/7/parent": null,
+    };
+    const ledger1 = `## Review ledger\n\nRound 1: ${"a".repeat(40)}\n\`\`\`json\n{"findings": []}\n\`\`\``;
+    const task = (list: string) =>
+      fromGitHub(
+        { body: valid.replace("- [x] a Done when line", list), head: { ref: "task/7" } },
+        { comments: [ledger1], routes: issue },
+      );
+    const coderabbit = "## Summary by CodeRabbit\n\n* **Bug Fixes**\n  * Fixed a crash.";
+
+    expect(task(`- [x] The website build passes.\n\n${coderabbit}`)).toEqual({
+      status: 0,
+      lines: [],
+    });
+    expect(task("- [x] The website\n\n  build passes.")).toEqual({
+      status: 1,
+      lines: [expect.stringContaining('"The website build passes." is not a checklist line')],
+    });
+  });
+
   it("walks the parent's Completion conditions on the PR that closes its last open sub-issue, counting the stack below", () => {
     const ledger1 = `## Review ledger\n\nRound 1: ${"a".repeat(40)}\n\`\`\`json\n{"findings": []}\n\`\`\``;
     const parent = {
