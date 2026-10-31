@@ -10688,6 +10688,7 @@ describe("simlock rotate", () => {
     argv: readonly string[],
     leases: readonly (typeof heldLease)[],
     role: "admin" | "agent" = "admin",
+    daemonHome?: { role: "gateway"; dataDirectory: string; gatewayPresent: true },
   ) {
     const output = outputCapture();
     const rotations: unknown[] = [];
@@ -10695,6 +10696,7 @@ describe("simlock rotate", () => {
     const exitCode = await runCli(
       argv,
       output.environmentWith({
+        ...(daemonHome === undefined ? {} : { daemonHome }),
         connectAdmin: async () =>
           fakeClient({
             role,
@@ -10713,7 +10715,7 @@ describe("simlock rotate", () => {
     return { closes: () => closes, exitCode, output, rotations };
   }
 
-  it("a user runs simlock rotate <orientation> [--lease <id>] and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
+  it("a user runs simlock rotate <orientation> [--lease <id>], on a worker or with --gateway, and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
     const only = await rotateWith(["rotate", "landscape-left"], [heldLease]);
     expect(only.exitCode).toBe(0);
     expect(only.rotations).toEqual([
@@ -10731,6 +10733,25 @@ describe("simlock rotate", () => {
     expect(asAgent.rotations).toEqual([
       { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
     ]);
+
+    const gateway = {
+      role: "gateway",
+      dataDirectory: "/simlock/gateway",
+      gatewayPresent: true,
+    } as const;
+    for (const argv of [
+      ["--gateway", "rotate", "landscape-left"],
+      ["rotate", "landscape-left", "--gateway"],
+    ]) {
+      const throughGateway = await rotateWith(argv, [heldLease], "agent", gateway);
+      expect(throughGateway.exitCode, argv.join(" ")).toBe(0);
+      expect(throughGateway.rotations, argv.join(" ")).toEqual([
+        { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
+      ]);
+      expect(throughGateway.output.stdout, argv.join(" ")).toBe(
+        "Rotated lease lse_mine_answered to landscape_left\n",
+      );
+    }
 
     for (const argv of [
       ["rotate", "--lease", "lse_other", "left"],
