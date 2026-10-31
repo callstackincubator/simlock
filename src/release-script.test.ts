@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { format } from "oxfmt";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = join(import.meta.dirname, "..", "scripts", "release.mjs");
@@ -131,6 +132,25 @@ describe("scripts/release.mjs changelog", () => {
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(
       `# Changelog\n\n## 0.1.0 (${today})\n\n### What's Changed\n\n- feat: a by @x in https://example/1\n\n### New Contributors\n\n- @x\n`,
     );
+  });
+
+  it("writes a CHANGELOG.md that oxfmt leaves unchanged, from main's CHANGELOG.md and GitHub's generated notes for 0.4.1", async () => {
+    const repo = join(import.meta.dirname, "..");
+    const cwd = scratch(
+      {
+        "CHANGELOG.md": readFileSync(join(repo, "CHANGELOG.md"), "utf8"),
+        "notes.md": readFileSync(
+          join(import.meta.dirname, "fixtures", "github-release-notes-v0.4.1.txt"),
+          "utf8",
+        ),
+      },
+      "0.4.0",
+    );
+    expect(run(cwd, ["changelog", "0.4.1", "v0.4.0", "notes.md"]).status).toBe(0);
+    const written = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
+    const formatted = await format("CHANGELOG.md", written);
+    expect(formatted.errors).toEqual([]);
+    expect(written).toBe(formatted.code);
   });
 
   it("leaves CHANGELOG.md alone when the notes file is missing", () => {
