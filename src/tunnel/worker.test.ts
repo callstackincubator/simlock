@@ -26,6 +26,15 @@ function frames(socket: MemoryLeaseSocket): { tag: number; conn: number; body: s
   }));
 }
 
+function sentData(socket: MemoryLeaseSocket, conn: number): number {
+  return socket.sent
+    .filter(
+      (sent) =>
+        sent[0] === 0x03 && new DataView(sent.buffer, sent.byteOffset).getUint32(1) === conn,
+    )
+    .reduce((total, sent) => total + sent.length - 5, 0);
+}
+
 function hello(...tunnels: { kind: string; devicePort: number }[]): Uint8Array {
   return frame(0x01, 0, JSON.stringify({ tunnels }));
 }
@@ -153,5 +162,35 @@ describe("a worker's tunnel socket", () => {
     expect(second.closed?.code).toBe(4003);
     expect(first.closed).toBeUndefined();
     expect(deviceTcp.reversed).toEqual([5001, 5002, 5003, 5004]);
+  });
+
+  it("carries bytes both ways under a 262144-byte window per direction, and a reader that grants no credit pauses only its own connection", async () => {
+    const { deviceTcp, worker } = await setup();
+    const socket = await attach(worker);
+    socket.receive(hello({ devicePort: 5173, kind: "reverse" }));
+    await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+    const first = deviceTcp.connect(5173);
+    const second = deviceTcp.connect(5173);
+    await vi.waitFor(() =>
+      expect(frames(socket).map((sent) => sent.tag)).toEqual([0x81, 0x02, 0x02]),
+    );
+
+    socket.receive(frame(0x03, 1, "to the device"));
+    await vi.waitFor(() => expect(first.writtenText()).toBe("to the device"));
+    await vi.waitFor(() =>
+      expect(socket.sent.at(-1)).toEqual(Uint8Array.from([0x04, 0, 0, 0, 1, 0, 0, 0, 13])),
+    );
+
+    first.send(new Uint8Array(300_000));
+    await vi.waitFor(() => expect(sentData(socket, 1)).toBe(262_144));
+    second.send("still flowing");
+    await vi.waitFor(() => expect(sentData(socket, 3)).toBe(13));
+    expect(sentData(socket, 1)).toBe(262_144);
+
+    socket.receive(Uint8Array.from([0x04, 0, 0, 0, 1, 0, 0x01, 0x86, 0xa0]));
+    await vi.waitFor(() => expect(sentData(socket, 1)).toBe(300_000));
+    expect(frames(socket).every((sent) => sent.tag !== 0x03 || sent.body.length <= 65_536)).toBe(
+      true,
+    );
   });
 });
