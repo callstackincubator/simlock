@@ -929,7 +929,7 @@ describe("MCP list_devices physicalDevices", () => {
   } as const;
   const cases: ReadonlyArray<{
     readonly name: string;
-    readonly devices: StatusDevice[];
+    readonly devices: StatusDevice[] | undefined;
     readonly workers?: WorkerView[];
     readonly expected: unknown[];
   }> = [
@@ -960,6 +960,30 @@ describe("MCP list_devices physicalDevices", () => {
       ],
       expected: [{ ...listed, model: "iPhone 16", workerId: "ok", state: "ready" }],
     },
+    {
+      name: "simulators and emulators are left out",
+      devices: [
+        statusDevice({
+          id: "s1",
+          physical: false,
+          platform: "ios",
+          model: "iPhone 17",
+          osVersion: "26.5",
+          state: "ready",
+        }),
+        statusDevice({
+          id: "e1",
+          physical: false,
+          platform: "android",
+          model: "Pixel 8",
+          osVersion: "35",
+          state: "leased",
+        }),
+      ],
+      expected: [],
+    },
+    { name: "no phone enrolled", devices: [], expected: [] },
+    { name: "a daemon still starting, with no device list", devices: undefined, expected: [] },
     {
       name: "a removed phone is left out",
       devices: [
@@ -997,6 +1021,19 @@ describe("MCP list_devices physicalDevices", () => {
         await close();
       }
     }
+
+    const failing = new FakeSimlockClient();
+    failing.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    failing.getStatusImpl = () =>
+      Promise.reject(new SimlockError("FORBIDDEN", "protocol", "not allowed", {}));
+    const { mcpClient, close } = await connectedServer(failing);
+    try {
+      const result = await call(mcpClient, "list_devices", {});
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text(result))).toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await close();
+    }
   });
 });
 
@@ -1030,8 +1067,15 @@ function statusDevice(fixture: StatusDeviceFixture): StatusDevice {
   };
 }
 
-function statusOutput(devices: StatusDevice[], workers?: WorkerView[]): StatusGetOutput {
-  return { ...startingStatus(), devices, ...(workers === undefined ? {} : { workers }) };
+function statusOutput(
+  devices: StatusDevice[] | undefined,
+  workers?: WorkerView[],
+): StatusGetOutput {
+  return {
+    ...startingStatus(),
+    ...(devices === undefined ? {} : { devices }),
+    ...(workers === undefined ? {} : { workers }),
+  };
 }
 
 function workerView(
