@@ -7,6 +7,7 @@ import {
   FakeDaemonLauncher,
   FakeHttpJsonClient,
   FakeSystemStats,
+  FakeTcpListenerFactory,
   FakeTcpStreamConnector,
   FakeWebSocketClientConnector,
   WebSocketRefusedError,
@@ -42,6 +43,7 @@ function command(env: NodeJS.ProcessEnv) {
   const httpJson = new FakeHttpJsonClient();
   const clock = new FakeClock(0);
   const tcpStreams = new FakeTcpStreamConnector();
+  const tcpListeners = new FakeTcpListenerFactory();
   const environment = buildCliEnvironment(
     {
       clock,
@@ -57,6 +59,7 @@ function command(env: NodeJS.ProcessEnv) {
       stderr: { write: (value) => err.push(value) },
       stdout: { write: (value) => out.push(value) },
       systemStats: new FakeSystemStats({ cpuCount: 2, totalRamBytes: 2 ** 30 }),
+      tcpListeners,
       tcpStreams,
       webSocket,
       workingDirectory: "/work",
@@ -70,6 +73,7 @@ function command(env: NodeJS.ProcessEnv) {
     out,
     run: (argv: readonly string[]) => runCli(argv, environment),
     signals,
+    tcpListeners,
     tcpStreams,
     webSocket,
   };
@@ -582,3 +586,83 @@ describe("simlock tunnel that is refused or loses its worker", () => {
     await sigterm();
   });
 });
+
+describe("simlock tunnel forward listening on the caller's loopback", () => {
+  it("binds each caller port before HELLO, holds connections until READY, announces them with even ids and closes every listener however the command ends", async () => {
+    const busy = command(ENV);
+    busy.tcpListeners.busy.add(9229);
+    expect(await busy.run(["tunnel", "forward", "9229", "--lease", "L1"])).toBe(1);
+    expect(line(busy)).toEqual(
+      errorBody("TUNNEL_CALLER_PORT_IN_USE", "forward 9229: localhost:9229 is already in use"),
+    );
+    expect(busy.webSocket.connections).toEqual([]);
+
+    const waiting = command(ENV);
+    const exit = waiting.run([
+      "tunnel",
+      "forward",
+      "9229:19229",
+      "reverse",
+      "5173",
+      "--lease",
+      "L1",
+    ]);
+    await vi.waitFor(() => expect(waiting.webSocket.connections).toHaveLength(1));
+    const peer = waiting.webSocket.connections[0]?.peer;
+    if (peer === undefined) throw new Error("no socket");
+    expect(waiting.tcpListeners.listeners.map((listener) => listener.port)).toEqual([19229]);
+    const early = waiting.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() =>
+      expect(sentFrames(waiting).map((f) => f.tag)).toEqual([TUNNEL_TAG.hello]),
+    );
+    expect(early?.closed).toBe(false);
+    peer.receive(READY);
+    await vi.waitFor(() =>
+      expect(sentFrames(waiting).map((f) => [f.tag, f.conn])).toEqual([
+        [TUNNEL_TAG.hello, 0],
+        [TUNNEL_TAG.open, 2],
+      ]),
+    );
+    expect(JSON.parse(new TextDecoder().decode(sentFrames(waiting)[1]?.payload))).toEqual({
+      devicePort: 9229,
+      kind: "forward",
+    });
+    waiting.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(waiting).at(-1)?.conn).toBe(4));
+    waiting.signals.emit("SIGINT");
+    expect(await exit).toBe(0);
+
+    const refusedEarly = command(ENV);
+    const refusedExit = refusedEarly.run(["tunnel", "forward", "9229", "--lease", "L1"]);
+    await vi.waitFor(() => expect(refusedEarly.webSocket.connections).toHaveLength(1));
+    const queued = refusedEarly.tcpListeners.listeners[0]?.connect();
+    refusedEarly.webSocket.connections[0]?.peer.receive(
+      refusedFrame("TUNNEL_BAD_PORT", "Device port 80 is below 1024"),
+    );
+    expect(await refusedExit).toBe(1);
+    expect(queued?.closed).toBe(true);
+    expect(sentFrames(refusedEarly).map((f) => f.tag)).toEqual([TUNNEL_TAG.hello]);
+
+    const endings: readonly ((cli: ReturnType<typeof command>, peer: Peer) => void)[] = [
+      (cli) => cli.signals.emit("SIGINT"),
+      (_cli, ended) => ended.receive(refusedFrame("TUNNEL_BAD_PORT", "no")),
+      (_cli, ended) => ended.dropped(4001, "device released"),
+      (_cli, ended) => ended.dropped(1006, ""),
+    ];
+    for (const ending of endings) {
+      const cli = command(ENV);
+      const run = cli.run(["tunnel", "forward", "9229", "forward", "9230", "--lease", "L1"]);
+      await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+      const connection = cli.webSocket.connections[0]?.peer;
+      if (connection === undefined) throw new Error("no socket");
+      connection.silentOnClose = true;
+      expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([false, false]);
+      ending(cli, connection);
+      cli.clock.advance(2_000);
+      await run;
+      expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([true, true]);
+    }
+  });
+});
+
+type Peer = ReturnType<typeof command>["webSocket"]["connections"][number]["peer"];
