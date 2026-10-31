@@ -50,6 +50,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | agent-device | Optional edge: the two agent-device daemons (simulators, phones) beside a worker, its HTTP front | [agent-device](../../src/agent-device/AGENTS.md) |
 | stream | Optional edge: a running device's live screen over HTTP, relayed by a gateway | [stream](../../src/stream/AGENTS.md) |
 | input | Optional edge: a lease holder's taps and keys over a WebSocket, relayed by a gateway | [input](../../src/input/AGENTS.md) |
+| tunnel | Optional edge: a lease holder's reverse tunnels from its Android device over a WebSocket, on a lone worker | [tunnel](../../src/tunnel/AGENTS.md) |
 | auth | Credential → identity: tokens, admin secret, `hello`, uplink join token, HTTP strategies | [auth](../../src/auth/AGENTS.md) |
 | http | HTTP frontend: routes, SSE | [http](../../src/http/AGENTS.md) |
 | cli | Operator command surface | [cli](../../src/cli/AGENTS.md) |

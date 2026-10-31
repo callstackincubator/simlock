@@ -23,6 +23,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `version-order.ts` | `isNewerVersion(candidate, running)`: the one "newer" rule (semver order) every update surface shares; the console imports it by this path, not the index (the index carries zod)                                                                       |
 | `duration.ts`      | `parseDurationMs`, for the CLI and HTTP                                                                                                                                                                                                                 |
 | `relay.ts`         | Bounded relay ids, channel ids, headers                                                                                                                                                                                                                 |
+| `tunnel-frames.ts` | The tunnel socket's frame codec, tags and limits (`encodeTunnelFrame`, `decodeTunnelFrame`, `TUNNEL_*`); a helper with no wire shape, listed in the protocol-bump check                                                                                 |
 | `console-url.ts`   | The console address `status.get` reports                                                                                                                                                                                                                |
 
 ## Operations
