@@ -12,9 +12,17 @@ import {
   TUNNEL_WINDOW_LIMIT,
   type TunnelFrame,
 } from "../contract/index.js";
-import { toDriverDevice, type DeviceRecord } from "../core/index.js";
+import {
+  stableError,
+  toDriverDevice,
+  type DeviceRecord,
+  type DeviceReverse,
+} from "../core/index.js";
 import type { ModuleDeviceTcp } from "../modules/index.js";
-import type { LeaseSocket, TcpStream } from "../ports/index.js";
+import type { LeaseSocket, Logger, TcpStream } from "../ports/index.js";
+
+const CLOSE_LEASE_ENDED = 4001;
+const CLOSE_GOING_AWAY = 1001;
 
 interface Tunnel {
   readonly kind: "reverse" | "forward";
@@ -90,20 +98,63 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
   return undefined;
 }
 
+// why: one socket's state that the lease's end and the daemon's stop reach from outside: `finish` closes its connections and, unless the reclaim that follows does it, removes its rules.
+interface Session {
+  readonly socket: LeaseSocket;
+  finish(removeRules: boolean): Promise<void>;
+}
+
 export interface TunnelSessions {
   attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void;
+  end(leaseId: string, reason: string, signal: AbortSignal): Promise<void>;
+  drain(): Promise<void>;
 }
 
 export function createTunnelSessions(options: {
   readonly deviceTcp: ModuleDeviceTcp;
+  readonly logger: Logger;
 }): TunnelSessions {
   // why: the 8-tunnel limit counts every socket of one lease, so the count is the lease's, not the socket's.
   const counts = new Map<string, number>();
+  const sessions = new Map<string, Set<Session>>();
 
   function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void {
     let nextConnection = 1;
     let greeted = false;
+    let reserved = 0;
+    let finished: Promise<void> | undefined;
     const connections = new Map<number, Connection>();
+    const reverses: DeviceReverse[] = [];
+
+    function finish(removeRules: boolean): Promise<void> {
+      finished ??= (async () => {
+        sessions.get(leaseId)?.delete(session);
+        counts.set(leaseId, (counts.get(leaseId) ?? 0) - reserved);
+        for (const connection of connections.values()) {
+          connection.closed = true;
+          connection.stream.close();
+          connection.wake?.();
+        }
+        connections.clear();
+        if (!removeRules) return;
+        await Promise.all(
+          reverses.map((reverse) =>
+            reverse.close().catch((error: unknown) => {
+              options.logger.warn("A tunnel's device rule could not be removed", {
+                error: stableError(error),
+              });
+            }),
+          ),
+        );
+      })();
+      return finished;
+    }
+
+    const session: Session = { finish, socket };
+    const mine = sessions.get(leaseId) ?? new Set<Session>();
+    mine.add(session);
+    sessions.set(leaseId, mine);
+    socket.onClose(() => void finish(true));
 
     // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
     async function pump(conn: number, connection: Connection): Promise<void> {
@@ -163,6 +214,7 @@ export function createTunnelSessions(options: {
         return;
       }
       counts.set(leaseId, held + tunnels.length);
+      reserved = tunnels.length;
       for (const tunnel of tunnels) {
         const reverse = await options.deviceTcp.reverse(
           device.spec.platform,
@@ -170,6 +222,7 @@ export function createTunnelSessions(options: {
           tunnel.devicePort,
           new AbortController().signal,
         );
+        reverses.push(reverse);
         reverse.onConnection((stream) => {
           const conn = nextConnection;
           nextConnection += 2;
@@ -253,5 +306,27 @@ export function createTunnelSessions(options: {
     });
   }
 
-  return { attach };
+  async function endSessions(
+    leaseId: string | undefined,
+    code: number,
+    reason: string,
+    removeRules: boolean,
+  ): Promise<void> {
+    const ending =
+      leaseId === undefined
+        ? [...sessions.values()].flatMap((set) => [...set])
+        : [...(sessions.get(leaseId) ?? [])];
+    // why: a close that races the end must not remove a rule twice, so each session finishes once, with the end's choice about removal.
+    const done = ending.map((session) => session.finish(removeRules));
+    for (const session of ending) session.socket.close(code, reason);
+    await Promise.all(done);
+  }
+
+  return {
+    attach,
+    drain: () => endSessions(undefined, CLOSE_GOING_AWAY, "Simlock is stopping", true),
+    // why: with the signal already aborted the daemon is stopping or in maintenance, and reclaim removes the rules, so no removal runs after reclaim began.
+    end: (leaseId, reason, signal) =>
+      endSessions(leaseId, CLOSE_LEASE_ENDED, reason, !signal.aborted),
+  };
 }

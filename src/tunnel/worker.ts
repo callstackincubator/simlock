@@ -4,9 +4,13 @@ import type { TunnelModuleConfig } from "./definition.js";
 import { createTunnelSessions } from "./sessions.js";
 
 export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModule {
-  const sessions = createTunnelSessions({ deviceTcp: ctx.deviceTcp });
+  const sessions = createTunnelSessions({ deviceTcp: ctx.deviceTcp, logger: ctx.logger });
   return {
     capability: { name: ctx.name, read: () => Promise.resolve({ state: "available" }) },
+    hooks: {
+      beforeDeviceReclaim: (ended, signal) => sessions.end(ended.leaseId, ended.reason, signal),
+      beforeDrain: () => sessions.drain(),
+    },
     socket: {
       open: (_request, _identity, held) => {
         const lease: LeaseRecord | undefined = ctx.registry.snapshot.leases.find(
