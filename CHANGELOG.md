@@ -414,6 +414,26 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.4.2](https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2) (2026-10-31)
+
+### What's Changed
+
+- fix(e2e): slow-ios-smoke comment names the real reason the simulator stays Booted by @V3RON in https://github.com/callstackincubator/simlock/pull/1136
+- fix(agents): pr-body-check ignores an indented line after a non-checklist line by @V3RON in https://github.com/callstackincubator/simlock/pull/1142
+- fix(ios): read the version from a device-specific runtime id by @V3RON in https://github.com/callstackincubator/simlock/pull/1141
+- fix(android): leave hw.device.hash2 out of the config hash by @V3RON in https://github.com/callstackincubator/simlock/pull/1147
+- fix(ports): survive a client reset during uplink authenticate by @V3RON in https://github.com/callstackincubator/simlock/pull/1140
+- fix(android): bound the clean-baseline snapshot load at 60 s by @V3RON in https://github.com/callstackincubator/simlock/pull/1149
+- fix(cli): report an invalid config.json as USAGE, exit 2 by @V3RON in https://github.com/callstackincubator/simlock/pull/1148
+- fix(daemon): daemon stop shuts down idle devices (#1056) by @V3RON in https://github.com/callstackincubator/simlock/pull/1150
+- fix(config): config.get redacts secrets unless showSecrets is asked by @V3RON in https://github.com/callstackincubator/simlock/pull/1157
+- fix(android): give emulator console snapshot save, snapshot list and emu kill a deadline by @V3RON in https://github.com/callstackincubator/simlock/pull/1159
+- fix(e2e): warmUp releases its warm-up leases when a later one fails by @V3RON in https://github.com/callstackincubator/simlock/pull/1160
+- fix(e2e): keep each daemon's log when teardown deletes its home by @V3RON in https://github.com/callstackincubator/simlock/pull/1161
+
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2
+
 ## [0.4.1](https://github.com/callstackincubator/simlock/compare/v0.4.0...v0.4.1) (2026-10-31)
 
 ### What's Changed

@@ -1,6 +1,6 @@
 {
   "name": "simlock",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Control plane for iOS simulators and Android emulators.",
   "keywords": [
     "agents",
