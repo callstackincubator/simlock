@@ -1894,11 +1894,16 @@ export class AndroidDriver implements Driver {
   async #avdConfig(avdName: string): Promise<string> {
     try {
       const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
-      return contents
-        .split(/\r?\n/)
-        .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
-        .sort()
-        .join("\n");
+      return (
+        contents
+          .split(/\r?\n/)
+          .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+          // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
+          // ignores it, so counting it would invalidate the other devices' baselines.
+          .filter((line) => !line.startsWith("hw.device.hash2="))
+          .sort()
+          .join("\n")
+      );
     } catch {
       return "";
     }
