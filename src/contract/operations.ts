@@ -1084,7 +1084,11 @@ export const deviceRotate = defineOperation({
   role: "agent",
   effect: "write",
   input: z
-    .object({ leaseId: z.string().min(1).max(256), orientation: z.enum(INPUT_ORIENTATIONS) })
+    .object({
+      leaseId: z.string().min(1).max(256),
+      orientation: z.enum(INPUT_ORIENTATIONS),
+      requesterId: z.string().min(1).max(256).optional(),
+    })
     .strict(),
   output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),
 });

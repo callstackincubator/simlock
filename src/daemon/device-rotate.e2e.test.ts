@@ -81,4 +81,37 @@ describe("device.rotate", () => {
       expect(input.opened[0]?.closes).toBe(1);
     },
   );
+
+  it(
+    "refuses a caller that rotates a lease it may not touch, or names a bad orientation",
+    { timeout: 60_000 },
+    async () => {
+      const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
+      const { daemon, leaseId } = await worker({ input, inputModule: false });
+      const other: DispatchSession = { ...holder, principal: "holder-2" };
+      const admin: DispatchSession = { ...holder, principal: "gateway-1", role: "admin" };
+      const orientation = "landscape_left";
+
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation }, holder),
+      ).resolves.toEqual({ leaseId, orientation });
+
+      const refused: readonly (readonly [object, unknown, DispatchSession])[] = [
+        [{ name: "UnknownLeaseError" }, { leaseId: "nope", orientation }, holder],
+        [{ code: "FORBIDDEN" }, { leaseId, orientation }, other],
+        [{ code: "FORBIDDEN" }, { leaseId, orientation, requesterId: "holder-1" }, holder],
+        [{ code: "FORBIDDEN" }, { leaseId, orientation, requesterId: "someone-else" }, admin],
+        [{ code: "BAD_REQUEST" }, { leaseId, orientation: "landscape-left" }, holder],
+        [{ code: "BAD_REQUEST" }, { leaseId, orientation: "auto" }, holder],
+        [{ code: "BAD_REQUEST" }, { leaseId, orientation: "" }, holder],
+      ];
+      for (const [expected, body, session] of refused) {
+        await expect(
+          daemon.dispatch("device.rotate", body as never, session),
+          JSON.stringify(body),
+        ).rejects.toMatchObject(expected);
+      }
+      expect(input.opened).toHaveLength(1);
+    },
+  );
 });
