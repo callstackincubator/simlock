@@ -336,18 +336,30 @@ function serve(
     );
   });
   let nextCallerConnection = 2;
+  // why: a connection accepted before READY is held, because the worker has not yet said the tunnels are set up; it is closed if the worker refuses.
+  let ready = false;
+  const held: (() => void)[] = [];
+  const heldStreams: TcpStream[] = [];
   for (const [spec, listener] of listeners) {
     listener.onConnection((stream) => {
-      const conn = nextCallerConnection;
-      nextCallerConnection += 2;
-      socket.send(
-        encodeTunnelFrame(
-          TUNNEL_TAG.open,
-          conn,
-          JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
-        ),
-      );
-      adopt(conn, stream);
+      const announce = (): void => {
+        const conn = nextCallerConnection;
+        nextCallerConnection += 2;
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.open,
+            conn,
+            JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
+          ),
+        );
+        adopt(conn, stream);
+      };
+      if (ready) {
+        announce();
+        return;
+      }
+      held.push(announce);
+      heldStreams.push(stream);
     });
   }
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
@@ -372,6 +384,7 @@ function serve(
       environment.signals.off("SIGTERM", stop);
       environment.clock.cancel(helloTimer);
       if (silence !== undefined) environment.clock.cancel(silence);
+      if (!ready) for (const stream of heldStreams) stream.close();
       if (failure === undefined) resolve(0);
       else reject(failure);
     }
@@ -410,6 +423,8 @@ function serve(
       }
       if (frame.tag === TUNNEL_TAG.ready) {
         environment.clock.cancel(helloTimer);
+        ready = true;
+        for (const announce of held.splice(0)) announce();
         for (const { callerPort, devicePort, kind } of specs) {
           const route =
             kind === "reverse"
