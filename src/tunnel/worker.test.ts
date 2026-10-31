@@ -90,4 +90,68 @@ describe("a worker's tunnel socket", () => {
       expect(frames(socket).at(-1)).toEqual({ body: "from the device", conn: 1, tag: 0x03 }),
     );
   });
+
+  it("refuses a HELLO that cannot be met whole with REFUSED and close 4003, and leaves nothing it named set up", async () => {
+    const reverse = (devicePort: number) => ({ devicePort, kind: "reverse" });
+    const cases = [
+      {
+        code: "TUNNEL_BAD_PORT",
+        message: "reverse 80: device ports are 1024 to 65535",
+        tunnels: [reverse(5173), reverse(80)],
+      },
+      {
+        code: "TUNNEL_BAD_PORT",
+        message: "reverse 70000: device ports are 1024 to 65535",
+        tunnels: [reverse(70_000)],
+      },
+      {
+        code: "TUNNEL_LIMIT",
+        message: "the lease already has 9 tunnels; at most 8",
+        tunnels: Array.from({ length: 9 }, (_, index) => reverse(5000 + index)),
+      },
+      {
+        code: "TUNNEL_UNSUPPORTED",
+        message: "forward tunnels are not available yet",
+        tunnels: [reverse(5173), { devicePort: 9229, kind: "forward" }],
+      },
+    ];
+    for (const refused of cases) {
+      const { deviceTcp, worker } = await setup();
+      const socket = await attach(worker);
+      socket.receive(hello(...refused.tunnels));
+      await vi.waitFor(() =>
+        expect(socket.closed).toEqual({ code: 4003, reason: refused.message }),
+      );
+      expect(frames(socket)).toEqual([
+        {
+          body: JSON.stringify({ code: refused.code, message: refused.message }),
+          conn: 0,
+          tag: 0x82,
+        },
+      ]);
+      expect(deviceTcp.reversed).toEqual([]);
+    }
+
+    const { deviceTcp, worker } = await setup();
+    const first = await attach(worker);
+    first.receive(hello(...[5001, 5002, 5003, 5004].map(reverse)));
+    await vi.waitFor(() => expect(frames(first).map((sent) => sent.tag)).toEqual([0x81]));
+    const second = await attach(worker);
+    second.receive(hello(...[5005, 5006, 5007, 5008, 5009].map(reverse)));
+    await vi.waitFor(() =>
+      expect(frames(second)).toEqual([
+        {
+          body: JSON.stringify({
+            code: "TUNNEL_LIMIT",
+            message: "the lease already has 9 tunnels; at most 8",
+          }),
+          conn: 0,
+          tag: 0x82,
+        },
+      ]),
+    );
+    expect(second.closed?.code).toBe(4003);
+    expect(first.closed).toBeUndefined();
+    expect(deviceTcp.reversed).toEqual([5001, 5002, 5003, 5004]);
+  });
 });
