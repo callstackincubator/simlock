@@ -1630,7 +1630,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(launcher.launches).toBe(0);
     expect(output.stderr).toContain("limits.android.maxDevices");
     expect(output.stderr).not.toContain("Timed out");
