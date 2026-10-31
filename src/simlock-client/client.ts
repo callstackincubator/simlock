@@ -637,11 +637,11 @@ class SimlockClientImpl {
   }
 
   rotate(
-    _leaseId: string,
-    _orientation: RotateInput["orientation"],
-    _options: { readonly requesterId?: string } = {},
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options: { readonly requesterId?: string } = {},
   ): Promise<RotateOutput> {
-    return Promise.resolve({ leaseId: "", orientation: "portrait" });
+    return this.#call("device.rotate", { leaseId, orientation, ...options });
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
