@@ -7,6 +7,7 @@ import {
   EVENTS_PAGE_WITH_SINCE_MESSAGE,
   eventsPageWithoutSince,
 } from "./events-page.js";
+import { INPUT_ORIENTATIONS } from "./orientation.js";
 import { parseOsConstraint } from "./os-range.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
@@ -1074,6 +1075,20 @@ const identityGet = defineOperation({
   }),
 });
 
+/**
+ * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
+ */
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const deviceRotate = defineOperation({
+  name: "device.rotate",
+  role: "agent",
+  effect: "write",
+  input: z
+    .object({ leaseId: z.string().min(1).max(256), orientation: z.enum(INPUT_ORIENTATIONS) })
+    .strict(),
+  output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),
+});
+
 export const OPERATIONS = {
   "identity.get": identityGet,
   "catalog.get": catalogGet,
@@ -1086,6 +1101,7 @@ export const OPERATIONS = {
   "lease.get": leaseGet,
   "driver.passthrough": driverPassthrough,
   "device.exec": deviceExec,
+  "device.rotate": deviceRotate,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,
   "list.get": listGet,

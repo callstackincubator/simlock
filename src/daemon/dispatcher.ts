@@ -261,6 +261,7 @@ export class Dispatcher {
       "lease.get": this.#leaseGet,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": this.#relayRequest,
       "relay.cancel": this.#relayCancel,
       "doctor.run": this.#doctorRun,
@@ -657,6 +658,11 @@ export class Dispatcher {
    * so a command that writes a gigabyte costs this process nothing, and a client sees the
    * first line while the command is still running.
    */
+  #deviceRotate: Handler<"device.rotate"> = async (input) => ({
+    leaseId: input.leaseId,
+    orientation: "portrait",
+  });
+
   #deviceExec: Handler<"device.exec"> = async (input, session) => {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
