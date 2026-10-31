@@ -50,6 +50,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   closeGate: Promise<void> | undefined;
   // why: every device list a `sweep` was given, in order, so a test can tell what the daemon asked a platform's driver to sweep.
   readonly sweeps: (readonly SweptDevice[])[] = [];
+  // why: a test sets a device port's failure to make its `connect` refuse with that error, as a device that never answers does.
+  readonly connectFailures = new Map<number, Error>();
   readonly listening = new Set<number>();
   readonly connections: { readonly devicePort: number; readonly peer: FakeTcpPeer }[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
@@ -91,6 +93,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   }
 
   async connect(_device: unknown, devicePort: number, _signal?: AbortSignal): Promise<TcpStream> {
+    const failure = this.connectFailures.get(devicePort);
+    if (failure !== undefined) throw failure;
     if (!this.listening.has(devicePort)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
     const peer = new FakeTcpPeer();
     this.connections.push({ devicePort, peer });

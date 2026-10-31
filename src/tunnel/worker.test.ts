@@ -791,7 +791,7 @@ describe("a worker's tunnel socket with forward tunnels", () => {
     socket.receive(open(514, 9229));
     await vi.waitFor(() =>
       expect(frames(socket).at(-1)).toEqual({
-        body: '{"reason":"256 connections are open"}',
+        body: '{"reason":"too many connections"}',
         conn: 514,
         tag: 0x06,
       }),
@@ -800,5 +800,38 @@ describe("a worker's tunnel socket with forward tunnels", () => {
     const past = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() => expect(past.closed).toBe(true));
     expect(socket.closed).toBeUndefined();
+
+    const failing = await ready();
+    failing.deviceTcp.listening.delete(9229);
+    failing.deviceTcp.connectFailures.set(9231, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
+    failing.socket.receive(open(2, 9229));
+    await vi.waitFor(() =>
+      expect(frames(failing.socket).at(-1)).toEqual({
+        body: '{"reason":"closed"}',
+        conn: 2,
+        tag: 0x06,
+      }),
+    );
+    expect(failing.socket.closed).toBeUndefined();
+
+    const silent = await ready();
+    silent.deviceTcp.connectFailures.set(9229, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
+    silent.socket.receive(open(2, 9229));
+    await vi.waitFor(() =>
+      expect(frames(silent.socket).at(-1)).toEqual({
+        body: '{"reason":"timeout"}',
+        conn: 2,
+        tag: 0x06,
+      }),
+    );
+
+    const ended = await ready();
+    await ended.worker.hooks?.beforeDeviceReclaim?.(
+      ending("expired"),
+      new AbortController().signal,
+    );
+    ended.socket.receive(open(2, 9229));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ended.deviceTcp.connections).toHaveLength(0);
   });
 });

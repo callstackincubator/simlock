@@ -272,6 +272,7 @@ export function createTunnelSessions(options: {
     }
 
     function openForward(conn: number, payload: Uint8Array): void {
+      if (finished !== undefined) return;
       if (conn % 2 !== 0 || conn <= lastCallerConnection) {
         badRequest("OPEN needs an even connection id above the last");
         return;
@@ -287,7 +288,7 @@ export function createTunnelSessions(options: {
           encodeTunnelFrame(
             TUNNEL_TAG.reset,
             conn,
-            JSON.stringify({ reason: `${String(MAX_CONNECTIONS)} connections are open` }),
+            JSON.stringify({ reason: "too many connections" }),
           ),
         );
         return;
