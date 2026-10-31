@@ -10682,6 +10682,8 @@ describe("simlock rotate", () => {
     ttlMs: 60_000,
   };
 
+  const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
+
   async function rotateWith(argv: readonly string[], leases: readonly (typeof heldLease)[]) {
     const output = outputCapture();
     const rotations: unknown[] = [];
@@ -10713,7 +10715,6 @@ describe("simlock rotate", () => {
     ]);
     expect(only.output.stdout).toBe("Rotated lease lse_mine_answered to landscape_left\n");
 
-    const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
     for (const argv of [
       ["rotate", "--lease", "lse_other", "left"],
       ["rotate", "left", "--lease", "lse_other"],
@@ -10729,5 +10730,66 @@ describe("simlock rotate", () => {
         },
       ]);
     }
+
+    for (const [spelling, orientation] of [
+      ["LEFT", "landscape_left"],
+      [" left ", "landscape_left"],
+      ["upside-down", "portrait_upside_down"],
+    ]) {
+      const spelled = await rotateWith(["rotate", spelling as string], [heldLease]);
+      expect(spelled.exitCode).toBe(0);
+      expect(spelled.output.stdout).toBe(`Rotated lease lse_mine_answered to ${orientation}\n`);
+    }
+
+    const refusals: [readonly string[], readonly (typeof heldLease)[], RegExp][] = [
+      [["rotate", "sideways"], [heldLease], /^Unknown orientation sideways; use portrait,/],
+      [["rotate", "auto"], [heldLease], /^Unknown orientation auto;/],
+      [["rotate", "landscapeLeft"], [heldLease], /^Unknown orientation landscapeLeft;/],
+      [["rotate"], [heldLease], /^Expected orientation/],
+      [["rotate", "left"], [], /test-requester/],
+      [["rotate", "left"], two, /lse_mine.*lse_other.*--lease <id>/s],
+    ];
+    for (const [argv, leases, message] of refusals) {
+      const refused = await rotateWith(argv, leases);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.rotations).toEqual([]);
+      expect(JSON.parse(refused.output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringMatching(message) },
+      });
+    }
+
+    const unsupported = outputCapture();
+    await expect(
+      runCli(
+        ["rotate", "left", "--lease", "lse_android"],
+        unsupported.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              rotate: () =>
+                Promise.reject(
+                  new SimlockError(
+                    "ROTATION_UNSUPPORTED",
+                    "domain",
+                    "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+                    {
+                      class: "emulator",
+                      leaseId: "lse_android",
+                      physical: false,
+                      platform: "android",
+                    },
+                  ),
+                ),
+            }),
+        }),
+      ),
+    ).resolves.toBe(12);
+    expect(JSON.parse(unsupported.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: {
+        code: "ROTATION_UNSUPPORTED",
+        message:
+          "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+      },
+    });
+    expect(unsupported.stdout).toBe("");
   });
 });
