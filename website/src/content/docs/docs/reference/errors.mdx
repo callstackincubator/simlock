@@ -86,7 +86,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection during the handshake or before the startup check finished, or was still starting 90 seconds after it answered (it is left running). The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause (often the configuration), and run the command again. |
+| `DAEMON_STARTUP_FAILED` | 1 | 503 | The CLI started the daemon, and it did not answer within 20 seconds, exited while starting, or closed the connection during the handshake or before the startup check finished, or was still starting 90 seconds after it answered (it is left running). The message carries the daemon's start error. | Read the message and `simlock daemon logs`, fix the cause, and run the command again. |
 | `DAEMON_CONNECTION_LOST` | 1 | 503 | The connection to the daemon dropped mid-command. A lease held by `simlock lease` is not released and stays yours until its deadline. | Start the daemon again; renew the lease with `simlock lease renew <lease-id>` or let it expire. |
 | `DAEMON_STOPPING` | 1 | 503 | The daemon is shutting down, or stopped while an install was running. | Run the command again once the daemon is back. |
 | `PROTOCOL_VERSION_UNSUPPORTED` | 1 | 400 | The CLI and the running daemon are different Simlock versions that cannot talk to each other. | Restart the daemon after an upgrade: `simlock daemon stop`, then any command. |
@@ -141,7 +141,7 @@ The CLI and the HTTP API each add a few codes of their own:
 
 | Code | Where | Exit or HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
+| `USAGE` | CLI | exit 2 | A bad flag, a missing argument or an unknown command. Also a `config.json` the CLI rejects before it starts the daemon, and a `SIMLOCK_HOME` too long for the daemon's socket path. | Run the command with `--help`. |
 | `SETUP_REFUSED` | CLI | exit 2 | `simlock setup` found a file or a symlink where its `simlock` skill directory goes. Nothing was written. | Move it aside and run `setup` again. |
 | `SETUP_MCP_FAILED` | CLI | exit 1 | `simlock setup` wrote the skills, but a tool's `mcp add` command failed or ran longer than 30 seconds. The message names each tool and the reason. | Run the tool's `mcp add` command by hand, as the message and [Connect your agent](/simlock/docs/getting-started/connect-your-agent) show. |
 | `SERVICE_FAILED` | CLI | exit 1 | `simlock daemon install` or `uninstall`, or a start through the service, could not finish: the service manager (launchd or systemd) failed or did not answer in time, or the old daemon did not stop. The message names the command and its first error line. | Fix what the message names and run the command again. |

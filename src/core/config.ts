@@ -414,13 +414,11 @@ export interface Config {
     /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
     readonly url?: string;
     /** why: A join token minted on the gateway with `simlock token create --role worker`.
-     * Worker-side. It is a secret, and it sits in the daemon's config file like any other
-     * value there: `config.get` is admin-role and returns the config as written, so this key
-     * is exactly as sensitive as `config.json`'s file permissions make it. `simlock config
-     * set` writes that file owner-only (0600) every time; a file written by hand, or before
+     * Worker-side. It is a secret, and it sits in the daemon's config file, which `simlock
+     * config set` writes owner-only (0600) every time; a file written by hand, or before
      * that, keeps whatever mode it has until the next `config set`. Everywhere else the
-     * config is written out -- the startup log line, `daemon.started` -- goes through
-     * `redactConfig`. */
+     * config is written out -- the startup log line, `daemon.started`, and `config.get`
+     * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
     /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
@@ -479,7 +477,19 @@ export interface Config {
 export const REDACTED_VALUE = "[redacted]";
 
 // why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
-export function redactConfig(config: Config): Config {
+export function redactConfig<
+  Shape extends {
+    readonly gateway: {
+      readonly token?: string | undefined;
+      readonly alerts: {
+        readonly destinations: readonly {
+          readonly url: string;
+          readonly secret?: string | undefined;
+        }[];
+      };
+    };
+  },
+>(config: Shape): Shape {
   const { token, alerts } = config.gateway;
   if (token === undefined && alerts.destinations.length === 0) return config;
   return {
@@ -496,7 +506,7 @@ export function redactConfig(config: Config): Config {
         })),
       },
     },
-  };
+  } as Shape;
 }
 
 /**

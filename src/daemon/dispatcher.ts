@@ -37,6 +37,7 @@ import {
   isUnavailableInput,
   createUsageReader,
   type UsageReader,
+  redactConfig,
 } from "../core/index.js";
 import type { ModuleInputs } from "../modules/index.js";
 import { rotationRefusal } from "./rotation-refusal.js";
@@ -876,7 +877,8 @@ export class Dispatcher {
     return { subscribed: false };
   };
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
