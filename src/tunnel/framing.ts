@@ -40,7 +40,7 @@ export async function* readFrames(
     for (;;) {
       while (buffer.length >= 4) {
         const length = new DataView(buffer.buffer, buffer.byteOffset, buffer.length).getUint32(0);
-        if (length < 1 || length > MAX_TUNNEL_MESSAGE_BYTES + 1) return;
+        if (length < 1 || length > MAX_TUNNEL_MESSAGE_BYTES) return;
         if (buffer.length < 4 + length) break;
         yield { payload: buffer.slice(5, 4 + length), tag: buffer[4] ?? 0 };
         buffer = buffer.subarray(4 + length);

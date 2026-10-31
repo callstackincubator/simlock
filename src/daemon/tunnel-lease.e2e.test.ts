@@ -290,6 +290,13 @@ describe("a lease's tunnel socket", () => {
       expect(carried.messages[2]?.length).toBe(65_541);
       expect(carried.messages[2]?.[0]).toBe(0x03);
 
+      const largest = Buffer.concat([Buffer.from([0x03, 0, 0, 0, 1]), Buffer.alloc(65_536)]);
+      expect(largest.length).toBe(65_541);
+      carried.socket.send(largest);
+      await vi.waitFor(() => expect(carried.messages).toHaveLength(4), { timeout: 10_000 });
+      expect(carried.messages[3]?.[0]).toBe(0x04);
+      expect(carried.closed).toBeUndefined();
+
       const tooBig = Buffer.concat([Buffer.from([0x03, 0, 0, 0, 1]), Buffer.alloc(65_537)]);
       expect(tooBig.length).toBe(65_542);
       carried.socket.send(tooBig);

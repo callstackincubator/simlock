@@ -25,7 +25,6 @@ export function channelSocket(pipe: ModuleTwoWayPipe, clock: Clock): LeaseSocket
   };
   // why: the gateway ends a relay whose worker direction is silent for 15 s, and a tunnel with nothing to say still has to be seen alive.
   const heartbeat = (): void => {
-    if (closed) return;
     write(encodeFrame(CHANNEL_TAG.heartbeat, new Uint8Array()));
     beat = clock.setTimer(HEARTBEAT_MS, heartbeat);
   };

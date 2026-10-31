@@ -504,6 +504,7 @@ describe("a worker's tunnel socket", () => {
         },
       }),
     );
+    const idleTimers = clock.pendingTimerCount;
     const answer = await worker.relayTwoWay?.(new Request("http://simlock/tunnel"), "gw:t", "L-1", {
       readable: fromGateway.readable,
       signal: new AbortController().signal,
@@ -542,8 +543,10 @@ describe("a worker's tunnel socket", () => {
         ...json,
       ]),
     );
+    expect(clock.pendingTimerCount).toBe(idleTimers);
     clock.advance(20_000);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(heartbeats()).toBe(2);
+    expect(clock.pendingTimerCount).toBe(idleTimers);
   });
 });
