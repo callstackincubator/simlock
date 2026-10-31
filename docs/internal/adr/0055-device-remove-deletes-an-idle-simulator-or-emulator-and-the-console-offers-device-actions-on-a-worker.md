@@ -54,8 +54,8 @@ click, at most a typed name to confirm.
 
 | Virtual device state                     | Answer                                     |
 | ---------------------------------------- | ------------------------------------------ |
-| `ready`, no claim                        | shut down, deleted: `{ id, driverDeviceId }` |
-| `shutdown`, no claim                     | deleted: `{ id, driverDeviceId }`          |
+| `ready`, no claim                        | shut down, deleted: 200, `physical: false` |
+| `shutdown`, no claim                     | deleted: 200, `physical: false`            |
 | `leased`                                 | 409 `DEVICE_BUSY`, reason `leased`         |
 | `reclaiming`, or a `reclaim` claim       | 409 `DEVICE_BUSY`, reason `reclaiming`     |
 | any other state, or any other claim      | 409 `DEVICE_BUSY`, reason `busy`           |
@@ -67,9 +67,14 @@ nothing was touched.
 
 Events: `device.shutdown` (when it was `ready`) and `device.deleted`, both
 with initiator `operator`, the initiator `device remove` already uses for
-a physical device. No new event and no new error code. The input, the
-output and `DEVICE_BUSY`'s reasons keep their shapes, so the protocol does
-not change.
+a physical device. No new event and no new error code: `DEVICE_BUSY`'s
+reasons stay `leased`, `reclaiming` and `busy`.
+
+The answer gains `physical` (a boolean), so a caller can say what
+happened: the CLI prints "Removed … It is no longer enrolled; nothing on
+the device changed." for a phone, as today, and a line saying the device
+was deleted for a simulator or emulator. The input keeps its shape. The
+protocol rises by one.
 
 The warm pool is not asked. A device a target or a learned kind keeps is
 deleted like any other, and the pool's next pass makes a new one if the
@@ -87,7 +92,7 @@ sequenceDiagram
   alt claimed and still ready
     L->>Dr: shutdown, then destroy
     L-->>D: deleted (device.shutdown, device.deleted)
-    D-->>O: 200 { id, driverDeviceId }
+    D-->>O: 200 { id, driverDeviceId, physical: false }
   else leased, claimed or moved
     L-->>D: nothing
     D-->>O: 409 DEVICE_BUSY
@@ -152,7 +157,7 @@ flowchart LR
 ## Alternatives considered
 
 - **A new route, `DELETE /v1/virtual-devices/{id}`, and a new operation.**
-  Rejected: two verbs for "this device goes", a protocol bump, and a CLI
+  Rejected: two verbs for "this device goes", a second operation, and a CLI
   command beside `device remove`. Ids do not collide: a virtual id is
   `dev_…`, a physical one is the phone's own.
 - **Let a delete also forget the device's warm kind.** Rejected: it mixes
