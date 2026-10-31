@@ -109,6 +109,62 @@ describe("a worker's tunnel socket", () => {
     );
   });
 
+  it("serves two tunnels, half-closes with END from each side, and closes a device connection past 256 open", async () => {
+    const { deviceTcp, worker } = await setup();
+    const socket = await attach(worker);
+    socket.receive(
+      hello({ devicePort: 5173, kind: "reverse" }, { devicePort: 5174, kind: "reverse" }),
+    );
+    await vi.waitFor(() =>
+      expect(frames(socket)).toEqual([
+        {
+          body: '{"tunnels":[{"kind":"reverse","devicePort":5173},{"kind":"reverse","devicePort":5174}]}',
+          conn: 0,
+          tag: 0x81,
+        },
+      ]),
+    );
+    const first = deviceTcp.connect(5173);
+    const second = deviceTcp.connect(5174);
+    await vi.waitFor(() =>
+      expect(frames(socket).slice(1)).toEqual([
+        { body: '{"kind":"reverse","devicePort":5173}', conn: 1, tag: 0x02 },
+        { body: '{"kind":"reverse","devicePort":5174}', conn: 3, tag: 0x02 },
+      ]),
+    );
+
+    first.end();
+    await vi.waitFor(() => expect(frames(socket).at(-1)).toEqual({ body: "", conn: 1, tag: 0x05 }));
+    socket.receive(frame(0x03, 1, "after the device's END"));
+    await vi.waitFor(() => expect(first.writtenText()).toBe("after the device's END"));
+    expect(first.writeEnded).toBe(false);
+    socket.receive(frame(0x05, 1));
+    await vi.waitFor(() => expect(first.writeEnded).toBe(true));
+    expect(second.writeEnded).toBe(false);
+    second.send("the other tunnel is untouched");
+    await vi.waitFor(() =>
+      expect(frames(socket).at(-1)).toEqual({
+        body: "the other tunnel is untouched",
+        conn: 3,
+        tag: 0x03,
+      }),
+    );
+
+    const opens = () => frames(socket).filter((sent) => sent.tag === 0x02).length;
+    const peers = Array.from({ length: 255 }, () => deviceTcp.connect(5173));
+    await vi.waitFor(() => expect(opens()).toBe(257));
+    expect(peers.every((peer) => !peer.closed)).toBe(true);
+    const past = deviceTcp.connect(5173);
+    await vi.waitFor(() => expect(past.closed).toBe(true));
+    expect(opens()).toBe(257);
+
+    socket.receive(frame(0x06, 3, '{"reason":"done"}'));
+    await vi.waitFor(() => expect(second.closed).toBe(true));
+    const after = deviceTcp.connect(5173);
+    await vi.waitFor(() => expect(opens()).toBe(258));
+    expect(after.closed).toBe(false);
+  });
+
   it("refuses a HELLO that cannot be met whole with REFUSED and close 4003, and leaves nothing it named set up", async () => {
     const reverse = (devicePort: number) => ({ devicePort, kind: "reverse" });
     const cases = [

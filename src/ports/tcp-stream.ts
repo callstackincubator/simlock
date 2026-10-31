@@ -10,6 +10,8 @@ export interface TcpStreamConnector {
 export interface TcpStream {
   readonly readable: ReadableStream<Uint8Array>;
   write(bytes: Uint8Array | string): Promise<void>;
+  // why: half-close, so the peer sees this side's bytes end while it can still write back; `close` ends both.
+  end(): void;
   close(): void;
 }
 
@@ -20,6 +22,9 @@ export function tcpStreamOf(socket: Socket): TcpStream {
   return {
     close: () => {
       socket.destroy();
+    },
+    end: () => {
+      socket.end();
     },
     readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
     write: (bytes) =>
@@ -60,6 +65,8 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
 export class FakeTcpPeer {
   readonly written: Uint8Array[] = [];
   closed = false;
+  // why: the driver half-closed its side, as `stream.end()` does; `end()` on the peer is the device's side ending.
+  writeEnded = false;
   #controller!: ReadableStreamDefaultController<Uint8Array>;
   readonly stream: TcpStream;
 
@@ -81,6 +88,9 @@ export class FakeTcpPeer {
         } catch {
           // why: a cancelled readable is already closed; closing the connection is still done.
         }
+      },
+      end: () => {
+        this.writeEnded = true;
       },
       readable,
       write: async (bytes) => {

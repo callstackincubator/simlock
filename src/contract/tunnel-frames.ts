@@ -4,6 +4,7 @@
 export const TUNNEL_TAG = {
   credit: 0x04,
   data: 0x03,
+  end: 0x05,
   hello: 0x01,
   open: 0x02,
   ready: 0x81,
