@@ -96,12 +96,16 @@ flowchart LR
    runs `forward --remove-all`: forward rules live in the server, which
    other devices and tools share. Tunnel listeners use only loopback ports
    47000 to 47999, reserved for tunnels. At start, before any lease is
-   served, the worker removes, on every Android device it proves its own,
-   leased or idle, each `reverse` rule whose host side is in that range:
-   the range is reserved for tunnels (a holder's own rule pointed there is
-   removed too, and the docs say so), and no tunnel survives a restart. Rules
-   pointing elsewhere, a holder's own made through `exec`, stay, so leases
-   kept across a restart (ADR 0019) keep them.
+   served, the worker reads `reverse` rules on every Android device it
+   proves its own. On an idle device it removes each rule whose host side is
+   in that range: the range is reserved for tunnels (a holder's own rule
+   pointed there is removed too, and the docs say so), and no tunnel
+   survives a restart. On a leased device it removes nothing, since no
+   cleanup may target a leased device (safety rule 2): it marks the ports
+   those rules point to as taken, so no new tunnel listener is given one,
+   and the device's reclaim removes the rules. Rules pointing elsewhere, a
+   holder's own made through `exec`, stay, so leases kept across a restart
+   (ADR 0019) keep them.
 7. The socket's frames are not daemon-contract operations, but both ends
    must agree on them: their codec is a helper in the contract, which the
    CLI and the module both import. The tunnel's refusals are contract error
