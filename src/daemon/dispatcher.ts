@@ -644,6 +644,44 @@ export class Dispatcher {
     return {};
   };
 
+  #leaseIsActive(leaseId: string): boolean {
+    return this.options.registry.snapshot.leases.some((candidate) => candidate.id === leaseId);
+  }
+
+  #deviceRotate: Handler<"device.rotate"> = async (input) => {
+    if (this.options.inputs === undefined) {
+      throw new DispatchError("INTERNAL", "Device input is unavailable");
+    }
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const record = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
+    const refusal = rotationRefusal(input.leaseId, record.spec);
+    if (refusal !== undefined) throw refusal;
+    try {
+      const held = await this.options.inputs.leaseInput(
+        input.leaseId,
+        record.spec.platform,
+        toDriverDevice(record),
+      );
+      try {
+        if (isUnavailableInput(held.input)) throw new Error(held.input.unavailable);
+        if (!this.#leaseIsActive(input.leaseId)) throw new UnknownLeaseError(input.leaseId);
+        await held.input.send({ kind: "orientation", orientation: input.orientation });
+      } finally {
+        held.release();
+      }
+    } catch (error) {
+      if (error instanceof UnknownLeaseError) throw error;
+      throw inputUnavailable(input.leaseId, error);
+    }
+    return { leaseId: input.leaseId, orientation: input.orientation };
+  };
+
   /**
    * why: ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
    * instead of there. Everything a passthrough already decides is reused verbatim -- which
@@ -663,38 +701,6 @@ export class Dispatcher {
    * so a command that writes a gigabyte costs this process nothing, and a client sees the
    * first line while the command is still running.
    */
-  #deviceRotate: Handler<"device.rotate"> = async (input) => {
-    if (this.options.inputs === undefined) {
-      throw new DispatchError("INTERNAL", "Device input is unavailable");
-    }
-    const lease = this.options.registry.snapshot.leases.find(
-      (candidate) => candidate.id === input.leaseId,
-    );
-    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
-    const record = this.options.registry.snapshot.devices.find(
-      (candidate) => candidate.id === lease.deviceId,
-    );
-    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
-    const refusal = rotationRefusal(input.leaseId, record.spec);
-    if (refusal !== undefined) throw refusal;
-    try {
-      const opened = await this.options.inputs.openInput(
-        record.spec.platform,
-        toDriverDevice(record),
-        new AbortController().signal,
-      );
-      if (isUnavailableInput(opened)) throw new Error(opened.unavailable);
-      try {
-        await opened.send({ kind: "orientation", orientation: input.orientation });
-      } finally {
-        await opened.close();
-      }
-    } catch (error) {
-      throw inputUnavailable(input.leaseId, error);
-    }
-    return { leaseId: input.leaseId, orientation: input.orientation };
-  };
-
   #deviceExec: Handler<"device.exec"> = async (input, session) => {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");

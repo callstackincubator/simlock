@@ -10,7 +10,7 @@ import {
   type InputScreenConfig,
   type UnavailableDeviceInput,
 } from "../core/index.js";
-import type { ModuleInputs } from "../modules/index.js";
+import type { LeaseInputHandle, ModuleInputs } from "../modules/index.js";
 import type { Clock, LeaseSocket } from "../ports/index.js";
 
 const MAX_SOCKETS_PER_LEASE = 8;
@@ -33,6 +33,8 @@ interface LeaseInput {
   // why: set once the device input has opened, so an end that finds it open closes it at once instead of after a wait.
   device: DeviceInput | undefined;
   readonly opening: Promise<DeviceInput | UnavailableDeviceInput>;
+  // why: set with `device`; the entry's one hold on the daemon's shared input, given back when the last socket leaves or the input fails.
+  handle: LeaseInputHandle | undefined;
   readonly sockets: Set<Attached>;
   config: InputScreenConfig | undefined;
   closed: boolean;
@@ -53,11 +55,11 @@ export function createInputSessions(options: {
   const failedOpens = new Map<string, number>();
 
   // why: every end of a lease's device input -- its last socket leaving, its own failure -- goes through here, so it closes once.
-  function release(leaseId: string, entry: LeaseInput, opened: DeviceInput): void {
+  function release(leaseId: string, entry: LeaseInput): void {
     if (entry.closed) return;
     entry.closed = true;
     if (leases.get(leaseId) === entry) leases.delete(leaseId);
-    void opened.close();
+    entry.handle?.release();
   }
 
   // why: an unavailable device input has nothing to close, so its entry is dropped at once instead of staying for the daemon's lifetime.
@@ -68,14 +70,14 @@ export function createInputSessions(options: {
   // why: `unlessJoined` is the last socket leaving: a socket that joined while the input was still opening keeps it, so the close that waited for the open drops out.
   function releaseWhenOpen(leaseId: string, entry: LeaseInput, unlessJoined = false): void {
     if (entry.device !== undefined) {
-      release(leaseId, entry, entry.device);
+      release(leaseId, entry);
       return;
     }
     void entry.opening.then(
       (opened) => {
         if (unlessJoined && entry.sockets.size > 0) return;
         if (isUnavailableInput(opened)) forget(leaseId, entry);
-        else release(leaseId, entry, opened);
+        else release(leaseId, entry);
       },
       () => undefined,
     );
@@ -105,15 +107,17 @@ export function createInputSessions(options: {
       closed: false,
       config: undefined,
       device: undefined,
+      handle: undefined,
       opening: options.inputs
-        .openInput(device.spec.platform, toDriverDevice(device), new AbortController().signal)
+        .leaseInput(leaseId, device.spec.platform, toDriverDevice(device))
         .then(
-          (opened) => {
-            if (!isUnavailableInput(opened)) {
-              entry.device = opened;
-              wire(leaseId, entry, opened);
+          (handle) => {
+            entry.handle = handle;
+            if (!isUnavailableInput(handle.input)) {
+              entry.device = handle.input;
+              wire(leaseId, entry, handle.input);
             }
-            return opened;
+            return handle.input;
           },
           (error: unknown) => {
             failedOpens.set(leaseId, options.clock.now());
@@ -135,7 +139,7 @@ export function createInputSessions(options: {
       }
     });
     opened.onFailed(() => {
-      release(leaseId, entry, opened);
+      release(leaseId, entry);
       for (const attached of entry.sockets) attached.socket.close(CLOSE_FAILED, REASON_FAILED);
     });
   }
