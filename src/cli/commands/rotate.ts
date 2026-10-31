@@ -8,7 +8,16 @@ async function run(
   argv: readonly string[],
   { environment, token }: CommandContext,
 ): Promise<number> {
-  const { lease, positionals } = commandArgs(argv, { lease: { type: "string" } });
+  const { help, lease, positionals } = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    lease: { type: "string" },
+  });
+  if (help) {
+    environment.stdout.write(
+      "Usage: simlock rotate <portrait|portrait-upside-down|landscape-left|landscape-right> [--lease <id>]\n",
+    );
+    return 0;
+  }
   const parsed = parseOrientation(requiredPositional(positionals, "orientation"));
   if (!parsed.ok) throw new UsageError(parsed.message);
   const client = await connectDaemonClient(environment, token);
