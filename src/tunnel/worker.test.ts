@@ -5,7 +5,7 @@ import { DeviceTcpError } from "../core/index.js";
 import { FakeDeviceTcp } from "../core/testing.js";
 import type { WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
-import { MemoryLeaseSocket } from "../ports/index.js";
+import { type FakeClock, MemoryLeaseSocket } from "../ports/index.js";
 import { tunnelModule } from "./index.js";
 
 const IDENTITY = { principal: "tok_holder", role: "agent" } as const;
@@ -50,8 +50,9 @@ function hello(...tunnels: { kind: string; devicePort: number }[]): Uint8Array {
 async function setup(platform = "android"): Promise<{
   readonly worker: WorkerModule;
   readonly deviceTcp: FakeDeviceTcp;
+  readonly clock: FakeClock;
 }> {
-  const { ctx } = await fakeWorkerContext("tunnel", {});
+  const { clock, ctx } = await fakeWorkerContext("tunnel", {});
   const deviceTcp = new FakeDeviceTcp();
   const registry = {
     snapshot: {
@@ -68,7 +69,7 @@ async function setup(platform = "android"): Promise<{
     },
     registry,
   });
-  return { deviceTcp, worker };
+  return { clock, deviceTcp, worker };
 }
 
 async function attach(worker: WorkerModule): Promise<MemoryLeaseSocket> {
@@ -489,5 +490,63 @@ describe("a worker's tunnel socket", () => {
     early.drop();
     release();
     await vi.waitFor(() => expect(racing.deviceTcp.reversed).toEqual([]));
+  });
+
+  it("keeps an idle relay alive with a heartbeat every 5 s and closes it with an 0xF1 {code, reason}", async () => {
+    const { clock, worker } = await setup();
+    const toGateway = new TransformStream<Uint8Array, Uint8Array>();
+    const fromGateway = new TransformStream<Uint8Array, Uint8Array>();
+    const written: number[] = [];
+    void toGateway.readable.pipeTo(
+      new WritableStream({
+        write: (chunk) => {
+          written.push(...chunk);
+        },
+      }),
+    );
+    const idleTimers = clock.pendingTimerCount;
+    const answer = await worker.relayTwoWay?.(new Request("http://simlock/tunnel"), "gw:t", "L-1", {
+      readable: fromGateway.readable,
+      signal: new AbortController().signal,
+      writable: toGateway.writable,
+    });
+    expect(answer?.status).toBe(200);
+    const heartbeat = [0, 0, 0, 1, 0xf0];
+    const heartbeats = (): number => {
+      let count = 0;
+      for (let at = 0; at + 5 <= written.length; at += 1) {
+        if (heartbeat.every((byte, offset) => written[at + offset] === byte)) count += 1;
+      }
+      return count;
+    };
+
+    clock.advance(4_999);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heartbeats()).toBe(0);
+    clock.advance(1);
+    await vi.waitFor(() => expect(heartbeats()).toBe(1));
+    clock.advance(5_000);
+    await vi.waitFor(() => expect(heartbeats()).toBe(2));
+
+    await worker.hooks?.beforeDeviceReclaim?.(
+      { leaseId: "L-1", reason: "explicit" } as never,
+      new AbortController().signal,
+    );
+    const json = new TextEncoder().encode(JSON.stringify({ code: 4001, reason: "explicit" }));
+    await vi.waitFor(() =>
+      expect(written.slice(-(json.length + 5))).toEqual([
+        0,
+        0,
+        (json.length + 1) >> 8,
+        (json.length + 1) & 0xff,
+        0xf1,
+        ...json,
+      ]),
+    );
+    expect(clock.pendingTimerCount).toBe(idleTimers);
+    clock.advance(20_000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heartbeats()).toBe(2);
+    expect(clock.pendingTimerCount).toBe(idleTimers);
   });
 });

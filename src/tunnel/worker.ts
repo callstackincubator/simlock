@@ -1,6 +1,7 @@
 import type { LeaseRecord } from "../core/index.js";
 import type { WorkerContext, WorkerModule } from "../modules/index.js";
 import type { TunnelModuleConfig } from "./definition.js";
+import { channelSocket } from "./channel.js";
 import { unknownLease, upgradeRequired } from "./refusal.js";
 import { createTunnelSessions } from "./sessions.js";
 
@@ -13,6 +14,15 @@ export function createWorker(ctx: WorkerContext<TunnelModuleConfig>): WorkerModu
       beforeDrain: () => sessions.drain(),
     },
     leaseRoute: () => Promise.resolve(upgradeRequired()),
+    relayTwoWay: (_request, _tenant, leaseId, pipe) => {
+      const lease = ctx.registry.snapshot.leases.find((entry) => entry.id === leaseId);
+      const device = ctx.registry.snapshot.devices.find((entry) => entry.id === lease?.deviceId);
+      if (lease === undefined || device === undefined) {
+        return Promise.resolve(unknownLease(leaseId ?? ""));
+      }
+      sessions.attach(lease.id, device, channelSocket(pipe, ctx.clock));
+      return Promise.resolve(new Response(null, { status: 200 }));
+    },
     socket: {
       open: (_request, _identity, held) => {
         const lease: LeaseRecord | undefined = ctx.registry.snapshot.leases.find(

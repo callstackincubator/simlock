@@ -413,9 +413,10 @@ describe("buildOpenApiDocument with the input module", () => {
 
     const tunnel = document.paths?.["/v1/leases/{id}/tunnel"]?.get;
     expect(tunnel?.tags).toEqual(["tunnel"]);
-    expect(sortedKeys(tunnel?.responses)).toEqual(["101", "401", "403", "404", "426"]);
+    expect(sortedKeys(tunnel?.responses)).toEqual(["101", "401", "403", "404", "426", "503"]);
     expect(errorCodes(tunnel, "404")).toEqual(["UNKNOWN_LEASE"]);
     expect(errorCodes(tunnel, "426")).toEqual(["BAD_REQUEST"]);
+    expect(errorCodes(tunnel, "503")).toEqual(["TUNNEL_UNAVAILABLE", "WORKER_UNREACHABLE"]);
   });
 });
 
