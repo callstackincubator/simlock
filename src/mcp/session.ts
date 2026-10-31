@@ -266,6 +266,7 @@ export class McpSession {
           osVersion: device.spec.osVersion,
           ...(device.class === undefined ? {} : { class: device.class }),
           state: device.state,
+          ...(device.absentReason === undefined ? {} : { absentReason: device.absentReason }),
         }));
       return { ...catalog, physicalDevices };
     });
