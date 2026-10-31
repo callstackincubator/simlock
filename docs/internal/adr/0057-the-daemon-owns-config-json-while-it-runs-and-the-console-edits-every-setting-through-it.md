@@ -78,7 +78,7 @@ Each write is atomic and owner-only (`0600`), as `config set` writes today
   values, or `json`), the running value, the saved value (what the file
   gives at the next start), the default, whether it applies `live` or on
   `restart`, whether it is secret, and whether it is `pending` (saved
-  differs from running, on a restart key). A secret row carries no value,
+  differs from running: a hand edit, or a restart key saved). A secret row carries no value,
   only whether it is set (§4). A file that no longer loads gives rows with
   no saved value and one `fileProblem` message.
 - **`config.set`** (admin, write) takes one key and one JSON value. It
