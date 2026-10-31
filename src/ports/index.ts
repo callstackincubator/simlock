@@ -180,3 +180,18 @@ export {
   NodeUpdaterLauncher,
   type UpdaterLauncher,
 } from "./updater-launcher.js";
+export {
+  FakeWebSocketClientConnector,
+  FakeWebSocketPeer,
+  NodeWebSocketClientConnector,
+  WebSocketRefusedError,
+  type WebSocketClient,
+  type WebSocketClientConnector,
+  type WebSocketClientOptions,
+} from "./websocket-client.js";
+export {
+  FakeHttpJsonClient,
+  FetchHttpJsonClient,
+  type HttpJsonAnswer,
+  type HttpJsonClient,
+} from "./http-json.js";

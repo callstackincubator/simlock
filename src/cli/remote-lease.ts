@@ -2,13 +2,13 @@ import type { SimlockAdminClient } from "../admin/index.js";
 import { UsageError } from "./errors.js";
 import type { CommandContext } from "./tree.js";
 
-export async function resolveRemoteLeaseId(
-  client: SimlockAdminClient,
+export function selectOnlyLease(
+  leases: readonly { readonly id: string; readonly requesterId: string }[],
+  role: "admin" | "agent",
   environment: CommandContext["environment"],
-): Promise<string> {
-  const { leases } = await client.listLeases();
+): string {
   const own =
-    client.role === "admin"
+    role === "admin"
       ? leases.filter((lease) => lease.requesterId === environment.requesterId)
       : leases;
   if (own.length === 0) {
@@ -22,4 +22,12 @@ export async function resolveRemoteLeaseId(
     );
   }
   return (own[0] as { readonly id: string }).id;
+}
+
+export async function resolveRemoteLeaseId(
+  client: SimlockAdminClient,
+  environment: CommandContext["environment"],
+): Promise<string> {
+  const { leases } = await client.listLeases();
+  return selectOnlyLease(leases, client.role, environment);
 }

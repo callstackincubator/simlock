@@ -47,7 +47,7 @@ These flags work anywhere on the command line, before or after the command.
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--token <secret>` | Connect as admin with this token. `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
+| `--token <secret>` | The credential a command sends: the admin token for the local daemon, or the bearer token `simlock tunnel` sends to a worker or gateway. `--token=<secret>` also works. | See [Admin credential](#admin-credential) |
 | `--gateway` | Send the command to this machine's gateway, the daemon in `~/.simlock/gateway`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--local` | Send the command to this machine's worker, the daemon in `~/.simlock`. Takes no value. | See [Which daemon a command reaches](#which-daemon-a-command-reaches) |
 | `--help`, `-h` | As the first word, or with no command: print the list of commands. | — |
@@ -199,6 +199,23 @@ simlock rotate <orientation> [--lease <lease-id>]
 | `--lease <lease-id>` | The lease to turn, before or after the orientation. | Your only lease |
 
 It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12); an input helper that cannot start fails with `INPUT_UNAVAILABLE` (exit 1).
+
+## simlock tunnel
+
+Reach your leased Android emulator back to ports on your own machine, from another machine, while the command runs. It talks to a lone worker or a gateway over HTTP and WebSocket, so it needs no local daemon.
+
+```text
+simlock tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <lease-id>] [--url <url>]
+```
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `reverse <device-port>[:<caller-port>]` | Make the device's `localhost:<device-port>` reach `localhost:<caller-port>` on this machine. Both are integers 1 to 65535; the worker accepts device ports from 1024. Repeat the word `reverse` for up to 8 tunnels; a caller port may appear once. | The caller port is the device port |
+| `--lease <lease-id>` | The lease to reach, 1 to 256 characters. | An agent token's only lease; an operator token must name one |
+| `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; at most 2048 characters. | `SIMLOCK_URL` |
+| `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
+
+It prints one line per tunnel, `reverse device:<device-port> -> localhost:<caller-port> (lease <lease-id>)`, and runs until you press Ctrl-C or the process gets SIGTERM, which close the tunnels and exit 0. A tunnel whose caller port has nothing listening writes a warning to stderr at most once every 10 seconds and stays open. A missing `--url`, token or lease, an invalid port, or a repeated caller port is a usage error (exit 2). A refusal exits 1 with its code, for example `TUNNEL_BAD_PORT` for a device port below 1024. A lost connection, 45 seconds with no message or ping, or 90 seconds with no answer to the request exits 1 with `TUNNEL_DISCONNECTED`; the lease ending exits 14 with `TUNNEL_LEASE_ENDED`.
 
 ## simlock catalog
 
@@ -707,6 +724,8 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
 | `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
 | `SIMLOCK_AGENT_ID` | The requester identity. When set, it wins over the session variables below. | Unset |
+| `SIMLOCK_URL` | The worker or gateway `simlock tunnel` calls, when `--url` is not given. | Unset |
+| `SIMLOCK_TOKEN` | The bearer token `simlock tunnel` sends, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
 | `CODEX_SESSION_ID` | Set by Codex. Gives the identity `codex:<id>`. | — |
 | `PI_SESSION_ID` | Set by [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md#shell-tool-session-environment) for the commands its `bash` and `powershell` tools run. Gives the identity `pi:<id>`. | — |
