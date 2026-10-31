@@ -81,16 +81,19 @@ Each write is atomic and owner-only (`0600`), as `config set` writes today
   differs from running: a hand edit, or a restart key saved). A secret row carries no value,
   only whether it is set (§4). A file that no longer loads gives rows with
   no saved value and one `fileProblem` message.
-- **`config.set`** (admin, write) takes one key and one JSON value. It
-  validates exactly as `simlock config set` does: the file with the key
-  changed, through `loadConfig` with the daemon's role and modules, and an
+- **`config.set`** (admin, write) takes one key and one JSON value: any
+  key `simlock config set` takes, a parent (`idle`) or a field inside a
+  `json` row (`http.proxyAuth.header`) included. It does what `config set`
+  does: drop the retired `eventLog.rotateBytes`, change the key, validate
+  the file through `loadConfig` with the daemon's role and modules, an
   unknown key refused. A refusal is `BAD_REQUEST` with the message
   `Invalid config after setting <key>: <loader message>`. It answers the
-  key's new row.
+  rows the key touched (the row of that key, the rows under it, or the
+  `json` row holding it), and the retired keys it dropped.
 
-The rows come from the contract's config shape (`configSchema`): one row
-per field of a nested object, every other field (an array, a record, a
-union) one `json` row, plus a `drivers` row (the shape leaves `drivers`
+The rows come from the contract's config shape (`configSchema`): every
+object recurses, at any depth, optional ones included; every other field
+(an array, a record, a union) is one `json` row; plus a `drivers` row (the shape leaves `drivers`
 out) and `http.proxyAuth` as one `json` row (its four fields are only
 valid together). `mode` is no row: it is not a key. Unset is not offered,
 as in `config set` today.
@@ -99,8 +102,10 @@ as in `config set` today.
 
 `idle.shutdownAfterMs`, `idle.deleteAfterMs` and
 `diskPressure.freeBytesThreshold` apply live: after `config.set` writes
-the file, the daemon swaps the running value, and the cleanup reaper and
-the warm pool read it on their next run. They read these values on every
+the file, the daemon swaps the running value everywhere it is held: the
+cleanup reaper's config, the warm pool's `idle` copy
+(`src/core/create-core.ts:265`) and the config `config.get` answers. The
+reaper and the warm pool read it on their next run. They read these values on every
 run already (`src/core/cleanup/idle-shutdown.ts:16`,
 `src/core/cleanup/idle-destroy.ts:16-17`, `src/core/reaper.ts:236`); only
 the frozen copy stops a change today.
@@ -114,7 +119,8 @@ to the live list is a code change with its own test, never a setting.
 `gateway.token` and `gateway.alerts.destinations` (whose entries hold a
 `url` and a `secret`) are secret rows: the keys `redactConfig` masks
 (`src/core/config.ts:482-500`), taken from one list both read. `config.list`
-says only whether each is set. `config.set` replaces one whole; its answer
+says only whether each is set in the saved file (in the running config
+when the file does not load); a secret row can be pending like any other. `config.set` replaces one whole; its answer
 and every error message carry no value. `config.get` is not changed here
 (#1097 owns it).
 
@@ -122,7 +128,9 @@ and every error message carry no value. `config.get` is not changed here
 
 **`daemon.restart`** (admin, write) answers `{ restarting: true }`, then
 launches the updater process in a restart mode: `daemon.stop`, wait until
-the socket is free, `daemon start` for the same role. No install, no
+the socket is free and the old pid has exited (10 minutes, then SIGKILL, as
+an update waits), `daemon start` for the same role (running within 2
+minutes, else exit 1). No install, no
 database copy, no rollback. A restart keeps leases as any restart does; a
 lease request still waiting fails, as any restart makes it. During an
 update it answers `DAEMON_UPDATING`. A second call while one runs answers
@@ -178,8 +186,9 @@ it reads (`GATEWAY_CONFIG_KEYS`, without `gateway.url`, `token` and
 
 ### 8. One event names the keys and the caller
 
-`config.changed` `{ keys, applied, requesterId }`: the key set, `live` or
-`restart`, and the admin session's principal. Never a value. Emitted after
+`config.changed` `{ keys, applied, requesterId }`: the touched rows' keys
+(the given key when it touched none), `live` when every touched row is
+live, else `restart`, and the admin session's principal. Never a value. Emitted after
 the file is written (and, for a live key, after the running value
 changed). It marks the console's settings read stale. A file written by the
 CLI with no daemon running emits nothing.
