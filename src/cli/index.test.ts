@@ -10668,3 +10668,47 @@ describe("simlock worker update", () => {
     }
   });
 });
+
+describe("simlock rotate", () => {
+  const heldLease = {
+    deviceId: "dev_1",
+    grantedAt: 0,
+    id: "lse_mine",
+    lastRenewedAt: 0,
+    idChosenByRequester: false,
+    ownerId: "some-other-principal",
+    requesterId: "test-requester",
+    ttlDeadline: 60_000,
+    ttlMs: 60_000,
+  };
+
+  it("prints the lease the answer names and the canonical orientation for the holder's only lease", async () => {
+    const output = outputCapture();
+    const rotations: unknown[] = [];
+
+    await expect(
+      runCli(
+        ["rotate", "landscape-left"],
+        output.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              listLeases: () => Promise.resolve({ leases: [heldLease] }),
+              rotate: (leaseId, orientation, options) => {
+                rotations.push({ leaseId, orientation, options });
+                return Promise.resolve({ leaseId: "lse_answered", orientation });
+              },
+            }),
+        }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(rotations).toEqual([
+      {
+        leaseId: "lse_mine",
+        orientation: "landscape_left",
+        options: { requesterId: "test-requester" },
+      },
+    ]);
+    expect(output.stdout).toBe("Rotated lease lse_answered to landscape_left\n");
+  });
+});
