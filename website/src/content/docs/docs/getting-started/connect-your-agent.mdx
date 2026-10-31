@@ -70,7 +70,7 @@ While the request waits in the queue or a device boots, `simlock lease` blocks a
 
 | Tool | What it does |
 | --- | --- |
-| `list_devices` | Lists the models, OS versions and Android system images you can lease on this machine. It never downloads anything. |
+| `list_devices` | Lists the models, OS versions and Android system images you can lease on this machine, and, as `physicalDevices`, the enrolled phones and tablets: platform, model, OS version, class, state (`ready`, `leased`, `absent`) and, when absent, the reason, plus the `workerId` through a gateway. It never says who holds a leased phone, and `physicalDevices` is empty while the daemon is still starting. It never downloads anything. |
 | `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
 | `release_simulator` | Releases this session's lease. |
 | `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. Through a gateway it can report `held: false` for up to about a minute after the worker holding the lease restarts, while the worker is `starting`; do not request a new device on that answer, call it again. |

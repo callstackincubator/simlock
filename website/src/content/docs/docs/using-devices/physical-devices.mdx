@@ -15,6 +15,8 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 `simlock status` lists enrolled devices. A device that cannot be used shows as `absent`, with the reason: `locked`, `untrusted` or `not-present`.
 
+An agent finds enrolled phones the same way. Over HTTP, read `GET /v1/status` and keep the devices with `physical: true` and a state other than `deleted` (a removed phone stays in the answer); through a gateway, also keep only those whose worker is connected and not drained. Over MCP, `list_devices` returns exactly those as `physicalDevices`. Neither names who holds a leased phone, and the list is a snapshot: leasing decides.
+
 ## Lease a physical device
 
 ```sh
