@@ -63,7 +63,7 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 
 | Code | Exit | What it means | What to do |
 | --- | --- | --- | --- |
-| `USAGE` | 2 | `simlock simctl` or `simlock adb` refused a command that would break a device or affect every agent, such as `erase` or `kill-server`. Over HTTP and the client the code is `PASSTHROUGH_REFUSED` (`422`). | Do what the message says, usually `simlock release` to get a clean device. See [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses). |
+| `USAGE` | 2 | A bad `config.json` value that stops a command from starting the daemon, or `simlock simctl` or `simlock adb` refused a command that would break a device or affect every agent, such as `erase` or `kill-server`. Over HTTP and the client the code is `PASSTHROUGH_REFUSED` (`422`). | Do what the message says, usually `simlock release` to get a clean device. See [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses). |
 | `UNKNOWN_PASSTHROUGH_TOOL` | 2 | `exec` named a tool no platform on that machine provides, such as `xcodebuild`. The CLI reports it as `USAGE`. | Use `simctl` or `adb`, or `devicectl` on a physical iPhone or iPad. `simctl` on a physical lease and `devicectl` on a simulator are refused with `PASSTHROUGH_REFUSED`. |
 | `EXEC_TIMEOUT` | 10 | The command ran longer than the machine allows (10 minutes by default) and was stopped. | Split the work, or ask an operator to raise `exec.timeoutMs`. |
 | `WORKER_UNREACHABLE` | 1 | Through a gateway, the worker that holds your device is not connected. | Retry. The lease is still yours until it expires. |
