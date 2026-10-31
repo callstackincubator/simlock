@@ -56,7 +56,7 @@ Provision — `provision`:
    into `config.ini`; a library profile replaces the seed's `hw.*`/`skin.*` keys, sets
    `PlayStore.enabled`, writes `boot.prop`.
 4. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` /
-   `image.sysdir.1` / `disk.dataPartition.*` lines, and `headless`/`gpu` when not default.
+   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD), and `headless`/`gpu` when not default.
 
 Boot — `makeReady` (per-device lock):
 
