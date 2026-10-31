@@ -42,11 +42,12 @@ describe("device.rotate", () => {
     );
   });
 
-  async function worker(options: {
+  async function startWorker(options: {
     readonly inputModule: boolean;
     readonly input: FakeInputFactory | undefined;
     readonly androidInput?: FakeInputFactory;
     readonly httpPort?: number;
+    readonly gateway?: { readonly label: string; readonly token: string; readonly url: string };
   }) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-"));
     directories.push(dataDirectory);
@@ -77,6 +78,7 @@ describe("device.rotate", () => {
     const daemon = await startDaemon({
       configOverrides: {
         capabilities: { input: { enabled: options.inputModule } },
+        ...(options.gateway === undefined ? {} : { gateway: options.gateway }),
         ...(options.httpPort === undefined
           ? {}
           : { http: { enabled: true, host: "127.0.0.1", port: options.httpPort } }),
@@ -89,6 +91,11 @@ describe("device.rotate", () => {
       version: "1.0.0-e2e",
     });
     daemons.push(daemon);
+    return { daemon, drivers };
+  }
+
+  async function worker(options: Parameters<typeof startWorker>[0]) {
+    const { daemon, drivers } = await startWorker(options);
     const granted = await daemon.dispatch(
       "lease.request",
       { model: "iPhone 15", platform: "ios" },
@@ -410,6 +417,154 @@ describe("device.rotate", () => {
       await outcome;
       await vi.waitFor(() => expect(input.opened[3]?.closes).toBe(1), { timeout: 10_000 });
       expect(input.opened[3]?.sent).toEqual([]);
+    },
+  );
+  async function agentTokens(daemon: DaemonServer, labels: readonly string[]) {
+    const admin: DispatchSession = { ...holder, principal: "operator", role: "admin" };
+    return await Promise.all(
+      labels.map(async (label) => {
+        const created = await daemon.dispatch("token.create", { label, role: "agent" }, admin);
+        return { principal: created.token.id, secret: created.secret };
+      }),
+    );
+  }
+
+  async function leaseFor(
+    daemon: DaemonServer,
+    principal: string,
+    request: { readonly model: string; readonly platform: "ios" | "android" },
+  ): Promise<string> {
+    const granted = await daemon.dispatch("lease.request", request, { ...holder, principal });
+    return (granted as { lease: { id: string } }).lease.id;
+  }
+
+  it(
+    "an agent's POST /v1/leases/{id}/rotate answers 200 with the lease and orientation, or the refusal's status, on a worker and through a gateway",
+    { timeout: 120_000 },
+    async () => {
+      const screen = { height: 2556, orientation: "portrait", width: 1179 } as const;
+
+      async function exercise(
+        daemon: DaemonServer,
+        httpPort: number,
+        input: FakeInputFactory,
+        ready: () => Promise<void>,
+      ) {
+        const [phone, emulator] = await agentTokens(daemon, ["phone", "emulator"]);
+        const phoneId = await leaseFor(daemon, phone!.principal, {
+          model: "iPhone 15",
+          platform: "ios",
+        });
+        const emulatorId = await leaseFor(daemon, emulator!.principal, {
+          model: "Pixel 8",
+          platform: "android",
+        });
+        await ready();
+        const rotate = async (leaseId: string, token: string, body: unknown) => {
+          const url = `http://127.0.0.1:${String(httpPort)}/v1/leases/${leaseId}/rotate`;
+          const response = await fetch(url, {
+            body: JSON.stringify(body),
+            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+            method: "POST",
+          });
+          const text = await response.text();
+          return {
+            body: (text.startsWith("{") ? JSON.parse(text) : {}) as {
+              error?: { code: string; message: string };
+              leaseId?: string;
+              orientation?: string;
+            },
+            status: response.status,
+          };
+        };
+        const orientation = "landscape_left";
+
+        expect(await rotate(phoneId, phone!.secret, { orientation })).toEqual({
+          body: { leaseId: phoneId, orientation },
+          status: 200,
+        });
+        expect(input.opened[0]?.sent).toEqual([{ kind: "orientation", orientation }]);
+
+        for (const badOrientation of ["landscape-left", "auto", ""]) {
+          const refused = await rotate(phoneId, phone!.secret, { orientation: badOrientation });
+          expect([badOrientation, refused.status, refused.body.error?.code]).toEqual([
+            badOrientation,
+            400,
+            "BAD_REQUEST",
+          ]);
+        }
+        expect((await rotate(phoneId, phone!.secret, {})).status).toBe(400);
+
+        const unknown = await rotate("nope", phone!.secret, { orientation });
+        expect([unknown.status, unknown.body.error?.code]).toEqual([404, "UNKNOWN_LEASE"]);
+        const foreign = await rotate(phoneId, emulator!.secret, { orientation });
+        expect([foreign.status, foreign.body.error?.code]).toEqual([403, "FORBIDDEN"]);
+
+        const android = await rotate(emulatorId, emulator!.secret, { orientation });
+        expect(android.status).toBe(422);
+        expect(android.body.error).toEqual({
+          code: "ROTATION_UNSUPPORTED",
+          message: `Lease ${emulatorId} is on an Android emulator; only an iOS simulator can be rotated`,
+        });
+
+        input.failWith = new Error("helper is gone");
+        const missing = await rotate(phoneId, phone!.secret, { orientation });
+        expect(missing.status).toBe(503);
+        expect(missing.body.error).toEqual({
+          code: "INPUT_UNAVAILABLE",
+          message: `Lease ${phoneId}'s simulator cannot take input: helper is gone`,
+        });
+        input.failWith = undefined;
+      }
+
+      const workerPort = await freeLoopbackPort();
+      const workerInput = new FakeInputFactory(screen);
+      const { daemon: standalone } = await startWorker({
+        httpPort: workerPort,
+        input: workerInput,
+        inputModule: false,
+      });
+      await exercise(standalone, workerPort, workerInput, () => Promise.resolve());
+      await daemons.pop()?.stop("test");
+
+      const gatewayPort = await freeLoopbackPort();
+      const admin: DispatchSession = { ...holder, principal: "operator", role: "admin" };
+      const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-gateway-"));
+      directories.push(gatewayDirectory);
+      const gateway = await startDaemon({
+        configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
+        dataDirectory: gatewayDirectory,
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        role: "gateway",
+        version: "1.0.0-e2e",
+      });
+      daemons.push(gateway);
+      const workerToken = (
+        await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin)
+      ).secret;
+      const fleetInput = new FakeInputFactory(screen);
+      await startWorker({
+        gateway: { label: "w", token: workerToken, url: `ws://127.0.0.1:${String(gatewayPort)}` },
+        input: fleetInput,
+        inputModule: false,
+      });
+      await vi.waitFor(
+        async () => {
+          const { workers } = await gateway.dispatch("worker.list", {}, admin);
+          expect(workers[0]?.catalog?.length).toBeGreaterThan(0);
+        },
+        { timeout: 10_000 },
+      );
+      await exercise(gateway, gatewayPort, fleetInput, async () => {
+        await vi.waitFor(
+          async () => {
+            const { leases } = await gateway.dispatch("lease.list", {}, admin);
+            expect(leases).toHaveLength(2);
+          },
+          { timeout: 10_000 },
+        );
+      });
     },
   );
 });
