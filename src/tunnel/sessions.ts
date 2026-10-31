@@ -169,17 +169,22 @@ export function createTunnelSessions(options: {
       connections.delete(conn);
     }
 
+    async function windowOpen(connection: Connection): Promise<boolean> {
+      while (connection.window === 0) {
+        await new Promise<void>((wake) => {
+          connection.wake = wake;
+        });
+        if (connection.closed) return false;
+      }
+      return true;
+    }
+
     // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
     async function pump(conn: number, connection: Connection): Promise<void> {
       const reader = connection.stream.readable.getReader();
       let pending: Uint8Array | undefined;
       for (;;) {
-        while (connection.window === 0) {
-          await new Promise<void>((wake) => {
-            connection.wake = wake;
-          });
-          if (connection.closed) return;
-        }
+        if (!(await windowOpen(connection))) return;
         if (pending === undefined) {
           // why: a forwarded connection whose device connect failed has a readable that errors; the RESET it got is its whole ending.
           const step = await reader.read().catch(() => undefined);

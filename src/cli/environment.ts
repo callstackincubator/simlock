@@ -281,6 +281,24 @@ function lazyNodeParentWatch(): ParentWatch {
   };
 }
 
+// why: each adapter loads on first use, so a command that never touches a TCP port loads none of them.
+function tcpPorts(ports: CliEnvironmentPorts): Pick<CliEnvironment, "tcpListeners" | "tcpStreams"> {
+  return {
+    tcpListeners: ports.tcpListeners ?? {
+      listen: async (port) => {
+        const { NodeTcpListenerFactory } = await import("../ports/index.js");
+        return new NodeTcpListenerFactory().listen(port);
+      },
+    },
+    tcpStreams: ports.tcpStreams ?? {
+      connect: async (port, timeoutMs) => {
+        const { NodeTcpStreamConnector } = await import("../ports/index.js");
+        return new NodeTcpStreamConnector().connect(port, timeoutMs);
+      },
+    },
+  };
+}
+
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -412,18 +430,7 @@ export function buildCliEnvironment(
         return new FetchHttpJsonClient().get(url, token);
       },
     },
-    tcpStreams: ports.tcpStreams ?? {
-      connect: async (port, timeoutMs) => {
-        const { NodeTcpStreamConnector } = await import("../ports/index.js");
-        return new NodeTcpStreamConnector().connect(port, timeoutMs);
-      },
-    },
-    tcpListeners: ports.tcpListeners ?? {
-      listen: async (port) => {
-        const { NodeTcpListenerFactory } = await import("../ports/index.js");
-        return new NodeTcpListenerFactory().listen(port);
-      },
-    },
+    ...tcpPorts(ports),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
     writeConfigFile: async (contents) => {
