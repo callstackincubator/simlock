@@ -110,7 +110,6 @@ async function leaseToUse(
   return selectOnlyLease(
     (field(leases.body, "leases") as { id: string; requesterId: string }[] | undefined) ?? [],
     field(identity.body, "role") === "admin" ? "admin" : "agent",
-    environment,
   );
 }
 
