@@ -94,18 +94,25 @@ flowchart LR
    device, the tunnel's and any an agent made through `exec`, and every
    `forward` rule the adb server holds for that device's serial. It never
    runs `forward --remove-all`: forward rules live in the server, which
-   other devices and tools share. At start, before any lease is granted, the
-   worker removes `reverse` rules on every Android device it proves its own,
-   so a rule left by a restart never points at a port a new tunnel is given.
+   other devices and tools share. Tunnel listeners use only loopback ports
+   47000 to 47999, reserved for tunnels. At start, before any lease is
+   served, the worker removes, on every Android device it proves its own,
+   leased or idle, each `reverse` rule whose host side is in that range:
+   only a tunnel can have set one, and no tunnel survives a restart. Rules
+   pointing elsewhere, a holder's own made through `exec`, stay, so leases
+   kept across a restart (ADR 0019) keep them.
 7. The socket's frames are not daemon-contract operations, but both ends
    must agree on them: their codec is a helper in the contract, which the
    CLI and the module both import. The tunnel's refusals are contract error
    codes, so every surface reports them the same way; adding them is one
    protocol bump.
-8. `simlock tunnel` opens the socket with Node's built-in `WebSocket`,
-   which sends the `Authorization` header (Node 22.13's undici accepts
-   `headers`). The CLI never loads `ws`; the comment that said Node 22
-   cannot set headers is corrected.
+8. `simlock tunnel` opens the socket with `ws`, through a ports adapter in
+   the barrel that loads `ws` with `import()` on first use, so no other CLI
+   command and not the MCP server ever load it. Node's built-in client
+   sends headers, but it hides a refused upgrade's status and body and the
+   server's pings, which the command needs to report a refusal and to tell
+   an idle tunnel from a dead one. The comment that said Node 22 cannot set
+   headers is corrected.
 
 ```mermaid
 sequenceDiagram
@@ -141,6 +148,8 @@ sequenceDiagram
 - Reclaim gains a step on Android, and rules made by hand no longer leak
   into the next lease.
 - The first daemon-contract helper for a module's own socket protocol.
+- A third file loads `ws`, and only when `simlock tunnel` runs.
+- Each worker reserves loopback ports 47000 to 47999 for tunnels.
 - iOS simulators are not covered: their `reverse` would be a port on the
   worker shared by every lease, the host-port problem #162 owns.
 
