@@ -10682,33 +10682,52 @@ describe("simlock rotate", () => {
     ttlMs: 60_000,
   };
 
-  it("prints the lease the answer names and the canonical orientation for the holder's only lease", async () => {
+  async function rotateWith(argv: readonly string[], leases: readonly (typeof heldLease)[]) {
     const output = outputCapture();
     const rotations: unknown[] = [];
+    const exitCode = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({
+            listLeases: () => Promise.resolve({ leases: [...leases] }),
+            rotate: (leaseId, orientation, options) => {
+              rotations.push({ leaseId, orientation, options });
+              return Promise.resolve({ leaseId: `${leaseId}_answered`, orientation });
+            },
+          }),
+      }),
+    );
+    return { exitCode, output, rotations };
+  }
 
-    await expect(
-      runCli(
-        ["rotate", "landscape-left"],
-        output.environmentWith({
-          connectAdmin: async () =>
-            fakeClient({
-              listLeases: () => Promise.resolve({ leases: [heldLease] }),
-              rotate: (leaseId, orientation, options) => {
-                rotations.push({ leaseId, orientation, options });
-                return Promise.resolve({ leaseId: "lse_answered", orientation });
-              },
-            }),
-        }),
-      ),
-    ).resolves.toBe(0);
-
-    expect(rotations).toEqual([
+  it("a user runs simlock rotate <orientation> [--lease <id>] and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
+    const only = await rotateWith(["rotate", "landscape-left"], [heldLease]);
+    expect(only.exitCode).toBe(0);
+    expect(only.rotations).toEqual([
       {
         leaseId: "lse_mine",
         orientation: "landscape_left",
         options: { requesterId: "test-requester" },
       },
     ]);
-    expect(output.stdout).toBe("Rotated lease lse_answered to landscape_left\n");
+    expect(only.output.stdout).toBe("Rotated lease lse_mine_answered to landscape_left\n");
+
+    const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
+    for (const argv of [
+      ["rotate", "--lease", "lse_other", "left"],
+      ["rotate", "left", "--lease", "lse_other"],
+      ["rotate", "left", "--lease=lse_other"],
+    ]) {
+      const named = await rotateWith(argv, two);
+      expect(named.exitCode).toBe(0);
+      expect(named.rotations).toEqual([
+        {
+          leaseId: "lse_other",
+          orientation: "landscape_left",
+          options: { requesterId: "test-requester" },
+        },
+      ]);
+    }
   });
 });
