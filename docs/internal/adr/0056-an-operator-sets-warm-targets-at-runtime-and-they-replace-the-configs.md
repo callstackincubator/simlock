@@ -124,8 +124,8 @@ never-leased idle rule.
 
 - `warm.list` (admin, read) answers the effective list, each row with its
   origin (`configured` or `runtime`), for a runtime row that replaced
-  configured ones their summed count, and the learned peak of the spec it
-  resolves to; the stored runtime list and `learn`, as stored; the
+  configured ones their summed count, the OS version and mode it resolved
+  to, and the learned peak of that spec; the stored runtime list and `learn`, as stored; the
   effective `learn` and its origin; and the learned kinds with their
   counts. A client that raises a count raises it from the larger of the
   row's count and that peak, so a raise never keeps fewer.
