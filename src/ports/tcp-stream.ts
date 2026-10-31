@@ -1,5 +1,4 @@
 import { createConnection, type Socket } from "node:net";
-import { Readable } from "node:stream";
 
 // why: `TcpProbe` answers one question and hangs up; a device's video socket reached through adb
 // keeps talking for as long as someone watches.
@@ -15,6 +14,34 @@ export interface TcpStream {
   close(): void;
 }
 
+// why: `Readable.toWeb` waits for the socket to close, not for the peer's FIN, so a peer's half-close would never end the stream; this one ends on `end`, and on an error or close too.
+function readableOf(socket: Socket): ReadableStream<Uint8Array> {
+  let finished = false;
+  return new ReadableStream<Uint8Array>({
+    cancel: () => {
+      socket.destroy();
+    },
+    pull: () => {
+      socket.resume();
+    },
+    start: (controller) => {
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        controller.close();
+      };
+      socket.on("data", (chunk: Buffer) => {
+        if (finished) return;
+        controller.enqueue(new Uint8Array(chunk));
+        if ((controller.desiredSize ?? 0) <= 0) socket.pause();
+      });
+      socket.on("end", finish);
+      socket.on("close", finish);
+      socket.on("error", finish);
+    },
+  });
+}
+
 // why: after connect or accept an error ends the readable through `Readable.toWeb`; a listener must
 // still exist or Node raises it as an uncaught exception and takes the daemon down.
 export function tcpStreamOf(socket: Socket): TcpStream {
@@ -26,7 +53,7 @@ export function tcpStreamOf(socket: Socket): TcpStream {
     end: () => {
       socket.end();
     },
-    readable: Readable.toWeb(socket) as ReadableStream<Uint8Array>,
+    readable: readableOf(socket),
     write: (bytes) =>
       new Promise<void>((done, failed) => {
         socket.write(bytes, (error) => (error ? failed(error) : done()));

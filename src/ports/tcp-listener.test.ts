@@ -34,8 +34,9 @@ describe("NodeTcpListenerFactory", () => {
     });
     const client = await new NodeTcpStreamConnector().connect(port, 1000);
     await client.write("hello");
-    client.close();
+    client.end();
     expect(await received).toBe("hello");
+    client.close();
 
     await listener?.close();
     const again = await factory.listen(port);
