@@ -35,6 +35,13 @@ function sentData(socket: MemoryLeaseSocket, conn: number): number {
     .reduce((total, sent) => total + sent.length - 5, 0);
 }
 
+function bigData(conn: number): Uint8Array {
+  const bytes = new Uint8Array(5 + 65_536);
+  bytes[0] = 0x03;
+  new DataView(bytes.buffer).setUint32(1, conn);
+  return bytes;
+}
+
 function hello(...tunnels: { kind: string; devicePort: number }[]): Uint8Array {
   return frame(0x01, 0, JSON.stringify({ tunnels }));
 }
@@ -192,5 +199,117 @@ describe("a worker's tunnel socket", () => {
     expect(frames(socket).every((sent) => sent.tag !== 0x03 || sent.body.length <= 65_536)).toBe(
       true,
     );
+  });
+
+  it("refuses a bad frame with BAD_REQUEST and close 4003, while a frame for an already closed connection is ignored and other connections go on", async () => {
+    const tunnel = { devicePort: 5173, kind: "reverse" };
+    const credit = (conn: number, granted: number): Uint8Array => {
+      const bytes = new Uint8Array(9);
+      bytes[0] = 0x04;
+      const view = new DataView(bytes.buffer);
+      view.setUint32(1, conn);
+      view.setUint32(5, granted);
+      return bytes;
+    };
+    const cases: {
+      readonly message: string;
+      readonly ready: boolean;
+      readonly send: (socket: MemoryLeaseSocket) => void;
+    }[] = [
+      {
+        message: "a frame came before HELLO",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x03, 1, "early")),
+      },
+      {
+        message: "HELLO is not valid JSON",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x01, 0, "{not json")),
+      },
+      {
+        message: "HELLO must name 1 to 8 tunnels",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x01, 0, '{"tunnels":[]}')),
+      },
+      {
+        message: "HELLO must name 1 to 8 tunnels",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x01, 0, '{"tunnels":"all"}')),
+      },
+      {
+        message: "HELLO is longer than 4096 bytes",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x01, 0, ` ${" ".repeat(4096)}{"tunnels":[]}`)),
+      },
+      {
+        message: "HELLO came twice",
+        ready: true,
+        send: (socket) => socket.receive(hello(tunnel)),
+      },
+      {
+        message: "unknown frame tag 127",
+        ready: true,
+        send: (socket) => socket.receive(frame(0x7f, 1)),
+      },
+      {
+        message: "DATA is past the granted window",
+        ready: true,
+        send: (socket) => {
+          for (let sent = 0; sent < 5; sent += 1) {
+            socket.receive(bigData(1));
+          }
+        },
+      },
+      {
+        message: "connection 99 was never opened",
+        ready: true,
+        send: (socket) => socket.receive(frame(0x03, 99, "x")),
+      },
+      {
+        message: "connection 2 was never opened",
+        ready: true,
+        send: (socket) => socket.receive(credit(2, 1)),
+      },
+      {
+        message: "the window is above 2147483648",
+        ready: true,
+        send: (socket) => socket.receive(credit(1, 2 ** 31)),
+      },
+    ];
+    for (const bad of cases) {
+      const { deviceTcp, worker } = await setup();
+      const socket = await attach(worker);
+      if (bad.ready) {
+        socket.receive(hello(tunnel));
+        await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+        deviceTcp.connect(5173);
+        await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
+      }
+      expect(socket.closed).toBeUndefined();
+      bad.send(socket);
+      await vi.waitFor(() => expect(socket.closed).toEqual({ code: 4003, reason: bad.message }));
+      expect(frames(socket).at(-1)).toEqual({
+        body: JSON.stringify({ code: "BAD_REQUEST", message: bad.message }),
+        conn: 0,
+        tag: 0x82,
+      });
+    }
+
+    const { deviceTcp, worker } = await setup();
+    const socket = await attach(worker);
+    socket.receive(hello(tunnel));
+    await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+    const closing = deviceTcp.connect(5173);
+    const going = deviceTcp.connect(5173);
+    await vi.waitFor(() => expect(frames(socket)).toHaveLength(3));
+    socket.receive(frame(0x06, 1, '{"reason":"caller closed"}'));
+    await vi.waitFor(() => expect(closing.closed).toBe(true));
+    socket.receive(credit(1, 10));
+    socket.receive(frame(0x03, 1, "late"));
+    going.send("still here");
+    await vi.waitFor(() =>
+      expect(frames(socket).at(-1)).toEqual({ body: "still here", conn: 3, tag: 0x03 }),
+    );
+    expect(socket.closed).toBeUndefined();
   });
 });
