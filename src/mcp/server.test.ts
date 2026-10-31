@@ -931,10 +931,26 @@ describe("MCP rotate_device", () => {
         { input: { leaseId: "lease-1", orientation: "landscape_left" }, method: "rotate" },
       ]);
 
-      const accepted = [{ orientation: "LEFT" }, { orientation: " upside-down " }];
-      for (const entry of accepted) {
-        expect((await call(mcpClient, "rotate_device", entry)).isError).not.toBe(true);
+      for (const [spelling, canonical] of [
+        ["LEFT", "landscape_left"],
+        [" upside-down ", "portrait_upside_down"],
+      ]) {
+        const spelled = await call(mcpClient, "rotate_device", { orientation: spelling });
+        expect(spelled.isError).not.toBe(true);
+        expect(spelled.structuredContent).toEqual({ leaseId: "lease-1", orientation: canonical });
       }
+      for (const [orientation, bound] of [
+        ["", "expected string to have >=1 characters"],
+        ["x".repeat(65), "expected string to have <=64 characters"],
+      ] as const) {
+        const refused = await call(mcpClient, "rotate_device", { orientation });
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toContain(`Invalid arguments for tool rotate_device: Too `);
+        expect(text(refused)).toContain(bound);
+      }
+      const longest = await call(mcpClient, "rotate_device", { orientation: "x".repeat(64) });
+      expect(JSON.parse(text(longest)).code).toBe("BAD_REQUEST");
+      expect(client.calls.filter((entry) => entry.method === "rotate")).toHaveLength(3);
       const unknown = await call(mcpClient, "rotate_device", { orientation: "sideways" });
       expect(unknown.isError).toBe(true);
       expect(JSON.parse(text(unknown))).toEqual({

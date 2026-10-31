@@ -10692,14 +10692,24 @@ describe("simlock rotate", () => {
 
   const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
 
-  async function rotateWith(argv: readonly string[], leases: readonly (typeof heldLease)[]) {
+  async function rotateWith(
+    argv: readonly string[],
+    leases: readonly (typeof heldLease)[],
+    role: "admin" | "agent" = "admin",
+  ) {
     const output = outputCapture();
     const rotations: unknown[] = [];
+    let closes = 0;
     const exitCode = await runCli(
       argv,
       output.environmentWith({
         connectAdmin: async () =>
           fakeClient({
+            role,
+            close: () => {
+              closes += 1;
+              return Promise.resolve();
+            },
             listLeases: () => Promise.resolve({ leases: [...leases] }),
             rotate: (leaseId, orientation, options) => {
               rotations.push({ leaseId, orientation, options });
@@ -10708,7 +10718,7 @@ describe("simlock rotate", () => {
           }),
       }),
     );
-    return { exitCode, output, rotations };
+    return { closes: () => closes, exitCode, output, rotations };
   }
 
   it("a user runs simlock rotate <orientation> [--lease <id>] and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
@@ -10722,6 +10732,13 @@ describe("simlock rotate", () => {
       },
     ]);
     expect(only.output.stdout).toBe("Rotated lease lse_mine_answered to landscape_left\n");
+    expect(only.closes()).toBe(1);
+
+    const asAgent = await rotateWith(["rotate", "landscape-left"], [heldLease], "agent");
+    expect(asAgent.exitCode).toBe(0);
+    expect(asAgent.rotations).toEqual([
+      { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
+    ]);
 
     for (const argv of [
       ["rotate", "--lease", "lse_other", "left"],
@@ -10767,12 +10784,17 @@ describe("simlock rotate", () => {
     }
 
     const unsupported = outputCapture();
+    let unsupportedCloses = 0;
     await expect(
       runCli(
         ["rotate", "left", "--lease", "lse_android"],
         unsupported.environmentWith({
           connectAdmin: async () =>
             fakeClient({
+              close: () => {
+                unsupportedCloses += 1;
+                return Promise.resolve();
+              },
               rotate: () =>
                 Promise.reject(
                   new SimlockError(
@@ -10799,6 +10821,7 @@ describe("simlock rotate", () => {
       },
     });
     expect(unsupported.stdout).toBe("");
+    expect(unsupportedCloses).toBe(1);
 
     const help = await rotateWith(["rotate", "--help"], [heldLease]);
     expect(help.exitCode).toBe(0);
