@@ -136,6 +136,35 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
     }
   });
 
+  /**
+   * why: `emulator.exe` runs the emulator itself as a child (`qemu-system-x86_64-headless.exe`);
+   * a kill that reached only the parent left that child running with its RAM and console port.
+   * The child here is `detached` because libuv otherwise puts it in a job object that ends it with
+   * its parent, which `emulator.exe` does not do for qemu.
+   */
+  it("ends the children of an .exe it kills, not only the .exe, and reports no exit code", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock exe "));
+    const pidFile = join(directory, "child.pid");
+    const childScript = `require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`;
+    const parentScript = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}, process.argv[1]], { detached: true, stdio: 'ignore' }); setInterval(() => {}, 1000)`;
+    let childPid: number | undefined;
+    try {
+      const handle = new NodeProcessRunner().spawn(process.execPath, ["-e", parentScript, pidFile]);
+      await expect
+        .poll(() => readFile(pidFile, "utf8").catch(() => ""), { timeout: 5_000 })
+        .not.toBe("");
+      childPid = Number(await readFile(pidFile, "utf8"));
+
+      handle.kill("SIGKILL");
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: null });
+      await expect.poll(() => isAlive(childPid ?? 0), { timeout: 5_000 }).toBe(false);
+    } finally {
+      if (childPid !== undefined && isAlive(childPid)) process.kill(childPid);
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("reports a batch file's own exit code when kill comes after cmd.exe exited but a grandchild still holds its output", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock bat "));
     const pidFile = join(directory, "grandchild.pid");

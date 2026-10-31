@@ -268,7 +268,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.lineEnd ?? "newline",
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      launch.windowsVerbatimArguments,
+      process.platform === "win32",
     );
   }
 
@@ -301,7 +301,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.onChunk,
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      launch.windowsVerbatimArguments,
+      process.platform === "win32",
     );
     if (options.input !== undefined) {
       // One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
@@ -391,7 +391,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
     private readonly exitDeferralCapMs: number,
     private readonly exitGraceMs: number,
-    private readonly wrapped: boolean,
+    private readonly treeKilled: boolean,
   ) {
     this.pid = pid;
     this.#forward(child.stdout, "stdout", onChunk);
@@ -405,7 +405,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         settled = true;
         const killedWith = this.#killedWith;
         resolve(
-          wrapped && killedWith !== undefined
+          treeKilled && killedWith !== undefined
             ? { code: null, signal: killedWith }
             : { code, signal },
         );
@@ -478,7 +478,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
     if (isRunning(this.child)) this.#killedWith ??= signal;
-    killProcessTree(this.child, this.pid, signal, this.wrapped);
+    killProcessTree(this.child, this.pid, signal);
   }
 
   wait(): Promise<StreamingProcessResult> {
@@ -543,14 +543,14 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
 const TASKKILL_TIMEOUT_MS = 10_000;
 
 /**
- * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper
- * (`windows-command.ts`): signalling the wrapper alone would leave the script's own processes,
- * `sdkmanager`'s Java, running. `taskkill /T` walks the tree from the wrapper's pid, so it runs
- * while the wrapper is still alive; the wrapper outlives what it runs, since a script runs its
- * commands in the foreground. Windows ends a process on any signal, so `/F` is no harsher than
- * `child.kill`. `taskkill` makes the wrapper exit with a code where `child.kill` reports a
- * signal, so the handle reports the signal it sent instead. Should `taskkill` itself fail, the
- * wrapper alone is killed as before.
+ * why: Windows has no process groups, and `child.kill` there ends the child alone: a batch
+ * file's `cmd.exe` wrapper (`windows-command.ts`) would leave the script's own processes,
+ * `sdkmanager`'s Java, running, and `emulator.exe` would leave the qemu it runs holding its RAM
+ * and console port. `taskkill /T` walks the tree from the child's pid, so it runs while the
+ * child is still alive; a tree whose parent already exited is out of its reach. Windows ends a
+ * process on any signal, so `/F` is no harsher than `child.kill`. `taskkill` makes the child exit
+ * with a code where `child.kill` reports a signal, so the handle reports the signal it sent
+ * instead. Should `taskkill` itself fail, the child alone is killed as before.
  */
 function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
   const fallback = () => {
@@ -569,8 +569,7 @@ function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS
 
 /**
  * why: Signals the child's whole process group (children are spawned `detached`, so the group is
- * the unit that actually dies), or on Windows a batch file's whole tree and any other child
- * alone, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
+ * the unit that actually dies), or on Windows the child's whole tree, treating an already-exited process as success. Extracted so `ProcessHandle` and `StreamingProcessHandle`
  * kill identically -- a timeout that only reached the direct child would leave a tool's own
  * subprocesses running.
  *
@@ -583,17 +582,11 @@ function killWindowsProcessTree(child: ChildProcess, pid: number, signal: NodeJS
  * already handed to someone else -- latent before this PR, but `device.exec` is what makes the
  * timing remotely triggerable.
  */
-function killProcessTree(
-  child: ChildProcess,
-  pid: number,
-  signal: NodeJS.Signals,
-  wrapped: boolean,
-): void {
+function killProcessTree(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
   if (!isRunning(child)) return;
 
   if (process.platform === "win32") {
-    if (wrapped) killWindowsProcessTree(child, pid, signal);
-    else child.kill(signal);
+    killWindowsProcessTree(child, pid, signal);
     return;
   }
 
@@ -608,7 +601,7 @@ function killProcessTree(
   }
 }
 
-// why: a wrapper that already exited, its output still held open by a grandchild, is never
+// why: a child that already exited, its output still held open by a grandchild, is never
 // signalled, so its own exit code stands rather than a kill nobody sent.
 function isRunning(child: ChildProcess): boolean {
   return child.exitCode === null && child.signalCode === null;
@@ -629,7 +622,7 @@ class NodeProcessHandle implements ProcessHandle {
     lineEnd: LineEnd,
     private readonly exitDeferralCapMs: number,
     private readonly exitGraceMs: number,
-    private readonly wrapped: boolean,
+    private readonly treeKilled: boolean,
   ) {
     this.pid = pid;
     captureLines(child.stdout, this.stdout, this.#stdoutChunks, lineEnd);
@@ -644,7 +637,7 @@ class NodeProcessHandle implements ProcessHandle {
         }
         settled = true;
         resolve({
-          code: wrapped && this.#killedWith !== undefined ? null : code,
+          code: treeKilled && this.#killedWith !== undefined ? null : code,
           stderr: this.#stderrChunks.join(""),
           stdout: this.#stdoutChunks.join(""),
         });
@@ -678,7 +671,7 @@ class NodeProcessHandle implements ProcessHandle {
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
     if (isRunning(this.child)) this.#killedWith ??= signal;
-    killProcessTree(this.child, this.pid, signal, this.wrapped);
+    killProcessTree(this.child, this.pid, signal);
   }
 
   unref(): void {
