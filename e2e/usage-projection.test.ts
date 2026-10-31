@@ -119,7 +119,8 @@ describe("usage projection", () => {
     expect(before.minutes.length).toBeGreaterThan(0);
     expect(before.minutes.some((bucket) => (bucket.slotsUsed?.peak ?? 0) >= 1)).toBe(true);
     expect(after.requests).toEqual(before.requests);
-    expect(after.facts).toEqual(before.facts);
+    // why: the stop shut the idle device down, so the start boots it again and may already have added a device.ready fact; the rows from before stay as they were.
+    expect(after.facts.slice(0, before.facts.length)).toEqual(before.facts);
   }, 90_000);
 
   it("with eventLog.retention a few seconds the first run's request rows are still there after the next start, and with metrics.retention also short they are gone", async () => {

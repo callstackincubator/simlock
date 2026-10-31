@@ -1630,7 +1630,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(launcher.launches).toBe(0);
     expect(output.stderr).toContain("limits.android.maxDevices");
     expect(output.stderr).not.toContain("Timed out");
@@ -3364,7 +3364,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(output.stderr).toContain("http.enabled");
   });
 
-  it("starting a gateway refuses to launch when its config.json fails gateway validation", async () => {
+  it("--gateway daemon start refuses a config.json that fails gateway validation with exit 2 and USAGE, before any launch", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock/gateway");
     await filesystem.writeFileAtomic(
@@ -3381,9 +3381,13 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       ["--gateway", "daemon", "start", "--token", "probe"],
       output.environmentWith(),
     );
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(2);
     expect(launcher.launches).toBe(0);
-    expect(output.stderr).toContain("http.enabled");
+    expect(JSON.parse(output.stderr).error).toEqual({
+      code: "USAGE",
+      message:
+        'Invalid config value for "http.enabled": expected true in gateway mode (a gateway is reached over HTTP)',
+    });
   });
 
   describe("a joined worker's own HTTP listener (#811)", () => {
@@ -3452,7 +3456,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       });
     });
 
-    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict before any launch", async () => {
+    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict with exit 2 and USAGE, before any launch", async () => {
       const filesystem = await workerFiles({
         gateway: { url: "ws://127.0.0.1:1", token: "join-secret" },
         http: { enabled: true },
@@ -3465,11 +3469,13 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
         launcher,
       });
       const exitCode = await runCli(["--local", "daemon", "start"], output.environmentWith());
-      expect(exitCode).not.toBe(0);
+      expect(exitCode).toBe(2);
       expect(launcher.launches).toBe(0);
-      expect(JSON.parse(output.stderr).error.message).toBe(
-        'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
-      );
+      expect(JSON.parse(output.stderr).error).toEqual({
+        code: "USAGE",
+        message:
+          'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      });
     });
   });
 

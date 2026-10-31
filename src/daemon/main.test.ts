@@ -523,7 +523,7 @@ async function freeLoopbackPort(): Promise<number> {
   return address.port;
 }
 describe("startDaemon", () => {
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get returns it only as the redaction marker unless showSecrets is asked", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
       configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
@@ -553,7 +553,13 @@ describe("startDaemon", () => {
       eventsReplay: JSON.stringify(replayed).includes(secret),
       historyDb: eventFile.includes(secret),
     }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
-    expect(config.gateway.token).toBe(secret);
+    const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as {
+      readonly gateway: { readonly token?: string };
+    };
+    expect({ default: config.gateway.token, shown: shown.gateway.token }).toEqual({
+      default: "[redacted]",
+      shown: secret,
+    });
   });
 
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {

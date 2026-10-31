@@ -195,8 +195,8 @@ describe.skipIf(process.platform !== "darwin")(
         const release = await env.cli(["release", grant.lease.id]);
         expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
-        // Still Booted: the warm pool only demotes after idle.shutdownAfterMs,
-        // which defaults far longer than this test.
+        // why: still Booted: idle shutdown skips a device the learned warm pool
+        // targets, and idle.shutdownAfterMs defaults far longer than this test.
         await waitFor(
           async () => {
             const rows = (await env.cli(["list", "--devices"])).json as {
