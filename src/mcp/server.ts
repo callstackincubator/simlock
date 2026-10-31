@@ -15,6 +15,8 @@ import {
   listDevicesOutputSchema,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
+  rotateDeviceInputSchema,
+  rotateDeviceOutputSchema,
   runOnDeviceInputSchema,
   runOnDeviceOutputSchema,
 } from "./contracts.js";
@@ -345,6 +347,24 @@ export function createMcpServer(
   session.onDeviceHealth((notice) => {
     void server.server.sendLoggingMessage(deviceHealthLoggingMessage(notice));
   });
+
+  server.registerTool(
+    "rotate_device",
+    {
+      title: "Rotate device",
+      description:
+        "Turn this session's leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right. Only an iOS phone or tablet simulator rotates: an Android emulator, a physical device or an Apple TV is refused with ROTATION_UNSUPPORTED.",
+      inputSchema: rotateDeviceInputSchema,
+      outputSchema: rotateDeviceOutputSchema,
+    },
+    async (input) => {
+      try {
+        return success(await session.rotateDevice(input));
+      } catch (error: unknown) {
+        return failure(error);
+      }
+    },
+  );
 
   return server;
 }
