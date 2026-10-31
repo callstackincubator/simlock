@@ -350,7 +350,10 @@ describe("daemon folders (ADR 0034)", () => {
             expect.objectContaining({ platform: "ios", models: ["iPhone 16"] }),
           ]),
         });
-        expect(gatewayCatalog.structuredContent).toEqual({ platforms: [] });
+        expect(gatewayCatalog.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
       } finally {
         await stopGateway(env);
       }
@@ -392,7 +395,10 @@ describe("daemon folders (ADR 0034)", () => {
         const catalog = await mcp.client.callTool({ name: "list_devices", arguments: {} });
 
         expect(catalog.isError).toBeFalsy();
-        expect(catalog.structuredContent).toEqual({ platforms: [] });
+        expect(catalog.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
         expect(existsSync(join(env.home, "instance.json"))).toBe(false);
       } finally {
         await stopGateway(env);
@@ -425,7 +431,10 @@ describe("daemon folders (ADR 0034)", () => {
         const after = await mcp.client.callTool({ name: "list_devices", arguments: {} });
 
         expect(after.isError).toBeFalsy();
-        expect(after.structuredContent).toEqual({ platforms: [] });
+        expect(after.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
       } finally {
         await stopGateway(env);
       }
