@@ -1,11 +1,13 @@
 import {
   decodeTunnelFrame,
   encodeTunnelFrame,
+  TUNNEL_MAX_DATA_BYTES,
   TUNNEL_MAX_DEVICE_PORT,
   TUNNEL_MAX_TUNNELS,
   TUNNEL_MIN_DEVICE_PORT,
   TUNNEL_REFUSED_CLOSE,
   TUNNEL_TAG,
+  TUNNEL_WINDOW_BYTES,
 } from "../contract/index.js";
 import { toDriverDevice, type DeviceRecord } from "../core/index.js";
 import type { ModuleDeviceTcp } from "../modules/index.js";
@@ -14,6 +16,13 @@ import type { LeaseSocket, TcpStream } from "../ports/index.js";
 interface Tunnel {
   readonly kind: "reverse" | "forward";
   readonly devicePort: number;
+}
+
+interface Connection {
+  readonly stream: TcpStream;
+  // why: how many bytes the worker may still send before the caller grants more credit.
+  window: number;
+  wake: (() => void) | undefined;
 }
 
 interface Refusal {
@@ -59,13 +68,39 @@ export function createTunnelSessions(options: {
   function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void {
     let nextConnection = 1;
 
-    async function pump(conn: number, stream: TcpStream): Promise<void> {
-      const reader = stream.readable.getReader();
+    const connections = new Map<number, Connection>();
+
+    // why: a connection reads from its device stream only while the caller has granted window, so a slow reader stops its own connection and no other.
+    async function pump(conn: number, connection: Connection): Promise<void> {
+      const reader = connection.stream.readable.getReader();
+      let pending: Uint8Array | undefined;
       for (;;) {
-        const step = await reader.read();
-        if (step.done) return;
-        socket.send(encodeTunnelFrame(TUNNEL_TAG.data, conn, step.value));
+        while (connection.window === 0) {
+          await new Promise<void>((wake) => {
+            connection.wake = wake;
+          });
+        }
+        if (pending === undefined) {
+          const step = await reader.read();
+          if (step.done) return;
+          pending = step.value;
+        }
+        const size = Math.min(pending.length, connection.window, TUNNEL_MAX_DATA_BYTES);
+        socket.send(encodeTunnelFrame(TUNNEL_TAG.data, conn, pending.subarray(0, size)));
+        connection.window -= size;
+        pending = size === pending.length ? undefined : pending.subarray(size);
       }
+    }
+
+    async function received(
+      conn: number,
+      connection: Connection,
+      payload: Uint8Array,
+    ): Promise<void> {
+      await connection.stream.write(payload);
+      const granted = new Uint8Array(4);
+      new DataView(granted.buffer).setUint32(0, payload.length);
+      socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, granted));
     }
 
     async function hello(payload: Uint8Array): Promise<void> {
@@ -90,7 +125,9 @@ export function createTunnelSessions(options: {
           const conn = nextConnection;
           nextConnection += 2;
           socket.send(encodeTunnelFrame(TUNNEL_TAG.open, conn, JSON.stringify(tunnel)));
-          void pump(conn, stream);
+          const connection: Connection = { stream, wake: undefined, window: TUNNEL_WINDOW_BYTES };
+          connections.set(conn, connection);
+          void pump(conn, connection);
         });
       }
       socket.send(encodeTunnelFrame(TUNNEL_TAG.ready, 0, JSON.stringify({ tunnels })));
@@ -98,7 +135,19 @@ export function createTunnelSessions(options: {
 
     socket.onMessage((data) => {
       const frame = decodeTunnelFrame(data);
-      if (frame?.tag === TUNNEL_TAG.hello) void hello(frame.payload);
+      if (frame === undefined) return;
+      if (frame.tag === TUNNEL_TAG.hello) void hello(frame.payload);
+      const connection = connections.get(frame.conn);
+      if (connection === undefined) return;
+      if (frame.tag === TUNNEL_TAG.data) void received(frame.conn, connection, frame.payload);
+      if (frame.tag === TUNNEL_TAG.credit) {
+        connection.window += new DataView(
+          frame.payload.buffer,
+          frame.payload.byteOffset,
+          frame.payload.length,
+        ).getUint32(0);
+        connection.wake?.();
+      }
     });
   }
 
