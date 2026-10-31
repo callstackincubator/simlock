@@ -51,6 +51,7 @@ export type CleanupRunInput = OpInput<"cleanup.run">;
 export type CleanupRunOutput = OpOutput<"cleanup.run">;
 export type NukeRunInput = OpInput<"nuke.run">;
 export type NukeReport = OpOutput<"nuke.run">;
+export type ConfigGetInput = OpInput<"config.get">;
 export type WarmForgetInput = OpInput<"warm.forget">;
 export type WarmForgetOutput = OpOutput<"warm.forget">;
 export type SimlockConfig = OpOutput<"config.get">;

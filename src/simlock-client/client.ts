@@ -79,6 +79,7 @@ import type {
   ListGetOutput,
   NukeReport,
   NukeRunInput,
+  ConfigGetInput,
   WarmForgetInput,
   WarmForgetOutput,
   RequestLeaseOptions,
@@ -263,7 +264,7 @@ export interface SimlockAdminClient extends SimlockClient {
   runCleanup(input?: CleanupRunInput): Promise<CleanupRunOutput>;
   runNuke(input?: NukeRunInput): Promise<NukeReport>;
   forgetWarmKind(input: WarmForgetInput): Promise<WarmForgetOutput>;
-  getConfig(): Promise<SimlockConfig>;
+  getConfig(input?: ConfigGetInput): Promise<SimlockConfig>;
   /** ADR §6's frozen exception: accepted by the daemon at any protocol version it has ever
    * spoken, even before `hello`/role resolve. Exposed here rather than on the base client
    * purely as an API-surface choice matching the ADR's operation matrix (the daemon itself
@@ -687,8 +688,8 @@ class SimlockClientImpl {
     return this.#call("warm.forget", input);
   }
 
-  getConfig(): Promise<SimlockConfig> {
-    return this.#call("config.get", {});
+  getConfig(input: ConfigGetInput = {}): Promise<SimlockConfig> {
+    return this.#call("config.get", input);
   }
 
   stopDaemon(): Promise<DaemonStopOutput> {
