@@ -1,14 +1,25 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
 import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
+
+async function freeLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (typeof address !== "object" || address === null) throw new Error("no port bound");
+  return address.port;
+}
 
 const holder: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -21,7 +32,10 @@ describe("device.rotate", () => {
   const daemons: DaemonServer[] = [];
   const directories: string[] = [];
 
+  const sockets: WebSocket[] = [];
+
   afterEach(async () => {
+    for (const socket of sockets.splice(0)) socket.terminate();
     await Promise.all(daemons.splice(0).map((daemon) => daemon.stop("test")));
     await Promise.all(
       directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
@@ -32,6 +46,7 @@ describe("device.rotate", () => {
     readonly inputModule: boolean;
     readonly input: FakeInputFactory | undefined;
     readonly androidInput?: FakeInputFactory;
+    readonly httpPort?: number;
   }) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-"));
     directories.push(dataDirectory);
@@ -60,7 +75,12 @@ describe("device.rotate", () => {
       }),
     ];
     const daemon = await startDaemon({
-      configOverrides: { capabilities: { input: { enabled: options.inputModule } } },
+      configOverrides: {
+        capabilities: { input: { enabled: options.inputModule } },
+        ...(options.httpPort === undefined
+          ? {}
+          : { http: { enabled: true, host: "127.0.0.1", port: options.httpPort } }),
+      },
       dataDirectory,
       deviceDataTables: fakeDeviceDataTables,
       drivers,
@@ -300,6 +320,96 @@ describe("device.rotate", () => {
         ).toEqual(input.opened.map(() => 1));
         await daemons.pop()?.stop("test");
       }
+    },
+  );
+
+  async function holderWithSocketAccess(input: FakeInputFactory) {
+    const httpPort = await freeLoopbackPort();
+    const { daemon } = await worker({ httpPort, input, inputModule: true });
+    const admin: DispatchSession = { ...holder, principal: "operator", role: "admin" };
+    const created = await daemon.dispatch(
+      "token.create",
+      { label: "holder", role: "agent" },
+      admin,
+    );
+    const session: DispatchSession = { ...holder, principal: created.token.id };
+    const granted = await daemon.dispatch(
+      "lease.request",
+      { model: "iPhone 15", platform: "ios" },
+      session,
+    );
+    const leaseId = (granted as { lease: { id: string } }).lease.id;
+    return {
+      daemon,
+      leaseId,
+      openSocket: async () => {
+        const socket = new WebSocket(
+          `ws://127.0.0.1:${String(httpPort)}/v1/leases/${leaseId}/input`,
+          {
+            headers: { authorization: `Bearer ${created.secret}` },
+          },
+        );
+        sockets.push(socket);
+        const messages: number[] = [];
+        const closed: { code: number | undefined } = { code: undefined };
+        socket.on("message", (data) => messages.push((data as Buffer)[0] ?? -1));
+        socket.on("close", (code) => {
+          closed.code = code;
+        });
+        await new Promise<void>((resolve, reject) => {
+          socket.once("open", () => resolve());
+          socket.once("error", reject);
+        });
+        await vi.waitFor(() => expect(messages).toEqual([0x83, 0x82]), { timeout: 10_000 });
+        return closed;
+      },
+      session,
+    };
+  }
+
+  it(
+    "gives an input socket opened after a rotate's helper closed a fresh helper, keeps a socket's helper through a rotate, and answers UNKNOWN_LEASE when the lease is reclaimed while the rotate's helper opens",
+    { timeout: 60_000 },
+    async () => {
+      const input = new FakeInputFactory({ height: 2556, orientation: "portrait", width: 1179 });
+      const { daemon, leaseId, openSocket, session } = await holderWithSocketAccess(input);
+      const orientation = "landscape_right";
+
+      await daemon.dispatch("device.rotate", { leaseId, orientation }, session);
+      expect(input.opened).toHaveLength(1);
+      expect(input.opened[0]?.closes).toBe(1);
+
+      const socket = await openSocket();
+      expect(input.opened).toHaveLength(2);
+      expect(input.opened[1]?.closes).toBe(0);
+
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation: "portrait" }, session),
+      ).resolves.toEqual({ leaseId, orientation: "portrait" });
+      expect(input.opened).toHaveLength(2);
+      expect(input.opened[1]?.sent).toEqual([{ kind: "orientation", orientation: "portrait" }]);
+      expect(input.opened[1]?.closes).toBe(0);
+
+      input.opened[1]?.fail(new Error("pipe closed"));
+      await vi.waitFor(() => expect(socket.code).toBe(1013), { timeout: 10_000 });
+      await expect(
+        daemon.dispatch("device.rotate", { leaseId, orientation }, session),
+      ).resolves.toEqual({ leaseId, orientation });
+      expect(input.opened).toHaveLength(3);
+      expect(input.opened[2]?.sent).toEqual([{ kind: "orientation", orientation }]);
+
+      let open: () => void = () => undefined;
+      input.gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const rotating = daemon.dispatch("device.rotate", { leaseId, orientation }, session);
+      const outcome = expect(rotating).rejects.toMatchObject({ name: "UnknownLeaseError" });
+      await vi.waitFor(() => expect(input.opens).toBe(4), { timeout: 10_000 });
+      await daemon.dispatch("lease.release", { leaseId }, session);
+      open();
+      await outcome;
+      await vi.waitFor(() => expect(input.opened[3]?.closes).toBe(1), { timeout: 10_000 });
+      expect(input.opened[3]?.sent).toEqual([]);
     },
   );
 });
