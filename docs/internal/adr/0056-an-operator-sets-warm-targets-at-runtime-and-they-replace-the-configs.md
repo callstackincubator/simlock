@@ -77,13 +77,17 @@ A runtime row is written like a configured target: `platform`, `model`,
 optional `osVersion` (a version or a range), optional `mode`, and `count`,
 an integer from 0 to 256. Its **key** is its written `platform`, `model`,
 `osVersion` and `mode`, exactly as given; an absent field is part of the
-key. Two rows of one list with the same key are refused.
+key. Two rows of one list with the same key are refused, and so is a list
+whose effective list (§2) would hold more than 256 rows, so status stays
+within the bound it has today.
 
 ### 2. A runtime row replaces the configured target with the same key
 
 The **effective list** is the configured targets in config order, each one
 whose key a runtime row has replaced by that row, then the runtime rows no
-configured target has, in their list's order. The pool plans from the
+configured target has, in their list's order. `config.json` may hold two
+targets of one key; a runtime row of that key replaces all of them, once, at
+the first one's place. The pool plans from the
 effective list exactly as it planned from `warmPool.targets`: rows that
 resolve to one spec merge, counts summed (ADR 0017).
 
@@ -113,19 +117,24 @@ request is shut down in the pass the change asks for, with initiator
 idle rules (`idle-destroy`), as any shut-down device.
 
 A boot or creation already running for a lowered row finishes. Its device
-is then kept by nothing and left to the never-leased idle rule.
+is kept if the effective list still wants it, and otherwise left to the
+never-leased idle rule.
 
 ### 5. Two operations, one event
 
 - `warm.list` (admin, read) answers the effective list, each row with its
-  origin (`configured` or `runtime`) and, for a runtime row that replaced
-  one, the configured count; the effective `learn` and its origin; and the
-  learned kinds with their counts.
+  origin (`configured` or `runtime`), for a runtime row that replaced
+  configured ones their summed count, and the learned peak of the spec it
+  resolves to; the stored runtime list and `learn`, as stored; the
+  effective `learn` and its origin; and the learned kinds with their
+  counts. A client that raises a count raises it from the larger of the
+  row's count and that peak, so a raise never keeps fewer.
 - `warm.set` (admin, write) takes the whole runtime list and an optional
-  `learn`, and replaces both. The same input twice changes nothing the
-  second time. Two operators writing at once: the last write wins.
+  `learn`, and replaces both. The same list, in the same order, with the
+  same `learn`, changes nothing. Two operators writing at once: the last write wins.
 - A change emits `warm-pool.targets-changed` with the runtime list, the
-  runtime `learn` when set, and the principal of the caller, then asks for
+  runtime `learn` when set, and the caller's principal as `requesterId` (as
+  the lease events name it), then asks for
   a pass. A `warm.set` that changes nothing emits nothing.
 - The status figures' `origin` gains `runtime`, and
   `warm-pool.target-missed` covers runtime rows with origin `runtime`.
