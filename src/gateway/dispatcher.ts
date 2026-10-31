@@ -35,7 +35,7 @@
 import type { TokenOperations } from "../auth/index.js";
 import type { z } from "zod";
 
-import { createUsageReader, type UsageReader } from "../core/index.js";
+import { createUsageReader, redactConfig, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
@@ -374,7 +374,8 @@ export class GatewayDispatcher {
   #catalogGet: Handler<"catalog.get"> = (input) =>
     aggregateCatalog(this.options.workers.views(), input.platform);
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
