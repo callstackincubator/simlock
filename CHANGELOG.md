@@ -431,7 +431,6 @@ is the daemon that exists today.
 - fix(e2e): warmUp releases its warm-up leases when a later one fails by @V3RON in https://github.com/callstackincubator/simlock/pull/1160
 - fix(e2e): keep each daemon's log when teardown deletes its home by @V3RON in https://github.com/callstackincubator/simlock/pull/1161
 
-
 **Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2
 
 ## [0.4.1](https://github.com/callstackincubator/simlock/compare/v0.4.0...v0.4.1) (2026-10-31)
