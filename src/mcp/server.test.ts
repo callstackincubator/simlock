@@ -8,12 +8,15 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 
-import { SimlockError } from "../client/index.js";
+import { SimlockError, type StatusGetOutput } from "../client/index.js";
 import { FakeClock } from "../ports/index.js";
-import { FakeSimlockClient, sampleGrant } from "./test-support.js";
+import { FakeSimlockClient, sampleGrant, startingStatus } from "./test-support.js";
 import { McpSession } from "./session.js";
 import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
+
+type StatusDevice = NonNullable<StatusGetOutput["devices"]>[number];
+type WorkerView = NonNullable<StatusGetOutput["workers"]>[number];
 
 describe("MCP server (smoke)", () => {
   it("advertises exactly the lease, catalog, status and run_on_device tools, and walks lease -> list -> status -> release", async () => {
@@ -35,6 +38,7 @@ describe("MCP server (smoke)", () => {
           },
         ],
       });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
     let listed = false;
     client.listLeasesImpl = () => {
@@ -68,9 +72,10 @@ describe("MCP server (smoke)", () => {
         "lease_status",
         "run_on_device",
       ]);
-      expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
-        "modelClasses",
-      );
+      const listDescription = tools.tools.find((tool) => tool.name === "list_devices")?.description;
+      expect(listDescription).toContain("modelClasses");
+      expect(listDescription).toContain("physicalDevices");
+      expect(listDescription).toContain("empty while the daemon is still starting");
       const leaseTool = tools.tools.find((tool) => tool.name === "lease_simulator");
       expect(Object.keys(leaseTool?.inputSchema.properties ?? {}).sort()).toEqual(
         Object.keys(leaseSimulatorInputSchema.shape).sort(),
@@ -114,6 +119,7 @@ describe("MCP server (smoke)", () => {
             runtimes: ["26.5"],
           },
         ],
+        physicalDevices: [],
       });
 
       const status = await call(mcpClient, "lease_status", {});
@@ -213,22 +219,23 @@ describe("MCP server (smoke)", () => {
       { model: 7, platform: "ios" },
       "requestLease",
     ],
-    ["list_devices", {}, { platform: 7 }, "getCatalog"],
+    ["list_devices", {}, { platform: 7 }, "getCatalog", "getStatus"],
     ["release_simulator", { leaseId: "lease-1" }, { leaseId: 7 }, "releaseLease"],
     ["lease_status", {}, undefined, "listLeases"],
   ] as const)(
     "%s reaches the client with a valid input, and a wrong-type input is refused through the registered schema before touching the client",
-    async (tool, valid, wrong, method) => {
+    async (tool, valid, wrong, ...methods) => {
       const client = new FakeSimlockClient();
       client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
       client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.getStatusImpl = () => Promise.resolve(startingStatus());
       client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
       client.listLeasesImpl = () => Promise.resolve({ leases: [] });
       const { mcpClient, close } = await connectedServer(client);
       try {
         const ok = await call(mcpClient, tool, valid);
         expect(ok.isError).not.toBe(true);
-        expect(client.calls.map((entry) => entry.method)).toEqual([method]);
+        expect(client.calls.map((entry) => entry.method)).toEqual(methods);
 
         if (wrong === undefined) return;
         client.calls.length = 0;
@@ -905,6 +912,183 @@ describe("MCP run_on_device alongside other tools", () => {
     }
   });
 });
+
+describe("MCP list_devices physicalDevices", () => {
+  const phone = {
+    physical: true,
+    platform: "ios",
+    model: "iPhone 15",
+    osVersion: "26.4",
+    class: "phone",
+  } as const;
+  const listed = {
+    platform: "ios",
+    model: "iPhone 15",
+    osVersion: "26.4",
+    class: "phone",
+  } as const;
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly devices: StatusDevice[] | undefined;
+    readonly workers?: WorkerView[];
+    readonly expected: unknown[];
+  }> = [
+    {
+      name: "a ready phone",
+      devices: [statusDevice({ ...phone, id: "p1", state: "ready" })],
+      expected: [{ ...listed, state: "ready" }],
+    },
+    {
+      name: "a phone through a gateway, with its worker",
+      devices: [statusDevice({ ...phone, id: "p1", state: "ready", workerId: "mac-mini-2" })],
+      workers: [workerView("mac-mini-2", {})],
+      expected: [{ ...listed, workerId: "mac-mini-2", state: "ready" }],
+    },
+    {
+      name: "phones on a lost, an incompatible and a drained worker are left out",
+      devices: [
+        statusDevice({ ...phone, id: "p1", state: "ready", workerId: "lost" }),
+        statusDevice({ ...phone, id: "p2", state: "ready", workerId: "old" }),
+        statusDevice({ ...phone, id: "p3", state: "ready", workerId: "drained" }),
+        statusDevice({ ...phone, id: "p4", model: "iPhone 16", state: "ready", workerId: "ok" }),
+      ],
+      workers: [
+        workerView("lost", { connection: "disconnected" }),
+        workerView("old", { connection: "incompatible" }),
+        workerView("drained", { drained: true }),
+        workerView("ok", {}),
+      ],
+      expected: [{ ...listed, model: "iPhone 16", workerId: "ok", state: "ready" }],
+    },
+    {
+      name: "simulators and emulators are left out",
+      devices: [
+        statusDevice({
+          id: "s1",
+          physical: false,
+          platform: "ios",
+          model: "iPhone 17",
+          osVersion: "26.5",
+          state: "ready",
+        }),
+        statusDevice({
+          id: "e1",
+          physical: false,
+          platform: "android",
+          model: "Pixel 8",
+          osVersion: "35",
+          state: "leased",
+        }),
+      ],
+      expected: [],
+    },
+    { name: "no phone enrolled", devices: [], expected: [] },
+    { name: "a daemon still starting, with no device list", devices: undefined, expected: [] },
+    {
+      name: "a removed phone is left out",
+      devices: [
+        statusDevice({ ...phone, id: "p1", state: "deleted" }),
+        statusDevice({ ...phone, id: "p2", model: "iPhone 16", state: "ready" }),
+      ],
+      expected: [{ ...listed, model: "iPhone 16", state: "ready" }],
+    },
+    {
+      name: "a leased phone, with no holder field",
+      devices: [statusDevice({ ...phone, id: "p1", state: "leased" })],
+      expected: [{ ...listed, state: "leased" }],
+    },
+    ...(["locked", "untrusted", "not-present"] as const).map((absentReason) => ({
+      name: `an absent phone, reason ${absentReason}`,
+      devices: [statusDevice({ ...phone, id: "p1", state: "absent", absentReason })],
+      expected: [{ ...listed, state: "absent", absentReason }],
+    })),
+  ];
+
+  it("lists the catalog plus each enrolled phone's worker, platform, model, OS version, class, state and absent reason, and no holder", async () => {
+    for (const { name, devices, workers, expected } of cases) {
+      const client = new FakeSimlockClient();
+      client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.getStatusImpl = () => Promise.resolve(statusOutput(devices, workers));
+      const { mcpClient, close } = await connectedServer(client);
+      try {
+        const result = await call(mcpClient, "list_devices", {});
+        expect(result.isError, name).not.toBe(true);
+        expect(result.structuredContent, name).toEqual({
+          platforms: [],
+          physicalDevices: expected,
+        });
+      } finally {
+        await close();
+      }
+    }
+
+    const failing = new FakeSimlockClient();
+    failing.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    failing.getStatusImpl = () =>
+      Promise.reject(new SimlockError("FORBIDDEN", "protocol", "not allowed", {}));
+    const { mcpClient, close } = await connectedServer(failing);
+    try {
+      const result = await call(mcpClient, "list_devices", {});
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text(result))).toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await close();
+    }
+  });
+});
+
+interface StatusDeviceFixture {
+  readonly id: string;
+  readonly physical: boolean;
+  readonly platform: "ios" | "android";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly class?: "phone" | "tablet";
+  readonly state: StatusDevice["state"];
+  readonly absentReason?: StatusDevice["absentReason"];
+  readonly workerId?: string;
+}
+
+function statusDevice(fixture: StatusDeviceFixture): StatusDevice {
+  return {
+    id: fixture.id,
+    spec: {
+      physical: fixture.physical,
+      platform: fixture.platform,
+      model: fixture.model,
+      osVersion: fixture.osVersion,
+    },
+    state: fixture.state,
+    physical: fixture.physical,
+    servesDefaultMode: false,
+    ...(fixture.class === undefined ? {} : { class: fixture.class }),
+    ...(fixture.absentReason === undefined ? {} : { absentReason: fixture.absentReason }),
+    ...(fixture.workerId === undefined ? {} : { workerId: fixture.workerId }),
+  };
+}
+
+function statusOutput(
+  devices: StatusDevice[] | undefined,
+  workers?: WorkerView[],
+): StatusGetOutput {
+  return {
+    ...startingStatus(),
+    ...(devices === undefined ? {} : { devices }),
+    ...(workers === undefined ? {} : { workers }),
+  };
+}
+
+function workerView(
+  id: string,
+  state: { readonly connection?: WorkerView["connection"]; readonly drained?: boolean },
+): WorkerView {
+  return {
+    id,
+    connection: state.connection ?? "connected",
+    drained: state.drained ?? false,
+    lastSeenAt: 0,
+  };
+}
 
 function call(client: Client, name: string, arguments_: Record<string, unknown>) {
   return client.request(

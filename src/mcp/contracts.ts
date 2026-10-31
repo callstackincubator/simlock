@@ -14,9 +14,13 @@
 import { z } from "zod";
 
 import {
+  absentReasonSchema,
+  deviceStateSchema,
   leaseRecordSchema,
   leaseRequestFields,
   OPERATIONS,
+  physicalClassSchema,
+  platformSchema,
   refuseModelWithClass,
 } from "../contract/index.js";
 
@@ -56,7 +60,20 @@ export const leaseSimulatorOutputSchema = OPERATIONS["lease.request"].output;
 // ---- list_devices -------------------------------------------------------------------------
 
 export const listDevicesInputSchema = OPERATIONS["catalog.get"].input;
-export const listDevicesOutputSchema = OPERATIONS["catalog.get"].output;
+
+const physicalDeviceSchema = z.object({
+  workerId: z.string().optional(),
+  platform: platformSchema,
+  model: z.string(),
+  osVersion: z.string(),
+  class: physicalClassSchema.optional(),
+  state: deviceStateSchema,
+  absentReason: absentReasonSchema.optional(),
+});
+
+export const listDevicesOutputSchema = OPERATIONS["catalog.get"].output.extend({
+  physicalDevices: z.array(physicalDeviceSchema),
+});
 
 // ---- release_simulator ---------------------------------------------------------------------
 
@@ -99,6 +116,7 @@ export const runOnDeviceOutputSchema = z.object({
 export type LeaseSimulatorInput = z.infer<typeof leaseSimulatorInputSchema>;
 export type LeaseSimulatorOutput = z.infer<typeof leaseSimulatorOutputSchema>;
 export type ListDevicesInput = z.infer<typeof listDevicesInputSchema>;
+export type PhysicalDevice = ListDevicesOutput["physicalDevices"][number];
 export type ListDevicesOutput = z.infer<typeof listDevicesOutputSchema>;
 export type ReleaseSimulatorInput = z.infer<typeof releaseSimulatorInputSchema>;
 export type ReleaseSimulatorOutput = z.infer<typeof releaseSimulatorOutputSchema>;

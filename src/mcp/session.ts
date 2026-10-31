@@ -7,6 +7,7 @@ import {
   type LeaseRecord,
   type LeaseRequestInput,
   type SimlockClient,
+  type StatusGetOutput,
 } from "../client/index.js";
 import {
   awaitWithin,
@@ -21,6 +22,7 @@ import type {
   LeaseStatusOutput,
   ListDevicesInput,
   ListDevicesOutput,
+  PhysicalDevice,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
   RunOnDeviceInput,
@@ -256,7 +258,10 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      return client.getCatalog(input);
+      const catalog = await client.getCatalog(input);
+      const status = await client.getStatus();
+      const physicalDevices = enrolledPhones(status);
+      return { ...catalog, physicalDevices };
     });
   }
 
@@ -676,4 +681,28 @@ function endsRenewal(error: unknown): boolean {
       error.code === "FORBIDDEN" ||
       error.code === "DAEMON_CONNECTION_LOST")
   );
+}
+
+function enrolledPhones(status: StatusGetOutput): PhysicalDevice[] {
+  const usableWorkers = new Set(
+    (status.workers ?? [])
+      .filter((worker) => worker.connection === "connected" && !worker.drained)
+      .map((worker) => worker.id),
+  );
+  return (status.devices ?? [])
+    .filter(
+      (device) =>
+        device.physical &&
+        device.state !== "deleted" &&
+        (device.workerId === undefined || usableWorkers.has(device.workerId)),
+    )
+    .map((device) => ({
+      ...(device.workerId === undefined ? {} : { workerId: device.workerId }),
+      platform: device.spec.platform,
+      model: device.spec.model,
+      osVersion: device.spec.osVersion,
+      ...(device.class === undefined ? {} : { class: device.class }),
+      state: device.state,
+      ...(device.absentReason === undefined ? {} : { absentReason: device.absentReason }),
+    }));
 }

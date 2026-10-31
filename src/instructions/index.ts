@@ -63,7 +63,7 @@ const MCP = `## MCP
 
 When Simlock is connected to you as an MCP server, it has five tools:
 
-- \`list_devices\`: what can be leased. Call it before leasing.
+- \`list_devices\`: what can be leased, and the enrolled phones in \`physicalDevices\`. Call it before leasing. Over HTTP, phones are the \`GET /v1/status\` devices with \`physical: true\` and a state other than \`deleted\`, on a connected, undrained worker.
 - \`lease_simulator\`: lease one device. It is renewed for you and released when the server exits.
 - \`release_simulator\`: give the device back.
 - \`lease_status\`: whether you still hold a lease, and which. Call it after a context compaction.
