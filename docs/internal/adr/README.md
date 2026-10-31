@@ -97,3 +97,4 @@ the status is stale.
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
 | [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
+| [0056](0056-an-operator-sets-warm-targets-at-runtime-and-they-replace-the-configs.md) | An operator sets warm targets at runtime, and they replace the config's | Proposed; supersedes 0017's deferred runtime-targets alternative; narrows 0017 §5 step 3 and §8, 0050 (HTTP route) and 0051 §1 and §3 |
