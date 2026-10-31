@@ -747,8 +747,7 @@ describe("simlock tunnel forward listening on the caller's loopback", () => {
       "L1",
     ]);
     await vi.waitFor(() => expect(waiting.webSocket.connections).toHaveLength(1));
-    const peer = waiting.webSocket.connections[0]?.peer;
-    if (peer === undefined) throw new Error("no socket");
+    const peer = firstPeer(waiting);
     expect(waiting.tcpListeners.listeners.map((listener) => listener.port)).toEqual([19229]);
     const early = waiting.tcpListeners.listeners[0]?.connect();
     await vi.waitFor(() =>
@@ -791,20 +790,29 @@ describe("simlock tunnel forward listening on the caller's loopback", () => {
       (_cli, ended) => ended.dropped(4001, "device released"),
       (_cli, ended) => ended.dropped(1006, ""),
     ];
-    for (const ending of endings) {
-      const cli = command(ENV);
-      const run = cli.run(["tunnel", "forward", "9229", "forward", "9230", "--lease", "L1"]);
-      await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
-      const connection = cli.webSocket.connections[0]?.peer;
-      if (connection === undefined) throw new Error("no socket");
-      connection.silentOnClose = true;
-      expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([false, false]);
-      ending(cli, connection);
-      cli.clock.advance(2_000);
-      await run;
-      expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([true, true]);
-    }
+    for (const ending of endings) await listenersCloseAfter(ending);
   });
 });
+
+function firstPeer(cli: ReturnType<typeof command>): Peer {
+  const peer = cli.webSocket.connections[0]?.peer;
+  if (peer === undefined) throw new Error("no socket");
+  return peer;
+}
+
+async function listenersCloseAfter(
+  ending: (cli: ReturnType<typeof command>, peer: Peer) => void,
+): Promise<void> {
+  const cli = command(ENV);
+  const run = cli.run(["tunnel", "forward", "9229", "forward", "9230", "--lease", "L1"]);
+  await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+  const connection = firstPeer(cli);
+  connection.silentOnClose = true;
+  expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([false, false]);
+  ending(cli, connection);
+  cli.clock.advance(2_000);
+  await run;
+  expect(cli.tcpListeners.listeners.map((listener) => listener.closed)).toEqual([true, true]);
+}
 
 type Peer = ReturnType<typeof command>["webSocket"]["connections"][number]["peer"];
