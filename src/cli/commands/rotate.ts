@@ -8,12 +8,13 @@ async function run(
   argv: readonly string[],
   { environment, token }: CommandContext,
 ): Promise<number> {
-  const { positionals } = commandArgs(argv, {});
+  const { lease, positionals } = commandArgs(argv, { lease: { type: "string" } });
   const parsed = parseOrientation(requiredPositional(positionals, "orientation"));
   if (!parsed.ok) throw new UsageError(parsed.message);
   const client = await connectDaemonClient(environment, token);
   try {
-    const leaseId = await resolveRemoteLeaseId(client, environment);
+    const leaseId =
+      typeof lease === "string" ? lease : await resolveRemoteLeaseId(client, environment);
     const requesterId = client.role === "admin" ? environment.requesterId : undefined;
     const rotated = await client.rotate(
       leaseId,
