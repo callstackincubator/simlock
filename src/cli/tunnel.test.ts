@@ -115,6 +115,14 @@ describe("simlock tunnel that cannot run", () => {
         message: "Caller port 5173 is named by two tunnels",
       },
       {
+        argv: ["forward", "9229:80"],
+        message: 'forward caller port "80" is below 1024',
+      },
+      {
+        argv: ["reverse", "5173", "forward", "5173"],
+        message: "Caller port 5173 is named by two tunnels",
+      },
+      {
         argv: ["sideways", "5173"],
         message: 'Unknown tunnel kind "sideways": use reverse or forward',
       },
