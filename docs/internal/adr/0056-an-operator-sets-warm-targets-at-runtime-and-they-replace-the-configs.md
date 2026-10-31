@@ -109,19 +109,24 @@ for a running slot or the reserve may displace (ADR 0051 §2).
 
 ### 4. A change that keeps fewer devices shuts them down at once
 
-A change is applied between passes, never inside one. The pool takes the
-devices it keeps (`targeted()`) under the old list, stores the new one,
-resolves it, and takes them again. The devices kept before and not after
-are the **lowered set**. The next pass that plans shuts down each device of
-the set that is still `ready`, unleased and unclaimed and that this pass
-does not keep, with initiator `warm-pool`, then drops the set. The daemon
-log line names the reason `target-lowered`; `device.shutdown` carries no
-reason, as today. The idle rules (`idle-destroy`) then delete it, as any
-shut-down device.
+`warm.set` stores the rows and answers at once; it never waits for a pass.
+Every pass starts by reading the stored rows. When they differ from the
+rows the last pass that planned used, the pass takes the devices that
+last plan kept (`targeted()`), resolves the new effective list, and takes
+them again. The devices kept before and not after are the **lowered
+set**. In the same pass it shuts down each device of the set that is
+still `ready`, unleased and unclaimed, with initiator `warm-pool`. Passes
+run one at a time, so no other pass plans in between. The daemon log line
+names the reason `target-lowered`; `device.shutdown` carries no reason, as
+today. The idle rules (`idle-destroy`) then delete it, as any shut-down
+device.
 
-A second change before that pass adds its own lowered set to the first. A
-pass that does not plan (under nuke, while stopping) or that fails drops
-the set, and so does a restart: those devices are left to the idle rules.
+The rows count as used only once a pass has planned with them. Two
+changes between passes are compared together, from the rows of the last
+plan. A pass that does not plan (under nuke, while stopping) or that fails
+leaves the comparison to the next one that plans. After a restart there is
+no last plan to compare with, so the devices of rows lowered just before
+it are left to the idle rules.
 
 A boot or creation already running for a lowered row finishes. Its device
 is kept if the effective list still wants it, and otherwise left to the
@@ -184,7 +189,7 @@ sequenceDiagram
     else stored
       W-->>D: changed
       D-->>U: 200 the effective list
-      W->>W: pass: shut down what is no longer kept, fill the rest
+      W->>W: next pass: rows differ from its last plan, so it shuts down what is no longer kept and fills the rest
     end
   end
 ```
