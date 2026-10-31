@@ -47,6 +47,8 @@ export class FakeDeviceTcp implements DeviceTcp {
     return true;
   }
 
+  async sweep(): Promise<void> {}
+
   async reverse(
     _device: unknown,
     devicePort: number,

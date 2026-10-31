@@ -22,6 +22,9 @@ const CANNOT_REBIND = "cannot rebind existing socket";
 
 export interface AndroidDeviceTcpOptions {
   readonly listeners: TcpListenerFactory;
+  // why: a sweep acts on a device only once the driver proved it Simlock's own; an emulator on a recorded serial may answer as another's (#284).
+  readonly isOwn: (device: VirtualDriverDevice | PhysicalDriverDevice) => Promise<boolean>;
+  readonly warn: (message: string, detail: Record<string, unknown>) => void;
   // why: the driver decides which adb server and environment a device's command runs on, and for a phone which check it passes first.
   readonly runAdb: (
     device: VirtualDriverDevice | PhysicalDriverDevice,
@@ -42,9 +45,76 @@ async function listenInRange(listeners: TcpListenerFactory): Promise<TcpListener
   throw new DeviceTcpError("TUNNEL_FAILED", "no free tunnel port on the worker");
 }
 
+type RunAdb = AndroidDeviceTcpOptions["runAdb"];
+type Warn = AndroidDeviceTcpOptions["warn"];
+type Target = VirtualDriverDevice | PhysicalDriverDevice;
+
+// why: a rule that cannot be removed is logged and the caller goes on; reclaim and start must not stop for it.
+async function attempt(
+  run: RunAdb,
+  warn: Warn,
+  device: Target,
+  args: readonly string[],
+): Promise<string | undefined> {
+  try {
+    const result = await run(device, args, ADB_TIMEOUT_MS);
+    if (result.code === 0) return result.stdout;
+    warn("An adb tunnel cleanup call failed", { args, stderr: cut(result.stderr.trim()) });
+  } catch (error) {
+    warn("An adb tunnel cleanup call failed", {
+      args,
+      error: cut(error instanceof Error ? error.message : String(error)),
+    });
+  }
+  return undefined;
+}
+
+function fields(output: string): string[][] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts.length >= 3);
+}
+
+// why: reclaim of a device proved its own leaves none of the lease's rules: every reverse rule of this serial, and this serial's forwards one by one, because `forward --remove-all` would end every device's on the server.
+export async function removeDeviceRules(
+  run: RunAdb,
+  warn: Warn,
+  device: Target,
+  serial: string,
+): Promise<void> {
+  await attempt(run, warn, device, ["reverse", "--remove-all"]);
+  const listed = await attempt(run, warn, device, ["forward", "--list"]);
+  for (const [owner, local] of fields(listed ?? "")) {
+    if (owner === serial && local !== undefined) {
+      await attempt(run, warn, device, ["forward", "--remove", local]);
+    }
+  }
+}
+
+// why: at start only a rule into the loopback range the worker keeps for tunnels is Simlock's own; a holder's other rules stay.
+async function removeTunnelRules(run: RunAdb, warn: Warn, device: Target): Promise<void> {
+  const listed = await attempt(run, warn, device, ["reverse", "--list"]);
+  for (const [, deviceSide, hostSide] of fields(listed ?? "")) {
+    const port = /^tcp:(\d{1,5})$/.exec(hostSide ?? "")?.[1];
+    if (port === undefined || deviceSide === undefined) continue;
+    if (Number(port) < TUNNEL_PORT_FIRST || Number(port) > TUNNEL_PORT_LAST) continue;
+    await attempt(run, warn, device, ["reverse", "--remove", deviceSide]);
+  }
+}
+
 export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): DeviceTcp {
   return {
     supports: () => true,
+    async sweep(devices): Promise<void> {
+      await Promise.all(
+        devices.map(async (device) => {
+          if (await options.isOwn(device)) {
+            await removeTunnelRules(options.runAdb, options.warn, device);
+          }
+        }),
+      );
+    },
     async reverse(device, devicePort): Promise<DeviceReverse> {
       const listener = await listenInRange(options.listeners);
       const refuse = async (error: DeviceTcpError): Promise<never> => {

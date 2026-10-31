@@ -10,7 +10,7 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
-import type { DeviceReverse } from "./device-tcp.js";
+import { DeviceTcpError, type DeviceReverse } from "./device-tcp.js";
 import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
@@ -117,7 +117,9 @@ export class DriverCatalog {
     signal: AbortSignal,
   ): Promise<DeviceReverse> {
     const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
-    if (deviceTcp === undefined) throw new Error(`${platform} devices take no tunnel`);
+    if (deviceTcp === undefined) {
+      throw new DeviceTcpError("TUNNEL_UNSUPPORTED", `${platform} devices take no tunnel`);
+    }
     return await deviceTcp.reverse(device, devicePort, signal);
   }
 

@@ -63,7 +63,7 @@ import {
   type TcpStreamConnector,
   type TimerHandle,
 } from "../../ports/index.js";
-import { createAndroidDeviceTcp } from "./device-tcp.js";
+import { createAndroidDeviceTcp, removeDeviceRules } from "./device-tcp.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
@@ -530,6 +530,7 @@ export class AndroidDriver implements Driver {
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
+  readonly #warnCleanup: (message: string, detail: Record<string, unknown>) => void;
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
   readonly #processRunner: ProcessRunner;
@@ -588,8 +589,11 @@ export class AndroidDriver implements Driver {
         ? undefined
         : createAndroidDeviceTcp({
             listeners: options.tcpListener,
+            isOwn: (device) => this.#deviceIsOwn(device),
             runAdb: (device, args, timeoutMs) => this.#runAdbOn(device, args, timeoutMs),
+            warn: (message, detail) => options.logger?.warn(message, detail),
           });
+    this.#warnCleanup = (message, detail) => options.logger?.warn(message, detail);
     // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -1133,6 +1137,7 @@ export class AndroidDriver implements Driver {
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) {
+      await this.#removeRules(device, device.deviceId);
       return this.#physical.reclaim(device);
     }
     const data = this.#dataFor(device);
@@ -1167,6 +1172,7 @@ export class AndroidDriver implements Driver {
         state.baselineCaptured = false;
         return { state: "shutdown", strategy: "wipe" };
       }
+      await this.#removeRules({ ...device, physical: false as const }, data.serial);
       const restored = await this.#runOrThrow(this.#sdk.adb, [
         "-s",
         data.serial,
@@ -1188,6 +1194,25 @@ export class AndroidDriver implements Driver {
       await this.#writeMark(data);
       return { state: "ready", strategy: "snapshot" };
     });
+  }
+
+  // why: reclaim leaves no rule of the lease on a device proved its own; it never throws, so a failed removal does not fail the reclaim.
+  async #removeRules(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    serial: string,
+  ): Promise<void> {
+    await removeDeviceRules(
+      (target, args, timeoutMs) => this.#runAdbOn(target, args, timeoutMs),
+      this.#warnCleanup,
+      device,
+      serial,
+    );
+  }
+
+  async #deviceIsOwn(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<boolean> {
+    if (isPhysicalDriverDevice(device)) return true;
+    const data = this.#dataFor(device);
+    return data.serial !== "" && (await this.#serialIsOwn(data));
   }
 
   reclaimStrategy(

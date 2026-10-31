@@ -41,7 +41,9 @@ import {
   warmPoolOwner,
   Nuke,
   SerializedDecision,
+  stableError,
   sweepWriteLeftovers,
+  toDriverDevice,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
@@ -618,6 +620,25 @@ async function composeDaemon(
       processSupervisor,
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
     });
+    // why: before any request is served, so a tunnel rule a stopped daemon left is gone before a lease uses its device; each driver proves a device its own first.
+    await Promise.all(
+      drivers.map(async (driver) => {
+        try {
+          await driver.deviceTcp?.sweep(
+            registry.snapshot.devices
+              .filter(
+                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
+              )
+              .map((device) => toDriverDevice(device)),
+          );
+        } catch (error) {
+          logger.warn("A driver's start sweep of tunnel rules failed", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+        }
+      }),
+    );
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
