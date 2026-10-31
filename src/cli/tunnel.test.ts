@@ -881,6 +881,23 @@ describe("simlock tunnel forward listening on the caller's loopback", () => {
     expect(queued?.closed).toBe(true);
     expect(sentFrames(refusedEarly).map((f) => f.tag)).toEqual([TUNNEL_TAG.hello]);
 
+    const slow = command(ENV);
+    let releaseLookup: () => void = () => undefined;
+    const lookup = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    slow.httpJson.get = async () => {
+      await lookup;
+      throw new Error("the worker is unreachable");
+    };
+    const slowExit = slow.run(["tunnel", "forward", "9229"]);
+    await vi.waitFor(() => expect(slow.tcpListeners.listeners).toHaveLength(1));
+    const beforeSocket = slow.tcpListeners.listeners[0]?.connect();
+    expect(beforeSocket?.closed).toBe(false);
+    releaseLookup();
+    expect(await slowExit).toBe(1);
+    expect(beforeSocket?.closed).toBe(true);
+
     const endings: readonly ((cli: ReturnType<typeof command>, peer: Peer) => void)[] = [
       (cli) => cli.signals.emit("SIGINT"),
       (_cli, ended) => ended.receive(refusedFrame("TUNNEL_BAD_PORT", "no")),
