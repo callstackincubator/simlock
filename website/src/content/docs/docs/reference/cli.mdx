@@ -379,20 +379,22 @@ simlock daemon uninstall [--json]
 Read or change the daemon's configuration. See [Configuration](/simlock/docs/worker/configuration) and the [configuration reference](/simlock/docs/reference/configuration) for every key.
 
 ```text
-simlock config
-simlock config get <key>
+simlock config [--show-secrets]
+simlock config get <key> [--show-secrets]
 simlock config set <key> <value>
 ```
 
 | Subcommand | What it does |
 | --- | --- |
-| (none) | Print the daemon's whole effective configuration as one JSON line. Needs the admin role. |
-| `get <key>` | Print one value. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
+| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token` and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
+| `get <key>` | Print one value, with the same secrets redacted. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
 | `set <key> <value>` | Write one value to `config.json` in the daemon's data folder. `<value>` is read as JSON when it parses (`900000`, `true`, `["ios"]`), else as a string. Does not contact the daemon. |
 
 `config set` checks the whole file after the change and refuses an invalid value or an unknown key with a usage error (exit 2), leaving the file as it was. The file is written with owner-only permissions. A change takes effect the next time the daemon starts; the command prints `Updated <key> in <path>; takes effect on daemon restart.`
 
-None of the subcommands take flags.
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--show-secrets` | `config` and `config get` only: print `gateway.token` and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
 
 ## simlock doctor
 
