@@ -8,6 +8,7 @@ class FakeReverse implements DeviceReverse {
   constructor(
     readonly hostPort: number,
     private readonly onClose: () => void,
+    private readonly failure: () => Error | undefined,
   ) {}
 
   onConnection(listener: (stream: TcpStream) => void): void {
@@ -15,6 +16,8 @@ class FakeReverse implements DeviceReverse {
   }
 
   async close(): Promise<void> {
+    const failure = this.failure();
+    if (failure !== undefined) throw failure;
     this.closed = true;
     this.onClose();
   }
@@ -27,6 +30,8 @@ class FakeReverse implements DeviceReverse {
 // why: a driver's `deviceTcp` member for tests: `reversed` holds the device ports whose rule is set,
 // and `connect` plays the device opening a connection to one of them.
 export class FakeDeviceTcp implements DeviceTcp {
+  // why: a test sets this to make every rule removal fail, as an adb that does not answer does.
+  closeFailure: Error | undefined;
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
 
@@ -41,9 +46,13 @@ export class FakeDeviceTcp implements DeviceTcp {
   ): Promise<DeviceReverse> {
     const hostPort = this.#nextHostPort;
     this.#nextHostPort += 1;
-    const reverse = new FakeReverse(hostPort, () => {
-      this.#reverses.delete(devicePort);
-    });
+    const reverse = new FakeReverse(
+      hostPort,
+      () => {
+        this.#reverses.delete(devicePort);
+      },
+      () => this.closeFailure,
+    );
     this.#reverses.set(devicePort, reverse);
     return reverse;
   }

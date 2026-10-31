@@ -312,4 +312,86 @@ describe("a worker's tunnel socket", () => {
     );
     expect(socket.closed).toBeUndefined();
   });
+
+  it("removes the tunnel's rules and closes its connections when the socket closes, the lease ends or the daemon stops, and keeps going when a removal fails", async () => {
+    const tunnel = { devicePort: 5173, kind: "reverse" };
+    async function open(): Promise<{
+      readonly deviceTcp: FakeDeviceTcp;
+      readonly worker: WorkerModule;
+      readonly socket: MemoryLeaseSocket;
+      readonly device: ReturnType<FakeDeviceTcp["connect"]>;
+    }> {
+      const { deviceTcp, worker } = await setup();
+      const socket = await attach(worker);
+      socket.receive(hello(tunnel));
+      await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+      const device = deviceTcp.connect(5173);
+      await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
+      return { device, deviceTcp, socket, worker };
+    }
+
+    const client = await open();
+    client.socket.drop();
+    await vi.waitFor(() => expect(client.deviceTcp.reversed).toEqual([]));
+    expect(client.device.closed).toBe(true);
+    const again = await attach(client.worker);
+    again.receive(
+      hello(
+        ...Array.from({ length: 8 }, (_, index) => ({ devicePort: 6000 + index, kind: "reverse" })),
+      ),
+    );
+    await vi.waitFor(() => expect(frames(again).map((sent) => sent.tag)).toEqual([0x81]));
+
+    const ended = await open();
+    await ended.worker.hooks?.beforeDeviceReclaim?.(
+      {
+        deviceId: "dev_1",
+        leaseId: "L-1",
+        ownerId: "tok_holder",
+        platform: "android",
+        reason: "expired",
+      },
+      new AbortController().signal,
+    );
+    expect(ended.deviceTcp.reversed).toEqual([]);
+    expect(ended.device.closed).toBe(true);
+    expect(ended.socket.closed).toEqual({ code: 4001, reason: "expired" });
+
+    const stopped = await open();
+    await stopped.worker.hooks?.beforeDrain?.();
+    expect(stopped.deviceTcp.reversed).toEqual([]);
+    expect(stopped.device.closed).toBe(true);
+    expect(stopped.socket.closed).toEqual({ code: 1001, reason: "Simlock is stopping" });
+
+    const failing = await open();
+    failing.deviceTcp.closeFailure = new Error("adb did not answer");
+    await failing.worker.hooks?.beforeDeviceReclaim?.(
+      {
+        deviceId: "dev_1",
+        leaseId: "L-1",
+        ownerId: "tok_holder",
+        platform: "android",
+        reason: "killed",
+      },
+      new AbortController().signal,
+    );
+    expect(failing.socket.closed).toEqual({ code: 4001, reason: "killed" });
+    expect(failing.device.closed).toBe(true);
+
+    const reclaimed = await open();
+    const aborted = new AbortController();
+    aborted.abort();
+    await reclaimed.worker.hooks?.beforeDeviceReclaim?.(
+      {
+        deviceId: "dev_1",
+        leaseId: "L-1",
+        ownerId: "tok_holder",
+        platform: "android",
+        reason: "device-lost",
+      },
+      aborted.signal,
+    );
+    expect(reclaimed.socket.closed).toEqual({ code: 4001, reason: "device-lost" });
+    expect(reclaimed.deviceTcp.reversed).toEqual([5173]);
+  });
 });
