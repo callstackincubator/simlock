@@ -478,5 +478,16 @@ describe("a worker's tunnel socket", () => {
     );
     expect(reclaimed.socket.closed).toEqual({ code: 4001, reason: "device-lost" });
     expect(reclaimed.deviceTcp.reversed).toEqual([5173]);
+
+    const racing = await setup();
+    let release: () => void = () => undefined;
+    racing.deviceTcp.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const early = await attach(racing.worker);
+    early.receive(hello(tunnel));
+    early.drop();
+    release();
+    await vi.waitFor(() => expect(racing.deviceTcp.reversed).toEqual([]));
   });
 });
