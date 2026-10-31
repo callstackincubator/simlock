@@ -161,15 +161,21 @@ const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
 /**
  * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
- * reaches the driver at construction and never from a lease request. Only these four settings
- * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
- * `-port`, a different AVD home, or any other argument that would break containment.
+ * reaches the driver at construction and never from a lease request. Only these settings exist:
+ * four map to one fixed emulator flag each through `emulatorLaunchFlags`, and `hardwareKeyboard`
+ * to one fixed `config.ini` key, so config cannot add `-port`, a different AVD home, or any other
+ * argument that would break containment.
  */
 export interface AndroidEmulatorLaunchOptions {
   readonly headless: boolean;
   readonly gpu: string;
   readonly audio: boolean;
   readonly bootAnimation: boolean;
+  /**
+   * why: The emulator has no flag for it, only `hw.keyboard` in `config.ini`, so it is written
+   * there before each prepare boot. Unset leaves the key as it is.
+   */
+  readonly hardwareKeyboard?: boolean;
 }
 
 const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
@@ -527,6 +533,7 @@ export class AndroidDriver implements Driver {
   readonly #legacyAvdHome: string;
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
+  readonly #hardwareKeyboard: boolean | undefined;
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -558,6 +565,7 @@ export class AndroidDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
     this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
+    this.#hardwareKeyboard = options.emulator?.hardwareKeyboard;
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -1067,6 +1075,7 @@ export class AndroidDriver implements Driver {
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
+      await this.#applyHardwareKeyboard(data.avdName);
       await this.#reconcileBaseline(data, state);
       const booted = await this.#withReservedPort(data, state);
       await this.#startEmulator(booted, state, prepareLaunchArgs(state), state.snapshotExpected);
@@ -1522,6 +1531,18 @@ export class AndroidDriver implements Driver {
     await this.#mergeConfigIniLines(avdName, properties);
   }
 
+  /**
+   * why: Before the baseline check, so a changed `hw.keyboard` changes the config hash and the
+   * baseline is rebuilt rather than loaded onto different hardware. Never on a recovery boot,
+   * which must not change a leased device's hardware.
+   */
+  async #applyHardwareKeyboard(avdName: string): Promise<void> {
+    const line = this.#hardwareKeyboardLine();
+    if (line === undefined) return;
+    const [key, value] = line.split("=") as [string, string];
+    await this.#mergeConfigIniLines(avdName, { [key]: value });
+  }
+
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
     const image = this.#matchingImage(await this.#installedImages(), component, undefined);
     return image === undefined ? undefined : this.#installedComponent(image);
@@ -1889,22 +1910,31 @@ export class AndroidDriver implements Driver {
     return result.stdout.trim();
   }
 
+  /**
+   * why: Hashes `hw.keyboard` as `android.emulator.hardwareKeyboard` will write it, so an estimate
+   * or reclaim made before the next prepare boot already sees a pending change as stale.
+   */
   async #avdConfig(avdName: string): Promise<string> {
+    let contents: string;
     try {
-      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
-      return (
-        contents
-          .split(/\r?\n/)
-          .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
-          // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
-          // ignores it, so counting it would invalidate the other devices' baselines.
-          .filter((line) => !line.startsWith("hw.device.hash2="))
-          .sort()
-          .join("\n")
-      );
+      contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
     } catch {
       return "";
     }
+    const keyboard = this.#hardwareKeyboardLine();
+    const lines = contents
+      .split(/\r?\n/)
+      .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
+      // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
+      // ignores it, so counting it would invalidate the other devices' baselines.
+      .filter((line) => !line.startsWith("hw.device.hash2="))
+      .filter((line) => keyboard === undefined || !line.startsWith("hw.keyboard="));
+    return [...lines, ...(keyboard === undefined ? [] : [keyboard])].sort().join("\n");
+  }
+
+  #hardwareKeyboardLine(): string | undefined {
+    if (this.#hardwareKeyboard === undefined) return undefined;
+    return `hw.keyboard=${this.#hardwareKeyboard ? "yes" : "no"}`;
   }
 
   #configIniPath(avdName: string): string {

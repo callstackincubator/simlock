@@ -394,6 +394,11 @@ export interface Config {
       readonly gpu: string;
       readonly audio: boolean;
       readonly bootAnimation: boolean;
+      /**
+       * why: Optional, unlike the four above: unset must leave each emulator's `hw.keyboard`
+       * as it is (a new one: its profile's), which no boolean default can say.
+       */
+      readonly hardwareKeyboard?: boolean;
     };
   };
   /**
@@ -1164,6 +1169,7 @@ export function configValidators(
         gpu: nonEmptyString,
         audio: booleanValue,
         bootAnimation: booleanValue,
+        hardwareKeyboard: booleanValue,
       }),
     }),
     stalledTransition: objectValidator({

@@ -1191,7 +1191,7 @@ describe("operation input/output round trips", () => {
     expect(parse(inside)).toBe(true);
   });
 
-  it("config.get: round-trips a representative config", () => {
+  it("config.get: round-trips a representative config, keeping lease.maxPerRequester and android.emulator.hardwareKeyboard as set", () => {
     const config = {
       capabilities: {},
       mode: "worker",
@@ -1255,6 +1255,11 @@ describe("operation input/output round trips", () => {
       });
       expect(parsed.lease.maxPerRequester).toEqual(maxPerRequester);
     }
+    const emulator = { ...config.android.emulator, hardwareKeyboard: true };
+    expect(
+      OPERATIONS["config.get"].output.parse({ ...config, android: { ...config.android, emulator } })
+        .android.emulator,
+    ).toEqual(emulator);
   });
 
   it("config.get: keeps every warm target key and rejects a target with a platform or a mode the config loader would not accept", () => {

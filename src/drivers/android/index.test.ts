@@ -982,7 +982,7 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, wipe-pending and physical boots at 70 s", async () => {
+  it("quotes a 4 s prepare boot for a persisted clean baseline and keeps unknown, recovery, mismatched, keyboard-changed, wipe-pending and physical boots at 70 s", async () => {
     const harness = await provisionedHarness();
     const booted = await harness.driver.makeReady(harness.device);
 
@@ -1074,7 +1074,25 @@ describe("AndroidDriver", () => {
     ]);
     const wipePendingDriver = await createDriver(harness.filesystem, wipePendingRunner);
     await wipePendingDriver.reclaim(booted, { clean: "full" });
+    // why: A keyboard setting the device does not have yet is written at the next prepare boot,
+    // which then rebuilds the baseline.
+    const keyboardChangedDriver = await createDriver(
+      harness.filesystem,
+      new ScriptedProcessRunner([
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]),
+      {
+        emulator: {
+          audio: true,
+          bootAnimation: true,
+          gpu: "auto",
+          hardwareKeyboard: true,
+          headless: false,
+        },
+      },
+    );
     expect({
+      keyboardChanged: await keyboardChangedDriver.estimate(prepareEstimate, spec),
       mismatchedBaselineHash: await mismatchedDriver.estimate(prepareEstimate, spec),
       physicalSpec: await restartedDriver.estimate(prepareEstimate, {
         class: "phone",
@@ -1084,7 +1102,12 @@ describe("AndroidDriver", () => {
         platform: "android",
       }),
       wipePending: await wipePendingDriver.estimate(prepareEstimate, spec),
-    }).toEqual({ mismatchedBaselineHash: 70_000, physicalSpec: 70_000, wipePending: 70_000 });
+    }).toEqual({
+      keyboardChanged: 70_000,
+      mismatchedBaselineHash: 70_000,
+      physicalSpec: 70_000,
+      wipePending: 70_000,
+    });
   });
 
   describe("android.emulator launch options", () => {
@@ -1193,7 +1216,10 @@ describe("AndroidDriver", () => {
      */
     const bootAfterRestartWith = async (
       emulator: AndroidEmulatorLaunchOptions,
-      expectations: (flags: readonly string[]) => ScriptedProcessExpectation[],
+      expectations: (
+        flags: readonly string[],
+        filesystem: MemoryFilesystem,
+      ) => ScriptedProcessExpectation[],
       flags: readonly string[],
       capturedUnder: {
         readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -1211,7 +1237,7 @@ describe("AndroidDriver", () => {
         ...(purpose === "recover"
           ? []
           : [processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9")]),
-        ...expectations(flags),
+        ...expectations(flags, harness.filesystem),
         markWriteExpectation("emulator-5586", "device-0"),
       ]);
       const driver = await createDriver(harness.filesystem, runner, { emulator });
@@ -1319,6 +1345,72 @@ describe("AndroidDriver", () => {
       },
     );
 
+    it.each([
+      [true, "hw.keyboard=yes"],
+      [false, "hw.keyboard=no"],
+    ] as const)(
+      "writes hardwareKeyboard %s into config.ini as %s before the next boot, and rebuilds the clean baseline it changes",
+      async (hardwareKeyboard, line) => {
+        let configAtLaunch: Promise<string> | undefined;
+        const { runner } = await bootAfterRestartWith(
+          { ...defaults, hardwareKeyboard },
+          (flags, filesystem) =>
+            rebuild(flags).map((expectation) =>
+              expectation.match.args[0] === "-avd"
+                ? {
+                    ...expectation,
+                    onSpawn: () => {
+                      configAtLaunch ??= filesystem.readFile(
+                        `${avdDirectory}/simlock_one.avd/config.ini`,
+                      );
+                    },
+                  }
+                : expectation,
+            ),
+          [],
+        );
+
+        expect((await configAtLaunch)?.split("\n")).toContain(line);
+        expect(emulatorLaunches(runner)[0]).toEqual([
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
+          "-wipe-data",
+          "-no-snapshot-load",
+        ]);
+      },
+    );
+
+    it("keeps the clean baseline and boots from it while hardwareKeyboard stays the same", async () => {
+      const emulator = { ...defaults, hardwareKeyboard: true };
+      const { filesystem, runner } = await bootAfterRestartWith(emulator, restore, [], {
+        emulator,
+      });
+
+      expect(emulatorLaunches(runner)).toEqual([
+        [
+          "-avd",
+          "simlock_one",
+          "-port",
+          "5586",
+          "-no-snapshot-save",
+          "-grpc",
+          "8586",
+          "-grpc-use-token",
+          "-snapshot",
+          "simlock_clean_baseline",
+        ],
+      ]);
+      expect(
+        (await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`)).split("\n"),
+      ).toContain("hw.keyboard=yes");
+    });
+
     it("rebuilds the clean baseline on the next boot after gpu changes from one explicit mode to another", async () => {
       const flags = ["-gpu", "swiftshader_indirect"];
       const { filesystem, runner } = await bootAfterRestartWith(
@@ -1403,7 +1495,7 @@ describe("AndroidDriver", () => {
       expect(emulatorLaunches(runner)[0]).not.toContain("-wipe-data");
     });
 
-    it("recovering a leased device after a restart boots it cold, never wiping it or loading a snapshot, even when headless changed", async () => {
+    it("recovering a leased device after a restart boots it cold, never wiping it, loading a snapshot or changing its keyboard, even when headless and hardwareKeyboard changed", async () => {
       const flags = ["-no-window"];
       const coldBoot = (launchFlags: readonly string[]): ScriptedProcessExpectation[] => [
         {
@@ -1442,7 +1534,7 @@ describe("AndroidDriver", () => {
         ),
       ];
       const { filesystem, runner } = await bootAfterRestartWith(
-        { ...defaults, headless: true },
+        { ...defaults, hardwareKeyboard: true, headless: true },
         coldBoot,
         flags,
         {},
@@ -1466,6 +1558,9 @@ describe("AndroidDriver", () => {
       await expect(
         filesystem.exists(`${avdDirectory}/simlock_one.avd/snapshots/simlock_clean_baseline`),
       ).resolves.toBe(true);
+      await expect(
+        filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`),
+      ).resolves.not.toContain("hw.keyboard");
       expect(runner.calls.filter((call) => call.args.includes("save"))).toHaveLength(0);
       // why: A recovered device is re-marked like any other ready device: the mark is what proves
       // the device is still Simlock's on the next reconcile.

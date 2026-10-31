@@ -201,6 +201,7 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `android.emulator.gpu`             | non-empty string                   | `auto`                           | Emulator GPU mode, such as `host` or `swiftshader_indirect`. `auto` leaves the emulator's own choice. A mode the emulator rejects fails the next boot, not the config load. | Worker     |
 | `android.emulator.audio`           | boolean                            | `true`                           | `false` starts emulators without audio.                                                                   | Worker     |
 | `android.emulator.bootAnimation`   | boolean                            | `true`                           | `false` skips the boot animation.                                                                         | Worker     |
+| `android.emulator.hardwareKeyboard` | boolean                           | not set                          | `true` gives emulators a hardware keyboard (`hw.keyboard`); `false` takes it away. Not set leaves each emulator's `hw.keyboard` as it is: a new one gets its profile's, and one this key already changed keeps that value, so set `false` to take a keyboard away again. | Worker     |
 | `drivers.ios.deviceRoot`           | absolute path                      | `~/.simlock/devices/ios`         | Folder that holds Simlock's simulators. A relative path turns iOS off; `simlock doctor` says why.          | Worker     |
 | `drivers.ios.deviceSet`            | `simlock` or `default`             | `simlock`                        | Where iOS simulators live. `simlock` keeps them in `drivers.ios.deviceRoot`; `default` keeps them in Xcode's own device set, `~/Library/Developer/CoreSimulator/Devices`. Case-sensitive. Any other value, `default` together with `drivers.ios.deviceRoot`, or a switch with simulators left from the other setting turns iOS off; `simlock doctor` says why. See [Build and run your app](/simlock/docs/using-devices/build-and-run#switch-the-device-set). | Worker     |
 | `drivers.ios.screenCaptureCommand` | path                               | the program installed with Simlock | Program that captures a simulator's screen for streaming.                                              | Worker     |
@@ -209,8 +210,11 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `drivers.android.adbServerPort`    | TCP port number                    | `5038`                           | Port of Simlock's own adb server. Not `5037`, the shared server's port. If something else holds it, Android does not start. | Worker     |
 | `exec.timeoutMs`                   | positive number                    | `600000` (10 min)                | How long one command run on a device through `simlock simctl` or `simlock adb` from a gateway or over HTTP may take before it is stopped with `EXEC_TIMEOUT`. | Worker     |
 
-`android.emulator.*` changes apply at each emulator's next boot. Changing `headless` or `gpu`
-makes the next boot wipe the device once to take a new clean snapshot.
+`android.emulator.*` changes apply at each emulator's next boot. `hardwareKeyboard` waits for
+the next boot that prepares the device for a lease: a recovery boot during a lease keeps the
+keyboard the device had. Changing `headless` or `gpu`, or a `hardwareKeyboard` value the device
+does not have, makes that boot wipe a device once to take a new clean snapshot; a device with
+no clean snapshot yet takes its first one without a wipe.
 
 ## HTTP and sign-in
 
