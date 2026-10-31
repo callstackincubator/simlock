@@ -14,7 +14,7 @@ class FakeDeviceInput implements DeviceInput {
   readonly #failedListeners = new Set<(error: Error) => void>();
   #config: InputScreenConfig;
 
-  // why: a test sets this to make every write fail, as a helper whose pipe broke does.
+  // why: a test sets this to make every write fail and the input report it through `onFailed`, as a helper whose pipe broke does.
   sendFailure: Error | undefined;
 
   constructor(config: InputScreenConfig) {
@@ -22,7 +22,10 @@ class FakeDeviceInput implements DeviceInput {
   }
 
   send(message: InputMessage): Promise<void> {
-    if (this.sendFailure !== undefined) return Promise.reject(this.sendFailure);
+    if (this.sendFailure !== undefined) {
+      this.fail(this.sendFailure);
+      return Promise.reject(this.sendFailure);
+    }
     this.sent.push(message);
     return Promise.resolve();
   }
