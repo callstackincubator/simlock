@@ -59,7 +59,9 @@ flowchart LR
 
 1. A new optional module, `tunnel`, owns `GET /v1/leases/{id}/tunnel`, a
    WebSocket on a lone worker and on a gateway, which relays it to the
-   lease's worker as the input socket is relayed. It is on only under
+   lease's worker as the input socket is relayed: frames wrapped
+   `[len u32][tag u8][payload]`, a worker heartbeat every 5 s, and close
+   codes carried in a close frame. It is on only under
    `capabilities.tunnel.enabled`, off by default on every role. Only the
    lease's holder and operators reach it.
 2. One socket carries every tunnel and every TCP connection of one
@@ -86,10 +88,16 @@ flowchart LR
 6. A tunnel lives while its socket does. When the socket closes, the
    worker removes its `reverse` rules and closes its listeners and
    connections. When the lease ends, every socket of it closes. Android
-   reclaim removes every `reverse` and `forward` rule on the device, the
-   tunnel's and any an agent made through `exec`.
+   reclaim removes every `reverse` rule on the device, the tunnel's and any
+   an agent made through `exec`, and every `forward` rule the adb server
+   holds for that device's serial. It never runs `forward --remove-all`:
+   forward rules live in the server, which other devices and tools share.
 7. The socket's messages are the module's, not a contract shape: no
    protocol bump.
+8. `simlock tunnel` opens the socket with `ws`, through a port adapter only
+   that command loads: Node 22's built-in WebSocket client cannot send the
+   `Authorization` header the daemons require. Every other CLI command and
+   the MCP server still never load `ws`.
 
 ```mermaid
 sequenceDiagram
@@ -124,6 +132,7 @@ sequenceDiagram
   a lease field.
 - Reclaim gains a step on Android, and rules made by hand no longer leak
   into the next lease.
+- A third file imports `ws`, loaded by one CLI command only.
 - iOS simulators are not covered: their `reverse` would be a port on the
   worker shared by every lease, the host-port problem #162 owns.
 
