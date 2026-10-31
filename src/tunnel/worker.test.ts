@@ -56,7 +56,10 @@ async function setup(platform = "android"): Promise<{
   const registry = {
     snapshot: {
       devices: [{ id: "dev_1", spec: { platform } } as unknown as DeviceRecord],
-      leases: [{ deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord],
+      leases: [
+        { deviceId: "dev_1", id: "L-1" } as unknown as LeaseRecord,
+        { deviceId: "dev_1", id: "L-2" } as unknown as LeaseRecord,
+      ],
     },
   };
   const loaded = await tunnelModule.loadWorker();
@@ -71,10 +74,10 @@ async function setup(platform = "android"): Promise<{
   return { deviceTcp, worker };
 }
 
-async function attach(worker: WorkerModule): Promise<MemoryLeaseSocket> {
+async function attach(worker: WorkerModule, leaseId = "L-1"): Promise<MemoryLeaseSocket> {
   const opened = await worker.socket?.open(new Request("http://simlock/tunnel"), IDENTITY, {
     deviceId: "dev_1",
-    id: "L-1",
+    id: leaseId,
   });
   expect(opened).toBeTypeOf("function");
   const socket = new MemoryLeaseSocket();
@@ -113,23 +116,23 @@ describe("a worker's tunnel socket", () => {
     const { deviceTcp, worker } = await setup();
     const socket = await attach(worker);
     socket.receive(
-      hello({ devicePort: 5173, kind: "reverse" }, { devicePort: 5174, kind: "reverse" }),
+      hello({ devicePort: 1024, kind: "reverse" }, { devicePort: 65535, kind: "reverse" }),
     );
     await vi.waitFor(() =>
       expect(frames(socket)).toEqual([
         {
-          body: '{"tunnels":[{"kind":"reverse","devicePort":5173},{"kind":"reverse","devicePort":5174}]}',
+          body: '{"tunnels":[{"kind":"reverse","devicePort":1024},{"kind":"reverse","devicePort":65535}]}',
           conn: 0,
           tag: 0x81,
         },
       ]),
     );
-    const first = deviceTcp.connect(5173);
-    const second = deviceTcp.connect(5174);
+    const first = deviceTcp.connect(1024);
+    const second = deviceTcp.connect(65535);
     await vi.waitFor(() =>
       expect(frames(socket).slice(1)).toEqual([
-        { body: '{"kind":"reverse","devicePort":5173}', conn: 1, tag: 0x02 },
-        { body: '{"kind":"reverse","devicePort":5174}', conn: 3, tag: 0x02 },
+        { body: '{"kind":"reverse","devicePort":1024}', conn: 1, tag: 0x02 },
+        { body: '{"kind":"reverse","devicePort":65535}', conn: 3, tag: 0x02 },
       ]),
     );
 
@@ -151,16 +154,16 @@ describe("a worker's tunnel socket", () => {
     );
 
     const opens = () => frames(socket).filter((sent) => sent.tag === 0x02).length;
-    const peers = Array.from({ length: 255 }, () => deviceTcp.connect(5173));
+    const peers = Array.from({ length: 255 }, () => deviceTcp.connect(1024));
     await vi.waitFor(() => expect(opens()).toBe(257));
     expect(peers.every((peer) => !peer.closed)).toBe(true);
-    const past = deviceTcp.connect(5173);
+    const past = deviceTcp.connect(1024);
     await vi.waitFor(() => expect(past.closed).toBe(true));
     expect(opens()).toBe(257);
 
     socket.receive(frame(0x06, 3, '{"reason":"done"}'));
     await vi.waitFor(() => expect(second.closed).toBe(true));
-    const after = deviceTcp.connect(5173);
+    const after = deviceTcp.connect(1024);
     await vi.waitFor(() => expect(opens()).toBe(258));
     expect(after.closed).toBe(false);
   });
@@ -322,6 +325,33 @@ describe("a worker's tunnel socket", () => {
         send: (socket) => socket.receive(frame(0x01, 0, '{"tunnels":"all"}')),
       },
       {
+        message: "HELLO tunnels must each be {kind, devicePort}",
+        ready: false,
+        send: (socket) => socket.receive(hello({ devicePort: 5173, kind: "bogus" })),
+      },
+      {
+        message: "HELLO tunnels must each be {kind, devicePort}",
+        ready: false,
+        send: (socket) =>
+          socket.receive(frame(0x01, 0, '{"tunnels":[{"kind":"reverse","devicePort":5173.5}]}')),
+      },
+      {
+        message: "HELLO tunnels must each be {kind, devicePort}",
+        ready: false,
+        send: (socket) =>
+          socket.receive(frame(0x01, 0, '{"tunnels":[{"kind":"reverse","devicePort":"5173"}]}')),
+      },
+      {
+        message: "HELLO tunnels must each be {kind, devicePort}",
+        ready: false,
+        send: (socket) => socket.receive(frame(0x01, 0, '{"tunnels":[null]}')),
+      },
+      {
+        message: "a frame is shorter than its 5-byte header",
+        ready: false,
+        send: (socket) => socket.receive(Uint8Array.of(0x01, 0, 0, 0)),
+      },
+      {
         message: "HELLO is longer than 4096 bytes",
         ready: false,
         send: (socket) => socket.receive(frame(0x01, 0, ` ${" ".repeat(4096)}{"tunnels":[]}`)),
@@ -340,15 +370,22 @@ describe("a worker's tunnel socket", () => {
         message: "DATA is past the granted window",
         ready: true,
         send: (socket) => {
-          for (let sent = 0; sent < 5; sent += 1) {
+          for (let sent = 0; sent < 4; sent += 1) {
             socket.receive(bigData(1));
           }
+          expect(socket.closed).toBeUndefined();
+          socket.receive(bigData(1));
         },
       },
       {
         message: "connection 99 was never opened",
         ready: true,
         send: (socket) => socket.receive(frame(0x03, 99, "x")),
+      },
+      {
+        message: "connection 5 was never opened",
+        ready: true,
+        send: (socket) => socket.receive(frame(0x03, 5, "x")),
       },
       {
         message: "connection 2 was never opened",
@@ -358,7 +395,11 @@ describe("a worker's tunnel socket", () => {
       {
         message: "the window is above 2147483648",
         ready: true,
-        send: (socket) => socket.receive(credit(1, 2 ** 31)),
+        send: (socket) => {
+          socket.receive(credit(1, 2 ** 31 - 262_144));
+          expect(socket.closed).toBeUndefined();
+          socket.receive(credit(1, 1));
+        },
       },
     ];
     for (const bad of cases) {
@@ -368,7 +409,8 @@ describe("a worker's tunnel socket", () => {
         socket.receive(hello(tunnel));
         await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
         deviceTcp.connect(5173);
-        await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
+        deviceTcp.connect(5173);
+        await vi.waitFor(() => expect(frames(socket)).toHaveLength(3));
       }
       expect(socket.closed).toBeUndefined();
       bad.send(socket);
@@ -442,6 +484,24 @@ describe("a worker's tunnel socket", () => {
     expect(ended.device.closed).toBe(true);
     expect(ended.socket.closed).toEqual({ code: 4001, reason: "expired" });
 
+    const pair = await open();
+    const bystander = await attach(pair.worker, "L-2");
+    bystander.receive(hello({ devicePort: 5180, kind: "reverse" }));
+    await vi.waitFor(() => expect(frames(bystander)).toHaveLength(1));
+    await pair.worker.hooks?.beforeDeviceReclaim?.(
+      {
+        deviceId: "dev_1",
+        leaseId: "L-1",
+        ownerId: "tok_holder",
+        platform: "android",
+        reason: "expired",
+      },
+      new AbortController().signal,
+    );
+    expect(pair.socket.closed).toEqual({ code: 4001, reason: "expired" });
+    expect(bystander.closed).toBeUndefined();
+    expect(pair.deviceTcp.reversed).toEqual([5180]);
+
     const stopped = await open();
     await stopped.worker.hooks?.beforeDrain?.();
     expect(stopped.deviceTcp.reversed).toEqual([]);
@@ -488,6 +548,7 @@ describe("a worker's tunnel socket", () => {
     early.receive(hello(tunnel));
     early.drop();
     release();
+    await vi.waitFor(() => expect(racing.deviceTcp.reverseLog).toEqual([5173]));
     await vi.waitFor(() => expect(racing.deviceTcp.reversed).toEqual([]));
   });
 });

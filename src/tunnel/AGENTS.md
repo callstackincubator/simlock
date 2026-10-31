@@ -2,7 +2,7 @@
 
 Does: lets a lease's holder (or an operator) reverse device ports of its Android device to its own machine over `WS /v1/leases/{id}/tunnel`, on a lone worker.
 Entry: `index.ts` -> `tunnelModule`, an optional module (ADR 0054): `worker.ts` `createWorker`, loaded by the module host only when turned on.
-Uses: contract (`tunnel-frames.ts`), core (`DeviceReverse`, `DeviceTcpError`), modules (the context, socket types), ports (`LeaseSocket`).
+Uses: contract (the tunnel frame codec), core (`DeviceReverse`, `DeviceTcpError`), modules (the context, socket types), ports (`LeaseSocket`).
 Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
 Off unless `capabilities.tunnel.enabled` (false). Off: nothing loaded, and the `tunnel` capability reads `off`.
 

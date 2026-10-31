@@ -364,6 +364,10 @@ function isUninstall(rest: readonly string[]): boolean {
   return rest.includes("uninstall");
 }
 
+function isRuleCommand(rest: readonly string[]): boolean {
+  return rest[2] === "reverse" || rest[2] === "forward";
+}
+
 function defaultServerSends(probe: FakeTcpProbe) {
   return probe.sends.filter((send) => send.port === 5037);
 }
@@ -1302,7 +1306,7 @@ describe("Android physical handler: reclaim", () => {
     expect(crlf.runner.rests.filter(isUninstall)).toHaveLength(1);
   });
 
-  it("passes a 30 000 ms limit with every read and a 60 000 ms limit with every uninstall to the process runner", async () => {
+  it("passes a 30 000 ms limit with every read, a 60 000 ms limit with every uninstall and a 10 000 ms limit with every rule removal to the process runner", async () => {
     const { driver, runner } = await world();
 
     await driver.inspectPhysical(PHONE);
@@ -1310,9 +1314,14 @@ describe("Android physical handler: reclaim", () => {
     await driver.reclaim(PHYSICAL, { clean: "standard" });
 
     const uninstalls = runner.commands.filter((call) => isUninstall(restOf(call)));
-    const reads = runner.calls.filter((call) => !isUninstall(restOf(call)));
+    const removals = runner.calls.filter((call) => isRuleCommand(restOf(call)));
+    const reads = runner.calls.filter(
+      (call) => !isUninstall(restOf(call)) && !isRuleCommand(restOf(call)),
+    );
     expect(uninstalls).not.toHaveLength(0);
+    expect(removals).not.toHaveLength(0);
     expect(uninstalls.map((call) => call.options.timeoutMs)).toEqual(uninstalls.map(() => 60_000));
+    expect(removals.map((call) => call.options.timeoutMs)).toEqual(removals.map(() => 10_000));
     expect(reads.map((call) => call.options.timeoutMs)).toEqual(reads.map(() => 30_000));
   });
 });
