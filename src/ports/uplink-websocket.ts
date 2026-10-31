@@ -1,7 +1,7 @@
 /**
- * why: The WebSocket adapters behind the uplink port (`./uplink.ts`) -- the one file in the tree
- * that imports `ws`, kept out of the ports barrel so processes that never open an uplink (the
- * CLI, the MCP server) never load it.
+ * why: The WebSocket adapters behind the uplink port (`./uplink.ts`) -- imports `ws` statically,
+ * kept out of the ports barrel so processes that never open an uplink (the CLI, the MCP
+ * server) never load it.
  *
  * Why `ws` at all: Node 22 ships a WebSocket *client* and no server, so the gateway's half needs
  * it, and the join token and the worker id both travel in headers at upgrade time (ADR 0005 §4).

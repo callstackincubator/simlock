@@ -91,6 +91,9 @@ function checkedUrl(text: string | undefined): string {
     parsed.protocol === "https:" ||
     (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname));
   if (!allowed || text.length > MAX_URL_CHARS) throw refusal;
+  if (parsed.pathname !== "/" || /[?#]/.test(text)) {
+    throw new UsageError("--url must be the worker's origin only: no path, query or fragment");
+  }
   return text.replace(/\/$/, "");
 }
 
@@ -147,12 +150,20 @@ function relayConnections(
           });
           continue;
         }
+        if (streams.get(conn) !== relayed) return;
         relayed.window -= size;
         socket.send(encodeTunnelFrame(TUNNEL_TAG.data, conn, step.value.subarray(at, at + size)));
         at += size;
       }
     }
-    socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+    if (streams.get(conn) === relayed) socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+  };
+  // why: a write the caller's port refused (it ended the connection) resets that one connection and leaves the tunnel and its other connections up.
+  const failed = (conn: number, relayed: Relayed): void => {
+    if (streams.get(conn) !== relayed) return;
+    streams.delete(conn);
+    relayed.stream.close();
+    socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, conn));
   };
   const grant = (conn: number, size: number): void => {
     const credit = new Uint8Array(4);
@@ -184,7 +195,8 @@ function relayConnections(
     if (frame.tag === TUNNEL_TAG.data) {
       connection.writes = connection.writes
         .then(() => connection.stream.write(frame.payload))
-        .then(() => grant(frame.conn, frame.payload.length));
+        .then(() => grant(frame.conn, frame.payload.length))
+        .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.credit) {
       connection.window += new DataView(
         frame.payload.buffer,
@@ -193,13 +205,15 @@ function relayConnections(
       ).getUint32(0);
       connection.wake?.();
     } else if (frame.tag === TUNNEL_TAG.end) {
-      connection.writes = connection.writes.then(() => connection.stream.end());
+      connection.writes = connection.writes
+        .then(() => connection.stream.end())
+        .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
       connection.stream.close();
       streams.delete(frame.conn);
     }
   };
-  return async (
+  const handle = async (
     spec: ReverseSpec | undefined,
     frame: { tag: number; conn: number; payload: Uint8Array },
   ): Promise<void> => {
@@ -210,6 +224,15 @@ function relayConnections(
     const connection = streams.get(frame.conn);
     if (connection !== undefined) onFrame(connection, frame);
   };
+  const closeAll = (): void => {
+    const open = [...streams.values()];
+    streams.clear();
+    for (const { stream, wake } of open) {
+      stream.close();
+      wake?.();
+    }
+  };
+  return { closeAll, handle };
 }
 
 const HELLO_TIMEOUT_MS = 90_000;
@@ -343,10 +366,12 @@ function serve(
   });
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
+  let socketClosed = false;
   return new Promise<number>((resolve, reject) => {
     let silence: TimerHandle | undefined;
     let finished = false;
     let stopping = false;
+    let closeTimer: TimerHandle | undefined;
     const helloTimer = environment.clock.setTimer(HELLO_TIMEOUT_MS, () => {
       end(disconnected(`Lease ${leaseId}: no READY from the worker within 90 s`));
     });
@@ -363,13 +388,16 @@ function serve(
       environment.signals.off("SIGTERM", stop);
       environment.clock.cancel(helloTimer);
       if (silence !== undefined) environment.clock.cancel(silence);
+      if (closeTimer !== undefined) environment.clock.cancel(closeTimer);
+      relay.closeAll();
+      if (!socketClosed) socket.close(CLOSE_NORMAL, "");
       if (failure === undefined) resolve(0);
       else reject(failure);
     }
     function stop(): void {
       if (finished) return;
       stopping = true;
-      environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
+      closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
       socket.close(CLOSE_NORMAL, "");
     }
     environment.signals.on("SIGINT", stop);
@@ -377,6 +405,7 @@ function serve(
     heard();
     socket.onPing(heard);
     socket.onClose((code, reason) => {
+      socketClosed = true;
       if (stopping) {
         end(undefined);
         return;
@@ -414,7 +443,7 @@ function serve(
               ({ devicePort }) => field(payloadJson(frame.payload), "devicePort") === devicePort,
             )
           : undefined;
-      handled = handled.then(() => relay(opened, frame)).catch(() => undefined);
+      handled = handled.then(() => relay.handle(opened, frame)).catch(() => undefined);
     });
     socket.send(
       encodeTunnelFrame(

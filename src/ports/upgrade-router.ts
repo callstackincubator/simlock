@@ -1,6 +1,6 @@
 // why: the one `upgrade` listener of an HTTP server: `/v1/uplink` goes to the uplink's own handler,
 // `/v1/leases/{id}/<module>` to the app's lease socket resolution, and anything else gets a 404 and its
-// socket destroyed. With `uplink-websocket.ts`, the only code that imports `ws`; the ports barrel does
+// socket destroyed. It imports `ws` statically, as `uplink-websocket.ts` does; the ports barrel does
 // not re-export it, so the CLI and MCP server never load it.
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
