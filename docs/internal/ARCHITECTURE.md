@@ -61,7 +61,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | bus | Post-commit business events and their in-memory ring | [bus](../../src/bus/AGENTS.md) |
 | state | `state.db`: opens it, refuses an old file, damage and a newer version, migrates each owner's tables | [state](../../src/state/AGENTS.md) |
 | history | The durable event history: `history.db`, prune, set-aside, projections (usage: request, minute and device fact rows) | [history](../../src/history/AGENTS.md) |
-| ports | Every external API behind an interface, with a fake | [ports](../../src/ports/AGENTS.md) |
+| ports | Every external API behind an interface, with a fake; `ws` loads lazily, in the CLI only for `simlock tunnel` | [ports](../../src/ports/AGENTS.md) |
 | host-load | CPU, memory and disk load samples | [host-load](../../src/host-load/AGENTS.md) |
 | instructions | The static rules text for agents: `simlock instructions`, the MCP server instructions and resource; `simlock setup`, which installs the router skill | [instructions](../../src/instructions/AGENTS.md) |
 | agent-identity | Default requester id for CLI and MCP | [agent-identity](../../src/agent-identity/AGENTS.md) |
