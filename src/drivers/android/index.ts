@@ -130,6 +130,9 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+// why: Saving the clean baseline writes the whole guest RAM and disk to the host, far slower than
+// the console's other commands; past this the emulator's console is taken as hung (#1138).
+const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 // why: A snapshot load on a loaded machine has hung for 18 minutes (#1047); past this the reclaim gives
 // the load up and takes the shutdown-and-wipe path, so the device's slot comes back.
@@ -2222,23 +2225,16 @@ export class AndroidDriver implements Driver {
   }
 
   async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#runOrThrow(this.#sdk.adb, [
-      "-s",
-      data.serial,
-      "emu",
-      "avd",
-      "snapshot",
-      "save",
-      CLEAN_BASELINE,
-    ]);
-    const snapshots = await this.#runOrThrow(this.#sdk.adb, [
-      "-s",
-      data.serial,
-      "emu",
-      "avd",
-      "snapshot",
-      "list",
-    ]);
+    await this.#runOrThrow(
+      this.#sdk.adb,
+      ["-s", data.serial, "emu", "avd", "snapshot", "save", CLEAN_BASELINE],
+      { timeoutMs: SNAPSHOT_SAVE_TIMEOUT_MS },
+    );
+    const snapshots = await this.#runOrThrow(
+      this.#sdk.adb,
+      ["-s", data.serial, "emu", "avd", "snapshot", "list"],
+      { timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+    );
     if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
       throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
     }
@@ -2274,6 +2270,7 @@ export class AndroidDriver implements Driver {
     if (data.port > 0 && (await this.#serialIsOwn(data))) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
     }
     const handle = state.handle;
