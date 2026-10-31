@@ -1,4 +1,4 @@
-import { type Logger, NoopLogger } from "../ports/index.js";
+import { type Logger, NoopLogger, type TcpStream } from "../ports/index.js";
 import { classCandidates, pairedRuntimes } from "./catalog-match.js";
 import { DEVICE_CLASSES, type DeviceClass, type VirtualSpec, type Platform } from "./domain.js";
 import type {
@@ -121,6 +121,19 @@ export class DriverCatalog {
       throw new DeviceTcpError("TUNNEL_UNSUPPORTED", `${platform} devices take no tunnel`);
     }
     return await deviceTcp.reverse(device, devicePort, signal);
+  }
+
+  async connectDevicePort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<TcpStream> {
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp === undefined) {
+      throw new DeviceTcpError("TUNNEL_UNSUPPORTED", `${platform} devices take no tunnel`);
+    }
+    return await deviceTcp.connect(device, devicePort, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

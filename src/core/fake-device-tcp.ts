@@ -1,5 +1,5 @@
 import { FakeTcpPeer, type TcpStream } from "../ports/index.js";
-import type { DeviceReverse, DeviceTcp } from "./device-tcp.js";
+import { DeviceTcpError, type DeviceReverse, type DeviceTcp } from "./device-tcp.js";
 
 class FakeReverse implements DeviceReverse {
   closed = false;
@@ -28,7 +28,8 @@ class FakeReverse implements DeviceReverse {
 }
 
 // why: a driver's `deviceTcp` member for tests: `reversed` holds the device ports whose rule is set,
-// and `connect` plays the device opening a connection to one of them.
+// `openFromDevice` plays the device opening a connection to one of them, and `listening` holds the
+// device ports a `connect` from the worker reaches, each answered by a peer in `connections`.
 export class FakeDeviceTcp implements DeviceTcp {
   // why: a test sets this to make every rule removal fail, as an adb that does not answer does.
   closeFailure: Error | undefined;
@@ -36,6 +37,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   readonly failures = new Map<number, Error>();
   // why: a test sets this to hold every `reverse` until it settles, as an adb call that is slow to answer does.
   gate: Promise<void> | undefined;
+  readonly listening = new Set<number>();
+  readonly connections: { readonly devicePort: number; readonly peer: FakeTcpPeer }[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
 
@@ -70,7 +73,14 @@ export class FakeDeviceTcp implements DeviceTcp {
     return reverse;
   }
 
-  connect(devicePort: number): FakeTcpPeer {
+  async connect(_device: unknown, devicePort: number, _signal?: AbortSignal): Promise<TcpStream> {
+    if (!this.listening.has(devicePort)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
+    const peer = new FakeTcpPeer();
+    this.connections.push({ devicePort, peer });
+    return peer.stream;
+  }
+
+  openFromDevice(devicePort: number): FakeTcpPeer {
     const peer = new FakeTcpPeer();
     this.#reverses.get(devicePort)?.accept(peer.stream);
     return peer;

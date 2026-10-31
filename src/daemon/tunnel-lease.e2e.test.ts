@@ -282,7 +282,7 @@ describe("a lease's tunnel socket", () => {
       const carried = await openTunnel(through.url(), through.holder);
       carried.socket.send(hello(5174));
       await vi.waitFor(() => expect(carried.messages).toHaveLength(1), { timeout: 10_000 });
-      const device = through.deviceTcp.connect(5174);
+      const device = through.deviceTcp.openFromDevice(5174);
       await vi.waitFor(() => expect(carried.messages).toHaveLength(2), { timeout: 10_000 });
       expect(carried.messages[1]?.[0]).toBe(0x02);
       device.send(new Uint8Array(65_536).fill(7));

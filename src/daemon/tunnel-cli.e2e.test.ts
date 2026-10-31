@@ -1,5 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -182,7 +182,7 @@ describe("simlock tunnel against a lone worker", () => {
     );
     expect(lone.deviceTcp.reversed).toEqual([5173]);
 
-    const peer = lone.deviceTcp.connect(5173);
+    const peer = lone.deviceTcp.openFromDevice(5173);
     peer.send("from-device");
     await vi.waitFor(() => expect(received.join("")).toBe("from-device"), { timeout: 10_000 });
     await vi.waitFor(() => expect(peer.writtenText()).toBe("from-caller"), { timeout: 10_000 });
@@ -203,5 +203,50 @@ describe("simlock tunnel against a lone worker", () => {
         message: `Lease ${lone.leaseId}: reverse 80: device ports are 1024 to 65535`,
       },
     });
+  });
+
+  async function callerClient(port: number, received: string[]): Promise<Socket> {
+    const socket = connect({ host: "127.0.0.1", port });
+    sockets.push(socket);
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk) => received.push(chunk.toString("utf8")));
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    return socket;
+  }
+
+  it("a user runs simlock tunnel forward and the caller's loopback port reaches the device port", async () => {
+    const lone = await worker();
+    lone.deviceTcp.listening.add(9229);
+    const callerPort = await freeLoopbackPort();
+    const cli = command({ SIMLOCK_TOKEN: lone.token, SIMLOCK_URL: lone.url });
+
+    const exit = cli.run(["tunnel", "forward", `9229:${String(callerPort)}`]);
+    await vi.waitFor(() => expect(cli.out.join("")).not.toBe(""), { timeout: 10_000 });
+    expect(cli.out.join("")).toBe(
+      `forward localhost:${String(callerPort)} -> device:9229 (lease ${lone.leaseId})
+`,
+    );
+
+    const received: string[] = [];
+    const client = await callerClient(callerPort, received);
+    client.write("from-caller");
+    await vi.waitFor(() => expect(lone.deviceTcp.connections).toHaveLength(1), {
+      timeout: 10_000,
+    });
+    const device = lone.deviceTcp.connections[0];
+    expect(device?.devicePort).toBe(9229);
+    await vi.waitFor(() => expect(device?.peer.writtenText()).toBe("from-caller"), {
+      timeout: 10_000,
+    });
+    device?.peer.send("from-device");
+    await vi.waitFor(() => expect(received.join("")).toBe("from-device"), { timeout: 10_000 });
+
+    cli.signals.emit("SIGINT");
+    expect(await exit).toBe(0);
+    expect(cli.err.join("")).toBe("");
+    await expect(callerClient(callerPort, [])).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 });

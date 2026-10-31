@@ -106,6 +106,9 @@ async function removeTunnelRules(run: RunAdb, warn: Warn, device: Target): Promi
 export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): DeviceTcp {
   return {
     supports: () => true,
+    async connect(): Promise<TcpStream> {
+      throw new DeviceTcpError("TUNNEL_FAILED", "forward tunnels are not built yet");
+    },
     async sweep(devices): Promise<void> {
       await Promise.all(
         devices.map(async (device) => {

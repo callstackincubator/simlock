@@ -64,6 +64,7 @@ async function setup(platform = "android"): Promise<{
   const worker = loaded.createWorker({
     ...ctx,
     deviceTcp: {
+      connect: (_platform, device, port, signal) => deviceTcp.connect(device, port, signal),
       supports: (named) => named === "android",
       reverse: (_platform, device, port, signal) => deviceTcp.reverse(device, port, signal),
     },
@@ -96,7 +97,7 @@ describe("a worker's tunnel socket", () => {
     );
     expect(deviceTcp.reversed).toEqual([5173]);
 
-    const device = deviceTcp.connect(5173);
+    const device = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() =>
       expect(frames(socket).at(-1)).toEqual({
         body: '{"kind":"reverse","devicePort":5173}',
@@ -125,8 +126,8 @@ describe("a worker's tunnel socket", () => {
         },
       ]),
     );
-    const first = deviceTcp.connect(5173);
-    const second = deviceTcp.connect(5174);
+    const first = deviceTcp.openFromDevice(5173);
+    const second = deviceTcp.openFromDevice(5174);
     await vi.waitFor(() =>
       expect(frames(socket).slice(1)).toEqual([
         { body: '{"kind":"reverse","devicePort":5173}', conn: 1, tag: 0x02 },
@@ -152,16 +153,16 @@ describe("a worker's tunnel socket", () => {
     );
 
     const opens = () => frames(socket).filter((sent) => sent.tag === 0x02).length;
-    const peers = Array.from({ length: 255 }, () => deviceTcp.connect(5173));
+    const peers = Array.from({ length: 255 }, () => deviceTcp.openFromDevice(5173));
     await vi.waitFor(() => expect(opens()).toBe(257));
     expect(peers.every((peer) => !peer.closed)).toBe(true);
-    const past = deviceTcp.connect(5173);
+    const past = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() => expect(past.closed).toBe(true));
     expect(opens()).toBe(257);
 
     socket.receive(frame(0x06, 3, '{"reason":"done"}'));
     await vi.waitFor(() => expect(second.closed).toBe(true));
-    const after = deviceTcp.connect(5173);
+    const after = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() => expect(opens()).toBe(258));
     expect(after.closed).toBe(false);
   });
@@ -262,8 +263,8 @@ describe("a worker's tunnel socket", () => {
     const socket = await attach(worker);
     socket.receive(hello({ devicePort: 5173, kind: "reverse" }));
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-    const first = deviceTcp.connect(5173);
-    const second = deviceTcp.connect(5173);
+    const first = deviceTcp.openFromDevice(5173);
+    const second = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() =>
       expect(frames(socket).map((sent) => sent.tag)).toEqual([0x81, 0x02, 0x02]),
     );
@@ -368,7 +369,7 @@ describe("a worker's tunnel socket", () => {
       if (bad.ready) {
         socket.receive(hello(tunnel));
         await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-        deviceTcp.connect(5173);
+        deviceTcp.openFromDevice(5173);
         await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
       }
       expect(socket.closed).toBeUndefined();
@@ -385,8 +386,8 @@ describe("a worker's tunnel socket", () => {
     const socket = await attach(worker);
     socket.receive(hello(tunnel));
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-    const closing = deviceTcp.connect(5173);
-    const going = deviceTcp.connect(5173);
+    const closing = deviceTcp.openFromDevice(5173);
+    const going = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(3));
     socket.receive(frame(0x06, 1, '{"reason":"caller closed"}'));
     await vi.waitFor(() => expect(closing.closed).toBe(true));
@@ -405,13 +406,13 @@ describe("a worker's tunnel socket", () => {
       readonly deviceTcp: FakeDeviceTcp;
       readonly worker: WorkerModule;
       readonly socket: MemoryLeaseSocket;
-      readonly device: ReturnType<FakeDeviceTcp["connect"]>;
+      readonly device: ReturnType<FakeDeviceTcp["openFromDevice"]>;
     }> {
       const { deviceTcp, worker } = await setup();
       const socket = await attach(worker);
       socket.receive(hello(tunnel));
       await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-      const device = deviceTcp.connect(5173);
+      const device = deviceTcp.openFromDevice(5173);
       await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
       return { device, deviceTcp, socket, worker };
     }

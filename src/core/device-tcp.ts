@@ -31,4 +31,10 @@ export interface DeviceTcp {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<DeviceReverse>;
+  // why: one connection from the worker to a device port, through the host protocol with no `adb forward` rule; a port with nothing listening rejects with a `DeviceTcpError` whose message is the reason the holder's connection is reset.
+  connect(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }
