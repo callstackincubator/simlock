@@ -227,6 +227,7 @@ describe("a lease's tunnel socket", () => {
       gateway,
       holder: holder.secret,
       leaseId,
+      owner: { ...agent, principal: holder.token.id },
       url: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/tunnel`,
       worker,
     };
@@ -303,6 +304,40 @@ describe("a lease's tunnel socket", () => {
       refusedHello.socket.send(hello(80));
       await vi.waitFor(() => expect(refusedHello.closed?.code).toBe(4003), { timeout: 10_000 });
       expect(refusedHello.messages.map((entry) => entry[0])).toEqual([0x82]);
+
+      const ends = await fleet({ gatewayTunnel: true, workerTunnel: true });
+      const ending = await openTunnel(ends.url(), ends.holder);
+      ending.socket.send(hello(5173));
+      await vi.waitFor(() => expect(ending.messages).toHaveLength(1), { timeout: 10_000 });
+      await ends.gateway.dispatch("lease.release", { leaseId: ends.leaseId }, ends.owner);
+      await vi.waitFor(() => expect(ending.closed).toEqual({ code: 4001, reason: "explicit" }), {
+        timeout: 10_000,
+      });
+
+      const stopping = await fleet({ gatewayTunnel: true, workerTunnel: true });
+      const viaWorker = await openTunnel(stopping.url(), stopping.holder);
+      viaWorker.socket.send(hello(5173));
+      await vi.waitFor(() => expect(viaWorker.messages).toHaveLength(1), { timeout: 10_000 });
+      const { workers } = await stopping.gateway.dispatch("worker.list", {}, admin);
+      await stopping.worker.stop("test");
+      await vi.waitFor(
+        () =>
+          expect(viaWorker.closed).toEqual({
+            code: 1011,
+            reason: `Worker ${workers[0]?.id ?? ""} stopped answering`,
+          }),
+        { timeout: 10_000 },
+      );
+
+      const draining = await fleet({ gatewayTunnel: true, workerTunnel: true });
+      const viaGateway = await openTunnel(draining.url(), draining.holder);
+      viaGateway.socket.send(hello(5173));
+      await vi.waitFor(() => expect(viaGateway.messages).toHaveLength(1), { timeout: 10_000 });
+      await draining.gateway.stop("test");
+      await vi.waitFor(
+        () => expect(viaGateway.closed).toEqual({ code: 1001, reason: "Simlock is stopping" }),
+        { timeout: 10_000 },
+      );
 
       const workerOff = await fleet({ gatewayTunnel: true, workerTunnel: false });
       const refused = await openTunnel(workerOff.url(), workerOff.holder);
