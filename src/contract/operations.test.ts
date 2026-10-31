@@ -1159,6 +1159,36 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["device.exec"].output.parse({ exitCode: 0 })).toEqual({ exitCode: 0 });
   });
 
+  it("device.rotate: accepts a leaseId and requesterId of 1 to 256 characters and each orientation, and refuses an empty or 257-character one, another orientation or an unknown key", () => {
+    const parse = (input: object) => OPERATIONS["device.rotate"].input.parse(input);
+    const base = { leaseId: "lse_1", orientation: "portrait" };
+
+    for (const orientation of [
+      "portrait",
+      "portrait_upside_down",
+      "landscape_left",
+      "landscape_right",
+    ]) {
+      expect(parse({ ...base, orientation })).toEqual({ ...base, orientation });
+    }
+    expect(parse({ ...base, leaseId: "x".repeat(256), requesterId: "y".repeat(256) })).toEqual({
+      ...base,
+      leaseId: "x".repeat(256),
+      requesterId: "y".repeat(256),
+    });
+
+    for (const refused of [
+      { ...base, leaseId: "" },
+      { ...base, leaseId: "x".repeat(257) },
+      { ...base, requesterId: "" },
+      { ...base, requesterId: "y".repeat(257) },
+      { ...base, orientation: "upside_down" },
+      { ...base, angle: 90 },
+    ]) {
+      expect(() => parse(refused)).toThrow();
+    }
+  });
+
   it("the output push carries a frame id, a stream, and a chunk", () => {
     expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
       chunk: "hello",
