@@ -8,6 +8,7 @@ import {
   TUNNEL_MAX_DEVICE_PORT,
   TUNNEL_MAX_TUNNELS,
   TUNNEL_TAG,
+  TUNNEL_WINDOW_BYTES,
 } from "../../contract/index.js";
 import type { TcpStream, WebSocketClient } from "../../ports/index.js";
 import { commandArgs, UsageError } from "../args.js";
@@ -18,6 +19,7 @@ import type { CliEnvironment } from "../types.js";
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const CALLER_CONNECT_TIMEOUT_MS = 5_000;
 const CLOSE_NORMAL = 1000;
+const WARN_EVERY_MS = 10_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
 
@@ -113,42 +115,80 @@ async function leaseToUse(
   );
 }
 
-// why: one caller connection per device connection; the stream's writes are chained so bytes reach the caller's port in the order the worker sent them.
-function relayConnections(socket: WebSocketClient, environment: CliEnvironment) {
-  const streams = new Map<number, { stream: TcpStream; writes: Promise<void> }>();
+// why: one caller connection per device connection. The stream's writes are chained so bytes reach the caller's port in the order the worker sent them, and each write is followed by a CREDIT that returns its bytes to the worker's window; the caller's own bytes leave only while the worker's window for them has room.
+function relayConnections(
+  socket: WebSocketClient,
+  environment: CliEnvironment,
+  warn: (devicePort: number, callerPort: number) => void,
+) {
+  interface Relayed {
+    readonly stream: TcpStream;
+    writes: Promise<void>;
+    window: number;
+    wake: (() => void) | undefined;
+  }
+  const streams = new Map<number, Relayed>();
+  const pump = async (conn: number, relayed: Relayed): Promise<void> => {
+    const reader = relayed.stream.readable.getReader();
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      for (let at = 0; at < step.value.length;) {
+        const size = Math.min(TUNNEL_MAX_DATA_BYTES, step.value.length - at, relayed.window);
+        if (size === 0) {
+          await new Promise<void>((resume) => {
+            relayed.wake = resume;
+          });
+          continue;
+        }
+        relayed.window -= size;
+        socket.send(encodeTunnelFrame(TUNNEL_TAG.data, conn, step.value.subarray(at, at + size)));
+        at += size;
+      }
+    }
+    socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+  };
+  const grant = (conn: number, size: number): void => {
+    const credit = new Uint8Array(4);
+    new DataView(credit.buffer).setUint32(0, size);
+    socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
+  };
   return async (
     spec: ReverseSpec | undefined,
     frame: { tag: number; conn: number; payload: Uint8Array },
   ): Promise<void> => {
     if (frame.tag === TUNNEL_TAG.open && spec !== undefined) {
-      const stream = await environment.tcpStreams.connect(
-        spec.callerPort,
-        CALLER_CONNECT_TIMEOUT_MS,
-      );
-      streams.set(frame.conn, { stream, writes: Promise.resolve() });
-      void (async () => {
-        const reader = stream.readable.getReader();
-        for (;;) {
-          const step = await reader.read();
-          if (step.done) break;
-          for (let at = 0; at < step.value.length; at += TUNNEL_MAX_DATA_BYTES) {
-            socket.send(
-              encodeTunnelFrame(
-                TUNNEL_TAG.data,
-                frame.conn,
-                step.value.subarray(at, at + TUNNEL_MAX_DATA_BYTES),
-              ),
-            );
-          }
-        }
-        socket.send(encodeTunnelFrame(TUNNEL_TAG.end, frame.conn));
-      })();
+      let stream: TcpStream;
+      try {
+        stream = await environment.tcpStreams.connect(spec.callerPort, CALLER_CONNECT_TIMEOUT_MS);
+      } catch {
+        warn(spec.devicePort, spec.callerPort);
+        socket.send(encodeTunnelFrame(TUNNEL_TAG.reset, frame.conn));
+        return;
+      }
+      const relayed: Relayed = {
+        stream,
+        wake: undefined,
+        window: TUNNEL_WINDOW_BYTES,
+        writes: Promise.resolve(),
+      };
+      streams.set(frame.conn, relayed);
+      void pump(frame.conn, relayed);
       return;
     }
     const connection = streams.get(frame.conn);
     if (connection === undefined) return;
     if (frame.tag === TUNNEL_TAG.data) {
-      connection.writes = connection.writes.then(() => connection.stream.write(frame.payload));
+      connection.writes = connection.writes
+        .then(() => connection.stream.write(frame.payload))
+        .then(() => grant(frame.conn, frame.payload.length));
+    } else if (frame.tag === TUNNEL_TAG.credit) {
+      connection.window += new DataView(
+        frame.payload.buffer,
+        frame.payload.byteOffset,
+        frame.payload.length,
+      ).getUint32(0);
+      connection.wake?.();
     } else if (frame.tag === TUNNEL_TAG.end) {
       connection.writes = connection.writes.then(() => connection.stream.end());
     } else if (frame.tag === TUNNEL_TAG.reset) {
@@ -189,7 +229,16 @@ async function run(
       headers: { authorization: `Bearer ${secret}` },
     },
   );
-  const relay = relayConnections(socket, environment);
+  const warned = new Map<number, number>();
+  const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
+    const now = environment.clock.now();
+    const last = warned.get(devicePort);
+    if (last !== undefined && now - last < WARN_EVERY_MS) return;
+    warned.set(devicePort, now);
+    environment.stderr.write(
+      `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
+    );
+  });
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
   return new Promise<number>((resolve, reject) => {
