@@ -289,6 +289,16 @@ describe("a lease's tunnel socket", () => {
       expect(carried.messages[2]?.length).toBe(65_541);
       expect(carried.messages[2]?.[0]).toBe(0x03);
 
+      const tooBig = Buffer.concat([Buffer.from([0x03, 0, 0, 0, 1]), Buffer.alloc(65_537)]);
+      expect(tooBig.length).toBe(65_542);
+      carried.socket.send(tooBig);
+      await vi.waitFor(() => expect(carried.closed?.code).toBe(4003), { timeout: 10_000 });
+      const last = carried.messages.at(-1);
+      expect(last?.[0]).toBe(0x82);
+      expect(JSON.parse(last?.subarray(5).toString("utf8") ?? "")).toMatchObject({
+        code: "BAD_REQUEST",
+      });
+
       const refusedHello = await openTunnel(through.url(), through.holder);
       refusedHello.socket.send(hello(80));
       await vi.waitFor(() => expect(refusedHello.closed?.code).toBe(4003), { timeout: 10_000 });
