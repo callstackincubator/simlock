@@ -14,6 +14,7 @@ const NOT_SHAPES = new Set([
   "index.ts",
   "console-url.ts",
   "duration.ts",
+  "orientation.ts",
   "os-range.ts",
   "version-order.ts",
 ]);

@@ -139,6 +139,7 @@ export interface GatewayDispatcherOptions {
     | "release"
     | "releaseAll"
     | "exec"
+    | "rotate"
     | "queueDepth"
     | "physicalQueueDepth"
     | "ownerId"
@@ -280,6 +281,7 @@ export class GatewayDispatcher {
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,
       "relay.cancel": relayRefused,
       // why: "daemon.stop" is absent for the same reason it is absent from the worker's table: the
@@ -730,6 +732,12 @@ export class GatewayDispatcher {
     const leaseIds = await this.options.coordinator.releaseAll();
     return { leaseIds: [...leaseIds] };
   };
+
+  #deviceRotate: Handler<"device.rotate"> = async (input, session) =>
+    this.options.coordinator.rotate(
+      { leaseId: input.leaseId, orientation: input.orientation },
+      session,
+    );
 
   #deviceExec: Handler<"device.exec"> = async (input, session) =>
     this.options.coordinator.exec(
