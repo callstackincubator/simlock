@@ -10791,5 +10791,15 @@ describe("simlock rotate", () => {
       },
     });
     expect(unsupported.stdout).toBe("");
+
+    const help = await rotateWith(["rotate", "--help"], [heldLease]);
+    expect(help.exitCode).toBe(0);
+    expect(help.output.stdout).toBe(
+      "Usage: simlock rotate <portrait|portrait-upside-down|landscape-left|landscape-right> [--lease <id>]\n",
+    );
+    expect(help.rotations).toEqual([]);
+    const listing = outputCapture();
+    await runCli(["--help"], listing.environmentWith());
+    expect(listing.stdout).toContain("  rotate <orientation> [--lease <id>]");
   });
 });
