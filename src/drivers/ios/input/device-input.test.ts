@@ -222,8 +222,9 @@ describe("iOS device input", () => {
     const failures: string[] = [];
     input.onFailed((error) => failures.push(error.message));
     broken.launcher.last.writeError = new Error("write EPIPE");
-    input.send({ kind: "touch", type: "begin", x: 0.5, y: 0.5 });
-    await new Promise((resolve) => setImmediate(resolve));
+    await expect(input.send({ kind: "touch", type: "begin", x: 0.5, y: 0.5 })).rejects.toThrow(
+      "The input helper stopped taking input: write EPIPE",
+    );
     expect(failures).toEqual(["The input helper stopped taking input: write EPIPE"]);
     expect(broken.launcher.last.stdinClosed).toBe(true);
   });
