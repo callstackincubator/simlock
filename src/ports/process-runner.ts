@@ -1,4 +1,5 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 import { constants } from "node:os";
 
 import { childLaunch } from "./windows-command.js";
@@ -37,11 +38,13 @@ export interface ProcessRunOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   /**
-   * `"ignore"` detaches the child's output entirely: nothing is captured and nothing is
-   * iterable. A long-lived supervised process (Simlock's own adb server) would otherwise
-   * accumulate every line it ever wrote in this handle's buffers for as long as it runs.
+   * why: `"ignore"` detaches the child's output entirely: nothing is captured and nothing is
+   * iterable. A long-lived supervised process would otherwise accumulate every line it ever
+   * wrote in this handle's buffers for as long as it runs. `{ file }` appends the child's
+   * stdout and stderr to that file (created 0600 when missing, whose directory must exist),
+   * with the same effect on the handle: nothing is captured.
    */
-  readonly stdio?: "pipe" | "ignore";
+  readonly stdio?: "pipe" | "ignore" | { readonly file: string };
   /**
    * Written to the child's stdin and then closed. For a CLI that reads an interactive prompt
    * from stdin (e.g. `sdkmanager --licenses`'s per-license `y/N`) rather than accepting a flag.
@@ -237,16 +240,20 @@ export class NodeProcessRunner implements ProcessRunner {
 
   spawn(command: string, args: readonly string[], options: ProcessRunOptions = {}): ProcessHandle {
     const launch = childLaunch(command, args);
+    const logFd =
+      typeof options.stdio === "object" ? openSync(options.stdio.file, "a", 0o600) : undefined;
     const child = spawnChildProcess(launch.command, launch.args, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.env === undefined ? {} : { env: options.env }),
       detached: process.platform !== "win32",
-      stdio: options.stdio ?? "pipe",
+      stdio: childStdio(options.stdio, logFd),
       // why: the daemon has no console, so on Windows a console program it starts (adb, the
       // emulator, node) would otherwise get a new, visible one.
       windowsHide: true,
       windowsVerbatimArguments: launch.windowsVerbatimArguments,
     });
+    // why: the child holds its own copy of the descriptor; keeping ours would leak one per start.
+    if (logFd !== undefined) closeSync(logFd);
 
     if (child.pid === undefined) {
       // The spawn failed, and Node will say why by emitting `error` on the next tick. An
@@ -1097,4 +1104,12 @@ function defaultResult(expectation: ScriptedProcessExpectation): ProcessResult {
 
 function isNoSuchProcessError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+}
+
+function childStdio(
+  stdio: ProcessRunOptions["stdio"],
+  logFd: number | undefined,
+): "pipe" | "ignore" | ["ignore", number, number] {
+  if (logFd !== undefined) return ["ignore", logFd, logFd];
+  return stdio === undefined || typeof stdio === "object" ? "pipe" : stdio;
 }

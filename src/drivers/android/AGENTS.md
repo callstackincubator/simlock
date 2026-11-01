@@ -132,7 +132,7 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 | Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
 | `avdmanager list device`        | 30 s                                    | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`). Reads only: the user's AVD home, devices.xml, the SDK.
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 

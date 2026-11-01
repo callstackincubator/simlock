@@ -691,6 +691,7 @@ export class AndroidDriver implements Driver {
       clock: options.clock,
       env: options.env,
       filesystem: options.filesystem,
+      logPath: join(options.simlockHome, "logs", "adb-server.log"),
       port: adbServerPort,
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
@@ -2132,12 +2133,11 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
-    // why: `stdio: "ignore"` and `unref()` for the same reason the adb server gets them: an
-    // emulator outlives the daemon by design (`#reattachRunningEmulators` adopts it after
-    // a restart) and is reaped through adb and by pid, never by awaiting its exit. Left
-    // referenced, its handle and stdio pipes would hold the event loop open, and a
-    // `daemon stop` that had logged "Daemon stopped" would leave the process alive for as
-    // long as any emulator ran.
+    // why: `stdio: "ignore"` and `unref()` because an emulator outlives the daemon by design
+    // (`#reattachRunningEmulators` adopts it after a restart) and is reaped through adb and
+    // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
+    // the event loop open, and a `daemon stop` that had logged "Daemon stopped" would leave
+    // the process alive for as long as any emulator ran.
     const handle = this.#processRunner.spawn(
       this.#sdk.emulator,
       [
