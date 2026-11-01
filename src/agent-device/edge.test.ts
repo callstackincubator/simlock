@@ -888,6 +888,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
         "physical",
       );
       expect(allocatesReceived(rig)).toEqual([]);
+      if (platform === "ios") {
+        // why: a physical iPhone has no `device.rotate`, so its `orientation auto` must reach agent-device, not be refused as an unknown name.
+        await command(rig, "orientation", 1, {}, { positionals: ["auto"] });
+        expect(rig.phone.rpcRequests("agent_device.command")).toMatchObject([
+          { params: { command: "orientation", positionals: ["auto"] } },
+        ]);
+      }
     }
   });
 

@@ -73,7 +73,7 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 
 The CLI starts the daemon on demand and waits up to 20 seconds for it. The message carries the daemon's own start error. Common causes:
 
-- **The config file is wrong.** The CLI checks `~/.simlock/config.json` before it starts the daemon and prints the problem, naming the key, such as `lease.defaultTtlMs` with `at most lease.maxTtlMs`. Fix the key with `simlock config set`, or edit the file. A file that is not valid JSON fails with `Invalid JSON in config file`. A config that still has a `mode` key is refused: remove it.
+- **The config file is wrong.** This one does not reach `DAEMON_STARTUP_FAILED`: the CLI checks `~/.simlock/config.json` before it starts the daemon and fails with `USAGE`, exit 2, printing the problem and naming the key, such as `lease.defaultTtlMs` with `at most lease.maxTtlMs`. Fix the key with `simlock config set`, or edit the file. A file that is not valid JSON fails with `Invalid JSON in config file`. A config that still has a `mode` key is refused: remove it.
 - **State from an older Simlock.** The message starts with `Found ~/.simlock/state.json, which this Simlock no longer reads`. Follow the steps in the message; [Running the daemon](/simlock/docs/worker/running-the-daemon) explains them.
 - **Another daemon holds the state.** `state.db is locked by another process`: another Simlock daemon for the same data folder is still running. Stop it with `simlock daemon stop`, then try again.
 - **The state file is damaged.** `state.db is damaged (...)`. Move `~/.simlock/state.db` somewhere else and start again. Simlock starts with empty state and forgets every device and lease it had on record. The devices stay on disk; run `simlock doctor` afterwards and delete orphans as described below.
@@ -134,6 +134,20 @@ A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the s
 4. If one runtime or system image keeps failing, remove it and install it again ([Runtimes and images](/simlock/docs/worker/runtimes-and-images)).
 
 Two Android warnings in the daemon log point at the cause. `Android snapshot boot fell back to a cold boot` (fields `avdName`, `readyAfterMs`) means a device restored from its snapshot took over three times the expected time, so the snapshot is probably damaged. `Android device profile source could not be read` (fields `path`, `reason`) means the Android `devices.xml` exists but could not be read or parsed. A missing file is not reported.
+
+## An Android device drops off adb
+
+**Symptom.** An Android emulator or phone disappears from `simlock adb devices` mid-lease, or an `adb` call fails with `device offline` or `device not found`.
+
+**Cause.** Simlock runs its own adb server for Android emulators. Its output goes to `logs/adb-server.log` in the Simlock home (`~/.simlock` by default), a file only you can read. Simlock empties it each time it starts that server. adb logs a closing transport there, and nothing else records why it closed.
+
+**Fix.** To see why, turn on adb's trace and reproduce the drop:
+
+1. Stop the daemon: `simlock daemon stop`.
+2. Start it again with `ADB_TRACE` set in its environment, for example `ADB_TRACE=all simlock daemon start`. `ADB_TRACE=transport,usb` is quieter. The daemon passes it on to the adb server it starts.
+3. When the device drops, read `logs/adb-server.log`.
+
+The trace is verbose, so unset `ADB_TRACE` and restart the daemon once you have the log. Phones on the default adb server on port 5037 are not covered: that server is not Simlock's.
 
 ## Android licence not accepted
 

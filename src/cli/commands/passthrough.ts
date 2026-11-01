@@ -1,5 +1,6 @@
 import type { SimlockAdminClient } from "../../admin/index.js";
 import { asUsageIfRefused, UsageError } from "../errors.js";
+import { resolveRemoteLeaseId } from "../remote-lease.js";
 import { connectDaemonClient } from "../connect.js";
 import type { CommandContext } from "../tree.js";
 
@@ -13,7 +14,7 @@ async function runPassthrough(
   args: readonly string[],
   { environment, token }: CommandContext,
 ): Promise<number> {
-  const { leaseFlag, rest } = extractLeaseFlag(args);
+  const { leaseFlag, sendStdin, rest } = extractLeadingFlags(args);
   const client = await connectDaemonClient(environment, token);
   let daemon;
   try {
@@ -24,7 +25,7 @@ async function runPassthrough(
   }
   if (daemon.mode === "gateway") {
     try {
-      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag);
+      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag, sendStdin);
     } finally {
       await client.close();
     }
@@ -51,10 +52,11 @@ async function runRemotePassthrough(
   environment: CommandContext["environment"],
   client: SimlockAdminClient,
   leaseFlag: string | undefined,
+  sendStdin: boolean,
 ): Promise<number> {
   try {
     const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
-    const stdin = await environment.readStdin?.();
+    const stdin = sendStdin ? await environment.readStdin?.() : "";
     const requesterId = client.role === "admin" ? environment.requesterId : undefined;
     const { exitCode } = await client.exec(
       {
@@ -77,14 +79,21 @@ async function runRemotePassthrough(
   }
 }
 
-function extractLeaseFlag(args: readonly string[]): {
+function extractLeadingFlags(args: readonly string[]): {
   readonly leaseFlag: string | undefined;
+  readonly sendStdin: boolean;
   readonly rest: readonly string[];
 } {
   let leaseFlag: string | undefined;
+  let sendStdin = false;
   let index = 0;
   while (index < args.length) {
     const argument = args[index] as string;
+    if (argument === "--stdin") {
+      sendStdin = true;
+      index += 1;
+      continue;
+    }
     if (argument === "--lease") {
       const value = args[index + 1];
       if (value === undefined) throw new UsageError("--lease requires a lease id");
@@ -100,29 +109,7 @@ function extractLeaseFlag(args: readonly string[]): {
     }
     break;
   }
-  return { leaseFlag, rest: args.slice(index) };
-}
-
-async function resolveRemoteLeaseId(
-  client: SimlockAdminClient,
-  environment: CommandContext["environment"],
-): Promise<string> {
-  const { leases } = await client.listLeases();
-  const own =
-    client.role === "admin"
-      ? leases.filter((lease) => lease.requesterId === environment.requesterId)
-      : leases;
-  if (own.length === 0) {
-    throw new UsageError(
-      `No lease is held by ${environment.requesterId}: run \`simlock lease\` first, or set SIMLOCK_AGENT_ID to the id that holds it`,
-    );
-  }
-  if (own.length > 1) {
-    throw new UsageError(
-      `${environment.requesterId} holds more than one lease (${own.map((lease) => lease.id).join(", ")}); pass --lease <id> to name the device you mean`,
-    );
-  }
-  return (own[0] as { readonly id: string }).id;
+  return { leaseFlag, sendStdin, rest: args.slice(index) };
 }
 
 export { run };

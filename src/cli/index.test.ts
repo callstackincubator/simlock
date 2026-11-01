@@ -879,6 +879,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -1002,45 +1003,65 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_named",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
     });
 
-    it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
+    it("sends stdin on device.exec only when --stdin was given", async () => {
       // why: `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
       // the wiring from that port's result to `device.exec`'s `stdin`, not the default
       // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
       // its own below, since a fake here would not exercise it at all.
-      const output = outputCapture();
-      const seen: unknown[] = [];
-
-      await expect(
-        runCli(
-          ["adb", "shell", "cat"],
-          output.environmentWith({
-            connectAdmin: async () =>
-              fakeClient({
-                getStatus: () => Promise.resolve(gatewayStatus),
-                listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                exec: (input) => {
-                  seen.push(input);
-                  return Promise.resolve({ exitCode: 0 });
-                },
-              }),
-            readStdin: async () => "piped payload\n",
-          }),
-        ),
-      ).resolves.toBe(0);
-      expect(seen).toEqual([
+      const cases = [
         {
-          args: ["shell", "cat"],
-          leaseId: "lse_mine",
-          requesterId: "test-requester",
-          stdin: "piped payload\n",
-          tool: "adb",
+          argv: ["adb", "shell", "cat"],
+          readable: false,
+          expected: { args: ["shell", "cat"], stdin: "", tool: "adb" },
         },
-      ]);
+        {
+          argv: ["simctl", "list"],
+          readable: false,
+          expected: { args: ["list"], stdin: "", tool: "simctl" },
+        },
+        {
+          argv: ["adb", "--stdin", "shell", "cat"],
+          readable: true,
+          expected: { args: ["shell", "cat"], stdin: "piped payload\n", tool: "adb" },
+        },
+        {
+          argv: ["simctl", "--stdin", "list"],
+          readable: true,
+          expected: { args: ["list"], stdin: "piped payload\n", tool: "simctl" },
+        },
+      ];
+
+      for (const { argv, readable, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: readable
+                ? async () => "piped payload\n"
+                : () => Promise.reject(new Error("stdin must not be read without --stdin")),
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, leaseId: "lse_mine", requesterId: "test-requester" }]);
+      }
     });
 
     it("sends no requesterId when the connection fell back to the agent role", async () => {
@@ -1066,7 +1087,7 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", stdin: "", tool: "adb" }]);
     });
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
@@ -1152,7 +1173,7 @@ describe("CLI: exit codes", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { args: [], leaseId: "lse_only", requesterId: "test-requester", tool: "adb" },
+        { args: [], leaseId: "lse_only", requesterId: "test-requester", stdin: "", tool: "adb" },
       ]);
 
       const missingValue = outputCapture();
@@ -1241,7 +1262,81 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", stdin: "", tool: "adb" }]);
+    });
+
+    it("takes --stdin before or after --lease, and passes it to the tool after the tool's first argument", async () => {
+      const cases = [
+        {
+          argv: ["adb", "--stdin", "--lease", "lse_named", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "--lease", "lse_named", "--stdin", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "shell", "--stdin"],
+          expected: { args: ["shell", "--stdin"], leaseId: "lse_mine", stdin: "" },
+        },
+      ];
+
+      for (const { argv, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: async () => "sent",
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, requesterId: "test-requester", tool: "adb" }]);
+      }
+    });
+
+    it("spawns locally against a worker, accepting and ignoring --stdin", async () => {
+      const cases = [
+        { argv: ["adb", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--stdin", "--lease", "lse_x", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--lease", "lse_x", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "shell", "--stdin"], args: ["shell", "--stdin"] },
+      ];
+
+      for (const { argv, args } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  exec: () => Promise.reject(new Error("must not exec remotely")),
+                  resolvePassthrough: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ args: [], command: "adb", env: {} });
+                  },
+                }),
+              readStdin: () => Promise.reject(new Error("a worker never reads stdin")),
+              runPassthrough: async () => 0,
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ args, tool: "adb" }]);
+      }
     });
 
     it("stops scanning for --lease at the tool's own first argument", async () => {
@@ -1271,6 +1366,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "input", "text", "--lease"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -1630,7 +1726,7 @@ describe("CLI: admin credential resolution (ADR 0003 §5)", () => {
       runTool: async () => ({ outcome: "not-found" }),
     });
     const exitCode = await runCli(["daemon", "start"], output.environmentWith());
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(2);
     expect(launcher.launches).toBe(0);
     expect(output.stderr).toContain("limits.android.maxDevices");
     expect(output.stderr).not.toContain("Timed out");
@@ -3364,7 +3460,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     expect(output.stderr).toContain("http.enabled");
   });
 
-  it("starting a gateway refuses to launch when its config.json fails gateway validation", async () => {
+  it("--gateway daemon start refuses a config.json that fails gateway validation with exit 2 and USAGE, before any launch", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock/gateway");
     await filesystem.writeFileAtomic(
@@ -3381,9 +3477,13 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       ["--gateway", "daemon", "start", "--token", "probe"],
       output.environmentWith(),
     );
-    expect(exitCode).not.toBe(0);
+    expect(exitCode).toBe(2);
     expect(launcher.launches).toBe(0);
-    expect(output.stderr).toContain("http.enabled");
+    expect(JSON.parse(output.stderr).error).toEqual({
+      code: "USAGE",
+      message:
+        'Invalid config value for "http.enabled": expected true in gateway mode (a gateway is reached over HTTP)',
+    });
   });
 
   describe("a joined worker's own HTTP listener (#811)", () => {
@@ -3452,7 +3552,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       });
     });
 
-    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict before any launch", async () => {
+    it("--local daemon start with no daemon listening refuses a joined worker's HTTP conflict with exit 2 and USAGE, before any launch", async () => {
       const filesystem = await workerFiles({
         gateway: { url: "ws://127.0.0.1:1", token: "join-secret" },
         http: { enabled: true },
@@ -3465,11 +3565,13 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
         launcher,
       });
       const exitCode = await runCli(["--local", "daemon", "start"], output.environmentWith());
-      expect(exitCode).not.toBe(0);
+      expect(exitCode).toBe(2);
       expect(launcher.launches).toBe(0);
-      expect(JSON.parse(output.stderr).error.message).toBe(
-        'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
-      );
+      expect(JSON.parse(output.stderr).error).toEqual({
+        code: "USAGE",
+        message:
+          'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
+      });
     });
   });
 
@@ -7721,12 +7823,12 @@ describe("readPipedStdin", () => {
     return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
   }
 
-  it("returns undefined without reading anything when stdin is a terminal", async () => {
-    const stdin = fakeStdin(["should never be read"], true);
+  it("reads a terminal stdin to its end, joining its chunks", async () => {
+    const stdin = fakeStdin(["typed ", "text\n"], true);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
     try {
-      await expect(readPipedStdin()).resolves.toBeUndefined();
+      await expect(readPipedStdin()).resolves.toBe("typed text\n");
     } finally {
       stdinGetter.mockRestore();
     }
@@ -7743,9 +7845,7 @@ describe("readPipedStdin", () => {
     }
   });
 
-  it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
-    // why: `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
-    // (empty) answer -- the two must stay distinguishable to a caller.
+  it("returns an empty string for a piped stdin that carries nothing", async () => {
     const stdin = fakeStdin([], false);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
@@ -8273,6 +8373,7 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     requestLease: (_input, _options) => Promise.resolve(grant),
     resolvePassthrough: () => Promise.resolve({ args: [], command: "adb", env: {} }),
     exec: () => Promise.resolve({ exitCode: 0 }),
+    rotate: (leaseId, orientation) => Promise.resolve({ leaseId, orientation }),
     cancelLease: () => Promise.resolve({ result: "not-found" }),
     renewLease: () => Promise.resolve(grant.lease as LeaseRecord),
     releaseLease: (input) => Promise.resolve({ leaseId: input.leaseId }),
@@ -10665,5 +10766,184 @@ describe("simlock worker update", () => {
         },
       ]);
     }
+  });
+});
+
+describe("simlock rotate", () => {
+  const heldLease = {
+    deviceId: "dev_1",
+    grantedAt: 0,
+    id: "lse_mine",
+    lastRenewedAt: 0,
+    idChosenByRequester: false,
+    ownerId: "some-other-principal",
+    requesterId: "test-requester",
+    ttlDeadline: 60_000,
+    ttlMs: 60_000,
+  };
+
+  const two = [heldLease, { ...heldLease, deviceId: "dev_2", id: "lse_other" }];
+
+  async function rotateWith(
+    argv: readonly string[],
+    leases: readonly (typeof heldLease)[],
+    role: "admin" | "agent" = "admin",
+    daemonHome?: { role: "gateway"; dataDirectory: string; gatewayPresent: true },
+  ) {
+    const output = outputCapture();
+    const rotations: unknown[] = [];
+    let closes = 0;
+    const exitCode = await runCli(
+      argv,
+      output.environmentWith({
+        ...(daemonHome === undefined ? {} : { daemonHome }),
+        connectAdmin: async () =>
+          fakeClient({
+            role,
+            close: () => {
+              closes += 1;
+              return Promise.resolve();
+            },
+            listLeases: () => Promise.resolve({ leases: [...leases] }),
+            rotate: (leaseId, orientation, options) => {
+              rotations.push({ leaseId, orientation, options });
+              return Promise.resolve({ leaseId: `${leaseId}_answered`, orientation });
+            },
+          }),
+      }),
+    );
+    return { closes: () => closes, exitCode, output, rotations };
+  }
+
+  it("a user runs simlock rotate <orientation> [--lease <id>], on a worker or with --gateway, and sees Rotated lease <id> to <orientation>, or a usage error", async () => {
+    const only = await rotateWith(["rotate", "landscape-left"], [heldLease]);
+    expect(only.exitCode).toBe(0);
+    expect(only.rotations).toEqual([
+      {
+        leaseId: "lse_mine",
+        orientation: "landscape_left",
+        options: { requesterId: "test-requester" },
+      },
+    ]);
+    expect(only.output.stdout).toBe("Rotated lease lse_mine_answered to landscape_left\n");
+    expect(only.closes()).toBe(1);
+
+    const asAgent = await rotateWith(["rotate", "landscape-left"], [heldLease], "agent");
+    expect(asAgent.exitCode).toBe(0);
+    expect(asAgent.rotations).toEqual([
+      { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
+    ]);
+
+    const gateway = {
+      role: "gateway",
+      dataDirectory: "/simlock/gateway",
+      gatewayPresent: true,
+    } as const;
+    for (const argv of [
+      ["--gateway", "rotate", "landscape-left"],
+      ["rotate", "landscape-left", "--gateway"],
+    ]) {
+      const throughGateway = await rotateWith(argv, [heldLease], "agent", gateway);
+      expect(throughGateway.exitCode, argv.join(" ")).toBe(0);
+      expect(throughGateway.rotations, argv.join(" ")).toEqual([
+        { leaseId: "lse_mine", orientation: "landscape_left", options: undefined },
+      ]);
+      expect(throughGateway.output.stdout, argv.join(" ")).toBe(
+        "Rotated lease lse_mine_answered to landscape_left\n",
+      );
+    }
+
+    for (const argv of [
+      ["rotate", "--lease", "lse_other", "left"],
+      ["rotate", "left", "--lease", "lse_other"],
+      ["rotate", "left", "--lease=lse_other"],
+    ]) {
+      const named = await rotateWith(argv, two);
+      expect(named.exitCode).toBe(0);
+      expect(named.rotations).toEqual([
+        {
+          leaseId: "lse_other",
+          orientation: "landscape_left",
+          options: { requesterId: "test-requester" },
+        },
+      ]);
+    }
+
+    for (const [spelling, orientation] of [
+      ["LEFT", "landscape_left"],
+      [" left ", "landscape_left"],
+      ["upside-down", "portrait_upside_down"],
+    ]) {
+      const spelled = await rotateWith(["rotate", spelling as string], [heldLease]);
+      expect(spelled.exitCode).toBe(0);
+      expect(spelled.output.stdout).toBe(`Rotated lease lse_mine_answered to ${orientation}\n`);
+    }
+
+    const refusals: [readonly string[], readonly (typeof heldLease)[], RegExp][] = [
+      [["rotate", "sideways"], [heldLease], /^Unknown orientation sideways; use portrait,/],
+      [["rotate", "auto"], [heldLease], /^Unknown orientation auto;/],
+      [["rotate", "landscapeLeft"], [heldLease], /^Unknown orientation landscapeLeft;/],
+      [["rotate"], [heldLease], /^Expected orientation/],
+      [["rotate", "left"], [], /test-requester/],
+      [["rotate", "left"], two, /lse_mine.*lse_other.*--lease <id>/s],
+    ];
+    for (const [argv, leases, message] of refusals) {
+      const refused = await rotateWith(argv, leases);
+      expect(refused.exitCode).toBe(2);
+      expect(refused.rotations).toEqual([]);
+      expect(JSON.parse(refused.output.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: expect.stringMatching(message) },
+      });
+    }
+
+    const unsupported = outputCapture();
+    let unsupportedCloses = 0;
+    await expect(
+      runCli(
+        ["rotate", "left", "--lease", "lse_android"],
+        unsupported.environmentWith({
+          connectAdmin: async () =>
+            fakeClient({
+              close: () => {
+                unsupportedCloses += 1;
+                return Promise.resolve();
+              },
+              rotate: () =>
+                Promise.reject(
+                  new SimlockError(
+                    "ROTATION_UNSUPPORTED",
+                    "domain",
+                    "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+                    {
+                      class: "emulator",
+                      leaseId: "lse_android",
+                      physical: false,
+                      platform: "android",
+                    },
+                  ),
+                ),
+            }),
+        }),
+      ),
+    ).resolves.toBe(12);
+    expect(JSON.parse(unsupported.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+      error: {
+        code: "ROTATION_UNSUPPORTED",
+        message:
+          "Lease lse_android is on an Android emulator; only an iOS simulator can be rotated",
+      },
+    });
+    expect(unsupported.stdout).toBe("");
+    expect(unsupportedCloses).toBe(1);
+
+    const help = await rotateWith(["rotate", "--help"], [heldLease]);
+    expect(help.exitCode).toBe(0);
+    expect(help.output.stdout).toBe(
+      "Usage: simlock rotate <portrait|portrait-upside-down|landscape-left|landscape-right> [--lease <id>]\n",
+    );
+    expect(help.rotations).toEqual([]);
+    const listing = outputCapture();
+    await runCli(["--help"], listing.environmentWith());
+    expect(listing.stdout).toContain("  rotate <orientation> [--lease <id>]");
   });
 });

@@ -56,7 +56,7 @@ Provision — `provision`:
    into `config.ini`; a library profile replaces the seed's `hw.*`/`skin.*` keys, sets
    `PlayStore.enabled`, writes `boot.prop`.
 4. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` /
-   `image.sysdir.1` / `disk.dataPartition.*` lines, and `headless`/`gpu` when not default.
+   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD), and `headless`/`gpu` when not default.
 
 Boot — `makeReady` (per-device lock):
 
@@ -74,7 +74,7 @@ Boot — `makeReady` (per-device lock):
 Reclaim — `reclaim`:
 
 - `full` → shut down; wipe on the next `makeReady`. Returns `shutdown` / `wipe`.
-- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
+- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` (60 s on the driver clock; a timeout kills the load, and a timeout, non-zero exit or no OK is a failed load: shut down and wipe) → readiness → mark. Returns `ready` / `snapshot`.
 - Hash changed or load failed → as `full`.
 - Physical → uninstall every user app not on the enrollment list. Returns `ready` / `uninstall`.
 
@@ -132,7 +132,7 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 | Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
 | `avdmanager list device`        | 30 s                                    | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`). Reads only: the user's AVD home, devices.xml, the SDK.
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 

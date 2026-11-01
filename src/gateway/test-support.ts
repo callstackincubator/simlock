@@ -24,6 +24,8 @@ import type {
   LeaseRequestInput,
   InstallComponentOptions,
   RequestLeaseOptions,
+  RotateInput,
+  RotateOutput,
   StatusGetOutput,
 } from "../admin/index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
@@ -494,6 +496,18 @@ export class ScriptedWorkerClient {
     if (outcome?.kind === "hang") return new Promise<never>(() => {});
     for (const chunk of outcome?.output ?? []) onOutput?.(chunk);
     return { exitCode: outcome?.exitCode ?? 0 };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options: { readonly requesterId?: string } = {},
+  ): Promise<RotateOutput> {
+    this.calls.push(`device.rotate:${options.requesterId ?? ""}`);
+    if (this.hangingCalls.has("device.rotate")) return new Promise<never>(() => {});
+    this.#throwIfFailing();
+    return { leaseId, orientation };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.

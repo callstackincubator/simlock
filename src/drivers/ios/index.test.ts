@@ -1938,6 +1938,14 @@ describe("IosSimctlDriver", () => {
       expect(iosRuntimeVersionFromId("garbage")).toBeUndefined();
     });
 
+    it("parses a device-specific runtime id (iOS-27-2-iPhone19-4) to the version it names (#1064)", () => {
+      // why: Xcode 27.2 installs `com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4` next to
+      // `...iOS-27-2`; the suffix after the version names a device family, not a version part.
+      expect(
+        iosRuntimeVersionFromId("com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4"),
+      ).toEqual([27, 2]);
+    });
+
     it("gates persistent slim on iOS 18.5+ without falling into string comparison", () => {
       // why: A naive string/lexicographic compare would put "9.0" ahead of "18.5" -- the gate must
       // compare the parsed integers instead.
@@ -3032,6 +3040,47 @@ describe("IosSimctlDriver", () => {
             message: expect.stringContaining("26.5"),
           },
         ]);
+      });
+
+      it("reports nothing for an iOS 27.2 device-specific runtime installed beside the general one (#1064)", async () => {
+        const devicetypes = (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes;
+        const deviceSpecificFixture = JSON.stringify({
+          devicetypes,
+          runtimes: [
+            {
+              buildversion: "24B91016s",
+              identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4",
+              isAvailable: true,
+              name: "iOS 27.2",
+              supportedDeviceTypes: [],
+              version: "27.2",
+            },
+            {
+              buildversion: "24B8117",
+              identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+              isAvailable: true,
+              name: "iOS 27.2",
+              supportedDeviceTypes: [],
+              version: "27.2",
+            },
+          ],
+        });
+        const runner = new ScriptedProcessRunner([
+          {
+            match: listInvocation,
+            result: { code: 0, stderr: "", stdout: deviceSpecificFixture },
+          },
+        ]);
+        const driver = await createSlimDriver(
+          runner,
+          new MemoryFilesystem(),
+          slimOptions(),
+          undefined,
+          undefined,
+          true,
+        );
+
+        await expect(driver.advisories()).resolves.toEqual([]);
       });
 
       it("reports nothing when the default mode is full, even with a runtime below 18.5 installed", async () => {

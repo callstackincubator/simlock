@@ -4,6 +4,7 @@ import {
   deviceClassSchema,
   deviceRecordSchema,
   imageTagSchema,
+  INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
   refuseModelWithClass,
@@ -158,6 +159,26 @@ export const leaseExecRoute = declareRoute({
   request: { params: leaseParamsSchema, json: execBodySchema },
   stream: execMessageSchema,
   errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
+});
+
+const rotateBodySchema = z.object({ orientation: z.enum(INPUT_ORIENTATIONS) }).strict();
+
+export const leaseRotateRoute = declareRoute({
+  method: "post",
+  path: "/v1/leases/{id}/rotate",
+  tag: "Leases",
+  summary: "Rotate the lease's iOS simulator",
+  role: "agent",
+  notes:
+    "Turns an iPhone or iPad simulator, whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
+  request: { params: leaseParamsSchema, json: rotateBodySchema },
+  reply: OPERATIONS["device.rotate"].output,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    422: ["ROTATION_UNSUPPORTED"],
+    503: ["INPUT_UNAVAILABLE", "WORKER_UNREACHABLE"],
+    504: ["EXEC_TIMEOUT"],
+  },
 });
 
 export const leaseRequestGetRoute = declareRoute({
@@ -345,6 +366,7 @@ export const LEASE_ROUTES = [
   leaseGetRoute,
   leaseRenewRoute,
   leaseExecRoute,
+  leaseRotateRoute,
   leaseEventsRoute,
   leaseReleaseRoute,
 ] as const;

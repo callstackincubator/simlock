@@ -136,14 +136,14 @@ describe("daemon folders (ADR 0034)", () => {
     expect(await readFile(env.configPath, "utf8")).toBe('{"http":{"port":4999}}\n');
   });
 
-  it("a daemon started from a config that still sets mode does not start, and the CLI prints the mode message with exit 1", async () => {
+  it("a daemon started from a config that still sets mode does not start, and the CLI prints the mode message with exit 2", async () => {
     const env = await withDaemon({ mode: "auto" });
     await writeFile(env.configPath, '{"mode":"worker"}\n', "utf8");
 
     const result = await env.cli(["daemon", "start"]);
 
-    expect(result.code).toBe(1);
-    expect(result.error).toEqual({ code: "INTERNAL", message: MODE_REMOVED });
+    expect(result.code).toBe(2);
+    expect(result.error).toEqual({ code: "USAGE", message: MODE_REMOVED });
     expect(existsSync(env.socketPath)).toBe(false);
   });
 

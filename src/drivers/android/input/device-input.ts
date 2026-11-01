@@ -187,34 +187,37 @@ class AndroidDeviceInput implements DeviceInput {
 
   // why: a rotation is dropped: scrcpy's only one (ROTATE_DEVICE) toggles between rotations 0 and 1
   // through the window manager's rotation lock, so it can name neither upside down nor a landscape side.
-  send(message: InputMessage): void {
+  send(message: InputMessage): Promise<void> {
     const size = this.#config;
-    if (size === undefined) return;
-    if (message.kind === "touch") this.#write(touchPacket(message, size));
-    else if (message.kind === "scroll") this.#write(scrollPacket(message, size));
-    else if (message.kind === "button") this.#press(BUTTON_KEYCODES[message.button]);
-    else if (message.kind === "key") this.#key(message.type, message.usage);
+    if (size === undefined) return Promise.resolve();
+    if (message.kind === "touch") return this.#write(touchPacket(message, size));
+    if (message.kind === "scroll") return this.#write(scrollPacket(message, size));
+    if (message.kind === "button") return this.#press(BUTTON_KEYCODES[message.button]);
+    if (message.kind === "key") return this.#key(message.type, message.usage);
+    return Promise.resolve();
   }
 
-  #press(keycode: number): void {
-    this.#write(keycodePacket("down", keycode, this.#meta));
-    this.#write(keycodePacket("up", keycode, this.#meta));
+  async #press(keycode: number): Promise<void> {
+    await Promise.all([
+      this.#write(keycodePacket("down", keycode, this.#meta)),
+      this.#write(keycodePacket("up", keycode, this.#meta)),
+    ]);
   }
 
   // why: a modifier is held in the meta state of every later key until its `up`; it joins the state
   // before its own down and leaves it before its own up, as Android's events carry it.
-  #key(type: "down" | "up", usage: number): void {
+  #key(type: "down" | "up", usage: number): Promise<void> {
     const keycode = keycodeOf(usage);
-    if (keycode === undefined) return;
+    if (keycode === undefined) return Promise.resolve();
     const modifier = modifierOf(usage);
     if (modifier !== undefined) {
       this.#meta = type === "down" ? this.#meta | modifier.meta : this.#meta & ~modifier.meta;
     }
-    this.#write(keycodePacket(type, keycode, this.#meta));
+    return this.#write(keycodePacket(type, keycode, this.#meta));
   }
 
-  #write(packet: Uint8Array): void {
-    void this.#stream?.write(packet).catch(() => undefined);
+  #write(packet: Uint8Array): Promise<void> {
+    return (this.#stream?.write(packet) ?? Promise.resolve()).catch(() => undefined);
   }
 
   onConfig(listener: (config: InputScreenConfig) => void): () => void {
