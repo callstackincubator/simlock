@@ -2471,6 +2471,26 @@ describe("operator-only listing routes", () => {
     const frames = await framesPromise;
     expect(frames[0]?.event).toBe("daemon.stopping");
   });
+
+  it("GET /v1/events/stream writes a comment or retry line as soon as it opens, before any keepalive is due", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
+    const response = await app.request("/v1/events/stream", { headers: operatorAuth });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("response has no body");
+    let written = "nothing written";
+    void reader.read().then(({ value, done }) => {
+      written = done ? "stream ended" : new TextDecoder().decode(value);
+    });
+    for (let turn = 0; turn < 50; turn += 1) await settle();
+    const writtenBeforeCancel = written;
+    await reader.cancel();
+
+    expect(writtenBeforeCancel).toMatch(/^(:[^\n]*|retry: ?\d+)\n\n$/);
+  });
 });
 
 describe("hardening from review", () => {
