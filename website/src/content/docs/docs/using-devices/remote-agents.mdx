@@ -164,7 +164,7 @@ A command runs on the worker machine, as the user who runs the worker daemon. `s
 
 An `Idempotency-Key` header on `POST /v1/lease-requests` (1 to 200 characters) makes the request safe to send again: the same key returns the stored request instead of queueing a second one, for 10 minutes after it finished.
 
-A `GET` under `/v1` that answers `200` with JSON carries an `ETag` header. Send it back as `If-None-Match` on the next read of the same route: while the answer is unchanged, the reply is `304 Not Modified` with no body. Event streams carry no `ETag`.
+A `GET` under `/v1` that answers `200` with JSON carries an `ETag` header. Send it back as `If-None-Match` on the next read of the same route: while the answer is unchanged, the reply is `304 Not Modified` with no body. Event streams carry no `ETag`. Simlock's own JSON answers under `/v1` (errors, `304` and `/v1/healthz` included) carry `Cache-Control: no-store`, so a CDN or proxy cache in front of the daemon never stores one. A module's routes, such as the device stream, keep the `Cache-Control` they set.
 
 ## Through a gateway
 
@@ -188,6 +188,8 @@ Each message is one binary frame: a tag byte, a 4-byte big-endian connection num
 - The socket closes `4001` with the lease-end reason when the lease ends, and `1001` when the daemon stops. Through a gateway it also closes `1011` when the lease's worker stops or stops answering, and `1001` when the gateway stops. A worker with tunnels off answers `503 TUNNEL_UNAVAILABLE` before the upgrade, and one that gives no answer within 10 seconds `503 WORKER_UNREACHABLE`. Closing the socket removes the device's `adb reverse` rule before the lease can end.
 
 The worker sets each tunnel up with `adb reverse --no-rebind`, so a port you already reversed with `adb reverse` through `exec` is refused `TUNNEL_PORT_IN_USE`. A rule you set through `exec` after the tunnel, without `--no-rebind`, replaces it and the tunnel's connections stop. iOS leases are refused `TUNNEL_UNSUPPORTED`.
+
+While a tunnel is open, its port on the worker is reachable by others on that machine: any process on the worker, an emulator of another lease at `10.0.2.2`, and any other lease's device that has an `adb reverse` rule to it set through `exec`. Treat what a tunnel carries as open to them. On a phone, Simlock removes only the rules its own tunnels set, when their socket closes; it never clears the phone's other `adb reverse` or `adb forward` rules. A tunnel rule left by a worker crash stays on the phone until it reboots or you remove it with `adb reverse --remove`, and the worker keeps that rule's port out of use for new tunnels.
 
 ## When something goes wrong
 

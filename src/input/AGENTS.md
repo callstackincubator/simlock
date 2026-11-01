@@ -17,7 +17,7 @@ Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `i
 | `create.ts`       | The two factories; the 426 lease route                                                                  |
 | `worker-link.ts`  | Worker: finds the lease in the registry; the socket door and the relay door, both to a session          |
 | `sessions.ts`     | Worker: one hold on the daemon's device input per lease, its sockets, config, failure, lease end, drain |
-| `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain                        |
+| `gateway-link.ts` | Gateway: the module's path, bounds and 503 texts for `createGatewayChannelLink`                         |
 
 ## How it works
 
@@ -25,7 +25,7 @@ Two doors reach one session. A standalone worker: the HTTP layer resolves the le
 `socket.open` answers an accept and the upgrade router hands it the upgraded socket. Through a gateway the
 same `open` on the gateway calls `relayTwoWay` (`input` target) with `/input/leases/<id>` and the worker's
 lease id; the worker's `relayTwoWay` finds the lease and attaches a `channelSocket` to the same session. The
-gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls when the handshake is refused after the relay opened.
+gateway's accept carries `abandon` (`modules/relay-channel.ts`), which the router calls when the handshake is refused after the relay opened.
 
 1. Worker session (`sessions.ts` `attach`): a lease gone from the registry → close 4001 `lease ended`; a failed
    open within 10 s → close 1013; 8 sockets already → close 1013. Else it takes the lease's one device input
@@ -37,7 +37,7 @@ gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls w
    stays; the device input decides what a valid `0x07` does. `0x10` is answered `0x90 {ok:false}`.
 4. Ends: the last socket leaves → the device input closes once; `onFailed` → every socket 1013; the
    `beforeDeviceReclaim` hook → every socket 4001 with the lease-end reason; `beforeDrain` → every socket 1001.
-5. Gateway bridge (`gateway-link.ts`): client frames (≤ 64 KiB) → channel; channel → client except `0xF0`.
+5. Gateway bridge (`modules/relay-channel.ts`): client frames (≤ 64 KiB) → channel; channel → client except `0xF0`.
    `0xF1 {code, reason}` closes the client (1001 from a stopping worker is reported as 1011). A channel that
    ends or breaks → 1011 `Worker <id> stopped answering`. `leases.onRemoved` → wait 2 s for that socket's
    `0xF1`, then 4001 `lease ended`. `beforeDrain` → 1001 `Simlock is stopping`.
@@ -53,9 +53,9 @@ Memory only: a device input per lease, its sockets, its config, the failed-open 
 | ---------------------------- | ------- | --------------------------------- |
 | Sockets per lease            | 8       | fixed, `sessions.ts`              |
 | Failed-open memory           | 10 s    | fixed, `sessions.ts`              |
-| Gateway relay open           | 10 s    | fixed, `gateway-link.ts`          |
+| Gateway relay open           | 10 s    | fixed, `modules/relay-channel.ts` |
 | Worker heartbeat (`0xF0`)    | 5 s     | fixed, `modules/relay-channel.ts` |
-| Wait for the worker's `0xF1` | 2 s     | fixed, `gateway-link.ts`          |
+| Wait for the worker's `0xF1` | 2 s     | fixed, `modules/relay-channel.ts` |
 | Client ping (ports router)   | 15 s    | fixed, `ports/upgrade-router.ts`  |
 
 ## Rules

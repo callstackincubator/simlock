@@ -13,7 +13,7 @@ Off unless `capabilities.tunnel.enabled` (false). Off: nothing loaded, and the `
 | `definition.ts`   | `tunnelModule`: name `tunnel`, empty config section, `http` route data, the two loaders      |
 | `worker.ts`       | The worker side from the host's context: capability, hooks, lease route (426), socket, relay |
 | `gateway.ts`      | The gateway side: lease route (426), socket, `beforeDrain`                                   |
-| `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain             |
+| `gateway-link.ts` | Gateway: the module's path, bounds and 503 texts for `createGatewayChannelLink`              |
 | `limits.ts`       | `MAX_TUNNEL_MESSAGE_BYTES` (65541): the longest message a channel frame carries              |
 | `sessions.ts`     | One session per socket: HELLO, rules, connections, window and credit, lease end, drain       |
 
@@ -25,7 +25,7 @@ The HTTP layer resolves the lease for the caller, then `socket.open` finds the l
 2. Each reverse tunnel is `ctx.deviceTcp.reverse`. A failure removes the tunnels set before it and refuses with the driver's `DeviceTcpError` code (`TUNNEL_PORT_IN_USE`, `TUNNEL_FAILED`), else `TUNNEL_FAILED`. Then `READY`.
 3. A device connection is `OPEN` with the next odd id; its bytes go out as `DATA` only while the caller's window allows, and the worker grants `CREDIT` as it writes to the device. `END` half-closes one direction; a connection ends when both have. A 257th open connection is closed at once.
 4. A bad frame (a `CREDIT` that is not 4 bytes, a `DATA` of 0 or over 65536 bytes included) is `BAD_REQUEST`, close 4003, never a throw; a frame for a connection already closed is ignored; a device stream that fails resets its own connection.
-5. The socket closing, the lease ending (`beforeDeviceReclaim`, close 4001 with the reason) and a drain (`beforeDrain`, close 1001) close the session's connections and remove its rules, the hook returning when they are done (10 s per removal); a signal that is aborted, or aborts between removals, skips the rest and reclaim does them.
+5. The socket closing, the lease ending (`beforeDeviceReclaim`, close 4001 with the reason) and a drain (`beforeDrain`, close 1001) close the session's connections and remove its rules, the hook returning when they are done, a removal the socket's close began included (10 s per removal); on an emulator a signal that is aborted, or aborts between removals, skips the rest and reclaim does them; on a phone the removals run anyway, because its reclaim removes no rules.
 
 ## Through a gateway
 
@@ -40,4 +40,4 @@ The gateway's `socket.open` calls `relayTwoWay` (`tunnel` target) with the worke
 
 - The module never checks an owner; the HTTP layer does.
 - The module never imports a driver; `ctx.deviceTcp` is the only door to a device.
-- A removal that fails is logged at `warn`; the driver keeps the loopback port reserved until reclaim.
+- A removal that fails is logged at `warn`; the driver keeps the loopback port reserved until reclaim, and on a phone until no rule there points to it.

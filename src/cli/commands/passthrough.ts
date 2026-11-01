@@ -14,7 +14,7 @@ async function runPassthrough(
   args: readonly string[],
   { environment, token }: CommandContext,
 ): Promise<number> {
-  const { leaseFlag, rest } = extractLeaseFlag(args);
+  const { leaseFlag, sendStdin, rest } = extractLeadingFlags(args);
   const client = await connectDaemonClient(environment, token);
   let daemon;
   try {
@@ -25,7 +25,7 @@ async function runPassthrough(
   }
   if (daemon.mode === "gateway") {
     try {
-      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag);
+      return await runRemotePassthrough(tool, rest, environment, client, leaseFlag, sendStdin);
     } finally {
       await client.close();
     }
@@ -52,10 +52,11 @@ async function runRemotePassthrough(
   environment: CommandContext["environment"],
   client: SimlockAdminClient,
   leaseFlag: string | undefined,
+  sendStdin: boolean,
 ): Promise<number> {
   try {
     const leaseId = leaseFlag ?? (await resolveRemoteLeaseId(client, environment));
-    const stdin = await environment.readStdin?.();
+    const stdin = sendStdin ? await environment.readStdin?.() : "";
     const requesterId = client.role === "admin" ? environment.requesterId : undefined;
     const { exitCode } = await client.exec(
       {
@@ -78,14 +79,21 @@ async function runRemotePassthrough(
   }
 }
 
-function extractLeaseFlag(args: readonly string[]): {
+function extractLeadingFlags(args: readonly string[]): {
   readonly leaseFlag: string | undefined;
+  readonly sendStdin: boolean;
   readonly rest: readonly string[];
 } {
   let leaseFlag: string | undefined;
+  let sendStdin = false;
   let index = 0;
   while (index < args.length) {
     const argument = args[index] as string;
+    if (argument === "--stdin") {
+      sendStdin = true;
+      index += 1;
+      continue;
+    }
     if (argument === "--lease") {
       const value = args[index + 1];
       if (value === undefined) throw new UsageError("--lease requires a lease id");
@@ -101,7 +109,7 @@ function extractLeaseFlag(args: readonly string[]): {
     }
     break;
   }
-  return { leaseFlag, rest: args.slice(index) };
+  return { leaseFlag, sendStdin, rest: args.slice(index) };
 }
 
 export { run };

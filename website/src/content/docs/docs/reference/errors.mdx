@@ -74,7 +74,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 
 ## Tunnels
 
-A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabilities.tunnel.enabled`) refuses a `HELLO` with one of these codes in a `REFUSED` frame and closes with 4003.
+A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabilities.tunnel.enabled`) refuses a `HELLO` in a `REFUSED` frame and closes with 4003, with `TUNNEL_UNSUPPORTED`, `TUNNEL_PORT_IN_USE`, `TUNNEL_BAD_PORT`, `TUNNEL_LIMIT` or `TUNNEL_FAILED`. `TUNNEL_UNAVAILABLE`, `TUNNEL_DISCONNECTED`, `TUNNEL_CALLER_PORT_IN_USE` and `TUNNEL_LEASE_ENDED` are not sent by a worker's tunnel socket; the rows below say who raises them.
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |

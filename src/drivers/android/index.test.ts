@@ -3722,7 +3722,7 @@ describe("AndroidDriver deviceTcp", () => {
     expect(exhausted.runner.calls).toEqual([]);
   });
 
-  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, and touches nothing on an emulator that answers as another's", async () => {
+  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
     const own = await driverWith([
       avdPathExpectation("emulator-5586"),
       {
@@ -3745,6 +3745,44 @@ describe("AndroidDriver deviceTcp", () => {
     ]);
     await own.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
     expect(own.runner.calls.filter((call) => call.args.includes("--remove"))).toHaveLength(2);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phones = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, "reverse", "--list"),
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: "UsbFfs tcp:5173 tcp:47000\nUsbFfs tcp:3000 tcp:3001\n",
+          },
+        },
+        {
+          match: adb(
+            "-P",
+            "5037",
+            "-s",
+            PHYSICAL_DEVICE.address,
+            "reverse",
+            "--no-rebind",
+            "tcp:5174",
+            "tcp:47001",
+          ),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    await phones.driver.deviceTcp?.sweep([{ device: PHYSICAL_DEVICE, leased: false }]);
+    const onPhone = await phones.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5174, signal());
+    expect(onPhone?.hostPort).toBe(47_001);
+    expect(phones.runner.calls.some((call) => call.args.includes("--remove"))).toBe(false);
 
     const foreign = await driverWith([avdPathExpectation("emulator-5586", "simlock_two")]);
     await foreign.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
@@ -4284,6 +4322,53 @@ describe("AndroidDriver.create", () => {
     await expect(passthroughOf(driver, ["-P", "1", "kill-server"])).rejects.toThrow(
       PassthroughRefusedError,
     );
+  });
+
+  it("refuses adb disconnect with or without an address, on the local CLI and through device.exec", async () => {
+    // why: #1168. adb's server answers an empty `host:disconnect:` with kick_all_tcp_devices(),
+    // which kicks every kTransportLocal transport, and emulators are local transports; with an
+    // address it kicks the transport of that serial. Either way it detaches leases other than
+    // the caller's, as `kill-server` would. `-s` does not scope it: the subcommand acts on no
+    // device.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const callers = [
+      ["local CLI", undefined, undefined],
+      ["device.exec", { hasTerminal: false, platform: "android" }, emulator],
+    ] as const;
+    const commands = [
+      ["disconnect"],
+      ["-s", "emulator-5554", "disconnect"],
+      ["disconnect", "emulator-5556"],
+    ];
+
+    for (const [caller, context, device] of callers) {
+      for (const args of commands) {
+        const returned = passthroughOf(driver, args, context, device);
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toBeInstanceOf(
+          PassthroughRefusedError,
+        );
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toMatchObject({
+          message: expect.stringMatching(/^Refusing `simlock adb disconnect`/),
+          tool: "adb",
+        });
+      }
+
+      // why: the refusal is of the subcommand only; `disconnect` as a later argument is data.
+      for (const args of [
+        ["shell", "echo", "disconnect"],
+        ["-s", "emulator-5554", "shell", "echo", "disconnect"],
+      ]) {
+        const passed = await passthroughOf(driver, args, context, device);
+        expect(passed.args.slice(-args.length), `${caller}: adb ${args.join(" ")}`).toEqual(args);
+      }
+    }
   });
 
   it.each([[["emu", "avd", "stop"]], [["-s", "emulator-5586", "emu", "avd", "stop"]]])(
