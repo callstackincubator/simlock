@@ -64,6 +64,7 @@ interface Child {
 
 interface Options {
   readonly baseEnvironment?: NodeJS.ProcessEnv;
+  readonly iosRunnerIdleStopMs?: number;
   readonly command?: string;
   readonly commandLines?: readonly (readonly [number, readonly (string | undefined)[]])[];
   readonly daemonJson?: (startIndex: number) => DaemonJson;
@@ -184,7 +185,12 @@ async function arrange(options: Options = {}) {
       PATH: "/usr/local/bin:/usr/bin",
     },
     clock,
-    config: { command: options.command ?? "agent-device" },
+    config: {
+      command: options.command ?? "agent-device",
+      ...(options.iosRunnerIdleStopMs === undefined
+        ? {}
+        : { iosRunnerIdleStopMs: options.iosRunnerIdleStopMs }),
+    },
     driverEnvironment: options.driverEnvironment ?? {},
     filesystem,
     healthProbe: health,
@@ -685,6 +691,16 @@ describe("AgentDeviceSupervisor spawning", () => {
     expect(running(xcodeSet).platforms).toEqual(["ios", "android"]);
     expect(xcodeSet.runner.calls[1]?.options.env).not.toHaveProperty(
       "AGENT_DEVICE_IOS_SIMULATOR_DEVICE_SET",
+    );
+  });
+
+  it("sets the iOS runner's idle stop only when the config names one", async () => {
+    const off = await run({ iosRunnerIdleStopMs: 0 });
+    expect(off.runner.calls[1]?.options.env?.["AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS"]).toBe("0");
+
+    const unset = await run({});
+    expect(unset.runner.calls[1]?.options.env).not.toHaveProperty(
+      "AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS",
     );
   });
 

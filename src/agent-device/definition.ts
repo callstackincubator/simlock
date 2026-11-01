@@ -4,6 +4,7 @@ import type { OptionalModuleDefinition } from "../modules/index.js";
 export interface AgentDeviceModuleConfig {
   readonly command: string;
   readonly leaseTtlCapMs?: number;
+  readonly iosRunnerIdleStopMs?: number;
   readonly ios?: {
     readonly teamId?: string;
     readonly bundleId?: string;
@@ -33,6 +34,7 @@ export const agentDeviceModule: OptionalModuleDefinition<AgentDeviceModuleConfig
         signingIdentity: nonEmptyString,
         teamId: nonEmptyString,
       }),
+      iosRunnerIdleStopMs: integerInRange(0, Number.MAX_SAFE_INTEGER),
       leaseTtlCapMs: integerInRange(MIN_AGENT_DEVICE_LEASE_TTL_MS, Number.MAX_SAFE_INTEGER),
     }),
   },
