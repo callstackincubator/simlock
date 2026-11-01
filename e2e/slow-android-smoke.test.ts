@@ -1,25 +1,15 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
+import type { AndroidSdkPaths } from "../src/drivers/android/index.js";
+import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/android-sdk.js";
 import { withDaemon } from "./helpers/index.js";
 import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
-const execFileAsync = promisify(execFile);
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
-
 /** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
-async function adbDevices(serverPort: number): Promise<string[]> {
-  const adb = join(ANDROID_HOME, "platform-tools", "adb");
-  const { stdout } = await execFileAsync(adb, ["-P", String(serverPort), "devices"]).catch(() => ({
+async function adbDevices(sdk: AndroidSdkPaths, serverPort: number): Promise<string[]> {
+  const { stdout } = await runSdkTool(sdk.adb, ["-P", String(serverPort), "devices"]).catch(() => ({
     stdout: "",
   }));
   return stdout
@@ -30,12 +20,10 @@ async function adbDevices(serverPort: number): Promise<string[]> {
     .map((line) => line.split(/\s+/)[0] as string);
 }
 
-async function avdManagerList(): Promise<string[]> {
-  const avdmanager = join(ANDROID_HOME, "cmdline-tools", "latest", "bin", "avdmanager");
-  const binary = existsSync(avdmanager)
-    ? avdmanager
-    : join(ANDROID_HOME, "tools", "bin", "avdmanager");
-  const { stdout } = await execFileAsync(binary, ["list", "avd"]).catch(() => ({ stdout: "" }));
+async function avdManagerList(sdk: AndroidSdkPaths): Promise<string[]> {
+  const { stdout } = await runSdkTool(sdk.avdmanager, ["list", "avd"]).catch(() => ({
+    stdout: "",
+  }));
   return [...stdout.matchAll(/Name:\s*(\S+)/g)].map((match) => match[1] as string);
 }
 
@@ -50,7 +38,7 @@ interface AndroidCatalogOutput {
   }[];
 }
 
-function checkCatalog(output: AndroidCatalogOutput): void {
+function checkCatalog(sdk: AndroidSdkPaths, output: AndroidCatalogOutput): void {
   const android = output.platforms.find((platform) => platform.platform === "android");
   if (android === undefined) {
     throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
@@ -64,13 +52,7 @@ function checkCatalog(output: AndroidCatalogOutput): void {
   expect(images.length, "expected the installed system images to be listed").toBeGreaterThan(0);
   for (const image of images) {
     expect(android.runtimes).toContain(image.runtime);
-    const path = join(
-      ANDROID_HOME,
-      "system-images",
-      `android-${image.runtime}`,
-      image.tag,
-      image.abi,
-    );
+    const path = join(sdk.root, "system-images", `android-${image.runtime}`, image.tag, image.abi);
     expect(existsSync(path), `listed image ${JSON.stringify(image)} is not installed`).toBe(true);
   }
 
@@ -81,7 +63,7 @@ function checkCatalog(output: AndroidCatalogOutput): void {
 
 // Real emulator boots are slow and this SDK layout is host-specific, so this lane is
 // gated on an actually-discoverable Android SDK rather than just `process.platform`.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "Android smoke (real emulator/adb)",
   { tags: ["slow", "android"] },
   () => {
@@ -89,6 +71,7 @@ describe.skipIf(!hasAndroidSdk)(
       "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
+        const sdk = requireAndroidSdk();
         const env = await withDaemon({
           driver: "real",
           // why: a learned warm kind would re-boot the emulator the idle shutdown just stopped.
@@ -101,7 +84,7 @@ describe.skipIf(!hasAndroidSdk)(
         try {
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
-          checkCatalog(catalog.json as AndroidCatalogOutput);
+          checkCatalog(sdk, catalog.json as AndroidCatalogOutput);
 
           const lease = await env.cli(
             [
@@ -151,7 +134,7 @@ describe.skipIf(!hasAndroidSdk)(
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
           // the grant names simlock's own AVD, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
-          const onlineSerials = await adbDevices(adbServerPort);
+          const onlineSerials = await adbDevices(sdk, adbServerPort);
           expect(
             onlineSerials.length,
             "expected at least one booted emulator visible to Simlock's own adb server",
@@ -163,7 +146,7 @@ describe.skipIf(!hasAndroidSdk)(
             existsSync(join(env.home, "devices", "android", `${avdName}.avd`)),
             "expected the AVD to live inside Simlock's own device root",
           ).toBe(true);
-          const avdNames = await avdManagerList();
+          const avdNames = await avdManagerList(sdk);
           expect(
             avdNames.includes(avdName),
             "a Simlock AVD must not appear in the user's own AVD home",

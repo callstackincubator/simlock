@@ -2880,6 +2880,8 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
 }
 export { androidDeviceDataTable } from "./device-data.js";
 export { androidPrerequisites } from "./prerequisites.js";
+export { locateSdk } from "./sdk-paths.js";
+export type { AndroidSdkPaths } from "./sdk-paths.js";
 
 function virtualReclaimStrategy(clean: "standard" | "full"): "snapshot" | "wipe" {
   return clean === "full" ? "wipe" : "snapshot";
