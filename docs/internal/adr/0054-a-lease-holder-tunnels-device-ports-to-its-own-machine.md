@@ -107,7 +107,11 @@ flowchart LR
    on a phone stays until the phone reboots or a person removes it. Tunnel listeners use only loopback ports
    47000 to 47999, reserved for tunnels. At start, before any lease is
    served, the worker reads `reverse` rules on every Android emulator it
-   proves its own; it does not touch phones. On an idle device it removes each rule whose host side is
+   proves its own, and on every phone it proves enrolled it reads `reverse --list`
+   and changes nothing: each port in the range a phone's rule points to stays
+   reserved, so a stale rule a daemon crash or a failed removal left never
+   sees its port given to another tunnel. A phone's reclaim reads its rules
+   again and frees only the ports no rule on it points to. On an idle emulator it removes each rule whose host side is
    in that range: the range is reserved for tunnels (a holder's own rule
    pointed there is removed too, and the docs say so), and no tunnel
    survives a restart. On a leased device it removes nothing, since no
@@ -163,8 +167,11 @@ sequenceDiagram
   tunnelled port. The operator accepts this with the module.
 - `dataPlane` on the lease stays reserved; tunnels are a module route, not
   a lease field.
-- Reclaim gains a step on Android, and rules made by hand no longer leak
-  into the next lease.
+- Reclaim gains a step on Android emulators, and rules made by hand there no
+  longer leak into the next lease. On an enrolled phone the rules a holder
+  made stay.
+- A stale tunnel rule on a phone holds its port until the phone reboots or
+  a person removes it.
 - The first daemon-contract helper for a module's own socket protocol.
 - A third file loads `ws`, and only when `simlock tunnel` runs.
 - Each worker reserves loopback ports 47000 to 47999 for tunnels.
