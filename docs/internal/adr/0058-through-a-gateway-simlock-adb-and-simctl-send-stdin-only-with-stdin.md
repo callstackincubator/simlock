@@ -56,7 +56,7 @@ flowchart LR
 
 ## Consequences
 
-- No caller hangs on an open pipe: a command that needs no input runs at once.
+- No caller without `--stdin` hangs on an open pipe: a command that needs no input runs at once.
 - Breaking: `echo x | simlock adb shell cat` through a gateway now needs
   `simlock adb --stdin shell cat`. Without the flag, `cat` gets empty input.
 - A command that reads stdin and was run from a terminal without a pipe
