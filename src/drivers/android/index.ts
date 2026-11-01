@@ -691,6 +691,7 @@ export class AndroidDriver implements Driver {
       clock: options.clock,
       env: options.env,
       filesystem: options.filesystem,
+      logPath: join(options.simlockHome, "logs", "adb-server.log"),
       port: adbServerPort,
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,

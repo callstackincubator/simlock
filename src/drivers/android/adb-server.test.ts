@@ -13,6 +13,7 @@ import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js"
 const adb = "/android-sdk/platform-tools/adb";
 const home = "/home/simlock/.simlock";
 const recordPath = `${home}/adb-server.json`;
+const logPath = `${home}/logs/adb-server.log`;
 const port = 5038;
 const recordedPid = 4242;
 
@@ -82,11 +83,25 @@ describe("AdbServerSupervisor.start", () => {
             ANDROID_HOME: "/android-sdk",
             PATH: "/usr/bin",
           },
-          stdio: "ignore",
+          stdio: { file: logPath },
         },
       },
     ]);
     await expect(harness.filesystem.readFile(recordPath)).resolves.toContain('"pid": 1');
+  });
+
+  it("hands the server a 0600 log file at <home>/logs/adb-server.log, truncated on each start", async () => {
+    const harness = await start({
+      expectations: [serverSpawn()],
+      spawnStartsListening: true,
+      staleLog: "trace of the previous server\n",
+    });
+
+    await harness.started;
+
+    expect(harness.runner.calls[0]?.options.stdio).toEqual({ file: logPath });
+    await expect(harness.filesystem.readFile(logPath)).resolves.toBe("");
+    await expect(harness.filesystem.stat(logPath)).resolves.toMatchObject({ mode: 0o600 });
   });
 
   it("kills the child and refuses when the server it started never listens", async () => {
@@ -316,6 +331,7 @@ describe("AdbServerSupervisor.stop", () => {
 });
 
 interface StartOptions {
+  readonly staleLog?: string;
   readonly commandLines?: readonly (readonly [number, readonly (string | undefined)[]])[];
   readonly expectations?: readonly ScriptedProcessExpectation[];
   readonly failRecordWrite?: boolean;
@@ -339,6 +355,10 @@ async function start(options: StartOptions = {}) {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp(home);
   await seedRecord(filesystem, options);
+  if (options.staleLog !== undefined) {
+    await filesystem.mkdirp(`${home}/logs`);
+    await filesystem.writeFileAtomic(logPath, options.staleLog, { mode: 0o644 });
+  }
 
   const clock = new FakeClock();
   const probe =
@@ -350,7 +370,13 @@ async function start(options: StartOptions = {}) {
   const spawned = observeSpawns({ configuredPort, options, probe, runner, supervisor });
 
   if (options.failRecordWrite === true) {
-    vi.spyOn(filesystem, "writeFileAtomic").mockRejectedValue(new Error("ENOSPC"));
+    const writeFileAtomic = filesystem.writeFileAtomic.bind(filesystem);
+    vi.spyOn(filesystem, "writeFileAtomic").mockImplementation(
+      async (path, contents, writeOptions) => {
+        if (path === recordPath) throw new Error("ENOSPC");
+        await writeFileAtomic(path, contents, writeOptions);
+      },
+    );
   }
 
   const adbServer = new AdbServerSupervisor({
@@ -358,6 +384,7 @@ async function start(options: StartOptions = {}) {
     clock,
     env: { ANDROID_HOME: "/android-sdk", PATH: "/usr/bin" },
     filesystem,
+    logPath,
     port: configuredPort,
     processRunner: runner,
     processSupervisor: supervisor,
