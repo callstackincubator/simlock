@@ -278,15 +278,7 @@ export class AdbServerSupervisor {
     await this.#options.filesystem.writeFileAtomic(this.#options.logPath, "", { mode: 0o600 });
   }
 
-  async #startServer(): Promise<void> {
-    const startedAt = this.#options.clock.now();
-    // why: `nodaemon server` runs the server in the foreground, so the pid recorded below is
-    // the server itself. `start-server` would fork one and hand back the pid of a launcher
-    // that exits immediately -- a pid that identifies nothing by the time it is needed.
-    // why: the output goes to a file rather than a pipe because this child outlives every call
-    // made to it: captured output would accumulate in the handle's buffers for as long as
-    // the daemon runs. In `nodaemon` mode adb logs to stderr only, so the file is the only
-    // place `ADB_TRACE` (passed through from `env`) can land.
+  async #prepareLog(): Promise<void> {
     try {
       await this.#resetLog();
     } catch (error: unknown) {
@@ -295,9 +287,18 @@ export class AdbServerSupervisor {
         `Simlock could not prepare the adb server's log at ${this.#options.logPath}: ${messageOf(error)}`,
       );
     }
-    let handle;
+  }
+
+  #spawnServer(): ProcessHandle {
+    // why: `nodaemon server` runs the server in the foreground, so the pid recorded by the caller is
+    // the server itself. `start-server` would fork one and hand back the pid of a launcher
+    // that exits immediately -- a pid that identifies nothing by the time it is needed.
+    // why: the output goes to a file rather than a pipe because this child outlives every call
+    // made to it: captured output would accumulate in the handle's buffers for as long as
+    // the daemon runs. In `nodaemon` mode adb logs to stderr only, so the file is the only
+    // place `ADB_TRACE` (passed through from `env`) can land.
     try {
-      handle = this.#options.processRunner.spawn(
+      return this.#options.processRunner.spawn(
         this.#options.adbPath,
         ["-P", String(this.#options.port), "nodaemon", "server"],
         {
@@ -318,6 +319,12 @@ export class AdbServerSupervisor {
         `Simlock could not start an adb server from ${this.#options.adbPath}: ${messageOf(error)}`,
       );
     }
+  }
+
+  async #startServer(): Promise<void> {
+    const startedAt = this.#options.clock.now();
+    await this.#prepareLog();
+    const handle = this.#spawnServer();
 
     // This child is meant to outlive the daemon: it is reaped by pid, never awaited, and
     // `nodaemon server` never exits on its own. Left referenced it would hold the event
