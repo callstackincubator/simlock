@@ -44,6 +44,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   closeGate: Promise<void> | undefined;
   // why: every device list a `sweep` was given, in order, so a test can tell what the daemon asked a platform's driver to sweep.
   readonly sweeps: (readonly SweptDevice[])[] = [];
+  // why: a test sets this to hold every `sweep` until it settles, as an adb call that is slow to answer does.
+  sweepGate: Promise<void> | undefined;
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
 
@@ -57,6 +59,7 @@ export class FakeDeviceTcp implements DeviceTcp {
 
   async sweep(devices: readonly SweptDevice[]): Promise<void> {
     this.sweeps.push(devices);
+    await this.sweepGate;
   }
 
   async reverse(

@@ -91,7 +91,7 @@ export interface CliEnvironment {
   readonly stdout: Output;
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
-  readonly readStdin?: () => Promise<string | undefined>;
+  readonly readStdin?: () => Promise<string>;
 }
 
 export interface CliEnvironmentPorts {
@@ -113,6 +113,6 @@ export interface CliEnvironmentPorts {
   readonly stdout?: Output;
   readonly confirm?: ((question: string) => Promise<boolean>) | undefined;
   readonly runPassthrough?: (command: PassthroughCommand) => Promise<number>;
-  readonly readStdin?: () => Promise<string | undefined>;
+  readonly readStdin?: () => Promise<string>;
   readonly parentPid?: number;
 }

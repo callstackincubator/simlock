@@ -1138,7 +1138,7 @@ describe("Android physical handler: reclaim", () => {
     expect(runner.installed).toEqual(["com.example.kept"]);
   });
 
-  it("removes every reverse rule of the phone and only its own forwards, goes on when a removal fails, and frees the loopback port a failed tunnel removal kept", async () => {
+  it("removes no reverse or forward rule of the phone on reclaim, and frees only the loopback ports no rule on it points to", async () => {
     const listeners = new FakeTcpListenerFactory();
     const { driver, runner } = await world({ listeners });
     runner.override((rest) => {
@@ -1146,24 +1146,23 @@ describe("Android physical handler: reclaim", () => {
       if (body === "forward --list") {
         return OK(`${PHONE} tcp:18790 tcp:18791\nOTHER tcp:18792 tcp:18793\n`);
       }
-      if (body === "reverse --remove-all" || body === "reverse --remove tcp:5173") return FAILED;
+      if (body === "reverse --list") return OK("UsbFfs tcp:5173 tcp:47000\n");
+      if (body.startsWith("reverse --remove tcp:")) return FAILED;
       return body.startsWith("reverse --no-rebind") ? OK() : undefined;
     });
-    const kept = await driver.deviceTcp?.reverse(PHYSICAL, 5173, new AbortController().signal);
-    await kept?.close().catch(() => undefined);
-    expect(listeners.listeners[0]?.closed).toBe(false);
+    for (const port of [5173, 5174]) {
+      const kept = await driver.deviceTcp?.reverse(PHYSICAL, port, new AbortController().signal);
+      await kept?.close().catch(() => undefined);
+    }
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([false, false]);
 
     const result = await driver.reclaim(PHYSICAL, { clean: "standard" });
 
-    expect(listeners.listeners[0]?.closed).toBe(true);
     expect(result).toMatchObject({ strategy: "uninstall" });
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([false, true]);
     expect(
-      runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward").slice(2),
-    ).toEqual([
-      ["-s", PHONE, "reverse", "--remove-all"],
-      ["-s", PHONE, "forward", "--list"],
-      ["-s", PHONE, "forward", "--remove", "tcp:18790"],
-    ]);
+      runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward").slice(4),
+    ).toEqual([["-s", PHONE, "reverse", "--list"]]);
   });
 
   it("with nothing off the list runs no uninstall", async () => {
@@ -1318,7 +1317,14 @@ describe("Android physical handler: reclaim", () => {
   });
 
   it("passes a 30 000 ms limit with every read, a 60 000 ms limit with every uninstall and a 10 000 ms limit with every rule removal to the process runner", async () => {
-    const { driver, runner } = await world();
+    const { driver, runner } = await world({ listeners: new FakeTcpListenerFactory() });
+    runner.override((rest) => {
+      const body = rest.slice(2).join(" ");
+      if (body.startsWith("reverse --remove tcp:")) return FAILED;
+      return body.startsWith("reverse --no-rebind") ? OK() : undefined;
+    });
+    const held = await driver.deviceTcp?.reverse(PHYSICAL, 5173, new AbortController().signal);
+    await held?.close().catch(() => undefined);
 
     await driver.inspectPhysical(PHONE);
     await driver.listPresentPhysical([PHONE]);
