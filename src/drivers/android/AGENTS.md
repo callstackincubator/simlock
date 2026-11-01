@@ -105,7 +105,7 @@ Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol r
 
 Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`) `-s <serial>` goes
 first unless the subcommand is on the no-device list (ADR 0047). Refused: another `-s`, `-e`, `-d`, `-t`,
-`adb` on a non-Android lease, `kill-server`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
+`adb` on a non-Android lease, `kill-server`, `disconnect`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
 globals (a lone `--version`/`--help` passes), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.
 
