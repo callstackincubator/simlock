@@ -26,8 +26,8 @@ describe("TTL leases and client-side renewal (ADR 0004)", () => {
 
     // why: the CLI loads the config before it launches a daemon, so no daemon.log is written.
     const result = await env.cli(["catalog", "--json"]);
-    expect(result.code).toBe(1);
-    expect(result.error?.code).toBe("INTERNAL");
+    expect(result.code).toBe(2);
+    expect(result.error?.code).toBe("USAGE");
     expect(result.error?.message).toContain("lease.defaultTtlMs");
     expect(existsSync(env.logPath)).toBe(false);
   });

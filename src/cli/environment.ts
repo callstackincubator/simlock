@@ -17,6 +17,7 @@ import type {
   ParentWatchHandle,
 } from "../ports/index.js";
 import { errorMessage } from "./errors.js";
+import { UsageError } from "./usage-error.js";
 import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import type { CliEnvironment, CliEnvironmentPorts } from "./types.js";
@@ -294,14 +295,20 @@ export function buildCliEnvironment(
   const checkConfig = async (): Promise<void> => {
     // why: the daemon refuses to boot on a config `loadConfig` rejects and only its log says so;
     // loading the same file before the launch puts the `ConfigError` on the CLI's stderr.
-    const { loadConfig } = await import("../core/index.js");
-    await loadConfig({
-      configPath,
-      filesystem,
-      modules: await moduleConfigEntries(),
-      role: daemonHome.role,
-      systemStats,
-    });
+    const { ConfigError, loadConfig } = await import("../core/index.js");
+    try {
+      await loadConfig({
+        configPath,
+        filesystem,
+        modules: await moduleConfigEntries(),
+        role: daemonHome.role,
+        systemStats,
+      });
+    } catch (error) {
+      // why: a rejected config value is a wrong request (exit 2), as `config set` reports it.
+      if (error instanceof ConfigError) throw new UsageError(error.message);
+      throw error;
+    }
   };
 
   const connect = async (

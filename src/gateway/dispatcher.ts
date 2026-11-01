@@ -35,7 +35,7 @@
 import type { TokenOperations } from "../auth/index.js";
 import type { z } from "zod";
 
-import { createUsageReader, type UsageReader } from "../core/index.js";
+import { createUsageReader, redactConfig, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
@@ -139,6 +139,7 @@ export interface GatewayDispatcherOptions {
     | "release"
     | "releaseAll"
     | "exec"
+    | "rotate"
     | "queueDepth"
     | "physicalQueueDepth"
     | "ownerId"
@@ -280,6 +281,7 @@ export class GatewayDispatcher {
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,
       "relay.cancel": relayRefused,
       // why: "daemon.stop" is absent for the same reason it is absent from the worker's table: the
@@ -372,7 +374,8 @@ export class GatewayDispatcher {
   #catalogGet: Handler<"catalog.get"> = (input) =>
     aggregateCatalog(this.options.workers.views(), input.platform);
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
@@ -729,6 +732,12 @@ export class GatewayDispatcher {
     const leaseIds = await this.options.coordinator.releaseAll();
     return { leaseIds: [...leaseIds] };
   };
+
+  #deviceRotate: Handler<"device.rotate"> = async (input, session) =>
+    this.options.coordinator.rotate(
+      { leaseId: input.leaseId, orientation: input.orientation },
+      session,
+    );
 
   #deviceExec: Handler<"device.exec"> = async (input, session) =>
     this.options.coordinator.exec(

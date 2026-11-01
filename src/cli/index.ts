@@ -33,6 +33,9 @@ Commands:
   device add --platform <ios|android> <id> [--json]
                               Enrol a physical device plugged into this host
   device remove <id> [--json] Forget an enrolled physical device; the device is untouched
+  rotate <orientation> [--lease <id>]
+                              Turn the leased iOS simulator: portrait, portrait-upside-down,
+                              landscape-left or landscape-right
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server

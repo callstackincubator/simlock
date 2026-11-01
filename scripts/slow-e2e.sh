@@ -240,7 +240,7 @@ echo "$log" > "$lock/log"
 echo "$log" > "$lock.last"
 mkdir -p "$lane_tmp"
 
-TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
+SIMLOCK_E2E_LOG_DIR="${log%.log}-daemons" TMPDIR="$lane_tmp/" python3 - "$lock" "$log" "$root" "$script" "$@" <<'EOF'
 import os, subprocess, sys
 lock, log, root, script, args = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 child = os.fork()

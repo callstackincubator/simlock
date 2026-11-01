@@ -9,15 +9,15 @@ Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `i
 
 ## Files
 
-| File              | Role                                                                                           |
-| ----------------- | ---------------------------------------------------------------------------------------------- |
-| `definition.ts`   | `inputModule`: name `input`, empty config section, `http` route data, the two loaders          |
-| `worker.ts`       | The worker side from the host's context: capability, hooks, lease route, socket, relay         |
-| `gateway.ts`      | The gateway side: lease route, socket, `beforeDrain`                                           |
-| `create.ts`       | The two factories; the 426 lease route                                                         |
-| `worker-link.ts`  | Worker: finds the lease in the registry; the socket door and the relay door, both to a session |
-| `sessions.ts`     | Worker: one device input per lease, its sockets, config, failure, lease end, drain             |
-| `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain               |
+| File              | Role                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `definition.ts`   | `inputModule`: name `input`, empty config section, `http` route data, the two loaders                   |
+| `worker.ts`       | The worker side from the host's context: capability, hooks, lease route, socket, relay                  |
+| `gateway.ts`      | The gateway side: lease route, socket, `beforeDrain`                                                    |
+| `create.ts`       | The two factories; the 426 lease route                                                                  |
+| `worker-link.ts`  | Worker: finds the lease in the registry; the socket door and the relay door, both to a session          |
+| `sessions.ts`     | Worker: one hold on the daemon's device input per lease, its sockets, config, failure, lease end, drain |
+| `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain                        |
 
 ## How it works
 
@@ -28,8 +28,8 @@ lease id; the worker's `relayTwoWay` finds the lease and attaches a `channelSock
 gateway's accept carries `abandon` (`gateway-link.ts`), which the router calls when the handshake is refused after the relay opened.
 
 1. Worker session (`sessions.ts` `attach`): a lease gone from the registry → close 4001 `lease ended`; a failed
-   open within 10 s → close 1013; 8 sockets already → close 1013. Else it opens the lease's one device input
-   (`ctx.inputs.openInput`, shared by every socket) and, once open, sends `0x83` then `0x82`.
+   open within 10 s → close 1013; 8 sockets already → close 1013. Else it takes the lease's one device input
+   (`ctx.inputs.leaseInput`, the daemon's, shared by every socket and by `device.rotate`) and, once open, sends `0x83` then `0x82`.
 2. `0x82` is the device input's `onConfig` (called at once, then on each change) and goes to every admitted socket.
    An unavailable device input sends `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}` and drops messages.
 3. Client messages go through `parseClientMessage` (core): bad JSON, an unknown tag, a position outside 0..1,

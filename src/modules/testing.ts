@@ -195,7 +195,13 @@ export async function fakeWorkerContext<C>(name: string, config: C): Promise<Fak
         reverse: () => Promise.reject(new Error("no device port in a fake context")),
         supports: () => false,
       },
-      inputs: { openInput: () => Promise.resolve({ unavailable: "no input in a fake context" }) },
+      inputs: {
+        leaseInput: () =>
+          Promise.resolve({
+            input: { unavailable: "no input in a fake context" },
+            release: () => undefined,
+          }),
+      },
       screens: {
         openScreen: () => Promise.reject(new Error("no screen in a fake context")),
         screenAvailability: () => Promise.resolve([]),

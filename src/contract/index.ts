@@ -2,6 +2,7 @@ export * from "./console-url.js";
 export * from "./duration.js";
 export * from "./errors.js";
 export * from "./operations.js";
+export * from "./orientation.js";
 export * from "./os-range.js";
 export * from "./protocol.js";
 export * from "./pushes.js";

@@ -146,17 +146,21 @@ export async function setLimits(
 
 export async function warmUp(daemon: SharedTestEnv, target: Target, count: number): Promise<void> {
   const ids: string[] = [];
-  for (let index = 1; index <= count; index += 1) {
-    const lease = await daemon.cli(
-      ["lease", "--detach", "--platform", target.platform, "--agent-id", `warmup-${index}`],
-      { timeout: 330_000 },
-    );
-    expect(lease.code, lease.stderr).toBe(0);
-    ids.push((lease.json as { lease: { id: string } }).lease.id);
-  }
-  for (const id of ids) {
-    const released = await daemon.cli(["release", id], { timeout: 60_000 });
-    expect(released.code, released.stderr).toBe(0);
+  // why: a failed warm-up lease must not leave the earlier ones held, or their emulators outlive the test.
+  try {
+    for (let index = 1; index <= count; index += 1) {
+      const lease = await daemon.cli(
+        ["lease", "--detach", "--platform", target.platform, "--agent-id", `warmup-${index}`],
+        { timeout: 330_000 },
+      );
+      expect(lease.code, lease.stderr).toBe(0);
+      ids.push((lease.json as { lease: { id: string } }).lease.id);
+    }
+  } finally {
+    for (const id of ids) {
+      const released = await daemon.cli(["release", id], { timeout: 60_000 });
+      expect(released.code, released.stderr).toBe(0);
+    }
   }
   let observed = "nothing read yet";
   await waitFor(

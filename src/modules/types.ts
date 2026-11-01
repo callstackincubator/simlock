@@ -188,13 +188,19 @@ export interface ModuleScreens {
   screenAvailability(): Promise<readonly ScreenAvailability[]>;
 }
 
-// why: the drivers' device input, routed by platform, without handing a module the drivers.
+// why: one user's hold on a lease's shared device input; `release` is how the user says it is done, and the last release closes the input.
+export interface LeaseInputHandle {
+  readonly input: DeviceInput | UnavailableDeviceInput;
+  release(): void;
+}
+
+// why: the daemon's device input per lease, shared by every user of it (the input module's sockets and `device.rotate`), without handing a module the drivers.
 export interface ModuleInputs {
-  openInput(
+  leaseInput(
+    leaseId: string,
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
-    signal: AbortSignal,
-  ): Promise<DeviceInput | UnavailableDeviceInput>;
+  ): Promise<LeaseInputHandle>;
 }
 
 // why: the drivers' device ports, routed by platform, without handing a module the drivers.
