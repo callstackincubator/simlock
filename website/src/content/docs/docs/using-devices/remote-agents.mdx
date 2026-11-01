@@ -189,6 +189,8 @@ Each message is one binary frame: a tag byte, a 4-byte big-endian connection num
 
 The worker sets each tunnel up with `adb reverse --no-rebind`, so a port you already reversed with `adb reverse` through `exec` is refused `TUNNEL_PORT_IN_USE`. A rule you set through `exec` after the tunnel, without `--no-rebind`, replaces it and the tunnel's connections stop. iOS leases are refused `TUNNEL_UNSUPPORTED`.
 
+While a tunnel is open, its port on the worker is reachable by others on that machine: any process on the worker, an emulator of another lease at `10.0.2.2`, and any other lease's device that has an `adb reverse` rule to it set through `exec`. Treat what a tunnel carries as open to them. On a phone, Simlock removes only the rules its own tunnels set, when their socket closes; it never clears the phone's other `adb reverse` or `adb forward` rules. A tunnel rule left by a worker crash stays on the phone until it reboots or you remove it with `adb reverse --remove`, and the worker keeps that rule's port out of use for new tunnels.
+
 ## When something goes wrong
 
 Errors come back as JSON with an HTTP status:
