@@ -57,9 +57,10 @@ export { type LeaseSocket, type LeaseSocketAccept, MemoryLeaseSocket } from "./l
 export { type Clock, FakeClock, SystemClock, type TimerHandle } from "./clock.js";
 /**
  * why: ADR 0005 §33's uplink port and its in-memory adapter. The WebSocket adapters are
- * deliberately *not* re-exported here: they live in `./uplink-websocket.js`, the one module
- * that imports `ws`, and only the daemon entrypoint needs them -- so the CLI and the MCP
- * server, which import this barrel, never load a WebSocket implementation they never use.
+ * deliberately *not* re-exported here: they live in `./uplink-websocket.js`, which imports `ws`
+ * statically, and only the daemon entrypoint needs them. `websocket-client.ts` (re-exported)
+ * loads `ws` with `import()` on its first `connect`, so only `simlock tunnel` loads it in the
+ * CLI; the MCP server never does.
  */
 export {
   createConnectionPair,
@@ -180,3 +181,11 @@ export {
   NodeUpdaterLauncher,
   type UpdaterLauncher,
 } from "./updater-launcher.js";
+export {
+  FakeWebSocketClientConnector,
+  NodeWebSocketClientConnector,
+  WebSocketRefusedError,
+  type WebSocketClient,
+  type WebSocketClientConnector,
+} from "./websocket-client.js";
+export { FakeHttpJsonClient, FetchHttpJsonClient, type HttpJsonClient } from "./http-json.js";

@@ -38,7 +38,12 @@ import {
   type IpcConnection,
   type IpcConnector,
 } from "../ports/index.js";
-import { FakeSystemStats } from "../ports/index.js";
+import {
+  FakeHttpJsonClient,
+  FakeSystemStats,
+  FakeTcpStreamConnector,
+  FakeWebSocketClientConnector,
+} from "../ports/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { openMemoryStateDatabase } from "../auth/testing.js";
 import { DaemonEndpointHost } from "../daemon/connection-host.js";
@@ -8501,6 +8506,9 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
           stderr: stderrOut,
           stdout: stdoutOut,
           confirm: async () => true,
+          webSocket: new FakeWebSocketClientConnector(),
+          httpJson: new FakeHttpJsonClient(),
+          tcpStreams: new FakeTcpStreamConnector(),
           ...overrides,
         };
       }

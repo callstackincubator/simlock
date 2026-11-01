@@ -156,7 +156,13 @@ export class FakeTcpPeer {
 export class FakeTcpStreamConnector implements TcpStreamConnector {
   readonly connections: { readonly port: number; readonly peer: FakeTcpPeer }[] = [];
 
+  // why: a test lists the ports nothing listens on; connecting to one rejects, as a refused loopback connection does.
+  readonly refusedPorts = new Set<number>();
+
   async connect(port: number): Promise<TcpStream> {
+    if (this.refusedPorts.has(port)) {
+      throw new Error(`connect ECONNREFUSED 127.0.0.1:${String(port)}`);
+    }
     const peer = new FakeTcpPeer();
     this.connections.push({ peer, port });
     return peer.stream;
