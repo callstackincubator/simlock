@@ -9,6 +9,7 @@ export * from "./pushes.js";
 export * from "./relay.js";
 export * from "./roles.js";
 export * from "./schemas.js";
+export * from "./tunnel-frames.js";
 export * from "./events-page.js";
 export * from "./inbox.js";
 export * from "./usage-window.js";

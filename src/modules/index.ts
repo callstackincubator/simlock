@@ -8,6 +8,7 @@ export type {
   GatewayContext,
   GatewayModule,
   ModuleCapabilitySource,
+  ModuleDeviceTcp,
   ModuleDispatch,
   ModuleEndedLease,
   ModuleFinding,

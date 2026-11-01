@@ -89,6 +89,7 @@ describe("the routes createHttpApp registers", () => {
       "GET /v1/leases/{id}/input",
       "GET /v1/stream/workers/{workerId}/devices/{deviceId}",
       "GET /v1/leases/{id}/stream",
+      "GET /v1/leases/{id}/tunnel",
     ]);
     expect([...documented].sort()).toEqual([...declared, ...moduleRoutes].sort());
     expect(coverageProblems([...core, "GET /v1/new"], declared)).toEqual([

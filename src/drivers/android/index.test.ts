@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
+  DeviceTcpError,
   DriverCrashError,
   OWNED_ROOT_MARKER_FILE,
   OwnedRootError,
@@ -15,6 +16,7 @@ import {
 import {
   FakeClock,
   FakeProcessSupervisor,
+  FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
   type Filesystem,
@@ -795,8 +797,11 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("captures a named clean baseline once and restores it on a standard reclaim", async () => {
-    const harness = await provisionedHarness({ forBaselineReclaim: true });
+  it("captures a named clean baseline once and restores it on a standard reclaim, after removing every reverse rule of the emulator and its own forwards, and keeping another device's forward", async () => {
+    const harness = await provisionedHarness({
+      forBaselineReclaim: true,
+      forwardList: "emulator-5586 tcp:18790 tcp:18791\nemulator-5590 tcp:18792 tcp:18793\n",
+    });
     const ready = await harness.driver.makeReady(harness.device);
 
     await expect(harness.driver.reclaim(ready, { clean: "standard" })).resolves.toEqual({
@@ -811,6 +816,17 @@ describe("AndroidDriver", () => {
     });
     const saves = harness.runner.calls.filter((call) => call.args.includes("save"));
     expect(saves).toHaveLength(1);
+    const commands = harness.runner.calls.map((call) => call.args.join(" "));
+    const removed = commands.indexOf("-P 5038 -s emulator-5586 reverse --remove-all");
+    expect(removed).toBeGreaterThan(-1);
+    expect(commands.indexOf("-P 5038 -s emulator-5586 forward --list")).toBe(removed + 1);
+    expect(commands.indexOf("-P 5038 -s emulator-5586 forward --remove tcp:18790")).toBe(
+      removed + 2,
+    );
+    expect(commands.some((command) => command.includes("tcp:18792"))).toBe(false);
+    expect(commands.indexOf("-s emulator-5586 emu avd snapshot load simlock_clean_baseline")).toBe(
+      removed + 3,
+    );
   });
 
   it.each([
@@ -840,6 +856,7 @@ describe("AndroidDriver", () => {
         afterwards: [
           processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
           avdPathExpectation("emulator-5586"),
+          ...ruleCleanupExpectations("emulator-5586"),
           { ...load, match: { args: loadArgs, command: binaries.adb } },
           avdPathExpectation("emulator-5586"),
           processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
@@ -1031,6 +1048,7 @@ describe("AndroidDriver", () => {
     const restartedRunner = new ScriptedProcessRunner([
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
+      ...ruleCleanupExpectations("emulator-5586"),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -3546,6 +3564,260 @@ describe("AndroidDriver", () => {
   });
 });
 
+describe("AndroidDriver deviceTcp", () => {
+  const emulator = {
+    address: "emulator-5586",
+    deviceId: "simlock_one",
+    driverData: { avdName: "simlock_one", configHash: "h", port: 5586, serial: "emulator-5586" },
+    physical: false,
+  } as const;
+  const reverseArgs = (port: number) => [
+    "reverse",
+    "--no-rebind",
+    "tcp:5173",
+    `tcp:${String(port)}`,
+  ];
+  const ok = { code: 0, stderr: "", stdout: "" };
+  const adb = (...args: string[]) => ({ args, command: binaries.adb });
+  const signal = () => new AbortController().signal;
+
+  async function driverWith(
+    expectations: ScriptedProcessExpectation[],
+    listeners = new FakeTcpListenerFactory(),
+    tcpProbe?: FakeTcpProbe,
+  ) {
+    const runner = new ScriptedProcessRunner(expectations);
+    const driver = await createDriver(await androidFilesystem(), runner, {
+      tcpListener: listeners,
+      ...(tcpProbe === undefined ? {} : { tcpProbe }),
+    });
+    return { driver, listeners, runner };
+  }
+
+  // fallow-ignore-next-line complexity -- one Tests line: the driver's reverse, its close and each refusal are the cases of one scenario.
+  it("sets adb reverse --no-rebind to a loopback listener in 47000-47999 and removes it on close, as an emulator or a phone, keeps the port of a rule that could not be removed until the device's reclaim, and refuses with TUNNEL_PORT_IN_USE when adb cannot rebind and TUNNEL_FAILED for any other adb failure or when every tunnel port is busy", async () => {
+    const { driver, listeners, runner } = await driverWith([
+      { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_002)), result: ok },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: ok,
+      },
+    ]);
+    listeners.busy.add(47_000).add(47_001);
+    const reverse = await driver.deviceTcp?.reverse(emulator, 5173, signal());
+    expect(reverse?.hostPort).toBe(47_002);
+    expect(runner.calls[0]?.options.env).toEqual(scopedEnv);
+    const arrived: unknown[] = [];
+    reverse?.onConnection((stream) => arrived.push(stream));
+    listeners.listeners[0]?.connect();
+    expect(arrived).toHaveLength(1);
+    await reverse?.close();
+    expect(runner.calls[1]?.args).toEqual([
+      "-P",
+      "5038",
+      "-s",
+      "emulator-5586",
+      "reverse",
+      "--remove",
+      "tcp:5173",
+    ]);
+    expect(listeners.listeners[0]?.closed).toBe(true);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phoneRun = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, ...reverseArgs(47_000)),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    const phone = await phoneRun.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5173, signal());
+    expect(phone?.hostPort).toBe(47_000);
+    expect(phoneRun.runner.calls[1]?.options.env?.ANDROID_ADB_SERVER_PORT).toBe("5037");
+
+    const stuck = await driverWith([
+      { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)), result: ok },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: { code: 1, stderr: "device offline", stdout: "" },
+      },
+      {
+        match: adb(
+          "-P",
+          "5038",
+          "-s",
+          "emulator-5586",
+          "reverse",
+          "--no-rebind",
+          "tcp:5174",
+          "tcp:47001",
+        ),
+        result: ok,
+      },
+    ]);
+    const held = await stuck.driver.deviceTcp?.reverse(emulator, 5173, signal());
+    const delivered: unknown[] = [];
+    held?.onConnection((stream) => delivered.push(stream));
+    await held?.close().catch(() => undefined);
+    expect(stuck.listeners.listeners[0]?.closed).toBe(false);
+    const late = stuck.listeners.listeners[0]?.connect();
+    expect({ closed: late?.closed, delivered: delivered.length }).toEqual({
+      closed: true,
+      delivered: 0,
+    });
+    const second = await stuck.driver.deviceTcp?.reverse(emulator, 5174, signal());
+    expect(second?.hostPort).toBe(47_001);
+    await stuck.driver.deviceTcp?.release(emulator);
+    expect(stuck.listeners.listeners.map((listener) => listener.closed)).toEqual([true, true]);
+
+    const cannotRebind = await driverWith([
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)),
+        result: { code: 1, stderr: "adb.exe: error: cannot rebind existing socket", stdout: "" },
+      },
+    ]);
+    await expect(cannotRebind.driver.deviceTcp?.reverse(emulator, 5173, signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_PORT_IN_USE",
+        message: "reverse 5173: the device port is already reversed; remove that rule first",
+      }),
+    );
+    expect(cannotRebind.listeners.listeners[0]?.closed).toBe(true);
+
+    const failed = await driverWith([
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_000)),
+        result: { code: 1, stderr: "x".repeat(300), stdout: "" },
+      },
+    ]);
+    const error = await failed.driver.deviceTcp
+      ?.reverse(emulator, 5173, signal())
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DeviceTcpError);
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: `reverse 5173: ${"x".repeat(200)}`,
+      }),
+    );
+    expect(failed.listeners.listeners[0]?.closed).toBe(true);
+
+    const busy = new FakeTcpListenerFactory();
+    for (let port = 47_000; port < 48_000; port += 1) busy.busy.add(port);
+    const exhausted = await driverWith([], busy);
+    await expect(exhausted.driver.deviceTcp?.reverse(emulator, 5173, signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: "no free tunnel port on the worker",
+      }),
+    );
+    expect(exhausted.runner.calls).toEqual([]);
+  });
+
+  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
+    const own = await driverWith([
+      avdPathExpectation("emulator-5586"),
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--list"),
+        result: {
+          code: 0,
+          stderr: "",
+          stdout:
+            "host-19 tcp:5173 tcp:47003\nhost-19 tcp:8081 tcp:8082\nhost-19 tcp:3000 tcp:47999\n",
+        },
+      },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:5173"),
+        result: ok,
+      },
+      {
+        match: adb("-P", "5038", "-s", "emulator-5586", "reverse", "--remove", "tcp:3000"),
+        result: ok,
+      },
+    ]);
+    await own.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
+    expect(own.runner.calls.filter((call) => call.args.includes("--remove"))).toHaveLength(2);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phones = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, "reverse", "--list"),
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: "UsbFfs tcp:5173 tcp:47000\nUsbFfs tcp:3000 tcp:3001\n",
+          },
+        },
+        {
+          match: adb(
+            "-P",
+            "5037",
+            "-s",
+            PHYSICAL_DEVICE.address,
+            "reverse",
+            "--no-rebind",
+            "tcp:5174",
+            "tcp:47001",
+          ),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    await phones.driver.deviceTcp?.sweep([{ device: PHYSICAL_DEVICE, leased: false }]);
+    const onPhone = await phones.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5174, signal());
+    expect(onPhone?.hostPort).toBe(47_001);
+    expect(phones.runner.calls.some((call) => call.args.includes("--remove"))).toBe(false);
+
+    const foreign = await driverWith([avdPathExpectation("emulator-5586", "simlock_two")]);
+    await foreign.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
+    expect(foreign.runner.calls.some((call) => call.args.includes("reverse"))).toBe(false);
+
+    const onServer = ["-P", "5038", "-s", "emulator-5586"];
+    const leased = await driverWith([
+      avdPathExpectation("emulator-5586"),
+      {
+        match: adb(...onServer, "reverse", "--list"),
+        result: {
+          code: 0,
+          stderr: "",
+          stdout: "host-19 tcp:5173 tcp:47000\nhost-19 tcp:3000 tcp:3001\n",
+        },
+      },
+      {
+        match: adb(...onServer, "reverse", "--no-rebind", "tcp:5174", "tcp:47001"),
+        result: ok,
+      },
+      {
+        match: adb(...onServer, "reverse", "--no-rebind", "tcp:5175", "tcp:47000"),
+        result: ok,
+      },
+    ]);
+    await leased.driver.deviceTcp?.sweep([{ device: emulator, leased: true }]);
+    expect(leased.runner.calls.filter((call) => call.args.includes("--remove"))).toEqual([]);
+    const next = await leased.driver.deviceTcp?.reverse(emulator, 5174, signal());
+    expect(next?.hostPort).toBe(47_001);
+    await leased.driver.deviceTcp?.release(emulator);
+    const afterReclaim = await leased.driver.deviceTcp?.reverse(emulator, 5175, signal());
+    expect(afterReclaim?.hostPort).toBe(47_000);
+  });
+});
+
 describe("AndroidDriver screen capture", () => {
   const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
   const running = {
@@ -4858,7 +5130,7 @@ describe("AndroidDriver console ports across a restart", () => {
   });
 
   it.each(["shutdown", "full reclaim", "standard reclaim"] as const)(
-    "%s after a restart sends neither kill nor snapshot load to another device on the stored serial (#284)",
+    "%s after a restart sends no kill, snapshot load or rule removal to another device on the stored serial (#284)",
     async (operation) => {
       const spec = {
         physical: false,
@@ -4891,6 +5163,14 @@ describe("AndroidDriver console ports across a restart", () => {
 
       expect({
         running: host.avdAnswering(running.address),
+        ruleCalls: runner.calls
+          .slice(callStart)
+          .filter(
+            (call) =>
+              call.args.includes(running.address) &&
+              (call.args.includes("reverse") || call.args.includes("forward")),
+          )
+          .map((call) => call.args),
         mutations: runner.calls
           .slice(callStart)
           .filter(
@@ -4901,7 +5181,7 @@ describe("AndroidDriver console ports across a restart", () => {
                 call.args.slice(2, 6).join(" ") === "emu avd snapshot load"),
           )
           .map((call) => call.args),
-      }).toEqual({ running: "simlock_two", mutations: [] });
+      }).toEqual({ running: "simlock_two", ruleCalls: [], mutations: [] });
     },
   );
 
@@ -5575,6 +5855,8 @@ async function provisionedHarness(
     readonly emulator?: AndroidEmulatorLaunchOptions;
     readonly emulatorFlags?: readonly string[];
     readonly forBaselineReclaim?: boolean;
+    // why: what the emulator's server answers to `forward --list` at reclaim, so a test can set another device's forward beside its own.
+    readonly forwardList?: string;
     readonly forFullCleanBoot?: boolean;
     readonly forReclaim?: boolean;
     readonly ids?: readonly string[];
@@ -5638,6 +5920,7 @@ async function provisionedHarness(
     expectations.push(
       processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       avdPathExpectation("emulator-5586"),
+      ...ruleCleanupExpectations("emulator-5586", options.forwardList),
       processResult(
         binaries.adb,
         ["-s", "emulator-5586", "emu", "avd", "snapshot", "load", "simlock_clean_baseline"],
@@ -6521,6 +6804,7 @@ async function createDriver(
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
     readonly readinessTimeoutMs?: number;
     readonly scrcpyServerPath?: string;
+    readonly tcpListener?: FakeTcpListenerFactory;
     readonly tcpProbe?: FakeTcpProbe;
     readonly tcpStreamConnector?: FakeTcpStreamConnector;
   } = {},
@@ -6566,9 +6850,11 @@ function onlyProvided(options: {
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly readinessTimeoutMs?: number;
   readonly scrcpyServerPath?: string;
+  readonly tcpListener?: FakeTcpListenerFactory;
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
 }) {
   return {
+    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
     ...(options.scrcpyServerPath === undefined
       ? {}
       : { scrcpyServerPath: options.scrcpyServerPath }),
@@ -7221,6 +7507,22 @@ function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedPr
     ["-s", serial, "emu", "avd", "path"],
     `${avdDirectory}/${avdName}.avd\r\nOK\r\n`,
   );
+}
+
+// why: a reclaim that passed its ownership probe removes the device's rules before it loads the snapshot: every reverse rule, then a look at the forwards (none here).
+function ruleCleanupExpectations(serial: string, forwards = ""): ScriptedProcessExpectation[] {
+  const onServer = ["-P", String(adbServerPort), "-s", serial];
+  const own = forwards
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((parts) => parts[0] === serial && parts[1] !== undefined);
+  return [
+    processResult(binaries.adb, [...onServer, "reverse", "--remove-all"]),
+    processResult(binaries.adb, [...onServer, "forward", "--list"], forwards),
+    ...own.map((parts) =>
+      processResult(binaries.adb, [...onServer, "forward", "--remove", parts[1] ?? ""]),
+    ),
+  ];
 }
 
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {

@@ -8,6 +8,7 @@ import {
 import {
   FakeClock,
   FakeProcessSupervisor,
+  FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
   type Filesystem,
@@ -282,6 +283,7 @@ async function world(
     readonly filesystem?: Filesystem;
     readonly processRunner?: (phone: PhoneAdb) => ProcessRunner;
     readonly serverReply?: string;
+    readonly listeners?: FakeTcpListenerFactory;
   } = {},
 ): Promise<World> {
   const log: string[] = [];
@@ -306,6 +308,7 @@ async function world(
     processRunner: options.processRunner?.(runner) ?? runner,
     processSupervisor: new FakeProcessSupervisor([4242]),
     simlockHome,
+    ...(options.listeners === undefined ? {} : { tcpListener: options.listeners }),
     tcpProbe: probe,
   });
   return { driver, filesystem, log: runner.log, probe, runner };
@@ -362,6 +365,10 @@ function isPackageList(rest: readonly string[]): boolean {
 
 function isUninstall(rest: readonly string[]): boolean {
   return rest.includes("uninstall");
+}
+
+function isRuleCommand(rest: readonly string[]): boolean {
+  return rest[2] === "reverse" || rest[2] === "forward";
 }
 
 function defaultServerSends(probe: FakeTcpProbe) {
@@ -1131,6 +1138,33 @@ describe("Android physical handler: reclaim", () => {
     expect(runner.installed).toEqual(["com.example.kept"]);
   });
 
+  it("removes no reverse or forward rule of the phone on reclaim, and frees only the loopback ports no rule on it points to", async () => {
+    const listeners = new FakeTcpListenerFactory();
+    const { driver, runner } = await world({ listeners });
+    runner.override((rest) => {
+      const body = rest.slice(2).join(" ");
+      if (body === "forward --list") {
+        return OK(`${PHONE} tcp:18790 tcp:18791\nOTHER tcp:18792 tcp:18793\n`);
+      }
+      if (body === "reverse --list") return OK("UsbFfs tcp:5173 tcp:47000\n");
+      if (body.startsWith("reverse --remove tcp:")) return FAILED;
+      return body.startsWith("reverse --no-rebind") ? OK() : undefined;
+    });
+    for (const port of [5173, 5174]) {
+      const kept = await driver.deviceTcp?.reverse(PHYSICAL, port, new AbortController().signal);
+      await kept?.close().catch(() => undefined);
+    }
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([false, false]);
+
+    const result = await driver.reclaim(PHYSICAL, { clean: "standard" });
+
+    expect(result).toMatchObject({ strategy: "uninstall" });
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([false, true]);
+    expect(
+      runner.rests.filter((rest) => rest[2] === "reverse" || rest[2] === "forward").slice(4),
+    ).toEqual([["-s", PHONE, "reverse", "--list"]]);
+  });
+
   it("with nothing off the list runs no uninstall", async () => {
     const { driver, runner } = await world();
     runner.installed.splice(0, runner.installed.length, "com.example.kept");
@@ -1282,17 +1316,29 @@ describe("Android physical handler: reclaim", () => {
     expect(crlf.runner.rests.filter(isUninstall)).toHaveLength(1);
   });
 
-  it("passes a 30 000 ms limit with every read and a 60 000 ms limit with every uninstall to the process runner", async () => {
-    const { driver, runner } = await world();
+  it("passes a 30 000 ms limit with every read, a 60 000 ms limit with every uninstall and a 10 000 ms limit with every rule removal to the process runner", async () => {
+    const { driver, runner } = await world({ listeners: new FakeTcpListenerFactory() });
+    runner.override((rest) => {
+      const body = rest.slice(2).join(" ");
+      if (body.startsWith("reverse --remove tcp:")) return FAILED;
+      return body.startsWith("reverse --no-rebind") ? OK() : undefined;
+    });
+    const held = await driver.deviceTcp?.reverse(PHYSICAL, 5173, new AbortController().signal);
+    await held?.close().catch(() => undefined);
 
     await driver.inspectPhysical(PHONE);
     await driver.listPresentPhysical([PHONE]);
     await driver.reclaim(PHYSICAL, { clean: "standard" });
 
     const uninstalls = runner.commands.filter((call) => isUninstall(restOf(call)));
-    const reads = runner.calls.filter((call) => !isUninstall(restOf(call)));
+    const removals = runner.calls.filter((call) => isRuleCommand(restOf(call)));
+    const reads = runner.calls.filter(
+      (call) => !isUninstall(restOf(call)) && !isRuleCommand(restOf(call)),
+    );
     expect(uninstalls).not.toHaveLength(0);
+    expect(removals).not.toHaveLength(0);
     expect(uninstalls.map((call) => call.options.timeoutMs)).toEqual(uninstalls.map(() => 60_000));
+    expect(removals.map((call) => call.options.timeoutMs)).toEqual(removals.map(() => 10_000));
     expect(reads.map((call) => call.options.timeoutMs)).toEqual(reads.map(() => 30_000));
   });
 });

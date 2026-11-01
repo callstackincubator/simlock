@@ -57,10 +57,12 @@ import {
   type ProcessResult,
   type ProcessRunner,
   type ProcessSupervisor,
+  type TcpListenerFactory,
   type TcpProbe,
   type TcpStreamConnector,
   type TimerHandle,
 } from "../../ports/index.js";
+import { createAndroidDeviceTcp, removeDeviceRules, type AndroidDeviceTcp } from "./device-tcp.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
@@ -215,6 +217,8 @@ export interface AndroidDriverOptions {
   // rather than one that fails each stream it is asked for.
   readonly scrcpyServerPath?: string | undefined;
   readonly tcpStreamConnector?: TcpStreamConnector | undefined;
+  // why: optional so a host that leaves it out gets a driver that offers no tunnels.
+  readonly tcpListener?: TcpListenerFactory | undefined;
   readonly uid?: number;
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
@@ -539,6 +543,7 @@ export class AndroidDriver implements Driver {
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
+  readonly #warnCleanup: (message: string, detail: Record<string, unknown>) => void;
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
   readonly #processRunner: ProcessRunner;
@@ -552,6 +557,7 @@ export class AndroidDriver implements Driver {
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
+  readonly deviceTcp: AndroidDeviceTcp | undefined;
 
   private constructor(
     options: AndroidDriverOptions,
@@ -591,6 +597,16 @@ export class AndroidDriver implements Driver {
     const targetFor = this.#screenTargetFor(options, sdk.adb, adbServerPort);
     this.screenCapture = this.#screenCaptureFor(options, targetFor);
     this.input = this.#inputFor(options, targetFor);
+    this.deviceTcp =
+      options.tcpListener === undefined
+        ? undefined
+        : createAndroidDeviceTcp({
+            listeners: options.tcpListener,
+            isOwn: (device) => this.#deviceIsOwn(device),
+            runAdb: (device, args, timeoutMs) => this.#runAdbOn(device, args, timeoutMs),
+            warn: (message, detail) => options.logger?.warn(message, detail),
+          });
+    this.#warnCleanup = (message, detail) => options.logger?.warn(message, detail);
     // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -821,6 +837,22 @@ export class AndroidDriver implements Driver {
       command: this.#sdk.adb,
       env: { ANDROID_ADB_SERVER_PORT: String(this.#adbServerPort) },
     });
+  }
+
+  // why: one adb call on a device through the server that owns it: a phone's behind the version check, an emulator's on Simlock's own server.
+  async #runAdbOn(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    args: readonly string[],
+    timeoutMs: number,
+  ): Promise<ProcessResult> {
+    if (isPhysicalDriverDevice(device)) return await this.#physical.runAdb(device, args, timeoutMs);
+    const { serial } = this.#dataFor(device);
+    if (serial === "") throw new Error("the emulator is not running");
+    return await this.#processRunner.run(
+      this.#sdk.adb,
+      ["-P", String(this.#adbServerPort), "-s", serial, ...args],
+      { env: this.#env(), timeoutMs },
+    );
   }
 
   #assertProxyable(args: readonly string[], context?: PassthroughContext): void {
@@ -1121,7 +1153,19 @@ export class AndroidDriver implements Driver {
       : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
+  // why: the loopback ports held for a device's tunnels are freed after its reclaim: on an emulator the reclaim removed the rules, on a phone it removes none and only the ports no rule points to are freed.
   async reclaim(
+    device: DriverDevice,
+    options: { readonly clean: "standard" | "full" },
+  ): Promise<ReclaimResult> {
+    const result = await this.#reclaimDevice(device, options);
+    await this.deviceTcp?.release(
+      isPhysicalDriverDevice(device) ? device : { ...device, physical: false as const },
+    );
+    return result;
+  }
+
+  async #reclaimDevice(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
@@ -1160,6 +1204,7 @@ export class AndroidDriver implements Driver {
         state.baselineCaptured = false;
         return { state: "shutdown", strategy: "wipe" };
       }
+      await this.#removeRules({ ...device, physical: false as const }, data.serial);
       const restored = await this.#loadCleanBaseline(data);
       if (
         restored === undefined ||
@@ -1176,6 +1221,21 @@ export class AndroidDriver implements Driver {
       await this.#writeMark(data);
       return { state: "ready", strategy: "snapshot" };
     });
+  }
+
+  // why: reclaim of an emulator proved its own leaves no rule of the lease; it never throws, so a failed removal does not fail the reclaim.
+  async #removeRules(device: VirtualDriverDevice, serial: string): Promise<void> {
+    await removeDeviceRules(
+      (target, args, timeoutMs) => this.#runAdbOn(target, args, timeoutMs),
+      this.#warnCleanup,
+      device,
+      serial,
+    );
+  }
+
+  async #deviceIsOwn(device: VirtualDriverDevice): Promise<boolean> {
+    const data = this.#dataFor(device);
+    return data.serial !== "" && (await this.#serialIsOwn(data));
   }
 
   reclaimStrategy(

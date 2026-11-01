@@ -175,6 +175,22 @@ Send the same calls to the gateway, with a token created on the gateway. The gat
 - A request no worker can serve fails at once, with or without `noWait`.
 - When the worker that holds your lease is not connected, calls for it answer `503 WORKER_UNREACHABLE`. The lease is still yours until it expires; retry.
 
+## Tunnels
+
+A holder with its own WebSocket client can reach its leased Android device's ports from the worker's side. Open `GET /v1/leases/<lease-id>/tunnel` as a WebSocket with your token, on a worker that has `capabilities.tunnel.enabled: true` (it is off by default; a gateway does not relay it yet). The lease's holder and an operator may open it; anyone else gets `404`, as for an unknown lease, and a plain `GET` gets `426`.
+
+Each message is one binary frame: a tag byte, a 4-byte big-endian connection number and a payload. The first frame is `HELLO` (tag `0x01`, connection 0) with JSON of at most 4 KiB: `{"tunnels":[{"kind":"reverse","devicePort":5173}]}`. Name 1 to 8 tunnels per lease, across all its sockets, with device ports from 1024 to 65535. Only `reverse` works today.
+
+- The worker answers `READY` (`0x81`) with the same list. Each connection the device then makes to `localhost:<devicePort>` arrives as `OPEN` (`0x02`, JSON `{kind, devicePort}`, odd connection numbers), and its bytes flow as `DATA` (`0x03`, up to 65536 bytes) both ways.
+- Each direction of a connection starts with a 262144-byte window. The reader grants more with `CREDIT` (`0x04`, a 4-byte count); a reader that grants none pauses that connection and no other.
+- `END` (`0x05`) closes one direction and leaves the other open. `RESET` (`0x06`) from you closes the connection. A worker closes a device connection at once when 256 are already open on the socket.
+- A `HELLO` the worker cannot meet gets `REFUSED` (`0x82`, JSON `{code, message}`) and the socket closes with 4003; nothing it named stays set up. The codes are in the [errors reference](/docs/reference/errors/#tunnels). A frame that breaks the protocol is refused `BAD_REQUEST` the same way.
+- The socket closes `4001` with the lease-end reason when the lease ends, and `1001` when the daemon stops. Closing the socket removes the device's `adb reverse` rule before the lease can end.
+
+The worker sets each tunnel up with `adb reverse --no-rebind`, so a port you already reversed with `adb reverse` through `exec` is refused `TUNNEL_PORT_IN_USE`. A rule you set through `exec` after the tunnel, without `--no-rebind`, replaces it and the tunnel's connections stop. iOS leases are refused `TUNNEL_UNSUPPORTED`.
+
+While a tunnel is open, its port on the worker is reachable by others on that machine: any process on the worker, an emulator of another lease at `10.0.2.2`, and any other lease's device that has an `adb reverse` rule to it set through `exec`. Treat what a tunnel carries as open to them. On a phone, Simlock removes only the rules its own tunnels set, when their socket closes; it never clears the phone's other `adb reverse` or `adb forward` rules. A tunnel rule left by a worker crash stays on the phone until it reboots or you remove it with `adb reverse --remove`, and the worker keeps that rule's port out of use for new tunnels.
+
 ## When something goes wrong
 
 Errors come back as JSON with an HTTP status:

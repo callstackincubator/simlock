@@ -89,6 +89,15 @@ export interface ErrorDetailsMap {
   COMPONENT_IN_USE: { readonly devices: number; readonly foreignDevices: number };
   COMPONENT_BUSY: Record<string, never>;
   UNKNOWN_LEASE: { readonly leaseId: string };
+  TUNNEL_UNSUPPORTED: Record<string, never>;
+  TUNNEL_PORT_IN_USE: Record<string, never>;
+  TUNNEL_BAD_PORT: Record<string, never>;
+  TUNNEL_LIMIT: Record<string, never>;
+  TUNNEL_FAILED: Record<string, never>;
+  TUNNEL_UNAVAILABLE: Record<string, never>;
+  TUNNEL_DISCONNECTED: Record<string, never>;
+  TUNNEL_CALLER_PORT_IN_USE: Record<string, never>;
+  TUNNEL_LEASE_ENDED: Record<string, never>;
   DEVICE_NOT_ENROLLABLE: {
     readonly platform: Platform;
     readonly id: string;
@@ -325,6 +334,46 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   UNKNOWN_LEASE: { code: "UNKNOWN_LEASE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // why: a lease's tunnel socket refuses with these (ADR 0054 section 7), so every surface reports them alike.
+  TUNNEL_UNSUPPORTED: {
+    code: "TUNNEL_UNSUPPORTED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 422,
+  },
+  TUNNEL_PORT_IN_USE: {
+    code: "TUNNEL_PORT_IN_USE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 409,
+  },
+  TUNNEL_BAD_PORT: { code: "TUNNEL_BAD_PORT", kind: "domain", cliExitCode: 1, httpStatus: 422 },
+  TUNNEL_LIMIT: { code: "TUNNEL_LIMIT", kind: "domain", cliExitCode: 1, httpStatus: 409 },
+  TUNNEL_FAILED: { code: "TUNNEL_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 502 },
+  TUNNEL_UNAVAILABLE: {
+    code: "TUNNEL_UNAVAILABLE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  TUNNEL_DISCONNECTED: {
+    code: "TUNNEL_DISCONNECTED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  TUNNEL_CALLER_PORT_IN_USE: {
+    code: "TUNNEL_CALLER_PORT_IN_USE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 409,
+  },
+  TUNNEL_LEASE_ENDED: {
+    code: "TUNNEL_LEASE_ENDED",
+    kind: "domain",
+    cliExitCode: 14,
+    httpStatus: 410,
+  },
   // A device that cannot be enrolled is a fact about the device, as `RUNTIME_MISSING` is about
   // the host: 422 and 12. A busy device passes once what holds it ends, as `NO_CAPACITY` does:
   // 409 and 11. An unknown device is the "what you named does not exist" class: 404 and 12.

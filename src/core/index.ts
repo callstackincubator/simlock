@@ -109,6 +109,13 @@ export {
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
 export {
+  DeviceTcpError,
+  unsupportedTunnelMessage,
+  type DeviceReverse,
+  type DeviceTcp,
+  type SweptDevice,
+} from "./device-tcp.js";
+export {
   closeReason,
   type DeviceInput,
   type DeviceInputFactory,
