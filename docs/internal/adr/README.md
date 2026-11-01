@@ -43,7 +43,7 @@ the status is stale.
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
-| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039 |
+| [0005](0005-gateway-and-worker-modes.md) | Gateway and worker modes | Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by 0039; §19c's piped stdin narrowed by 0058 |
 | [0006](0006-events-and-log-are-two-records.md) | Events and the daemon log are two records | Accepted; §2 narrowed by 0032 (the event record is a database) |
 | [0007](0007-a-lease-request-chooses-the-device-mode.md) | A lease request chooses the device mode | Accepted |
 | [0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) | The catalog pairs models with runtimes, and status carries host facts | Accepted; §3 narrowed by 0025 on Android |
@@ -92,3 +92,4 @@ the status is stale.
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
 | [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
 | [0053](0053-the-daemon-owns-each-leases-device-input.md) | The daemon owns each lease's device input, and `device.rotate` uses it | Accepted; narrows 0049 §4 and 0052 §1 |
+| [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Proposed; narrows 0005 §19c |
