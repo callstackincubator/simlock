@@ -375,8 +375,7 @@ describe.skipIf(!hasAndroidSdk)(
     }
 
     async function resumedActivity(): Promise<string> {
-      const dump = await onGateway().cli([
-        "adb",
+      const dump = await leaseAdb(onGateway(), { agentId: "input-tunnel", leaseId: lease.id }, [
         "shell",
         "dumpsys activity activities | grep -E 'ResumedActivity'",
       ]);
@@ -409,6 +408,7 @@ describe.skipIf(!hasAndroidSdk)(
         },
         driver: "real",
       });
+      await waitForWorkerJoined(gateway);
       const granted = await gateway.cli(
         [
           "lease",
@@ -427,17 +427,17 @@ describe.skipIf(!hasAndroidSdk)(
       const created = await gateway.cli(["token", "create", "--role", "operator"]);
       expect(created.code, created.stderr).toBe(0);
       lease.secret = (created.json as { secret: string }).secret;
-      const devices = await workerAdb(workerAdbPort(), ["devices"]);
-      const serials = devices.stdout
-        .split("\n")
-        .filter((line) => line.endsWith("\tdevice"))
-        .map((line) => line.split("\t")[0] ?? "");
-      expect(serials, devices.stdout).toHaveLength(1);
-      lease.serial = serials[0] ?? "";
+      // why: the worker's adb server can list more emulators than the leased one (a warm spare), so the serial comes from the lease's own passthrough, which aims adb at it.
+      const serial = await leaseAdb(gateway, { agentId: "input-tunnel", leaseId: lease.id }, [
+        "get-serialno",
+      ]);
+      expect(serial.code, serial.stderr).toBe(0);
+      lease.serial = serial.stdout.trim();
+      expect(lease.serial, serial.stdout).toMatch(/^emulator-\d+$/);
     }, DEVICE_READY_MS + 120_000);
 
     afterAll(async () => {
-      await gateway
+      await worker
         ?.cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
         .catch(() => undefined);
       await Promise.allSettled([worker?.teardown(), gateway?.teardown()]);
@@ -447,8 +447,7 @@ describe.skipIf(!hasAndroidSdk)(
       "a home button sent on the input socket through a gateway takes a real emulator from Settings to its home screen",
       { timeout: 180_000 },
       async () => {
-        const home = await onGateway().cli([
-          "adb",
+        const home = await leaseAdb(onGateway(), { agentId: "input-tunnel", leaseId: lease.id }, [
           "shell",
           "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -n 1",
         ]);
@@ -456,8 +455,7 @@ describe.skipIf(!hasAndroidSdk)(
         expect(launcher, home.stdout).toMatch(/^[a-z][\w.]+$/);
         expect(launcher).not.toBe("com.android.settings");
 
-        const opened = await onGateway().cli([
-          "adb",
+        const opened = await leaseAdb(onGateway(), { agentId: "input-tunnel", leaseId: lease.id }, [
           "shell",
           "am start -W -a android.settings.SETTINGS",
         ]);
@@ -510,7 +508,10 @@ describe.skipIf(!hasAndroidSdk)(
         const socket = await openInputSocket(gatewayPort.value, lease.id, lease.secret);
         try {
           const env = onGateway();
-          const chrome = await env.cli(["adb", "shell", `pm path ${CHROME}`]);
+          const chrome = await leaseAdb(env, { agentId: "input-tunnel", leaseId: lease.id }, [
+            "shell",
+            `pm path ${CHROME}`,
+          ]);
           expect(chrome.stdout, "the emulator's image has no Chrome to open the page in").toContain(
             "package:",
           );
@@ -521,7 +522,7 @@ describe.skipIf(!hasAndroidSdk)(
             `pm grant ${CHROME} android.permission.POST_NOTIFICATIONS`,
             `am force-stop ${CHROME}`,
           ]) {
-            await env.cli(["adb", "shell", step]);
+            await leaseAdb(env, { agentId: "input-tunnel", leaseId: lease.id }, ["shell", step]);
           }
 
           const tunnel = env.cliBackground([
@@ -539,8 +540,7 @@ describe.skipIf(!hasAndroidSdk)(
             `reverse device:${String(pagePort)} -> localhost:${String(pagePort)} (lease ${lease.id})`,
           );
 
-          const view = await env.cli([
-            "adb",
+          const view = await leaseAdb(env, { agentId: "input-tunnel", leaseId: lease.id }, [
             "shell",
             `am start -a android.intent.action.VIEW -d http://localhost:${String(pagePort)}/ -p ${CHROME}`,
           ]);
