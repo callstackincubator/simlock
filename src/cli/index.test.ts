@@ -7823,12 +7823,12 @@ describe("readPipedStdin", () => {
     return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
   }
 
-  it("returns undefined without reading anything when stdin is a terminal", async () => {
-    const stdin = fakeStdin(["should never be read"], true);
+  it("reads a terminal stdin to its end, joining its chunks", async () => {
+    const stdin = fakeStdin(["typed ", "text\n"], true);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
     try {
-      await expect(readPipedStdin()).resolves.toBeUndefined();
+      await expect(readPipedStdin()).resolves.toBe("typed text\n");
     } finally {
       stdinGetter.mockRestore();
     }
