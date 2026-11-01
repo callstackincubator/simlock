@@ -19,6 +19,8 @@ export class WebSocketRefusedError extends Error {
 export interface WebSocketClient {
   send(bytes: Uint8Array): void;
   close(code: number, reason: string): void;
+  // why: `close` waits for the server's close frame, and `ws` keeps a timer and the TCP socket alive for 30 s when none comes; a caller that gave up waiting tears the socket down so nothing holds the process open.
+  terminate(): void;
   onMessage(listener: (bytes: Uint8Array) => void): void;
   // why: a server's ping is the only sign of life on an idle socket, and `ws` answers it without telling the caller.
   onPing(listener: () => void): void;
@@ -63,6 +65,10 @@ class NodeWebSocketClient implements WebSocketClient {
 
   close(code: number, reason: string): void {
     this.#socket.close(code, reason);
+  }
+
+  terminate(): void {
+    this.#socket.terminate();
   }
 
   onMessage(listener: (bytes: Uint8Array) => void): void {
@@ -116,6 +122,7 @@ export class NodeWebSocketClientConnector implements WebSocketClientConnector {
 class FakeWebSocketPeer implements WebSocketClient {
   readonly sent: Uint8Array[] = [];
   closedWith: { readonly code: number; readonly reason: string } | undefined;
+  terminated = false;
   // why: a real socket answers `close` with its own close event; a test sets this to play a server that never answers.
   silentOnClose = false;
   readonly #messages: ((bytes: Uint8Array) => void)[] = [];
@@ -130,6 +137,10 @@ class FakeWebSocketPeer implements WebSocketClient {
     this.closedWith = { code, reason };
     if (this.silentOnClose) return;
     for (const listener of this.#closes) listener(code, reason);
+  }
+
+  terminate(): void {
+    this.terminated = true;
   }
 
   onMessage(listener: (bytes: Uint8Array) => void): void {

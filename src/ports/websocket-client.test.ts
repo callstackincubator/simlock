@@ -84,6 +84,20 @@ describe("NodeWebSocketClientConnector", () => {
       connector.connect(await listen(silent), { ...options, handshakeTimeoutMs: 100 }),
     ).rejects.toThrow();
     for (const socket of held) socket.destroy();
+    const stallingHttp = createServer();
+    const stalled = new WebSocketServer({ server: stallingHttp });
+    stalled.on("connection", (_socket, request) => {
+      request.socket.pause();
+      held.push(request.socket);
+    });
+    const stuck = await connector.connect(await listen(stallingHttp), options);
+    const stuckCloses: number[] = [];
+    stuck.onClose((code) => stuckCloses.push(code));
+    stuck.close(1000, "");
+    stuck.terminate();
+    await vi.waitFor(() => expect(stuckCloses).toEqual([1006]));
+    for (const socket of held) socket.destroy();
+
     const late: [number, string][] = [];
     client.onClose((code, reason) => late.push([code, reason]));
     expect(late).toEqual([[4001, "got 2"]]);

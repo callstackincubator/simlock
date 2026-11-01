@@ -686,7 +686,10 @@ async function lossesOfTheSocket(): Promise<void> {
     },
     ...[1011, 1001, 1006].map((code) => ({
       drop: [code, ""] as [number, string],
-      error: errorBody("TUNNEL_DISCONNECTED", "Lease L1: the connection to the worker was lost"),
+      error: errorBody(
+        "TUNNEL_DISCONNECTED",
+        `Lease L1: the connection to ${ENV.SIMLOCK_URL} was lost`,
+      ),
       exit: 1,
     })),
   ];
@@ -771,6 +774,7 @@ async function ctrlC(): Promise<void> {
   expect(settled).toBe(true);
   expect(await idle.exit).toBe(0);
   expect(idleLocal.closed).toBe(true);
+  expect(idle.peer.terminated).toBe(true);
   expect(idle.cli.clock.pendingTimerCount).toBe(0);
 }
 
