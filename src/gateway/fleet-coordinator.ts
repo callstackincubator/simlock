@@ -591,7 +591,6 @@ export class FleetLeaseCoordinator {
   /**
    * why: `device.rotate` forwarded to the worker that owns the lease, with the lease's own namespaced requester, bounded by `gateway.execTimeoutMs` like `exec`. A worker names the lease by its own id in any coded error; the caller holds the gateway's id, so the error names that instead.
    */
-  // fallow-ignore-next-line unused-class-member -- reached only through `GatewayDispatcher`'s `Pick<FleetLeaseCoordinator, ...>`-typed `coordinator` option.
   async rotate(input: FleetRotateInput, _session: DispatchSession): Promise<RotateOutput> {
     const entry = this.#requireEntry(input.leaseId);
     const requesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;

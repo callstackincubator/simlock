@@ -15,6 +15,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock release`](#simlock-release) | Give a lease back | [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle) |
 | [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
+| [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
@@ -396,7 +397,7 @@ simlock daemon uninstall [--json]
 | Subcommand | What it does |
 | --- | --- |
 | `start` | Start the daemon if it is not running, wait until it has finished starting (up to 90 seconds), and print `Daemon running` with the console address. A start that fails (for example, the HTTP port is taken) exits 1 with `DAEMON_STARTUP_FAILED` and the daemon's own error; a daemon still starting after the wait is left running and reported as such. `simlock --gateway daemon start` creates the gateway on first run. |
-| `stop` | Ask the daemon to stop and print `Daemon stopping`. Needs the admin role. Never starts a daemon. |
+| `stop` | Ask the daemon to stop and print `Daemon stopping`. Before it exits the daemon shuts down every idle device it booted; leased devices keep running. Needs the admin role. Never starts a daemon. |
 | `status` | Print the daemon's status, or `Daemon stopped` when none is running, then on macOS and Linux one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |
 | `install` | macOS and Linux only. Stop a running daemon (leases are kept), add a LaunchAgent (macOS) or a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)` or `(systemd)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS and Linux only`. |
@@ -412,20 +413,22 @@ simlock daemon uninstall [--json]
 Read or change the daemon's configuration. See [Configuration](/simlock/docs/worker/configuration) and the [configuration reference](/simlock/docs/reference/configuration) for every key.
 
 ```text
-simlock config
-simlock config get <key>
+simlock config [--show-secrets]
+simlock config get <key> [--show-secrets]
 simlock config set <key> <value>
 ```
 
 | Subcommand | What it does |
 | --- | --- |
-| (none) | Print the daemon's whole effective configuration as one JSON line. Needs the admin role. |
-| `get <key>` | Print one value. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
+| (none) | Print the daemon's whole effective configuration as one JSON line. `gateway.token` and every alert destination's `url` and `secret` read `[redacted]`. Needs the admin role. |
+| `get <key>` | Print one value, with the same secrets redacted. `<key>` is a dotted path, such as `lease.defaultTtlMs`. An unknown key is a usage error. Needs the admin role. |
 | `set <key> <value>` | Write one value to `config.json` in the daemon's data folder. `<value>` is read as JSON when it parses (`900000`, `true`, `["ios"]`), else as a string. Does not contact the daemon. |
 
 `config set` checks the whole file after the change and refuses an invalid value or an unknown key with a usage error (exit 2), leaving the file as it was. The file is written with owner-only permissions. A change takes effect the next time the daemon starts; the command prints `Updated <key> in <path>; takes effect on daemon restart.`
 
-None of the subcommands take flags.
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--show-secrets` | `config` and `config get` only: print `gateway.token` and the alert destinations' `url` and `secret` as written instead of `[redacted]`. | Off |
 
 ## simlock doctor
 

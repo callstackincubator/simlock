@@ -355,6 +355,7 @@ async function keepOrRelease(
       deadline: grant.lease.ttlDeadline,
       identity,
       model: grant.device.spec.model,
+      physical: grant.device.spec.physical === true,
       platform: plan.platform,
       ttlMs: grant.lease.ttlMs,
       ...replyFacts(reading.result),

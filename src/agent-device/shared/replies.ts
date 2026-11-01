@@ -56,6 +56,10 @@ export function failure(message: string, status = 502): FrontReply {
   return { code: "COMMAND_FAILED", message, status };
 }
 
+export function successReply(data: unknown, rpc: { readonly id: unknown }): Response {
+  return Response.json({ id: rpc.id, jsonrpc: "2.0", result: { data, ok: true } });
+}
+
 export function frontReply(reply: FrontReply, rpc: { readonly id: unknown } | undefined): Response {
   if (rpc === undefined) {
     return Response.json(

@@ -10,26 +10,34 @@ import {
 import { errorMessage } from "../errors.js";
 import type { CommandContext } from "../tree.js";
 
+const SECRET_FLAG = { "show-secrets": { type: "boolean" } } as const;
+
 // fallow-ignore-next-line complexity -- config subcommand parsing is a single CLI boundary.
 async function run(argv: readonly string[], context: CommandContext): Promise<number> {
   const { environment, token } = context;
   const { command, flagArgs } = subcommand(argv, context.path);
-  if (command === undefined) {
+  if (command === undefined || command === "--show-secrets") {
+    const values = commandArgs(argv, SECRET_FLAG);
+    const [word] = values.positionals;
+    if (word !== undefined) throw new UsageError(`Unknown config command: ${word}`);
     const client = await connectDaemonClient(environment, token);
     try {
-      writeResult((value) => environment.stdout.write(value), await client.getConfig());
+      writeResult(
+        (value) => environment.stdout.write(value),
+        await client.getConfig({ showSecrets: values["show-secrets"] === true }),
+      );
       return 0;
     } finally {
       await client.close();
     }
   }
   if (command === "get") {
-    const values = commandArgs(flagArgs, {});
+    const values = commandArgs(flagArgs, SECRET_FLAG);
     const key = requiredPositional(values.positionals, "key");
     const client = await connectDaemonClient(environment, token);
     let config: Record<string, unknown>;
     try {
-      config = await client.getConfig();
+      config = await client.getConfig({ showSecrets: values["show-secrets"] === true });
     } finally {
       await client.close();
     }
@@ -63,7 +71,9 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (isHelp(command)) {
-    environment.stdout.write("Usage: simlock config [get <key>|set <key> <value>]\n");
+    environment.stdout.write(
+      "Usage: simlock config [--show-secrets] | config get <key> [--show-secrets] | config set <key> <value>\n",
+    );
     return 0;
   }
   throw new UsageError(`Unknown config command: ${String(command)}`);

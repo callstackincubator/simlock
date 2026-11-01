@@ -22,6 +22,7 @@ On unless `capabilities.agent-device.enabled` is set false, on a standalone work
 | `front/front.ts`                                              | The mount: role check, routes, `/rpc` dispatch by call class                                                                                                                           |
 | `front/request-rules.ts`                                      | Refusals and rewrites before anything is forwarded                                                                                                                                     |
 | `front/allocate.ts`, `front/heartbeat.ts`, `front/release.ts` | Lease calls ↔ simlock `lease.*`                                                                                                                                                        |
+| `front/orientation.ts`                                        | `orientation` on an iOS phone or tablet simulator lease: `device.rotate`, answered unconfirmed; anything else forwarded                                                                |
 | `front/renewals.ts`                                           | Renews the simlock lease while a command runs                                                                                                                                          |
 | `front/front-map.ts`                                          | In-memory leases this front made, and who ended each                                                                                                                                   |
 | `front/devices-filter.ts`, `front/token-devices.ts`           | `devices` cut to the token's leases                                                                                                                                                    |
@@ -76,12 +77,11 @@ Front (`createFront`, prefix `agent-device`):
 6. Heartbeat → forwarded with `ttlMs` raised to the ceiling; on success `renewLease`
    (`lease.renew` only if it moves the deadline; a gateway list that trails the grant and omits the lease still relays agent-device's reply). agent-device says gone → `lease.release`, reply "ended by simlock".
 7. Release → forwarded; on success `lease.release`; map marks it ended by `agent`.
-8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends,
-   capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, a streamed `type: "response"` line, or a
+8. Command on a lease → `Renewals.begin`: renew every TTL/3 until the body ends, capped at `lease.maxTtlMs`. A reply naming `endedLeases` (in `data`, `error.details`, a streamed `type: "response"` line, or a
    batch's `data`) → `front/ended.ts` ends each simlock lease this token holds, as a release does.
+   `orientation` (not a batch step) on an `ios`, not physical lease (an adopted one: physical unknown) whose model is an iPhone or iPad → `device.rotate`, answered with agent-device's unconfirmed reply, `INVALID_ARGS` for an unknown name (an adopted lease forwards it); `ROTATION_UNSUPPORTED`, `UNKNOWN_LEASE` and `FORBIDDEN` forward the command; `WORKER_UNREACHABLE` answers the try-again reply; any other error `COMMAND_FAILED`. Every other lease is forwarded before the name is read.
 
-Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request, and `authenticate` sets tenant = requester id, overwriting the client's. Rewrites `/v1/agent-device` → `/agent-device`. Download: `Content-Length` > 2 GiB → 413 before
-any byte; no length → counted, errors past 2 GiB.
+Host (`AgentDeviceHost.forward`): one proxy per daemon generation. Tags the request, and `authenticate` sets tenant = requester id, overwriting the client's. Rewrites `/v1/agent-device` → `/agent-device`. Download: `Content-Length` > 2 GiB → 413 before any byte; no length → counted, errors past 2 GiB.
 
 Lease end: `ReleaseScopeRecord` reads each allocate reply's scope (tenant, run id, …)
 through the proxy's upstream fetch. `AgentDeviceLeaseEnd.leaseEnded` waits for a
@@ -130,8 +130,7 @@ under leasing's signal (`lease.endWaitMs`).
 | Renewal tick                                   | TTL / 3                         | lease TTL                                 |
 | Download cap; `/rpc` body                      | 2 GiB; 1 MiB                    | none                                      |
 
-Disk: `<data dir>/agent-device/` and `<data dir>/agent-device-phones/` (agent-device's own files) and the two pid records. Front map,
-renewals and release scopes: memory only.
+Disk: `<data dir>/agent-device/` and `<data dir>/agent-device-phones/` (agent-device's own files) and the two pid records. Front map, renewals and release scopes: memory only.
 
 Local profile: a standalone worker with HTTP and this module on keeps `<data dir>/agent-device-profile.json` (0600) so an agent on the same Mac connects with `agent-device connect --remote-config <file>` and no token of its own ([ADR 0046](../../docs/internal/adr/0046-a-standalone-worker-serves-agent-device-by-default-with-a-private-profile.md)). `definition.ts` declares the file as plain data; the module host writes it at each start, reuses the one `agent`-role token labelled `agent-device on this Mac` (so an agent's saved connection stays valid), revokes other tokens with that label, and deletes the file and revokes the token when HTTP or the module is off. No worker code runs for it.
 
