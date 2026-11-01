@@ -369,10 +369,7 @@ async function start(options: StartOptions = {}) {
   const filesystem = new MemoryFilesystem();
   await filesystem.mkdirp(home);
   await seedRecord(filesystem, options);
-  if (options.staleLog !== undefined) {
-    await filesystem.mkdirp(`${home}/logs`);
-    await filesystem.writeFileAtomic(logPath, options.staleLog, { mode: 0o644 });
-  }
+  await seedStaleLog(filesystem, options);
 
   const clock = new FakeClock();
   const probe =
@@ -383,16 +380,7 @@ async function start(options: StartOptions = {}) {
     supervisor.answerCommandLine(pid, ...lines);
   const spawned = observeSpawns({ configuredPort, options, probe, runner, supervisor });
 
-  if (options.failRecordWrite === true || options.failLogWrite === true) {
-    const writeFileAtomic = filesystem.writeFileAtomic.bind(filesystem);
-    vi.spyOn(filesystem, "writeFileAtomic").mockImplementation(
-      async (path, contents, writeOptions) => {
-        if (path === recordPath && options.failRecordWrite === true) throw new Error("ENOSPC");
-        if (path === logPath && options.failLogWrite === true) throw new Error("EACCES");
-        await writeFileAtomic(path, contents, writeOptions);
-      },
-    );
-  }
+  failWrites(filesystem, options);
 
   const adbServer = new AdbServerSupervisor({
     adbPath: adb,
@@ -412,6 +400,24 @@ async function start(options: StartOptions = {}) {
   started.catch(() => undefined);
 
   return { adbServer, clock, filesystem, ...spawned, probe, runner, started, supervisor };
+}
+
+async function seedStaleLog(filesystem: MemoryFilesystem, options: StartOptions): Promise<void> {
+  if (options.staleLog === undefined) return;
+  await filesystem.mkdirp(`${home}/logs`);
+  await filesystem.writeFileAtomic(logPath, options.staleLog, { mode: 0o644 });
+}
+
+function failWrites(filesystem: MemoryFilesystem, options: StartOptions): void {
+  if (options.failRecordWrite !== true && options.failLogWrite !== true) return;
+  const writeFileAtomic = filesystem.writeFileAtomic.bind(filesystem);
+  vi.spyOn(filesystem, "writeFileAtomic").mockImplementation(
+    async (path, contents, writeOptions) => {
+      if (path === recordPath && options.failRecordWrite === true) throw new Error("ENOSPC");
+      if (path === logPath && options.failLogWrite === true) throw new Error("EACCES");
+      await writeFileAtomic(path, contents, writeOptions);
+    },
+  );
 }
 
 async function seedRecord(filesystem: MemoryFilesystem, options: StartOptions): Promise<void> {
