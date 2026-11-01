@@ -4087,6 +4087,15 @@ describe("AndroidDriver.create", () => {
           tool: "adb",
         });
       }
+
+      // why: the refusal is of the subcommand only; `disconnect` as a later argument is data.
+      for (const args of [
+        ["shell", "echo", "disconnect"],
+        ["-s", "emulator-5554", "shell", "echo", "disconnect"],
+      ]) {
+        const passed = await passthroughOf(driver, args, context, device);
+        expect(passed.args.slice(-args.length), `${caller}: adb ${args.join(" ")}`).toEqual(args);
+      }
     }
   });
 
