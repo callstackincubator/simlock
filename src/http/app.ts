@@ -239,7 +239,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     });
   });
 
-  // why: Hono's `etag()` buffers the body to hash it, so it runs only under /v1 (a `*` step, so no `/v1/*` route is registered) on a JSON answer that is not a mount's (which also gets `Cache-Control: no-store` unless it has one, so a CDN never stores it); a stream or a mount's own body is never read.
+  // why: Hono's `etag()` buffers the body to hash it, so it runs only under /v1 (a `*` step, so no `/v1/*` route is registered) on a JSON answer that is not a mount's, which it also gives `Cache-Control: no-store` unless it has one, so a CDN never stores it (a mount keeps the Cache-Control it set); a stream or a mount's own body is never read.
   const mountPrefixes = (deps.mounts ?? []).map((mount) => `/v1/${mount.prefix}`);
   const etagStep = etag();
   app.use("*", async (c, next) => {

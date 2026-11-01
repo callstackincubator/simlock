@@ -3338,8 +3338,16 @@ describe("ETag on a JSON read under /v1", () => {
 });
 
 describe("Cache-Control on a JSON answer under /v1", () => {
-  it("a JSON read, its 304, a JSON error and /v1/healthz each carry Cache-Control: no-store, so a CDN never stores an answer", async () => {
-    const { app, dispatcher } = buildHarness();
+  it("a JSON read, its 304, a JSON error and /v1/healthz each carry Cache-Control: no-store, so a CDN never stores an answer, and a mount's answer keeps the Cache-Control it set", async () => {
+    const { app, dispatcher } = buildHarness({
+      mounts: [
+        { prefix: "json-mount", handle: () => Response.json({ ok: true }) },
+        {
+          prefix: "cached-mount",
+          handle: () => Response.json({ ok: true }, { headers: { "Cache-Control": "max-age=60" } }),
+        },
+      ] as never,
+    });
     dispatcher.handlers["token.list"] = () => ({ tokens: [{ id: "tok_1" }] });
     const read = (path: string, headers: Record<string, string> = {}) =>
       app.request(path, { headers: { ...operatorAuth, ...headers } });
@@ -3350,10 +3358,16 @@ describe("Cache-Control on a JSON answer under /v1", () => {
     });
     const missing = await read("/v1/leases/lse_none");
     const health = await app.request("/v1/healthz");
+    const plainMount = await read("/v1/json-mount");
+    const cachedMount = await read("/v1/cached-mount");
 
     expect([first.status, unchanged.status, missing.status, health.status]).toEqual([
       200, 304, 404, 200,
     ]);
+    expect({
+      plain: plainMount.headers.get("cache-control"),
+      cached: cachedMount.headers.get("cache-control"),
+    }).toEqual({ plain: null, cached: "max-age=60" });
     expect({
       read: first.headers.get("cache-control"),
       notModified: unchanged.headers.get("cache-control"),
