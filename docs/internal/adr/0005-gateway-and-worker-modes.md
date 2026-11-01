@@ -1,6 +1,6 @@
 # 0005. Gateway and worker modes
 
-- **Status:** Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by [0039](0039-joined-workers-refuse-their-own-http-listener.md)
+- **Status:** Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by [0039](0039-joined-workers-refuse-their-own-http-listener.md); §19c's piped stdin narrowed by [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md)
 - **Date:** 2026-09-05
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)
