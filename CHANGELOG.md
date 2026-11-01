@@ -414,6 +414,31 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.5.0](https://github.com/callstackincubator/simlock/compare/v0.4.2...v0.5.0) (2026-11-01)
+
+### What's Changed
+
+- chore(release): format the 0.4.2 changelog entry so Format passes by @V3RON in https://github.com/callstackincubator/simlock/pull/1163
+- fix(release): collapse blank-line runs in the changelog notes by @V3RON in https://github.com/callstackincubator/simlock/pull/1165
+- feat(daemon): device.rotate rotates a leased iOS simulator by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1122
+- feat(cli): simlock rotate and MCP rotate_device by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1123
+- feat(agent-device): the front answers orientation on an iOS simulator through device.rotate by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1124
+- docs(adr): 0053 the daemon owns each lease's device input, and device.rotate uses it by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1106
+- fix(http): SSE streams write an opening comment at once by @V3RON in https://github.com/callstackincubator/simlock/pull/1170
+- fix(android): write the adb server's output to logs/adb-server.log by @V3RON in https://github.com/callstackincubator/simlock/pull/1171
+- fix(http): /v1 JSON answers carry Cache-Control: no-store by @V3RON in https://github.com/callstackincubator/simlock/pull/1173
+- docs(adr): 0058 through a gateway, simlock adb and simctl send stdin only with --stdin by @V3RON in https://github.com/callstackincubator/simlock/pull/1175
+- feat(cli)!: through a gateway, simlock adb and simctl send stdin only with --stdin by @V3RON in https://github.com/callstackincubator/simlock/pull/1178
+- fix(android): refuse simlock adb disconnect by @V3RON in https://github.com/callstackincubator/simlock/pull/1180
+- feat(tunnel): reverse a leased Android device's port over a lease WebSocket on a worker by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1121
+- feat(tunnel): the gateway relays the tunnel socket to the lease's worker by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1125
+- feat(tunnel): simlock tunnel reverses a leased device's port to the caller (#1114) by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1126
+- feat(tunnel): simlock tunnel forward reaches a leased device's port from the caller's machine by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1127
+- docs(adr): 0054 a lease holder tunnels device ports to its own machine by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1111
+- fix(android): start the emulator with -crash-report-mode never by @V3RON in https://github.com/callstackincubator/simlock/pull/1186
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.2...v0.5.0
+
 ## [0.4.2](https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2) (2026-10-31)
 
 ### What's Changed
