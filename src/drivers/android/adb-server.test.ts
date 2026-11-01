@@ -263,6 +263,19 @@ describe("AdbServerSupervisor.start", () => {
     expect(harness.kills).toEqual(["SIGKILL"]);
   });
 
+  it("refuses the platform, spawning nothing, when the adb server's log cannot be prepared", async () => {
+    const harness = await start({ expectations: [], failLogWrite: true });
+
+    // why: typed, not a raw disk error: an untyped throw escapes the platform-scoped catch in
+    // discovery and takes the daemon -- iOS included -- down with Android.
+    await expect(harness.started).rejects.toMatchObject({
+      name: "AdbServerUnavailableError",
+      reason: "start-failed",
+      message: expect.stringContaining(logPath),
+    });
+    expect(harness.runner.calls).toEqual([]);
+  });
+
   it("refuses when the port is served by something other than the child it spawned", async () => {
     // Two daemons cold-start on one port, both probe it free, both spawn. This is the loser:
     // its adb printed "cannot bind" and exited, and a bare loopback probe cannot tell the
@@ -334,6 +347,7 @@ interface StartOptions {
   readonly staleLog?: string;
   readonly commandLines?: readonly (readonly [number, readonly (string | undefined)[]])[];
   readonly expectations?: readonly ScriptedProcessExpectation[];
+  readonly failLogWrite?: boolean;
   readonly failRecordWrite?: boolean;
   readonly listening?: boolean;
   readonly livePids?: readonly number[];
@@ -369,11 +383,12 @@ async function start(options: StartOptions = {}) {
     supervisor.answerCommandLine(pid, ...lines);
   const spawned = observeSpawns({ configuredPort, options, probe, runner, supervisor });
 
-  if (options.failRecordWrite === true) {
+  if (options.failRecordWrite === true || options.failLogWrite === true) {
     const writeFileAtomic = filesystem.writeFileAtomic.bind(filesystem);
     vi.spyOn(filesystem, "writeFileAtomic").mockImplementation(
       async (path, contents, writeOptions) => {
-        if (path === recordPath) throw new Error("ENOSPC");
+        if (path === recordPath && options.failRecordWrite === true) throw new Error("ENOSPC");
+        if (path === logPath && options.failLogWrite === true) throw new Error("EACCES");
         await writeFileAtomic(path, contents, writeOptions);
       },
     );
