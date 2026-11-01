@@ -552,6 +552,44 @@ describe("AndroidDriver", () => {
     );
   });
 
+  it("starts the cold boot and the restart from the baseline with -crash-report-mode never, so a stale crash dump asks no one", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const launches: (readonly string[])[] = [];
+    const hostRunner = host.runner();
+    const runner: ProcessRunner = {
+      ...hostRunner,
+      spawn: (command, args) => {
+        launches.push(args);
+        return hostRunner.spawn(command, args);
+      },
+    };
+    const driver = await createDriver(filesystem, runner, {
+      ids: ["one"],
+      tcpProbe: new FakeTcpProbe([adbServerPort]),
+    });
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    await driver.resolveSpec(spec);
+
+    await driver.makeReady(await driver.provision(spec));
+
+    const crashReportMode = (args: readonly string[]) => {
+      const flag = args.indexOf("-crash-report-mode");
+      return flag === -1 ? undefined : args[flag + 1];
+    };
+    expect(
+      launches.map((args) => ({ boot: args.at(-1), crashReportMode: crashReportMode(args) })),
+    ).toEqual([
+      { boot: "-no-snapshot-load", crashReportMode: "never" },
+      { boot: "simlock_clean_baseline", crashReportMode: "never" },
+    ]);
+  });
+
   /**
    * why: The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
    * release the event loop -- the ChildProcess handle does -- so without the `unref` a
