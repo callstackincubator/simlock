@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -124,11 +125,25 @@ describe.skipIf(!hasAndroidSdk)(
           throw new Error("the real-SDK lane must allocate its own adb server port");
         }
         const completedDir = await sharedCrashCompletedDir();
-        const planted = join(completedDir, `simlock-1183-${process.pid}-${Date.now()}.dmp`);
+        // why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted.
+        const dumpId = randomUUID();
+        const planted = join(completedDir, `${dumpId}.dmp`);
         const createdRoot = firstMissingAncestor(completedDir);
         try {
           await mkdir(completedDir, { recursive: true });
           await writeFile(planted, "simlock slow-lane crash dump marker");
+          await execFileAsync("xattr", [
+            "-w",
+            "org.chromium.crashpad.database.uuid",
+            dumpId,
+            planted,
+          ]);
+          await execFileAsync("xattr", [
+            "-w",
+            "org.chromium.crashpad.database.creation_time",
+            String(Math.floor(Date.now() / 1000)),
+            planted,
+          ]);
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
           checkCatalog(catalog.json as AndroidCatalogOutput);
