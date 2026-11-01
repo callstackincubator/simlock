@@ -127,9 +127,3 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 - Renewal stops before the release; no timer outlives a command.
 - `CliEnvironment` carries every port and process handle; tests build it with fakes.
 - Nothing printed names a file path in this repo (documentation rules).
-
-## Known gaps
-
-- **`simlock simctl` / `adb` can hang on a piped stdin.** Through a gateway,
-  `readPipedStdin` reads stdin to EOF before sending, with no bound. A pipe nobody closes
-  blocks before the command goes out. Redirect stdin from `/dev/null`.
