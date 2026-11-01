@@ -25,7 +25,7 @@ const hasAndroidSdk =
 
 const BODY = "simlock-tunnel-ok";
 
-// why: through a gateway an adb call names its lease and runs as the agent that holds it (the gateway refuses `device.exec` for any other requester), and closes its stdin, which the gateway reads to the end and forwards to the device.
+// why: through a gateway an adb call names its lease and runs as the agent that holds it (the gateway refuses `device.exec` for any other requester),.
 function leaseAdb(
   env: SharedTestEnv,
   holder: { readonly agentId: string; readonly leaseId: string },
@@ -33,7 +33,6 @@ function leaseAdb(
 ): ReturnType<SharedTestEnv["cli"]> {
   return env.cli(["adb", "--lease", holder.leaseId, ...args], {
     env: { SIMLOCK_AGENT_ID: holder.agentId },
-    input: "",
   });
 }
 
@@ -269,7 +268,7 @@ describe.skipIf(!hasAndroidSdk)(
               "shell",
               `(printf 'device-ok'; sleep 30) | nc -l -p ${String(forwardPort)} > ${FORWARD_IN}`,
             ],
-            { env: { SIMLOCK_AGENT_ID: "tunnel" }, input: "" },
+            { env: { SIMLOCK_AGENT_ID: "tunnel" } },
           );
           const received = await new Promise<string>((resolve, reject) => {
             const giveUp = Date.now() + 30_000;
