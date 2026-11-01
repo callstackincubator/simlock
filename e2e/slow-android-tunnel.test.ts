@@ -271,7 +271,7 @@ describe.skipIf(!hasAndroidSdk)(
             { env: { SIMLOCK_AGENT_ID: "tunnel" } },
           );
           const received = await new Promise<string>((resolve, reject) => {
-            const giveUp = Date.now() + 30_000;
+            const giveUp = Date.now() + 5_000;
             const attempt = (): void => {
               const socket = connect({ host: "127.0.0.1", port: forwardPort });
               let heard = "";
@@ -568,6 +568,15 @@ describe.skipIf(!hasAndroidSdk)(
 
           const rules = await workerAdb(workerAdbPort(), ["-s", lease.serial, "reverse", "--list"]);
           expect(rules.stdout).toContain(`tcp:${String(pagePort)}`);
+          const ruleHostPort = await freeLoopbackPort();
+          const made = await leaseAdb(env, { agentId: "input-tunnel", leaseId: lease.id }, [
+            "forward",
+            `tcp:${String(ruleHostPort)}`,
+            `tcp:${String(pagePort)}`,
+          ]);
+          expect(made.code, made.stderr).toBe(0);
+          const listed = await workerAdb(workerAdbPort(), ["forward", "--list"]);
+          expect(listed.stdout).toContain(`${lease.serial} tcp:${String(ruleHostPort)}`);
           const released = await env.cli(["release", lease.id]);
           expect(released.code, released.stderr).toBe(0);
           const ended = await tunnel.waitForExit(30_000);
