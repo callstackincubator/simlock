@@ -2419,6 +2419,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-no-window",
         "-gpu",
         "host",

@@ -61,7 +61,7 @@ Provision — `provision`:
 Boot — `makeReady` (per-device lock):
 
 1. Baseline: stored hash matches → `-snapshot simlock_clean_baseline`; differs → delete
-   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file).
+   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file), and `-crash-report-mode never` (a stale crash dump otherwise opens a modal consent dialog that blocks the boot; `never` deletes the dumps in the database it reads, so the spawn env sets `ANDROID_EMU_CRASH_REPORTING_DATABASE` to `<root>/emu-crash.db`, never the user's shared `/tmp/android-<user>/emu-crash-<version>.db`).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
    `adb devices`, not reserved, port, port+1 and port+3000 (gRPC) not listening.
 3. Ready = `sys.boot_completed` 1, `init.svc.bootanim` stopped or unset, `adb emu avd path`

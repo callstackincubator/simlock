@@ -1375,7 +1375,7 @@ describe("Android physical handler: independence from emulator calls", () => {
       {
         hangs: true,
         match: {
-          args: [/^-avd$/, "simlock_one", /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/],
+          args: [/^-avd$/, "simlock_one", /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/],
           command: `${sdk}/emulator/emulator`,
         },
       },

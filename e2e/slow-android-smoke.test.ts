@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { homedir, userInfo } from "node:os";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +30,30 @@ async function adbDevices(serverPort: number): Promise<string[]> {
     .map((line) => line.trim())
     .filter((line) => line.endsWith("device"))
     .map((line) => line.split(/\s+/)[0] as string);
+}
+
+/**
+ * why: the emulator keeps crash dumps in `/tmp/android-<user>/emu-crash-<version>.db`, shared with
+ * Android Studio, and `-crash-report-mode never` deletes the ones in the database it reads.
+ * Returns the shared `completed/` folder of the installed emulator.
+ */
+async function sharedCrashCompletedDir(): Promise<string> {
+  const emulator = join(ANDROID_HOME, "emulator", "emulator");
+  const { stdout } = await execFileAsync(emulator, ["-version"]);
+  const version = /emulator version (\d+\.\d+\.\d+)/.exec(stdout)?.[1];
+  if (version === undefined) {
+    throw new Error(`could not read the emulator version from: ${stdout}`);
+  }
+  return join("/tmp", `android-${userInfo().username}`, `emu-crash-${version}.db`, "completed");
+}
+
+/** why: the test removes only the folders it created, so it needs the topmost one that was missing. */
+function firstMissingAncestor(path: string): string | undefined {
+  let missing: string | undefined;
+  for (let dir = path; !existsSync(dir); dir = dirname(dir)) {
+    missing = dir;
+  }
+  return missing;
 }
 
 async function avdManagerList(): Promise<string[]> {
@@ -86,7 +112,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const env = await withDaemon({
@@ -98,7 +124,26 @@ describe.skipIf(!hasAndroidSdk)(
         if (adbServerPort === undefined) {
           throw new Error("the real-SDK lane must allocate its own adb server port");
         }
+        const completedDir = await sharedCrashCompletedDir();
+        // why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted.
+        const dumpId = randomUUID();
+        const planted = join(completedDir, `${dumpId}.dmp`);
+        const createdRoot = firstMissingAncestor(completedDir);
         try {
+          await mkdir(completedDir, { recursive: true });
+          await writeFile(planted, "simlock slow-lane crash dump marker");
+          await execFileAsync("xattr", [
+            "-w",
+            "org.chromium.crashpad.database.uuid",
+            dumpId,
+            planted,
+          ]);
+          await execFileAsync("xattr", [
+            "-w",
+            "org.chromium.crashpad.database.creation_time",
+            String(Math.floor(Date.now() / 1000)),
+            planted,
+          ]);
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
           checkCatalog(catalog.json as AndroidCatalogOutput);
@@ -142,6 +187,12 @@ describe.skipIf(!hasAndroidSdk)(
           expect(size.stdout).toContain("Physical size: 1080x2424");
           const density = await env.cli(["adb", "shell", "wm", "density"]);
           expect(density.stdout).toContain("Physical density: 420");
+
+          // why: the lease is up, so no dialog blocked the boot, and the launch must have left the user's shared crash database alone.
+          expect(
+            existsSync(planted),
+            "the lease deleted a dump in the user's shared crash db",
+          ).toBe(true);
 
           const refused = await env.cli(["adb", "kill-server"]);
           expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
@@ -210,6 +261,10 @@ describe.skipIf(!hasAndroidSdk)(
           const list = await env.cli(["list", "--devices"]);
           expect(list.code).toBe(0);
         } finally {
+          await rm(planted, { force: true });
+          if (createdRoot !== undefined) {
+            await rm(createdRoot, { recursive: true, force: true });
+          }
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);

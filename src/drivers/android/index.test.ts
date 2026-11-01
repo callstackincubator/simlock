@@ -60,7 +60,10 @@ const scopedEnv = {
 } as const;
 const scopedOptions = { env: scopedEnv } as const;
 // why: The emulator outlives the daemon and is never read from, so it is spawned detached.
-const emulatorOptions = { env: scopedEnv, stdio: "ignore" } as const;
+const emulatorOptions = {
+  env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
+  stdio: "ignore",
+} as const;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
   avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
@@ -513,6 +516,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-no-snapshot-load",
       ],
       command: binaries.emulator,
@@ -550,6 +555,50 @@ describe("AndroidDriver", () => {
     expect(launches[0]).toEqual(
       expect.arrayContaining(["-port", "5588", "-grpc", "8588", "-grpc-use-token"]),
     );
+  });
+
+  it("starts the cold boot and the restart from the baseline with -crash-report-mode never and a crash database under the Simlock root, so a stale crash dump asks no one and the user's shared database is never read", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const launches: (readonly string[])[] = [];
+    const crashDatabases: (string | undefined)[] = [];
+    const hostRunner = host.runner();
+    const runner: ProcessRunner = {
+      ...hostRunner,
+      spawn: (command, args, options) => {
+        launches.push(args);
+        crashDatabases.push(options?.env?.ANDROID_EMU_CRASH_REPORTING_DATABASE);
+        return hostRunner.spawn(command, args, options);
+      },
+    };
+    const driver = await createDriver(filesystem, runner, {
+      ids: ["one"],
+      tcpProbe: new FakeTcpProbe([adbServerPort]),
+    });
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    await driver.resolveSpec(spec);
+
+    await driver.makeReady(await driver.provision(spec));
+
+    expect(crashDatabases).toEqual([
+      `${avdDirectory}/emu-crash.db`,
+      `${avdDirectory}/emu-crash.db`,
+    ]);
+    const crashReportMode = (args: readonly string[]) => {
+      const flag = args.indexOf("-crash-report-mode");
+      return flag === -1 ? undefined : args[flag + 1];
+    };
+    expect(
+      launches.map((args) => ({ boot: args.at(-1), crashReportMode: crashReportMode(args) })),
+    ).toEqual([
+      { boot: "-no-snapshot-load", crashReportMode: "never" },
+      { boot: "simlock_clean_baseline", crashReportMode: "never" },
+    ]);
   });
 
   /**
@@ -673,6 +722,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-snapshot",
         "simlock_clean_baseline",
       ],
@@ -790,6 +841,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-wipe-data",
         "-no-snapshot-load",
       ],
@@ -1101,6 +1154,8 @@ describe("AndroidDriver", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             "-snapshot",
             "simlock_clean_baseline",
           ],
@@ -1153,6 +1208,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-snapshot",
         "simlock_clean_baseline",
       ],
@@ -1214,6 +1271,8 @@ describe("AndroidDriver", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             "-no-snapshot-load",
           ],
           [
@@ -1225,6 +1284,8 @@ describe("AndroidDriver", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             "-snapshot",
             "simlock_clean_baseline",
           ],
@@ -1244,7 +1305,7 @@ describe("AndroidDriver", () => {
       const launches = emulatorLaunches(harness.runner);
       expect(launches).toHaveLength(2);
       for (const args of launches) {
-        expect(args.slice(0, 8 + flags.length)).toEqual([
+        expect(args.slice(0, 10 + flags.length)).toEqual([
           "-avd",
           "simlock_one",
           "-port",
@@ -1253,6 +1314,8 @@ describe("AndroidDriver", () => {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...flags,
         ]);
       }
@@ -1273,6 +1336,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-gpu",
         "swiftshader_indirect",
         "-no-snapshot-load",
@@ -1336,6 +1401,8 @@ describe("AndroidDriver", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             ...flags,
             "-snapshot",
             "simlock_clean_baseline",
@@ -1378,6 +1445,8 @@ describe("AndroidDriver", () => {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...flags,
           "-wipe-data",
           "-no-snapshot-load",
@@ -1407,6 +1476,8 @@ describe("AndroidDriver", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             ...flags,
             "-snapshot",
             "simlock_clean_baseline",
@@ -1436,6 +1507,8 @@ describe("AndroidDriver", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         ...flags,
         "-wipe-data",
         "-no-snapshot-load",
@@ -1464,6 +1537,8 @@ describe("AndroidDriver", () => {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...flags,
           "-snapshot",
           "simlock_clean_baseline",
@@ -1517,6 +1592,8 @@ describe("AndroidDriver", () => {
               "-grpc",
               "8586",
               "-grpc-use-token",
+              "-crash-report-mode",
+              "never",
               ...launchFlags,
               "-no-snapshot-load",
             ],
@@ -1558,6 +1635,8 @@ describe("AndroidDriver", () => {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...flags,
           "-no-snapshot-load",
         ],
@@ -5414,6 +5493,8 @@ describe("AndroidDriver console port reservations", () => {
             "-grpc",
             "8586",
             "-grpc-use-token",
+            "-crash-report-mode",
+            "never",
             "-no-snapshot-load",
           ],
           command: binaries.emulator,
@@ -7214,6 +7295,8 @@ function baselineBuildExpectations(options: {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...emulatorFlags,
           ...options.launchArgs,
         ],
@@ -7304,6 +7387,8 @@ function baselineBuildExpectations(options: {
           "-grpc",
           "8586",
           "-grpc-use-token",
+          "-crash-report-mode",
+          "never",
           ...emulatorFlags,
           "-snapshot",
           "simlock_clean_baseline",
