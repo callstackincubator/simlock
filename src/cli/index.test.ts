@@ -879,6 +879,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -1002,6 +1003,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_named",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -1085,7 +1087,7 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", stdin: "", tool: "adb" }]);
     });
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
@@ -1171,7 +1173,7 @@ describe("CLI: exit codes", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { args: [], leaseId: "lse_only", requesterId: "test-requester", tool: "adb" },
+        { args: [], leaseId: "lse_only", requesterId: "test-requester", stdin: "", tool: "adb" },
       ]);
 
       const missingValue = outputCapture();
@@ -1260,7 +1262,7 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", stdin: "", tool: "adb" }]);
     });
 
     it("stops scanning for --lease at the tool's own first argument", async () => {
@@ -1290,6 +1292,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "input", "text", "--lease"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
