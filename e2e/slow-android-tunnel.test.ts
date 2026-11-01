@@ -368,6 +368,11 @@ describe.skipIf(!hasAndroidSdk)(
       return gateway;
     }
 
+    function onWorker(): SharedTestEnv {
+      if (worker === undefined) throw new Error("the worker did not start");
+      return worker;
+    }
+
     function workerAdbPort(): number {
       const port = worker?.adbServerPort;
       if (port === undefined) throw new Error("the worker has no adb server of its own");
@@ -587,7 +592,7 @@ describe.skipIf(!hasAndroidSdk)(
           expect(ended.error?.code).toBe("TUNNEL_LEASE_ENDED");
 
           // why: release returns before the device's reclaim has run, and adb answers throughout it, so the rules are read once the device is ready again.
-          await waitForDeviceState(onGateway(), lease.deviceId, "ready", { timeout: 120_000 });
+          await waitForDeviceState(onWorker(), lease.deviceId, "ready", { timeout: 120_000 });
           let left = { forward: "", reverse: "" };
           await waitFor(
             async () => {
