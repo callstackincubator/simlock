@@ -2235,6 +2235,9 @@ export class AndroidDriver implements Driver {
         "-grpc",
         String(data.port + GRPC_PORT_OFFSET),
         "-grpc-use-token",
+        // why: a dump an earlier crash left in the user's crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and drops the dump.
+        "-crash-report-mode",
+        "never",
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
