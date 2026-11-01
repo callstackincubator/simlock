@@ -13,7 +13,7 @@ Off unless `capabilities.tunnel.enabled` (false). Off: nothing loaded, and the `
 | `definition.ts`   | `tunnelModule`: name `tunnel`, empty config section, `http` route data, the two loaders      |
 | `worker.ts`       | The worker side from the host's context: capability, hooks, lease route (426), socket, relay |
 | `gateway.ts`      | The gateway side: lease route (426), socket, `beforeDrain`                                   |
-| `gateway-link.ts` | Gateway: the relay open, refusals, one bridge per socket, lease-gone wait, drain             |
+| `gateway-link.ts` | Gateway: the module's path, bounds and 503 texts for `createGatewayChannelLink`              |
 | `limits.ts`       | `MAX_TUNNEL_MESSAGE_BYTES` (65541): the longest message a channel frame carries              |
 | `sessions.ts`     | One session per socket: HELLO, rules, connections, window and credit, lease end, drain       |
 
