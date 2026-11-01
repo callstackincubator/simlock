@@ -1265,6 +1265,80 @@ describe("CLI: exit codes", () => {
       expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", stdin: "", tool: "adb" }]);
     });
 
+    it("takes --stdin before or after --lease, and passes it to the tool after the tool's first argument", async () => {
+      const cases = [
+        {
+          argv: ["adb", "--stdin", "--lease", "lse_named", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "--lease", "lse_named", "--stdin", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "shell", "--stdin"],
+          expected: { args: ["shell", "--stdin"], leaseId: "lse_mine", stdin: "" },
+        },
+      ];
+
+      for (const { argv, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: async () => "sent",
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, requesterId: "test-requester", tool: "adb" }]);
+      }
+    });
+
+    it("spawns locally against a worker, accepting and ignoring --stdin", async () => {
+      const cases = [
+        { argv: ["adb", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--stdin", "--lease", "lse_x", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--lease", "lse_x", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "shell", "--stdin"], args: ["shell", "--stdin"] },
+      ];
+
+      for (const { argv, args } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  exec: () => Promise.reject(new Error("must not exec remotely")),
+                  resolvePassthrough: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ args: [], command: "adb", env: {} });
+                  },
+                }),
+              readStdin: () => Promise.reject(new Error("a worker never reads stdin")),
+              runPassthrough: async () => 0,
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ args, tool: "adb" }]);
+      }
+    });
+
     it("stops scanning for --lease at the tool's own first argument", async () => {
       // why: Everything from the tool's subcommand onwards is the tool's, so a `--lease` there is
       // an argument to *it* -- typed text, a filter, an operand -- and travels through.
