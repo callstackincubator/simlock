@@ -12,7 +12,7 @@ Against a gateway, `simlock adb` and `simlock simctl` run the command on the
 lease's worker through `device.exec`, whose `stdin` is one string written to
 the command and then closed (ADR 0005 §19a). So §19c has the CLI read any
 stdin that is not a terminal to its end before it sends anything
-(`src/cli/commands/passthrough.ts:57`, `src/cli/stdio.ts:5`).
+(`src/cli/commands/passthrough.ts:58`, `src/cli/stdio.ts:2`).
 
 A pipe nobody closes never ends. Coding agents and scripts often start
 the CLI with a piped stdin they never close, and then `simlock adb shell
