@@ -3783,9 +3783,12 @@ describe("AndroidDriver deviceTcp", () => {
     );
 
     const silent = await connectWith(emulator, "");
-    await vi.waitFor(() => expect(silent.clock.pendingTimerCount).toBeGreaterThan(0));
+    // why: the connect is pending only once the socket is open and waiting for adb's answer; a timer alone is set before that.
+    await vi.waitFor(() => expect(silent.connector.connections).toHaveLength(1));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(silent.clock.pendingTimerCount).toBeGreaterThan(0);
     silent.clock.advance(4_999);
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(silent.connector.connections[0]?.peer.closed).toBe(false);
     silent.clock.advance(1);
     await expect(silent.connecting).rejects.toEqual(
