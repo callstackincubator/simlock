@@ -34,7 +34,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 | `duration.ts`     | `parseDuration` for `--ttl`-style flags                                                           |
 | `termination.ts`  | The signals and parent-exit wait a held lease blocks on                                           |
 | `log-file.ts`     | `readLogFile`: `daemon.log` plus a rotated generation                                             |
-| `stdio.ts`        | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                                   |
+| `stdio.ts`        | `readPipedStdin`: stdin for `simctl`/`adb --stdin`, read to EOF, a terminal included              |
 | `remote-lease.ts` | `resolveRemoteLeaseId`: the requester's only lease, shared by `simctl`/`adb` and `rotate`         |
 | `passthrough.ts`  | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                           |
 | `follow-log.ts`   | `followLog`: `daemon logs --follow` across rotations                                              |
@@ -87,8 +87,10 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 5. **`simlock simctl` / `adb`** — reads `status.get` `daemon.mode`:
    - worker: `driver.passthrough` returns a scoped command; `spawnPassthrough` runs it here.
    - gateway: `device.exec` on `--lease`, or the requester's only lease; the worker's driver
-     fills the lease's device in and refuses another (ADR 0047). A piped stdin is
-     read to EOF first; output chunks go to stdout and stderr.
+     fills the lease's device in and refuses another (ADR 0047). `--stdin` (taken
+     off the front with `--lease`, in either order; a worker ignores it) makes `readPipedStdin` read stdin
+     to EOF and send it; without it stdin is never read and `stdin: ""` is sent (ADR 0058). Output chunks
+     go to stdout and stderr.
      `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL` become usage errors (exit 2).
      5a. **`simlock rotate <orientation> [--lease <id>]`** — `parseOrientation` (contract) spells the
      orientation, an unknown one is a usage error (exit 2); the lease is `--lease` (anywhere on the line)
@@ -125,9 +127,3 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 - Renewal stops before the release; no timer outlives a command.
 - `CliEnvironment` carries every port and process handle; tests build it with fakes.
 - Nothing printed names a file path in this repo (documentation rules).
-
-## Known gaps
-
-- **`simlock simctl` / `adb` can hang on a piped stdin.** Through a gateway,
-  `readPipedStdin` reads stdin to EOF before sending, with no bound. A pipe nobody closes
-  blocks before the command goes out. Redirect stdin from `/dev/null`.

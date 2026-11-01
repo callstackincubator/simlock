@@ -177,13 +177,8 @@ describe("gateway smoke", () => {
     // why: 3. The CLI branches on `status.get`'s `mode`: against a gateway `simlock adb` sends
     //    `device.exec` instead of spawning locally, prints what streams back on the matching
     //    stream, and exits with the tool's own code. Nothing else in the suite runs that branch.
-    //    `input: ""` closes the child's stdin, which models `simlock adb ... < /dev/null` and is
-    //    load-bearing here rather than tidiness: against a *worker* the CLI spawns the tool with
-    //    inherited stdio and never reads stdin, but against a gateway it must read stdin to EOF
-    //    before it can send the one `stdin` string `device.exec` carries. The test
-    //    harness spawns with a pipe it never closes, so without this the CLI waits for an EOF
-    //    that never comes -- which is exactly what a real caller would see if it handed simlock
-    //    an open pipe it never closed.
+    //    The harness spawns the CLI with a stdin pipe it never closes, as a real caller might; the
+    //    CLI must not read it without `--stdin`, so the command gets `""`.
     const exec = await gateway.cli(
       [
         "adb",
@@ -192,14 +187,22 @@ describe("gateway smoke", () => {
         "devices",
         "--fake-exec-stderr=a warning",
         "--fake-exec-exit=3",
+        "--fake-exec-echo-stdin",
       ],
-      { input: "", timeout: 30_000 },
+      { timeout: 30_000 },
     );
     expect(exec.code).toBe(3);
     expect(exec.stderr).toContain("a warning");
     expect(JSON.parse(exec.stdout)).toEqual({
-      argv: ["/fake/android", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
+      argv: [
+        "/fake/android",
+        "devices",
+        "--fake-exec-stderr=a warning",
+        "--fake-exec-exit=3",
+        "--fake-exec-echo-stdin",
+      ],
       platform: "android",
+      stdin: "",
     });
 
     const released = await gateway.cli(["release", grant.lease.id], { timeout: 30_000 });
