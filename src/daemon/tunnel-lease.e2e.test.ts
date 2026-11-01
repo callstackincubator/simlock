@@ -225,8 +225,21 @@ describe("a lease's tunnel socket", () => {
       await second.stop("test");
 
       const idle = new FakeDeviceTcp();
-      daemons.push(await start(idle));
-      expect(idle.sweeps).toHaveLength(1);
+      let releaseSweep: () => void = () => undefined;
+      idle.sweepGate = new Promise<void>((resolve) => {
+        releaseSweep = resolve;
+      });
+      let started = false;
+      const starting = start(idle).then((daemon) => {
+        started = true;
+        return daemon;
+      });
+      await vi.waitFor(() => expect(idle.sweeps).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(started).toBe(false);
+      releaseSweep();
+      daemons.push(await starting);
+      expect(started).toBe(true);
       expect(idle.sweeps[0]).toEqual([
         { device: expect.objectContaining({ physical: false }), leased: false },
       ]);
