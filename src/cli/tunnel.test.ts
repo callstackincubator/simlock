@@ -712,7 +712,10 @@ async function lossesOfTheSocket(): Promise<void> {
     },
     ...[1011, 1001, 1006].map((code) => ({
       drop: [code, ""] as [number, string],
-      error: errorBody("TUNNEL_DISCONNECTED", "Lease L1: the connection to the worker was lost"),
+      error: errorBody(
+        "TUNNEL_DISCONNECTED",
+        `Lease L1: the connection to ${ENV.SIMLOCK_URL} was lost`,
+      ),
       exit: 1,
     })),
   ];
@@ -744,6 +747,7 @@ async function silentSocket(): Promise<void> {
   expect(await silent.exit).toBe(1);
   expect(silentLocal.closed).toBe(true);
   expect(silent.peer.closedWith?.code).toBe(1000);
+  expect(silent.peer.terminated).toBe(true);
   expect(silent.cli.clock.pendingTimerCount).toBe(0);
   expect(line(silent.cli)).toEqual(
     errorBody("TUNNEL_DISCONNECTED", "Lease L1: nothing was heard from the worker for 45 s"),
@@ -766,6 +770,7 @@ async function noReadySocket(): Promise<void> {
   expect(noReady.err).toHaveLength(1);
   expect(await noReadyExit).toBe(1);
   expect(quietPeer?.closedWith?.code).toBe(1000);
+  expect(quietPeer?.terminated).toBe(true);
   expect(noReady.clock.pendingTimerCount).toBe(0);
   expect(line(noReady)).toEqual(
     errorBody("TUNNEL_DISCONNECTED", "Lease L1: no READY from the worker within 90 s"),
@@ -797,6 +802,7 @@ async function ctrlC(): Promise<void> {
   expect(settled).toBe(true);
   expect(await idle.exit).toBe(0);
   expect(idleLocal.closed).toBe(true);
+  expect(idle.peer.terminated).toBe(true);
   expect(idle.cli.clock.pendingTimerCount).toBe(0);
 }
 

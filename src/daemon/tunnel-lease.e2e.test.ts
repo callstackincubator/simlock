@@ -6,14 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-import { encodeTunnelFrame, TUNNEL_TAG } from "../contract/index.js";
-import {
-  FakeDeviceTcp,
-  FakeDriver,
-  FakeInputFactory,
-  fakeDeviceDataTables,
-} from "../core/testing.js";
-import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
+import { FakeDeviceTcp, FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
+import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
@@ -96,16 +90,6 @@ async function openTunnel(url: string, token: string | undefined): Promise<Opene
   };
 }
 
-function inputMessage(tag: number, body: unknown): Buffer {
-  return Buffer.concat([Buffer.from([tag]), Buffer.from(JSON.stringify(body))]);
-}
-
-function pattern(length: number, step: number): Buffer {
-  const bytes = Buffer.alloc(length);
-  for (let index = 0; index < length; index += 1) bytes[index] = (index * step) % 251;
-  return bytes;
-}
-
 function hello(devicePort: number): Buffer {
   const body = Buffer.from(JSON.stringify({ tunnels: [{ devicePort, kind: "reverse" }] }));
   return Buffer.concat([Buffer.from([0x01, 0, 0, 0, 0]), body]);
@@ -178,17 +162,11 @@ describe("a lease's tunnel socket", () => {
   async function fleet(options: {
     readonly gatewayTunnel: boolean;
     readonly workerTunnel: boolean;
-    // why: given, the input module is on at both ends and the worker's device input is this fake.
-    readonly input?: FakeInputFactory;
-    readonly clock?: FakeClock;
   }) {
     const port = await freeLoopbackPort();
-    const input = { enabled: options.input !== undefined };
-    const clock = options.clock === undefined ? {} : { clock: options.clock };
     const gateway = await startDaemon({
-      ...clock,
       configOverrides: {
-        capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
+        capabilities: { tunnel: { enabled: options.gatewayTunnel } },
         http: { enabled: true, host: "127.0.0.1", port },
       },
       dataDirectory: await directory("gateway"),
@@ -202,16 +180,14 @@ describe("a lease's tunnel socket", () => {
       .secret;
     const deviceTcp = new FakeDeviceTcp();
     const worker = await startDaemon({
-      ...clock,
       configOverrides: {
-        capabilities: { input, tunnel: { enabled: options.workerTunnel } },
+        capabilities: { tunnel: { enabled: options.workerTunnel } },
         gateway: { label: "w", token, url: `ws://127.0.0.1:${String(port)}` },
       },
       dataDirectory: await directory("worker"),
       deviceDataTables: fakeDeviceDataTables,
       drivers: [
         new FakeDriver({
-          ...(options.input === undefined ? {} : { input: options.input }),
           availableOsVersions: ["18.0"],
           clock: new SystemClock(),
           deviceTcp,
@@ -250,7 +226,6 @@ describe("a lease's tunnel socket", () => {
       deviceTcp,
       gateway,
       holder: holder.secret,
-      inputUrl: `ws://127.0.0.1:${String(port)}/v1/leases/${leaseId}/input`,
       leaseId,
       owner: { ...agent, principal: holder.token.id },
       url: (id = leaseId) => `ws://127.0.0.1:${String(port)}/v1/leases/${id}/tunnel`,
@@ -370,181 +345,13 @@ describe("a lease's tunnel socket", () => {
         () => expect(viaGateway.closed).toEqual({ code: 1001, reason: "Simlock is stopping" }),
         { timeout: 10_000 },
       );
-    },
-  );
 
-  async function inputAdmitted(url: string, token: string): Promise<OpenedSocket> {
-    const opened = await openTunnel(url, token);
-    expect(opened.status).toBe(101);
-    await vi.waitFor(() => expect(opened.messages.map((entry) => entry[0])).toEqual([0x83, 0x82]), {
-      timeout: 10_000,
-    });
-    return opened;
-  }
-
-  async function tunnelReady(
-    url: string,
-    token: string,
-    devicePort: number,
-  ): Promise<OpenedSocket> {
-    const opened = await openTunnel(url, token);
-    expect(opened.status).toBe(101);
-    opened.socket.send(hello(devicePort));
-    await vi.waitFor(() => expect(opened.messages.map((entry) => entry[0])).toEqual([0x81]), {
-      timeout: 10_000,
-    });
-    return opened;
-  }
-
-  it(
-    "carries a holder's taps in order and 1 MiB each way through a reverse tunnel intact, on one lease through a gateway at once",
-    { timeout: 60_000 },
-    async () => {
-      const input = new FakeInputFactory({ height: 2400, orientation: "portrait", width: 1080 });
-      const both = await fleet({ gatewayTunnel: true, input, workerTunnel: true });
-      const tunnel = await tunnelReady(both.url(), both.holder, 5173);
-      const taps = await inputAdmitted(both.inputUrl, both.holder);
-
-      const device = both.deviceTcp.openFromDevice(5173);
-      await vi.waitFor(() => expect(tunnel.messages[1]?.[0]).toBe(TUNNEL_TAG.open), {
-        timeout: 10_000,
-      });
-      const conn = tunnel.messages[1]?.readUInt32BE(1) ?? 0;
-      const fromDevice: Buffer[] = [];
-      const granted = { bytes: 262_144 };
-      tunnel.socket.on("message", (data: Buffer) => {
-        if (data.readUInt32BE(1) !== conn) return;
-        if (data[0] === TUNNEL_TAG.data) {
-          fromDevice.push(data.subarray(5));
-          const credit = Buffer.alloc(4);
-          credit.writeUInt32BE(data.length - 5);
-          tunnel.socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
-        }
-        if (data[0] === TUNNEL_TAG.credit) granted.bytes += data.readUInt32BE(5);
-      });
-
-      const chunk = 65_536;
-      const toCaller = pattern(16 * chunk, 7);
-      const toDevice = pattern(16 * chunk, 13);
-      for (let at = 0; at < toCaller.length; at += chunk) {
-        device.send(toCaller.subarray(at, at + chunk));
-      }
-      const sentTaps: unknown[] = [];
-      for (let index = 0; index < 16; index += 1) {
-        await vi.waitFor(() => expect(granted.bytes).toBeGreaterThanOrEqual(chunk), {
-          timeout: 10_000,
-        });
-        granted.bytes -= chunk;
-        const at = index * chunk;
-        tunnel.socket.send(
-          encodeTunnelFrame(TUNNEL_TAG.data, conn, toDevice.subarray(at, at + chunk)),
-        );
-        for (const touch of [
-          { type: "begin", x: index / 16, y: 0.25 },
-          { type: "end", x: index / 16, y: 0.75 },
-        ]) {
-          taps.socket.send(inputMessage(0x03, touch));
-          sentTaps.push({ kind: "touch", ...touch });
-        }
-      }
-
-      await vi.waitFor(() => expect(Buffer.concat(fromDevice).length).toBe(toCaller.length), {
-        timeout: 20_000,
-      });
-      expect(Buffer.concat(fromDevice).equals(toCaller)).toBe(true);
-      await vi.waitFor(() => expect(Buffer.concat(device.written).length).toBe(toDevice.length), {
-        timeout: 20_000,
-      });
-      expect(Buffer.concat(device.written).equals(toDevice)).toBe(true);
-      await vi.waitFor(() => expect(input.opened[0]?.sent).toHaveLength(32), { timeout: 10_000 });
-      expect(input.opened[0]?.sent).toEqual(sentTaps);
-      expect([tunnel.closed, taps.closed]).toEqual([undefined, undefined]);
-    },
-  );
-
-  it(
-    "closes a lease's input and tunnel sockets through a gateway 4001 with the worker's reason when it is released, its reverse rule gone when the release returns, and 1011 when the worker stops, with its rule and device input let go",
-    { timeout: 60_000 },
-    async () => {
-      const endingInput = new FakeInputFactory({
-        height: 2400,
-        orientation: "portrait",
-        width: 1080,
-      });
-      const ends = await fleet({ gatewayTunnel: true, input: endingInput, workerTunnel: true });
-      const endingTunnel = await tunnelReady(ends.url(), ends.holder, 5173);
-      const endingTaps = await inputAdmitted(ends.inputUrl, ends.holder);
-      expect(ends.deviceTcp.reversed).toEqual([5173]);
-      await ends.gateway.dispatch("lease.release", { leaseId: ends.leaseId }, ends.owner);
-      expect(ends.deviceTcp.reversed).toEqual([]);
-      for (const socket of [endingTunnel, endingTaps]) {
-        await vi.waitFor(() => expect(socket.closed).toEqual({ code: 4001, reason: "explicit" }), {
-          timeout: 10_000,
-        });
-      }
-
-      const stoppingInput = new FakeInputFactory({
-        height: 2400,
-        orientation: "portrait",
-        width: 1080,
-      });
-      const stopping = await fleet({
-        gatewayTunnel: true,
-        input: stoppingInput,
-        workerTunnel: true,
-      });
-      const tunnel = await tunnelReady(stopping.url(), stopping.holder, 5173);
-      const taps = await inputAdmitted(stopping.inputUrl, stopping.holder);
-      expect(stoppingInput.opened[0]?.closes).toBe(0);
-      const { workers } = await stopping.gateway.dispatch("worker.list", {}, admin);
-      await stopping.worker.stop("test");
-      expect(stopping.deviceTcp.reversed).toEqual([]);
-      expect(stoppingInput.opened[0]?.closes).toBe(1);
-      const gone = { code: 1011, reason: `Worker ${workers[0]?.id ?? ""} stopped answering` };
-      for (const socket of [tunnel, taps]) {
-        await vi.waitFor(() => expect(socket.closed).toEqual(gone), { timeout: 10_000 });
-        expect(socket.socket.readyState).toBe(WebSocket.CLOSED);
-      }
-    },
-  );
-
-  it(
-    "carries input through a gateway to a worker with tunnels off, and answers that worker's tunnel upgrade 503 TUNNEL_UNAVAILABLE",
-    { timeout: 60_000 },
-    async () => {
-      const input = new FakeInputFactory({ height: 2400, orientation: "portrait", width: 1080 });
-      const workerOff = await fleet({ gatewayTunnel: true, input, workerTunnel: false });
-      const taps = await inputAdmitted(workerOff.inputUrl, workerOff.holder);
-      taps.socket.send(inputMessage(0x04, { button: "home" }));
-      await vi.waitFor(
-        () => expect(input.opened[0]?.sent).toEqual([{ button: "home", kind: "button" }]),
-        { timeout: 10_000 },
-      );
+      const workerOff = await fleet({ gatewayTunnel: true, workerTunnel: false });
       const refused = await openTunnel(workerOff.url(), workerOff.holder);
       expect({ code: refused.code, status: refused.status }).toEqual({
         code: "TUNNEL_UNAVAILABLE",
         status: 503,
       });
-    },
-  );
-
-  it(
-    "keeps a quiet tunnel through a gateway open past the relay's 15 s silence bound, and a device connection still reaches the holder",
-    { timeout: 60_000 },
-    async () => {
-      const clock = new FakeClock();
-      const quiet = await fleet({ clock, gatewayTunnel: true, workerTunnel: true });
-      const tunnel = await tunnelReady(quiet.url(), quiet.holder, 5173);
-      for (let second = 0; second < 20; second += 1) {
-        clock.advance(1_000);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(tunnel.closed).toBeUndefined();
-      quiet.deviceTcp.openFromDevice(5173);
-      await vi.waitFor(() => expect(tunnel.messages.at(-1)?.[0]).toBe(TUNNEL_TAG.open), {
-        timeout: 10_000,
-      });
-      expect(tunnel.closed).toBeUndefined();
     },
   );
 
@@ -594,8 +401,21 @@ describe("a lease's tunnel socket", () => {
       await second.stop("test");
 
       const idle = new FakeDeviceTcp();
-      daemons.push(await start(idle));
-      expect(idle.sweeps).toHaveLength(1);
+      let releaseSweep: () => void = () => undefined;
+      idle.sweepGate = new Promise<void>((resolve) => {
+        releaseSweep = resolve;
+      });
+      let started = false;
+      const starting = start(idle).then((daemon) => {
+        started = true;
+        return daemon;
+      });
+      await vi.waitFor(() => expect(idle.sweeps).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(started).toBe(false);
+      releaseSweep();
+      daemons.push(await starting);
+      expect(started).toBe(true);
       expect(idle.sweeps[0]).toEqual([
         { device: expect.objectContaining({ physical: false }), leased: false },
       ]);

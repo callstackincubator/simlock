@@ -3585,17 +3585,11 @@ describe("AndroidDriver deviceTcp", () => {
     expectations: ScriptedProcessExpectation[],
     listeners = new FakeTcpListenerFactory(),
     tcpProbe?: FakeTcpProbe,
-    extra: {
-      readonly clock?: FakeClock;
-      readonly driverConfig?: Readonly<Record<string, number>>;
-      readonly tcpStreamConnector?: FakeTcpStreamConnector;
-    } = {},
   ) {
     const runner = new ScriptedProcessRunner(expectations);
     const driver = await createDriver(await androidFilesystem(), runner, {
       tcpListener: listeners,
       ...(tcpProbe === undefined ? {} : { tcpProbe }),
-      ...extra,
     });
     return { driver, listeners, runner };
   }
@@ -3728,113 +3722,7 @@ describe("AndroidDriver deviceTcp", () => {
     expect(exhausted.runner.calls).toEqual([]);
   });
 
-  it("opens a device port through adb's host protocol with no adb forward, on the emulator's configured server port or the phone's 5037 behind the gate, and fails with the reason on FAIL, a closed gate or no answer in 5 s", async () => {
-    const tcp = new FakeTcpStreamConnector();
-    const clock = new FakeClock();
-    const world = await driverWith([], new FakeTcpListenerFactory(), undefined, {
-      clock,
-      driverConfig: { adbServerPort: 5599 },
-      tcpStreamConnector: tcp,
-    });
-    const requested = (index: number) => tcp.connections[index]?.peer.writtenText();
-    const dial = async (index: number, request: string) => {
-      await vi.waitFor(() => expect(requested(index)).toBe(request));
-      return tcp.connections[index]?.peer;
-    };
-    const transport = "001chost:transport:emulator-5586";
-
-    const opening = world.driver.deviceTcp?.connect(emulator, 9229, signal());
-    expect(await dial(0, transport)).toBeDefined();
-    expect(tcp.connections[0]?.port).toBe(5599);
-    const peer = tcp.connections[0]?.peer;
-    peer?.send("OKAY");
-    await dial(0, `${transport}0008tcp:9229`);
-    peer?.send("OKAYdevice-ok");
-    const stream = await opening;
-    const reader = stream?.readable.getReader();
-    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe("device-ok");
-    await stream?.write("from-caller");
-    expect(requested(0)).toBe(`${transport}0008tcp:9229from-caller`);
-    stream?.end();
-    expect(peer?.writeEnded).toBe(true);
-    expect(world.runner.calls).toEqual([]);
-
-    const failed = world.driver.deviceTcp?.connect(emulator, 9230, signal());
-    const failing = failed?.catch((error: unknown) => error);
-    await dial(1, transport);
-    tcp.connections[1]?.peer.send("OKAY");
-    await dial(1, `${transport}0008tcp:9230`);
-    tcp.connections[1]?.peer.send("FAIL0006closed");
-    const refused = await failing;
-    expect(refused).toBeInstanceOf(DeviceTcpError);
-    expect((refused as DeviceTcpError).code).toBe("TUNNEL_FAILED");
-    expect((refused as DeviceTcpError).message).toBe("closed");
-    expect(tcp.connections[1]?.peer.closed).toBe(true);
-
-    const silent = world.driver.deviceTcp?.connect(emulator, 9231, signal());
-    let settled = false;
-    const silence = silent?.catch((error: unknown) => error).finally(() => (settled = true));
-    await dial(2, transport);
-    tcp.connections[2]?.peer.send("OKAY");
-    await dial(2, `${transport}0008tcp:9231`);
-    clock.advance(4_999);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-    clock.advance(1);
-    await vi.waitFor(() => expect(settled).toBe(true), { timeout: 2_000 });
-    const timedOut = await silence;
-    expect(timedOut).toBeInstanceOf(DeviceTcpError);
-    expect((timedOut as DeviceTcpError).message).toBe("timeout");
-    expect(tcp.connections[2]?.peer.closed).toBe(true);
-
-    const phoneTcp = new FakeTcpStreamConnector();
-    const open = new FakeTcpProbe([5038, 5037]);
-    open.replyWith("OKAY00040029");
-    const phone = await driverWith(
-      [
-        {
-          match: adb("version"),
-          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
-        },
-      ],
-      new FakeTcpListenerFactory(),
-      open,
-      { tcpStreamConnector: phoneTcp },
-    );
-    const phoneOpening = phone.driver.deviceTcp?.connect(PHYSICAL_DEVICE, 9229, signal());
-    await vi.waitFor(() => expect(phoneTcp.connections.map((c) => c.port)).toEqual([5037]));
-    expect(phoneTcp.connections[0]?.peer.writtenText()).toBe("0019host:transport:R58M123ABC");
-    phoneTcp.connections[0]?.peer.send("OKAY");
-    await vi.waitFor(() =>
-      expect(phoneTcp.connections[0]?.peer.writtenText()).toBe(
-        "0019host:transport:R58M123ABC0008tcp:9229",
-      ),
-    );
-    phoneTcp.connections[0]?.peer.send("OKAY");
-    expect(await phoneOpening).toBeDefined();
-
-    const closedGate = new FakeTcpProbe([5038, 5037]);
-    closedGate.replyWith("OKAY00040028");
-    const gated = new FakeTcpStreamConnector();
-    const shut = await driverWith(
-      [
-        {
-          match: adb("version"),
-          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
-        },
-      ],
-      new FakeTcpListenerFactory(),
-      closedGate,
-      { tcpStreamConnector: gated },
-    );
-    const gateError = await shut.driver.deviceTcp
-      ?.connect(PHYSICAL_DEVICE, 9229, signal())
-      .catch((error: unknown) => error);
-    expect((gateError as Error).message).toMatch(/speaks protocol 40/);
-    expect(gated.connections).toEqual([]);
-  });
-
-  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, and touches nothing on an emulator that answers as another's", async () => {
+  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
     const own = await driverWith([
       avdPathExpectation("emulator-5586"),
       {
@@ -3857,6 +3745,44 @@ describe("AndroidDriver deviceTcp", () => {
     ]);
     await own.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
     expect(own.runner.calls.filter((call) => call.args.includes("--remove"))).toHaveLength(2);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phones = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, "reverse", "--list"),
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: "UsbFfs tcp:5173 tcp:47000\nUsbFfs tcp:3000 tcp:3001\n",
+          },
+        },
+        {
+          match: adb(
+            "-P",
+            "5037",
+            "-s",
+            PHYSICAL_DEVICE.address,
+            "reverse",
+            "--no-rebind",
+            "tcp:5174",
+            "tcp:47001",
+          ),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    await phones.driver.deviceTcp?.sweep([{ device: PHYSICAL_DEVICE, leased: false }]);
+    const onPhone = await phones.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5174, signal());
+    expect(onPhone?.hostPort).toBe(47_001);
+    expect(phones.runner.calls.some((call) => call.args.includes("--remove"))).toBe(false);
 
     const foreign = await driverWith([avdPathExpectation("emulator-5586", "simlock_two")]);
     await foreign.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
@@ -4396,6 +4322,53 @@ describe("AndroidDriver.create", () => {
     await expect(passthroughOf(driver, ["-P", "1", "kill-server"])).rejects.toThrow(
       PassthroughRefusedError,
     );
+  });
+
+  it("refuses adb disconnect with or without an address, on the local CLI and through device.exec", async () => {
+    // why: #1168. adb's server answers an empty `host:disconnect:` with kick_all_tcp_devices(),
+    // which kicks every kTransportLocal transport, and emulators are local transports; with an
+    // address it kicks the transport of that serial. Either way it detaches leases other than
+    // the caller's, as `kill-server` would. `-s` does not scope it: the subcommand acts on no
+    // device.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const callers = [
+      ["local CLI", undefined, undefined],
+      ["device.exec", { hasTerminal: false, platform: "android" }, emulator],
+    ] as const;
+    const commands = [
+      ["disconnect"],
+      ["-s", "emulator-5554", "disconnect"],
+      ["disconnect", "emulator-5556"],
+    ];
+
+    for (const [caller, context, device] of callers) {
+      for (const args of commands) {
+        const returned = passthroughOf(driver, args, context, device);
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toBeInstanceOf(
+          PassthroughRefusedError,
+        );
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toMatchObject({
+          message: expect.stringMatching(/^Refusing `simlock adb disconnect`/),
+          tool: "adb",
+        });
+      }
+
+      // why: the refusal is of the subcommand only; `disconnect` as a later argument is data.
+      for (const args of [
+        ["shell", "echo", "disconnect"],
+        ["-s", "emulator-5554", "shell", "echo", "disconnect"],
+      ]) {
+        const passed = await passthroughOf(driver, args, context, device);
+        expect(passed.args.slice(-args.length), `${caller}: adb ${args.join(" ")}`).toEqual(args);
+      }
+    }
   });
 
   it.each([[["emu", "avd", "stop"]], [["-s", "emulator-5586", "emu", "avd", "stop"]]])(

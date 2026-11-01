@@ -885,6 +885,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -1008,45 +1009,65 @@ describe("CLI: exit codes", () => {
           args: ["shell", "getprop"],
           leaseId: "lse_named",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
     });
 
-    it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
+    it("sends stdin on device.exec only when --stdin was given", async () => {
       // why: `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
       // the wiring from that port's result to `device.exec`'s `stdin`, not the default
       // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
       // its own below, since a fake here would not exercise it at all.
-      const output = outputCapture();
-      const seen: unknown[] = [];
-
-      await expect(
-        runCli(
-          ["adb", "shell", "cat"],
-          output.environmentWith({
-            connectAdmin: async () =>
-              fakeClient({
-                getStatus: () => Promise.resolve(gatewayStatus),
-                listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                exec: (input) => {
-                  seen.push(input);
-                  return Promise.resolve({ exitCode: 0 });
-                },
-              }),
-            readStdin: async () => "piped payload\n",
-          }),
-        ),
-      ).resolves.toBe(0);
-      expect(seen).toEqual([
+      const cases = [
         {
-          args: ["shell", "cat"],
-          leaseId: "lse_mine",
-          requesterId: "test-requester",
-          stdin: "piped payload\n",
-          tool: "adb",
+          argv: ["adb", "shell", "cat"],
+          readable: false,
+          expected: { args: ["shell", "cat"], stdin: "", tool: "adb" },
         },
-      ]);
+        {
+          argv: ["simctl", "list"],
+          readable: false,
+          expected: { args: ["list"], stdin: "", tool: "simctl" },
+        },
+        {
+          argv: ["adb", "--stdin", "shell", "cat"],
+          readable: true,
+          expected: { args: ["shell", "cat"], stdin: "piped payload\n", tool: "adb" },
+        },
+        {
+          argv: ["simctl", "--stdin", "list"],
+          readable: true,
+          expected: { args: ["list"], stdin: "piped payload\n", tool: "simctl" },
+        },
+      ];
+
+      for (const { argv, readable, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: readable
+                ? async () => "piped payload\n"
+                : () => Promise.reject(new Error("stdin must not be read without --stdin")),
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, leaseId: "lse_mine", requesterId: "test-requester" }]);
+      }
     });
 
     it("sends no requesterId when the connection fell back to the agent role", async () => {
@@ -1072,7 +1093,7 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_mine", stdin: "", tool: "adb" }]);
     });
 
     it("spawns locally against a worker, accepting and ignoring --lease", async () => {
@@ -1158,7 +1179,7 @@ describe("CLI: exit codes", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { args: [], leaseId: "lse_only", requesterId: "test-requester", tool: "adb" },
+        { args: [], leaseId: "lse_only", requesterId: "test-requester", stdin: "", tool: "adb" },
       ]);
 
       const missingValue = outputCapture();
@@ -1247,7 +1268,81 @@ describe("CLI: exit codes", () => {
           }),
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", tool: "adb" }]);
+      expect(seen).toEqual([{ args: ["devices"], leaseId: "lse_owned", stdin: "", tool: "adb" }]);
+    });
+
+    it("takes --stdin before or after --lease, and passes it to the tool after the tool's first argument", async () => {
+      const cases = [
+        {
+          argv: ["adb", "--stdin", "--lease", "lse_named", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "--lease", "lse_named", "--stdin", "shell", "cat"],
+          expected: { args: ["shell", "cat"], leaseId: "lse_named", stdin: "sent" },
+        },
+        {
+          argv: ["adb", "shell", "--stdin"],
+          expected: { args: ["shell", "--stdin"], leaseId: "lse_mine", stdin: "" },
+        },
+      ];
+
+      for (const { argv, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: async () => "sent",
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, requesterId: "test-requester", tool: "adb" }]);
+      }
+    });
+
+    it("spawns locally against a worker, accepting and ignoring --stdin", async () => {
+      const cases = [
+        { argv: ["adb", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--stdin", "--lease", "lse_x", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "--lease", "lse_x", "--stdin", "shell", "cat"], args: ["shell", "cat"] },
+        { argv: ["adb", "shell", "--stdin"], args: ["shell", "--stdin"] },
+      ];
+
+      for (const { argv, args } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  exec: () => Promise.reject(new Error("must not exec remotely")),
+                  resolvePassthrough: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ args: [], command: "adb", env: {} });
+                  },
+                }),
+              readStdin: () => Promise.reject(new Error("a worker never reads stdin")),
+              runPassthrough: async () => 0,
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ args, tool: "adb" }]);
+      }
     });
 
     it("stops scanning for --lease at the tool's own first argument", async () => {
@@ -1277,6 +1372,7 @@ describe("CLI: exit codes", () => {
           args: ["shell", "input", "text", "--lease"],
           leaseId: "lse_mine",
           requesterId: "test-requester",
+          stdin: "",
           tool: "adb",
         },
       ]);
@@ -7733,12 +7829,12 @@ describe("readPipedStdin", () => {
     return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
   }
 
-  it("returns undefined without reading anything when stdin is a terminal", async () => {
-    const stdin = fakeStdin(["should never be read"], true);
+  it("reads a terminal stdin to its end, joining its chunks", async () => {
+    const stdin = fakeStdin(["typed ", "text\n"], true);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
     try {
-      await expect(readPipedStdin()).resolves.toBeUndefined();
+      await expect(readPipedStdin()).resolves.toBe("typed text\n");
     } finally {
       stdinGetter.mockRestore();
     }
@@ -7755,9 +7851,7 @@ describe("readPipedStdin", () => {
     }
   });
 
-  it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
-    // why: `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
-    // (empty) answer -- the two must stay distinguishable to a caller.
+  it("returns an empty string for a piped stdin that carries nothing", async () => {
     const stdin = fakeStdin([], false);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 

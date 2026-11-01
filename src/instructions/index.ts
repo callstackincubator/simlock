@@ -47,7 +47,7 @@ Some commands are refused on purpose, because they break the device for Simlock 
 
 - \`simlock simctl\` refuses \`simlock simctl create\`, \`simlock simctl erase\`, \`simlock simctl delete\`, \`simlock simctl shutdown all\` and \`simlock simctl runtime delete\`.
 - \`simlock simctl\` refuses any option before the subcommand, \`--set\` and \`--profiles\` included.
-- \`simlock adb kill-server\`, \`simlock adb emu kill\`, \`simlock adb emu avd stop\` and \`simlock adb emu avd snapshot delete\` are refused.
+- \`simlock adb kill-server\`, \`simlock adb disconnect\`, \`simlock adb emu kill\`, \`simlock adb emu avd stop\` and \`simlock adb emu avd snapshot delete\` are refused.
 - \`simlock adb\` refuses any option before the subcommand other than \`-s\`, \`-t\`, \`-d\` or \`-e\`.
 - On another machine, \`simlock adb shell\` needs a command to run.
 

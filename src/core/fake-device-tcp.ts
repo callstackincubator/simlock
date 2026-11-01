@@ -50,6 +50,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   closeGate: Promise<void> | undefined;
   // why: every device list a `sweep` was given, in order, so a test can tell what the daemon asked a platform's driver to sweep.
   readonly sweeps: (readonly SweptDevice[])[] = [];
+  // why: a test sets this to hold every `sweep` until it settles, as an adb call that is slow to answer does.
+  sweepGate: Promise<void> | undefined;
   // why: a test sets a device port's failure to make its `connect` refuse with that error, as a device that never answers does.
   readonly connectFailures = new Map<number, Error>();
   readonly listening = new Set<number>();
@@ -67,6 +69,7 @@ export class FakeDeviceTcp implements DeviceTcp {
 
   async sweep(devices: readonly SweptDevice[]): Promise<void> {
     this.sweeps.push(devices);
+    await this.sweepGate;
   }
 
   async reverse(

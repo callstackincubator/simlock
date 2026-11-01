@@ -310,6 +310,14 @@ const RECLAIM_INSTEAD =
 export const REFUSED_ADB_VERB = "kill-server";
 
 /**
+ * why: #1168. `adb disconnect` with no address makes the server kick every local transport,
+ * which emulators are, and with an address it kicks that one: either way it detaches a lease
+ * other than the caller's. Unlike `kill-server` it is refused only as the subcommand, so
+ * `adb shell echo disconnect` still runs.
+ */
+const REFUSED_ADB_SUBCOMMAND = "disconnect";
+
+/**
  * why: Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
  * anywhere in the list so that `-s <serial> emu kill` is caught along with `emu kill`.
  * Every one of them reaches through Simlock's own adb server, which is the only server
@@ -645,7 +653,7 @@ export class AndroidDriver implements Driver {
   ): AndroidTargetFor | undefined {
     const tcp = options.tcpStreamConnector;
     if (tcp === undefined) return undefined;
-    const runner = this.#processRunner;
+    const runner = options.processRunner;
     return async (device) =>
       isPhysicalDriverDevice(device)
         ? this.#physical.screenTargetFor(device, tcp)
@@ -718,6 +726,7 @@ export class AndroidDriver implements Driver {
       clock: options.clock,
       env: options.env,
       filesystem: options.filesystem,
+      logPath: join(options.simlockHome, "logs", "adb-server.log"),
       port: adbServerPort,
       processRunner: options.processRunner,
       processSupervisor: options.processSupervisor,
@@ -873,6 +882,13 @@ export class AndroidDriver implements Driver {
       throw new PassthroughRefusedError(
         "adb",
         `Refusing \`simlock adb ${REFUSED_ADB_VERB}\`: it would detach every leased emulator at once. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
+      );
+    }
+    const walked = walkGlobals(args);
+    if (walked.kind === "subcommand" && args[walked.index] === REFUSED_ADB_SUBCOMMAND) {
+      throw new PassthroughRefusedError(
+        "adb",
+        `Refusing \`simlock adb ${REFUSED_ADB_SUBCOMMAND}\`: it would detach other leased emulators, which adb treats as connections it can drop. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
       );
     }
     const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
@@ -1148,13 +1164,15 @@ export class AndroidDriver implements Driver {
       : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
-  // why: the loopback ports held for a device's tunnels are freed only after its reclaim removed the rules they serve.
+  // why: the loopback ports held for a device's tunnels are freed after its reclaim: on an emulator the reclaim removed the rules, on a phone it removes none and only the ports no rule points to are freed.
   async reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     const result = await this.#reclaimDevice(device, options);
-    await this.deviceTcp?.release(device);
+    await this.deviceTcp?.release(
+      isPhysicalDriverDevice(device) ? device : { ...device, physical: false as const },
+    );
     return result;
   }
 
@@ -1163,7 +1181,6 @@ export class AndroidDriver implements Driver {
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) {
-      await this.#removeRules(device, device.deviceId);
       return this.#physical.reclaim(device);
     }
     const data = this.#dataFor(device);
@@ -1217,11 +1234,8 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  // why: reclaim leaves no rule of the lease on a device proved its own; it never throws, so a failed removal does not fail the reclaim.
-  async #removeRules(
-    device: VirtualDriverDevice | PhysicalDriverDevice,
-    serial: string,
-  ): Promise<void> {
+  // why: reclaim of an emulator proved its own leaves no rule of the lease; it never throws, so a failed removal does not fail the reclaim.
+  async #removeRules(device: VirtualDriverDevice, serial: string): Promise<void> {
     await removeDeviceRules(
       (target, args, timeoutMs) => this.#runAdbOn(target, args, timeoutMs),
       this.#warnCleanup,
@@ -1230,8 +1244,7 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async #deviceIsOwn(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<boolean> {
-    if (isPhysicalDriverDevice(device)) return true;
+  async #deviceIsOwn(device: VirtualDriverDevice): Promise<boolean> {
     const data = this.#dataFor(device);
     return data.serial !== "" && (await this.#serialIsOwn(data));
   }
@@ -2206,12 +2219,11 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
-    // why: `stdio: "ignore"` and `unref()` for the same reason the adb server gets them: an
-    // emulator outlives the daemon by design (`#reattachRunningEmulators` adopts it after
-    // a restart) and is reaped through adb and by pid, never by awaiting its exit. Left
-    // referenced, its handle and stdio pipes would hold the event loop open, and a
-    // `daemon stop` that had logged "Daemon stopped" would leave the process alive for as
-    // long as any emulator ran.
+    // why: `stdio: "ignore"` and `unref()` because an emulator outlives the daemon by design
+    // (`#reattachRunningEmulators` adopts it after a restart) and is reaped through adb and
+    // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
+    // the event loop open, and a `daemon stop` that had logged "Daemon stopped" would leave
+    // the process alive for as long as any emulator ran.
     const handle = this.#processRunner.spawn(
       this.#sdk.emulator,
       [

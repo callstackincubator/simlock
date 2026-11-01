@@ -33,7 +33,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
    with CSP, `nosniff` and `no-referrer`; a page path (no extension, not `/assets/`)
    falls back to `index.html`. An unbuilt console answers 404 and logs one warning.
 2. Log middleware — one `request` line per answer (method, path, status, `durationMs`,
-   `requesterId`). Not for `/v1/healthz`. Inside it, a JSON `200` to a `GET` gets an `ETag`, and a matching `If-None-Match` turns it
+   `requesterId`). Not for `/v1/healthz`. Inside it, a JSON answer under `/v1` that is not a mount's gets `Cache-Control: no-store` unless it already has one (so a CDN never stores it), and a JSON `200` to a `GET` gets an `ETag`, and a matching `If-None-Match` turns it
    into `304` with no body. Streams and mounts are skipped, so their bodies are never read.
 3. `requireAuth` on every route but `GET /v1/healthz`. It asks `src/auth` with the request's
    headers: a bearer token, or the JWT the sign-in proxy adds when `http.proxyAuth` is set.
@@ -86,7 +86,7 @@ A route with a `socket` handler also takes a WebSocket upgrade: `app.leaseSocket
 
 ## Streams
 
-- `pipeSse` writes events in order, `: keepalive` every 15 s, unsubscribes on abort. A stream
+- `pipeSse` writes `: open` at once (a proxy that holds headers until the first body byte shows the stream), events in order, `: keepalive` every 15 s, unsubscribes on abort. A stream
   opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.

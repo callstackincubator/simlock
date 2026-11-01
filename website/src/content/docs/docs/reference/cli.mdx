@@ -161,30 +161,32 @@ Releasing a lease taken under a different [requester identity](#requester-identi
 Run `xcrun simctl` against Simlock's iOS device set. Under `drivers.ios.deviceSet` `simlock` (the default), Simlock's simulators live in their own set, so a bare `xcrun simctl` does not see them; under `default` this runs plain `xcrun simctl` in Xcode's set. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
 
 ```text
-simlock simctl [--lease <lease-id>] <simctl-args...>
+simlock simctl [--lease <lease-id>] [--stdin] <simctl-args...>
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the simctl arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
+| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command. Must come before the simctl arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
 
-Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back, and a piped stdin is sent along. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
+Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back. Stdin is sent only with `--stdin`; without it the command gets empty input and a pipe that never closes does not hold it up. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
 
 ## simlock adb
 
 Run `adb` against Simlock's adb server, which is where Simlock's emulators are. See [Working with a device](/simlock/docs/using-devices/working-with-a-device).
 
 ```text
-simlock adb [--lease <lease-id>] <adb-args...>
+simlock adb [--lease <lease-id>] [--stdin] <adb-args...>
 ```
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the adb arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
+| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command. Must come before the adb arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<adb-args...>` | Passed to `adb` as written. | — |
 
-The command exits with `adb`'s own exit code. Simlock refuses `adb kill-server`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
+The command exits with `adb`'s own exit code. Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input. Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
 
 ## simlock rotate
 

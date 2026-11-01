@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -515,6 +519,34 @@ describe("NodeProcessRunner", () => {
       stdout: "standard out",
     });
   });
+
+  it.each([
+    { existing: undefined, expected: "out-line\nerr-line\n" },
+    { existing: "kept\n", expected: "kept\nout-line\nerr-line\n" },
+  ])(
+    "appends a child's stdout and stderr to a { file } stdio (existing $existing)",
+    async ({ existing, expected }) => {
+      const dir = mkdtempSync(join(tmpdir(), "simlock-runner-"));
+      const file = join(dir, "child.log");
+      try {
+        if (existing !== undefined) writeFileSync(file, existing);
+
+        const handle = new NodeProcessRunner().spawn(
+          process.execPath,
+          ["-e", "process.stdout.write('out-line\\n', () => process.stderr.write('err-line\\n'))"],
+          { stdio: { file } },
+        );
+        await handle.wait();
+
+        expect(readFileSync(file, "utf8")).toBe(expected);
+        if (existing === undefined && process.platform !== "win32") {
+          expect(statSync(file).mode & 0o777).toBe(0o600);
+        }
+      } finally {
+        rmSync(dir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("captures nothing and ends its line streams when output is ignored", async () => {
     const runner = new NodeProcessRunner();

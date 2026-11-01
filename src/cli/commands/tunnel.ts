@@ -231,7 +231,7 @@ function relayConnections(
       streams.delete(frame.conn);
     }
   };
-  const relay = async (
+  const handle = async (
     spec: TunnelSpec | undefined,
     frame: { tag: number; conn: number; payload: Uint8Array },
   ): Promise<void> => {
@@ -250,7 +250,7 @@ function relayConnections(
       wake?.();
     }
   };
-  return { adopt, closeAll, relay };
+  return { adopt, closeAll, handle };
 }
 
 // why: a forward listener accepts at bind, before the lease and the socket exist, so its connections wait here until READY and the command closes what is left when it ends.
@@ -378,6 +378,7 @@ function serve(
   specs: readonly TunnelSpec[],
   gate: ForwardGate,
   leaseId: string,
+  base: string,
 ): Promise<number> {
   const warned = new Map<number, number>();
   const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
@@ -411,15 +412,15 @@ function serve(
     let stopping = false;
     let closeTimer: TimerHandle | undefined;
     const helloTimer = environment.clock.setTimer(HELLO_TIMEOUT_MS, () => {
-      end(disconnected(`Lease ${leaseId}: no READY from the worker within 90 s`));
+      end(disconnected(`Lease ${leaseId}: no READY from the worker within 90 s`), true);
     });
     const heard = () => {
       if (silence !== undefined) environment.clock.cancel(silence);
       silence = environment.clock.setTimer(SILENCE_TIMEOUT_MS, () => {
-        end(disconnected(`Lease ${leaseId}: nothing was heard from the worker for 45 s`));
+        end(disconnected(`Lease ${leaseId}: nothing was heard from the worker for 45 s`), true);
       });
     };
-    function end(failure: TunnelFailure | undefined): void {
+    function end(failure: TunnelFailure | undefined, unresponsive = false): void {
       if (finished) return;
       finished = true;
       environment.signals.off("SIGINT", stop);
@@ -429,14 +430,18 @@ function serve(
       if (closeTimer !== undefined) environment.clock.cancel(closeTimer);
       gate.open = undefined;
       relay.closeAll();
-      if (!socketClosed) socket.close(CLOSE_NORMAL, "");
+      if (!socketClosed) {
+        socket.close(CLOSE_NORMAL, "");
+        // why: a worker that never answers the close would leave the socket holding the process open for 30 s past the bound.
+        if (unresponsive) socket.terminate();
+      }
       if (failure === undefined) resolve(0);
       else reject(failure);
     }
     function stop(): void {
       if (finished) return;
       stopping = true;
-      closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined));
+      closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined, true));
       socket.close(CLOSE_NORMAL, "");
     }
     environment.signals.on("SIGINT", stop);
@@ -456,7 +461,7 @@ function serve(
               `Lease ${leaseId} ended: ${reason}`,
               ERROR_TABLE.TUNNEL_LEASE_ENDED.cliExitCode,
             )
-          : disconnected(`Lease ${leaseId}: the connection to the worker was lost`),
+          : disconnected(`Lease ${leaseId}: the connection to ${base} was lost`),
       );
     });
     socket.onMessage((bytes) => {
@@ -488,7 +493,7 @@ function serve(
                 field(payloadJson(frame.payload), "devicePort") === devicePort,
             )
           : undefined;
-      handled = handled.then(() => relay.relay(opened, frame)).catch(() => undefined);
+      handled = handled.then(() => relay.handle(opened, frame)).catch(() => undefined);
     });
     socket.send(
       encodeTunnelFrame(
@@ -542,7 +547,7 @@ async function run(
     }
     const leaseId = await leaseToUse(environment, base, secret, named);
     const socket = await openSocket(environment, base, secret, leaseId);
-    return await serve(environment, socket, specs, gate, leaseId);
+    return await serve(environment, socket, specs, gate, leaseId, base);
   } catch (error) {
     if (!(error instanceof TunnelFailure)) throw error;
     environment.stderr.write(
