@@ -22,6 +22,7 @@ import {
 } from "../core/index.js";
 import type { ModuleDeviceTcp } from "../modules/index.js";
 import type { Clock, LeaseSocket, Logger, TcpStream, TimerHandle } from "../ports/index.js";
+import { pendingStream } from "./pending-stream.js";
 
 const CLOSE_LEASE_ENDED = 4001;
 const CLOSE_GOING_AWAY = 1001;
@@ -109,9 +110,6 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
       };
     }
   }
-  if (tunnels.some(({ kind }) => kind === "forward")) {
-    return { code: "TUNNEL_UNSUPPORTED", message: "forward tunnels are not available yet" };
-  }
   return undefined;
 }
 
@@ -138,6 +136,7 @@ export function createTunnelSessions(options: {
 
   function attach(leaseId: string, device: DeviceRecord, socket: LeaseSocket): void {
     let nextConnection = 1;
+    let lastCallerConnection = 0;
     let greeted = false;
     let reserved = 0;
     let finished: Promise<void> | undefined;
@@ -147,6 +146,7 @@ export function createTunnelSessions(options: {
       | undefined;
     const connections = new Map<number, Connection>();
     const reverses: DeviceReverse[] = [];
+    const forwards = new Set<number>();
 
     // why: a phone's reclaim removes no rules, so an end whose signal is aborted still removes this session's own; only an emulator's reclaim does that for it.
     const phone = toDriverDevice(device).physical;
@@ -212,6 +212,16 @@ export function createTunnelSessions(options: {
       connections.delete(conn);
     }
 
+    async function windowOpen(connection: Connection): Promise<boolean> {
+      while (connection.window === 0) {
+        await new Promise<void>((wake) => {
+          connection.wake = wake;
+        });
+        if (connection.closed) return false;
+      }
+      return true;
+    }
+
     // why: a connection a RESET or a failure already closed sends no END for the device's end.
     function deviceEnded(conn: number, connection: Connection): void {
       if (connection.closed) return;
@@ -225,14 +235,11 @@ export function createTunnelSessions(options: {
       const reader = connection.stream.readable.getReader();
       let pending: Uint8Array | undefined;
       for (;;) {
-        while (connection.window === 0) {
-          await new Promise<void>((wake) => {
-            connection.wake = wake;
-          });
-          if (connection.closed) return;
-        }
+        if (!(await windowOpen(connection))) return;
         if (pending === undefined) {
-          const step = await reader.read();
+          // why: a forwarded connection whose device connect failed has a readable that errors; the RESET it got is its whole ending.
+          const step = await reader.read().catch(() => undefined);
+          if (step === undefined) return;
           if (step.done) {
             deviceEnded(conn, connection);
             return;
@@ -244,6 +251,78 @@ export function createTunnelSessions(options: {
         connection.window -= size;
         pending = size === pending.length ? undefined : pending.subarray(size);
       }
+    }
+
+    function register(conn: number, stream: TcpStream): void {
+      const connection: Connection = {
+        callerEnded: false,
+        closed: false,
+        deviceEnded: false,
+        inbound: TUNNEL_WINDOW_BYTES,
+        stream,
+        wake: undefined,
+        window: TUNNEL_WINDOW_BYTES,
+      };
+      connections.set(conn, connection);
+      void pump(conn, connection).catch(() => drop(conn, connection));
+    }
+
+    // why: the OPEN is wire input from the caller, so its JSON may be anything; the port it names is trusted only when it is one of this socket's forward tunnels.
+    function forwardPortOf(payload: Uint8Array): number | undefined {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(new TextDecoder().decode(payload));
+      } catch {
+        return undefined;
+      }
+      const devicePort = field(parsed, "devicePort");
+      const named = field(parsed, "kind") === "forward" && typeof devicePort === "number";
+      return named && forwards.has(devicePort) ? devicePort : undefined;
+    }
+
+    function openForward(conn: number, payload: Uint8Array): void {
+      if (finished !== undefined) return;
+      if (conn % 2 !== 0 || conn <= lastCallerConnection) {
+        badRequest("OPEN needs an even connection id above the last");
+        return;
+      }
+      const devicePort = forwardPortOf(payload);
+      if (devicePort === undefined) {
+        badRequest("OPEN must name a forward tunnel of this socket");
+        return;
+      }
+      lastCallerConnection = conn;
+      if (connections.size >= MAX_CONNECTIONS) {
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.reset,
+            conn,
+            JSON.stringify({ reason: "too many connections" }),
+          ),
+        );
+        return;
+      }
+      const connecting = options.deviceTcp.connect(
+        device.spec.platform,
+        toDriverDevice(device),
+        devicePort,
+        new AbortController().signal,
+      );
+      register(conn, pendingStream(connecting));
+      connecting.catch((error: unknown) => {
+        const connection = connections.get(conn);
+        if (connection === undefined) return;
+        connection.closed = true;
+        connection.wake?.();
+        connections.delete(conn);
+        socket.send(
+          encodeTunnelFrame(
+            TUNNEL_TAG.reset,
+            conn,
+            JSON.stringify({ reason: error instanceof Error ? error.message : String(error) }),
+          ),
+        );
+      });
     }
 
     function refuse(refused: Refusal): void {
@@ -310,9 +389,12 @@ export function createTunnelSessions(options: {
         });
         return;
       }
+      for (const { devicePort, kind } of tunnels) if (kind === "forward") forwards.add(devicePort);
       counts.set(leaseId, held + tunnels.length);
       reserved = tunnels.length;
       for (const tunnel of tunnels) {
+        // why: a forward tunnel sets nothing on the device; each caller connection opens its own device socket.
+        if (tunnel.kind === "forward") continue;
         let reverse: DeviceReverse;
         try {
           reverse = await options.deviceTcp.reverse(
@@ -350,17 +432,7 @@ export function createTunnelSessions(options: {
           const conn = nextConnection;
           nextConnection += 2;
           socket.send(encodeTunnelFrame(TUNNEL_TAG.open, conn, JSON.stringify(tunnel)));
-          const connection: Connection = {
-            callerEnded: false,
-            closed: false,
-            deviceEnded: false,
-            inbound: TUNNEL_WINDOW_BYTES,
-            stream,
-            wake: undefined,
-            window: TUNNEL_WINDOW_BYTES,
-          };
-          connections.set(conn, connection);
-          void pump(conn, connection).catch(() => drop(conn, connection));
+          register(conn, stream);
         });
       }
       socket.send(encodeTunnelFrame(TUNNEL_TAG.ready, 0, JSON.stringify({ tunnels })));
@@ -412,6 +484,10 @@ export function createTunnelSessions(options: {
         badRequest("HELLO came twice");
         return;
       }
+      if (frame.tag === TUNNEL_TAG.open) {
+        openForward(frame.conn, frame.payload);
+        return;
+      }
       if (
         frame.tag !== TUNNEL_TAG.data &&
         frame.tag !== TUNNEL_TAG.credit &&
@@ -421,8 +497,9 @@ export function createTunnelSessions(options: {
         badRequest(`unknown frame tag ${String(frame.tag)}`);
         return;
       }
-      // why: the worker opens odd ids, rising from 1, so an even id or one above the last it opened was never a connection; one it opened and closed is ignored.
-      if (frame.conn % 2 === 0 || frame.conn > nextConnection - 2) {
+      // why: the worker opens odd ids and the caller even ones, each rising, so an id above the last of its side was never a connection; one opened and closed is ignored.
+      const last = frame.conn % 2 === 0 ? lastCallerConnection : nextConnection - 2;
+      if (frame.conn === 0 || frame.conn > last) {
         badRequest(`connection ${String(frame.conn)} was never opened`);
         return;
       }

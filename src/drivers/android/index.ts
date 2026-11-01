@@ -594,14 +594,17 @@ export class AndroidDriver implements Driver {
     this.#sdk = sdk;
     this.#tcpProbe = options.tcpProbe;
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
-    const targetFor = this.#screenTargetFor(options, sdk.adb, adbServerPort);
+    const deviceTarget = this.#deviceTargetFor(options, sdk.adb, adbServerPort);
+    const targetFor = this.#screenTargetFor(options, deviceTarget);
     this.screenCapture = this.#screenCaptureFor(options, targetFor);
     this.input = this.#inputFor(options, targetFor);
     this.deviceTcp =
       options.tcpListener === undefined
         ? undefined
         : createAndroidDeviceTcp({
+            clock: options.clock,
             listeners: options.tcpListener,
+            target: deviceTarget,
             isOwn: (device) => this.#deviceIsOwn(device),
             runAdb: (device, args, timeoutMs) => this.#runAdbOn(device, args, timeoutMs),
             warn: (message, detail) => options.logger?.warn(message, detail),
@@ -635,13 +638,21 @@ export class AndroidDriver implements Driver {
     );
   }
 
+  // why: the screen and the input helper ride on the scrcpy server, so without its path they have no target even when a device port can be opened.
   #screenTargetFor(
+    options: AndroidDriverOptions,
+    deviceTarget: AndroidTargetFor | undefined,
+  ): AndroidTargetFor | undefined {
+    return options.scrcpyServerPath === undefined ? undefined : deviceTarget;
+  }
+
+  #deviceTargetFor(
     options: AndroidDriverOptions,
     adb: string,
     adbServerPort: number,
   ): AndroidTargetFor | undefined {
     const tcp = options.tcpStreamConnector;
-    if (options.scrcpyServerPath === undefined || tcp === undefined) return undefined;
+    if (tcp === undefined) return undefined;
     const runner = options.processRunner;
     return async (device) =>
       isPhysicalDriverDevice(device)

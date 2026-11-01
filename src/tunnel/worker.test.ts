@@ -87,6 +87,7 @@ async function setup(
   const worker = loaded.createWorker({
     ...ctx,
     deviceTcp: {
+      connect: (_platform, device, port, signal) => deviceTcp.connect(device, port, signal),
       supports: (named) => named === "android",
       reverse: (_platform, device, port, signal) => deviceTcp.reverse(device, port, signal),
     },
@@ -118,7 +119,7 @@ async function carriesOneTunnel(): Promise<void> {
   );
   expect(deviceTcp.reversed).toEqual([5173]);
 
-  const device = deviceTcp.connect(5173);
+  const device = deviceTcp.openFromDevice(5173);
   await vi.waitFor(() =>
     expect(frames(socket).at(-1)).toEqual({
       body: '{"kind":"reverse","devicePort":5173}',
@@ -147,8 +148,8 @@ async function halfClosesAndLimitsConnections(): Promise<void> {
       },
     ]),
   );
-  const first = deviceTcp.connect(1024);
-  const second = deviceTcp.connect(65535);
+  const first = deviceTcp.openFromDevice(1024);
+  const second = deviceTcp.openFromDevice(65535);
   await vi.waitFor(() =>
     expect(frames(socket).slice(1)).toEqual([
       { body: '{"kind":"reverse","devicePort":1024}', conn: 1, tag: 0x02 },
@@ -176,16 +177,16 @@ async function halfClosesAndLimitsConnections(): Promise<void> {
   );
 
   const opens = () => frames(socket).filter((sent) => sent.tag === 0x02).length;
-  const peers = Array.from({ length: 255 }, () => deviceTcp.connect(1024));
+  const peers = Array.from({ length: 255 }, () => deviceTcp.openFromDevice(1024));
   await vi.waitFor(() => expect(opens()).toBe(257));
   expect(peers.every((peer) => !peer.closed)).toBe(true);
-  const past = deviceTcp.connect(1024);
+  const past = deviceTcp.openFromDevice(1024);
   await vi.waitFor(() => expect(past.closed).toBe(true));
   expect(opens()).toBe(257);
 
   socket.receive(frame(0x06, 3, '{"reason":"done"}'));
   await vi.waitFor(() => expect(second.closed).toBe(true));
-  const after = deviceTcp.connect(1024);
+  const after = deviceTcp.openFromDevice(1024);
   await vi.waitFor(() => expect(opens()).toBe(258));
   expect(after.closed).toBe(false);
 }
@@ -195,8 +196,8 @@ async function pausesOnlyTheConnectionWithoutCredit(): Promise<void> {
   const socket = await attach(worker);
   socket.receive(hello({ devicePort: 5173, kind: "reverse" }));
   await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-  const first = deviceTcp.connect(5173);
-  const second = deviceTcp.connect(5173);
+  const first = deviceTcp.openFromDevice(5173);
+  const second = deviceTcp.openFromDevice(5173);
   await vi.waitFor(() =>
     expect(frames(socket).map((sent) => sent.tag)).toEqual([0x81, 0x02, 0x02]),
   );
@@ -265,8 +266,9 @@ describe("a worker's tunnel socket", () => {
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "forward tunnels are not available yet",
-        tunnels: [reverse(5173), { devicePort: 9229, kind: "forward" }],
+        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        platform: "ios",
+        tunnels: [{ devicePort: 9229, kind: "forward" }],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
@@ -488,6 +490,11 @@ describe("a worker's tunnel socket", () => {
         send: (socket) => socket.receive(credit(2, 1)),
       },
       {
+        message: "connection 0 was never opened",
+        ready: true,
+        send: (socket) => socket.receive(frame(0x03, 0, "x")),
+      },
+      {
         message: "the window is above 2147483648",
         ready: true,
         send: (socket) => {
@@ -503,8 +510,8 @@ describe("a worker's tunnel socket", () => {
       if (bad.ready) {
         socket.receive(hello(tunnel));
         await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-        deviceTcp.connect(5173);
-        deviceTcp.connect(5173);
+        deviceTcp.openFromDevice(5173);
+        deviceTcp.openFromDevice(5173);
         await vi.waitFor(() => expect(frames(socket)).toHaveLength(3));
       }
       expect(socket.closed).toBeUndefined();
@@ -521,8 +528,8 @@ describe("a worker's tunnel socket", () => {
     const socket = await attach(worker);
     socket.receive(hello(tunnel));
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-    const closing = deviceTcp.connect(5173);
-    const going = deviceTcp.connect(5173);
+    const closing = deviceTcp.openFromDevice(5173);
+    const going = deviceTcp.openFromDevice(5173);
     await vi.waitFor(() => expect(frames(socket)).toHaveLength(3));
     socket.receive(frame(0x06, 1, '{"reason":"caller closed"}'));
     await vi.waitFor(() => expect(closing.closed).toBe(true));
@@ -554,13 +561,13 @@ describe("a worker's tunnel socket", () => {
       readonly deviceTcp: FakeDeviceTcp;
       readonly worker: WorkerModule;
       readonly socket: MemoryLeaseSocket;
-      readonly device: ReturnType<FakeDeviceTcp["connect"]>;
+      readonly device: ReturnType<FakeDeviceTcp["openFromDevice"]>;
     }> {
       const { clock, deviceTcp, worker } = await setup();
       const socket = await attach(worker);
       socket.receive(hello(tunnel));
       await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
-      const device = deviceTcp.connect(5173);
+      const device = deviceTcp.openFromDevice(5173);
       await vi.waitFor(() => expect(frames(socket)).toHaveLength(2));
       return { clock, device, deviceTcp, socket, worker };
     }
@@ -710,7 +717,7 @@ describe("a worker's tunnel socket", () => {
     );
     expect(reclaimed.socket.closed).toEqual({ code: 4001, reason: "device-lost" });
     expect(reclaimed.deviceTcp.reversed).toEqual([5173]);
-    expect(reclaimed.deviceTcp.connect(5173).closed).toBe(true);
+    expect(reclaimed.deviceTcp.openFromDevice(5173).closed).toBe(true);
 
     // why: a phone's reclaim removes no rules, so an aborted end still removes the tunnel's own.
     const phone = await setup("android", true);
@@ -806,5 +813,115 @@ describe("a worker's tunnel socket", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(heartbeats()).toBe(2);
     expect(clock.pendingTimerCount).toBe(idleTimers);
+  });
+});
+
+describe("a worker's tunnel socket with forward tunnels", () => {
+  const tunnels = [
+    { devicePort: 9229, kind: "forward" },
+    { devicePort: 5173, kind: "reverse" },
+  ];
+  const open = (conn: number, devicePort: number, kind = "forward"): Uint8Array =>
+    frame(0x02, conn, JSON.stringify({ devicePort, kind }));
+
+  async function ready() {
+    const { deviceTcp, worker } = await setup();
+    deviceTcp.listening.add(9229);
+    const socket = await attach(worker);
+    socket.receive(hello(...tunnels));
+    await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+    expect(deviceTcp.reversed).toEqual([5173]);
+    return { deviceTcp, socket, worker };
+  }
+
+  it("refuses a caller OPEN that is not an even rising id for a forward tunnel of the socket with BAD_REQUEST and close 4003, and counts caller and device connections together toward 256", async () => {
+    const accepted = await ready();
+    accepted.socket.receive(open(2, 9229));
+    await vi.waitFor(() => expect(accepted.deviceTcp.connections).toHaveLength(1));
+    expect(accepted.socket.closed).toBeUndefined();
+
+    const cases = [
+      { frames: [open(2, 9230)], message: "OPEN must name a forward tunnel of this socket" },
+      { frames: [open(2, 5173)], message: "OPEN must name a forward tunnel of this socket" },
+      {
+        frames: [open(2, 9229, "reverse")],
+        message: "OPEN must name a forward tunnel of this socket",
+      },
+      { frames: [open(1, 9229)], message: "OPEN needs an even connection id above the last" },
+      {
+        frames: [open(2, 9229), open(2, 9229)],
+        message: "OPEN needs an even connection id above the last",
+      },
+      {
+        frames: [open(4, 9229), open(2, 9229)],
+        message: "OPEN needs an even connection id above the last",
+      },
+      {
+        frames: [frame(0x02, 2, "{nope")],
+        message: "OPEN must name a forward tunnel of this socket",
+      },
+    ];
+    for (const bad of cases) {
+      const { socket } = await ready();
+      for (const sent of bad.frames) socket.receive(sent);
+      await vi.waitFor(() => expect(socket.closed).toEqual({ code: 4003, reason: bad.message }));
+      expect(frames(socket).at(-1)).toEqual({
+        body: JSON.stringify({ code: "BAD_REQUEST", message: bad.message }),
+        conn: 0,
+        tag: 0x82,
+      });
+    }
+
+    const { deviceTcp, socket } = await ready();
+    for (let conn = 2; conn <= 512; conn += 2) {
+      if (conn <= 256) deviceTcp.openFromDevice(5173);
+      else socket.receive(open(conn, 9229));
+    }
+    await vi.waitFor(() => expect(deviceTcp.connections).toHaveLength(128));
+    socket.receive(open(514, 9229));
+    await vi.waitFor(() =>
+      expect(frames(socket).at(-1)).toEqual({
+        body: '{"reason":"too many connections"}',
+        conn: 514,
+        tag: 0x06,
+      }),
+    );
+    expect(deviceTcp.connections).toHaveLength(128);
+    const past = deviceTcp.openFromDevice(5173);
+    await vi.waitFor(() => expect(past.closed).toBe(true));
+    expect(socket.closed).toBeUndefined();
+
+    const failing = await ready();
+    failing.deviceTcp.listening.delete(9229);
+    failing.deviceTcp.connectFailures.set(9231, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
+    failing.socket.receive(open(2, 9229));
+    await vi.waitFor(() =>
+      expect(frames(failing.socket).at(-1)).toEqual({
+        body: '{"reason":"closed"}',
+        conn: 2,
+        tag: 0x06,
+      }),
+    );
+    expect(failing.socket.closed).toBeUndefined();
+
+    const silent = await ready();
+    silent.deviceTcp.connectFailures.set(9229, new DeviceTcpError("TUNNEL_FAILED", "timeout"));
+    silent.socket.receive(open(2, 9229));
+    await vi.waitFor(() =>
+      expect(frames(silent.socket).at(-1)).toEqual({
+        body: '{"reason":"timeout"}',
+        conn: 2,
+        tag: 0x06,
+      }),
+    );
+
+    const ended = await ready();
+    await ended.worker.hooks?.beforeDeviceReclaim?.(
+      ending("expired"),
+      new AbortController().signal,
+    );
+    ended.socket.receive(open(2, 9229));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ended.deviceTcp.connections).toHaveLength(0);
   });
 });

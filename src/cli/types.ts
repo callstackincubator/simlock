@@ -16,6 +16,7 @@ import type {
   ServiceDefinition,
   ServiceManager,
   SystemStats,
+  TcpListenerFactory,
   TcpStreamConnector,
   WebSocketClientConnector,
 } from "../ports/index.js";
@@ -98,6 +99,8 @@ export interface CliEnvironment {
   readonly webSocket: WebSocketClientConnector;
   readonly httpJson: HttpJsonClient;
   readonly tcpStreams: TcpStreamConnector;
+  /** why: a `forward` tunnel listens on the caller's loopback port; the adapter loads on first use. */
+  readonly tcpListeners: TcpListenerFactory;
   /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the daemon `simlock tunnel` calls and the credential it sends. */
   readonly tunnelUrl?: string;
   readonly tunnelToken?: string;
@@ -128,4 +131,5 @@ export interface CliEnvironmentPorts {
   readonly webSocket?: WebSocketClientConnector;
   readonly httpJson?: HttpJsonClient;
   readonly tcpStreams?: TcpStreamConnector;
+  readonly tcpListeners?: TcpListenerFactory;
 }

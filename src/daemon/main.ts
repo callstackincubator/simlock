@@ -524,6 +524,8 @@ async function composeDaemon(
       processSupervisor,
       registry,
       deviceTcp: {
+        connect: (platform, device, devicePort, signal) =>
+          catalog.connectDevicePort(platform, device, devicePort, signal),
         supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
         reverse: (platform, device, devicePort, signal) =>
           catalog.reverseDevicePort(platform, device, devicePort, signal),

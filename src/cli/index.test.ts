@@ -41,6 +41,7 @@ import {
 import {
   FakeHttpJsonClient,
   FakeSystemStats,
+  FakeTcpListenerFactory,
   FakeTcpStreamConnector,
   FakeWebSocketClientConnector,
 } from "../ports/index.js";
@@ -8508,6 +8509,7 @@ function outputCapture(ports?: CliEnvironmentPorts, env: NodeJS.ProcessEnv = {})
           confirm: async () => true,
           webSocket: new FakeWebSocketClientConnector(),
           httpJson: new FakeHttpJsonClient(),
+          tcpListeners: new FakeTcpListenerFactory(),
           tcpStreams: new FakeTcpStreamConnector(),
           ...overrides,
         };

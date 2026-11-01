@@ -30,6 +30,7 @@ import type {
   ProcessRunner,
   ProcessSupervisor,
   TcpProbe,
+  TcpStream,
 } from "../ports/index.js";
 
 export interface ModuleConfig<C> {
@@ -212,6 +213,12 @@ export interface ModuleDeviceTcp {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<DeviceReverse>;
+  connect(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }
 
 export interface WorkerContext<C> {
