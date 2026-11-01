@@ -60,7 +60,10 @@ const scopedEnv = {
 } as const;
 const scopedOptions = { env: scopedEnv } as const;
 // why: The emulator outlives the daemon and is never read from, so it is spawned detached.
-const emulatorOptions = { env: scopedEnv, stdio: "ignore" } as const;
+const emulatorOptions = {
+  env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
+  stdio: "ignore",
+} as const;
 const binaries = {
   adb: `${sdk}/platform-tools/adb`,
   avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
@@ -554,16 +557,18 @@ describe("AndroidDriver", () => {
     );
   });
 
-  it("starts the cold boot and the restart from the baseline with -crash-report-mode never, so a stale crash dump asks no one", async () => {
+  it("starts the cold boot and the restart from the baseline with -crash-report-mode never and a crash database under the Simlock root, so a stale crash dump asks no one and the user's shared database is never read", async () => {
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
     const launches: (readonly string[])[] = [];
+    const crashDatabases: (string | undefined)[] = [];
     const hostRunner = host.runner();
     const runner: ProcessRunner = {
       ...hostRunner,
-      spawn: (command, args) => {
+      spawn: (command, args, options) => {
         launches.push(args);
-        return hostRunner.spawn(command, args);
+        crashDatabases.push(options?.env?.ANDROID_EMU_CRASH_REPORTING_DATABASE);
+        return hostRunner.spawn(command, args, options);
       },
     };
     const driver = await createDriver(filesystem, runner, {
@@ -580,6 +585,10 @@ describe("AndroidDriver", () => {
 
     await driver.makeReady(await driver.provision(spec));
 
+    expect(crashDatabases).toEqual([
+      `${avdDirectory}/emu-crash.db`,
+      `${avdDirectory}/emu-crash.db`,
+    ]);
     const crashReportMode = (args: readonly string[]) => {
       const flag = args.indexOf("-crash-report-mode");
       return flag === -1 ? undefined : args[flag + 1];

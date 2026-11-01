@@ -936,6 +936,18 @@ export class AndroidDriver implements Driver {
   }
 
   /**
+   * why: `-crash-report-mode never` deletes every dump in the crash database the emulator reads, and
+   * by default that is `/tmp/android-<user>/emu-crash-<version>.db`, shared with Android Studio and
+   * the user's own emulators. A database inside Simlock's own root keeps those dumps untouched.
+   */
+  #emulatorEnv(): NodeJS.ProcessEnv {
+    return {
+      ...this.#env(),
+      ANDROID_EMU_CRASH_REPORTING_DATABASE: join(this.#deviceRoot, "emu-crash.db"),
+    };
+  }
+
+  /**
    * why: Announces every console port Simlock may have an emulator on to the server that was
    * just started or adopted -- deliberately doing, for Simlock's own range only, what adb's
    * scanner would do for everyone's.
@@ -2235,13 +2247,13 @@ export class AndroidDriver implements Driver {
         "-grpc",
         String(data.port + GRPC_PORT_OFFSET),
         "-grpc-use-token",
-        // why: a dump an earlier crash left in the user's crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and drops the dump.
+        // why: a dump an earlier crash left in a crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and deletes the dumps in the database it reads, so `#emulatorEnv` points that at Simlock's own root and never at the user's shared one.
         "-crash-report-mode",
         "never",
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
-      { env: this.#env(), stdio: "ignore" },
+      { env: this.#emulatorEnv(), stdio: "ignore" },
     );
     handle.unref();
     state.handle = handle;
