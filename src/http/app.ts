@@ -250,6 +250,7 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       (prefix) => path === prefix || path.startsWith(`${prefix}/`),
     );
     if (mounted || !c.res.headers.get("content-type")?.startsWith("application/json")) return;
+    if (!c.res.headers.has("cache-control")) c.res.headers.set("Cache-Control", "no-store");
     await etagStep(c, () => Promise.resolve());
   });
 
