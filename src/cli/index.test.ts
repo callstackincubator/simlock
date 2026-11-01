@@ -1043,6 +1043,49 @@ describe("CLI: exit codes", () => {
       ]);
     });
 
+    it.each([
+      { args: ["shell", "getprop"], tool: "adb" },
+      { args: ["list"], tool: "simctl" },
+    ])(
+      "runs $tool through a gateway without waiting for a piped stdin that stays open",
+      async ({ args, tool }) => {
+        // why: A `readStdin` that never settles is a pipe whose writer never closes it (a caller
+        // that spawns the CLI with `stdio: "pipe"`); the CLI reaching either it or `device.exec`
+        // is the point at which the command has run or is stuck, so no timer decides the result.
+        const output = outputCapture();
+        const seen: unknown[] = [];
+        let reached!: () => void;
+        const stuckOrSent = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+
+        const exited = runCli(
+          [tool, ...args],
+          output.environmentWith({
+            connectAdmin: async () =>
+              fakeClient({
+                getStatus: () => Promise.resolve(gatewayStatus),
+                listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                exec: (input) => {
+                  seen.push(input);
+                  reached();
+                  return Promise.resolve({ exitCode: 0 });
+                },
+              }),
+            readStdin: () => {
+              reached();
+              return new Promise<string | undefined>(() => {});
+            },
+          }),
+        );
+        await stuckOrSent;
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(seen).toEqual([{ args, leaseId: "lse_mine", requesterId: "test-requester", tool }]);
+        await expect(exited).resolves.toBe(0);
+      },
+    );
+
     it("sends no requesterId when the connection fell back to the agent role", async () => {
       // why: An agent session is gated on the lease it owns and its `requesterId` is ignored
       // entirely, so sending one would be noise that reads like authorization.
