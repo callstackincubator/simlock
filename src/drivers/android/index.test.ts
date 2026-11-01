@@ -4052,6 +4052,44 @@ describe("AndroidDriver.create", () => {
     );
   });
 
+  it("refuses adb disconnect with or without an address, on the local CLI and through device.exec", async () => {
+    // why: #1168. adb's server answers an empty `host:disconnect:` with kick_all_tcp_devices(),
+    // which kicks every kTransportLocal transport, and emulators are local transports; with an
+    // address it kicks the transport of that serial. Either way it detaches leases other than
+    // the caller's, as `kill-server` would. `-s` does not scope it: the subcommand acts on no
+    // device.
+    const filesystem = await androidFilesystem();
+    const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
+    const emulator = {
+      address: "emulator-5554",
+      deviceId: "device",
+      driverData: {},
+      physical: false,
+    } as const;
+    const callers = [
+      ["local CLI", undefined, undefined],
+      ["device.exec", { hasTerminal: false, platform: "android" }, emulator],
+    ] as const;
+    const commands = [
+      ["disconnect"],
+      ["-s", "emulator-5554", "disconnect"],
+      ["disconnect", "emulator-5556"],
+    ];
+
+    for (const [caller, context, device] of callers) {
+      for (const args of commands) {
+        const returned = passthroughOf(driver, args, context, device);
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toBeInstanceOf(
+          PassthroughRefusedError,
+        );
+        await expect(returned, `${caller}: adb ${args.join(" ")}`).rejects.toMatchObject({
+          message: expect.stringMatching(/^Refusing `simlock adb disconnect`/),
+          tool: "adb",
+        });
+      }
+    }
+  });
+
   it.each([[["emu", "avd", "stop"]], [["-s", "emulator-5586", "emu", "avd", "stop"]]])(
     "refuses an emu avd stop that would stop a device Simlock believes is running: %j",
     async (args) => {
