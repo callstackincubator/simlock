@@ -1,6 +1,6 @@
 # 0054. A lease holder tunnels device ports to its own machine
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-10-30
 - **Issue:** [#1110](https://github.com/callstackincubator/simlock/issues/1110)
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) Non-goals ("A
