@@ -164,7 +164,7 @@ A command runs on the worker machine, as the user who runs the worker daemon. `s
 
 An `Idempotency-Key` header on `POST /v1/lease-requests` (1 to 200 characters) makes the request safe to send again: the same key returns the stored request instead of queueing a second one, for 10 minutes after it finished.
 
-A `GET` under `/v1` that answers `200` with JSON carries an `ETag` header. Send it back as `If-None-Match` on the next read of the same route: while the answer is unchanged, the reply is `304 Not Modified` with no body. Event streams carry no `ETag`. Every JSON answer under `/v1` (including errors, `304` and `/v1/healthz`) carries `Cache-Control: no-store`, so a CDN or proxy cache in front of the daemon never stores one.
+A `GET` under `/v1` that answers `200` with JSON carries an `ETag` header. Send it back as `If-None-Match` on the next read of the same route: while the answer is unchanged, the reply is `304 Not Modified` with no body. Event streams carry no `ETag`. Simlock's own JSON answers under `/v1` (errors, `304` and `/v1/healthz` included) carry `Cache-Control: no-store`, so a CDN or proxy cache in front of the daemon never stores one. A module's routes, such as the device stream, keep the `Cache-Control` they set.
 
 ## Through a gateway
 
