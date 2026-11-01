@@ -43,7 +43,7 @@ function copyScrcpyServer() {
 
 // why: one product per call, so a build that fails on one program is not what skips the other;
 // the caller decides what the pair of outcomes means.
-function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
+function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
   const result = spawnSync(
     "swift",
     [
@@ -56,6 +56,7 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
       packagePath,
       "--scratch-path",
       scratch,
+      ...archs.flatMap((arch) => ["--arch", arch]),
     ],
     { stdio: "inherit" },
   );
@@ -69,7 +70,13 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
   }
   const target = join(dist, "bin", product);
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(scratch, "release", product), target);
+  // why: with more than one --arch, SwiftPM builds through Xcode's build system, which writes the
+  // universal binary under apple/Products/Release rather than release/.
+  const built =
+    archs.length > 1
+      ? join(scratch, "apple", "Products", "Release", product)
+      : join(scratch, "release", product);
+  copyFileSync(built, target);
   chmodSync(target, 0o755);
   return true;
 }
@@ -82,13 +89,16 @@ function buildIosCapture() {
   const packagePath = join(root, "vendor/screen-capture");
   const scratch = join(packagePath, ".build/out");
   // why: each program builds on its own -- the device program links a private framework the
-  // simulator program never needs, so one failing must not take the other's streams with it.
+  // simulator program never needs, so one failing must not take the other's streams with it. The
+  // simulator program runs on the worker's own CPU, and an Intel Mac or an x86_64 macOS VM is a
+  // worker too, so it ships universal; the device program needs Xcode 27, which runs on Apple
+  // silicon only, so it builds for the host alone.
   const products = [
-    ["simlock-screen-capture", "iOS screen streams"],
-    ["simlock-device-capture", "physical iPhone streams"],
+    ["simlock-screen-capture", "iOS screen streams", ["arm64", "x86_64"]],
+    ["simlock-device-capture", "physical iPhone streams", []],
   ];
-  const copied = products.filter(([product, what]) =>
-    buildAndCopySwiftProduct(product, what, packagePath, scratch),
+  const copied = products.filter(([product, what, archs]) =>
+    buildAndCopySwiftProduct(product, what, packagePath, scratch, archs),
   );
   if (copied.length > 0) copyNotices("screen-capture");
 }
