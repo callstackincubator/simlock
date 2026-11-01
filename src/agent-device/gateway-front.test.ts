@@ -251,11 +251,13 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const fake = existing?.fake ?? new FakeAgentDevice();
     const phone = existing?.phone ?? new FakeAgentDevice();
     if (spec.capability === "unavailable") fake.setUnavailable("down");
-    const latency: Record<string, number> =
-      spec.slowCatalog === true ? { listCatalog: slowCatalogMs } : {};
+    const latency: Record<string, number> = existing?.latency ?? {};
+    if (spec.slowCatalog === true) latency["listCatalog"] = slowCatalogMs;
     const workerClock =
-      spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs);
-    const driver = driverFor(spec, workerClock, latency);
+      existing?.clock ??
+      (spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs));
+    // why: a restarted worker keeps its driver, so the devices it leased are still running, as after a real daemon restart.
+    const driver = existing?.driver ?? driverFor(spec, workerClock, latency);
     let directPort: number | undefined;
     if (spec.direct === true) {
       directPort = await freeLoopbackPort();
@@ -1104,6 +1106,36 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
       ttlMs: workerCeilingMs,
     });
     expect(await deadlineOf(member, 1)).toBe(rig.clock.now() + 120_000);
+  });
+
+  it("after the worker restarts with the leased device still running, which ends its agent-device daemon's leases, simlock keeps the lease and the next heartbeat through the gateway keeps it too: it answers success, the worker's agent-device daemon holds the lease again on the same device, the simlock lease is still held, and the device is not wiped", async () => {
+    const rig = await setUp();
+    const original = first(rig);
+    await granted(rig, 1);
+    const leased = await grantedDevice(original);
+    const stopped = await original.daemon;
+    await stopped.stop("test");
+    runningDaemons.splice(runningDaemons.indexOf(stopped), 1);
+    await vi.waitFor(async () =>
+      expect((await viewOf(rig, original.label))?.connection).toBe("disconnected"),
+    );
+    original.fake.restart();
+    const member = await rig.addWorker(original.spec, original);
+    await untilRead(rig, member);
+    await expect
+      .poll(async () => (await fleetLeases(rig)).map((lease) => lease.id))
+      .toEqual([hex(1)]);
+    expect(await workerLeaseFor(member, 1)).toBeDefined();
+    expect(member.fake.leases.has(hex(1))).toBe(false);
+    const wiped = wipes(member);
+
+    const answer = await envelopeOf(await heartbeat(rig, 1));
+
+    expect(answer.error).toBeUndefined();
+    expect(answer.result).toMatchObject({ ok: true });
+    expect(member.fake.leases.get(hex(1))?.address).toBe(leased.address);
+    expect(await workerLeaseFor(member, 1)).toBeDefined();
+    expect(wipes(member)).toBe(wiped);
   });
 
   it("a heartbeat for a lease whose worker stopped being capable answers the notAvailable reply naming `the worker holding this lease cannot serve agent-device`", async () => {
