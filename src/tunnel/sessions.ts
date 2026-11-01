@@ -115,7 +115,7 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
   return undefined;
 }
 
-// why: one socket's state that the lease's end and the daemon's stop reach from outside: `finish` closes its connections and, unless the reclaim that follows does it, removes its rules.
+// why: one socket's state that the lease's end and the daemon's stop reach from outside: `finish` closes its connections and removes its rules, except on an emulator whose end is aborted, where the reclaim that follows does it.
 interface Session {
   readonly socket: LeaseSocket;
   finish(removeRules: boolean, signal?: AbortSignal): Promise<void>;
@@ -148,7 +148,12 @@ export function createTunnelSessions(options: {
     const connections = new Map<number, Connection>();
     const reverses: DeviceReverse[] = [];
 
-    function finish(removeRules: boolean, signal?: AbortSignal): Promise<void> {
+    // why: a phone's reclaim removes no rules, so an end whose signal is aborted still removes this session's own; only an emulator's reclaim does that for it.
+    const phone = toDriverDevice(device).physical;
+
+    function finish(removeRulesAsked: boolean, signalAsked?: AbortSignal): Promise<void> {
+      const removeRules = removeRulesAsked || phone;
+      const signal = phone ? undefined : signalAsked;
       finished ??= (async () => {
         endedWith = { remove: removeRules, signal };
         counts.set(leaseId, (counts.get(leaseId) ?? 0) - reserved);
@@ -160,7 +165,7 @@ export function createTunnelSessions(options: {
         connections.clear();
         try {
           if (!removeRules) return;
-          // why: one after another, so a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
+          // why: one after another, so on an emulator a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
           for (const reverse of reverses) {
             if (signal?.aborted === true) return;
             await bounded(removeRule(reverse));
@@ -470,7 +475,7 @@ export function createTunnelSessions(options: {
   return {
     attach,
     drain: () => endSessions(undefined, CLOSE_GOING_AWAY, "Simlock is stopping", true),
-    // why: with the signal aborted the daemon is stopping or in maintenance, and reclaim removes the rules, so no removal starts after that; the hook returns only when the removals it began are done.
+    // why: with the signal aborted the daemon is stopping or in maintenance; an emulator's reclaim removes the rules, so none starts after that, while a phone's reclaim removes none, so its session still does; the hook returns only when the removals it began are done.
     end: (leaseId, reason, signal) =>
       endSessions(leaseId, CLOSE_LEASE_ENDED, reason, !signal.aborted, signal),
   };

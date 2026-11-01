@@ -712,6 +712,16 @@ describe("a worker's tunnel socket", () => {
     expect(reclaimed.deviceTcp.reversed).toEqual([5173]);
     expect(reclaimed.deviceTcp.connect(5173).closed).toBe(true);
 
+    // why: a phone's reclaim removes no rules, so an aborted end still removes the tunnel's own.
+    const phone = await setup("android", true);
+    const phoneSocket = await attach(phone.worker);
+    phoneSocket.receive(hello(tunnel));
+    await vi.waitFor(() => expect(phone.deviceTcp.reversed).toEqual([5173]));
+    const phoneAborted = new AbortController();
+    phoneAborted.abort();
+    await phone.worker.hooks?.beforeDeviceReclaim?.(ending("device-lost"), phoneAborted.signal);
+    expect(phone.deviceTcp.reversed).toEqual([]);
+
     const racing = await setup();
     let release: () => void = () => undefined;
     racing.deviceTcp.gate = new Promise<void>((resolve) => {

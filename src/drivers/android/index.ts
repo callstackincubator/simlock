@@ -1137,7 +1137,7 @@ export class AndroidDriver implements Driver {
       : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
-  // why: the loopback ports held for a device's tunnels are freed only after its reclaim removed the rules they serve.
+  // why: the loopback ports held for a device's tunnels are freed after its reclaim: on an emulator the reclaim removed the rules, on a phone it removes none and only the ports no rule points to are freed.
   async reclaim(
     device: DriverDevice,
     options: { readonly clean: "standard" | "full" },

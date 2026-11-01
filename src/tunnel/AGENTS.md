@@ -23,7 +23,7 @@ The HTTP layer resolves the lease for the caller, then `socket.open` finds the l
 2. Each reverse tunnel is `ctx.deviceTcp.reverse`. A failure removes the tunnels set before it and refuses with the driver's `DeviceTcpError` code (`TUNNEL_PORT_IN_USE`, `TUNNEL_FAILED`), else `TUNNEL_FAILED`. Then `READY`.
 3. A device connection is `OPEN` with the next odd id; its bytes go out as `DATA` only while the caller's window allows, and the worker grants `CREDIT` as it writes to the device. `END` half-closes one direction; a connection ends when both have. A 257th open connection is closed at once.
 4. A bad frame (a `CREDIT` that is not 4 bytes, a `DATA` of 0 or over 65536 bytes included) is `BAD_REQUEST`, close 4003, never a throw; a frame for a connection already closed is ignored; a device stream that fails resets its own connection.
-5. The socket closing, the lease ending (`beforeDeviceReclaim`, close 4001 with the reason) and a drain (`beforeDrain`, close 1001) close the session's connections and remove its rules, the hook returning when they are done, a removal the socket's close began included (10 s per removal); a signal that is aborted, or aborts between removals, skips the rest and reclaim does them.
+5. The socket closing, the lease ending (`beforeDeviceReclaim`, close 4001 with the reason) and a drain (`beforeDrain`, close 1001) close the session's connections and remove its rules, the hook returning when they are done, a removal the socket's close began included (10 s per removal); on an emulator a signal that is aborted, or aborts between removals, skips the rest and reclaim does them; on a phone the removals run anyway, because its reclaim removes no rules.
 
 ## Rules
 
