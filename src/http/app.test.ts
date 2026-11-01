@@ -3336,3 +3336,34 @@ describe("ETag on a JSON read under /v1", () => {
     expect((await framesPromise)[0]?.event).toBe("daemon.stopping");
   });
 });
+
+describe("Cache-Control on a JSON answer under /v1", () => {
+  it("a JSON read, its 304, a JSON error and /v1/healthz each carry Cache-Control: no-store, so a CDN never stores an answer", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["token.list"] = () => ({ tokens: [{ id: "tok_1" }] });
+    const read = (path: string, headers: Record<string, string> = {}) =>
+      app.request(path, { headers: { ...operatorAuth, ...headers } });
+
+    const first = await read("/v1/tokens");
+    const unchanged = await read("/v1/tokens", {
+      "If-None-Match": first.headers.get("etag") ?? "",
+    });
+    const missing = await read("/v1/leases/lse_none");
+    const health = await app.request("/v1/healthz");
+
+    expect([first.status, unchanged.status, missing.status, health.status]).toEqual([
+      200, 304, 404, 200,
+    ]);
+    expect({
+      read: first.headers.get("cache-control"),
+      notModified: unchanged.headers.get("cache-control"),
+      error: missing.headers.get("cache-control"),
+      healthz: health.headers.get("cache-control"),
+    }).toEqual({
+      read: "no-store",
+      notModified: "no-store",
+      error: "no-store",
+      healthz: "no-store",
+    });
+  });
+});
