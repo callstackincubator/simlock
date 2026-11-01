@@ -11,6 +11,7 @@ import {
   freeLoopbackPort,
   openInputSocket,
   waitFor,
+  waitForDeviceState,
   withHttpDaemon,
   withSharedDaemon,
   type SharedTestEnv,
@@ -360,7 +361,7 @@ describe.skipIf(!hasAndroidSdk)(
     const gatewayPort = { value: 0 };
     let gateway: SharedTestEnv | undefined;
     let worker: SharedTestEnv | undefined;
-    const lease = { id: "", secret: "", serial: "" };
+    const lease = { deviceId: "", id: "", secret: "", serial: "" };
 
     function onGateway(): SharedTestEnv {
       if (gateway === undefined) throw new Error("the gateway did not start");
@@ -422,7 +423,9 @@ describe.skipIf(!hasAndroidSdk)(
         { timeout: DEVICE_READY_MS },
       );
       expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
-      lease.id = (granted.json as { lease: { id: string } }).lease.id;
+      const grant = granted.json as { device: { driverDeviceId: string }; lease: { id: string } };
+      lease.id = grant.lease.id;
+      lease.deviceId = grant.device.driverDeviceId;
       const created = await gateway.cli(["token", "create", "--role", "operator"]);
       expect(created.code, created.stderr).toBe(0);
       lease.secret = (created.json as { secret: string }).secret;
@@ -583,6 +586,8 @@ describe.skipIf(!hasAndroidSdk)(
           expect(ended.code, ended.stderr).toBe(14);
           expect(ended.error?.code).toBe("TUNNEL_LEASE_ENDED");
 
+          // why: release returns before the device's reclaim has run, and adb answers throughout it, so the rules are read once the device is ready again.
+          await waitForDeviceState(onGateway(), lease.deviceId, "ready", { timeout: 120_000 });
           let left = { forward: "", reverse: "" };
           await waitFor(
             async () => {
