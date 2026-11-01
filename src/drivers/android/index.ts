@@ -1143,7 +1143,9 @@ export class AndroidDriver implements Driver {
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     const result = await this.#reclaimDevice(device, options);
-    await this.deviceTcp?.release(device);
+    await this.deviceTcp?.release(
+      isPhysicalDriverDevice(device) ? device : { ...device, physical: false as const },
+    );
     return result;
   }
 
@@ -1152,7 +1154,6 @@ export class AndroidDriver implements Driver {
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) {
-      await this.#removeRules(device, device.deviceId);
       return this.#physical.reclaim(device);
     }
     const data = this.#dataFor(device);
@@ -1206,11 +1207,8 @@ export class AndroidDriver implements Driver {
     });
   }
 
-  // why: reclaim leaves no rule of the lease on a device proved its own; it never throws, so a failed removal does not fail the reclaim.
-  async #removeRules(
-    device: VirtualDriverDevice | PhysicalDriverDevice,
-    serial: string,
-  ): Promise<void> {
+  // why: reclaim of an emulator proved its own leaves no rule of the lease; it never throws, so a failed removal does not fail the reclaim.
+  async #removeRules(device: VirtualDriverDevice, serial: string): Promise<void> {
     await removeDeviceRules(
       (target, args, timeoutMs) => this.#runAdbOn(target, args, timeoutMs),
       this.#warnCleanup,
@@ -1219,8 +1217,7 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async #deviceIsOwn(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<boolean> {
-    if (isPhysicalDriverDevice(device)) return true;
+  async #deviceIsOwn(device: VirtualDriverDevice): Promise<boolean> {
     const data = this.#dataFor(device);
     return data.serial !== "" && (await this.#serialIsOwn(data));
   }

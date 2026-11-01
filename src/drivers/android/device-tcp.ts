@@ -24,7 +24,7 @@ const CANNOT_REBIND = "cannot rebind existing socket";
 export interface AndroidDeviceTcpOptions {
   readonly listeners: TcpListenerFactory;
   // why: a sweep acts on a device only once the driver proved it Simlock's own; an emulator on a recorded serial may answer as another's (#284).
-  readonly isOwn: (device: VirtualDriverDevice | PhysicalDriverDevice) => Promise<boolean>;
+  readonly isOwn: (device: VirtualDriverDevice) => Promise<boolean>;
   readonly warn: (message: string, detail: Record<string, unknown>) => void;
   // why: the driver decides which adb server and environment a device's command runs on, and for a phone which check it passes first.
   readonly runAdb: (
@@ -102,10 +102,11 @@ async function tunnelRules(
   run: RunAdb,
   warn: Warn,
   device: Target,
-): Promise<{ readonly deviceSide: string; readonly port: number }[]> {
+): Promise<{ readonly deviceSide: string; readonly port: number }[] | undefined> {
   const listed = await attempt(run, warn, device, ["reverse", "--list"]);
+  if (listed === undefined) return undefined;
   const rules: { deviceSide: string; port: number }[] = [];
-  for (const [, deviceSide, hostSide] of fields(listed ?? "")) {
+  for (const [, deviceSide, hostSide] of fields(listed)) {
     const port = Number(/^tcp:(\d{1,5})$/.exec(hostSide ?? "")?.[1]);
     if (deviceSide === undefined || port < TUNNEL_PORT_FIRST || port > TUNNEL_PORT_LAST) continue;
     rules.push({ deviceSide, port });
@@ -120,8 +121,8 @@ interface HeldPort {
 }
 
 export interface AndroidDeviceTcp extends DeviceTcp {
-  // why: called by the driver's reclaim of a device once its rules are gone, so every port held for it is free again.
-  release(device: { readonly deviceId: string }): Promise<void>;
+  // why: called by the driver's reclaim of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
+  release(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<void>;
 }
 
 export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): AndroidDeviceTcp {
@@ -137,14 +138,28 @@ export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): Androi
     supports: () => true,
     async release(device): Promise<void> {
       const mine = held.get(device.deviceId);
-      held.delete(device.deviceId);
-      await Promise.all([...(mine ?? [])].map((entry) => entry.listener?.close()));
+      if (mine === undefined) return;
+      // why: Simlock removes no rule it did not set on a phone, so a port a rule there still points to stays reserved; a phone whose rules cannot be read keeps all its ports.
+      const rules = device.physical ? await tunnelRules(options.runAdb, options.warn, device) : [];
+      const pointed = new Set(rules?.map(({ port }) => port) ?? [...mine].map(({ port }) => port));
+      const freed = [...mine].filter((entry) => !pointed.has(entry.port));
+      for (const entry of freed) mine.delete(entry);
+      if (mine.size === 0) held.delete(device.deviceId);
+      await Promise.all(freed.map((entry) => entry.listener?.close()));
     },
     async sweep(devices: readonly SweptDevice[]): Promise<void> {
       await Promise.all(
         devices.map(async ({ device, leased }) => {
+          // why: a phone is a person's device whose other rules Simlock cannot tell from its own, so the sweep only reads its rules and keeps the ports they point to from the next `reverse`.
+          if (device.physical) {
+            for (const { port } of (await tunnelRules(options.runAdb, options.warn, device)) ??
+              []) {
+              keep(device.deviceId, { port });
+            }
+            return;
+          }
           if (!(await options.isOwn(device))) return;
-          const rules = await tunnelRules(options.runAdb, options.warn, device);
+          const rules = (await tunnelRules(options.runAdb, options.warn, device)) ?? [];
           for (const { deviceSide, port } of rules) {
             if (leased) keep(device.deviceId, { port });
             else {

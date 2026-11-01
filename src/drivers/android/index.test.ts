@@ -3722,7 +3722,7 @@ describe("AndroidDriver deviceTcp", () => {
     expect(exhausted.runner.calls).toEqual([]);
   });
 
-  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, and touches nothing on an emulator that answers as another's", async () => {
+  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
     const own = await driverWith([
       avdPathExpectation("emulator-5586"),
       {
@@ -3745,6 +3745,44 @@ describe("AndroidDriver deviceTcp", () => {
     ]);
     await own.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
     expect(own.runner.calls.filter((call) => call.args.includes("--remove"))).toHaveLength(2);
+
+    const probe = new FakeTcpProbe([5038, 5037]);
+    probe.replyWith("OKAY00040029");
+    const phones = await driverWith(
+      [
+        {
+          match: adb("version"),
+          result: { code: 0, stderr: "", stdout: "Android Debug Bridge version 1.0.41\n" },
+        },
+        {
+          match: adb("-P", "5037", "-s", PHYSICAL_DEVICE.address, "reverse", "--list"),
+          result: {
+            code: 0,
+            stderr: "",
+            stdout: "UsbFfs tcp:5173 tcp:47000\nUsbFfs tcp:3000 tcp:3001\n",
+          },
+        },
+        {
+          match: adb(
+            "-P",
+            "5037",
+            "-s",
+            PHYSICAL_DEVICE.address,
+            "reverse",
+            "--no-rebind",
+            "tcp:5174",
+            "tcp:47001",
+          ),
+          result: ok,
+        },
+      ],
+      new FakeTcpListenerFactory(),
+      probe,
+    );
+    await phones.driver.deviceTcp?.sweep([{ device: PHYSICAL_DEVICE, leased: false }]);
+    const onPhone = await phones.driver.deviceTcp?.reverse(PHYSICAL_DEVICE, 5174, signal());
+    expect(onPhone?.hostPort).toBe(47_001);
+    expect(phones.runner.calls.some((call) => call.args.includes("--remove"))).toBe(false);
 
     const foreign = await driverWith([avdPathExpectation("emulator-5586", "simlock_two")]);
     await foreign.driver.deviceTcp?.sweep([{ device: emulator, leased: false }]);
