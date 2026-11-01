@@ -93,6 +93,10 @@ export function cliBackground(
   const child = spawn(process.execPath, [options.entry ?? CLI_ENTRY, ...args], {
     env: { ...env, ...options.env },
   });
+  if (options.input !== undefined) {
+    child.stdin.write(options.input);
+    child.stdin.end();
+  }
   let stdout = "";
   let stderr = "";
   const progress: unknown[] = [];
