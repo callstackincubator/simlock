@@ -13,7 +13,6 @@ export type {
   ModuleEndedLease,
   ModuleFinding,
   ModuleHttpResponse,
-  ModuleIdentity,
   LeaseInputHandle,
   ModuleInputs,
   ModuleLease,
@@ -36,16 +35,9 @@ export type {
 } from "./types.js";
 export { createModuleHost } from "./host.js";
 export {
-  CHANNEL_TAG,
-  channelSocket,
-  closeOf,
   createGatewayChannelLink,
-  encodeFrame,
   type GatewayChannelLinkOptions,
-  type GatewayChannelShape,
-  readFrames,
-  relayRefusal,
-  unavailable,
+  channelSocket,
   unknownLease,
   upgradeRequired,
 } from "./relay-channel.js";

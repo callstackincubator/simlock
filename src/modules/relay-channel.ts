@@ -13,17 +13,17 @@ import type {
 
 // why: the two channel-only tags: a heartbeat the worker sends while it is alive, and the worker's close
 // `{code, reason}`; neither reaches a client, and a client's tags are the module's own.
-export const CHANNEL_TAG = { close: 0xf1, heartbeat: 0xf0 } as const;
+const CHANNEL_TAG = { close: 0xf1, heartbeat: 0xf0 } as const;
 
 const HEARTBEAT_MS = 5_000;
 
-export interface ChannelFrame {
+interface ChannelFrame {
   readonly tag: number;
   readonly payload: Uint8Array;
 }
 
 // why: the channel framing of a two-way relay (ADR 0049 section 5): `[len u32 big-endian][tag u8][payload]`, `len` counting the tag and the payload.
-export function encodeFrame(tag: number, payload: Uint8Array): Uint8Array {
+function encodeFrame(tag: number, payload: Uint8Array): Uint8Array {
   const frame = new Uint8Array(5 + payload.length);
   new DataView(frame.buffer).setUint32(0, payload.length + 1);
   frame[4] = tag;
@@ -40,7 +40,7 @@ function joined(head: Uint8Array, tail: Uint8Array): Uint8Array {
 
 // why: ends quietly on a frame whose `len` is over `maxLength`, a stream that ends mid-frame and a stream
 // that errors, so a peer that breaks the framing or drops is the same as one that went away.
-export async function* readFrames(
+async function* readFrames(
   readable: ReadableStream<Uint8Array>,
   maxLength: number,
 ): AsyncGenerator<ChannelFrame, void, void> {
@@ -122,7 +122,7 @@ export function channelSocket(
 }
 
 // why: the worker's close is wire input from another process: a code and a reason a socket may close with, or nothing.
-export function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
+function closeOf(payload: Uint8Array): { code: number; reason: string } | undefined {
   try {
     const { code, reason } = JSON.parse(new TextDecoder().decode(payload)) as Record<
       string,
@@ -157,7 +157,7 @@ export function unknownLease(leaseId: string): Response {
 // why: the relay fails with the fleet's own codes -- a worker without the module (`RELAY_TARGET_MISSING`, answered
 // with the module's `missing` code and text), a worker gone (`WORKER_UNREACHABLE`) -- and a client must get a 503 that says
 // which, before the upgrade; an error with no code is a real fault and goes on to the HTTP layer's 500.
-export function relayRefusal(
+function relayRefusal(
   error: unknown,
   workerId: string,
   missing: { readonly code: string; readonly message: string },
@@ -174,7 +174,7 @@ export function relayRefusal(
   throw error;
 }
 
-export function unavailable(code: string, message: string): Response {
+function unavailable(code: string, message: string): Response {
   return refusal(503, code, message);
 }
 
