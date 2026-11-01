@@ -39,6 +39,7 @@ import {
   UnknownModelError,
   uninstallPlan,
 } from "./driver.js";
+import type { DeviceTcp } from "./device-tcp.js";
 import type { DeviceInputFactory } from "./input.js";
 import type { ScreenCapture } from "./screen.js";
 
@@ -103,6 +104,7 @@ export interface FakeDriverOptions {
   readonly passthroughTools?: readonly string[];
   readonly screenCapture?: ScreenCapture;
   readonly input?: DeviceInputFactory;
+  readonly deviceTcp?: DeviceTcp;
   readonly passthrough?: (
     tool: string,
     device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
@@ -167,6 +169,7 @@ export class FakeDriver implements Driver {
   readonly passthroughTools: readonly string[] | undefined;
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
+  readonly deviceTcp: DeviceTcp | undefined;
   readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
@@ -207,6 +210,7 @@ export class FakeDriver implements Driver {
     this.passthroughTools = options.passthroughTools;
     this.screenCapture = options.screenCapture;
     this.input = options.input;
+    this.deviceTcp = options.deviceTcp;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;

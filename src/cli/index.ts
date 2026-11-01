@@ -36,6 +36,8 @@ Commands:
   rotate <orientation> [--lease <id>]
                               Turn the leased iOS simulator: portrait, portrait-upside-down,
                               landscape-left or landscape-right
+  tunnel reverse <device-port>[:<caller-port>] [reverse ...] [--lease <id>] [--url <url>]
+                              Reach this machine's ports from a leased Android device
   simctl <args...>            Run xcrun simctl against Simlock's iOS device set
   adb <args...>               Run adb against Simlock's adb server
   mcp                         Start the stdio MCP server
@@ -45,9 +47,8 @@ Commands:
 Run 'simlock <command> --help' for command usage.
 Run 'simlock --version' (or -v) to print the installed version.
 
-Pass --token <secret> anywhere on the command line to connect as admin
-explicitly; see https://github.com/callstackincubator/simlock for the default
-resolution order.
+Pass --token <secret> anywhere on the command line to set the credential a command
+sends; the CLI reference lists the default resolution order.
 
 Pass --gateway anywhere on the command line to reach this machine's gateway in place of its worker.
 Pass --local anywhere on the command line to reach this machine's worker even when only a gateway has run here.`;
