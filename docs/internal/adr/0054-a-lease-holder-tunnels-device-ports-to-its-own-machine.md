@@ -78,6 +78,11 @@ flowchart LR
    runs `adb reverse --no-rebind tcp:<device port> tcp:<that port>`; a
    device port already reversed is refused. Each accepted connection is
    announced to the client, which connects to its own loopback port.
+   The listener accepts any connection that reaches the worker's loopback
+   port, and no listener check is added: while a tunnel is open, another
+   lease's device on the same worker (an emulator at 10.0.2.2, any device
+   through an `adb reverse` set with `device.exec`) or a local process can
+   reach the holder's tunnelled port.
    `forward` on Android: the client listens on its own loopback port; each
    connection is announced to the worker, which opens the device port
    through adb's host protocol. The caller side touches loopback only.
@@ -89,15 +94,20 @@ flowchart LR
    worker removes its `reverse` rules and closes its listeners and
    connections; the removal is awaited before lease end lets reclaim run,
    and a removal that fails keeps its loopback port reserved until reclaim.
-   When the lease ends, every socket of it closes. Android reclaim, once the
-   device is proved Simlock's own, removes every `reverse` rule on the
+   When the lease ends, every socket of it closes. Android reclaim acts on
+   emulators only. Once an emulator is proved Simlock's own, reclaim removes every `reverse` rule on the
    device, the tunnel's and any an agent made through `exec`, and every
    `forward` rule the adb server holds for that device's serial. It never
    runs `forward --remove-all`: forward rules live in the server, which
-   other devices and tools share. Tunnel listeners use only loopback ports
+   other devices and tools share. On an enrolled phone Simlock removes only
+   the `reverse` rules its own tunnels set, when their socket closes, each
+   phone command behind the default server's version check (safety rule 9);
+   it never runs `reverse --remove-all` or removes a `forward` rule on a
+   phone (safety rule 1, ADR 0022 §3). A tunnel rule a daemon crash leaves
+   on a phone stays until the phone reboots or a person removes it. Tunnel listeners use only loopback ports
    47000 to 47999, reserved for tunnels. At start, before any lease is
-   served, the worker reads `reverse` rules on every Android device it
-   proves its own. On an idle device it removes each rule whose host side is
+   served, the worker reads `reverse` rules on every Android emulator it
+   proves its own; it does not touch phones. On an idle device it removes each rule whose host side is
    in that range: the range is reserved for tunnels (a holder's own rule
    pointed there is removed too, and the docs say so), and no tunnel
    survives a restart. On a leased device it removes nothing, since no
@@ -146,8 +156,11 @@ sequenceDiagram
 - An agent anywhere tests a local build on a leased Android device with one
   command, through the gateway's one port.
 - An operator who turns the module on lets lease holders move arbitrary TCP
-  bytes between their machine and the device. The device still reaches only
-  the holder's loopback, and the holder only the device's ports.
+  bytes between their machine and the device. The holder reaches only the
+  device's ports, but a `reverse` listener is open to anything that reaches
+  the worker's loopback port while the tunnel lives: another lease's device
+  on the same worker or a local process can connect to the holder's
+  tunnelled port. The operator accepts this with the module.
 - `dataPlane` on the lease stays reserved; tunnels are a module route, not
   a lease field.
 - Reclaim gains a step on Android, and rules made by hand no longer leak
