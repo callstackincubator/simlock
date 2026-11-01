@@ -600,6 +600,28 @@ describe("a worker's tunnel socket", () => {
     expect(ended.device.closed).toBe(true);
     expect(ended.socket.closed).toEqual({ code: 4001, reason: "expired" });
 
+    const dropped = await open();
+    let releaseDropped: () => void = () => undefined;
+    dropped.deviceTcp.closeGate = new Promise<void>((resolve) => {
+      releaseDropped = resolve;
+    });
+    dropped.socket.drop();
+    await vi.waitFor(() => expect(dropped.device.closed).toBe(true));
+    let droppedReturned = false;
+    const droppedHook = dropped.worker.hooks
+      ?.beforeDeviceReclaim?.(ending("expired"), new AbortController().signal)
+      .then(() => {
+        droppedReturned = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect({ reversed: dropped.deviceTcp.reversed, droppedReturned }).toEqual({
+      reversed: [5173],
+      droppedReturned: false,
+    });
+    releaseDropped();
+    await droppedHook;
+    expect(dropped.deviceTcp.reversed).toEqual([]);
+
     const pair = await open();
     const bystander = await attach(pair.worker, "L-2");
     bystander.receive(hello({ devicePort: 5180, kind: "reverse" }));

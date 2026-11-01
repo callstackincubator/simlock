@@ -151,7 +151,6 @@ export function createTunnelSessions(options: {
     function finish(removeRules: boolean, signal?: AbortSignal): Promise<void> {
       finished ??= (async () => {
         endedWith = { remove: removeRules, signal };
-        sessions.get(leaseId)?.delete(session);
         counts.set(leaseId, (counts.get(leaseId) ?? 0) - reserved);
         for (const connection of connections.values()) {
           connection.closed = true;
@@ -159,11 +158,16 @@ export function createTunnelSessions(options: {
           connection.wake?.();
         }
         connections.clear();
-        if (!removeRules) return;
-        // why: one after another, so a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
-        for (const reverse of reverses) {
-          if (signal?.aborted === true) return;
-          await bounded(removeRule(reverse));
+        try {
+          if (!removeRules) return;
+          // why: one after another, so a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
+          for (const reverse of reverses) {
+            if (signal?.aborted === true) return;
+            await bounded(removeRule(reverse));
+          }
+        } finally {
+          // why: the session stays listed until its removals are done, so the lease's end finds a removal the socket's close began and waits for it before reclaim.
+          sessions.get(leaseId)?.delete(session);
         }
       })();
       return finished;
