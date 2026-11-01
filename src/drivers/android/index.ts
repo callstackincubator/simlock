@@ -306,6 +306,14 @@ const RECLAIM_INSTEAD =
 export const REFUSED_ADB_VERB = "kill-server";
 
 /**
+ * why: #1168. `adb disconnect` with no address makes the server kick every local transport,
+ * which emulators are, and with an address it kicks that one: either way it detaches a lease
+ * other than the caller's. Unlike `kill-server` it is refused only as the subcommand, so
+ * `adb shell echo disconnect` still runs.
+ */
+const REFUSED_ADB_SUBCOMMAND = "disconnect";
+
+/**
  * why: Console commands `simlock adb` will not proxy, matched as a run of adjacent arguments
  * anywhere in the list so that `-s <serial> emu kill` is caught along with `emu kill`.
  * Every one of them reaches through Simlock's own adb server, which is the only server
@@ -831,6 +839,13 @@ export class AndroidDriver implements Driver {
       throw new PassthroughRefusedError(
         "adb",
         `Refusing \`simlock adb ${REFUSED_ADB_VERB}\`: it would detach every leased emulator at once. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
+      );
+    }
+    const walked = walkGlobals(args);
+    if (walked.kind === "subcommand" && args[walked.index] === REFUSED_ADB_SUBCOMMAND) {
+      throw new PassthroughRefusedError(
+        "adb",
+        `Refusing \`simlock adb ${REFUSED_ADB_SUBCOMMAND}\`: it would detach other leased emulators, which adb treats as connections it can drop. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
       );
     }
     const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
