@@ -2,7 +2,7 @@
 
 Does: a daemon started with `--gateway` (it lives in `<root>/gateway`): owns no devices, fronts the workers that dial in.
 Entry: `index.ts`; `startGatewayDaemon` (`../daemon/main.ts`) wires `GatewayService`, `FleetLeaseCoordinator`, `GatewayDispatcher`, `GatewayRelay`, `GatewayOwnerRoutedFacts`.
-Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from core and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
+Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from core (`redactConfig` among them) and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
 Never imports: drivers, the rest of daemon, core's registry, capacity or lifecycle.
 Imported by: `../daemon/main.ts`. This manual also covers the worker's end of the uplink.
 Flows: [device selection](../../docs/internal/flows/device-selection.md), [device.exec](../../docs/internal/flows/device-exec.md), [worker update](../../docs/internal/flows/worker-update.md), [leasing](../leasing/AGENTS.md).

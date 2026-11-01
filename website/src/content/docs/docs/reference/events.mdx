@@ -143,7 +143,7 @@ release and records nothing.
 | `device.crash-detected` | A leased device stopped running outside Simlock. | `deviceId`, `leaseId`, `platform`, `observed` | Relayed |
 | `device.recovered` | A crashed leased device was rebooted and the lease goes on. | `deviceId`, `leaseId`, `attempts`, `duration`, `platform` | Relayed |
 | `device.recovery-failed` | A crashed leased device could not be brought back; its lease ends as `device-lost`. | `deviceId`, `leaseId`, `attempts`, `reason`, `error`, `platform` | Relayed |
-| `device.shutdown` | A device was shut down and kept on disk. | `deviceId`, `initiator` (who did it, such as `cleanup-reaper`, `warm-pool` or `nuke`) | Relayed |
+| `device.shutdown` | A device was shut down and kept on disk. | `deviceId`, `initiator` (who did it, such as `cleanup-reaper`, `warm-pool`, `daemon-stop` or `nuke`) | Relayed |
 | `device.deleted` | A device was removed: deleted from disk, or forgotten if physical. | `deviceId`, `initiator` (such as `lease-end`, `cleanup-reaper`, `lease-engine`, `doctor`, `nuke`, `operator`, `quarantine`), `physical` | Relayed |
 | `device.enrolled` | `simlock device add` enrolled a physical device. | `deviceId`, `platform`, `driverDeviceId`, `model`, `osVersion`, `class` (`phone` or `tablet`), `appCount`, `reenrolled` | Relayed |
 | `device.absence-detected` | An enrolled physical device went away. | `deviceId`, `previousState` (`ready`, `leased`, `reclaiming`), `absentReason` (`locked`, `untrusted`, `not-present`) | Relayed |

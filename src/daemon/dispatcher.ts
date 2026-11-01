@@ -34,9 +34,13 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
+  isUnavailableInput,
   createUsageReader,
   type UsageReader,
+  redactConfig,
 } from "../core/index.js";
+import type { ModuleInputs } from "../modules/index.js";
+import { rotationRefusal } from "./rotation-refusal.js";
 import {
   type DeviceModeReader,
   LeaseIdTakenError,
@@ -143,6 +147,8 @@ export interface DispatcherOptions {
   readonly warmKinds?: WarmKindForgetter;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
+  /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
+  readonly inputs?: ModuleInputs;
   readonly processRunner?: ProcessRunner;
   /**
    * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
@@ -261,6 +267,7 @@ export class Dispatcher {
       "lease.get": this.#leaseGet,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": this.#relayRequest,
       "relay.cancel": this.#relayCancel,
       "doctor.run": this.#doctorRun,
@@ -638,6 +645,44 @@ export class Dispatcher {
     return {};
   };
 
+  #leaseIsActive(leaseId: string): boolean {
+    return this.options.registry.snapshot.leases.some((candidate) => candidate.id === leaseId);
+  }
+
+  #deviceRotate: Handler<"device.rotate"> = async (input) => {
+    if (this.options.inputs === undefined) {
+      throw new DispatchError("INTERNAL", "Device input is unavailable");
+    }
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const record = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
+    const refusal = rotationRefusal(input.leaseId, record.spec);
+    if (refusal !== undefined) throw refusal;
+    try {
+      const held = await this.options.inputs.leaseInput(
+        input.leaseId,
+        record.spec.platform,
+        toDriverDevice(record),
+      );
+      try {
+        if (isUnavailableInput(held.input)) throw new Error(held.input.unavailable);
+        if (!this.#leaseIsActive(input.leaseId)) throw new UnknownLeaseError(input.leaseId);
+        await held.input.send({ kind: "orientation", orientation: input.orientation });
+      } finally {
+        held.release();
+      }
+    } catch (error) {
+      if (error instanceof UnknownLeaseError) throw error;
+      throw inputUnavailable(input.leaseId, error);
+    }
+    return { leaseId: input.leaseId, orientation: input.orientation };
+  };
+
   /**
    * why: ADR 0005 §19a: the same command `driver.passthrough` would have handed back, run here
    * instead of there. Everything a passthrough already decides is reused verbatim -- which
@@ -832,7 +877,8 @@ export class Dispatcher {
     return { subscribed: false };
   };
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
@@ -1099,6 +1145,18 @@ function describeEnrollmentError(error: unknown): unknown {
     return new DispatchError("UNKNOWN_DEVICE", error.message, { id: error.id });
   }
   return error;
+}
+
+const INPUT_REASON_MAX = 200;
+
+function inputUnavailable(leaseId: string, error: unknown): DispatchError {
+  const text = error instanceof Error ? error.message : String(error);
+  const reason = text === "" ? "unknown error" : text.slice(0, INPUT_REASON_MAX);
+  return new DispatchError(
+    "INPUT_UNAVAILABLE",
+    `Lease ${leaseId}'s simulator cannot take input: ${reason}`,
+    { leaseId, reason },
+  );
 }
 
 function unsupportedOnWorker(

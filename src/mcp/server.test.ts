@@ -16,7 +16,7 @@ import { leaseSimulatorInputSchema } from "./contracts.js";
 import { createMcpServer } from "./server.js";
 
 describe("MCP server (smoke)", () => {
-  it("advertises exactly the lease, catalog, status and run_on_device tools, and walks lease -> list -> status -> release", async () => {
+  it("advertises exactly the lease, catalog, status, run_on_device and rotate_device tools, and walks lease -> list -> status -> release", async () => {
     const client = new FakeSimlockClient();
     const grant = sampleGrant();
     client.requestLeaseImpl = () => Promise.resolve(grant);
@@ -67,6 +67,7 @@ describe("MCP server (smoke)", () => {
         "release_simulator",
         "lease_status",
         "run_on_device",
+        "rotate_device",
       ]);
       expect(tools.tools.find((tool) => tool.name === "list_devices")?.description).toContain(
         "modelClasses",
@@ -84,6 +85,8 @@ describe("MCP server (smoke)", () => {
         "stdin",
         "tool",
       ]);
+      const rotateTool = tools.tools.find((tool) => tool.name === "rotate_device");
+      expect(Object.keys(rotateTool?.inputSchema.properties ?? {})).toEqual(["orientation"]);
       expect(runTool?.description).toBe(
         "Run one simctl, adb or devicectl command on this session's leased device, on the machine that holds it. Leave the device out: Simlock fills in the lease's UDID or serial, and refuses a command that names another device. File paths are on that machine. Output is text: stdout and stderr each keep their last 32768 characters, and truncated says when any was cut. A non-zero exitCode is the command's own answer, not a tool error. There is no terminal: a bare adb shell is refused, and an interactive command hangs until the time limit (10 minutes by default) stops it.",
       );
@@ -900,6 +903,83 @@ describe("MCP run_on_device alongside other tools", () => {
       expect(status.structuredContent).toMatchObject({ held: true, id: "lease-1" });
       finish?.();
       expect((await running).structuredContent).toMatchObject({ exitCode: 0 });
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("MCP rotate_device", () => {
+  it("rotates the session's held lease and returns its id and the canonical orientation", async () => {
+    const client = new FakeSimlockClient();
+    client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
+    client.rotateImpl = (leaseId, orientation) => Promise.resolve({ leaseId, orientation });
+    client.releaseLeaseImpl = (input) => Promise.resolve({ leaseId: input.leaseId });
+    const { mcpClient, close } = await connectedServer(client);
+    try {
+      const never = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(never.isError).toBe(true);
+      expect(JSON.parse(text(never)).code).toBe("NO_LEASE");
+      await call(mcpClient, "lease_simulator", { model: "iPhone 17 Pro", platform: "ios" });
+      const result = await call(mcpClient, "rotate_device", { orientation: "landscape-left" });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toEqual({
+        leaseId: "lease-1",
+        orientation: "landscape_left",
+      });
+      expect(client.calls.filter((entry) => entry.method === "rotate")).toEqual([
+        { input: { leaseId: "lease-1", orientation: "landscape_left" }, method: "rotate" },
+      ]);
+
+      for (const [spelling, canonical] of [
+        ["LEFT", "landscape_left"],
+        [" upside-down ", "portrait_upside_down"],
+      ]) {
+        const spelled = await call(mcpClient, "rotate_device", { orientation: spelling });
+        expect(spelled.isError).not.toBe(true);
+        expect(spelled.structuredContent).toEqual({ leaseId: "lease-1", orientation: canonical });
+      }
+      for (const [orientation, bound] of [
+        ["", "expected string to have >=1 characters"],
+        ["x".repeat(65), "expected string to have <=64 characters"],
+      ] as const) {
+        const refused = await call(mcpClient, "rotate_device", { orientation });
+        expect(refused.isError).toBe(true);
+        expect(text(refused)).toContain(`Invalid arguments for tool rotate_device: Too `);
+        expect(text(refused)).toContain(bound);
+      }
+      const longest = await call(mcpClient, "rotate_device", { orientation: "x".repeat(64) });
+      expect(JSON.parse(text(longest)).code).toBe("BAD_REQUEST");
+      expect(client.calls.filter((entry) => entry.method === "rotate")).toHaveLength(3);
+      const unknown = await call(mcpClient, "rotate_device", { orientation: "sideways" });
+      expect(unknown.isError).toBe(true);
+      expect(JSON.parse(text(unknown))).toEqual({
+        code: "BAD_REQUEST",
+        message:
+          "Unknown orientation sideways; use portrait, portrait-upside-down, landscape-left or landscape-right",
+      });
+      const unsupported = new SimlockError(
+        "ROTATION_UNSUPPORTED",
+        "domain",
+        "Lease lease-1 is on an Android emulator; only an iOS simulator can be rotated",
+        { class: "emulator", leaseId: "lease-1", physical: false, platform: "android" },
+      );
+      client.rotateImpl = () => Promise.reject(unsupported);
+      const refusal = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(refusal.isError).toBe(true);
+      expect(JSON.parse(text(refusal))).toEqual({
+        code: "ROTATION_UNSUPPORTED",
+        message: unsupported.message,
+      });
+      client.rotateImpl = (leaseId, orientation) => Promise.resolve({ leaseId, orientation });
+
+      await call(mcpClient, "release_simulator", { leaseId: "lease-1" });
+      const released = await call(mcpClient, "rotate_device", { orientation: "left" });
+      expect(released.isError).toBe(true);
+      expect(JSON.parse(text(released))).toEqual({
+        code: "NO_LEASE",
+        message: "This MCP session holds no lease. Call lease_simulator first.",
+      });
     } finally {
       await close();
     }
