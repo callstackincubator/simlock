@@ -7845,9 +7845,7 @@ describe("readPipedStdin", () => {
     }
   });
 
-  it("returns an empty string, not undefined, for a piped stdin that carries nothing", async () => {
-    // why: `undefined` means "a terminal, do not read"; an empty pipe is a real EOF and a real
-    // (empty) answer -- the two must stay distinguishable to a caller.
+  it("returns an empty string for a piped stdin that carries nothing", async () => {
     const stdin = fakeStdin([], false);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
