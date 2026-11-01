@@ -618,7 +618,7 @@ export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
   effect: "read",
-  input: z.object({}),
+  input: z.object({ showSecrets: z.boolean().optional() }),
   output: configSchema,
 });
 

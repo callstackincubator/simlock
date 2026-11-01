@@ -27,6 +27,7 @@ import { anyUnreachable, devicesThroughGateway, filterDevices } from "./devices-
 import { heartbeat } from "./heartbeat.js";
 import type { LinkStatus } from "./host-link.js";
 import { releaseEndedLeases } from "./ended.js";
+import { answerOrientation, isOrientationCall } from "./orientation.js";
 import { release } from "./release.js";
 import { checkRequest } from "./request-rules.js";
 
@@ -222,6 +223,10 @@ async function forwardCommand(
   read: RpcRequest,
   leaseId: string | undefined,
 ): Promise<Response> {
+  if (leaseId !== undefined && isOrientationCall(read)) {
+    const answered = await answerOrientation(context, identity, read, leaseId);
+    if (answered !== undefined) return answered;
+  }
   const isDevices = isDevicesCall(read);
   if (isDevices && context.link.readsLeaseHeader) {
     return devicesThroughGateway(context, {

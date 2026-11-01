@@ -740,6 +740,8 @@ async function composeDaemon(
       stopping = true;
       await leasing.settle();
       await core.drain();
+      // why: after the reclaims settled, so a device that just came back ready is shut down too; before `dispose`, which stops adb.
+      await core.shutdownIdle();
     },
     // why: Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
