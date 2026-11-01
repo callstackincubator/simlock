@@ -1007,40 +1007,59 @@ describe("CLI: exit codes", () => {
       ]);
     });
 
-    it("sends whatever readStdin resolves with as the command's one-shot stdin", async () => {
+    it("sends stdin on device.exec only when --stdin was given", async () => {
       // why: `readStdin` is a `CliEnvironmentPorts` seam this test injects directly -- it exercises
       // the wiring from that port's result to `device.exec`'s `stdin`, not the default
       // `readPipedStdin` implementation that reads a real pipe to EOF; that one is tested on
       // its own below, since a fake here would not exercise it at all.
-      const output = outputCapture();
-      const seen: unknown[] = [];
-
-      await expect(
-        runCli(
-          ["adb", "shell", "cat"],
-          output.environmentWith({
-            connectAdmin: async () =>
-              fakeClient({
-                getStatus: () => Promise.resolve(gatewayStatus),
-                listLeases: () => Promise.resolve({ leases: [ownLease] }),
-                exec: (input) => {
-                  seen.push(input);
-                  return Promise.resolve({ exitCode: 0 });
-                },
-              }),
-            readStdin: async () => "piped payload\n",
-          }),
-        ),
-      ).resolves.toBe(0);
-      expect(seen).toEqual([
+      const cases = [
         {
-          args: ["shell", "cat"],
-          leaseId: "lse_mine",
-          requesterId: "test-requester",
-          stdin: "piped payload\n",
-          tool: "adb",
+          argv: ["adb", "shell", "cat"],
+          readable: false,
+          expected: { args: ["shell", "cat"], stdin: "", tool: "adb" },
         },
-      ]);
+        {
+          argv: ["simctl", "list"],
+          readable: false,
+          expected: { args: ["list"], stdin: "", tool: "simctl" },
+        },
+        {
+          argv: ["adb", "--stdin", "shell", "cat"],
+          readable: true,
+          expected: { args: ["shell", "cat"], stdin: "piped payload\n", tool: "adb" },
+        },
+        {
+          argv: ["simctl", "--stdin", "list"],
+          readable: true,
+          expected: { args: ["list"], stdin: "piped payload\n", tool: "simctl" },
+        },
+      ];
+
+      for (const { argv, readable, expected } of cases) {
+        const output = outputCapture();
+        const seen: unknown[] = [];
+
+        await expect(
+          runCli(
+            argv,
+            output.environmentWith({
+              connectAdmin: async () =>
+                fakeClient({
+                  getStatus: () => Promise.resolve(gatewayStatus),
+                  listLeases: () => Promise.resolve({ leases: [ownLease] }),
+                  exec: (input) => {
+                    seen.push(input);
+                    return Promise.resolve({ exitCode: 0 });
+                  },
+                }),
+              readStdin: readable
+                ? async () => "piped payload\n"
+                : () => Promise.reject(new Error("stdin must not be read without --stdin")),
+            }),
+          ),
+        ).resolves.toBe(0);
+        expect(seen).toEqual([{ ...expected, leaseId: "lse_mine", requesterId: "test-requester" }]);
+      }
     });
 
     it("sends no requesterId when the connection fell back to the agent role", async () => {
