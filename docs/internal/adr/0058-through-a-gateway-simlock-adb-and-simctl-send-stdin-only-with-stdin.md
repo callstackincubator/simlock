@@ -1,6 +1,6 @@
 # 0058. Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin`
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-01
 - **Issue:** [#1174](https://github.com/callstackincubator/simlock/issues/1174) (request [#1172](https://github.com/callstackincubator/simlock/issues/1172))
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) §19c ("a piped
