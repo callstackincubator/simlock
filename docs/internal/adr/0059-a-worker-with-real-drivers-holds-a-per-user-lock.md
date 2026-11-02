@@ -49,11 +49,13 @@ The lock is per OS user, at a path that does not depend on `SIMLOCK_HOME` or
 | macOS, Linux   | `/tmp/simlock-<uid>/worker.lock/`      |
 | Windows        | `<os.tmpdir()>\simlock\worker.lock\`   |
 
-`<uid>` is `process.getuid()`. The parent folder is created `0700` and must be
-owned by the user. The lock is a directory, made with one `mkdir` (atomic),
-holding `owner.json`: `{ pid, folder, startedAt }`, where `folder` is the
-worker's data directory and `startedAt` an ISO time. This is the shape the slow
-lane's own lock already uses (`scripts/slow-e2e.sh`).
+On macOS and Linux, `<uid>` is `process.getuid()`; the parent folder is created
+`0700` and must be owned by the user. On Windows, `os.tmpdir()` is already the
+user's own folder (`%LOCALAPPDATA%\Temp`), so no owner or mode check runs there.
+The lock is a directory, made with one `mkdir` (atomic), holding `owner.json`:
+`{ pid, folder, startedAt }`, where `folder` is the worker's data directory and
+`startedAt` an ISO time. Like the slow lane's own lock (`scripts/slow-e2e.sh`,
+a directory holding a `pid` file), a lock whose pid is gone is stale.
 
 ### 2. Who wins
 
