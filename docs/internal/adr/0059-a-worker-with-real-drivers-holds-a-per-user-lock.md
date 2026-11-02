@@ -66,7 +66,7 @@ flowchart TD
   M -- made --> W["write owner.json, go on to driver discovery"]
   M -- exists --> R{"owner.json's pid alive?"}
   R -- no, or unreadable --> T["take it over: replace owner.json"] --> W
-  R -- "yes, same folder" --> C["go on; the winner of the socket claim rewrites owner.json with its pid"]
+  R -- "yes, same folder" --> C["go on; the winner of the socket claim makes sure it holds the lock (§2 below)"]
   R -- "yes, other folder" --> X["start fails, naming pid, folder and start time"]
 ```
 
@@ -75,7 +75,15 @@ flowchart TD
   CLI prints `The daemon could not start: <message>` as for every start failure.
 - **Held by a live pid with the same folder:** the lock does not decide; the
   worker goes on. The socket claim already answers a second daemon on one
-  folder, and the worker that wins it rewrites `owner.json` with its own pid.
+  folder. The worker that wins it then makes sure it holds the lock, whatever
+  order the loser or an old holder failed or stopped in:
+  - the lock folder is missing (the loser failed, or a holder stopped or failed
+    discovery, and removed it): the winner makes it again with its own
+    `owner.json`;
+  - `owner.json` names its own folder and another pid: the winner rewrites
+    `owner.json` with its own pid;
+  - `owner.json` names a live pid with another folder: the winner's start fails
+    with the refusal message above.
 - **Holder's pid gone:** the lock is stale and is taken over. Emulators the old
   holder left running stay running; the new holder's sweep may attach them, as
   happens today after a restart.
@@ -87,7 +95,8 @@ reaped), so no other worker sweeps while this one still acts on devices, and
 only when `owner.json` is still the one this daemon wrote. A start that fails
 after taking the lock removes it only when `owner.json` is still the one this
 start wrote, so the losing start of a same-folder race leaves the winner's
-lock. A crash leaves it
+lock. If the loser (or a holder that stopped) removed the lock before the
+winner's check, the winner makes it again (§2). A crash leaves it
 stale, and the next start takes it over (§2).
 
 ### 4. The slow lane refuses to run while a worker holds the machine
