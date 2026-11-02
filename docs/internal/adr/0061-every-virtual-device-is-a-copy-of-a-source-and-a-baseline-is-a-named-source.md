@@ -1,6 +1,6 @@
 # 0061. Every virtual device is a copy of a source, and a baseline is a named source
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-02
 - **Issue:** [#327](https://github.com/callstackincubator/simlock/issues/327) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049), points 1 and 4)
 - **Supersedes:** nothing. Narrows [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md)
