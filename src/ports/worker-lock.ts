@@ -110,11 +110,9 @@ export class NodeWorkerLock implements WorkerLock {
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const holder = await readOwner(filesystem, ownerFile);
-      if (
-        holder !== undefined &&
-        processSupervisor.isAlive(holder.pid) &&
-        holder.folder !== owner.folder
-      ) {
+      if (holder !== undefined && processSupervisor.isAlive(holder.pid)) {
+        // why: the same folder is a second daemon on one home, which the socket claim answers as today; it holds nothing to release.
+        if (holder.folder === owner.folder) return { release: async () => undefined };
         throw new WorkerLockHeldError(holder);
       }
     }

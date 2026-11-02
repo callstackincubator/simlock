@@ -70,7 +70,7 @@ describe("NodeWorkerLock", () => {
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(ME);
   });
 
-  it("refuses a live holder in another folder and goes on, touching nothing, beside a live holder in the same folder", async () => {
+  it("refuses a live holder in another folder with its details, and leaves a live holder in the same folder alone", async () => {
     const { path } = await lockInTemporaryFolder();
     const holder: WorkerLockOwner = { folder: "/home/other/.simlock", pid: 7, startedAt: "t0" };
     await adapter(path).take(holder);
