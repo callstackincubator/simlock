@@ -4931,3 +4931,53 @@ describe("startDaemon gateway update", () => {
     await expect(filesystem.exists(join(directory, "update-result.json"))).resolves.toBe(false);
   });
 });
+
+describe("startDaemon worker lock", () => {
+  const LOCK_PATH = "/tmp/simlock-test/worker.lock";
+  const OTHER_FOLDER = "/home/other/.simlock";
+
+  async function filesystemWithLockHeldBy(
+    owner: { readonly pid: number; readonly folder: string },
+    path = LOCK_PATH,
+  ): Promise<MemoryFilesystem> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(path);
+    await filesystem.writeFileAtomic(
+      join(path, "owner.json"),
+      JSON.stringify({ ...owner, startedAt: "2026-11-02T08:00:00.000Z" }),
+    );
+    return filesystem;
+  }
+
+  // why: real drivers are the ones discovered, so neither the drivers option nor the substitute module may be set.
+  async function startWithRealDrivers(
+    filesystem: MemoryFilesystem,
+    livePids: readonly number[],
+    processRunner: ScriptedProcessRunner,
+  ) {
+    vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+    return start({
+      drivers: undefined,
+      filesystem,
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+      npm: new FakeNpmCli(),
+      processRunner,
+      processSupervisor: new FakeProcessSupervisor(livePids),
+      workerLockPath: LOCK_PATH,
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a worker whose lock is held by a live pid in another folder fails to start with the refusal message, before any driver command", async () => {
+    const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
+    const processRunner = new ScriptedProcessRunner([]);
+
+    await expect(startWithRealDrivers(filesystem, [4242], processRunner)).rejects.toThrow(
+      `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since 2026-11-02T08:00:00.000Z); stop it first: SIMLOCK_HOME=${OTHER_FOLDER} simlock daemon stop`,
+    );
+    expect(processRunner.calls).toEqual([]);
+  });
+});

@@ -199,6 +199,8 @@ export interface StartDaemonOptions {
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
+  /** why: test-only, moves the worker lock (never decides whether it is taken). */
+  readonly workerLockPath?: string;
   /** why: test-only, replaces the poster a gateway's alerts send through. */
   readonly webhookPoster?: WebhookPoster;
 }
