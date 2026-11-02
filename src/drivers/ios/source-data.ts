@@ -124,6 +124,10 @@ export class IosSourceTable {
     return this.#rows("WHERE state = 'making' AND maker != ?", [maker]);
   }
 
+  findRow(sourceId: string): SourceRow | undefined {
+    return this.#rows("WHERE source_id = ?", [sourceId])[0];
+  }
+
   readyRows(): readonly SourceRow[] {
     return this.#rows("WHERE state = 'ready' ORDER BY created_at, source_id", []);
   }

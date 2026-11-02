@@ -748,7 +748,12 @@ export class IosSimctlDriver implements Driver {
     });
   }
 
-  async destroySource(_sourceId: string): Promise<void> {}
+  async destroySource(sourceId: string): Promise<void> {
+    const row = this.#sources.findRow(sourceId);
+    if (row === undefined) throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
+    if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+    this.#sources.deleteRow(sourceId);
+  }
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
