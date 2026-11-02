@@ -128,10 +128,7 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 - A gateway forwards `allowDownload: false`, always.
 - Only the gateway's prefix `gw:<instance id>:` marks its leases; `release-all` and retention read it.
 - Only `WorkerLink` republishes onto the bus (`boundary.test.ts`).
-
-## Security model
-
-- A worker must not be able to crash, stall or corrupt its gateway: every worker reply is parsed with its contract schema and a bad one fails that call, a relayed event nested deeper than 64 levels or otherwise unserializable is dropped at `WorkerLink` before it reaches the bus (`worker-link.ts` `#onWorkerEvent`).
+- A worker cannot crash, stall or corrupt its gateway: a bad worker reply fails that call, and a relayed event nested past 64 levels or unserializable is dropped in `worker-link.ts`.
 
 ## Known gaps
 
