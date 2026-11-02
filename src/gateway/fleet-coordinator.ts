@@ -1,5 +1,5 @@
 /**
- * `FleetLeaseCoordinator`: admission, the fleet-wide one-lease rule, dispatch, and lease/exec
+ * why: `FleetLeaseCoordinator`: admission, the fleet-wide one-lease rule, dispatch, and lease/exec
  * forwarding (ADR 0005 §10-§16, §19a-§19c, §27, §27a). Much smaller than the worker's own
  * `LeaseAcquisitionCoordinator` -- there is no provisioning, no eviction, and no driver to ask: a
  * worker either grants a forwarded `lease.request` immediately or refuses it, because every
@@ -159,22 +159,9 @@ export interface FleetLeaseCoordinatorOptions {
   readonly views: FleetViews;
   readonly routing: RoutingPolicy;
   readonly leaseIndex: FleetLeaseIndex;
-  /** ADR §19e (P5, round 2 review): `gateway.execTimeoutMs`, the backstop for a forwarded
-   * `device.exec` whose worker never answers at all -- the worker's own `exec.timeoutMs` is
-   * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
-   * to fire first, since the gateway's default is deliberately the longer of the two. */
   readonly execTimeoutMs: number;
-  /** P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded `lease.request`,
-   * the one uplink call that used to have no timeout of its own. See
-   * `#withLeaseRequestTimeout`'s own doc comment. */
   readonly leaseRequestTimeoutMs: number;
-  /**
-   * `lease.requestRetentionMs`/`lease.maxRequestRecords`. A gateway keeps its lease requests in
-   * memory only: a gateway restart loses every one it held, the same as before requests were
-   * stored, while what it had already routed is stored on the worker that took it.
-   */
   readonly leaseRequestLimits: LeaseRequestLimits;
-  /** The same failure description a worker stores, so a replay answers with the same code. */
   readonly describeFailure: (error: unknown) => LeaseRequestFailure;
   readonly maxPerRequester?: MaxPerRequester;
   readonly logger?: Logger;
@@ -191,11 +178,10 @@ type FleetEventName =
 export class FleetLeaseCoordinator {
   readonly #queue: FleetQueue;
   readonly #decisions = new SerializedDecision();
-  /** The gateway's lease requests, by the same rules a worker's are (`LeaseRequestBook`). */
   readonly requests: LeaseRequestBook<FleetLeaseGrant>;
   readonly #logger: Logger;
   #knownWorkerIds = new Set<string>();
-  /** C1 (round 2 review): the `view.leases` array reference this coordinator last reconciled
+  /** why: C1 (round 2 review): the `view.leases` array reference this coordinator last reconciled
    * into `leaseIndex` for each worker, keyed by worker id. `onViewsChanged` fires for *every*
    * worker-view mutation on the whole registry (`connected`, `refresh`, `disconnected`,
    * `setDrained`, `remove`, `pruneExpired` -- see `FleetViews#onViewsChanged`'s own doc), not
@@ -209,12 +195,12 @@ export class FleetLeaseCoordinator {
    * identity on the notification itself. */
   readonly #lastReconciledLeases = new Map<string, NonNullable<WorkerView["leases"]>>();
   readonly #unsubscribeViews: () => void;
-  /** A `WeakMap` so a waiter that never dispatches (rejected, cancelled, timed out) leaks no entry. */
+  /** why: A `WeakMap` so a waiter that never dispatches (rejected, cancelled, timed out) leaks no entry. */
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
-  /** A `WeakMap` so the memo dies with the waiter. */
+  /** why: A `WeakMap` so the memo dies with the waiter. */
   readonly #refusals = new WeakMap<FleetWaiter, Map<string, Refusal>>();
   readonly #workerReasons = new WeakMap<FleetWaiter, readonly WorkerEntry[]>();
-  /** A `WeakMap` so the memo dies with the waiter. */
+  /** why: A `WeakMap` so the memo dies with the waiter. */
   readonly #cannotServe = new WeakMap<FleetWaiter, Map<string, DispatchError>>();
   #dispatchDepth = 0;
   #passRequested = false;
@@ -278,12 +264,6 @@ export class FleetLeaseCoordinator {
     return this.#queue.findPendingWaiter(requesterId, platform)?.options.ownerId;
   }
 
-  /**
-   * Admits a request and returns the eventual grant. The one-lease check and the enqueue commit
-   * together, inside `SerializedDecision.run`, so two concurrent requests for the same
-   * `requesterId` can never both be admitted (see the module doc's "two different fields").
-   * Everything past admission -- reaching a worker at all -- is I/O and stays outside it.
-   */
   async request(
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
@@ -353,12 +333,6 @@ export class FleetLeaseCoordinator {
     return reported !== undefined && reported.ttlDeadline <= this.options.clock.now();
   }
 
-  /**
-   * ADR 0020: the one clash check on a gateway, after the one-lease check and in the same
-   * admission section. A caller-chosen id is held by one of this gateway's leases and by one of
-   * its own requests still open; leases a local client holds on a worker are not checked (a
-   * worker refuses its own, and the requester's uniqueness guarantee makes a clash unlikely).
-   */
   #refuseIfLeaseIdTaken(
     deviceRequest: DeviceRequest,
     options: LeaseRequestOptions,
@@ -423,7 +397,7 @@ export class FleetLeaseCoordinator {
       this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
       throw error;
     }
-    // Removed immediately rather than waiting on the relayed `lease.released` fact to make the
+    // why: Removed immediately rather than waiting on the relayed `lease.released` fact to make the
     // round trip back over the uplink: the release just succeeded, on this same call, so there
     // is nothing left to learn from that event. `removeByWorkerLease` still runs when it arrives
     // (idempotent -- see `FleetLeaseIndex`), which is what covers a release the worker's own
@@ -431,19 +405,6 @@ export class FleetLeaseCoordinator {
     this.options.leaseIndex.remove(gatewayLeaseId);
   }
 
-  /**
-   * ADR §34: releases only the leases this gateway issued, across every connected worker, and
-   * never a worker's own local leases. A worker that cannot be reached is reported, naming it,
-   * while every other worker's releases still complete -- what has already succeeded by the time
-   * one fails stays released.
-   *
-   * H8 (round 2 review): the thrown error's `details.releasedLeaseIds` names everything that did
-   * succeed before the failure, rather than leaving the operator to guess (§34's own "leaves the
-   * operator guessing" is exactly the thing this closes) -- `lease.release-all`'s output shape
-   * (`{ leaseIds }`) still has no room to carry a partial result on its *success* path, so this is
-   * the one channel available on the answer that does exist. #119, which owns `WORKER_UNREACHABLE`
-   * retry/backoff, may still want to widen the output shape itself.
-   */
   async releaseAll(): Promise<readonly string[]> {
     const released: string[] = [];
     let firstFailure: unknown;
@@ -456,7 +417,7 @@ export class FleetLeaseCoordinator {
         released.push(entry.gatewayLeaseId);
       } catch (error: unknown) {
         if (this.#forgetIfUnknownToWorker(entry.gatewayLeaseId, error)) {
-          // C3: the worker already agrees this lease does not exist -- that is not a failure to
+          // why: C3: the worker already agrees this lease does not exist -- that is not a failure to
           // report, it is the release this call asked for, already true. Skip it (not a
           // `firstFailure`) rather than making a single zombie entry fail every future
           // `release-all` forever.
@@ -473,7 +434,7 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * C3 (round 2 review): a worker answering `UNKNOWN_LEASE` to a release or renew is telling this
+   * why: C3 (round 2 review): a worker answering `UNKNOWN_LEASE` to a release or renew is telling this
    * gateway its own index entry is wrong -- the one source of truth for removal
    * (`lease.released`/`lease.expired`) never fires for a lease the worker has no record of at
    * all, so without this the entry is immortal: every future request from the same requester is
@@ -502,13 +463,13 @@ export class FleetLeaseCoordinator {
     session: DispatchSession,
   ): Promise<{ readonly exitCode: number }> {
     const entry = this.#requireEntry(input.leaseId);
-    // ADR §19b/§27: the worker checks this *namespaced* requester against the lease in front of
+    // why: ADR §19b/§27: the worker checks this *namespaced* requester against the lease in front of
     // it (§19a'), so it must be built from the lease's own recorded requester -- never from
     // whatever `device.exec`'s own optional `requesterId` said, which the gateway's own
     // `authorize` hook (via `leaseRequesterId` above) has already resolved by the time this
     // handler runs.
     const namespacedRequesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    // ADR §19a/§19e: `session.onStarted` means "the process now exists", and a transport chooses
+    // why: ADR §19a/§19e: `session.onStarted` means "the process now exists", and a transport chooses
     // its response shape on it -- HTTP commits its `200` and starts an SSE stream, so every
     // failure that can happen *before* a process exists (§19a''s `FORBIDDEN` when the worker's own
     // ownership check disagrees with this gateway's index, the driver's `PASSTHROUGH_REFUSED` /
@@ -541,7 +502,7 @@ export class FleetLeaseCoordinator {
       started = true;
       session.onStarted?.();
     };
-    // H4 (round 3 review): `#withExecTimeout` settling `EXEC_TIMEOUT` only stops *this* call's
+    // why: H4 (round 3 review): `#withExecTimeout` settling `EXEC_TIMEOUT` only stops *this* call's
     // returned promise from being awaited any further -- the worker's own `client.exec` RPC is
     // never cancelled, and its `onOutput` closure below stays live for as long as the worker
     // keeps sending chunks, relaying every one of them into `session.onOutput` long after the
@@ -554,10 +515,6 @@ export class FleetLeaseCoordinator {
     // happened.
     let detached = false;
     return this.#forwardToWorker(entry.workerId, async (client) => {
-      // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
-      // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
-      // ordinary timeout and is expected to answer first (the gateway's default is deliberately
-      // the longer of the two), so this only ever fires when nothing else would have.
       return this.#withExecTimeout(
         client.exec(
           {
@@ -572,8 +529,6 @@ export class FleetLeaseCoordinator {
               if (detached) return;
               void session.onOutput?.(chunk.stream, chunk.chunk);
             },
-            // The worker's own "the process exists" fact, relayed verbatim -- the only thing
-            // that announces `started` here, so there is exactly one path to it.
             onStarted: () => {
               if (detached) return;
               announceStarted();
@@ -623,18 +578,6 @@ export class FleetLeaseCoordinator {
     );
   }
 
-  /**
-   * Races a forwarded `device.exec` against `gateway.execTimeoutMs` (ADR §19e). Before this,
-   * `exec` awaited `client.exec` unbounded -- a worker that never answers at all (the case this
-   * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
-   * already covers) hung the call and its SSE stream forever, and nothing here read the config
-   * value the schema, validator, and docs already described.
-   *
-   * `onTimeout` (H4, round 3 review) is `#raceTimeout`'s own detach hook -- see `exec`'s own
-   * `detached` flag for why: a client that only stops *awaiting* the worker's answer, without
-   * also telling `exec`'s `onOutput` closure to stop relaying, would keep forwarding late chunks
-   * to `session.onOutput` for as long as the worker cared to keep sending them.
-   */
   #withExecTimeout<Value>(
     promise: Promise<Value>,
     workerId: string,
@@ -653,27 +596,6 @@ export class FleetLeaseCoordinator {
     );
   }
 
-  /**
-   * P2 (round 2 review): races a forwarded `lease.request` against
-   * `gateway.leaseRequestTimeoutMs`. Before this, the one uplink call this class makes with no
-   * bound of its own left a waiter `processing` -- a state neither `WaitQueue#armTimeout` (it
-   * declines to reject a `processing` waiter) nor `cancelPending` (`not-cancellable`) can reach
-   * -- for as long as a wedged worker cared to hold it, with `timeoutMs`/`lease.cancel`
-   * unenforceable the whole time (ADR §10). Expiry maps to `WORKER_UNREACHABLE`: not a fact
-   * about this worker's capacity (a real answer might still have been a grant), but the same
-   * "not reachable right now" story `#forwardToWorker`'s pre-flight check already answers that
-   * code for.
-   *
-   * If the worker does eventually answer after this already gave up, that answer is discarded
-   * here exactly as `#withExecTimeout`'s own doc describes -- a grant landing late becomes an
-   * orphan lease on the worker (this gateway rejected the waiter and issued nothing to release
-   * it by), the same class of gap H2/H8 already name for the RPCs this class does track state
-   * for. A genuinely wedged worker is rare enough, and `leaseRequestTimeoutMs` generous enough,
-   * that this is left as a known consequence rather than built out here.
-   *
-   * `onTimeout` (P4, round 3 review): the same detach hook `#withExecTimeout` already takes, for
-   * the same reason -- see `#attempt`'s own `detached` flag.
-   */
   #withLeaseRequestTimeout<Value>(
     promise: Promise<Value>,
     workerId: string,
@@ -693,7 +615,7 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * Mirrors `WorkerLink#withTimeout`'s race-and-cancel shape: whichever of the timer or
+   * why: Mirrors `WorkerLink#withTimeout`'s race-and-cancel shape: whichever of the timer or
    * `promise` settles first wins, and the other is inert from then on (the timer is cancelled on
    * a real answer; a promise that eventually does settle after the timer already fired is simply
    * ignored, not delivered late).
@@ -739,49 +661,12 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  /** Unsubscribes from worker-view changes and rejects every still-pending waiter -- a gateway
-   * restart loses in-flight requests exactly as a worker restart does (ADR §30), so this makes
-   * that explicit rather than leaving them to hang on a coordinator nothing will ever drive
-   * again. */
   dispose(): void {
     this.#unsubscribeViews();
     this.#queue.cancelAll(() => new DispatchError("DAEMON_STOPPING", "Gateway is stopping"));
   }
 
-  // ---- admission and dispatch ----------------------------------------------------------------
-
-  /**
-   * A brand-new waiter's admission. **Architecture rule 10: `noWait` is enforced in exactly one
-   * place.** Every admission goes through `#dispatch`'s one ordered walk, carrying this waiter
-   * as its `candidate` -- there is no second, out-of-order look of its own. A `noWait` waiter
-   * whose worker answered `NO_CAPACITY` comes back through here too, for its one more walk
-   * (ADR 0009 §5), so that rejection is decided here as well.
-   *
-   * There used to be two paths here: a direct `routing.select` when the queue was empty, and an
-   * enqueue-then-dispatch when it was not. They answered the same question and drifted, exactly
-   * as rule 10 describes. Four consecutive review rounds each found a fresh defect in that
-   * disagreement, ending with a request that answered `NO_CAPACITY` immediately or waited in the
-   * queue depending on whether *unrelated* requests happened to be queued at the time.
-   *
-   * Queue membership is committed only once the waiter is actually going to wait. That ordering
-   * is load-bearing rather than tidy: `WaitQueue#enqueue` pushes a `queued` progress frame to
-   * the caller and `#enqueue` emits `lease.queued`, and a `noWait` request that is about to be
-   * refused must produce neither. ADR §10 requires "the same codes and progress states a worker
-   * uses", and the worker's own `#defer` rejects a `noWait` waiter *before* it enqueues.
-   *
-   * H9 (round 2 review): throws a plain `DispatchError("NO_CAPACITY", ...)` rather than a
-   * fleet-native error class -- `DispatchError`'s own code is used verbatim by
-   * `daemon/error-code.ts#classifyError`'s first branch, so no gateway-specific class or import
-   * is needed there to answer the same code the worker's own `NoCapacityError` answers. Before
-   * this, `src/daemon` (every worker-mode daemon, not just gateway mode) imported that class
-   * from `src/gateway/fleet-coordinator.js` just to recognize it, pulling the whole gateway
-   * module graph into ordinary worker startup with no lint rule covering that direction.
-   */
   #admit(waiter: FleetWaiter): void {
-    // Attempted. If that attempt is refused, `#attempt` decides the rest: one more walk for a
-    // `noWait` caller (ADR 0009 §5). A target that turned out unreachable re-queues it. A
-    // candidate the walk rejected as unservable (ADR 0009 §4) is terminal, so the rejection and
-    // the enqueue below are no-ops on it: `WaitQueue` refuses both for a terminal waiter.
     if (this.#dispatch(waiter)) return;
     if (waiter.options.noWait === true) {
       this.#reject(
@@ -796,7 +681,7 @@ export class FleetLeaseCoordinator {
 
   #dispatch(candidate?: FleetWaiter): boolean {
     if (this.#dispatchDepth > 0) {
-      // Round 4 review: a nested pass used to be *dropped*. The outer walk iterates a snapshot
+      // why: Round 4 review: a nested pass used to be *dropped*. The outer walk iterates a snapshot
       // and has already claimed workers, so a waiter freed mid-pass would never be reconsidered
       // -- C1's stall, reintroduced silently by the guard meant to prevent recursion. Defer
       // instead of dropping: the outer call runs another pass once this one unwinds.
@@ -817,10 +702,6 @@ export class FleetLeaseCoordinator {
     }
   }
 
-  /**
-   * `candidate` walks last, because it is the newest: that keeps the single fleet FIFO honest.
-   * The return says whether it was attempted, which `waiter.state` alone cannot tell `#admit`.
-   */
   #dispatchPass(candidate?: FleetWaiter): boolean {
     // why: a virtual pick holds a worker; a physical pick holds a worker for the same match only.
     const claimedThisPass = { physical: new Set<string>(), virtual: new Set<string>() };
@@ -830,7 +711,7 @@ export class FleetLeaseCoordinator {
         ? this.#queue.list()
         : [...this.#queue.list(), candidate];
     for (const waiter of waiters) {
-      // The candidate is mid-admission, not `queued`, even when it holds a queue position.
+      // why: The candidate is mid-admission, not `queued`, even when it holds a queue position.
       if (waiter !== candidate && waiter.state !== "queued") continue;
       if (this.#walkWaiter(waiter, claimedThisPass)) attempted.add(waiter);
     }
@@ -846,7 +727,7 @@ export class FleetLeaseCoordinator {
     const claimKey = (workerId: string): string =>
       isPhysical ? `${workerId}\u0000${physicalMatchKey(waiter.request)}` : workerId;
     const refusals = this.#cannotServe.get(waiter);
-    // A worker claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it
+    // why: A worker claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it
     // stays in the table's view.
     const allViews = this.options.views.routingViews();
     const views = allViews.filter((worker) => refusals?.has(worker.id) !== true);
@@ -954,11 +835,6 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  /** Ends a request the table of ADR 0009 §4 says no worker can serve, with the code and
-   * details a worker gives the same request. A request that holds a worker's "cannot serve"
-   * refusal ends with the last one instead (ADR 0009 §5). The worker only declined the dispatch
-   * (`lease.declined`), so the end is this gateway's own fact (ADR 0021 §4): `lease.rejected`
-   * with reason `unresolvable-spec`, whether or not the request had entered the gateway queue. */
   #rejectUnservable(
     waiter: FleetWaiter,
     verdict: Rejection,
@@ -966,8 +842,6 @@ export class FleetLeaseCoordinator {
   ): void {
     const last = refusals === undefined ? undefined : [...refusals.values()].at(-1);
     if (last !== undefined) {
-      // The worker's own refusal was only a probe's decline (ADR 0021), so the request's end is
-      // this gateway's fact, whether or not the request had entered the queue.
       this.#reject(waiter, last, "unresolvable-spec");
       return;
     }
@@ -978,21 +852,13 @@ export class FleetLeaseCoordinator {
     );
   }
 
-  /**
-   * H2 (round 2 review): `markProcessing`'s own `false` return -- the waiter is already terminal
-   * -- used to be ignored, issuing the RPC anyway. Masked in practice by every caller
-   * (`#admit`/`#dispatch`) only ever reaching this with a live waiter today, but nothing enforced
-   * that: a grant landing for a waiter that settled a moment earlier would still be indexed by
-   * `#settleGrant` while `queue.resolve` quietly answers `false`, leaving an orphan lease no
-   * client holds a reference to release.
-   */
   #beginAttempt(waiter: FleetWaiter, decision: RoutingDecision, rename: ModelName): void {
     if (!this.#queue.markProcessing(waiter)) return;
     void this.#attempt(waiter, decision, rename);
   }
 
   /**
-   * Every exit from this method leaves `waiter` either terminal (`resolve`/`reject`, inside
+   * why: Every exit from this method leaves `waiter` either terminal (`resolve`/`reject`, inside
    * `#settleGrant`/the catch below), back in `queued` (`#staleView`'s `#enqueue`), or -- a
    * `noWait` waiter refused with `NO_CAPACITY`, or any waiter refused with a cannot-serve code
    * before progress (ADR 0009 §5) -- handed back to `#admit`, which leaves it
@@ -1025,7 +891,7 @@ export class FleetLeaseCoordinator {
     const workerId = decision.workerId;
     const client = liveClient(this.options.directory.target(workerId));
     if (client === undefined) {
-      // The view named a worker that is no longer reachable by the time we got here -- the same
+      // why: The view named a worker that is no longer reachable by the time we got here -- the same
       // "stale, not wrong" story as a worker's own `NO_CAPACITY`, just discovered a step earlier.
       this.#staleView(waiter, workerId, { unreachable: true });
       return;
@@ -1052,7 +918,7 @@ export class FleetLeaseCoordinator {
       });
     };
 
-    // P4 (round 3 review): H4's own reasoning applies verbatim here -- `#withLeaseRequestTimeout`
+    // why: P4 (round 3 review): H4's own reasoning applies verbatim here -- `#withLeaseRequestTimeout`
     // settling `WORKER_UNREACHABLE` only stops *this* call's returned promise from being awaited
     // any further, not the worker's own still-pending `lease.request` RPC, whose `onProgress`
     // closure below stays live for as long as the worker keeps pushing progress. Before this,
@@ -1068,29 +934,13 @@ export class FleetLeaseCoordinator {
       grant = await this.#withLeaseRequestTimeout(
         client.requestLease(
           {
-            // The request as it arrived, under the worker's own name for an exact model.
             ...requestedDevice({ ...waiter.request, ...rename }),
             requesterId: namespacedRequesterId,
-            // ADR §27a (narrowed, round 3 review, H3): only the worker's own gateway-uplink
-            // session may set `owner` -- and this RPC always travels over exactly that
-            // connection (`WorkerLink#connect`, via `acceptUplink` on the worker's own end, see
-            // `session.isGatewayUplink`'s doc). The worker stores this verbatim as the lease's
-            // `ownerId` instead of deriving it from the connection -- see
-            // `daemon/dispatcher.ts`'s `#leaseRequest`.
             owner: waiter.options.ownerId,
-            // ADR 0009 §3: a download is never triggered through a gateway.
             allowDownload: false,
-            // ADR §12: worker queues never hold gateway traffic. Every dispatch is `noWait`
-            // regardless of what the original caller asked the gateway for -- the *gateway's
-            // own* queue is where a "wait" request actually waits.
             noWait: true,
             ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
-            // ADR 0020: sent as the requester sent it. The worker grants exactly this id, and
-            // its refusal (`LEASE_ID_TAKEN`) is the caller's answer: no other worker is tried.
             ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
-            // ADR 0021: this gateway's id for the request marks the dispatch a probe. The worker
-            // declines a probe it refuses (`lease.declined`) rather than rejecting it, and names
-            // the id on the lease events of the dispatch.
             fleetRequestId: waiter.id,
             ...(waiter.options.requires === undefined
               ? {}
@@ -1099,9 +949,6 @@ export class FleetLeaseCoordinator {
           {
             onProgress: (progress) => {
               if (detached) return;
-              // ADR §11: "the first `progress` push" is one of the two signals a request is
-              // this worker's now -- device work having started means it is committed here even
-              // before the grant itself arrives.
               announceDispatched();
               this.#queue.notifyProgress(waiter, progress);
             },
@@ -1113,7 +960,7 @@ export class FleetLeaseCoordinator {
         },
       );
     } catch (error: unknown) {
-      // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
+      // why: P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
       // queued ... the request waits" (§11) -- `announced` is exactly the "work has begun"
       // distinction the ADR draws, already maintained above for `request.dispatched`. A worker
       // can answer `NO_CAPACITY` *after* pushing progress (its own `#evictManaged` failure path,
@@ -1127,9 +974,6 @@ export class FleetLeaseCoordinator {
         });
         if (waiter.options.noWait === true) {
           this.#refreshView(workerId);
-          // ADR 0009 §5: one more walk, with this worker left out until its view changes. A
-          // `noWait` caller never asked to wait for that change, so `#admit` rejects it if no
-          // worker is picked.
           this.#admit(waiter);
           return;
         }
@@ -1151,7 +995,7 @@ export class FleetLeaseCoordinator {
         this.#admit(waiter);
         return;
       }
-      // C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
+      // why: C1 (round 3 review): this waiter's own outcome is terminal, but the worker it just gave
       // up (or never actually reached) may still be free for whoever else is queued behind it --
       // and unlike `#staleView`'s branch above, nothing else here schedules another look at them.
       // `WORKER_UNREACHABLE`/`INTERNAL` in particular need not produce any worker-side event, so
@@ -1171,41 +1015,16 @@ export class FleetLeaseCoordinator {
 
     announceDispatched();
     if (this.#settleGrant(waiter, workerId, grant) === "retry") {
-      // The worker answered with an id the gateway did not ask for: the attempt failed, and the
+      // why: The worker answered with an id the gateway did not ask for: the attempt failed, and the
       // request goes back to the queue as after an unreachable worker. This worker is left out
       // until its view changes, so a worker that keeps answering so is not asked in a loop.
       this.#rememberRefusal(waiter, workerId);
       this.#staleView(waiter, workerId);
       return;
     }
-    // C1 (round 3 review): see the catch branch above -- a grant settling this waiter is just as
-    // much a reason for whoever else is queued to get another look, not only a terminal failure.
     this.#dispatch();
   }
 
-  /**
-   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
-   * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
-   * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
-   * `INTERNAL`) it usually emitted nothing; after a dispatch timeout the worker's request is
-   * still running and may yet end in a relayed `lease.declined` or a grant, since the timeout
-   * only stops this gateway waiting. Either way the request's end is this
-   * gateway's own `lease.rejected` (ADR 0021 §4). The error code is
-   * preserved so the caller sees what the worker actually said, with three exceptions:
-   *
-   * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
-   *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
-   *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
-   * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
-   *   `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
-   *   answer (the request itself did reach the worker and keeps running there) -- forwarded as-is;
-   * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
-   *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
-   *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
-   *   used to answer this case too, misreporting a gateway-side crash as "the machine is
-   *   unreachable"; `INTERNAL` is what `#forwardToWorker`'s matching branch answers for the same
-   *   shape of failure.
-   */
   #classifyLeaseRequestError(error: unknown, workerId: string): DispatchError {
     if (error instanceof DispatchError) return error;
     if (isSimlockError(error)) return this.#classifyRelayedError(error, workerId);
@@ -1216,11 +1035,6 @@ export class FleetLeaseCoordinator {
     );
   }
 
-  /** ADR §11: "an immediate `NO_CAPACITY` is the only answer that leaves it queued ... the
-   * request waits", because this is a stale view, not a real refusal. A waiter reaches
-   * this from a target that turned out unreachable, and from a grant whose id was not the one
-   * asked for (`noWait` included, in both); a `noWait` caller refused with `NO_CAPACITY` is
-   * settled in `#attempt` instead (ADR 0009 §5). */
   #staleView(
     waiter: FleetWaiter,
     workerId: string,
@@ -1279,7 +1093,6 @@ export class FleetLeaseCoordinator {
     this.#refusals.set(waiter, refusals);
   }
 
-  /** Whether `worker` refused `waiter` and its view has not changed since. */
   #refused(waiter: FleetWaiter, worker: WorkerView): boolean {
     const refusals = this.#refusals.get(waiter);
     const key = refusals?.get(worker.id)?.key;
@@ -1291,7 +1104,7 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * H6 (round 2 review): the entry's `ownerId` comes from `waiter.options.ownerId` -- what this
+   * why: H6 (round 2 review): the entry's `ownerId` comes from `waiter.options.ownerId` -- what this
    * gateway itself forwarded as `owner` in the `lease.request` a moment ago -- never from the
    * worker's own echo of it (`grant.lease.ownerId`). Everything this gateway authorizes
    * afterwards (`lease.renew`/`release`/`device.exec`) keys on the index's `ownerId`, so a worker
@@ -1301,7 +1114,7 @@ export class FleetLeaseCoordinator {
    * either a worker bug or something worth knowing about, never silently swallowed.
    */
   #settleGrant(waiter: FleetWaiter, workerId: string, grant: LeaseGrant): "settled" | "retry" {
-    // ADR 0020: a forwarded `leaseId` is the gateway lease id, bare, and never the worker's echo
+    // why: ADR 0020: a forwarded `leaseId` is the gateway lease id, bare, and never the worker's echo
     // of it -- a worker that granted something else is not believed, and its lease is given back.
     const forwardedLeaseId = waiter.options.leaseId;
     if (forwardedLeaseId !== undefined && grant.lease.id !== forwardedLeaseId) {
@@ -1334,7 +1147,7 @@ export class FleetLeaseCoordinator {
       workerLeaseId: grant.lease.id,
     };
     if (!this.options.leaseIndex.add(entry, waiter.request.platform)) {
-      // The index already routes this bare id to another worker, which got it there first: the
+      // why: The index already routes this bare id to another worker, which got it there first: the
       // new worker's lease is given back and the caller is told the id is taken.
       this.#releaseOnWorker(workerId, grant.lease.id);
       this.#reject(waiter, leaseIdTaken(gatewayLeaseId), "lease-id-taken");
@@ -1346,7 +1159,7 @@ export class FleetLeaseCoordinator {
       lease: this.#projectRecord(grant.lease, entry),
       timing: grant.timing,
     };
-    // ADR 0021 §4: the grant is the request's end only if the waiter was still open. One that
+    // why: ADR 0021 §4: the grant is the request's end only if the waiter was still open. One that
     // landed after a timeout, a cancel or `dispose()` handed nothing to a caller, so it is no fact.
     if (this.#queue.resolve(waiter, fleetGrant)) {
       this.#emit("request.granted", {
@@ -1409,16 +1222,11 @@ export class FleetLeaseCoordinator {
       requester: waiter.options.requesterId,
       requestSpec: waiter.request,
       reason,
-      // `worker`, never `workerId`: that key marks an event relayed from a worker (ADR 0014 §6).
+      // why: `worker`, never `workerId`: that key marks an event relayed from a worker (ADR 0014 §6).
       ...(failedOn === undefined ? {} : { code: failedOn.code, worker: failedOn.worker }),
     });
   }
 
-  // ---- forwarding and views -------------------------------------------------------------------
-
-  /** The one chokepoint every forwarded operation funnels through -- #119's seam for
-   * `WORKER_UNREACHABLE` retry/backoff, without touching `renew`/`release`/`releaseAll`/`exec`
-   * individually. */
   async #forwardToWorker<Result>(
     workerId: string,
     fn: (client: SimlockAdminClient) => Promise<Result>,
@@ -1433,7 +1241,7 @@ export class FleetLeaseCoordinator {
       return await fn(client);
     } catch (error: unknown) {
       if (isSimlockError(error)) throw this.#classifyRelayedError(error, workerId);
-      // H1 (round 2 review): rethrown unchanged before this fix, which let a `TypeError` in this
+      // why: H1 (round 2 review): rethrown unchanged before this fix, which let a `TypeError` in this
       // coordinator's own request-building code surface exactly as if the worker itself had
       // produced it -- no code, no `kind`, nothing a caller could branch on the way it could on
       // every other failure this class answers. Every real transport failure already arrives as
@@ -1450,17 +1258,6 @@ export class FleetLeaseCoordinator {
     }
   }
 
-  /**
-   * P4 (round 2 review): `error.code` was preserved verbatim for every `SimlockError`, which
-   * answered a fleet client its own `DAEMON_CONNECTION_LOST` whenever the uplink itself died
-   * mid-call -- naming *this coordinator's* session to the worker, not the worker's own fact.
-   * `kind: "transport"` is what the admin client's wire (`src/simlock-client/wire.ts`) stamps on
-   * every rejection caused by the connection dying under an in-flight call, so it is what
-   * distinguishes that case from an ordinary domain refusal (`RUNTIME_MISSING`,
-   * `REQUESTER_ALREADY_LEASED`, ...), which is forwarded byte for byte -- ADR §28/§29 name
-   * `WORKER_UNREACHABLE` for exactly the transport case, and `#forwardToWorker`'s "not reachable
-   * right now" branch above already answers that same code for the pre-flight version of it.
-   */
   #classifyRelayedError(error: AnySimlockError, workerId: string): DispatchError {
     if (isUplinkLost(error)) {
       return new DispatchError("WORKER_UNREACHABLE", error.message, { workerId });
@@ -1488,8 +1285,6 @@ export class FleetLeaseCoordinator {
     return {
       ...record,
       id: entry.gatewayLeaseId,
-      // H6 (round 2 review): the index's own `ownerId` (trusted -- see `#settleGrant`), never
-      // this record's raw `ownerId` as a worker's own RPC answer echoed it back.
       ownerId: entry.ownerId,
       requesterId: entry.requesterId,
       ...(workerLabel === undefined
@@ -1498,29 +1293,11 @@ export class FleetLeaseCoordinator {
     };
   }
 
-  /**
-   * §30's reconnect rebuild, and its own upkeep on every worker-view change: reconciles each
-   * worker's entries against its current view -- adding any gateway-issued lease the index does
-   * not already know and, a generation later, forgetting one the view has stopped reporting at
-   * all (see `FleetLeaseIndex#rebuildFromWorker`'s own doc comment, C3 round 2 review) -- forgets
-   * a worker's entries entirely once its view has disappeared (`worker.remove`, or retention),
-   * then runs a dispatch pass.
-   *
-   * C1 (round 2 review): `rebuildFromWorker` runs *only* for a worker whose `view.leases`
-   * reference actually changed since the last time this method reconciled it -- see
-   * `#lastReconciledLeases`'s own doc. Before this fix, every view was reconciled on *every*
-   * notification regardless of which worker it was about: two view changes on worker B alone
-   * bumped worker A's reconciliation generation twice against A's own byte-identical, stale
-   * cached snapshot, which is enough for `rebuildFromWorker`'s two-consecutive-misses rule to
-   * evict a lease on A that was never actually missing from a real snapshot at all -- silently
-   * violating ADR §14 (the fleet-wide one-lease check reads this same index) and losing the
-   * `lease-lost` push `GatewayOwnerRoutedFacts` would otherwise emit for it.
-   */
   #onViewsChanged(): void {
     const views = this.options.views.views();
     const currentIds = new Set(views.map((view) => view.id));
     for (const view of views) {
-      // A starting worker's view has no `leases`: nothing was read, so the index keeps what it
+      // why: A starting worker's view has no `leases`: nothing was read, so the index keeps what it
       // holds for that worker until the worker answers `running`.
       if (view.leases === undefined) continue;
       if (this.#lastReconciledLeases.get(view.id) === view.leases) continue;
@@ -1542,13 +1319,11 @@ export class FleetLeaseCoordinator {
   }
 }
 
-/** A class request has no model to send: the worker applies its own rules to the class. */
 function forwardedModel(
   request: RoutableRequest,
   views: readonly WorkerView[],
   decision: RoutingDecision,
 ): ModelName {
-  // A physical request is matched by the worker against its enrolled devices, as typed.
   if (request.model === undefined || request.physical === true) return {};
   const view = views.find((worker) => worker.id === decision.workerId);
   return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };

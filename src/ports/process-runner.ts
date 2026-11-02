@@ -4,7 +4,7 @@ import { constants } from "node:os";
 
 import { childLaunch } from "./windows-command.js";
 
-// `close` normally follows `exit` within the same tick, once the child's own stdio
+// why: `close` normally follows `exit` within the same tick, once the child's own stdio
 // pipes report EOF. But a child that forks a grandchild before it dies leaves that
 // grandchild holding the inherited write end of our pipe open -- it was handed the
 // same descriptors, and nothing takes them back -- so `close` never fires even
@@ -21,12 +21,12 @@ import { childLaunch } from "./windows-command.js";
 // say" -- the only case this needs to escape.
 const EXIT_TO_CLOSE_GRACE_MS = 1_000;
 
-// A grandchild that inherits the pipe *and* chatters on it would otherwise restart the
+// why: A grandchild that inherits the pipe *and* chatters on it would otherwise restart the
 // grace window forever, so the deferral is capped. Reaching this cap means the output
 // may be incomplete; nothing else is waiting on it by then.
 const EXIT_TO_CLOSE_MAX_DEFERRAL_MS = 5_000;
 
-// A hard bound on how long `run()` waits after a timeout-triggered SIGTERM before escalating to
+// why: A hard bound on how long `run()` waits after a timeout-triggered SIGTERM before escalating to
 // SIGKILL. A child that ignores SIGTERM (or is itself stuck in an uninterruptible wait) would
 // otherwise hold the caller's `await process.wait()` open forever -- exactly the unbounded wait
 // this constant exists to cap. Fixed rather than derived from `timeoutMs`: it is a
@@ -45,19 +45,7 @@ export interface ProcessRunOptions {
    * with the same effect on the handle: nothing is captured.
    */
   readonly stdio?: "pipe" | "ignore" | { readonly file: string };
-  /**
-   * Written to the child's stdin and then closed. For a CLI that reads an interactive prompt
-   * from stdin (e.g. `sdkmanager --licenses`'s per-license `y/N`) rather than accepting a flag.
-   * Omitted means stdin is left open and unwritten, exactly as before this option existed.
-   */
   readonly input?: string;
-  /**
-   * Where `spawn`'s `stdout` and `stderr` iterables end a line. `"newline"` (the default) ends
-   * one only at `\n`. `"carriage-return-too"` also ends one at a bare `\r`, and yields no empty
-   * lines: an installer such as `sdkmanager` redraws its progress bar in place with `\r`, so
-   * without this every update waits in one unfinished line until the process prints its final
-   * newline. The captured `ProcessResult` text is the same either way.
-   */
   readonly lineEnd?: LineEnd;
 }
 
@@ -69,45 +57,13 @@ export interface ProcessResult {
   readonly stderr: string;
 }
 
-/**
- * ADR 0005 §19a's spawn: a child whose output is handed to the caller chunk by chunk as it
- * arrives and is never accumulated anywhere in this process.
- *
- * Deliberately a second method rather than an option on `spawn`: `ProcessHandle` exposes its
- * output as line-delimited `AsyncIterable`s *and* keeps every chunk so `wait()` can hand back
- * a complete `stdout`/`stderr` -- exactly right for the driver calls that parse a tool's whole
- * answer, and exactly wrong for `device.exec`, which must forward bytes as they appear and
- * hold none of them (§19e: "Output is streamed, never buffered, so there is no size cap").
- * Bolting a "don't buffer" flag onto `spawn` would have left `ProcessResult`'s `stdout`/`stderr`
- * silently empty for that mode; a separate return type says so in the type system instead.
- *
- * Chunks are whatever the child wrote, decoded UTF-8, unsplit: no line assembly, so a caller
- * that wants lines does that itself.
- */
 export interface ProcessStreamOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
-  /**
-   * Written to the child's stdin, which is then closed -- the one-shot `stdin` of ADR §19c.
-   * Omitted leaves stdin open and unwritten (a child that reads it simply blocks until its
-   * own timeout), matching `ProcessRunOptions.input`.
-   */
   readonly input?: string;
-  /**
-   * Called with each chunk as it arrives. **May return a promise**, and if it does, this
-   * runner stops reading that stream until it resolves -- which is how backpressure reaches
-   * the child: a consumer that cannot place a chunk yet (an SSE client that is not reading, a
-   * socket that has not drained) slows the command down instead of accumulating its output
-   * somewhere. ADR 0005 §19e says output is streamed and never buffered; that is only true
-   * end to end if the slow end can push back, so the callback's promise is the seam that
-   * makes it true rather than a claim about the fast path only.
-   */
   readonly onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>;
 }
 
-/** How a streamed child ended. `code` is null when a signal killed it, in which case
- * `signal` names it -- `exitCodeOf` below turns the pair into the single number a shell
- * would report. */
 export interface StreamingProcessResult {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -119,14 +75,6 @@ export interface StreamingProcessHandle {
   wait(): Promise<StreamingProcessResult>;
 }
 
-/**
- * The single number a shell reports for a finished process: its own exit code, or
- * `128 + signal` when a signal ended it. Lives here, in the port's adapter layer, because
- * turning a signal *name* into its number needs `node:os` -- which application code (the
- * dispatcher that answers `device.exec` with an `exitCode`) may not import (architecture
- * rule 9). Mirrors what `src/cli/passthrough.ts` does for a locally-spawned passthrough, so
- * the same command reports the same number whether it ran here or there.
- */
 export function exitCodeOf(result: StreamingProcessResult): number {
   if (result.code !== null) return result.code;
   if (result.signal === null) return 1;
@@ -138,21 +86,10 @@ export interface ProcessHandle {
   readonly stdout: AsyncIterable<string>;
   readonly stderr: AsyncIterable<string>;
   kill(signal?: NodeJS.Signals): void;
-  /**
-   * Stops this child from keeping the parent's event loop alive. Only for a process that
-   * is meant to outlive the daemon and is reaped by pid instead of by exit (Simlock's adb
-   * server): everything else is awaited through `wait()` and must keep the loop open.
-   */
   unref(): void;
   wait(): Promise<ProcessResult>;
 }
 
-/**
- * A child that could not be started at all -- a binary that exists but is not executable,
- * `ETXTBSY` while it is being rewritten, `EAGAIN` under memory pressure. Node reports this
- * asynchronously, so it is raised here as a synchronous throw (and therefore a rejected
- * promise out of `run`) rather than left to surface as an unhandled `error` event.
- */
 export class ProcessSpawnError extends Error {
   constructor(
     readonly command: string,
@@ -170,8 +107,6 @@ export interface ProcessRunner {
     options?: ProcessRunOptions,
   ): Promise<ProcessResult>;
   spawn(command: string, args: readonly string[], options?: ProcessRunOptions): ProcessHandle;
-  /** ADR 0005 §19a: spawns a child and forwards its output chunk by chunk, buffering none of
-   * it. See `ProcessStreamOptions`. */
   spawnStreaming(
     command: string,
     args: readonly string[],
@@ -210,9 +145,8 @@ export class NodeProcessRunner implements ProcessRunner {
             try {
               process.kill("SIGTERM");
             } catch {
-              // The child may have exited between the timer firing and the kill.
             }
-            // SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
+            // why: SIGTERM is a request, not a guarantee -- a child that ignores it (or is itself
             // hung) must not be able to keep this `run()` call waiting indefinitely. Escalate to
             // SIGKILL if it hasn't exited within the grace period; cleared below like `timeout`
             // itself the moment `process.wait()` actually settles, so a child that does exit
@@ -221,7 +155,6 @@ export class NodeProcessRunner implements ProcessRunner {
               try {
                 process.kill("SIGKILL");
               } catch {
-                // The child may have exited between the timer firing and the kill.
               }
             }, this.sigkillGraceMs);
           }, options.timeoutMs);
@@ -256,7 +189,7 @@ export class NodeProcessRunner implements ProcessRunner {
     if (logFd !== undefined) closeSync(logFd);
 
     if (child.pid === undefined) {
-      // The spawn failed, and Node will say why by emitting `error` on the next tick. An
+      // why: The spawn failed, and Node will say why by emitting `error` on the next tick. An
       // `error` with no listener is a hard, uncatchable process exit, so the listener is
       // attached *before* this function leaves -- throwing first would take the daemon
       // down over an unreadable `adb`. The reason is lost with it (it does not exist yet),
@@ -296,7 +229,7 @@ export class NodeProcessRunner implements ProcessRunner {
     });
 
     if (child.pid === undefined) {
-      // Same reasoning as `spawn` above: attach a listener before throwing, or Node's
+      // why: Same reasoning as `spawn` above: attach a listener before throwing, or Node's
       // asynchronous `error` takes the daemon down instead of rejecting one operation.
       child.once("error", () => undefined);
       throw new ProcessSpawnError(command, args);
@@ -311,7 +244,7 @@ export class NodeProcessRunner implements ProcessRunner {
       launch.windowsVerbatimArguments,
     );
     if (options.input !== undefined) {
-      // One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
+      // why: One shot, then closed (ADR 0005 §19c): a command reading stdin sees exactly this and
       // then EOF. `end` is safe even if the child already exited -- the EPIPE that produces is
       // swallowed below rather than left to surface as an unhandled `error` on the stream.
       child.stdin?.on("error", () => undefined);
@@ -321,16 +254,6 @@ export class NodeProcessRunner implements ProcessRunner {
   }
 }
 
-/**
- * Thrown by `NodeStreamingProcessHandle#wait()` when the child exited but a chunk's delivery
- * -- the promise `onChunk` returned, which this handle was waiting on before resuming the
- * pipe for backpressure (ADR 0005 §19e) -- was still outstanding `EXIT_TO_CLOSE_MAX_DEFERRAL_MS`
- * later. A paused readable never reaches `close` and stops emitting `data`, so nothing here can
- * *prove* the remaining output was delivered; resolving `{ exitCode }` as if it had been would
- * be exactly the silent truncation streaming without buffering exists to avoid. The caller sees
- * this as `device.exec`'s terminal error, the same shape a `PASSTHROUGH_REFUSED` or
- * `EXEC_TIMEOUT` already is on both transports -- not a clean exit that quietly drops a tail.
- */
 export class ExecOutputDeliveryStalledError extends Error {
   constructor(deferralCapMs: number = EXIT_TO_CLOSE_MAX_DEFERRAL_MS) {
     super(
@@ -342,52 +265,11 @@ export class ExecOutputDeliveryStalledError extends Error {
   }
 }
 
-/**
- * `spawnStreaming`'s handle. Holds no output: every chunk is handed to `onChunk` the moment
- * the stream emits it and is then forgotten, which is what lets `device.exec` stream
- * arbitrarily large output through a daemon that never grows for it.
- *
- * Settling repeats `NodeProcessHandle`'s `exit`-then-quiet-window dance for the same reason
- * (see `EXIT_TO_CLOSE_GRACE_MS`): a grandchild holding the inherited pipe open (`adb
- * start-server` is exactly this) means `close` may never fire even though the process the
- * caller asked about is gone.
- *
- * The quiet window that dance relies on only means anything when the pipe is idle because the
- * child has nothing left to write. `#forward` below pauses the readable while a chunk's
- * delivery to the consumer is outstanding (the backpressure ADR 0005 §19e asks for): a paused
- * readable emits no `data`, so `#chunkCount` stops moving for a reason that has nothing to do
- * with the child being gone. Settling under that -- as this class once did -- resolves `wait()`
- * while a chunk still sits undelivered in the paused pipe, and the caller returns `{ exitCode }`
- * having silently dropped it.
- *
- * `close` itself is not the all-clear it looks like, either: verified against real Node (a
- * child that writes two small chunks in quick succession and calls `process.exit()`), the
- * stdio pipe's `close` can fire in the very same tick as a `data` event delivering a chunk
- * this handle just paused on -- Node drains whatever the OS pipe was already holding as part
- * of noticing EOF, pause or no pause. So both `close` and the exit grace window fail closed
- * through the same `#settleWhenDrained`: `#pendingDeliveries` is this handle's own state (it is
- * the one that called `pause()`), checked directly rather than inferred from the chunk counter
- * the grandchild case already overloads, and only `EXIT_TO_CLOSE_MAX_DEFERRAL_MS` with a
- * delivery still outstanding at that deadline ends the wait -- as a rejection
- * (`ExecOutputDeliveryStalledError`), not a settle, because at that point something really may
- * have been dropped and pretending otherwise is the one thing this class must not do. A chatty
- * grandchild with **no** pending delivery hitting the same deadline still settles as before:
- * nothing of the command's own output is waiting on anyone in that case, only unrelated noise
- * this handle was never going to forward to a live consumer anyway (see `#execDevice` in
- * `daemon/server.ts`, torn down by then).
- */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;
   readonly #result: Promise<StreamingProcessResult>;
   #chunkCount = 0;
   #pendingDeliveries = 0;
-  /** Per-stream half of `#pendingDeliveries` -- the total is what the exit-settle path needs
-   * ("is anything at all still outstanding"), this is what `#forward`'s own `resume()` needs
-   * ("is *this* stream's own last outstanding delivery the one that just settled"). A stream
-   * can hold more than one outstanding delivery at once (a paused readable still drains
-   * whatever it already had at EOF -- see the class doc), so resuming on any settle rather
-   * than this stream's own count reaching zero would resume it while another delivery on the
-   * same stream is still unaccounted for. */
   #pendingByStream: Record<"stdout" | "stderr", number> = { stderr: 0, stdout: 0 };
   #deliveryWaiters: Array<() => void> = [];
   #killedWith: NodeJS.Signals | undefined;
@@ -422,7 +304,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         settled = true;
         reject(error);
       };
-      // Neither `close` nor the exit grace window may resolve this promise while a chunk's
+      // why: Neither `close` nor the exit grace window may resolve this promise while a chunk's
       // delivery is still outstanding -- both funnel through here instead of settling
       // directly, each with its own budget for how long it will wait on a delivery that
       // never finishes before giving up and failing loudly instead. Re-checked against a
@@ -459,7 +341,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         const armGrace = (chunksAtArm: number): void => {
           const timer = setTimeout(() => {
             if (settled) return;
-            // A pending delivery always wins over "chunk count still changing": it is this
+            // why: A pending delivery always wins over "chunk count still changing": it is this
             // handle's own state, not an inference, and it is checked first so a chattering
             // stream with one stuck delivery does not keep re-arming past it forever.
             if (
@@ -477,7 +359,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         armGrace(this.#chunkCount);
       });
     });
-    // A late `error` on a handle whose `wait()` nobody kept (a caller that killed and walked
+    // why: A late `error` on a handle whose `wait()` nobody kept (a caller that killed and walked
     // away) must not become an unhandled rejection and end the daemon; a caller that does
     // await `wait()` still sees the rejection.
     this.#result.catch(() => undefined);
@@ -492,8 +374,6 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     return this.#result;
   }
 
-  /** Resolves the next time any outstanding delivery finishes, successfully or not -- just a
-   * wake-up to re-check state, not a promise about which one it was. */
   #nextDeliverySettled(): Promise<void> {
     return new Promise((resolve) => {
       this.#deliveryWaiters.push(resolve);
@@ -509,7 +389,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
     stream.setEncoding("utf8");
     stream.on("data", (chunk: string) => {
       this.#chunkCount += 1;
-      // `onChunk` is typed `void | Promise<void>`, but nothing enforces that a transport's
+      // why: `onChunk` is typed `void | Promise<void>`, but nothing enforces that a transport's
       // implementation never throws synchronously (a bug in a socket write, say). Called bare
       // inside a `data` listener, that throw would become an uncaught exception and take the
       // whole daemon down over one bad chunk delivery -- caught here and treated exactly like
@@ -521,7 +401,7 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
         delivered = Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
       if (delivered === undefined) return;
-      // The consumer is not ready for more yet. Pausing the readable stops this child at the
+      // why: The consumer is not ready for more yet. Pausing the readable stops this child at the
       // pipe -- it fills the OS buffer and then blocks in its own `write` -- which is the only
       // place backpressure can be applied without holding the bytes somewhere. Resumed on
       // either outcome: a failed delivery (a dead socket) must not wedge the process, and the
@@ -671,13 +551,13 @@ class NodeProcessHandle implements ProcessHandle {
             }
             settle(code);
           }, this.exitGraceMs);
-          // A pending grace timer must never keep the Node process alive on its own.
+          // why: A pending grace timer must never keep the Node process alive on its own.
           timer.unref();
         };
         armGrace(capturedSoFar());
       });
     });
-    // A child nobody waits on (the supervised adb server) would otherwise turn a late
+    // why: A child nobody waits on (the supervised adb server) would otherwise turn a late
     // `error` into an unhandled rejection, which ends the daemon. Marking the promise
     // handled here changes nothing for a caller that does await `wait()`.
     this.#result.catch(() => undefined);
@@ -714,35 +594,13 @@ export interface ScriptedProcessExpectation {
   readonly stdoutLines?: readonly string[];
   readonly stderrLines?: readonly string[];
   readonly hangs?: boolean;
-  /**
-   * Raw chunks for `spawnStreaming`, emitted in this exact order across both streams --
-   * which `stdoutLines`/`stderrLines` cannot express, since they are two separate lists with
-   * no ordering between them. A test asserting that interleaved output reaches a caller in
-   * arrival order needs that, so it is stated here rather than inferred. When absent,
-   * `spawnStreaming` falls back to the line lists (stdout then stderr, newline-terminated).
-   * `spawn` replays them too, in place of the line lists, through the same line splitting a
-   * real child's output gets -- so a test can say exactly where one chunk ends.
-   */
   readonly chunks?: readonly { readonly stream: "stdout" | "stderr"; readonly chunk: string }[];
-  /**
-   * Models a child that ignores `SIGTERM` -- only `SIGKILL` ends it. Without this a scripted
-   * `hangs` process dies on the first signal, so the escalation every timeout path depends on
-   * (`SIGTERM`, then `SIGKILL` after a grace window) is never actually exercised: the code that
-   * sends the second signal would be dead and nothing would notice.
-   */
   readonly ignoresSigterm?: boolean;
   readonly onSpawn?: (args: readonly string[]) => void | Promise<void>;
 }
 
 export class ScriptedProcessRunner implements ProcessRunner {
   readonly calls: ProcessInvocation[] = [];
-  /**
-   * The handle each `spawn` returned, index-aligned with `calls`, so a test can assert what
-   * the caller did *with* the child rather than only how it was started. `unref` is the case
-   * that needs it: nothing about the argv or the options says whether the event loop was
-   * released, and a spawned child that stays referenced keeps the daemon alive after
-   * `daemon stop`.
-   */
   readonly handles: (ProcessHandle & { readonly unreffed: boolean })[] = [];
   #nextPid = 1;
   readonly #expectations: ScriptedProcessExpectation[];
@@ -786,8 +644,6 @@ export class ScriptedProcessRunner implements ProcessRunner {
     const invocation = {
       args: [...args],
       command,
-      // Recorded as a `ProcessRunOptions` so `calls` stays one list a test can read uniformly;
-      // `onChunk` is a callback, not configuration, and nothing would assert on it.
       options: {
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         ...(options.env === undefined ? {} : { env: options.env }),
@@ -805,13 +661,6 @@ export class ScriptedProcessRunner implements ProcessRunner {
   }
 }
 
-/**
- * The scripted counterpart of `NodeStreamingProcessHandle`: emits the expectation's chunks
- * synchronously (so a test needs no timers to see them), then settles unless the expectation
- * `hangs` -- in which case only `kill()` settles it, reporting the signal the way a real
- * killed child does. That is what makes the daemon's exec timeout testable without a real
- * process or a real clock.
- */
 class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
   readonly #result: Promise<StreamingProcessResult>;
   #resolve!: (result: StreamingProcessResult) => void;
@@ -831,12 +680,6 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
     void this.#deliver(expectation, onChunk);
   }
 
-  /**
-   * One chunk at a time, awaiting each delivery before the next -- the same discipline
-   * `NodeStreamingProcessHandle` gets by pausing a readable, so a test that stalls a delivery
-   * sees the scripted child stall too rather than racing ahead of it. The command settles only
-   * once its output is delivered, which keeps "output, then exit code" true here as well.
-   */
   async #deliver(
     expectation: ScriptedProcessExpectation,
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
@@ -883,7 +726,6 @@ function scriptedChunks(
 }
 
 class ScriptedProcessHandle implements ProcessHandle {
-  /** Whether the caller released the event loop, which only a supervised child should do. */
   unreffed = false;
   readonly stdout = new LineBuffer();
   readonly stderr = new LineBuffer();
@@ -924,11 +766,6 @@ class ScriptedProcessHandle implements ProcessHandle {
     return this.#result;
   }
 
-  /**
-   * Each scripted line is replayed as the child would have printed it, `\n`-terminated, through
-   * the same splitter the real handle uses -- so a scripted line holding `\r` redraws splits
-   * exactly as real output would under the caller's `lineEnd`.
-   */
   #writeLines(
     lines: readonly string[] | undefined,
     destination: LineBuffer,
@@ -1012,18 +849,11 @@ class LineBuffer implements AsyncIterable<string> {
   }
 }
 
-/**
- * The one place process output is cut into lines, for the real handle and the scripted one.
- * `\r\n` is always a single line end. Under `"carriage-return-too"` a bare `\r` ends a line as
- * well, and empty lines are dropped -- which is also what keeps a `\r\n` pair split across two
- * chunks one line end rather than a line plus an empty one.
- */
 class LineSplitter {
   #remainder = "";
 
   constructor(private readonly lineEnd: LineEnd) {}
 
-  /** The lines `chunk` completes; an unfinished tail is held for the next chunk. */
   feed(chunk: string): string[] {
     const parts = `${this.#remainder}${chunk}`.split(
       this.lineEnd === "carriage-return-too" ? /\r\n|\r|\n/ : /\r?\n/,
@@ -1032,7 +862,6 @@ class LineSplitter {
     return this.#kept(parts);
   }
 
-  /** The unfinished tail at end of output, if any. */
   end(): string[] {
     const tail = this.#remainder;
     this.#remainder = "";
@@ -1050,7 +879,7 @@ function captureLines(
   chunks: string[],
   lineEnd: LineEnd,
 ): void {
-  // No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
+  // why: No pipe means the child was spawned with `stdio: "ignore"`. Closing the buffer
   // straight away is what keeps `for await (const line of handle.stdout)` a loop that
   // ends immediately rather than one that never yields and never returns.
   if (stream === null) {
