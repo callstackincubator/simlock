@@ -95,4 +95,4 @@ the status is stale.
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding) |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
-| [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted — not yet implemented; supersedes 0002 §2, §3, §5, §8, §9 |
+| [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |

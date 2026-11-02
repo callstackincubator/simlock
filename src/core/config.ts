@@ -374,7 +374,7 @@ export interface Config {
     readonly slim: {
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
       readonly categories?: readonly string[];
-      /** Boot deadline for a slim device (slim adds a second boot; CI runners are slow). */
+      /** why: a slim device gets its own boot deadline, because CI runners are slow. */
       readonly bootTimeoutMs: number;
     };
   };
