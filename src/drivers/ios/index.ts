@@ -149,12 +149,6 @@ export const REFUSED_RUNTIME_OPERATION = "delete";
 const RECLAIM_INSTEAD =
   "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
 
-// why: Slim mode reboots the device a second time and runs a launchctl-disable pass on top of the
-// usual cold boot -- without a dedicated estimate, `doctor`'s provisioning-stall threshold would
-// be sized for a single boot and flag every slim device as stuck. Budget: one `COLD_BOOT_ESTIMATE_MS`
-// boot, a second one for the post-slim reboot, plus headroom for the chunked `simctl spawn` calls
-// (a handful of ~60s-capped chunks that in practice finish in a few seconds each).
-const SLIM_BOOT_ESTIMATE_MS = 150_000;
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
 const OVERRIDES_FILE_NAME = "disabled.plist";
@@ -1106,13 +1100,7 @@ export class IosSimctlDriver implements Driver {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        // why: A slim device pays for a second boot plus a launchctl-disable pass on top of the usual
-        // one -- quoting the plain cold-boot number here would make `doctor` flag every slim
-        // device as stalled. A full spec never slims, so quoting the slim number to it would
-        // make `doctor` flag a perfectly on-time full boot as stalled instead.
-        return this.#slim !== undefined && spec.mode === "slim"
-          ? SLIM_BOOT_ESTIMATE_MS
-          : COLD_BOOT_ESTIMATE_MS;
+        return COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
         return ERASE_ESTIMATE_MS;
