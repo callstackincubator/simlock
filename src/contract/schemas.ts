@@ -89,6 +89,25 @@ export const imageTagSchema = z
   .max(IMAGE_TAG_MAX)
   .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
 
+const REQUESTER_ID_MAX = 200;
+const GATEWAY_PREFIX = /^gw:[^:]{0,100}:/;
+
+/**
+ * A requester id as any input names it: printable, no control characters, at most 200 characters.
+ * why: a gateway hands its worker `gw:<instance id>:<requester id>`, so the limit counts what
+ * follows that prefix and the worker accepts the namespaced form of an id the gateway let in.
+ */
+export const requesterIdSchema = z
+  .string()
+  .refine(
+    (id) => !/[\p{Cc}\u2028\u2029]/u.test(id),
+    "requesterId must not contain control characters",
+  )
+  .refine(
+    (id) => id.replace(GATEWAY_PREFIX, "").length <= REQUESTER_ID_MAX,
+    `requesterId may be at most ${String(REQUESTER_ID_MAX)} characters`,
+  );
+
 const deviceSpecSchema = z.object({
   physical: z.boolean(),
   platform: platformSchema,

@@ -26,6 +26,7 @@ import {
   eventEnvelopeSchema,
   EVENT_ID_PATTERN,
   hostFactsSchema,
+  requesterIdSchema,
   historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
@@ -156,7 +157,7 @@ const leaseRequestBaseSchema = z
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
     physical: z.boolean().optional(),
-    requesterId: z.string().optional(),
+    requesterId: requesterIdSchema.optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
@@ -318,7 +319,10 @@ export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   effect: "write",
-  input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
+  input: z.object({
+    requesterId: requesterIdSchema.optional(),
+    platform: platformSchema.optional(),
+  }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
    * why: ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
@@ -450,7 +454,7 @@ export const deviceExec = defineOperation({
        * identity and is answered as if it had not is the kind of silence that reads like
        * authorization (round 4, F4).
        */
-      requesterId: z.string().optional(),
+      requesterId: requesterIdSchema.optional(),
     })
     .strict(),
   /**

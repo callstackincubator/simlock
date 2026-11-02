@@ -8,6 +8,7 @@ import {
   leaseIdSchema,
   OPERATIONS,
   refuseModelWithClass,
+  requesterIdSchema,
   waitingRequestSchema,
 } from "../contract/index.js";
 import { declareRoute, firstValue, sseMessage } from "./routes.js";
@@ -135,10 +136,7 @@ const execBodySchema = z
       .string()
       .nullish()
       .transform((value) => value ?? undefined),
-    requesterId: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
+    requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
 

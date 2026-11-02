@@ -479,6 +479,13 @@ describe("Dispatcher: parsing", () => {
         ).rejects.toMatchObject({ code: "BAD_REQUEST" });
       }
     }
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", platform: "ios" },
+        session({ principal: "a\u001b[2Jb", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(registry.snapshot.leases).toEqual([]);
 
     await expect(send("lease.cancel", "x".repeat(200))).resolves.toEqual({ result: "not-found" });
