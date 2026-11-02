@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { OwnedRootError } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
 
-const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+export const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 const MARK_FILE_NAME = "simlock-mark.json";
 
 const SWITCH_STEPS =

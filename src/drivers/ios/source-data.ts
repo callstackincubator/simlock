@@ -136,6 +136,13 @@ export class IosSourceTable {
     ]);
   }
 
+  allUdids(): readonly string[] {
+    return this.#database
+      .prepare("SELECT udid FROM ios_source_data WHERE udid IS NOT NULL")
+      .all()
+      .map((row) => row["udid"] as string);
+  }
+
   findRow(sourceId: string): SourceRow | undefined {
     return this.#rows("WHERE source_id = ?", [sourceId])[0];
   }

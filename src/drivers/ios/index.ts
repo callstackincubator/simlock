@@ -58,7 +58,11 @@ import type {
   SqliteDatabase,
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
-import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-leftovers.js";
+import {
+  refuseOwnSetLeftovers,
+  refuseXcodeSetLeftovers,
+  UDID_PATTERN,
+} from "./device-set-leftovers.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
@@ -737,29 +741,69 @@ export class IosSimctlDriver implements Driver {
   async listSources(): Promise<readonly DriverSource[]> {
     await this.#sweepLeftovers();
     const rows = this.#sources.readyRows();
-    if (rows.length === 0) return [];
+    const orphans = await this.#orphanSources();
+    if (rows.length === 0) return orphans;
     const catalog = await this.#loadCatalog();
-    return rows.map((row) => {
-      const staleReason = sourceStaleReason(row, catalog);
-      return {
-        id: row.sourceId,
-        kind: row.kind,
-        model: row.model,
-        osVersion: row.osVersion,
-        ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
-        ...(staleReason === undefined ? {} : { staleReason }),
-      };
-    });
+    return [
+      ...rows.map((row) => {
+        const staleReason = sourceStaleReason(row, catalog);
+        return {
+          id: row.sourceId,
+          kind: row.kind,
+          model: row.model,
+          osVersion: row.osVersion,
+          ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+          ...(staleReason === undefined ? {} : { staleReason }),
+        };
+      }),
+      ...orphans,
+    ];
   }
 
   async destroySource(sourceId: string): Promise<void> {
     const row = this.#sources.findRow(sourceId);
-    if (row === undefined) throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
+    if (row === undefined) {
+      // why: safety rule 1 (ADR 0061 §1): a UDID no row names is deleted only when it is a simulator folder of the sources set.
+      if (!(await this.#isOrphanSource(sourceId))) {
+        throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
+      }
+      await this.#withSeedLock(sourceId, () => this.#deleteSeedSimulator(sourceId));
+      return;
+    }
     if (row.udid !== undefined) {
       const udid = row.udid;
       await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
     }
     this.#sources.deleteRow(sourceId);
+  }
+
+  /** why: a simulator in the sources set that no row names is a leftover of a crash; `doctor` reports it and only `--purge-orphans` deletes it. */
+  async #orphanSources(): Promise<readonly DriverSource[]> {
+    const named = new Set(this.#sources.allUdids());
+    return (await this.#sourceFolders())
+      .filter((udid) => !named.has(udid))
+      .map((udid) => ({
+        id: udid,
+        kind: "seed",
+        model: "unknown",
+        orphan: true,
+        osVersion: "unknown",
+      }));
+  }
+
+  async #isOrphanSource(udid: string): Promise<boolean> {
+    return (await this.#sourceFolders()).includes(udid) && !this.#sources.allUdids().includes(udid);
+  }
+
+  async #sourceFolders(): Promise<readonly string[]> {
+    try {
+      return (await this.#filesystem.readdir(this.#sourcesSet)).filter((entry) =>
+        UDID_PATTERN.test(entry),
+      );
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
   }
 
   async provision(
