@@ -769,6 +769,7 @@ describe("createLeasing", () => {
     );
     expect(harness.driver.calls.slice(callsBefore).map((call) => call.operation)).toEqual([
       "listManaged",
+      "listSources",
     ]);
   });
 
@@ -2167,12 +2168,12 @@ describe("createLeasing fresh lease identity (#75)", () => {
   it.each([
     {
       crashedIn: "reclaiming" as const,
-      operations: ["listManaged", "shutdown", "destroy"],
+      operations: ["listManaged", "shutdown", "destroy", "listSources"],
       title: "while it was reclaiming",
     },
     {
       crashedIn: "shutdown" as const,
-      operations: ["listManaged", "destroy"],
+      operations: ["listManaged", "destroy", "listSources"],
       title: "after its shutdown commit and before its delete",
     },
   ])(
