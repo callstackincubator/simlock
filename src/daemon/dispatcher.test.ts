@@ -455,6 +455,52 @@ describe("Dispatcher: parsing", () => {
     },
   );
 
+  it("rejects a requesterId with a control character or longer than 256 characters on lease.request, lease.cancel, device.exec and device.rotate with BAD_REQUEST, and accepts one at 256 or a gateway-namespaced one", async () => {
+    const { dispatcher, registry } = await buildDispatcher();
+    const send = (
+      operation: "lease.request" | "lease.cancel" | "device.exec" | "device.rotate",
+      requesterId: string,
+    ) =>
+      dispatcher.dispatch(
+        operation,
+        operation === "lease.request"
+          ? { model: "iPhone 17 Pro", platform: "ios", requesterId }
+          : operation === "lease.cancel"
+            ? { requesterId }
+            : operation === "device.rotate"
+              ? { leaseId: "lse_none", orientation: "portrait", requesterId }
+              : { args: [], leaseId: "lse_none", requesterId, tool: "simctl" },
+        session({ role: "admin" }),
+      );
+    const bad = ["a\u001bb", "a\u0000b", "a\u009bb", "a\nb", "a\u007fb", "x".repeat(257)];
+    for (const operation of [
+      "lease.request",
+      "lease.cancel",
+      "device.exec",
+      "device.rotate",
+    ] as const) {
+      for (const requesterId of bad) {
+        await expect(
+          send(operation, requesterId),
+          `${operation} ${JSON.stringify(requesterId)}`,
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      }
+    }
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", platform: "ios" },
+        session({ principal: "a\u001b[2Jb", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(registry.snapshot.leases).toEqual([]);
+
+    await expect(send("lease.cancel", "x".repeat(256))).resolves.toEqual({ result: "not-found" });
+    await expect(send("lease.cancel", `gw:inst-1:${"x".repeat(256)}`)).resolves.toEqual({
+      result: "not-found",
+    });
+  });
+
   it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it, and creates no lease", async () => {
     const { dispatcher, registry } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
     await expect(

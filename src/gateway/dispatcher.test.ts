@@ -1695,6 +1695,18 @@ describe("GatewayDispatcher", () => {
       }
     });
 
+    it("refuses a lease.request that names no requesterId when the session principal has a control character", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", noWait: true, platform: "ios" },
+          session({ principal: "a\u001b[2Jb", role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
     it.each([
       ["with noWait: true", { noWait: true }],
       ["without noWait", {}],

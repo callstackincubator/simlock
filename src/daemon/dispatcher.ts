@@ -79,6 +79,7 @@ import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -465,7 +466,7 @@ export class Dispatcher {
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
-    const requesterId = input.requesterId ?? session.principal;
+    const requesterId = input.requesterId ?? principalAsRequester(session.principal);
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
