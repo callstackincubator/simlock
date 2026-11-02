@@ -510,37 +510,49 @@ describe("ReclaimCoordinator", () => {
   });
 
   describe("a spent fresh device", () => {
-    function spent(record: VirtualDevice): VirtualDevice {
-      return { ...record, lastLeaseEndedAt: 900, leaseIdentity: "fresh" };
+    function spent(
+      record: VirtualDevice,
+      identity: VirtualDevice["leaseIdentity"] = "fresh",
+    ): VirtualDevice {
+      return { ...record, lastLeaseEndedAt: 900, leaseIdentity: identity };
     }
 
-    async function freshHarness(state: VirtualDevice["state"]) {
+    async function freshHarness(
+      state: VirtualDevice["state"],
+      identity: VirtualDevice["leaseIdentity"] = "fresh",
+    ) {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
-      const target = spent(device("fresh", state, (await driver.provision(spec)).deviceId, spec));
+      const target = spent(
+        device("fresh", state, (await driver.provision(spec)).deviceId, spec),
+        identity,
+      );
       const harness = await createHarness({ devices: [target], driver });
       const operations = () =>
         driver.calls.map((call) => call.operation).filter((operation) => operation !== "provision");
       return { ...harness, operations, target };
     }
 
-    it("is never erased: its lease end is a shutdown and a delete", async () => {
-      const harness = await freshHarness("reclaiming");
+    it.each(["fresh", "reusable"] as const)(
+      "is never erased, whatever lease.identity says (%s): its lease end is a shutdown and a delete",
+      async (identity) => {
+        const harness = await freshHarness("reclaiming", identity);
 
-      await harness.coordinator.reclaim(released(harness.target));
+        await harness.coordinator.reclaim(released(harness.target));
 
-      expect(harness.operations()).toEqual(["shutdown", "destroy"]);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
-      expect(
-        harness.bus.replay().map((event) => ({ event: event.event, payload: event.payload })),
-      ).toEqual([
-        {
-          event: "device.deleted",
-          payload: { deviceId: harness.target.id, initiator: "lease-end", physical: false },
-        },
-      ]);
-      expect(harness.quarantined).toEqual([]);
-    });
+        expect(harness.operations()).toEqual(["shutdown", "destroy"]);
+        expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
+        expect(
+          harness.bus.replay().map((event) => ({ event: event.event, payload: event.payload })),
+        ).toEqual([
+          {
+            event: "device.deleted",
+            payload: { deviceId: harness.target.id, initiator: "lease-end", physical: false },
+          },
+        ]);
+        expect(harness.quarantined).toEqual([]);
+      },
+    );
 
     it("hands a failed delete to quarantine with strategy delete, after the shutdown commit", async () => {
       const harness = await freshHarness("reclaiming");
