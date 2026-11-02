@@ -887,6 +887,7 @@ describe("IosSimctlDriver", () => {
     const clock = new FakeClock();
     const driver = await createDriver(runner, clock, filesystem);
     await plantManagedDevice(filesystem);
+    await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
     const clones = (): number => runner.calls.filter((call) => call.args[3] === "clone").length;
 
     const first = driver.provision(spec);

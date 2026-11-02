@@ -297,6 +297,8 @@ export class IosSimctlDriver implements Driver {
   readonly #sourcesSet: string;
   #sourceMaker: string | undefined;
   #swept = false;
+  readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
+  readonly #seedLocks = new Map<string, Promise<unknown>>();
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -751,7 +753,10 @@ export class IosSimctlDriver implements Driver {
   async destroySource(sourceId: string): Promise<void> {
     const row = this.#sources.findRow(sourceId);
     if (row === undefined) throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
-    if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+    if (row.udid !== undefined) {
+      const udid = row.udid;
+      await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+    }
     this.#sources.deleteRow(sourceId);
   }
 
@@ -764,10 +769,12 @@ export class IosSimctlDriver implements Driver {
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const result = await this.#simctl(
-      ["clone", seed.udid, name, this.#deviceRoot],
-      COMMAND_TIMEOUT_MS,
-      this.#sourcesSet,
+    const result = await this.#withSeedLock(seed.udid, () =>
+      this.#simctl(
+        ["clone", seed.udid, name, this.#deviceRoot],
+        COMMAND_TIMEOUT_MS,
+        this.#sourcesSet,
+      ),
     );
     const udid = result.stdout.trim();
 
@@ -799,8 +806,32 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  async #seedFor(resolved: ResolvedIosSpec): Promise<ReadySeed> {
+  /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
+  #seedFor(resolved: ResolvedIosSpec): Promise<ReadySeed> {
     const specKey = seedSpecKey(resolved);
+    const running = this.#seedMakes.get(specKey);
+    if (running !== undefined) return running;
+    const made = this.#findOrMakeSeed(resolved, specKey).finally(() => {
+      this.#seedMakes.delete(specKey);
+    });
+    this.#seedMakes.set(specKey, made);
+    return made;
+  }
+
+  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
+  async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
+    const before = this.#seedLocks.get(udid) ?? Promise.resolve();
+    const turn = before.then(run, run);
+    const settled = turn.catch(() => undefined);
+    this.#seedLocks.set(udid, settled);
+    try {
+      return await turn;
+    } finally {
+      if (this.#seedLocks.get(udid) === settled) this.#seedLocks.delete(udid);
+    }
+  }
+
+  async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const seed = this.#sources.findReadySeed(specKey);
     if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
     if (seed !== undefined) await this.#destroySeed(seed);
