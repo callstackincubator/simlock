@@ -62,9 +62,9 @@ merges the slim labels into the device's `disabled.plist` before
   manage, keep their value. It is atomic (temporary file in the same
   folder, then rename), the file mode is `0644`, and a folder Simlock
   creates is `0700`.
-- Labels simslim marks as never to be disabled (`assistantd`, `gamed` at
-  v0.13.0) are written as `false`, so a device slimmed under an older list
-  gets them back.
+- Labels simslim marks as never to be disabled (`assistantd`, `gamed` and
+  `sharingd` at v0.13.0) are written as `false`, so a device slimmed under
+  an older list gets them back.
 - No `simctl spawn /bin/sh`, no reboot and no batches remain.
 
 ### 2. The boot is read back; not honoured means full
@@ -73,12 +73,17 @@ After the boot, the driver runs
 `simctl spawn <udid> launchctl print-disabled system` (`launchctl` is in
 every runtime) and compares it with what it wrote.
 
-| After boot                                    | Device mode | Logged                |
-| --------------------------------------------- | ----------- | --------------------- |
-| every written label reads as written          | `slim`      | `device.slimmed`      |
-| any written label reads otherwise, or missing | `full`      | slim skipped + reason |
-| the file could not be written                 | `full`      | slim skipped + reason |
-| the readback itself failed or timed out       | `slim`      | slim skipped + reason |
+The mode comes from the readback, compared with the labels Simlock meant to
+write, whether or not the write succeeded: a re-leased device keeps the file
+it had through the erase, so a failed write can still boot slim.
+
+| File write | Readback after boot                  | Device mode | Logged                |
+| ---------- | ------------------------------------ | ----------- | --------------------- |
+| ok         | every label as wanted                | `slim`      | `device.slimmed`      |
+| failed     | every label as wanted                | `slim`      | slim skipped + reason |
+| any        | a label otherwise, or missing        | `full`      | slim skipped + reason |
+| ok         | failed or timed out                  | `slim`      | slim skipped + reason |
+| failed     | failed or timed out                  | `full`      | slim skipped + reason |
 
 There is no fallback to running `launchctl disable` inside the simulator. A
 readback that cannot run keeps ADR 0002's rule that an uncertain device is
@@ -100,8 +105,9 @@ device boots slim; the next `prepare` still writes and reads back. A device
 is slim or full for its whole life (ADR 0007), so a full device never meets
 a slim file.
 
-`destroy` removes `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/`
-after `simctl delete` succeeds. A failure to remove it is logged and does
+`destroy` and `destroyLegacy` remove
+`/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/` after
+`simctl delete` succeeds. A failure to remove it is logged and does
 not fail the destroy. Only a registry device's own UDID is ever removed
 (safety rule 1). Folders left by simulators deleted before this change stay.
 
@@ -116,7 +122,8 @@ boot deadline of a slim boot) and its default.
 `slim-labels.ts` is re-synced from simslim's `profiles.go` at v0.13.0
 (`d594c230fe9ed5080189b0ce76afabda6104bae0`), keeping its MIT notice. At
 that commit `navd` joins `widgets`, and `assistantd` and `gamed` leave the
-slimmable set for decision 1's `false` list. Category names do not change.
+slimmable set; with `sharingd` (never in Simlock's list) they form
+decision 1's `false` list. Category names do not change.
 
 ## Consequences
 
