@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -119,6 +119,9 @@ import {
   type TcpProbe,
   FetchWebhookPoster,
   type WebhookPoster,
+  defaultWorkerLockPath,
+  NodeWorkerLock,
+  type WorkerLockHandle,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -199,6 +202,8 @@ export interface StartDaemonOptions {
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
+  /** why: test-only, moves the worker lock (never decides whether it is taken). */
+  readonly workerLockPath?: string;
   /** why: test-only, replaces the poster a gateway's alerts send through. */
   readonly webhookPoster?: WebhookPoster;
 }
@@ -247,6 +252,7 @@ function updateOptionsFor(
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   let opened: StateDatabase | undefined;
   let check: VersionCheck | undefined;
+  let workerLock: WorkerLockHandle | undefined;
   try {
     return await composeDaemon(
       options,
@@ -256,12 +262,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       (started) => {
         check = started;
       },
+      (lock) => {
+        workerLock = lock;
+      },
     );
   } catch (error: unknown) {
     // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
     check?.dispose();
     // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
     opened?.close();
+    // why: a start that fails after taking the worker lock must not leave a lock that blocks the next worker; a running daemon releases it in `dispose`.
+    await workerLock?.release().catch(() => undefined);
     throw error;
   }
 }
@@ -271,6 +282,7 @@ async function composeDaemon(
   options: StartDaemonOptions,
   onStateOpened: (state: StateDatabase) => void,
   onVersionCheck: (check: VersionCheck) => void,
+  onWorkerLock: (lock: WorkerLockHandle) => void,
 ): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
@@ -418,6 +430,23 @@ async function composeDaemon(
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
+  // why: only a worker whose drivers are discovered touches the machine's adb server, console ports and runtimes; substituted drivers touch none (ADR 0059 §1).
+  let workerLock: WorkerLockHandle | undefined;
+  if (options.drivers === undefined && process.env.SIMLOCK_DRIVERS_MODULE === undefined) {
+    workerLock = await new NodeWorkerLock({
+      filesystem,
+      path:
+        options.workerLockPath ??
+        defaultWorkerLockPath(process.platform, process.getuid?.() ?? 0, tmpdir()),
+      processSupervisor,
+      uid: process.platform === "win32" ? undefined : process.getuid?.(),
+    }).take({
+      folder: dataDirectory,
+      pid: process.pid,
+      startedAt: new Date(clock.now()).toISOString(),
+    });
+    onWorkerLock(workerLock);
+  }
   const { drivers, prerequisiteChecks, rejections } =
     options.drivers === undefined
       ? await discoverDrivers({
@@ -600,6 +629,7 @@ async function composeDaemon(
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   let socketClaimed = false;
+  let lockClaim: Promise<unknown> = Promise.resolve();
   const gatewayStarted: Promise<void> = config.http.enabled
     ? new Promise<void>((resolve, reject) => {
         resolveGatewayStarted = resolve;
@@ -763,6 +793,8 @@ async function composeDaemon(
           });
         }
       }
+      // why: ADR 0059: after the drivers are disposed, so no other worker sweeps while this one still acts on devices.
+      await workerLock?.release();
       await eventHistory.stop();
       state.close();
     },
@@ -795,6 +827,10 @@ async function composeDaemon(
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
+      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).then(
+        () => undefined,
+        (error: unknown) => error ?? new Error("worker lock check failed"),
+      );
       startHistory(
         eventHistory,
         logger,
@@ -878,6 +914,11 @@ async function composeDaemon(
     if (!socketClaimed) resolveGatewayStarted?.();
   });
   const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
+  const lockFailure = await lockClaim;
+  if (lockFailure !== undefined) {
+    await daemon.stop().catch(() => undefined);
+    throw lockFailure;
+  }
   if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
     // why: The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
     // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,

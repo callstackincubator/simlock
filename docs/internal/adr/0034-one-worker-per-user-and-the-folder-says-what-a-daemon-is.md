@@ -1,6 +1,6 @@
 # 0034. One worker per user, and the folder says what a daemon is
 
-- **Status:** Accepted — not yet implemented; §1's "no new lock" narrowed by [ADR 0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md)
+- **Status:** Accepted; §1's "no new lock" narrowed by [ADR 0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md)
 - **Date:** 2026-10-19
 - **Issue:** [#700](https://github.com/callstackincubator/simlock/issues/700)
 - **Supersedes:** in part, [ADR 0005](0005-gateway-and-worker-modes.md):

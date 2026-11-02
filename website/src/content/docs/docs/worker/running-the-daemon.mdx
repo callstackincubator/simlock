@@ -149,7 +149,7 @@ Simlock creates `~/.simlock` (and `~/.simlock/gateway`) so only your user can op
 
 On Windows the daemon listens on a named pipe, `\\.\pipe\simlock-<16 hex characters>`, not on a file in that folder, so the folder's permissions do not guard it. Other accounts cannot connect to the daemon's pipe. But the pipe's name is predictable: another account that creates it before the daemon starts would receive the CLI's connection, with any admin token the CLI sends. Run Simlock on Windows only on a machine that one user account uses.
 
-To run a separate install on the same account, set `SIMLOCK_HOME` to another folder. Every command and the daemon it starts use that folder instead of `~/.simlock`. Keep the path short: the socket path must fit the system limit (104 bytes on macOS, 108 on Linux), and a longer one fails with `Point SIMLOCK_HOME at a shorter directory.`
+A machine runs one worker per user. A second worker with real drivers, started from another folder with `SIMLOCK_HOME`, refuses to start and names the first: its pid, its folder and when it started, with the command that stops it (`SIMLOCK_HOME=<folder> simlock daemon stop`). The first worker's stop, or its crash, frees the machine for the next one.
 
 <Aside type="caution">
 `~/.simlock/devices` can grow to tens of gigabytes. Do not delete folders in it by hand while the daemon runs. Use `simlock cleanup`, or [`simlock nuke`](/simlock/docs/worker/cleanup#reset-a-machine-with-nuke) to start over.

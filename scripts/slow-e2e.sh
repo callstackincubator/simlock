@@ -15,7 +15,7 @@
 # when it ends. Exits 75 without starting when another worktree's run holds the lock: real
 # simulators and emulators share one machine, and two lanes at once make timeouts that look
 # like bugs. Exits 69 without starting when the machine is not fit to run it: too little free
-# disk, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
+# disk, a Simlock worker outside the lane holding the machine's worker lock, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
 # pins for @agent-device/proxy, or a checkout never built. The lock is a directory holding the runner's pid; a lock whose pid is
 # gone is stale and is taken over.
 #
@@ -35,12 +35,14 @@ set -eu
 lock=${SIMLOCK_SLOW_LOCK:-/tmp/simlock-slow-e2e.lock}
 lane_tmp=${SIMLOCK_SLOW_TMP:-/tmp/simlock-slow}
 min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
+# why: the worker lock the daemon takes (ADR 0059); src/slow-e2e.test.ts keeps this default equal to defaultWorkerLockPath.
+worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
 root=$(git rev-parse --show-toplevel)
 
 helper() {
-  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$@" <<'EOF'
+  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
 import json, os, re, shutil, signal, subprocess, sys, time
-lock, lane_tmp, root, min_free, command = sys.argv[1:6]
+lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
 
 def read(path, default=""):
     try:
@@ -140,6 +142,14 @@ if command == "clean":
 elif command == "check":
     clean()
     problems = []
+    # why: a lane worker an aborted run left is already killed by clean(), so a live holder here is a worker outside the lane (ADR 0059 §4).
+    try:
+        owner = json.loads(read(os.path.join(worker_lock, "owner.json"), "{}"))
+        if alive(owner["pid"]):
+            print(f"not fit: a Simlock worker holds this machine (pid {owner['pid']}, folder {owner['folder']}); stop it first: SIMLOCK_HOME={owner['folder']} simlock daemon stop", file=sys.stderr)
+            sys.exit(69)
+    except (ValueError, KeyError, TypeError):
+        pass
     for path in ("/tmp", os.path.expanduser("~")):
         if free_gib(path) < float(min_free):
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
