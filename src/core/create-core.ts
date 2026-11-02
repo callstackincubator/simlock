@@ -33,6 +33,7 @@ import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
 import { WarmPool } from "./warm-pool/index.js";
 
@@ -363,6 +364,7 @@ export function createCore(options: CoreOptions): Core {
       readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
     async converge(read) {
       await startup.converge(read);
+      await listStartupSources(options.drivers, options.logger);
       warmPool.start();
       capacityObserver.start();
     },
@@ -403,4 +405,24 @@ export function createCore(options: CoreOptions): Core {
       quarantine.dispose();
     },
   };
+}
+
+/**
+ * why: the first `listSources` of a process is where a driver sweeps what an earlier process left
+ * in its sources (ADR 0061 §1); a failed read is logged, never fatal, and the sweep runs again on
+ * the next call.
+ */
+async function listStartupSources(
+  drivers: readonly Driver[],
+  logger: Logger | undefined,
+): Promise<void> {
+  for (const driver of drivers) {
+    try {
+      await driver.listSources();
+    } catch (error: unknown) {
+      logger?.warn(`could not list ${driver.platform} sources at start`, {
+        error: stableError(error),
+      });
+    }
+  }
 }
