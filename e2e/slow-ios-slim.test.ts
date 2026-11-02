@@ -75,6 +75,16 @@ async function processCount(grant: LeaseGrant): Promise<number> {
   return stdout.split("\n").filter((line) => line.trim() !== "").length;
 }
 
+function compareVersionsDescending(a: string, b: string): number {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (right[index] ?? 0) - (left[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
 async function catalogModelAndOs(env: TestEnv): Promise<{ model: string; os: string }> {
   const catalog = await env.cli(["catalog", "--json", "--platform", "ios"]);
   expect(catalog.code, `catalog failed: ${catalog.stderr}`).toBe(0);
@@ -86,7 +96,10 @@ async function catalogModelAndOs(env: TestEnv): Promise<{ model: string; os: str
     (name) => (iosCatalog.modelRuntimes[name]?.length ?? 0) > 0,
   );
   expect(model, "simlock catalog paired no iOS model with an installed runtime").toBeDefined();
-  const os = iosCatalog?.modelRuntimes[model as string]?.[0];
+  // why: the newest runtime is the one a current Mac has, and the one with no shell in it.
+  const os = [...(iosCatalog?.modelRuntimes[model as string] ?? [])].sort(
+    compareVersionsDescending,
+  )[0];
   return { model: model as string, os: os as string };
 }
 
@@ -165,8 +178,7 @@ describe.skipIf(process.platform !== "darwin")(
         const slimDurationMs = Date.now() - slimStart;
         await expectSlim(env, slimGrant.mode, "a lease naming no mode must be slim");
 
-        // What only a real simulator can show: launchd took every label, and the overrides
-        // survived the reboot that makes them take effect.
+        // why: only a real simulator shows that launchd took every label from the one boot.
         const slimDisabled = await printDisabled(slimGrant);
         const missing = [...ALL_LABELS].filter((label) => !slimDisabled.has(label));
         expect(
@@ -221,6 +233,26 @@ describe.skipIf(process.platform !== "darwin")(
             `${(reduction * 100).toFixed(1)}% reduction`,
         ).toBeGreaterThanOrEqual(0.3);
 
+        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+      },
+    );
+
+    it(
+      "a released slim simulator leased again is slim with every label disabled after one boot",
+      { timeout: 900_000 },
+      async () => {
+        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
+        const { model, os } = await catalogModelAndOs(env);
+        const first = await leaseDetached(env, model, os, "slim-first");
+        await expectSlim(env, first.mode, "a default-slim lease must be slim");
+        await env.cli(["release", first.lease]);
+
+        const second = await leaseDetached(env, model, os, "slim-second");
+
+        expect(second.udid, "the released simulator must be the one leased again").toBe(first.udid);
+        await expectSlim(env, second.mode, "a re-leased slim simulator must be slim");
+        const disabled = await printDisabled(second);
+        expect([...ALL_LABELS].filter((label) => !disabled.has(label))).toEqual([]);
         await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
       },
     );

@@ -7,18 +7,19 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 
 ## Files
 
-| File                      | Role                                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`                | `IosSimctlDriver`: every `Driver` verb, slim pass, `simctl` passthrough rules                                                                                                   |
-| `device-data.ts`          | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`) |
-| `device-set-leftovers.ts` | `refuseOwnSetLeftovers`, `refuseXcodeSetLeftovers`: the file-only check for simulators left from the other `deviceSet`                                                          |
-| `physical.ts`             | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                                                                                                              |
-| `devicectl-exec.ts`       | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                           |
-| `slim-labels.ts`          | `SLIM_CATEGORIES`, `resolveSlimCategories`, `labelsFor`, `slimSignature`                                                                                                        |
-| `prerequisites.ts`        | `iosPrerequisites`: Xcode selected, license accepted, first launch done                                                                                                         |
-| `input/`                  | `createIosDeviceInput`: the lease's input socket on a simulator, through `simlock-screen-capture --input`; a physical iPhone answers unavailable                                |
-| `runtime-version.ts`      | `iosRuntimeVersionFromId`: the iOS major and minor a runtime id names                                                                                                           |
-| `screen-capture.ts`       | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone                                                                                     |
+| File                      | Role                                                                                                                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                | `IosSimctlDriver`: every `Driver` verb, slim overrides write and readback, `simctl` passthrough rules                                                                                              |
+| `device-data.ts`          | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`, no longer written) |
+| `device-set-leftovers.ts` | `refuseOwnSetLeftovers`, `refuseXcodeSetLeftovers`: the file-only check for simulators left from the other `deviceSet`                                                                             |
+| `physical.ts`             | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                                                                                                                                 |
+| `devicectl-exec.ts`       | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                                              |
+| `slim-labels.ts`          | `SLIM_CATEGORIES`, `NEVER_DISABLE_LABELS`, `resolveSlimCategories`, `labelsFor`, `overridesFor`, `slimSignature`                                                                                   |
+| `slim-overrides.ts`       | read and write `disabled.plist`; read `launchctl print-disabled` output                                                                                                                            |
+| `prerequisites.ts`        | `iosPrerequisites`: Xcode selected, license accepted, first launch done                                                                                                                            |
+| `input/`                  | `createIosDeviceInput`: the lease's input socket on a simulator, through `simlock-screen-capture --input`; a physical iPhone answers unavailable                                                   |
+| `runtime-version.ts`      | `iosRuntimeVersionFromId`: the iOS major and minor a runtime id names                                                                                                                              |
+| `screen-capture.ts`       | `createIosScreenCapture`: runs `vendor/screen-capture/` on a simulator or a physical iPhone                                                                                                        |
 
 ## How it works
 
@@ -44,19 +45,21 @@ Boot — `makeReady`:
 1. `simctl boot`, then `simctl bootstatus -b`, then poll `simctl listapps` until it succeeds.
    Bootstatus and installer polling share one deadline; each probe is capped at 30 s and
    failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`.
-2. Slim pass only for `prepare` + mode `slim` + runtime 18.5+. Too old → skipped, returned `full`.
-3. Already slim: `driverData.slimSignature` and `slimMarkToken` match the categories and the
-   current mark → return `slim`, no work.
-4. Else `simctl spawn <udid> /bin/sh -c` running `launchctl disable system/<label>`, 50 labels a
-   chunk. Then shut down and boot again, including the installer check.
-5. Commit `slimSignature` + `slimMarkToken` into `driverData`; `onSlimmed` → `device.slimmed`.
-   A failed pass → `onSlimSkipped` (logged only); the device keeps the mode it really has.
-6. `purpose: "recover"`: boot only, no slim pass.
+2. Before step 1, for `prepare` + mode `slim` + runtime 18.5+ only (ADR 0060): merge the managed
+   labels into `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/disabled.plist` (labels of
+   the configured categories `true`, every other managed label `false`, other entries kept),
+   skipped when the file already says so. A failed write is logged and the boot goes on.
+   Too old → skipped, returned `full`.
+3. After the boot, `simctl spawn <udid> launchctl print-disabled system` (120 s) is compared with
+   what was written. A label not as written → `full`; a readback that fails → `slim`; both
+   → `onSlimSkipped` (logged only). Every label as written, and the write ok → `slim`, `onSlimmed` →
+   `device.slimmed`.
+4. `purpose: "recover"`: boot only, no write, no readback.
 
 Reclaim — `reclaim` ignores the clean level: shut down → `simctl erase` → write mark →
-`shutdown` / `erase`. The erase removes the slim overrides too.
+`shutdown` / `erase`. The erase keeps the overrides file, so the next `prepare` finds it as wanted.
 Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`.
-`destroy`: shut down, `simctl delete`. `listManaged`: `simctl list -j devices` in the set, plus marks.
+`destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
 Catalog — models are device type names; class from product family (iPhone `phone`, iPad
 `tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired
@@ -113,17 +116,17 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 | Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
 | Bootstatus + installer (full) | 120 s                       | none                     |
 | Any other `simctl` call       | 30 s                        | none                     |
-| Slim chunk                    | 60 s                        | none                     |
+| Slim readback                 | 120 s                       | none                     |
 | `devicectl` read / uninstall  | 30 s / 60 s                 | none                     |
 
 Writes: the device set (by `simctl`), the two mark files per device. The registry is the only
-record of a device's mode; `driverData` holds the slim signature.
+record of a device's mode. Also writes, and deletes with the device, its folder in `/private/var/tmp` (`launchdOverridesRoot` option).
 
 ## Rules
 
 - Under `simlock`, never `simctl` without `--set`, except the three unscoped calls above. Under `default`, never `--set`, and never act on a device whose durable mark does not name this instance.
 - The erasable mark is written before the durable one, never both at once.
-- A recovery boot never slims.
+- A recovery boot writes no overrides and reads nothing back.
 - A slim spec is returned only for a slim request the driver will slim.
 
 ## Known gaps
@@ -131,11 +134,10 @@ record of a device's mode; `driverData` holds the slim signature.
 - **Input:** no app switcher or Lock, and no keys on iOS 27 runtimes (#1024). Rotation was checked on Xcode 26.4 (iOS 26.4 runtime) and Xcode 27.0 (iOS 26.4 and 27.0 runtimes) (#1080); a screen that does not rotate (the iPhone home screen, upside down on a Face ID iPhone) ignores it, and nothing tells the client. The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
 - **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
-- **Slim costs (#87, #172).** Every reclaim erases, so the next boot re-slims: two boots each
-  time. Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight,
+- **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight,
   StoreKit, universal links, Siri, iCloud sync. Use `--mode full` when a test needs them.
-- **Slim drift is invisible.** `launchctl disable` accepts labels that do not exist. Narrowing
-  `ios.slim.categories` never re-enables a daemon: reclaim or destroy old devices first.
+- **Folders of simulators deleted before ADR 0060 stay** in `/private/var/tmp`.
+- **The overrides file is an undocumented CoreSimulator file.** If Apple ignores it the readback shows it and the device is granted `full`.
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
 - **A screen stream can freeze after a reboot under its lease.** The capture program checks the simulator is booted only when it starts, then repaints its last surface every 200 ms, so after the health monitor reboots a crashed simulator the viewer can see the old picture until they leave the Screen tab and open it again. A lease ending stops it as usual.
 - **An iPhone rotated mid-stream keeps the first picture's scale**, as a simulator does today: the scaler is sized once, from the first picture. An iPhone that stays connected and unlocked but stops sending video, or a decoder that stops producing pictures, shows the last picture until the lease ends.

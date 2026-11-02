@@ -133,7 +133,7 @@ release and records nothing.
 | --- | --- | --- | --- |
 | `device.provisioned` | A simulator or emulator was created. | `deviceId`, `spec`, `driver`, `duration` | Relayed |
 | `device.ready` | A device finished booting and is ready to use. | `deviceId`, `bootDuration`, `platform` | Relayed |
-| `device.slimmed` | A slim iOS simulator came up with its chosen services turned off. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
+| `device.slimmed` | A slim iOS simulator booted with its chosen services turned off, and a readback confirmed it. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
 | `device.reclaimed` | A device was cleaned after a lease and can be leased again. | `deviceId`, `strategy` (`erase`, `snapshot`, `wipe`, `uninstall`), `duration`, `missingApps` for a physical device | Relayed |
 | `device.purge-failed` | Cleaning a device after a lease failed. `device.quarantined` follows. | `deviceId`, `leaseId`, `attemptedStrategy`, `duration`, `error` | Relayed |
 | `device.quarantined` | A device was set aside: it is not leased and cleanup is retried. | `deviceId`, `maxRetries`, `nextRetryAt`, `platform`, `kind` (`purge-failed`, `shutdown-failed`, `delete-failed`, `stalled`), `stalledState` or `message` | Relayed |

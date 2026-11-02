@@ -96,18 +96,17 @@ worker is ever contacted. `lease-id-taken` (ADR 0020; widens a published vocabul
 | `device.recovered` | device id, lease id, attempts, duration, the device's `platform` (`ios` or `android`) | a crashed leased device was rebooted under its existing lease and passed readiness | LeaseHealthMonitor | implemented |
 | `device.recovery-failed` | device id, lease id, attempts, reason, error, the device's `platform` (`ios` or `android`) | recovery could not restore a leased device (absent from driver reality, provenance drift, or attempts exhausted) and its lease was released | LeaseHealthMonitor | implemented |
 | `device.orphan-purged` | driver device id, platform, device root | `simlock doctor --purge-orphans` destroyed a device that sat inside a validly-marked Simlock device root with no registry record — see [ADR 0001](adr/0001-simlock-owned-device-roots.md) | Doctor | implemented |
-| `device.slimmed` | device id, address, platform (ios), categories, label count, duration, signature, unknown labels | *after* the post-slim reboot's `bootstatus` and installer probe succeeded -- i.e. once the `launchctl disable` overrides applied via `simctl spawn` are actually in force on the simulator | driver-diagnostics | implemented |
+| `device.slimmed` | device id, address, platform (ios), categories, label count, duration, signature, unknown labels | *after* the boot's readback (`launchctl print-disabled system`) shows every managed label as written, and the overrides file write succeeded or was already as wanted (ADR 0060) | driver-diagnostics | implemented |
 
 `device.slimmed` reports a fact committed to the *simulator's own launchd database*, not to the
 Simlock registry (ADR 0002, `docs/internal/adr/0002-opt-in-slim-ios-simulators.md`) -- so events rule 3 ("emit post-commit
 only") is satisfied by waiting for that commit to become observable, not by waiting on a registry
-write: the driver applies the `launchctl disable` overrides, reboots the device, and only fires
-`onSlimmed` once the second `bootstatus` and installer probe have passed, proving the overrides survived the reboot and
-are actually in force. The registry's own `device.ready` for that same boot is a separate,
+write: the driver writes the launchd overrides file while the simulator is shut down, boots it once, and only fires
+`onSlimmed` once the readback shows the overrides in force. The registry's own `device.ready` for that same boot is a separate,
 later event, emitted through the normal readiness path once the driver call returns. A slim
 request on a runtime older than iOS 18.5 is resolved to a full spec before planning (ADR 0007
-§4), so it never reaches a slim pass. A *skipped* slim on a slim-spec device -- its runtime id
-didn't parse, or the disable pass itself failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
+§4), so it never reaches a slim boot. A *skipped* slim on a slim-spec device -- its runtime id
+didn't parse, the overrides file could not be written, or the readback disagreed or failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
 consumer, just operator diagnostics, so it's a `warn` log line (`daemon.driver-discovery`) instead.
 
 ## Components
