@@ -86,8 +86,8 @@ describe("lease liveness & restart", () => {
     // With nothing left renewing it, the restored timer expires the lease on its own
     // deadline: the record persisted, and so did the deadline it carried.
     await waitForLeaseCount(env, 0, { timeout: 25_000 });
-    await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
-    const recorded = await env.expectEvents(["lease.expired"]);
+    await waitForDeviceState(env, grant.device.driverDeviceId, "deleted");
+    const recorded = await env.expectEvents(["lease.expired", "device.deleted"]);
     // On that deadline, not merely eventually: the wait above has slack for a slow machine, so
     // without this a restored timer that fires seconds late would still pass. The upper bound is
     // scheduling slack. It cannot tell the persisted deadline from a fresh TTL armed at restart,
