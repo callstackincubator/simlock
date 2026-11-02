@@ -19,6 +19,7 @@ export interface GatewayRelayOptions {
   readonly deadlineMs?: number;
   readonly idleMs?: number;
   readonly clock?: Clock;
+  readonly proxyAuthHeader?: string;
 }
 
 export interface GatewayRelayCall {
