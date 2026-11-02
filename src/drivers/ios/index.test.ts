@@ -861,6 +861,29 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
+  it("a clone that fails makes the provision throw and keeps the seed and its row", async () => {
+    const database = await seededDatabase();
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 1, stderr: "No space left on device", stdout: "" },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const error = await driver.provision(spec).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toContain("No space left on device");
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone"]);
+    expect(database.prepare("SELECT udid, state FROM ios_source_data").all()).toEqual([
+      { state: "ready", udid: seedUdid },
+    ]);
+  });
+
   it("two provisions at once make one seed, and the clones of one seed run one at a time", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
     const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
