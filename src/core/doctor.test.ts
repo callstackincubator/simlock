@@ -1848,7 +1848,11 @@ describe("Doctor", () => {
           platform: "ios",
         },
       ]);
-      expect(driver.calls.map((call) => call.operation)).toEqual(["listManaged"]);
+      expect(
+        driver.calls
+          .map((call) => call.operation)
+          .filter((operation) => operation !== "listSources"),
+      ).toEqual(["listManaged"]);
     });
 
     it("excludes driver-advisory findings from the doctor.reconciled event's driftFindings", async () => {
@@ -2038,7 +2042,11 @@ describe("Doctor", () => {
 
       expect(prerequisiteFindings(fixed)).toEqual(prerequisiteFindings(plain));
       expect(prerequisiteFindings(fixed)).toHaveLength(1);
-      expect(android.calls.map((call) => call.operation)).toEqual(["listManaged", "listManaged"]);
+      expect(
+        android.calls
+          .map((call) => call.operation)
+          .filter((operation) => operation !== "listSources"),
+      ).toEqual(["listManaged", "listManaged"]);
       expect(check.runs).toBe(2);
     });
 
@@ -2222,11 +2230,9 @@ describe("Doctor with a platform it cannot observe", () => {
       purgeOrphans: true,
     });
 
-    expect(driver.calls.map((call) => call.operation)).toEqual([
-      "listManaged",
-      "revalidateRoot",
-      "destroy",
-    ]);
+    expect(
+      driver.calls.map((call) => call.operation).filter((operation) => operation !== "listSources"),
+    ).toEqual(["listManaged", "revalidateRoot", "destroy"]);
   });
 
   it("destroys nothing at all when a root can no longer be proven", async () => {

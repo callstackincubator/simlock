@@ -62,7 +62,9 @@ export type FakeDriverOperation =
   | "removeComponent"
   | "revalidateRoot"
   | "findLegacy"
-  | "destroyLegacy";
+  | "destroyLegacy"
+  | "listSources"
+  | "destroySource";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -158,6 +160,7 @@ export class FakeDriver implements Driver {
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
+  #sources: readonly DriverSource[] = [];
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
@@ -398,10 +401,14 @@ export class FakeDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
-    return [];
+    await this.#beforeCall("listSources");
+    return [...this.#sources];
   }
 
-  async destroySource(_sourceId: string): Promise<void> {}
+  async destroySource(sourceId: string): Promise<void> {
+    await this.#beforeCall("destroySource", sourceId);
+    this.#sources = this.#sources.filter((source) => source.id !== sourceId);
+  }
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
@@ -631,7 +638,9 @@ export class FakeDriver implements Driver {
     }
   }
 
-  setSources(_sources: readonly DriverSource[]): void {}
+  setSources(sources: readonly DriverSource[]): void {
+    this.#sources = sources;
+  }
 
   /**
    * why: Stages what `listManaged` reports. Everything passed in is reported back, name and

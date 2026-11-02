@@ -2914,7 +2914,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2940,7 +2940,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2988,7 +2988,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -3022,7 +3022,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       ["doctor"],
       output.environmentWith({
         connectAdmin: async () =>
-          fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+          fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
       }),
     );
 

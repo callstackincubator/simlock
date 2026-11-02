@@ -136,7 +136,7 @@ export interface DoctorReport {
   readonly sources: readonly DoctorSource[];
 }
 
-export interface DoctorSource extends DriverSource {
+export interface DoctorSource extends Omit<DriverSource, "id"> {
   readonly platform: Platform;
 }
 
@@ -253,7 +253,7 @@ export class Doctor {
       ...this.#optionalModuleFindings(),
     ];
 
-    const report = { findings: remaining, sources: [] };
+    const report = { findings: remaining, sources: await this.#sources() };
     this.#emitFindingEvents(remaining);
     this.options.eventBus.emit(
       "doctor.reconciled",
@@ -265,6 +265,26 @@ export class Doctor {
       "doctor",
     );
     return report;
+  }
+
+  /** why: a platform whose source read fails lists none; one failure must not hide the rest of the report. */
+  async #sources(): Promise<readonly DoctorSource[]> {
+    const lists = await Promise.all(
+      this.options.drivers.map(async (driver) => {
+        try {
+          return (await driver.listSources()).map(({ id: _id, ...source }): DoctorSource => ({
+            ...source,
+            platform: driver.platform,
+          }));
+        } catch (error: unknown) {
+          this.#logger.warn(
+            `could not list ${driver.platform} sources: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return [];
+        }
+      }),
+    );
+    return lists.flat();
   }
 
   async #realities(
