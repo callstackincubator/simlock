@@ -820,6 +820,8 @@ describe("IosSimctlDriver", () => {
 
   it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
+    const database = await memorySourceDatabase();
+    const rowsWhenCreated: unknown[] = [];
     const seedCreate = sourcesSimctl(
       "create",
       "simlock-seed-device-1",
@@ -829,7 +831,15 @@ describe("IosSimctlDriver", () => {
     const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
-      { match: seedCreate, result: { code: 0, stderr: "", stdout: `${seedUdid}\n` } },
+      {
+        match: seedCreate,
+        onSpawn: () => {
+          rowsWhenCreated.push(
+            ...database.prepare("SELECT state, udid FROM ios_source_data").all(),
+          );
+        },
+        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+      },
       { match: sourcesSimctl("boot", seedUdid) },
       { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
       { match: sourcesSimctl("listapps", seedUdid) },
@@ -838,7 +848,7 @@ describe("IosSimctlDriver", () => {
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
     const filesystem = new MemoryFilesystem();
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
     await plantManagedDevice(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
 
@@ -847,6 +857,14 @@ describe("IosSimctlDriver", () => {
       deviceId: driverData.udid,
       driverData,
     });
+    expect(
+      rowsWhenCreated,
+      "the seed's row is making, with no simulator yet, when create runs",
+    ).toEqual([{ state: "making", udid: null }]);
+    expect(
+      (await filesystem.stat(`${deviceRoot}/sources`)).mode,
+      "under deviceSet simlock the sources set is private to the user",
+    ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 30_000 } },
