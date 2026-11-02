@@ -255,3 +255,30 @@ describe("link late traffic for an ended channel", () => {
     expect(peer.log.records).toHaveLength(records);
   });
 });
+
+describe("link receive queue", () => {
+  it("hands a reader one-byte DATA fragments as whole chunks, in order, however many arrived", async () => {
+    const peer = linkWithRawPeer();
+    const channel = await acceptRaw(peer);
+    const fragments = 100_000;
+    for (let i = 0; i < fragments; i += 1) {
+      void peer.raw.writeBinary(envelope(TYPE.DATA, 2, new Uint8Array([i % 251])));
+    }
+    await settle();
+
+    const reader = channel.readable.getReader();
+    const sizes: number[] = [];
+    const got = new Uint8Array(fragments);
+    let next = 0;
+    while (next < fragments) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sizes.push(value.length);
+      got.set(value, next);
+      next += value.length;
+    }
+    expect(next).toBe(fragments);
+    expect(got).toEqual(Uint8Array.from({ length: fragments }, (_, i) => i % 251));
+    expect(sizes.length).toBeLessThanOrEqual(Math.ceil(fragments / (64 * KiB)) + 1);
+  });
+});
