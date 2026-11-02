@@ -6,7 +6,8 @@
 - **Supersedes:** [ADR 0002](0002-opt-in-slim-ios-simulators.md) §2, §3, §8 and §9, and its
   Context and Consequences where they say the overrides live inside the
   device's data partition, that `simctl erase` removes them, or that a slim
-  device boots twice. Narrows §10 to decision 2's table.
+  device boots twice, and its "No `launchctl enable` pass" cost. Narrows
+  §10 to decision 2's table.
 
 ## Context
 
@@ -58,8 +59,12 @@ merges the slim labels into the device's `disabled.plist` before
 
 - The file is an XML property list whose top-level dict maps a bare launchd
   label (no `system/` prefix) to `true` (disabled) or `false` (enabled).
-- The write merges: entries the runtime wrote, and labels Simlock does not
-  manage, keep their value. It is atomic (temporary file in the same
+- Simlock manages every label in its slim categories plus the never-disable
+  labels below. A managed label in a configured category is written `true`;
+  every other managed label is written `false`, so narrowing
+  `ios.slim.categories` turns the dropped services back on at the next
+  `prepare`. The write merges: entries the runtime wrote, and labels Simlock
+  does not manage, keep their value. It is atomic (temporary file in the same
   folder, then rename), the file mode is `0644`, and a folder Simlock
   creates is `0700`.
 - Labels simslim marks as never to be disabled (`assistantd`, `gamed` and
@@ -77,9 +82,11 @@ The mode comes from the readback, compared with the labels Simlock meant to
 write, whether or not the write succeeded: a re-leased device keeps the file
 it had through the erase, so a failed write can still boot slim.
 
-A label written `true` is as wanted when it reads `disabled`; a label
-written `false` is as wanted when it does not read `disabled` (absent counts
-as enabled, as in simslim). A file Simlock cannot read as a plist dict is
+A label reads disabled when its line says `disabled` or `true` (older
+launchd builds print the second form). A label written `true` is as wanted
+when it reads disabled; a label written `false` is as wanted when it does
+not (absent counts as enabled, as in simslim). The readback is limited to
+120 s, simslim's limit for a simulator just after its first boot. A file Simlock cannot read as a plist dict is
 left unchanged and counts as a failed write.
 
 | File write | Readback after boot                  | Device mode | Logged                |
