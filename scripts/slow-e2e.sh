@@ -35,12 +35,14 @@ set -eu
 lock=${SIMLOCK_SLOW_LOCK:-/tmp/simlock-slow-e2e.lock}
 lane_tmp=${SIMLOCK_SLOW_TMP:-/tmp/simlock-slow}
 min_free=${SIMLOCK_SLOW_MIN_FREE_GIB:-15}
+# why: the worker lock the daemon takes (ADR 0059); src/slow-e2e.test.ts keeps this default equal to defaultWorkerLockPath.
+worker_lock=${SIMLOCK_SLOW_WORKER_LOCK:-/tmp/simlock-$(id -u)/worker.lock}
 root=$(git rev-parse --show-toplevel)
 
 helper() {
-  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$@" <<'EOF'
+  python3 - "$lock" "$lane_tmp" "$root" "$min_free" "$worker_lock" "$@" <<'EOF'
 import json, os, re, shutil, signal, subprocess, sys, time
-lock, lane_tmp, root, min_free, command = sys.argv[1:6]
+lock, lane_tmp, root, min_free, worker_lock, command = sys.argv[1:7]
 
 def read(path, default=""):
     try:
