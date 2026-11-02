@@ -2207,54 +2207,88 @@ describe("IosSimctlDriver", () => {
       expect(result.mode).toBe("slim");
     });
 
-    it("a purpose: 'recover' boot never applies slim, even on a device that would otherwise qualify (finding #1, issue #87 review)", async () => {
-      // why: `slim18_5` (a slim spec, an 18.5+ runtime) is exactly the shape of device
-      // "boots, applies the disable list, and reboots on a qualifying, not-yet-slimmed device"
-      // (above) slims -- the only difference here is `{ purpose: "recover" }`, standing in for
-      // `ManagedDeviceLifecycle.recoverLeased`'s call on a crashed, still-*leased* device. Safety
-      // rule 2's exception may only reboot; a slim pass here (a second, unannounced reboot plus
-      // a launchctl-disable pass) would be exactly the broader privilege the rule withholds. So
-      // this must produce a single ordinary boot: no `simctl list`, no `simctl spawn`, no second
-      // shutdown/boot, and no `device.slimmed` fact.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
+    it.each([
+      {
+        name: "full mode",
+        runtimeId: slim18_5.runtimeId,
+        options: { mode: "full", purpose: "prepare" } as const,
+        categories: ["widgets"],
+        skipped: undefined,
+      },
+      {
+        name: "a purpose: 'recover' boot, which only reboots",
+        runtimeId: slim18_5.runtimeId,
+        options: { mode: "slim", purpose: "recover" } as const,
+        categories: ["widgets"],
+        skipped: undefined,
+      },
+      {
+        name: "runtime 18.4",
+        runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+        options: prepareSlim,
+        categories: ["widgets"],
+        skipped: "runtime-too-old",
+      },
+      {
+        name: "a runtime id that does not parse",
+        runtimeId: "not-a-runtime-id",
+        options: prepareSlim,
+        categories: ["widgets"],
+        skipped: "unknown-runtime",
+      },
+      {
+        name: "configured categories none of which is known",
+        runtimeId: slim18_5.runtimeId,
+        options: prepareSlim,
+        categories: ["nonsense"],
+        skipped: "apply-failed",
+      },
+    ])(
+      "touches no overrides file and runs no readback for a device that must not be slimmed: $name",
+      async ({ runtimeId, options, categories, skipped }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        filesystem.writes.length = 0;
+        const data = { ...driverData, runtimeId };
+        const runner = new ScriptedProcessRunner([
+          { match: simctl("boot", data.udid) },
+          { match: simctl("bootstatus", data.udid, "-b") },
+          { match: simctl("listapps", data.udid) },
+        ]);
+        const onSlimmed = vi.fn();
+        const onSlimSkipped = vi.fn();
+        const driver = await createSlimDriver(
+          runner,
+          filesystem,
+          { bootTimeoutMs: 300_000, categories },
+          onSlimmed,
+          onSlimSkipped,
+        );
 
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        { mode: "slim", purpose: "recover" },
-      );
+        const result = await driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
 
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "full",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      // why: The ordinary, un-widened boot deadline -- not `slim.bootTimeoutMs` -- since this boot
-      // never considers applying anything.
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
+        expect(result).toEqual({
+          address: data.udid,
+          deviceId: data.udid,
+          driverData: data,
+          mode: "full",
+        });
+        expect(runner.calls.map((call) => call.args)).toEqual([
+          simctlArgs("boot", data.udid),
+          simctlArgs("bootstatus", data.udid, "-b"),
+          simctlArgs("listapps", data.udid),
+        ]);
+        expect(filesystem.writes).toEqual([]);
+        expect(await filesystem.exists(overridesFolder(data.udid))).toBe(false);
+        expect(onSlimmed).not.toHaveBeenCalled();
+        expect(onSlimSkipped.mock.calls.map(([fact]) => (fact as SlimSkippedFact).reason)).toEqual(
+          skipped === undefined ? [] : [skipped],
+        );
+      },
+    );
 
     it("times out the slim boot's bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
       const filesystem = new MemoryFilesystem();
