@@ -114,6 +114,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   An existing directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows the endpoint is a named pipe no directory guards: see [ports](../ports/AGENTS.md).
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
+- A worker must not be able to crash, stall or corrupt its gateway: see [gateway](../gateway/AGENTS.md#security-model).
 - A worker that joins a fleet grants its gateway `admin` over itself.
 - An `agent` token is shell access to the worker: `device.exec` runs host tools as the daemon's
   user, with only the keys `execBaseEnvironment` (`exec-env.ts`) keeps plus the command's own.

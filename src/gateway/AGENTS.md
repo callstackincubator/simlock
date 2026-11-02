@@ -129,6 +129,10 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 - Only the gateway's prefix `gw:<instance id>:` marks its leases; `release-all` and retention read it.
 - Only `WorkerLink` republishes onto the bus (`boundary.test.ts`).
 
+## Security model
+
+- A worker must not be able to crash, stall or corrupt its gateway: every worker reply is parsed with its contract schema and a bad one fails that call, one event that cannot be stored is dropped alone, and a relayed timestamp is clamped to the gateway's clock.
+
 ## Known gaps
 
 - **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` omit them
