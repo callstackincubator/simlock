@@ -3,7 +3,7 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-02
 - **Issue:** [#1192](https://github.com/callstackincubator/simlock/issues/1192) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049))
-- **Supersedes:** [ADR 0002](0002-opt-in-slim-ios-simulators.md) §2, §3, §8 and §9, and its
+- **Supersedes:** [ADR 0002](0002-opt-in-slim-ios-simulators.md) §2, §3, §5, §8 and §9, and its
   Context and Consequences where they say the overrides live inside the
   device's data partition, that `simctl erase` removes them, or that a slim
   device boots twice, and its "No `launchctl enable` pass" cost. Narrows
@@ -92,9 +92,25 @@ left unchanged and counts as a failed write.
 | File write | Readback after boot                  | Device mode | Logged                |
 | ---------- | ------------------------------------ | ----------- | --------------------- |
 | ok         | every label as wanted                | `slim`      | `device.slimmed`      |
-| failed     | every label as wanted                | `slim`      | slim skipped + reason |
+| failed     | every label as wanted                | `slim`      | slim skipped + reason, no `device.slimmed` |
 | any        | any label not as wanted              | `full`      | slim skipped + reason |
 | any        | failed or timed out                  | `slim`      | slim skipped + reason |
+
+`device.slimmed` fires only on row 1: the write succeeded and the readback
+shows every managed label as wanted. Rows 2 to 4 log slim skipped with the
+reason and emit no event. It fires after that readback, not after a reboot
+and installer probe as in ADR 0002 §9, and its fields do not change:
+`labelCount` is the number of labels written `true`; `unknownLabels` the
+unknown category names from `resolveSlimCategories`; `durationMs` runs from
+the start of the file read to the end of the readback; `signature` is
+`slimSignature(categories)`.
+
+ADR 0002 §7 still holds: a label for a daemon the runtime lacks is written
+and read back like any other, and is never a boot failure.
+
+A `purpose: "recover"` boot writes nothing and runs no readback; the driver
+returns the mode exactly as it does today (the `planSlimBoot` "off" path in
+`index.ts`).
 
 There is no fallback to running `launchctl disable` inside the simulator. A
 readback that cannot run keeps ADR 0002's rule that an uncertain device is
