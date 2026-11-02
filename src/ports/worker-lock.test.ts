@@ -70,6 +70,20 @@ describe("NodeWorkerLock", () => {
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(ME);
   });
 
+  it("refuses a live holder in another folder and goes on, touching nothing, beside a live holder in the same folder", async () => {
+    const { path } = await lockInTemporaryFolder();
+    const holder: WorkerLockOwner = { folder: "/home/other/.simlock", pid: 7, startedAt: "t0" };
+    await adapter(path).take(holder);
+
+    await expect(adapter(path, [7]).take(ME)).rejects.toThrow(
+      "another Simlock worker runs for this user (pid 7, folder /home/other/.simlock, since t0); stop it first: SIMLOCK_HOME=/home/other/.simlock simlock daemon stop",
+    );
+    const sameFolder = await adapter(path, [7]).take({ ...ME, folder: holder.folder });
+    await sameFolder.release();
+
+    expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(holder);
+  });
+
   it("refuses a parent folder owned by another user and tightens one of its own to 0700", async () => {
     const { path } = await lockInTemporaryFolder();
     const parent = dirname(path);
