@@ -37,7 +37,7 @@ import {
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
-import { memorySourceDatabase, plantReadySeed } from "./testing.js";
+import { memorySourceDatabase, plantReadySeed, plantSource } from "./testing.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
 const listDevicesFixture = readFileSync(
@@ -174,6 +174,11 @@ afterEach(() => {
 });
 
 const seedUdid = "00000000-0000-0000-0000-0000000000aa";
+
+interface Catalog {
+  devicetypes: { identifier: string }[];
+  runtimes: { buildversion?: string; identifier: string }[];
+}
 
 /** why: A seed lives in the sources set, a sibling of the lease device set, and its calls are scoped to that. */
 function sourcesSimctl(...args: readonly string[]): {
@@ -1007,6 +1012,76 @@ describe("IosSimctlDriver", () => {
           ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
           : ["clone"],
       );
+    },
+  );
+
+  it.each([
+    { name: "healthy", edit: () => undefined, reason: undefined },
+    {
+      name: "its runtime is gone",
+      edit: (catalog: Catalog) => {
+        catalog.runtimes = catalog.runtimes.filter(
+          (entry) => entry.identifier !== driverData.runtimeId,
+        );
+      },
+      reason: `runtime ${driverData.runtimeId} is not installed`,
+    },
+    {
+      name: "its runtime changed build",
+      edit: (catalog: Catalog) => {
+        for (const entry of catalog.runtimes) {
+          if (entry.identifier === driverData.runtimeId) entry.buildversion = "23F79";
+        }
+      },
+      reason: `runtime ${driverData.runtimeId} changed from build 23F77 to 23F79`,
+    },
+    {
+      name: "its device type is gone",
+      edit: (catalog: Catalog) => {
+        catalog.devicetypes = catalog.devicetypes.filter(
+          (entry) => entry.identifier !== driverData.deviceTypeId,
+        );
+      },
+      reason: `device type ${driverData.deviceTypeId} is not available`,
+    },
+  ])(
+    "lists a ready seed as a source with its model, version and size, and its staleReason when $name, which clears once it is back",
+    async ({ edit, reason }) => {
+      const catalogOf = (change: (catalog: Catalog) => void) => {
+        const catalog = JSON.parse(listFixture) as Catalog;
+        for (const entry of catalog.runtimes) {
+          if (entry.identifier === driverData.runtimeId) entry.buildversion = "23F77";
+        }
+        change(catalog);
+        return JSON.stringify(catalog);
+      };
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: catalogOf(edit) } },
+        {
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: catalogOf(() => undefined) },
+        },
+      ]);
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeBuild: "23F77",
+        runtimeId: driverData.runtimeId,
+        sizeBytes: 1_073_741_824,
+        udid: seedUdid,
+      });
+      const driver = await createDriver(runner, new FakeClock(), undefined, database);
+
+      expect(await driver.listSources()).toMatchObject([
+        {
+          kind: "seed",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          sizeBytes: 1_073_741_824,
+          ...(reason === undefined ? {} : { staleReason: reason }),
+        },
+      ]);
+      expect((await driver.listSources())[0]).not.toHaveProperty("staleReason");
+      expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
     },
   );
 
