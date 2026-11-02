@@ -205,7 +205,8 @@ export class Channel implements BulkSource {
   onCredit(amount: number | undefined): void {
     if (this.#failure !== undefined) return;
     if (amount === undefined || amount < 1) return this.#invalid("a CREDIT of 0");
-    const taken = this.#handed + this.#queuedBytes;
+    // why: credit acknowledges bytes the peer received, so only bytes handed to the transport count; bytes still queued here cannot have been received.
+    const taken = this.#handed;
     if (this.#allowance + amount > taken + CHANNEL_WINDOW) {
       return this.#invalid("credit beyond 4 MiB outstanding");
     }
