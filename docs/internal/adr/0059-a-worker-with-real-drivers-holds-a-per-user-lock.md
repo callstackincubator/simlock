@@ -80,15 +80,19 @@ flowchart TD
 
 ### 3. The lock is released when the worker stops
 
-A stop removes the lock only when `owner.json` names this daemon's pid. A start
-that fails after taking the lock removes it the same way. A crash leaves it
+A stop removes the lock after the drivers are disposed (their adb server
+reaped), so no other worker sweeps while this one still acts on devices, and
+only when `owner.json` is still the one this daemon wrote. A start that fails
+after taking the lock removes it the same way. A crash leaves it
 stale, and the next start takes it over (§2).
 
-### 4. The slow lane reports busy, not failed
+### 4. The slow lane refuses to run while a worker holds the machine
 
-`scripts/slow-e2e.sh` exits 75 before it starts, naming the holder, when the
-lock names a live pid. That is the exit code it already uses when another
-worktree's lane holds the machine.
+`scripts/slow-e2e.sh`'s machine check, after it has killed the lane's own
+leftovers, fails when the lock names a live pid: the script exits 69 ("machine
+not fit"), naming the holder and how to stop it. Not 75 ("busy"): that code
+means another lane run that will end, and a user's own worker never ends by
+itself.
 
 ## Consequences
 
