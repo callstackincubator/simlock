@@ -1386,6 +1386,31 @@ describe("Dispatcher: ownership", () => {
   });
 });
 
+describe("Dispatcher: lease.release of a virtual device", () => {
+  it.each([{ identity: "reusable" as const }, { identity: "fresh" as const }])(
+    "deletes the device whatever lease.identity says ($identity), and the next lease.request gets another device",
+    async ({ identity }) => {
+      const { dispatcher, registry } = await buildDispatcher({
+        lease: { identity: { android: identity, ios: identity } },
+      });
+      const request = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+      const first = await dispatcher.dispatch("lease.request", request, session());
+
+      await dispatcher.dispatch("lease.release", { leaseId: first.lease.id }, session());
+      await vi.waitFor(() => {
+        expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["deleted"]);
+      });
+      const second = await dispatcher.dispatch("lease.request", request, session());
+
+      expect(second.device.id).not.toBe(first.device.id);
+      expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toEqual([
+        [first.device.id, "deleted"],
+        [second.device.id, "leased"],
+      ]);
+    },
+  );
+});
+
 describe("Dispatcher: lease.release-all", () => {
   it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
     const { dispatcher, registry } = await buildDispatcher();
