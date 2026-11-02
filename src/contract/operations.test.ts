@@ -258,6 +258,18 @@ describe("component.install input", () => {
   });
 });
 
+describe("lease.request model", () => {
+  const parse = (model: string) =>
+    OPERATIONS["lease.request"].input.safeParse({ model, platform: "ios" });
+
+  it("accepts a model of 256 characters and refuses one of 257, naming the field", () => {
+    expect(parse("m".repeat(256)).success).toBe(true);
+    const result = parse("m".repeat(257));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.path).toEqual(["model"]);
+  });
+});
+
 describe("lease.request osVersion", () => {
   const parse = (osVersion: string) =>
     OPERATIONS["lease.request"].input.safeParse({

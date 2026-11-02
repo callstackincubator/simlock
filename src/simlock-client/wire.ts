@@ -124,9 +124,11 @@ export class SimlockWire {
   #pieceChars = 0;
   #nextId = 1;
   #dead: AnySimlockError | undefined;
+  readonly #maxLineChars: number;
 
-  constructor(connection: IpcConnection) {
+  constructor(connection: IpcConnection, maxLineChars: number = MAX_WIRE_LINE_CHARS) {
     this.#connection = connection;
+    this.#maxLineChars = maxLineChars;
     connection.onData((chunk) => this.#read(chunk));
     connection.onError(() =>
       this.#die(
@@ -270,7 +272,7 @@ export class SimlockWire {
     const rest = start === 0 ? chunk : chunk.slice(start);
     this.#pieces.push(rest);
     this.#pieceChars += rest.length;
-    if (this.#pieceChars > MAX_WIRE_LINE_CHARS) {
+    if (this.#pieceChars > this.#maxLineChars) {
       this.#pieces = [];
       this.#pieceChars = 0;
       this.#die(

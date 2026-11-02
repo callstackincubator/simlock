@@ -28,6 +28,8 @@ import {
 } from "./test-support.js";
 import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
+// why: the 8 MiB the gateway accepts for one unfinished worker reply line, written out so the test pins the number.
+const REPLY_LINE_CAP = 8 * 1024 * 1024;
 const RETENTION_MS = 24 * 60 * 60_000;
 const previousProtocol = {
   min: PROTOCOL_VERSION_RANGE.min - 1,
@@ -59,6 +61,8 @@ function fleet(
     readonly leaseMaxTtlMs?: number;
     readonly logger?: Logger;
     readonly refreshIntervalMs?: number;
+    /** why: leaves `connect` unset so the gateway builds its real client over the uplink. */
+    readonly realConnect?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -72,15 +76,20 @@ function fleet(
     authenticate: async (credential, workerId) =>
       options.authenticate?.(credential, workerId) ?? "accept",
     clock,
-    connect: async () => {
-      if (connectState.hangNext) {
-        connectState.hangNext = false;
-        return new Promise<never>(() => {});
-      }
-      const client = clients.at(-1);
-      if (client === undefined) throw new Error("no scripted worker was queued for this uplink");
-      return client.asClient();
-    },
+    ...(options.realConnect === true
+      ? {}
+      : {
+          connect: async () => {
+            if (connectState.hangNext) {
+              connectState.hangNext = false;
+              return new Promise<never>(() => {});
+            }
+            const client = clients.at(-1);
+            if (client === undefined)
+              throw new Error("no scripted worker was queued for this uplink");
+            return client.asClient();
+          },
+        }),
     drainStore: new MemoryDrainStore(),
     eventBus,
     leaseMaxTtlMs: options.leaseMaxTtlMs ?? DEFAULT_LEASE_MAX_TTL_MS,
@@ -1662,6 +1671,47 @@ describe("GatewayService", () => {
     await vi.waitFor(() =>
       expect(harness.service.workers.view("wrk_1")?.connection).toBe("connected"),
     );
+
+    await harness.service.stop();
+  });
+
+  it("closes an uplink whose worker sends an unfinished line past the reply cap, and keeps one at the cap", async () => {
+    const harness = fleet({ realConnect: true });
+    await harness.service.start();
+    const workerEnd = await harness.transport.connect({
+      token: "join-secret",
+      url: "ws://gateway.test",
+      workerId: "wrk_1",
+    });
+    let helloId: number | string | undefined;
+    workerEnd.onData((chunk) => {
+      const frame = JSON.parse(chunk.trim().split("\n")[0] ?? "{}") as {
+        id?: number | string;
+        type?: string;
+      };
+      if (frame.type === "hello") helloId = frame.id;
+    });
+    await vi.waitFor(() => expect(helloId).toBeDefined());
+    await workerEnd.write(
+      `${JSON.stringify({
+        id: helloId,
+        ok: true,
+        payload: {
+          daemonProtocolRange: PROTOCOL_VERSION_RANGE,
+          principal: "gw:instance-1",
+          protocolVersion: negotiateProtocolVersion(PROTOCOL_VERSION_RANGE, PROTOCOL_VERSION_RANGE),
+          role: "admin",
+          version: "0.3.0",
+        },
+      })}\n`,
+    );
+    const chunk = "a".repeat(64 * 1024);
+    for (let sent = 0; sent < REPLY_LINE_CAP; sent += chunk.length) {
+      await workerEnd.write(chunk);
+    }
+    expect(workerEnd.closed).toBe(false);
+    await workerEnd.write(chunk);
+    await vi.waitFor(() => expect(workerEnd.closed).toBe(true));
 
     await harness.service.stop();
   });

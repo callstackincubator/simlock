@@ -552,8 +552,9 @@ describe("wire framing", () => {
     for (let sent = 0; sent <= MAX_WIRE_LINE_CHARS; sent += chunk.length) {
       connection.receiveRaw(chunk);
     }
-    await expect(pending).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+    await flushMicrotasks();
     expect(connection.closed).toBe(true);
+    await expect(pending).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
   });
 });
 
