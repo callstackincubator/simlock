@@ -1977,7 +1977,7 @@ describe("IosSimctlDriver", () => {
 
   describe("slim mode", () => {
     const widgetsLabels = widgetsLabelList();
-    const widgetsSignature = "v1:1ea7bd351e05525c";
+    const widgetsSignature = "v1:0dd8c925463fb678";
     const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
 
     const managedCount = Object.keys(wantedOverrides()).length;

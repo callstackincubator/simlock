@@ -1,11 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { labelsFor, resolveSlimCategories, SLIM_CATEGORIES, slimSignature } from "./slim-labels.js";
+import {
+  labelsFor,
+  NEVER_DISABLE_LABELS,
+  resolveSlimCategories,
+  SLIM_CATEGORIES,
+  slimSignature,
+} from "./slim-labels.js";
 
+// why: pure logic with many cases (category resolution, label dedupe and the shipped data), no port involved.
 describe("SLIM_CATEGORIES", () => {
   it("every category has at least one label", () => {
     for (const category of SLIM_CATEGORIES) {
       expect(category.labels.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("matches simslim v0.13.0: navd is in widgets, and the never-disable labels are in no category", () => {
+    const widgets = SLIM_CATEGORIES.find((c) => c.name === "widgets");
+    const slimmable = new Set(SLIM_CATEGORIES.flatMap((c) => c.labels));
+
+    expect(widgets?.labels).toContain("com.apple.navd");
+    expect([...NEVER_DISABLE_LABELS].sort()).toEqual([
+      "com.apple.assistantd",
+      "com.apple.gamed",
+      "com.apple.sharingd",
+    ]);
+    for (const label of NEVER_DISABLE_LABELS) {
+      expect(slimmable.has(label)).toBe(false);
     }
   });
 
