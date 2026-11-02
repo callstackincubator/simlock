@@ -405,6 +405,18 @@ describe("createCore", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it("converge lists each driver's sources once, and goes on after logging a driver whose read failed", async () => {
+    const sink = new MemoryLogSink();
+    const { core, driver } = await build({ sink });
+    core.connect(ports());
+    driver.failOn("listSources", 1, new Error("catalog unreadable"));
+
+    await expect(core.converge(await core.readStartup())).resolves.toBeUndefined();
+
+    expect(driver.calls.filter((call) => call.operation === "listSources")).toHaveLength(1);
+    expect(JSON.stringify(sink.records)).toContain("catalog unreadable");
+  });
+
   it("converge shuts down and deletes a released device whose wipe was deferred, instead of wiping it", async () => {
     const harness = await build();
     const { released } = await releasedLease(harness, { deferReclaim: true });
