@@ -254,4 +254,29 @@ describe("scripts/slow-e2e.sh", () => {
       defaultWorkerLockPath("linux", uid, tmpdir()),
     );
   });
+
+  it("check and a run exit 69 with the not fit message, freeing the lane lock, while a live pid holds the worker lock; a stale holder lets them go on", () => {
+    const { dir, env, run } = machine();
+    const holderFolder = "/home/other/.simlock";
+    const lockFolder = join(dir, "worker.lock");
+    mkdirSync(lockFolder);
+    const owner = (pid: number) =>
+      writeFileSync(
+        join(lockFolder, "owner.json"),
+        JSON.stringify({ folder: holderFolder, pid, startedAt: "t0" }),
+      );
+    const pid = idleNode(env);
+    owner(pid);
+    const refusal = `not fit: a Simlock worker holds this machine (pid ${pid}, folder ${holderFolder}); stop it first: SIMLOCK_HOME=${holderFolder} simlock daemon stop\n`;
+
+    const check = run("check");
+    const started = run();
+    owner(2_147_483_646);
+    const stale = run("check");
+
+    expect([check.status, check.stderr]).toEqual([69, refusal]);
+    expect([started.status, started.stderr]).toEqual([69, refusal]);
+    expect(existsSync(env.SIMLOCK_SLOW_LOCK)).toBe(false);
+    expect([stale.status, stale.stderr]).toEqual([0, ""]);
+  });
 });
