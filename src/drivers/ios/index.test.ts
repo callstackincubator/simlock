@@ -2404,35 +2404,21 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
-    it("estimates the boot cost with the slim reboot+apply budget for a slim spec", async () => {
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock: new FakeClock(),
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        processRunner: new ScriptedProcessRunner([]),
-        slim: slimOptions(),
-      });
+    it.each([
+      { name: "slim spec", spec: { ...spec, mode: "slim" } as const },
+      { name: "full spec", spec },
+    ])(
+      "quotes the cold-boot cost for a boot of a $name, since a slim boot is one boot",
+      async (c) => {
+        const driver = await createSlimDriver(
+          new ScriptedProcessRunner([]),
+          new MemoryFilesystem(),
+          slimOptions(),
+        );
 
-      expect(driver.estimate({ operation: "boot" }, { ...spec, mode: "slim" })).toBe(150_000);
-    });
-
-    it("quotes the plain cold-boot cost for a full spec, since a full spec never slims", async () => {
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock: new FakeClock(),
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        processRunner: new ScriptedProcessRunner([]),
-        slim: slimOptions(),
-      });
-
-      expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
-    });
+        expect(driver.estimate({ operation: "boot" }, c.spec)).toBe(60_000);
+      },
+    );
 
     describe("resolveSpec and the device mode", () => {
       const iphone16 = { model: "iPhone 16", platform: "ios" } as const;
