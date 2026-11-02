@@ -239,6 +239,8 @@ export interface DriverSource {
   readonly sizeBytes?: number;
   /** why: reads after "is stale:", at most 300 characters. */
   readonly staleReason?: string;
+  /** why: a simulator in the sources set that no row names; only `doctor --purge-orphans` destroys it, never nuke (ADR 0061 §1). */
+  readonly orphan?: true;
 }
 
 export interface Driver {

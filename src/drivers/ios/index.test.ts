@@ -1275,6 +1275,36 @@ describe("IosSimctlDriver", () => {
     );
   });
 
+  it("listSources reports a simulator in the sources set that no row names as an orphan source, and destroySource deletes it", async () => {
+    const orphanUdid = "00000000-0000-0000-0000-0000000000ee";
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    await filesystem.mkdirp(`${deviceRoot}/sources/${seedUdid}`);
+    await filesystem.mkdirp(`${deviceRoot}/sources/${orphanUdid}`);
+    const database = await seededDatabase();
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: sourcesSimctl("shutdown", orphanUdid) },
+      { match: sourcesSimctl("delete", orphanUdid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const sources = await driver.listSources();
+
+    expect(sources.filter((source) => source.orphan !== true)).toHaveLength(1);
+    expect(sources.filter((source) => source.orphan === true)).toEqual([
+      { id: orphanUdid, kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
+    ]);
+    await driver.destroySource(orphanUdid);
+    expect(runner.calls.slice(1).map((call) => [call.args[3], call.args[4]])).toEqual([
+      ["shutdown", orphanUdid],
+      ["delete", orphanUdid],
+    ]);
+    await expect(
+      driver.destroySource("00000000-0000-0000-0000-0000000000f0"),
+    ).rejects.toBeInstanceOf(DriverCrashError);
+  });
+
   it.each([
     { name: "deletes its simulator in the sources set and its row", deleteCode: 0, rows: 0 },
     { name: "keeps the row and throws when the delete fails", deleteCode: 1, rows: 1 },
