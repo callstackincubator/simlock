@@ -108,6 +108,23 @@ const channelBreaks: Break[] = [
       return channel;
     },
   },
+  {
+    name: "credit for bytes still queued, not yet sent",
+    run: async (peer) => {
+      const channel = await acceptRaw(peer);
+      const writer = channel.writable.getWriter();
+      await writer.write(pattern(0, 64 * KiB));
+      await settle();
+      await peer.raw.writeBinary(creditEnvelope(2, 64 * KiB));
+      await settle();
+      expect(resets(peer, 2)).toEqual([]);
+      peer.tap.setUnsent(10 * 1024 * KiB);
+      await writer.write(pattern(0, 64 * KiB));
+      await settle();
+      await peer.raw.writeBinary(creditEnvelope(2, 64 * KiB));
+      return channel;
+    },
+  },
 ];
 
 describe("link rule breaks that name a held channel", () => {
