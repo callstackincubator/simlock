@@ -25,6 +25,7 @@ import {
   ScriptedProcessRunner,
   SystemClock,
   type Filesystem,
+  type Logger,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
@@ -1143,6 +1144,77 @@ describe("IosSimctlDriver", () => {
     expect(driver.estimate({ operation: "provision" }, spec)).toBe(500);
     expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
   });
+
+  it.each([
+    { name: "removal succeeds", method: "destroy" as const, failing: undefined, deleteCode: 0 },
+    {
+      name: "rm throws, which is logged and does not fail the destroy",
+      method: "destroy" as const,
+      failing: "rm" as const,
+      deleteCode: 0,
+    },
+    {
+      name: "simctl delete fails, so the folder is kept and the error thrown",
+      method: "destroy" as const,
+      failing: undefined,
+      deleteCode: 1,
+    },
+    {
+      name: "destroyLegacy removes it too",
+      method: "destroyLegacy" as const,
+      failing: undefined,
+      deleteCode: 0,
+    },
+  ])(
+    "removes the overrides folder of a destroyed simulator after simctl delete: $name",
+    async ({ method, failing, deleteCode }) => {
+      const udid = method === "destroy" ? driverData.udid : legacyUdid;
+      const args = (verb: string) =>
+        method === "destroy" ? simctlArgs(verb, udid) : ["simctl", verb, udid];
+      const runner = new ScriptedProcessRunner([
+        { match: { args: args("shutdown"), command: "xcrun" } },
+        {
+          match: { args: args("delete"), command: "xcrun" },
+          result: { code: deleteCode, stderr: "no", stdout: "" },
+        },
+      ]);
+      const filesystem = new FaultyFilesystem();
+      await filesystem.mkdirp(overridesFolder(udid));
+      await filesystem.writeFileAtomic(overridesPath(udid), "x");
+      await filesystem.mkdirp(overridesFolder("other-udid"));
+      filesystem.failing = failing;
+      const logger = new RecordingLogger();
+      scopedRunners.push(runner);
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        logger,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+      const device = { address: udid, deviceId: udid, driverData: { ...driverData, udid } };
+
+      const destroyed = driver[method](device);
+
+      if (deleteCode === 0) {
+        await expect(destroyed).resolves.toBeUndefined();
+      } else {
+        await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
+      }
+      const removed = deleteCode === 0 && failing === undefined;
+      expect(await filesystem.exists(overridesFolder(udid))).toBe(!removed);
+      expect(await filesystem.exists(overridesFolder("other-udid"))).toBe(true);
+      expect(logger.warnings).toEqual(
+        failing === undefined
+          ? []
+          : [`could not remove the launchd overrides folder of ${udid}: disk full`],
+      );
+    },
+  );
 
   it("prices reclaim as the erase it always runs, at either clean level", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
@@ -4081,6 +4153,21 @@ function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
     ([label, off]) => `<key>${label}</key><${String(off)}/>`,
   );
   return `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${lines.join("")}</dict></plist>\n`;
+}
+
+/** why: Records every `warn` message, so the destroy's log line is asserted on its text. */
+class RecordingLogger implements Logger {
+  readonly warnings: string[] = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string): void {
+    this.warnings.push(message);
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
 }
 
 /** why: Records what is written and fails the one operation a test names, as a full or unwritable store would. */
