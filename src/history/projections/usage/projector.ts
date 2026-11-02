@@ -80,8 +80,10 @@ class Projector implements ProjectionHandle {
     // why: `seq` only orders within one run, so a seq that does not rise is a new run (a replay crosses a crash with no stop between); this run starts with what a fresh process holds.
     if (this.#lastSeq !== undefined && envelope.seq <= this.#lastSeq) this.#newRun();
     this.#lastSeq = envelope.seq;
-    const at = amount(envelope.timestamp);
-    if (at === undefined) return;
+    const stamped = amount(envelope.timestamp);
+    if (stamped === undefined) return;
+    // why: a worker stamps its own events; one stamped after this gateway's clock would drag the shared key forward and misplace the gateway's own later steps.
+    const at = Math.min(stamped, this.#options.now());
     const payload = payloadOf(envelope.payload);
     if (envelope.event === "worker.disconnected") {
       if (this.#options.fleet) this.#disconnected(payload, at);

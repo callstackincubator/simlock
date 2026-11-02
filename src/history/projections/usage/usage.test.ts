@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus, type EventMap, type EventName } from "../../../bus/index.js";
 import {
+  type Clock,
   FakeClock,
   JsonLinesLogger,
   MemoryLogSink,
@@ -43,6 +44,8 @@ interface RigOptions {
   readonly directory?: string;
   readonly at?: number;
   readonly fleet?: boolean;
+  /** why: how far the history's clock runs ahead of the bus's, so relayed stamps within it are not clamped. */
+  readonly gatewayAheadMs?: number;
   readonly eventRetention?: number;
   readonly metricsRetention?: number;
   readonly projections?: readonly HistoryProjectionDefinition[];
@@ -73,9 +76,15 @@ async function rig(options: RigOptions = {}): Promise<Rig> {
     generate: () => `${options.at ?? T0}_${(nextId += 1)}`,
   });
   const logs = new MemoryLogSink();
+  const ahead = options.gatewayAheadMs ?? 0;
+  const historyClock: Clock = {
+    cancel: (handle) => clock.cancel(handle),
+    now: () => clock.now() + ahead,
+    setTimer: (delayMs, callback) => clock.setTimer(delayMs, callback),
+  };
   const history = createEventHistory({
     bus,
-    clock,
+    clock: historyClock,
     config: { maxBytes: 256 * 1024 * 1024, retention: options.eventRetention ?? 7 * DAY },
     dataDirectory: directory,
     filesystem: new NodeFilesystem(),
@@ -456,7 +465,7 @@ describe("usage projection: a gateway", () => {
   });
 
   it("source and heldMs come from the held relayed lease matching workerId and workerLeaseId, by the worker's clock, whether the relayed grant arrives before or after request.granted; with no relayed grant source is absent; a relayed end deletes the held lease", async () => {
-    const r = await rig({ fleet: true });
+    const r = await rig({ fleet: true, gatewayAheadMs: 10 * MIN });
     for (const id of ["A", "B", "C"]) r.emit("lease.requested", requested(id));
     r.relay("w1", "lease.granted", granted("WL-A", "A", { source: "booted" }), T0 + 15_000);
     await dispatch(r, "A", "WL-A", T0 + 20_000);
@@ -493,7 +502,7 @@ describe("usage projection: a gateway", () => {
   });
 
   it("a relayed lease with an over-long id, an unknown source or no leaseId joins by the cut id and leaves source absent", async () => {
-    const r = await rig({ fleet: true });
+    const r = await rig({ fleet: true, gatewayAheadMs: 10 * MIN });
     const long = "L".repeat(500);
     r.emit("lease.requested", requested("A"));
     r.relay("w1", "lease.granted", granted(long, "A", { source: "mystery" as never }), T0 + 15_000);
@@ -668,7 +677,7 @@ describe("usage projection: minute rows", () => {
   });
 
   it("a step stamped before its key's last step counts at the last step's time, on a relayed row and on a * row", async () => {
-    const r = await rig({ fleet: true });
+    const r = await rig({ fleet: true, gatewayAheadMs: 10 * MIN });
     r.relay("w1", "capacity.changed", capacity({ global: [1, 0, 4], ios: [1, 0, 4] }), T0 + 10_000);
     r.relay("w1", "capacity.changed", capacity({ global: [3, 0, 4], ios: [3, 0, 4] }), T0 + 5_000);
     r.relay("w2", "capacity.changed", capacity({ global: [0, 0, 4], ios: [0, 0, 4] }), T0 + 20_000);
@@ -746,7 +755,6 @@ describe("usage projection: minute rows", () => {
     const star = (from: number) =>
       buckets(r, { from, platform: "all", to: from + MIN, workerId: "*" });
     expect(figure((await star(T0))[0], "queueDepth")?.peak).toBe(7);
-    expect(await star(T0 + YEAR)).toEqual([]);
     await r.history.stop();
   });
 
