@@ -1908,6 +1908,10 @@ describe("IosSimctlDriver", () => {
     const widgetsSignature = "v1:1ea7bd351e05525c";
     const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
 
+    const managedCount = Object.keys(wantedOverrides()).length;
+    const trueLabel = widgetsLabels[0] ?? "";
+    const falseLabel = "com.apple.siriactionsd";
+
     function slimOptions(bootTimeoutMs = 300_000) {
       return { bootTimeoutMs, categories: ["widgets"] } as const;
     }
@@ -2041,6 +2045,81 @@ describe("IosSimctlDriver", () => {
           unknownLabels: [],
         });
         expect(onSlimSkipped).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      {
+        name: "a true label reads enabled",
+        readback: () => readbackWith({ [trueLabel]: "enabled" }),
+        mode: "full",
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "a true label is missing",
+        readback: () => readbackWith({ [trueLabel]: undefined }),
+        mode: "full",
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "a false label reads disabled",
+        readback: () => readbackWith({ [falseLabel]: "disabled" }),
+        mode: "full",
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${falseLabel}`,
+      },
+      {
+        name: "two labels disagree, the first by sort order is named",
+        readback: () => readbackWith({ [falseLabel]: "disabled", [trueLabel]: "enabled" }),
+        mode: "full",
+        detail: `2 of ${managedCount} managed labels did not read back as written at boot; first: ${[trueLabel, falseLabel].sort()[0]}`,
+      },
+      {
+        name: "a true label reads true (older launchd)",
+        readback: () => readbackWith({ [trueLabel]: "true" }),
+        mode: "slim",
+        detail: undefined,
+      },
+      {
+        name: "a false label is missing",
+        readback: () => readbackWith({ [falseLabel]: undefined }),
+        mode: "slim",
+        detail: undefined,
+      },
+      {
+        name: "the readback exits non-zero",
+        readback: () => ({ code: 1, stderr: "launchctl: boom\n" }),
+        mode: "slim",
+        detail: "could not read back the launchd overrides: exit 1: launchctl: boom",
+      },
+      {
+        name: "the readback times out",
+        readback: () => "hangs" as const,
+        mode: "slim",
+        detail: "could not read back the launchd overrides: timed out after 120000ms",
+      },
+    ])(
+      "grants the mode the readback shows and tells why when it disagrees or fails: $name",
+      async ({ readback, mode, detail }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        const script = readback();
+
+        const { onSlimSkipped, onSlimmed, result } = await prepareSlimWith(
+          filesystem,
+          typeof script === "string" && script !== "hangs" ? { stdout: script } : script,
+          slimOptions(),
+        );
+
+        expect(result.mode).toBe(mode);
+        if (detail === undefined) {
+          expect(onSlimmed).toHaveBeenCalledTimes(1);
+          expect(onSlimSkipped).not.toHaveBeenCalled();
+        } else {
+          expect(onSlimmed).not.toHaveBeenCalled();
+          expect(onSlimSkipped.mock.calls).toEqual([
+            [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
+          ]);
+        }
       },
     );
 
@@ -3866,12 +3945,13 @@ async function createSlimDriver(
   onSlimmed?: (fact: SlimmedFact) => void,
   onSlimSkipped?: (fact: SlimSkippedFact) => void,
   slimByDefault = false,
+  clock = new FakeClock(),
 ): Promise<IosSimctlDriver> {
   return await IosSimctlDriver.create({
     driverConfig: { deviceRoot },
     instanceId,
     simlockHome: "/home/.simlock",
-    clock: new FakeClock(),
+    clock,
     filesystem,
     idGenerator: { generate: () => "device-1" },
     ...(onSlimmed === undefined ? {} : { onSlimmed }),
@@ -3988,6 +4068,65 @@ function slimBootCalls(udid: string, readback: string) {
       result: { code: 0, stderr: "", stdout: readback },
     },
   ];
+}
+
+type ReadbackScript =
+  | { readonly stdout: string }
+  | { readonly code: number; readonly stderr: string }
+  | "hangs";
+
+/** why: One slim `prepare` of the 18.5 device, with the readback scripted; the 120 s limit runs on a fake clock. */
+async function prepareSlimWith(
+  filesystem: FaultyFilesystem,
+  readback: ReadbackScript,
+  slimOptions: { readonly categories?: readonly string[]; readonly bootTimeoutMs: number },
+) {
+  const udid = "00000000-0000-0000-0000-000000000001";
+  const runtimeId = "com.apple.CoreSimulator.SimRuntime.iOS-18-5";
+  const calls = slimBootCalls(udid, "");
+  const readbackCall =
+    readback === "hangs"
+      ? { hangs: true, match: calls[3]!.match }
+      : "stdout" in readback
+        ? { match: calls[3]!.match, result: { code: 0, stderr: "", stdout: readback.stdout } }
+        : {
+            match: calls[3]!.match,
+            result: { code: readback.code, stderr: readback.stderr, stdout: "" },
+          };
+  const runner = new ScriptedProcessRunner([...calls.slice(0, 3), readbackCall]);
+  const clock = new FakeClock();
+  const onSlimmed = vi.fn();
+  const onSlimSkipped = vi.fn();
+  const driver = await createSlimDriver(
+    runner,
+    filesystem,
+    slimOptions,
+    onSlimmed,
+    onSlimSkipped,
+    false,
+    clock,
+  );
+  const ready = driver.makeReady(
+    { address: udid, deviceId: udid, driverData: { ...driverData, runtimeId } },
+    prepareSlim,
+  );
+  if (readback === "hangs") {
+    await waitForCalls(runner, 4);
+    clock.advance(120_000);
+  }
+  return { onSlimSkipped, onSlimmed, result: await ready, runner };
+}
+
+/** why: The readback of a boot that honoured every label, with the given labels changed or dropped (`undefined`). */
+function readbackWith(changes: Readonly<Record<string, string | undefined>>): string {
+  const entries: Record<string, string> = Object.fromEntries(
+    Object.entries(wantedOverrides()).map(([label, off]) => [label, off ? "disabled" : "enabled"]),
+  );
+  for (const [label, state] of Object.entries(changes)) {
+    if (state === undefined) delete entries[label];
+    else entries[label] = state;
+  }
+  return printDisabled(entries);
 }
 
 function scriptedListRunner(): ScriptedProcessRunner {
