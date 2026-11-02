@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import type { Page } from "@playwright/test";
 
+import type { FakeDriverScript } from "../fake-driver/types.js";
+
 import {
   disposeFleet,
   expect,
@@ -76,7 +78,7 @@ async function deviceIds(host: RunningDaemon): Promise<readonly string[]> {
   return (result.json as { devices: { id: string }[] }).devices.map((device) => device.id);
 }
 
-// why: a lease then a release leaves one warm device that nobody holds, which is the device a viewer
+// why: a lease then a release deletes that device and the pool makes a warm one nobody holds, which is the device a viewer
 // can watch without a lease.
 async function warmDevice(host: RunningDaemon): Promise<string> {
   const granted = await host.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
@@ -87,31 +89,40 @@ async function warmDevice(host: RunningDaemon): Promise<string> {
   await expect
     .poll(async () => {
       const listed = await host.cli(["status", "--json"]);
-      const [device] = (listed.json as { devices: { id: string; state: string }[] }).devices;
-      ready = device?.state === "ready" ? device.id : "";
+      const { devices } = listed.json as { devices: { id: string; state: string }[] };
+      ready = devices.find((device) => device.state === "ready")?.id ?? "";
       return ready;
     })
     .not.toBe("");
   return ready;
 }
 
-// why: with the warm pool off a released device is left shut down, which is the one state a viewer
-// can reach a device in without a lease changing under them.
-async function shutdownDevice(host: RunningDaemon): Promise<string> {
-  const granted = await host.cli([...LEASE, "--agent-id", "console-screen", "--detach"]);
-  expect(granted.code, granted.stderr).toBe(0);
-  const released = await host.cli(["release", "--all", "--yes"]);
-  expect(released.code, released.stderr).toBe(0);
-  let id = "";
+// why: a released device is deleted, so the one way to reach a shut-down device without a lease is the pool's: the daemon stops
+// (its idle devices shut down), and the restarted one cannot boot the device back because the driver's boots fail.
+async function shutdownDevice(host: RunningDaemon, script: FakeDriverScript): Promise<string> {
+  let ready = "";
   await expect
     .poll(async () => {
       const listed = await host.cli(["status", "--json"]);
-      const [device] = (listed.json as { devices: { id: string; state: string }[] }).devices;
-      id = device?.state === "shutdown" ? device.id : "";
-      return id;
+      const { devices } = listed.json as { devices: { id: string; state: string }[] };
+      ready = devices.find((device) => device.state === "ready")?.id ?? "";
+      return ready;
     })
     .not.toBe("");
-  return id;
+  await host.stop();
+  await host.writeDriverScript({
+    ios: { ...script.ios, failures: { makeReady: { message: "no boot", type: "generic" } } },
+  });
+  await host.start();
+  await expect
+    .poll(async () => {
+      const listed = await host.cli(["status", "--json"]);
+      const { devices } = listed.json as { devices: { id: string; state: string }[] };
+      return devices.find((device) => device.id === ready)?.state;
+    })
+    .toBe("shutdown");
+  await host.writeDriverScript(script);
+  return ready;
 }
 
 async function openDevice(page: Page, target: Target, search = "?tab=devices"): Promise<void> {
@@ -281,10 +292,12 @@ test.describe("the device drawer's Screen tab", () => {
 const SHUT_DOWN = "The device is shut down. Its screen shows while it runs.";
 
 test.describe("the Screen tab of a device that is not running", () => {
-  test("says why instead of starting a capture, starts the picture when the device runs, shows the sentence again when it is shut down while watched, shows the daemon's words for a refused stream, and says streaming is off where it is", async ({
+  test("says why instead of starting a capture, starts the picture when the device runs, closes it when the lease ends, shows the daemon's words for a refused stream, and says streaming is off where it is", async ({
     page,
   }) => {
-    const started = await streamingHost({ warmPool: { enabled: false } });
+    const started = await streamingHost({
+      warmPool: { targets: [{ count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" }] },
+    });
     const off = await startDaemon("worker", {
       config: { warmPool: { enabled: false } },
       driverScript: { ios: IOS },
@@ -292,7 +305,9 @@ test.describe("the Screen tab of a device that is not running", () => {
     try {
       const host = started.host;
       const workerId = await workerIdOn(host);
-      const deviceId = await shutdownDevice(host);
+      const deviceId = await shutdownDevice(host, {
+        ios: { ...IOS, screenCaptureCommand: started.command },
+      });
       const streams: string[] = [];
       page.on("request", (request) => {
         if (request.url().includes("/v1/stream/")) streams.push(request.url());
@@ -316,7 +331,6 @@ test.describe("the Screen tab of a device that is not running", () => {
       const released = await host.cli(["release", "--all", "--yes"]);
       expect(released.code, released.stderr).toBe(0);
       await logReached(started.dir, "closed", 1);
-      await expect(drawer(page).getByText(SHUT_DOWN)).toBeVisible();
       await expect(screen(page)).toHaveCount(0);
       expect(await captureLogLines(started.dir, "opened")).toBe(1);
 

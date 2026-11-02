@@ -615,10 +615,10 @@ test.describe("the workers page", () => {
       await lease(host, "console-e2e-3");
       await waitFor(
         async () =>
-          (await status(host)).devices.every(
-            (device) => device.state === "ready" || device.state === "leased",
+          (await status(host)).devices.every((device) =>
+            ["deleted", "leased", "ready"].includes(device.state),
           ),
-        { label: "every device ready or leased" },
+        { label: "every device ready, leased or deleted" },
       );
       const { devices } = await status(host);
       const [view] = await workerList(host);
@@ -677,10 +677,10 @@ test.describe("the workers page", () => {
       await lease(host, "console-e2e-3");
       await waitFor(
         async () =>
-          (await status(host)).devices.every(
-            (device) => device.state === "ready" || device.state === "leased",
+          (await status(host)).devices.every((device) =>
+            ["deleted", "leased", "ready"].includes(device.state),
           ),
-        { label: "every device ready or leased" },
+        { label: "every device ready, leased or deleted" },
       );
       const { devices } = await status(host);
       const [view] = await workerList(host);
