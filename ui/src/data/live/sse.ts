@@ -62,26 +62,15 @@ export function createSseParser(): SseParser {
         finish(out);
         if (text.startsWith("\n")) start = 1;
       }
-      const find = (char: string) => {
-        const at = text.indexOf(char, start);
-        return at < 0 ? Infinity : at;
-      };
-      let nextLf = find("\n");
-      let nextCr = find("\r");
-      for (;;) {
-        const lf = nextLf < nextCr;
-        const index = lf ? nextLf : nextCr;
-        if (index === Infinity) break;
-        pieces.push(text.slice(start, index));
-        if (!lf && index === text.length - 1) {
-          // why: a `\r` at the very end is not complete yet: the next chunk may start with the `\n` that makes it one `\r\n`.
+      const next = createBreakFinder(text);
+      for (let found = next(start); found !== undefined; found = next(start)) {
+        pieces.push(text.slice(start, found.index));
+        if (found.endsText) {
           crPending = true;
           return out;
         }
         finish(out);
-        start = index + (!lf && text[index + 1] === "\n" ? 2 : 1);
-        if (nextLf < start) nextLf = find("\n");
-        if (nextCr < start) nextCr = find("\r");
+        start = found.index + found.length;
       }
       if (start < text.length) pieces.push(text.slice(start));
       return out;
@@ -91,4 +80,32 @@ export function createSseParser(): SseParser {
 
 function idField(id: string | undefined): { readonly id?: string } {
   return id === undefined ? {} : { id };
+}
+
+interface LineBreak {
+  readonly index: number;
+  readonly length: number;
+  // why: a `\r` at the very end is not complete yet: the next chunk may start with the `\n` that makes it one `\r\n`.
+  readonly endsText: boolean;
+}
+
+// why: each of `\n` and `\r` is searched for again only once the search has moved past its last hit, so the text is scanned once however many breaks it holds.
+function createBreakFinder(text: string): (from: number) => LineBreak | undefined {
+  const find = (char: string, from: number) => {
+    const at = text.indexOf(char, from);
+    return at < 0 ? Infinity : at;
+  };
+  let nextLf = -1;
+  let nextCr = -1;
+  return (from) => {
+    if (nextLf < from) nextLf = find("\n", from);
+    if (nextCr < from) nextCr = find("\r", from);
+    if (nextLf === Infinity && nextCr === Infinity) return undefined;
+    if (nextLf < nextCr) return { endsText: false, index: nextLf, length: 1 };
+    return {
+      endsText: nextCr === text.length - 1,
+      index: nextCr,
+      length: text[nextCr + 1] === "\n" ? 2 : 1,
+    };
+  };
 }

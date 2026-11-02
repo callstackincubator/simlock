@@ -91,6 +91,15 @@ function stepsOf(unit: Unit): Unit[] {
   return out;
 }
 
+function batchStep(step: unknown): Unit {
+  const owner = asRecord(step);
+  if (owner === undefined) throw refuse("refused: malformed batchSteps");
+  if (present(owner["command"]) && typeof owner["command"] !== "string") {
+    throw refuse("refused: malformed command");
+  }
+  return { command: commandName(owner["command"]), isStep: true, kind: "command", owner };
+}
+
 // why: one pass into one list, with the depth and step caps checked before a step is added, so the work follows the step count and a request cannot make the loop copy every descendant once per level.
 function collectSteps(unit: Unit, depth: number, out: Unit[]): void {
   if (unit.command !== "batch") return;
@@ -104,17 +113,7 @@ function collectSteps(unit: Unit, depth: number, out: Unit[]): void {
     throw refuse(`refused: a batch has more than ${String(MAX_BATCH_STEPS)} steps`);
   }
   for (const step of steps as unknown[]) {
-    const owner = asRecord(step);
-    if (owner === undefined) throw refuse("refused: malformed batchSteps");
-    if (present(owner["command"]) && typeof owner["command"] !== "string") {
-      throw refuse("refused: malformed command");
-    }
-    const inner: Unit = {
-      command: commandName(owner["command"]),
-      isStep: true,
-      kind: "command",
-      owner,
-    };
+    const inner = batchStep(step);
     out.push(inner);
     collectSteps(inner, depth + 1, out);
   }
