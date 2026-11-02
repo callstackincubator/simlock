@@ -23,6 +23,15 @@ async function devices(env: TestEnv): Promise<readonly Device[]> {
   return listed.json as Device[];
 }
 
+async function live(env: TestEnv): Promise<readonly Device[]> {
+  return (await devices(env)).filter((device) => device.state !== "deleted");
+}
+
+async function ready(env: TestEnv): Promise<boolean> {
+  const present = await live(env);
+  return present.length === 1 && present.every((device) => device.state === "ready");
+}
+
 async function lease(env: TestEnv, agent: string): Promise<Grant> {
   const result = await env.cli([
     "lease",
@@ -45,7 +54,7 @@ async function grants(env: TestEnv): Promise<readonly { payload: { source: strin
 }
 
 describe("a worker with no targets keeps the kinds it has leased", () => {
-  it("creates nothing while the first lease is held, boots the released device back and keeps it ready past idle.shutdownAfterMs, and grants the next lease of its kind warm", async () => {
+  it("creates nothing while the first lease is held, makes a new device of the kind in place of the deleted one and keeps it ready past idle.shutdownAfterMs, and grants the next lease of its kind warm", async () => {
     const env = await withDaemon({
       configOverrides: {
         idle: { shutdownAfterMs: 500 },
@@ -58,16 +67,16 @@ describe("a worker with no targets keeps the kinds it has leased", () => {
     expect(await devices(env)).toHaveLength(1);
 
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await waitFor(async () => (await devices(env)).every((device) => device.state === "ready"), {
-      label: "the released device is booted back",
-    });
+    await waitFor(() => ready(env), { label: "the pool makes a new device of the released kind" });
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect((await env.cli(["cleanup"])).code).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    expect((await devices(env)).map((device) => device.state)).toEqual(["ready"]);
+    const [kept] = await live(env);
+    expect(kept?.state).toBe("ready");
+    expect(kept?.id).not.toBe(first.device.id);
     const second = await lease(env, "a2");
-    expect(second.device.id).toBe(first.device.id);
+    expect(second.device.id).toBe(kept?.id);
     expect((await grants(env)).map((entry) => entry.payload.source)).toEqual([
       "provisioned",
       "warm",
@@ -80,23 +89,17 @@ describe("a worker with no targets keeps the kinds it has leased", () => {
     });
     const first = await lease(env, "a1");
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await waitFor(async () => (await devices(env)).every((device) => device.state === "ready"), {
-      label: "the released device is booted back",
-    });
+    await waitFor(() => ready(env), { label: "the pool makes a new device of the released kind" });
 
     await env.withConfig({ warmPool: { enabled: false } }, async () => {
-      await waitFor(
-        async () => (await devices(env)).every((device) => device.state === "shutdown"),
-        { label: "the pool being off shuts the device down" },
-      );
+      await waitFor(async () => (await live(env)).every((device) => device.state === "shutdown"), {
+        label: "the pool being off shuts the device down",
+      });
     });
 
-    await waitFor(
-      async () => (await devices(env)).map((device) => device.state).join() === "ready",
-      {
-        label: "the record boots the device again before any lease",
-      },
-    );
+    await waitFor(async () => (await live(env)).map((device) => device.state).join() === "ready", {
+      label: "the record boots the device again before any lease",
+    });
     expect((await grants(env)).map((entry) => entry.payload.source)).toEqual(["provisioned"]);
   });
 
@@ -107,15 +110,13 @@ describe("a worker with no targets keeps the kinds it has leased", () => {
     });
     const first = await lease(env, "a1");
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await waitFor(async () => (await devices(env)).every((device) => device.state === "ready"), {
-      label: "the released device is booted back",
-    });
+    await waitFor(() => ready(env), { label: "the pool makes a new device of the released kind" });
 
     const nuked = await env.cli(["nuke", "--yes"]);
     expect(nuked.code, nuked.stderr).toBe(0);
     await env.restartDaemon();
     await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-    expect((await devices(env)).filter((device) => device.state !== "shutdown")).toEqual([]);
+    expect((await live(env)).filter((device) => device.state !== "shutdown")).toEqual([]);
   });
 });
