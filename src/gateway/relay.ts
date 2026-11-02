@@ -76,6 +76,9 @@ export class GatewayRelay {
         client: () => liveClient(this.options.directory.target(workerId)),
         deadlineMs: this.options.deadlineMs ?? DEFAULT_DEADLINE_MS,
         clock: this.options.clock ?? new SystemClock(),
+        ...(this.options.proxyAuthHeader === undefined
+          ? {}
+          : { proxyAuthHeader: this.options.proxyAuthHeader }),
         idleMs: this.options.idleMs ?? DEFAULT_IDLE_MS,
         reject,
         resolve,
@@ -93,6 +96,7 @@ interface ExchangeInit {
   readonly deadlineMs: number;
   readonly idleMs: number;
   readonly clock: Clock;
+  readonly proxyAuthHeader?: string;
   readonly resolve: (response: Response | TwoWayRelay) => void;
   readonly reject: (error: unknown) => void;
   readonly twoWay: boolean;
@@ -189,7 +193,12 @@ class Exchange {
           channel: channel.id,
           hasBody: body !== null,
           ...(this.init.twoWay ? { twoWay: true as const } : {}),
-          headers: relayHeaderPairs(request.headers, { dropCredentials: true }),
+          headers: relayHeaderPairs(request.headers, {
+            dropCredentials: true,
+            ...(this.init.proxyAuthHeader === undefined
+              ? {}
+              : { proxyAuthHeader: this.init.proxyAuthHeader }),
+          }),
           method: request.method as RelayMethod,
           relayId: this.#relayId,
           target: this.init.call.target,
