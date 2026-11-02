@@ -112,7 +112,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const env = await withDaemon({
@@ -223,23 +223,24 @@ describe.skipIf(!hasAndroidSdk)(
           const release = await env.cli(["release", grant.lease.id]);
           expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
-          // Force the idle-shutdown rule (see flow 9) rather than waiting on the slow
-          // periodic tick, so the emulator process actually stops.
+          // why: a released emulator is deleted, never wiped and kept: its state, its AVD folder and its avdmanager entry all go.
           await waitFor(
             async () => {
-              await env.cli(["cleanup"]);
               const rows = (await env.cli(["list", "--devices"])).json as {
                 driverDeviceId: string;
                 state: string;
               }[];
-              return rows.some((row) => row.driverDeviceId === avdName && row.state === "shutdown");
+              return rows.some((row) => row.driverDeviceId === avdName && row.state === "deleted");
             },
-            { timeout: 60_000, interval: 500, label: "device demoted to shutdown" },
+            { timeout: 120_000, interval: 500, label: "device deleted after release" },
           );
+          expect(
+            existsSync(join(env.home, "devices", "android", `${avdName}.avd`)),
+            "the released emulator's AVD folder is gone",
+          ).toBe(false);
+          expect((await avdManagerList()).includes(avdName)).toBe(false);
 
-          // With the emulator process stopped, the on-device erasable mark is
-          // unreachable -- `doctor` must not crash on that, must not report it as an
-          // erase (unreadable is not the same as absent), and `list` must render fine.
+          // why: `doctor` must not crash on a deleted device nor report it as drift.
           const doctorReport = await env.cli(["doctor"]);
           expect(doctorReport.code).toBe(0);
           const findings = (
@@ -251,12 +252,9 @@ describe.skipIf(!hasAndroidSdk)(
           }[];
           const registryId = devices.find((device) => device.driverDeviceId === avdName)?.id;
           expect(
-            findings.some(
-              (finding) =>
-                finding.kind === "foreign-provenance-change" && finding.deviceId === registryId,
-            ),
-            "a stopped emulator's unreadable mark must not be reported as a foreign-provenance-change",
-          ).toBe(false);
+            findings.filter((finding) => finding.deviceId === registryId),
+            "a deleted emulator must produce no finding",
+          ).toEqual([]);
 
           const list = await env.cli(["list", "--devices"]);
           expect(list.code).toBe(0);

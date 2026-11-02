@@ -106,10 +106,12 @@ export async function waitForFree(env: SharedTestEnv): Promise<void> {
         listLeases(env),
         listRequests(env),
       ]);
-      observed = `devices ${devices.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
+      // why: a released device is deleted and its record stays listed as `deleted`; the pool's new device is the one that has to be ready.
+      const live = devices.filter((device) => device.state !== "deleted");
+      observed = `devices ${live.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
       return (
-        devices.length > 0 &&
-        devices.every((device) => device.state === "ready") &&
+        live.length > 0 &&
+        live.every((device) => device.state === "ready") &&
         leases.length === 0 &&
         requests.length === 0
       );
@@ -165,7 +167,8 @@ export async function warmUp(daemon: SharedTestEnv, target: Target, count: numbe
   let observed = "nothing read yet";
   await waitFor(
     async () => {
-      const devices = await listDevices(daemon);
+      // why: the warm-up leases' devices are deleted at their release; the pool learned the kind and makes `count` new ones.
+      const devices = (await listDevices(daemon)).filter((device) => device.state !== "deleted");
       observed = devices.map((device) => device.state).join(",") || "none";
       return devices.length >= count && devices.every((device) => device.state === "ready");
     },

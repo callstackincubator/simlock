@@ -91,7 +91,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release keeps it warm, and nuke empties the set",
+      "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release deletes it from the set, and nuke empties the set",
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -195,20 +195,18 @@ describe.skipIf(process.platform !== "darwin")(
         const release = await env.cli(["release", grant.lease.id]);
         expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
-        // why: still Booted: idle shutdown skips a device the learned warm pool
-        // targets, and idle.shutdownAfterMs defaults far longer than this test.
+        // why: a released simulator is deleted, never wiped and kept; the pool may boot another of the kind, never this one.
         await waitFor(
           async () => {
             const rows = (await env.cli(["list", "--devices"])).json as {
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
+            return rows.some((row) => row.driverDeviceId === udid && row.state === "deleted");
           },
-          { timeout: 60_000, label: "device returns to ready after release" },
+          { timeout: 60_000, label: "device is deleted after release" },
         );
-        const stillBooted = await setDevices(deviceSet);
-        expect(stillBooted.find((device) => device.udid === udid)?.state).toBe("Booted");
+        expect((await setDevices(deviceSet)).some((device) => device.udid === udid)).toBe(false);
 
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
         expect(nuke.code).toBe(0);
@@ -221,7 +219,7 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it(
-      "a platform-only lease grants the first listed phone model and accepts an immediate install, including after erase and reuse",
+      "a platform-only lease grants the first listed phone model and accepts an immediate install, including on the new simulator after a release",
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -253,9 +251,9 @@ describe.skipIf(process.platform !== "darwin")(
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
+            return rows.some((row) => row.driverDeviceId === udid && row.state === "deleted");
           },
-          { timeout: 60_000, label: "device returns to ready after release" },
+          { timeout: 60_000, label: "device is deleted after release" },
         );
 
         const second = await env.cli(request, { timeout: 120_000 });
@@ -267,13 +265,15 @@ describe.skipIf(process.platform !== "darwin")(
           secondGrant.device.driverDeviceId,
           IOS.app,
         ]);
-        expect(secondInstall.code, `install after erase failed: ${secondInstall.stderr}`).toBe(0);
+        expect(
+          secondInstall.code,
+          `install on the new simulator failed: ${secondInstall.stderr}`,
+        ).toBe(0);
         expect(
           secondGrant.device.driverDeviceId,
-          "the same request must reuse the idle device",
-        ).toBe(udid);
-        // Reused, not recreated: Simlock's set holds one simulator, still the one that booted first.
-        expect(await setDevices(deviceSet)).toHaveLength(1);
+          "a released simulator is never granted again",
+        ).not.toBe(udid);
+        expect((await setDevices(deviceSet)).some((device) => device.udid === udid)).toBe(false);
 
         await env.cli(["release", secondGrant.lease.id]);
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
