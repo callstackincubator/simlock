@@ -28,6 +28,8 @@ import {
 } from "./test-support.js";
 import { MAX_CONSECUTIVE_REFRESH_TIMEOUTS, WORKER_CALL_TIMEOUT_MS } from "./worker-link.js";
 
+// why: the documented bound (src/gateway/AGENTS.md); a payload nested this deep is refused.
+const MAX_RELAYED_PAYLOAD_DEPTH = 64;
 const RETENTION_MS = 24 * 60 * 60_000;
 const previousProtocol = {
   min: PROTOCOL_VERSION_RANGE.min - 1,
@@ -581,7 +583,7 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("a relayed event stamped at or before the gateway's clock differs from the worker's only in seq and payload.workerId", async () => {
+  it("a relayed event differs from the worker's only in seq and payload.workerId", async () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
@@ -608,59 +610,44 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("a relayed event stamped after the gateway's clock is republished stamped at the gateway's clock, with the worker's own id", async () => {
-    const harness = fleet();
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+  it.each([
+    { levels: MAX_RELAYED_PAYLOAD_DEPTH - 1, relayed: true },
+    { levels: MAX_RELAYED_PAYLOAD_DEPTH, relayed: false },
+    { levels: 6_189, relayed: false },
+    { levels: 20_000, relayed: false },
+  ])(
+    "a relayed event whose payload nests $levels levels is relayed: $relayed, and a refused one logs one error while the next event arrives",
+    async ({ levels, relayed }) => {
+      const logger = new RecordingLogger();
+      const harness = fleet({ logger });
+      await harness.service.start();
+      const worker = new ScriptedWorkerClient();
+      await harness.join("wrk_1", worker);
+      await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+      const nested = JSON.parse("[".repeat(levels) + "]".repeat(levels)) as unknown;
 
-    worker.pushEvent({
-      event: "queue.changed",
-      id: "evt_ahead",
-      module: "wait-queue",
-      payload: { depth: 3 },
-      seq: 5,
-      timestamp: harness.clock.now() + 365 * 24 * 3_600_000,
-    });
+      worker.pushEvent({
+        event: "queue.changed",
+        id: "evt_nested",
+        module: "wait-queue",
+        payload: { depth: 1, nested },
+      });
+      worker.pushEvent({
+        event: "queue.changed",
+        id: "evt_after",
+        module: "wait-queue",
+        payload: { depth: 2 },
+      });
 
-    expect(harness.events.filter((event) => event.event === "queue.changed")).toMatchObject([
-      { id: "evt_ahead", timestamp: harness.clock.now() },
-    ]);
+      const ids = harness.events
+        .filter((event) => event.event === "queue.changed")
+        .map((event) => event.id);
+      expect(ids).toEqual(relayed ? ["evt_nested", "evt_after"] : ["evt_after"]);
+      expect(logger.errors).toHaveLength(relayed ? 0 : 1);
 
-    await harness.service.stop();
-  });
-
-  it("a relayed event that cannot be serialized is dropped with one logged error, and the next relayed event still arrives", async () => {
-    const logger = new RecordingLogger();
-    const harness = fleet({ logger });
-    await harness.service.start();
-    const worker = new ScriptedWorkerClient();
-    await harness.join("wrk_1", worker);
-    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
-    const depth = 20_000;
-    const nested = JSON.parse("[".repeat(depth) + "]".repeat(depth)) as unknown;
-
-    worker.pushEvent({
-      event: "queue.changed",
-      id: "evt_nested",
-      module: "wait-queue",
-      payload: { depth: 1, nested },
-    });
-    worker.pushEvent({
-      event: "queue.changed",
-      id: "evt_after",
-      module: "wait-queue",
-      payload: { depth: 2 },
-    });
-
-    expect(harness.events.filter((event) => event.event === "queue.changed")).toMatchObject([
-      { id: "evt_after" },
-    ]);
-    expect(logger.errors).toHaveLength(1);
-
-    await harness.service.stop();
-  });
+      await harness.service.stop();
+    },
+  );
 
   it("republishes a worker's queue.changed with its workerId and emits no queue.changed of its own", async () => {
     const harness = fleet();

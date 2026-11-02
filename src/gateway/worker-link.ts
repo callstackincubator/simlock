@@ -535,10 +535,10 @@ export class WorkerLink {
    * `request.granted` straight into the operator's audit trail. Any other name is forwarded
    * unchanged: a newer worker's vocabulary is a fact its consumers need, and a gateway that
    * dropped it would lose it from `events.replay`. The name, module and `id` travel as they
-   * arrived, and so does the `timestamp` unless it is ahead of this gateway's clock, which it is
-   * set to -- the fact happened on that machine at that time, and rewriting the rest would make the
-   * audit trail lie about where it happened; `workerId` is what says which machine. An event that
-   * cannot be serialized is dropped with one logged error.
+   * arrived -- the fact happened on that machine at that time, and rewriting either would
+   * make the audit trail lie about where it happened; `workerId` is what says which machine. An
+   * event whose payload nests deeper than `MAX_RELAYED_PAYLOAD_DEPTH`, or cannot be serialized,
+   * is dropped with one logged error.
    */
   #onWorkerEvent(envelope: {
     readonly id: string;
@@ -563,19 +563,20 @@ export class WorkerLink {
     // is what `events.replay` returns, and a consumer that knows the name gets it either way.
     // ADR 0014 §2: the worker's `id` and `timestamp` travel with the fact (the wire layer bounded
     // both); only `seq` is this bus's own.
-    // why: a worker stamps its own events, so one stamped after this gateway's clock is set to it -- the stored stamp every consumer reads (history, usage, a rebuild) is then the live one, and the shared `*` usage key cannot be dragged forward.
     const stamped = {
       event: envelope.event as EventName,
       id: envelope.id,
       module: envelope.module,
       payload: payload as never,
-      timestamp: Math.min(envelope.timestamp, this.options.clock.now()),
+      timestamp: envelope.timestamp,
     };
-    // why: one event nobody can serialize (a payload nested too deep) would throw in the IPC push, `events.replay` and the history on every use while it stays in the ring, so it never enters the bus.
+    // why: one event nobody can serialize (a payload nested too deep) would throw in the IPC push, `events.replay` and the history on every use while it stays in the ring, so it never enters the bus; the depth is measured without recursion because a stack-dependent check lets a payload just under the limit through.
     try {
+      if (exceedsDepth(payload, MAX_RELAYED_PAYLOAD_DEPTH))
+        throw new Error("payload nests too deep");
       JSON.stringify(stamped);
     } catch (error: unknown) {
-      this.#logger.error("Worker sent an event that cannot be serialized; dropping it", {
+      this.#logger.error("Worker sent an event that cannot be relayed; dropping it", {
         workerId: this.workerId,
         event: envelope.event,
         eventId: envelope.id,
@@ -669,4 +670,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** why: real event payloads nest a handful of levels; far below any stack limit, far above real use. */
+const MAX_RELAYED_PAYLOAD_DEPTH = 64;
+
+/** why: iterative on purpose -- the answer must not depend on the stack. */
+function exceedsDepth(value: unknown, limit: number): boolean {
+  const pending: Array<[unknown, number]> = [[value, 0]];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [node, depth] = next;
+    if (typeof node !== "object" || node === null) continue;
+    if (depth >= limit) return true;
+    for (const child of Object.values(node)) pending.push([child, depth + 1]);
+  }
+  return false;
 }

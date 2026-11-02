@@ -198,9 +198,8 @@ worker to lose.
 else, so one fact has one `id` in the worker's history, the gateway's, both
 rings and both streams, and the two can be joined by it.
 `payload.workerId` is the only mark of a relay; nothing is added to the
-envelope. A relayed line's time is when the fact happened on the worker (one ahead of
-the gateway's clock is set to it, and an event that does not serialize is
-dropped, both in the worker link), so a worker's clock skew shows in the gateway's order, and `--since` on the gateway
+envelope. A relayed line's time is when the fact happened on the worker, so a
+worker's clock skew shows in the gateway's order, and `--since` on the gateway
 filters by that time. `simlock events`, `events.replay`, `GET /v1/events` and
 the console's buffer present a replay by `timestamp`, then `seq`;
 `simlock events --follow` prints live pushes, and the pushes buffered during its

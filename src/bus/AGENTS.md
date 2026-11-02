@@ -18,8 +18,8 @@ Catalog: [internal EVENTS.md](../../docs/internal/EVENTS.md) (rationale),
 1. **Emit** — `emit(event, payload, module)` stamps `id` (`evt_<id>`), `timestamp`
    (`Clock`) and the next `seq`, appends to the ring, then calls per-event subscribers and
    all-event subscribers, synchronously.
-2. **Republish** — `republish(envelope)` keeps a relayed fact's `id` and `timestamp` as given; only
-   `seq` is new (the caller bounds the timestamp and refuses an event that does not serialize). One caller: the gateway's `WorkerLink`.
+2. **Republish** — `republish(envelope)` keeps a relayed fact's `id` and `timestamp`; only
+   `seq` is new. One caller: the gateway's `WorkerLink`.
 3. **Isolate** — a throwing subscriber is logged (`EventBusLogger`; the daemon passes
    `logger.child("bus")`) and skipped. The emitter never sees it.
 4. **Replay** — `replay({ sinceSeq, sinceTs })` from the ring, sorted by `byTimeThenSeq`.

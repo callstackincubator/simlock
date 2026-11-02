@@ -50,7 +50,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
 5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure`,
    `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus `catalog.get` and `config.get` on the tick, after `component.installed`, or with no catalog yet. One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
-6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*` and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped. A relayed timestamp ahead of the gateway's clock is set to the clock; an event that cannot be serialized is dropped with one `error`.
+6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*` and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped. An event whose payload nests deeper than 64 levels (`MAX_RELAYED_PAYLOAD_DEPTH`) or cannot be serialized is dropped with one `error`.
 
 **Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's `assess` and nine stages are in [routing](routing/AGENTS.md)):
 
@@ -131,7 +131,7 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 
 ## Security model
 
-- A worker must not be able to crash, stall or corrupt its gateway: every worker reply is parsed with its contract schema and a bad one fails that call, a relayed event that cannot be serialized is dropped at `WorkerLink` before it reaches the bus, and a relayed timestamp ahead of the gateway's clock is set to the clock there (`worker-link.ts` `#onWorkerEvent`).
+- A worker must not be able to crash, stall or corrupt its gateway: every worker reply is parsed with its contract schema and a bad one fails that call, a relayed event nested deeper than 64 levels or otherwise unserializable is dropped at `WorkerLink` before it reaches the bus (`worker-link.ts` `#onWorkerEvent`).
 
 ## Known gaps
 
@@ -147,6 +147,7 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`;
   the request waits elsewhere. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
+- **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`, so the usage projection's shared fleet clock can move forward; amending the ADR is the maintainer's call.
 - **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a
   mode-less request; a `--mode slim` request there is no hit on a ready full device.
