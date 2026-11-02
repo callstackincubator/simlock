@@ -6,7 +6,8 @@
 - **Narrows:** [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md)
   §1, "No new lock is needed". [ADR 0001](0001-simlock-owned-device-roots.md)'s
   Consequences line "Two Simlock instances on one machine now need distinct
-  `adbServerPort` values" now holds only for workers with substituted drivers.
+  `adbServerPort` values" now applies only to workers of different OS users
+  (and to tests that set `adbServerPort`).
 - **Depends on:** ADR 0034 (one worker per user, `SIMLOCK_HOME` for tests only),
   ADR 0001 (owned roots, Simlock's adb server, the startup sweep).
 
@@ -65,15 +66,16 @@ flowchart TD
   M -- made --> W["write owner.json, go on to driver discovery"]
   M -- exists --> R{"owner.json's pid alive?"}
   R -- no, or unreadable --> T["take it over: replace owner.json"] --> W
-  R -- "yes, same folder" --> C["go on: the socket claim answers 'already running', as today"]
+  R -- "yes, same folder" --> C["go on; the winner of the socket claim rewrites owner.json with its pid"]
   R -- "yes, other folder" --> X["start fails, naming pid, folder and start time"]
 ```
 
 - **Held by a live pid with another folder:** the start fails before driver
   discovery. The daemon logs `Daemon failed to start` with the message, and the
   CLI prints `The daemon could not start: <message>` as for every start failure.
-- **Held by a live pid with the same folder:** the lock does not decide. The
-  socket claim already answers a second daemon on one folder.
+- **Held by a live pid with the same folder:** the lock does not decide; the
+  worker goes on. The socket claim already answers a second daemon on one
+  folder, and the worker that wins it rewrites `owner.json` with its own pid.
 - **Holder's pid gone:** the lock is stale and is taken over. Emulators the old
   holder left running stay running; the new holder's sweep may attach them, as
   happens today after a restart.
@@ -83,7 +85,9 @@ flowchart TD
 A stop removes the lock after the drivers are disposed (their adb server
 reaped), so no other worker sweeps while this one still acts on devices, and
 only when `owner.json` is still the one this daemon wrote. A start that fails
-after taking the lock removes it the same way. A crash leaves it
+after taking the lock removes it only when `owner.json` is still the one this
+start wrote, so the losing start of a same-folder race leaves the winner's
+lock. A crash leaves it
 stale, and the next start takes it over (§2).
 
 ### 4. The slow lane refuses to run while a worker holds the machine

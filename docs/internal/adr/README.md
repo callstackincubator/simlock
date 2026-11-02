@@ -39,7 +39,7 @@ the status is stale.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`); §1, §2, §3, §5, §6 and §7 narrowed by 0048 for iOS under `deviceSet: "default"` |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`); §1, §2, §3, §5, §6 and §7 narrowed by 0048 for iOS under `deviceSet: "default"`; Consequences' two-instance line narrowed by 0059 |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
