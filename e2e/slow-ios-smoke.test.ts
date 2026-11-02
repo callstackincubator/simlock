@@ -224,7 +224,11 @@ describe.skipIf(process.platform !== "darwin")(
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
-        const env = await withDaemon({ driver: "real" });
+        const env = await withDaemon({
+          driver: "real",
+          // why: the pool would refill the released kind, so the device set would hold more than the copy.
+          configOverrides: { warmPool: { enabled: false } },
+        });
         const deviceSet = iosDeviceSet(env.home);
         const phone = await iosPhoneDefault(env);
         expect(phone, "the catalog lists no default phone for iOS").toBeDefined();

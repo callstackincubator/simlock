@@ -847,7 +847,7 @@ describe("IosSimctlDriver", () => {
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
       { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
-    const filesystem = new MemoryFilesystem();
+    const filesystem = new ModeRecordingFilesystem();
     const driver = await createDriver(runner, new FakeClock(), filesystem, database);
     await plantManagedDevice(filesystem);
     await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
@@ -862,8 +862,8 @@ describe("IosSimctlDriver", () => {
       "the seed's row is making, with no simulator yet, when create runs",
     ).toEqual([{ state: "making", udid: null }]);
     expect(
-      (await filesystem.stat(`${deviceRoot}/sources`)).mode,
-      "under deviceSet simlock the sources set is private to the user",
+      filesystem.mkdirpModes.get(`${deviceRoot}/sources`),
+      "under deviceSet simlock the sources set is asked for private to the user",
     ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
@@ -4755,6 +4755,19 @@ class RecordingLogger implements Logger {
   error(): void {}
   child(): Logger {
     return this;
+  }
+}
+
+/** why: Records the mode each `mkdirp` was asked for, because `MemoryFilesystem` creates every directory owner-only by default and so cannot show a caller that left the mode out. */
+class ModeRecordingFilesystem extends MemoryFilesystem {
+  readonly mkdirpModes = new Map<string, number | undefined>();
+
+  override async mkdirp(
+    path: string,
+    options?: Parameters<MemoryFilesystem["mkdirp"]>[1],
+  ): Promise<void> {
+    this.mkdirpModes.set(path, options?.mode);
+    await super.mkdirp(path, options);
   }
 }
 
