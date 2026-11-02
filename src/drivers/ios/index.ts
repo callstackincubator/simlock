@@ -780,7 +780,10 @@ export class IosSimctlDriver implements Driver {
 
   async #seedFor(resolved: ResolvedIosSpec): Promise<ReadySeed> {
     const specKey = seedSpecKey(resolved);
-    return this.#sources.findReadySeed(specKey) ?? (await this.#makeSeed(resolved, specKey));
+    const seed = this.#sources.findReadySeed(specKey);
+    if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
+    if (seed !== undefined) await this.#destroySeed(seed);
+    return this.#makeSeed(resolved, specKey);
   }
 
   async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
@@ -826,11 +829,16 @@ export class IosSimctlDriver implements Driver {
         throw error;
       }
       this.#sources.markReady(sourceId, await this.#sizeOf(udid));
-      return { sourceId, udid };
+      return { sourceId, udid, runtimeBuild: resolved.runtime.build };
     } catch (error: unknown) {
       this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  async #destroySeed(seed: ReadySeed): Promise<void> {
+    await this.#deleteSeedSimulator(seed.udid);
+    this.#sources.deleteRow(seed.sourceId);
   }
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
@@ -2320,6 +2328,12 @@ function alreadyShutdown(stderr: string): boolean {
 
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
+}
+
+/** why: a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
+function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
+  const current = resolved.runtime.build;
+  return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
 }
 
 function seedSpecKey(resolved: ResolvedIosSpec): string {

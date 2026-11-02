@@ -43,6 +43,7 @@ export interface NewSourceRow {
 export interface ReadySeed {
   readonly sourceId: string;
   readonly udid: string;
+  readonly runtimeBuild: string | undefined;
 }
 
 /** why: the one place that reads or writes `ios_source_data`; nothing outside the iOS driver does (ADR 0036 §2). */
@@ -94,10 +95,14 @@ export class IosSourceTable {
   findReadySeed(specKey: string): ReadySeed | undefined {
     const row = this.#database
       .prepare(
-        "SELECT source_id, udid FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
+        "SELECT source_id, udid, runtime_build FROM ios_source_data WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?",
       )
       .get(specKey);
     if (row === undefined) return undefined;
-    return { sourceId: row["source_id"] as string, udid: row["udid"] as string };
+    return {
+      sourceId: row["source_id"] as string,
+      udid: row["udid"] as string,
+      runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,
+    };
   }
 }
