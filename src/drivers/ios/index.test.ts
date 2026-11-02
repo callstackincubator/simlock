@@ -1945,66 +1945,104 @@ describe("IosSimctlDriver", () => {
       expect(supportsPersistentSlim(undefined)).toBe(false);
     });
 
-    it("writes the launchd overrides before the one boot and grants slim after the readback", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      let fileAtBoot: string | undefined;
-      const calls = slimBootCalls(slim18_5.udid, wantedReadback());
-      const runner = new ScriptedProcessRunner([
-        {
-          ...calls[0]!,
-          onSpawn: async () => {
-            const path = overridesPath(slim18_5.udid);
-            fileAtBoot = (await filesystem.exists(path))
-              ? await filesystem.readFile(path)
-              : undefined;
-          },
+    it.each([
+      { name: "no file yet", existing: undefined, expected: wantedOverrides(), rewritten: true },
+      {
+        name: "a file with the runtime's own entries, which are kept",
+        existing: { "com.apple.runtime.own": true, "com.example.other": false },
+        expected: {
+          ...wantedOverrides(),
+          "com.apple.runtime.own": true,
+          "com.example.other": false,
         },
-        ...calls.slice(1),
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
+        rewritten: true,
+      },
+      {
+        name: "a file already as wanted, which is not rewritten",
+        existing: wantedOverrides(),
+        expected: wantedOverrides(),
+        rewritten: false,
+      },
+      {
+        name: "a file slimmed under wider categories, whose dropped labels are now off the list",
+        existing: Object.fromEntries(
+          Object.entries(wantedOverrides()).map(([label]) => [
+            label,
+            !neverDisabled.includes(label),
+          ]),
+        ),
+        expected: wantedOverrides(),
+        rewritten: true,
+      },
+    ])(
+      "writes the launchd overrides before the one boot and grants slim after the readback: $name",
+      async ({ existing, expected, rewritten }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        if (existing !== undefined) {
+          await filesystem.mkdirp(overridesFolder(slim18_5.udid));
+          await filesystem.writeFileAtomic(overridesPath(slim18_5.udid), overridesPlist(existing));
+        }
+        filesystem.writes.length = 0;
+        let fileAtBoot: string | undefined;
+        const calls = slimBootCalls(slim18_5.udid, wantedReadback());
+        const runner = new ScriptedProcessRunner([
+          {
+            ...calls[0]!,
+            onSpawn: async () => {
+              const path = overridesPath(slim18_5.udid);
+              fileAtBoot = (await filesystem.exists(path))
+                ? await filesystem.readFile(path)
+                : undefined;
+            },
+          },
+          ...calls.slice(1),
+        ]);
+        const onSlimmed = vi.fn();
+        const onSlimSkipped = vi.fn();
+        const driver = await createSlimDriver(
+          runner,
+          filesystem,
+          slimOptions(),
+          onSlimmed,
+          onSlimSkipped,
+        );
 
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
+        const result = await driver.makeReady(
+          { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
+          prepareSlim,
+        );
 
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "slim",
-      });
-      expect(fileAtBoot).toBeDefined();
-      expect(parseOverrides(fileAtBoot ?? "")).toEqual(wantedOverrides());
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
-      ]);
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
-      expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-      expect(onSlimmed).toHaveBeenCalledWith({
-        address: slim18_5.udid,
-        categories: ["widgets"],
-        deviceId: slim18_5.udid,
-        durationMs: expect.any(Number),
-        labelCount: widgetsLabels.length,
-        signature: widgetsSignature,
-        unknownLabels: [],
-      });
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
+        expect(result).toEqual({
+          address: slim18_5.udid,
+          deviceId: slim18_5.udid,
+          driverData: slim18_5,
+          mode: "slim",
+        });
+        expect(fileAtBoot).toBeDefined();
+        expect(parseOverrides(fileAtBoot ?? "")).toEqual(expected);
+        expect(filesystem.writes).toEqual(rewritten ? [overridesPath(slim18_5.udid)] : []);
+        expect(runner.calls.map((call) => call.args)).toEqual([
+          simctlArgs("boot", slim18_5.udid),
+          simctlArgs("bootstatus", slim18_5.udid, "-b"),
+          simctlArgs("listapps", slim18_5.udid),
+          simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
+        ]);
+        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
+        expect(onSlimmed).toHaveBeenCalledTimes(1);
+        expect(onSlimmed).toHaveBeenCalledWith({
+          address: slim18_5.udid,
+          categories: ["widgets"],
+          deviceId: slim18_5.udid,
+          durationMs: expect.any(Number),
+          labelCount: widgetsLabels.length,
+          signature: widgetsSignature,
+          unknownLabels: [],
+        });
+        expect(onSlimSkipped).not.toHaveBeenCalled();
+      },
+    );
 
     it("ignores a full flag an older daemon stamped into driver data: the spec mode decides", async () => {
       const filesystem = new MemoryFilesystem();
@@ -3847,8 +3885,50 @@ async function createSlimDriver(
 
 const overridesRoot = "/private/var/tmp";
 
+function overridesFolder(udid: string): string {
+  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}`;
+}
+
 function overridesPath(udid: string): string {
-  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}/disabled.plist`;
+  return `${overridesFolder(udid)}/disabled.plist`;
+}
+
+function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
+  const lines = Object.entries(entries).map(
+    ([label, off]) => `<key>${label}</key><${String(off)}/>`,
+  );
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${lines.join("")}</dict></plist>\n`;
+}
+
+/** why: Records what is written and fails the one operation a test names, as a full or unwritable store would. */
+class FaultyFilesystem extends MemoryFilesystem {
+  readonly writes: string[] = [];
+  failing: "writeFileAtomic" | "mkdirp" | "rm" | undefined;
+  failureMessage = "disk full";
+
+  override async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: Parameters<MemoryFilesystem["writeFileAtomic"]>[2],
+  ): Promise<void> {
+    if (this.failing === "writeFileAtomic" && path.endsWith("disabled.plist")) {
+      throw new Error(this.failureMessage);
+    }
+    await super.writeFileAtomic(path, contents, options);
+    this.writes.push(path);
+  }
+
+  override async mkdirp(path: string, options?: Parameters<MemoryFilesystem["mkdirp"]>[1]) {
+    if (this.failing === "mkdirp" && path.includes("CoreSimulator.SimDevice")) {
+      throw new Error(this.failureMessage);
+    }
+    await super.mkdirp(path, options);
+  }
+
+  override async rm(path: string): Promise<void> {
+    if (this.failing === "rm") throw new Error(this.failureMessage);
+    await super.rm(path);
+  }
 }
 
 // why: spelled out here, not imported: the labels simslim v0.13.0 never disables (ADR 0060 §1).
