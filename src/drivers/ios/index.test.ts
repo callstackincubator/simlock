@@ -3691,6 +3691,75 @@ describe("IosSimctlDriver listComponents()", () => {
       expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
     });
 
+    it("deletes the seeds made from the removed runtime before the runtime, logs one it cannot delete and goes on, and keeps the seeds of another runtime", async () => {
+      const [goneSeed, stuckSeed, keptSeed] = [1, 2, 3].map(
+        (n) => `00000000-0000-0000-0000-0000000002${String(n)}0`,
+      ) as [string, string, string];
+      const database = await memorySourceDatabase();
+      const removed = {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: target.runtime,
+      };
+      plantSource(database, { ...removed, udid: goneSeed });
+      plantSource(database, {
+        ...removed,
+        deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPad",
+        udid: stuckSeed,
+      });
+      plantSource(database, {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: other.runtime,
+        udid: keptSeed,
+      });
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target, other]),
+        defaultSetListed({}),
+        { match: sourcesSimctl("shutdown", goneSeed) },
+        { match: sourcesSimctl("delete", goneSeed) },
+        { match: sourcesSimctl("shutdown", stuckSeed) },
+        {
+          match: sourcesSimctl("delete", stuckSeed),
+          result: { code: 1, stderr: "busy", stdout: "" },
+        },
+        deleted,
+        imagesListed([other]),
+        imagesListed([other]),
+        defaultSetListed({}),
+      ]);
+      const logger = new RecordingLogger();
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        await assetStore([]),
+        database,
+        logger,
+      );
+
+      await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(runner.calls.map((call) => [call.args[3], call.args[4]])).toEqual(
+        expect.arrayContaining([
+          ["shutdown", goneSeed],
+          ["delete", goneSeed],
+          ["delete", stuckSeed],
+          ["runtime", "delete"],
+        ]),
+      );
+      expect(runner.calls.some((call) => call.args.includes(keptSeed))).toBe(false);
+      expect(runner.calls.findIndex((call) => call.args[3] === "runtime")).toBeGreaterThan(
+        runner.calls.findIndex((call) => call.args[4] === stuckSeed),
+      );
+      expect(logger.warnings).toEqual([
+        expect.stringContaining(
+          `could not remove seed ${stuckSeed} of removed runtime ${target.runtime}:`,
+        ),
+      ]);
+      expect(database.prepare("SELECT udid FROM ios_source_data ORDER BY udid").all()).toEqual([
+        { udid: stuckSeed },
+        { udid: keptSeed },
+      ]);
+    });
+
     it("reports residue naming Xcode's Settings -> Platforms when the build's download is still in the asset store", async () => {
       const runner = new ScriptedProcessRunner([
         imagesListed([target]),
