@@ -96,8 +96,13 @@ left unchanged and counts as a failed write.
 | any        | any label not as wanted              | `full`      | slim skipped + reason |
 | any        | failed or timed out                  | `slim`      | slim skipped + reason |
 
-`device.slimmed` fires only on row 1: the write succeeded and the readback
-shows every managed label as wanted. Rows 2 to 4 log slim skipped with the
+An "ok" write includes a write skipped because the file already holds what
+is wanted: the boot and readback still run, and a matching readback grants
+`slim` and fires `device.slimmed`, as today's reclaimed device fires one on
+every `prepare`.
+
+`device.slimmed` fires only on row 1: the write succeeded (or was skipped
+as unchanged) and the readback shows every managed label as wanted. Rows 2 to 4 log slim skipped with the
 reason and emit no event. It fires after that readback, not after a reboot
 and installer probe as in ADR 0002 §9, and its fields do not change:
 `labelCount` is the number of labels written `true`; `unknownLabels` the
@@ -123,7 +128,8 @@ reason.
 What is slim is read from the file and the readback, so the driver no
 longer writes `slimSignature` or `slimMarkToken`. Their nullable columns in
 `ios_device_data` stay, unread, so no migration is needed. A write that
-would change nothing is skipped; the boot and readback still run.
+would change nothing is skipped and counts as an `ok` write (§2): the boot
+and readback still run, and `device.slimmed` fires on a matching readback.
 
 ### 4. Erase keeps the overrides; delete removes them
 
