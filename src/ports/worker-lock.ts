@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
@@ -144,9 +145,19 @@ export class NodeWorkerLock implements WorkerLock {
       release: async () => {
         if (!owns) return;
         owns = false;
-        // why: another worker may have taken a stale-looking lock over; only the content this worker wrote is its own to remove.
-        const current = await filesystem.readFile(ownerFile).catch(() => undefined);
-        if (current === written) await filesystem.rm(path);
+        // why: the lock is renamed away first, so the owner read and the removal see one lock: a winner that rewrites owner.json meanwhile makes a new one at the path, never loses its own.
+        const aside = `${path}.release-${process.pid}-${randomUUID()}`;
+        try {
+          await filesystem.rename(path, aside);
+        } catch {
+          return;
+        }
+        const current = await filesystem.readFile(join(aside, OWNER_FILE)).catch(() => undefined);
+        if (current !== written) {
+          // why: another worker took a stale-looking lock over; it is put back unless a lock has been made at the path since.
+          await filesystem.rename(aside, path).catch(() => undefined);
+        }
+        await filesystem.rm(aside);
       },
     };
   }

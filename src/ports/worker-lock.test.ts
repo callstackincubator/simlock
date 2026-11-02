@@ -130,4 +130,33 @@ describe("NodeWorkerLock", () => {
       "another Simlock worker runs for this user (pid 7, folder /elsewhere, since t0)",
     );
   });
+
+  it("a start that lost the claim never removes the lock a winner makes its own while the loser releases", async () => {
+    const { path } = await lockInTemporaryFolder();
+    const winner: WorkerLockOwner = { ...ME, pid: 200, startedAt: "2026-11-02T09:00:01.000Z" };
+    const winnerHandle = await adapter(path).take(winner);
+    const loserFilesystem = new NodeFilesystem();
+    const loserHandle = await new NodeWorkerLock({
+      filesystem: loserFilesystem,
+      path,
+      processSupervisor: new FakeProcessSupervisor([]),
+      uid: process.getuid?.(),
+    }).take(ME);
+    // why: the winner's claim cannot be scheduled between two of the loser's calls, so it runs right after the loser's first read of owner.json.
+    const readOnce = loserFilesystem.readFile.bind(loserFilesystem);
+    let claimed = false;
+    loserFilesystem.readFile = async (file: string) => {
+      const contents = await readOnce(file);
+      if (!claimed && file.endsWith("owner.json")) {
+        claimed = true;
+        await winnerHandle.claimed();
+      }
+      return contents;
+    };
+
+    await loserHandle.release();
+
+    expect(claimed).toBe(true);
+    expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(winner);
+  });
 });
