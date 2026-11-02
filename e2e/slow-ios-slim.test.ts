@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import { SLIM_CATEGORIES, labelsFor } from "../src/drivers/ios/index.js";
-import { withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import {
   iosDeviceSet,
@@ -246,6 +246,17 @@ describe.skipIf(process.platform !== "darwin")(
         const first = await leaseDetached(env, model, os, "slim-first");
         await expectSlim(env, first.mode, "a default-slim lease must be slim");
         await env.cli(["release", first.lease]);
+        // why: a lease landing while the release is still cleaning provisions a second device.
+        await waitFor(
+          async () => {
+            const rows = (await env.cli(["list", "--devices"])).json as {
+              driverDeviceId: string;
+              state: string;
+            }[];
+            return rows.some((row) => row.driverDeviceId === first.udid && row.state === "ready");
+          },
+          { timeout: 60_000, label: "device returns to ready after release" },
+        );
 
         const second = await leaseDetached(env, model, os, "slim-second");
 
