@@ -120,6 +120,10 @@ export class IosSourceTable {
     };
   }
 
+  makingRowsNotMadeBy(maker: string): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'making' AND maker != ?", [maker]);
+  }
+
   readyRows(): readonly SourceRow[] {
     return this.#rows("WHERE state = 'ready' ORDER BY created_at, source_id", []);
   }

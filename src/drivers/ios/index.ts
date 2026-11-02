@@ -296,6 +296,7 @@ export class IosSimctlDriver implements Driver {
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
   #sourceMaker: string | undefined;
+  #swept = false;
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -730,6 +731,7 @@ export class IosSimctlDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
+    await this.#sweepLeftovers();
     const rows = this.#sources.readyRows();
     if (rows.length === 0) return [];
     const catalog = await this.#loadCatalog();
@@ -801,12 +803,11 @@ export class IosSimctlDriver implements Driver {
 
   async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
     const sourceId = this.#idGenerator.generate();
-    this.#sourceMaker ??= this.#idGenerator.generate();
     this.#sources.insertMaking({
       createdAt: this.#clock.now(),
       deviceTypeId: resolved.deviceType.identifier,
       kind: "seed",
-      maker: this.#sourceMaker,
+      maker: this.#maker(),
       model: resolved.spec.model,
       osVersion: resolved.spec.osVersion,
       runtimeBuild: resolved.runtime.build,
@@ -847,6 +848,31 @@ export class IosSimctlDriver implements Driver {
       this.#sources.deleteRow(sourceId);
       throw error;
     }
+  }
+
+  /**
+   * why: ADR 0061 §1: a `making` row another process left is a seed that process never finished, so
+   * its simulator (if `create` answered) and row go at the first source read of this process. A
+   * simulator no row names is left in place: `doctor` reports it.
+   */
+  async #sweepLeftovers(): Promise<void> {
+    if (this.#swept) return;
+    this.#swept = true;
+    for (const row of this.#sources.makingRowsNotMadeBy(this.#maker())) {
+      try {
+        if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+        this.#sources.deleteRow(row.sourceId);
+      } catch (error: unknown) {
+        this.#logger?.warn(
+          `could not remove leftover source ${row.udid ?? row.sourceId}: ${errorMessage(error)}`,
+        );
+      }
+    }
+  }
+
+  #maker(): string {
+    this.#sourceMaker ??= this.#idGenerator.generate();
+    return this.#sourceMaker;
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
