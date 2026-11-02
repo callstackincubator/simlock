@@ -147,7 +147,7 @@ const EXACT_OS_VERSION_BOUND =
 
 const leaseRequestBaseSchema = z
   .object({
-    model: z.string().min(1).optional(),
+    model: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
     // why: A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
