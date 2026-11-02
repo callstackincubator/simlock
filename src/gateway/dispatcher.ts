@@ -363,10 +363,13 @@ export class GatewayDispatcher {
         waiting: [],
       })),
       leases: this.#ownedFleetLeases(principal),
-      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester decides.
+      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester on that row's platform decides.
       waiting: (answer.waiting ?? []).filter(
         (request) =>
-          this.options.coordinator.pendingRequestOwner(request.requesterId) === principal,
+          this.options.coordinator.pendingRequestOwner(
+            request.requesterId,
+            request.spec.platform,
+          ) === principal,
       ),
     });
   };
