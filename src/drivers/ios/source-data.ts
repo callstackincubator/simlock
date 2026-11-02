@@ -40,6 +40,20 @@ export interface NewSourceRow {
   readonly createdAt: number;
 }
 
+export interface SourceRow {
+  readonly sourceId: string;
+  readonly kind: "seed" | "baseline";
+  readonly udid: string | undefined;
+  readonly deviceTypeId: string;
+  readonly runtimeId: string;
+  readonly runtimeBuild: string | undefined;
+  readonly model: string;
+  readonly osVersion: string;
+  readonly state: "making" | "ready";
+  readonly maker: string;
+  readonly sizeBytes: number | undefined;
+}
+
 export interface ReadySeed {
   readonly sourceId: string;
   readonly udid: string;
@@ -104,5 +118,31 @@ export class IosSourceTable {
       udid: row["udid"] as string,
       runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,
     };
+  }
+
+  readyRows(): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'ready' ORDER BY created_at, source_id", []);
+  }
+
+  #rows(where: string, parameters: readonly string[]): readonly SourceRow[] {
+    return this.#database
+      .prepare(
+        `SELECT source_id, kind, udid, device_type_id, runtime_id, runtime_build, model, os_version,
+           state, maker, size_bytes FROM ios_source_data ${where}`,
+      )
+      .all(...parameters)
+      .map((row) => ({
+        sourceId: row["source_id"] as string,
+        kind: row["kind"] as "seed" | "baseline",
+        udid: (row["udid"] as string | null) ?? undefined,
+        deviceTypeId: row["device_type_id"] as string,
+        runtimeId: row["runtime_id"] as string,
+        runtimeBuild: (row["runtime_build"] as string | null) ?? undefined,
+        model: row["model"] as string,
+        osVersion: row["os_version"] as string,
+        state: row["state"] as "making" | "ready",
+        maker: row["maker"] as string,
+        sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
+      }));
   }
 }

@@ -64,7 +64,7 @@ import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
-import { IosSourceTable, type ReadySeed } from "./source-data.js";
+import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
@@ -730,7 +730,20 @@ export class IosSimctlDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
-    return [];
+    const rows = this.#sources.readyRows();
+    if (rows.length === 0) return [];
+    const catalog = await this.#loadCatalog();
+    return rows.map((row) => {
+      const staleReason = sourceStaleReason(row, catalog);
+      return {
+        id: row.sourceId,
+        kind: row.kind,
+        model: row.model,
+        osVersion: row.osVersion,
+        ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+        ...(staleReason === undefined ? {} : { staleReason }),
+      };
+    });
   }
 
   async destroySource(_sourceId: string): Promise<void> {}
@@ -2334,6 +2347,23 @@ function alreadyBooted(stderr: string): boolean {
 function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
   const current = resolved.runtime.build;
   return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
+}
+
+/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
+function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+  const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
+  if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
+  if (
+    row.runtimeBuild !== undefined &&
+    runtime.build !== undefined &&
+    row.runtimeBuild !== runtime.build
+  ) {
+    return `runtime ${row.runtimeId} changed from build ${row.runtimeBuild} to ${runtime.build}`;
+  }
+  if (!catalog.deviceTypes.some((entry) => entry.identifier === row.deviceTypeId)) {
+    return `device type ${row.deviceTypeId} is not available`;
+  }
+  return undefined;
 }
 
 function seedSpecKey(resolved: ResolvedIosSpec): string {
