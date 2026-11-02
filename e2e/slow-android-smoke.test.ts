@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -260,6 +260,18 @@ describe.skipIf(!hasAndroidSdk)(
 
           const list = await env.cli(["list", "--devices"]);
           expect(list.code).toBe(0);
+
+          // why: ADR 0059: the worker with real drivers holds the machine's worker lock while it runs and frees it at its stop.
+          const lockFolder = join(`/tmp/simlock-${process.getuid?.() ?? 0}`, "worker.lock");
+          const owner = JSON.parse(await readFile(join(lockFolder, "owner.json"), "utf8")) as {
+            folder: string;
+            pid: number;
+          };
+          expect(owner.folder).toBe(env.dataDirectory);
+          expect(() => process.kill(owner.pid, 0)).not.toThrow();
+          const stopped = await env.cli(["daemon", "stop"]);
+          expect(stopped.code).toBe(0);
+          expect(existsSync(lockFolder), "daemon stop left the worker lock behind").toBe(false);
         } finally {
           await rm(planted, { force: true });
           if (createdRoot !== undefined) {

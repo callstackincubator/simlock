@@ -15,7 +15,7 @@
 # when it ends. Exits 75 without starting when another worktree's run holds the lock: real
 # simulators and emulators share one machine, and two lanes at once make timeouts that look
 # like bugs. Exits 69 without starting when the machine is not fit to run it: too little free
-# disk, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
+# disk, a Simlock worker outside the lane holding the machine's worker lock, or SIMLOCK_E2E_AGENT_DEVICE naming an agent-device of another version than package.json
 # pins for @agent-device/proxy, or a checkout never built. The lock is a directory holding the runner's pid; a lock whose pid is
 # gone is stale and is taken over.
 #
