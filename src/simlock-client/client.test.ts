@@ -4,6 +4,7 @@ import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
 import type { SimlockAdminClient } from "./client.js";
 import type { LeaseGrant } from "./types.js";
+import { MAX_WIRE_LINE_CHARS } from "./wire.js";
 import { completeHello, ScriptedConnection } from "./test-support.js";
 
 async function flushMicrotasks(times = 10): Promise<void> {
@@ -511,6 +512,48 @@ describe("connection death", () => {
 
     await expect(client.getStatus()).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
     expect(connection.sent.filter((f) => f.type === "status.get")).toHaveLength(1);
+  });
+});
+
+describe("wire framing", () => {
+  it("finds a reply split across many chunks scanning each byte a bounded number of times, and closes the connection when an unfinished line passes its cap", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const statusPromise = client.getStatus();
+    await flushMicrotasks();
+    const call = connection.lastSentOf("status.get")!;
+    const line = `${JSON.stringify({ id: call.id, ok: true, payload: { notStatus: "x".repeat(20_000) } })}\n`;
+    let scanned = 0;
+    const original = String.prototype.indexOf;
+    const spy = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      ...args: Parameters<typeof original>
+    ) {
+      scanned += this.length;
+      return original.apply(this, args);
+    });
+    try {
+      for (let at = 0; at < line.length; at += 16) connection.receiveRaw(line.slice(at, at + 16));
+    } finally {
+      spy.mockRestore();
+    }
+    // why: the payload fails the status schema, so BAD_FRAME proves the split line reached its call.
+    await expect(statusPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
+    expect(scanned).toBeLessThanOrEqual(3 * line.length);
+
+    const pending = client.getStatus();
+    await flushMicrotasks();
+    expect(connection.closed).toBe(false);
+    const chunk = "a".repeat(64 * 1024);
+    for (let sent = 0; sent <= MAX_WIRE_LINE_CHARS; sent += chunk.length) {
+      connection.receiveRaw(chunk);
+    }
+    await expect(pending).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
+    expect(connection.closed).toBe(true);
   });
 });
 

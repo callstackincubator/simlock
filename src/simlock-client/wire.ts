@@ -26,6 +26,8 @@ import type { ComponentInstallProgress, DeviceOutputChunk, LeaseProgress } from 
  * peer. */
 const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 
+export const MAX_WIRE_LINE_CHARS = 16 * 1024 * 1024;
+
 export interface HelloOptions {
   readonly principal?: string;
   readonly credential?: string;
