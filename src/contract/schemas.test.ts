@@ -710,6 +710,34 @@ describe("doctorReportSchema's module-unavailable finding", () => {
   });
 });
 
+describe("doctorReportSchema's sources", () => {
+  const source = { platform: "ios", kind: "seed", model: "iPhone 17", osVersion: "27.0" };
+  const parses = (candidate: unknown) =>
+    doctorReportSchema.safeParse({ findings: [], sources: [candidate] }).success;
+
+  it("parses a source with its optional fields, and refuses an unknown kind, a size that is negative or not whole, an over-long staleReason, model or osVersion, and an orphan that is not true", () => {
+    expect(
+      doctorReportSchema.parse({
+        findings: [],
+        sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+      }),
+    ).toStrictEqual({
+      findings: [],
+      sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+    });
+    expect(parses({ ...source, orphan: true })).toBe(true);
+    expect(parses({ ...source, kind: "copy" })).toBe(false);
+    expect(parses({ ...source, sizeBytes: -1 })).toBe(false);
+    expect(parses({ ...source, sizeBytes: 1.5 })).toBe(false);
+    expect(parses({ ...source, staleReason: "x".repeat(301) })).toBe(false);
+    expect(parses({ ...source, model: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, osVersion: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, imageTag: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, orphan: false })).toBe(false);
+    expect(doctorReportSchema.safeParse({ findings: [] }).success).toBe(false);
+  });
+});
+
 describe("a worker status's capabilities list", () => {
   const status = (capabilities: unknown) =>
     statusGet.output.safeParse({

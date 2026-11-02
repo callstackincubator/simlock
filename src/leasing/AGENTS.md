@@ -73,11 +73,10 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    with an `AbortSignal` bounded by `lease.endWaitMs`. Today: agent-device's
    `AgentDeviceLeaseEnd` and the stream's `createStreamLeaseEnd`. Reclaim waits for them.
 9. **Reclaim** (background, `reclaim` claim) — core's `ReclaimCoordinator`
-   wipes the device and commits the state the driver returns (iOS `shutdown`;
-   Android `ready`, or `shutdown` after a full clean, a changed config or a
-   failed snapshot load), deletes a spent
-   `fresh` device, or quarantines on failure. Then it kicks the queue and the
-   warm pool.
+   deletes a virtual device (shutdown, then destroy: it serves one lease,
+   whatever `lease.identity` says, ADR 0061 §2), or wipes a physical one and
+   commits the state the driver returns; it quarantines on failure. Then it
+   kicks the queue and the warm pool.
 
 Physical branch: plan picks the first ready, unclaimed, fitting enrolled
 device under a `grant` claim; presence is read outside the lock and checked

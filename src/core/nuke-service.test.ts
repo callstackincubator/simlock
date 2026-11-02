@@ -120,6 +120,23 @@ describe("NukeService", () => {
     expect((await driver.listSources()).map((source) => source.id)).toEqual(["base-1", "orphan-1"]);
   });
 
+  it("goes on deleting the other seeds and the other drivers' seeds when one seed will not delete or one driver's sources cannot be read", async () => {
+    const stuck = { id: "seed-stuck", kind: "seed", model: "iPhone", osVersion: "27.0" } as const;
+    const other = { ...stuck, id: "seed-other" };
+    const unreadable = new FakeDriver({ clock: new FakeClock(), platform: "android" });
+    const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
+    unreadable.failOn("listSources", 1, new Error("catalog unreadable"));
+    driver.setSources([stuck, other]);
+    driver.failOn("destroySource", 1, new Error("simctl delete failed"));
+    const harness = createHarness([], () => undefined, [unreadable, driver]);
+
+    await expect(harness.service.nuke(true)).resolves.toEqual({
+      releasedLeaseIds: ["lse_1", "lse_2"],
+    });
+
+    expect((await driver.listSources()).map((source) => source.id)).toEqual(["seed-stuck"]);
+  });
+
   it("fences acquisition before releasing killed leases and returns their ids", async () => {
     const harness = createHarness([]);
 
