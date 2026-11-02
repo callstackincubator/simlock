@@ -142,6 +142,14 @@ if command == "clean":
 elif command == "check":
     clean()
     problems = []
+    # why: a lane worker an aborted run left is already killed by clean(), so a live holder here is a worker outside the lane (ADR 0059 §4).
+    try:
+        owner = json.loads(read(os.path.join(worker_lock, "owner.json"), "{}"))
+        if alive(owner["pid"]):
+            print(f"not fit: a Simlock worker holds this machine (pid {owner['pid']}, folder {owner['folder']}); stop it first: SIMLOCK_HOME={owner['folder']} simlock daemon stop", file=sys.stderr)
+            sys.exit(69)
+    except (ValueError, KeyError, TypeError):
+        pass
     for path in ("/tmp", os.path.expanduser("~")):
         if free_gib(path) < float(min_free):
             problems.append(f"{free_gib(path):.1f} GiB free on the volume of {path}; the lane needs {min_free}")
