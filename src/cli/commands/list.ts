@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import { requestedClass, waitingRequestSchema } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, UsageError, writeResult } from "../args.js";
 import type { CommandContext } from "../tree.js";
 
@@ -98,7 +99,7 @@ function workerReasonLines(
         : worker.capacityReason === undefined
           ? "Full"
           : WAITING_REASON_TEXT[worker.capacityReason](platform);
-    return `  ${names.get(worker.workerId) ?? worker.workerId}: ${lowerFirst(text)}`;
+    return `  ${esc(names.get(worker.workerId) ?? worker.workerId)}: ${lowerFirst(text)}`;
   });
 }
 
@@ -121,14 +122,14 @@ function formatWaitingRequests(
       ]
         .filter((part) => part !== undefined)
         .join(" ");
-      const where = request.workerId === undefined ? "" : ` on ${request.workerId}`;
+      const where = request.workerId === undefined ? "" : ` on ${esc(request.workerId)}`;
       const stage =
         request.queuePosition === undefined
           ? request.stage
           : `${request.stage} at ${String(request.queuePosition)}`;
       const waited = Math.max(0, Math.round((now - request.createdAt) / 1000));
       const why = waitingReasonText(request);
-      const line = `Request ${request.id}: ${request.requesterId}${where}, ${device}, ${stage}, waiting ${String(waited)}s${why === undefined ? "" : ` — ${why}`}`;
+      const line = `Request ${esc(request.id)}: ${esc(request.requesterId)}${where}, ${esc(device)}, ${stage}, waiting ${String(waited)}s${why === undefined ? "" : ` — ${why}`}`;
       return [line, ...workerReasonLines(request, names)].join("\n");
     })
     .join("\n");
