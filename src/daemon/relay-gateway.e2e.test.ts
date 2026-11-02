@@ -175,10 +175,13 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     return { fixture, gatewayEnd, makeRelay, opened, pair, relay, spy };
   }
 
-  const startFleet = (execCommand?: FleetExec) =>
+  const startFleet = (
+    execCommand?: FleetExec,
+    extra: { readonly proxyAuth?: Record<string, unknown> } = {},
+  ) =>
     startFleet_(
       { daemons, directories, target, twoWayTarget },
-      execCommand === undefined ? {} : { execCommand },
+      { ...(execCommand === undefined ? {} : { execCommand }), ...extra },
     );
 
   const agent = (overrides: Partial<DispatchSession> = {}): DispatchSession => ({
@@ -216,6 +219,33 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(response.headers.get("x-reply")).toBe("yes");
     expect(response.headers.get("content-type")).toBe("text/plain");
     expect(await response.text()).toBe("hello from the target");
+  }, 30_000);
+
+  it("a gateway started with http.proxyAuth relays a request to its worker without the proxy's header or cookie", async () => {
+    const { relay, workerId } = await startFleet(undefined, {
+      proxyAuth: {
+        audience: "aud",
+        header: "cf-access-jwt-assertion",
+        issuer: "https://team.example",
+        jwksUrl: "http://127.0.0.1:1/jwks",
+      },
+    });
+
+    await relay.relay(
+      workerId,
+      buildCall({
+        headers: {
+          cookie: "CF_Authorization=person.jwt",
+          "cf-access-jwt-assertion": "person.jwt",
+          "x-test": "1",
+        },
+      }),
+    );
+
+    expect(targetCalls).toHaveLength(1);
+    expect(targetCalls[0]?.headers.get("cf-access-jwt-assertion")).toBeNull();
+    expect(targetCalls[0]?.headers.get("cookie")).toBeNull();
+    expect(targetCalls[0]?.headers.get("x-test")).toBe("1");
   }, 30_000);
 
   it("through startFleet, a relayed GET opens a channel on the link between the gateway and the worker", async () => {

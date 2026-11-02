@@ -112,8 +112,9 @@ headers, the agent-device lease id and the caller's principal.
 The host on the worker takes a relayed request exactly as it takes an
 in-process one. The agent-device daemon token never leaves the worker, and
 an agent's gateway token never reaches it: the gateway drops the caller's
-`Authorization`, `Cookie`, `x-agent-device-token` and the `http.proxyAuth.header` (when set) before relaying, and adds them to
-an upload ticket itself when it answers the preflight. A worker that is
+`Authorization`, `Cookie`, `x-agent-device-token` and the `http.proxyAuth.header` (when set) before relaying, and adds only the
+caller's `Authorization` and `x-agent-device-token` back to an upload ticket
+itself when it answers the preflight. A worker that is
 compromised holds nothing it could use on the gateway.
 
 ```mermaid
