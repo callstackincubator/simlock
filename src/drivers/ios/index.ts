@@ -549,6 +549,7 @@ export class IosSimctlDriver implements Driver {
       receipt,
       remove: async ({ image, unusedDevices, version }) => {
         const deadline = this.#clock.now() + COMPONENT_REMOVAL_TIMEOUT_MS;
+        await this.#destroySeedsOf(image.runtimeIdentifier);
         await this.#deleteRuntimeImage(image.identifier, options.signal);
         await this.#waitWhileDeleting(image.identifier, version, deadline, options.signal);
         const sentences = [
@@ -558,6 +559,22 @@ export class IosSimctlDriver implements Driver {
         return sentences.length === 0 ? {} : { residue: sentences.join(". ") };
       },
     });
+  }
+
+  /** why: ADR 0061 §3: a seed of a removed runtime can never be copied again; a stuck one is logged and the removal goes on. */
+  async #destroySeedsOf(runtimeId: string): Promise<void> {
+    for (const row of this.#sources.readyRows()) {
+      if (row.kind !== "seed" || row.runtimeId !== runtimeId || row.udid === undefined) continue;
+      const udid = row.udid;
+      try {
+        await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+        this.#sources.deleteRow(row.sourceId);
+      } catch (error: unknown) {
+        this.#logger?.warn(
+          `could not remove seed ${udid} of removed runtime ${runtimeId}: ${errorMessage(error)}`,
+        );
+      }
+    }
   }
 
   async #deleteRuntimeImage(identifier: string, signal: AbortSignal): Promise<void> {
