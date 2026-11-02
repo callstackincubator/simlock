@@ -3,7 +3,10 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-02
 - **Issue:** [#327](https://github.com/callstackincubator/simlock/issues/327) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049), points 1 and 4)
-- **Supersedes:** nothing. Narrows [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md)
+- **Supersedes:** nothing. Narrows [ADR 0001](0001-simlock-owned-device-roots.md)
+  §1 (the root layout gains `sources/` and, on Android, one folder per
+  device), §4 (the Android per-device folder) and §6 (orphan sources
+  are reported, not destroyed, by the rule below). Narrows [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md)
   §4 ("Reclaim still erases"): an iOS reclaim deletes and clones instead.
   Narrows the `lease.identity` setting: every virtual device is spent after
   one lease. Narrows [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §6
@@ -21,7 +24,7 @@ Every lease starts from a factory device, and every reset brings the
 factory first boot back:
 
 - **iOS.** `provision` runs `simctl create`; `reclaim` runs `simctl erase`
-  (`src/drivers/ios/index.ts:1091-1101`). Both are followed by a full first
+  (`src/drivers/ios/index.ts:729-732`, `:943`). Both are followed by a full first
   boot. Measured on an M3 Pro, Xcode with iOS 27.0, iPhone 17: a new
   simulator's first boot took 36.4 s, an erase plus boot 39.9 s. A
   `simctl clone` of a shut-down simulator that had booted once took 2.3 s,
@@ -75,8 +78,10 @@ flowchart LR
 
 ### 1. A source is a shut-down device Simlock keeps only to copy
 
-A **source** is a device that has booted at least once, was shut down
-cleanly, and is never leased, booted or erased again. Every virtual device
+A **source** is a device that has booted at least once and was shut down
+cleanly. It boots only while it is being made (Android: one cold boot with
+`-no-snapshot-load` to save `simlock_boot`, then killed); once `ready` it is
+never leased, booted or erased again. Every virtual device
 Simlock makes is a copy of one source. There are two kinds:
 
 - A **seed**: made by the driver for plain leases, one per platform, model,
@@ -101,10 +106,12 @@ A driver may destroy its own sources. This amends safety rule 1 ("destroy
 only what the registry holds"): a source is recorded in its driver's own
 table, not the registry. A source row is written first, in state `making`,
 and set `ready` when the source is finished; a `making` row an earlier
-daemon process left, and a source with no row, are destroyed at start. At
-start core also destroys every baseline source no `baselines` row names (a
-restart mid-save). Its records follow ADR 0036 §2, with no JSON
-text:
+daemon process left is destroyed at start, with its source. A source with
+no row in its driver's table, and a `ready` baseline source no `baselines`
+row names, are not destroyed (ADR 0001 §6: orphans are never auto-destroyed):
+they stay in place, `doctor` reports them as orphan sources, and only
+`doctor --purge-orphans` destroys them. Its records follow ADR 0036 §2, with
+no JSON text:
 
 - Each driver keeps its sources in its own table (`ios_source_data`,
   `android_source_data`), keyed by a source id: the kind, the spec key, the
@@ -171,10 +178,12 @@ or system image destroys the seeds made from it.
 ### 4. A baseline is a named source an operator saves from a held lease
 
 `baseline.save {leaseId, name, note?}` is an admin operation. It ends the
-lease: the device is shut down cleanly (iOS `simctl shutdown`; Android
-`adb shell sync`, `adb shell reboot -p`, then the ownership check and
-`emu kill` if it has not stopped), made a source by `saveSource` (with its
-boot snapshot on Android), and destroyed. The baseline carries the
+lease. On iOS the device is shut down (`simctl shutdown`), copied into a
+`making` source by `saveSource`, the source is marked `ready`, and the leased
+device is destroyed. On Android: `adb shell sync`, `adb shell reboot -p`
+(the ownership check and `emu kill` if it has not stopped in 60 s), copy into
+a `making` source, one cold boot of the source with `-no-snapshot-load`, save
+`simlock_boot`, kill, mark `ready`, then destroy the leased device. The baseline carries the
 device's platform, model, OS, mode and image tag, a version that starts at
 1, the note, its size and when it was saved.
 
