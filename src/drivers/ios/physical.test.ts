@@ -18,6 +18,7 @@ import {
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
 import { IosSimctlDriver } from "./index.js";
+import { memorySourceDatabase } from "./testing.js";
 
 type Json = string | number | boolean | null | undefined | Json[] | { [key: string]: Json };
 type Fields = Record<string, Json>;
@@ -296,6 +297,7 @@ class Lab {
   ): Promise<IosSimctlDriver> {
     await this.filesystem.mkdirp(SIMLOCK_HOME);
     return IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: this.clock,
       driverConfig: { deviceRoot: DEVICE_ROOT },
       filesystem: this.filesystem,

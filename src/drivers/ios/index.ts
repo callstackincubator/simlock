@@ -54,6 +54,7 @@ import type {
   Logger,
   ProcessResult,
   ProcessRunner,
+  SqliteDatabase,
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-leftovers.js";
@@ -180,6 +181,7 @@ export interface SlimSkippedFact {
 
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
@@ -2224,5 +2226,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 export { iosDeviceDataTable } from "./device-data.js";
+export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
 export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";

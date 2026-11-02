@@ -63,6 +63,7 @@ import {
   IosSimctlDriver,
   type SlimmedFact,
   iosDeviceDataTable,
+  iosSourceDataOwner,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
@@ -122,6 +123,7 @@ import {
   defaultWorkerLockPath,
   NodeWorkerLock,
   type WorkerLockHandle,
+  type SqliteDatabase,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -358,7 +360,13 @@ async function composeDaemon(
     owners:
       role === "gateway"
         ? [tokensOwner, drainedWorkersOwner]
-        : [registryOwner, warmPoolOwner, tokensOwner, ...new Set(deviceDataTables.values())],
+        : [
+            registryOwner,
+            warmPoolOwner,
+            tokensOwner,
+            iosSourceDataOwner,
+            ...new Set(deviceDataTables.values()),
+          ],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -452,6 +460,7 @@ async function composeDaemon(
       ? await discoverDrivers({
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
+          database: state.database,
           driversConfig: config.drivers,
           eventBus,
           filesystem,
@@ -1276,6 +1285,7 @@ function errorMessage(error: unknown): string {
 export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
@@ -1411,6 +1421,7 @@ async function discoverIosDriver(
     const driver = await IosSimctlDriver.create({
       clock: options.clock,
       coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+      database: options.database,
       driverConfig: options.driversConfig["ios"] ?? {},
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,

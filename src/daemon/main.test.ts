@@ -78,6 +78,7 @@ import {
 } from "./main.js";
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
+import { memorySourceDatabase } from "../drivers/ios/testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -2202,6 +2203,7 @@ describe("discoverDrivers", () => {
     const filesystem = new MemoryFilesystem();
 
     const { drivers } = await discoverDrivers({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2547,6 +2549,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     > = {},
   ) {
     return discoverDrivers({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2594,6 +2597,7 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   try {
     await IosSimctlDriver.create({
       clock: new FakeClock(),
+      database: memorySourceDatabase(),
       driverConfig: {},
       filesystem,
       idGenerator: new CryptoIdGenerator(),
@@ -2616,6 +2620,7 @@ function discoverIos(
   } = {},
 ) {
   return discoverDrivers({
+    database: memorySourceDatabase(),
     clock: new FakeClock(),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
@@ -2889,6 +2894,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   async function discover(sink: MemoryLogSink) {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     return discoverDrivers({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),

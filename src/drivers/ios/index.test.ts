@@ -36,6 +36,7 @@ import {
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
+import { memorySourceDatabase } from "./testing.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
 const listDevicesFixture = readFileSync(
@@ -172,9 +173,20 @@ afterEach(() => {
     // `simctl` that reached the machine's default set is the leak this guards.
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
-    expect(call.args.slice(0, 3)).toEqual(["simctl", "--set", deviceRoot]);
+    expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
+    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
   }
 });
+
+const seedUdid = "00000000-0000-0000-0000-0000000000aa";
+
+/** why: A seed lives in the sources set, a sibling of the lease device set, and its calls are scoped to that. */
+function sourcesSimctl(...args: readonly string[]): {
+  readonly command: string;
+  readonly args: string[];
+} {
+  return { args: ["simctl", "--set", `${deviceRoot}/sources`, ...args], command: "xcrun" };
+}
 
 function simctl(...args: readonly string[]): { readonly command: string; readonly args: string[] } {
   return { args: simctlArgs(...args), command: "xcrun" };
@@ -783,6 +795,7 @@ describe("IosSimctlDriver", () => {
 
     it("states 8 GiB on the configured CoreSimulator volume as the footprint of one install", async () => {
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot: "/Users/agent/Library/Developer/CoreSimulator",
         driverConfig: { deviceRoot },
@@ -800,25 +813,29 @@ describe("IosSimctlDriver", () => {
     });
   });
 
-  it("provisions with the exact simctl argv and returns opaque iOS driver data", async () => {
+  it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
+    const copyUdid = "00000000-0000-0000-0000-000000000002";
+    const seedCreate = sourcesSimctl(
+      "create",
+      "simlock-seed-device-1",
+      driverData.deviceTypeId,
+      driverData.runtimeId,
+    );
+    const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
     const runner = new ScriptedProcessRunner([
-      {
-        match: listInvocation,
-        result: { code: 0, stderr: "", stdout: listFixture },
-      },
-      {
-        match: createInvocation,
-        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
-      },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: seedCreate, result: { code: 0, stderr: "", stdout: `${seedUdid}\n` } },
+      { match: sourcesSimctl("boot", seedUdid) },
+      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+      { match: sourcesSimctl("listapps", seedUdid) },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
     const filesystem = new MemoryFilesystem();
     const driver = await createDriver(runner, new FakeClock(), filesystem);
     await plantManagedDevice(filesystem);
-    await driver.resolveSpec({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
+    await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
 
     await expect(driver.provision(spec)).resolves.toEqual({
       address: driverData.udid,
@@ -827,8 +844,16 @@ describe("IosSimctlDriver", () => {
     });
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
-      { ...createInvocation, options: { timeoutMs: 30_000 } },
+      { ...seedCreate, options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...cloneInvocation, options: { timeoutMs: 30_000 } },
     ]);
+
+    await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: copyUdid });
+    expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
   it("keeps no copy of a slim spec's mode in driver data", async () => {
@@ -1186,6 +1211,7 @@ describe("IosSimctlDriver", () => {
       const logger = new RecordingLogger();
       scopedRunners.push(runner);
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         driverConfig: { deviceRoot },
         filesystem,
@@ -1572,6 +1598,7 @@ describe("IosSimctlDriver", () => {
     const filesystem = new MemoryFilesystem();
 
     const driver = await IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: {},
       filesystem,
@@ -1611,6 +1638,7 @@ describe("IosSimctlDriver", () => {
 
   it("refuses the platform, not the daemon, when the configured device root is not a path", async () => {
     const failure = await IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: { deviceRoot: true },
       filesystem: new MemoryFilesystem(),
@@ -1951,6 +1979,7 @@ describe("IosSimctlDriver", () => {
     "runs a provision-to-destroy smoke test against simctl",
     async () => {
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new SystemClock(),
         driverConfig: {},
         filesystem: new NodeFilesystem(),
@@ -2378,6 +2407,7 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
       ]);
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         driverConfig: { deviceRoot },
         instanceId,
         simlockHome: "/home/.simlock",
@@ -3890,6 +3920,7 @@ describe("IosSimctlDriver screen capture commands", () => {
     await filesystem.writeFileAtomic("/dist/bin/simlock-device-capture", "");
     const launcher = new FakeBytePipeLauncher();
     const driver = await IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: configured === undefined ? {} : { deviceCaptureCommand: configured },
       filesystem,
@@ -4014,6 +4045,7 @@ function createDriver(
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
+    database: memorySourceDatabase(),
     clock,
     driverConfig: { deviceRoot },
     filesystem,
@@ -4037,6 +4069,7 @@ function createTokenDriver(
   let calls = 0;
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
+    database: memorySourceDatabase(),
     clock: new FakeClock(),
     driverConfig: { deviceRoot },
     filesystem,
@@ -4144,6 +4177,7 @@ async function createSlimDriver(
   clock = new FakeClock(),
 ): Promise<IosSimctlDriver> {
   return await IosSimctlDriver.create({
+    database: memorySourceDatabase(),
     driverConfig: { deviceRoot },
     instanceId,
     simlockHome: "/home/.simlock",
@@ -4466,6 +4500,7 @@ describe("IosSimctlDriver device set", () => {
       await plantDevice(filesystem, devicesDir);
       if (scoped) await plantManagedDevice(filesystem);
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: scoped ? { deviceRoot, ...config } : config,
@@ -4507,6 +4542,7 @@ describe("IosSimctlDriver device set", () => {
     async (_case, config, root, detail) => {
       const create = (driverConfig: Record<string, string | number | boolean>) =>
         IosSimctlDriver.create({
+          database: memorySourceDatabase(),
           clock: new FakeClock(),
           coreSimulatorRoot,
           driverConfig,
@@ -4620,6 +4656,7 @@ describe("IosSimctlDriver device set", () => {
       await plant(filesystem);
       const runner = new ScriptedProcessRunner([]);
       const failure = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: config,
@@ -4665,6 +4702,7 @@ describe("IosSimctlDriver device set", () => {
         if (scoped) await plantManagedDevice(filesystem);
         else await filesystem.mkdirp(`${devicesDir}/${driverData.udid}/data`);
         const driver = await IosSimctlDriver.create({
+          database: memorySourceDatabase(),
           clock: new FakeClock(),
           coreSimulatorRoot,
           driverConfig: config,
@@ -4765,6 +4803,7 @@ describe("IosSimctlDriver device set", () => {
       },
     ]);
     const driver = await IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       coreSimulatorRoot,
       driverConfig: { deviceSet: "default" },
@@ -4813,6 +4852,7 @@ describe("IosSimctlDriver device set", () => {
         }
       }
       return IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: { deviceSet: "default" },
@@ -4862,6 +4902,7 @@ describe("IosSimctlDriver device set", () => {
       await filesystem.writeFileAtomic("/dist/bin/simlock-screen-capture", "");
       const launcher = new FakeBytePipeLauncher();
       const driver = await IosSimctlDriver.create({
+        database: memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: config,
@@ -4905,6 +4946,7 @@ describe("IosSimctlDriver device set", () => {
 
   it("simlock simctl under deviceSet default runs plain xcrun simctl and keeps its refusals", async () => {
     const driver = await IosSimctlDriver.create({
+      database: memorySourceDatabase(),
       clock: new FakeClock(),
       coreSimulatorRoot,
       driverConfig: { deviceSet: "default" },
