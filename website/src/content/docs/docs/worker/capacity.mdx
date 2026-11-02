@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 A worker limits two numbers per platform:
 
 - **Managed devices**: how many simulators or emulators may exist, booted or shut down.
-- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being reclaimed after a lease (a physical device), or quarantined.
+- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being deleted after its lease, or quarantined.
 
 A capacity strategy sets these limits. The default, `resource`, sizes them from the machine's CPU and RAM. The `fixed` strategy uses a number you write down. Physical devices never count against either limit.
 

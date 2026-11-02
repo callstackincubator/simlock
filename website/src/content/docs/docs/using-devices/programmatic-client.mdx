@@ -103,7 +103,7 @@ What the calls do:
 | --- | --- |
 | `requestLease(request, { onProgress, signal })` | Waits in the queue and resolves with the grant: `device`, `environment`, `lease` and `timing`, the same fields `simlock lease` prints. |
 | `renewLease({ leaseId, ttlMs? })` | Sets the deadline to now plus the TTL. Resolves with the lease, including the new `ttlDeadline`. |
-| `releaseLease({ leaseId })` | Ends the lease. The device is wiped in the background. |
+| `releaseLease({ leaseId })` | Ends the lease. A simulator or emulator is deleted in the background; a physical device is cleaned. |
 | `exec({ leaseId, tool, args, stdin? }, { onOutput })` | Runs `simctl` or `adb` (or `devicectl` on a physical iPhone or iPad) against the device and resolves with `{ exitCode }`. |
 | `listLeases()` | Your leases. |
 | `getCatalog({ platform? })` | What you can ask for, as `simlock catalog --json` prints it. |

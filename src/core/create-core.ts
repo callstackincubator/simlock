@@ -272,8 +272,8 @@ export function createCore(options: CoreOptions): Core {
   });
   const nuke = new NukeService({
     acquisition: {
-      // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
-      // already has in flight is waited for, so the reset sees a settled pool. A startup wipe still
+      // why: closing acquisition first makes the pool skip every new action; then a boot or shutdown it
+      // already has in flight is waited for, so the reset sees a settled pool. A startup reclaim still
       // running is waited for first: its commit can start a pool pass, and the device it holds in
       // `reclaiming` is one the reset would skip.
       beginMaintenance: async () => {
@@ -396,7 +396,7 @@ export function createCore(options: CoreOptions): Core {
       );
     },
     async settle() {
-      // The wipe's commit can start a pool pass, so the wipes are awaited first.
+      // why: a reclaim's commit can start a pool pass, so the reclaims are awaited first.
       await reclaim.settle();
       await warmPool.settle();
     },
