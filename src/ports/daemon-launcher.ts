@@ -86,9 +86,9 @@ export interface NodeDaemonLauncherOptions {
 
 /**
  * why: the log lives in the data directory, and on a fresh machine this launch is what first
- * creates it, so it and the data root above it (`SIMLOCK_HOME`) are made owner-only here (`DATA_DIRECTORY_MODE`, which a test that loads this
- * file alone in a child process cannot import), its parents left to the default and an existing
- * one left as it is. `chmod` because the umask can only take bits from `mkdir`'s mode.
+ * creates it, so it and the data root above it (`SIMLOCK_HOME`) are made owner-only here
+ * (`DATA_DIRECTORY_MODE`, which a test that loads this file alone in a child process cannot
+ * import), their parents left to the default and an existing one left as it is. `chmod` because the umask can only take bits from `mkdir`'s mode.
  */
 async function createDataDirectory(directory: string): Promise<void> {
   await mkdir(dirname(directory), { recursive: true });

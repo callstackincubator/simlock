@@ -2189,7 +2189,7 @@ describe("GatewayDispatcher: waiting requests", () => {
     expect(status.waiting).toEqual([listed[0]]);
   });
 
-  it("lease.cancel {platform} cancels only the named platform's waiting fleet request and is gated on that request's owner", async () => {
+  it("status.get lists and lease.cancel {platform} cancels only the named platform's waiting fleet request, each gated on that request's owner", async () => {
     const { coordinator, dispatcher, workers } = harness();
     const capacity = statusFixture().capacity;
     // why: both platforms are full, so each fleet request waits in the gateway's own queue.
@@ -2230,6 +2230,16 @@ describe("GatewayDispatcher: waiting requests", () => {
         .map((waiting) => waiting.spec.platform)
         .sort();
     expect(waitingPlatforms()).toEqual(["android", "ios"]);
+
+    // why: both rows share one requester label, so a status lookup that ignored the platform would list the android row to the iOS owner.
+    const listedTo = async (principal: string) =>
+      (
+        await dispatcher.dispatch("status.get", {}, session({ principal, role: "agent" }))
+      ).waiting?.map((waiting) => waiting.spec.platform);
+    expect([await listedTo("owner-ios"), await listedTo("owner-android")]).toEqual([
+      ["ios"],
+      ["android"],
+    ]);
 
     // why: the iOS request is the earliest, so a hook that ignored the platform would name its owner.
     await expect(
