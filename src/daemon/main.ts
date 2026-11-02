@@ -621,7 +621,7 @@ async function composeDaemon(
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   let socketClaimed = false;
-  let lockClaim: Promise<void> = Promise.resolve();
+  let lockClaim: Promise<unknown> = Promise.resolve();
   const gatewayStarted: Promise<void> = config.http.enabled
     ? new Promise<void>((resolve, reject) => {
         resolveGatewayStarted = resolve;
@@ -817,11 +817,10 @@ async function composeDaemon(
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
-      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).catch((error: unknown) => {
-        logger.error("Worker lock could not be rewritten", {
-          reason: error instanceof Error ? error.message : "unknown",
-        });
-      });
+      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).then(
+        () => undefined,
+        (error: unknown) => error ?? new Error("worker lock check failed"),
+      );
       startHistory(
         eventHistory,
         logger,
@@ -905,7 +904,11 @@ async function composeDaemon(
     if (!socketClaimed) resolveGatewayStarted?.();
   });
   const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
-  await lockClaim;
+  const lockFailure = await lockClaim;
+  if (lockFailure !== undefined) {
+    await daemon.stop().catch(() => undefined);
+    throw lockFailure;
+  }
   if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
     // why: The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
     // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
