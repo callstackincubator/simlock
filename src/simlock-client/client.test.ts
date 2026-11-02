@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
-import type { SimlockAdminClient } from "./client.js";
+import type { SimlockAdminClient, SimlockClient } from "./client.js";
 import type { LeaseGrant } from "./types.js";
 import { completeHello, ScriptedConnection } from "./test-support.js";
 
@@ -383,20 +383,39 @@ describe("connectSimlock: handshake", () => {
     expect(await refused).toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
-    await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
+  it.each([
+    {
+      call: (client: SimlockClient) => client.getCatalog(),
+      operation: "catalog.get",
+      reply: { notPlatforms: true },
+    },
+    {
+      call: (client: SimlockClient) => client.requestLease({ model: "iPhone 17", platform: "ios" }),
+      operation: "lease.request",
+      reply: null,
+    },
+    {
+      call: (client: SimlockClient) => client.requestLease({ model: "iPhone 17", platform: "ios" }),
+      operation: "lease.request",
+      reply: { lease: null },
+    },
+  ])(
+    "wraps a malformed $operation response ($reply) instead of throwing a raw parse failure",
+    async ({ call: callOperation, operation, reply }) => {
+      const connection = new ScriptedConnection();
+      const connectPromise = connectSimlock({ connection });
+      await flushMicrotasks();
+      completeHello(connection);
+      const client = await connectPromise;
 
-    const callPromise = client.getCatalog();
-    await flushMicrotasks();
-    const call = connection.lastSentOf("catalog.get")!;
-    connection.reply(call.id, { notPlatforms: true });
+      const callPromise = callOperation(client);
+      await flushMicrotasks();
+      const call = connection.lastSentOf(operation)!;
+      connection.reply(call.id, reply);
 
-    await expect(callPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
-  });
+      await expect(callPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
+    },
+  );
 
   it("rejects status.get from a worker with an over-long host string by the gateway's schema", async () => {
     // A gateway reads each worker through this client (`WorkerLink`), so this parse is where
