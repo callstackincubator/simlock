@@ -77,13 +77,17 @@ The mode comes from the readback, compared with the labels Simlock meant to
 write, whether or not the write succeeded: a re-leased device keeps the file
 it had through the erase, so a failed write can still boot slim.
 
+A label written `true` is as wanted when it reads `disabled`; a label
+written `false` is as wanted when it does not read `disabled` (absent counts
+as enabled, as in simslim). A file Simlock cannot read as a plist dict is
+left unchanged and counts as a failed write.
+
 | File write | Readback after boot                  | Device mode | Logged                |
 | ---------- | ------------------------------------ | ----------- | --------------------- |
 | ok         | every label as wanted                | `slim`      | `device.slimmed`      |
 | failed     | every label as wanted                | `slim`      | slim skipped + reason |
-| any        | a label otherwise, or missing        | `full`      | slim skipped + reason |
-| ok         | failed or timed out                  | `slim`      | slim skipped + reason |
-| failed     | failed or timed out                  | `full`      | slim skipped + reason |
+| any        | any label not as wanted              | `full`      | slim skipped + reason |
+| any        | failed or timed out                  | `slim`      | slim skipped + reason |
 
 There is no fallback to running `launchctl disable` inside the simulator. A
 readback that cannot run keeps ADR 0002's rule that an uncertain device is
@@ -108,8 +112,9 @@ a slim file.
 `destroy` and `destroyLegacy` remove
 `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/` after
 `simctl delete` succeeds. A failure to remove it is logged and does
-not fail the destroy. Only a registry device's own UDID is ever removed
-(safety rule 1). Folders left by simulators deleted before this change stay.
+not fail the destroy. The folder removed is always the UDID of the
+simulator that call just deleted, so it follows `destroy`'s own ownership
+proof (safety rule 1, including `doctor --purge-orphans`). Folders left by simulators deleted before this change stay.
 
 ### 5. One boot is the estimate and the deadline
 
