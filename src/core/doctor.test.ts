@@ -135,6 +135,39 @@ describe("Doctor", () => {
     ]);
   });
 
+  it("lists an orphan source and destroys it only when it purges orphans", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setSources([
+      { id: "s1", kind: "seed", model: "iPhone 17", osVersion: "27.0" },
+      { id: "o1", kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
+    ]);
+    const doctor = new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    });
+
+    const listed = await doctor.reconcile();
+    expect(listed.findings).toEqual([]);
+    expect(listed.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+      { kind: "seed", model: "unknown", orphan: true, osVersion: "unknown", platform: "ios" },
+    ]);
+    expect(await driver.listSources()).toHaveLength(2);
+
+    const purged = await doctor.reconcile({ purgeOrphans: true });
+    expect(purged.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+    ]);
+    expect((await driver.listSources()).map((source) => source.id)).toEqual(["s1"]);
+  });
+
   it("reports but does not correct a leased-state device with no lease record", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);

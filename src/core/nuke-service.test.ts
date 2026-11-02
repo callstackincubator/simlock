@@ -90,7 +90,7 @@ function createHarness(
 }
 
 describe("NukeService", () => {
-  it("deletes every source of kind seed with --delete-devices, keeps a baseline, and keeps every source in a plain nuke", async () => {
+  it("deletes every source of kind seed with --delete-devices, keeps a baseline and an orphan source, and keeps every source in a plain nuke", async () => {
     const seed = { id: "seed-1", kind: "seed", model: "iPhone", osVersion: "27.0" } as const;
     const baseline = {
       id: "base-1",
@@ -99,14 +99,25 @@ describe("NukeService", () => {
       osVersion: "27.0",
     } as const;
     const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
-    driver.setSources([seed, baseline]);
+    const orphan = {
+      id: "orphan-1",
+      kind: "seed",
+      model: "unknown",
+      orphan: true,
+      osVersion: "unknown",
+    } as const;
+    driver.setSources([seed, baseline, orphan]);
     const harness = createHarness([], () => undefined, [driver]);
 
     await harness.service.nuke(false);
-    expect((await driver.listSources()).map((source) => source.id)).toEqual(["seed-1", "base-1"]);
+    expect((await driver.listSources()).map((source) => source.id)).toEqual([
+      "seed-1",
+      "base-1",
+      "orphan-1",
+    ]);
 
     await harness.service.nuke(true);
-    expect((await driver.listSources()).map((source) => source.id)).toEqual(["base-1"]);
+    expect((await driver.listSources()).map((source) => source.id)).toEqual(["base-1", "orphan-1"]);
   });
 
   it("fences acquisition before releasing killed leases and returns their ids", async () => {
