@@ -114,27 +114,40 @@ export class NodeWorkerLock implements WorkerLock {
       const holder = await readOwner(filesystem, ownerFile);
       if (holder !== undefined && processSupervisor.isAlive(holder.pid)) {
         // why: the same folder is a second daemon on one home, which the socket claim answers as today; it holds nothing to release.
-        if (holder.folder === owner.folder) return this.#handle(owner);
+        if (holder.folder === owner.folder) return this.#handle(owner, false);
         throw new WorkerLockHeldError(holder);
       }
     }
     await filesystem.writeFileAtomic(ownerFile, JSON.stringify(owner));
-    return this.#handle(owner);
+    return this.#handle(owner, true);
   }
 
-  #handle(owner: WorkerLockOwner): WorkerLockHandle {
+  #handle(owner: WorkerLockOwner, owned: boolean): WorkerLockHandle {
     const { filesystem, path, processSupervisor } = this.#options;
     const ownerFile = join(path, OWNER_FILE);
+    const written = JSON.stringify(owner);
+    let owns = owned;
     return {
       claimed: async () => {
         const holder = await readOwner(filesystem, ownerFile);
-        if (holder !== undefined && holder.folder !== owner.folder) {
-          if (processSupervisor.isAlive(holder.pid)) throw new WorkerLockHeldError(holder);
+        if (
+          holder !== undefined &&
+          holder.folder !== owner.folder &&
+          processSupervisor.isAlive(holder.pid)
+        ) {
+          throw new WorkerLockHeldError(holder);
         }
         await filesystem.mkdirp(path);
-        await filesystem.writeFileAtomic(ownerFile, JSON.stringify(owner));
+        await filesystem.writeFileAtomic(ownerFile, written);
+        owns = true;
       },
-      release: async () => undefined,
+      release: async () => {
+        if (!owns) return;
+        owns = false;
+        // why: another worker may have taken a stale-looking lock over; only the content this worker wrote is its own to remove.
+        const current = await filesystem.readFile(ownerFile).catch(() => undefined);
+        if (current === written) await filesystem.rm(path);
+      },
     };
   }
 }

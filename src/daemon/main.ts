@@ -252,6 +252,7 @@ function updateOptionsFor(
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   let opened: StateDatabase | undefined;
   let check: VersionCheck | undefined;
+  let workerLock: WorkerLockHandle | undefined;
   try {
     return await composeDaemon(
       options,
@@ -261,12 +262,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       (started) => {
         check = started;
       },
+      (lock) => {
+        workerLock = lock;
+      },
     );
   } catch (error: unknown) {
     // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
     check?.dispose();
     // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
     opened?.close();
+    // why: a start that fails after taking the worker lock must not leave a lock that blocks the next worker; a running daemon releases it in `dispose`.
+    await workerLock?.release().catch(() => undefined);
     throw error;
   }
 }
@@ -276,6 +282,7 @@ async function composeDaemon(
   options: StartDaemonOptions,
   onStateOpened: (state: StateDatabase) => void,
   onVersionCheck: (check: VersionCheck) => void,
+  onWorkerLock: (lock: WorkerLockHandle) => void,
 ): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
@@ -438,6 +445,7 @@ async function composeDaemon(
       pid: process.pid,
       startedAt: new Date(clock.now()).toISOString(),
     });
+    onWorkerLock(workerLock);
   }
   const { drivers, prerequisiteChecks, rejections } =
     options.drivers === undefined
@@ -785,6 +793,8 @@ async function composeDaemon(
           });
         }
       }
+      // why: ADR 0059: after the drivers are disposed, so no other worker sweeps while this one still acts on devices.
+      await workerLock?.release();
       await eventHistory.stop();
       state.close();
     },
