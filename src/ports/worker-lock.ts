@@ -15,11 +15,11 @@ export interface WorkerLockHandle {
   release(): Promise<void>;
 }
 
-export interface WorkerLock {
+interface WorkerLock {
   take(owner: WorkerLockOwner): Promise<WorkerLockHandle>;
 }
 
-export class WorkerLockHeldError extends Error {
+class WorkerLockHeldError extends Error {
   constructor(readonly holder: WorkerLockOwner) {
     super(
       `another Simlock worker runs for this user (pid ${holder.pid}, folder ${holder.folder}, since ${holder.startedAt}); stop it first: SIMLOCK_HOME=${holder.folder} simlock daemon stop`,

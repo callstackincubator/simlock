@@ -192,8 +192,6 @@ export { FakeHttpJsonClient, FetchHttpJsonClient, type HttpJsonClient } from "./
 export {
   defaultWorkerLockPath,
   NodeWorkerLock,
-  WorkerLockHeldError,
-  type WorkerLock,
   type WorkerLockHandle,
   type WorkerLockOwner,
 } from "./worker-lock.js";
