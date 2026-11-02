@@ -27,9 +27,9 @@ const VIRTUAL_DEVICE = {
 
 type PassthroughDevice = Parameters<IosSimctlDriver["passthrough"]>[1];
 
-function createDriver(runner: ScriptedProcessRunner): Promise<IosSimctlDriver> {
+async function createDriver(runner: ScriptedProcessRunner): Promise<IosSimctlDriver> {
   return IosSimctlDriver.create({
-    database: memorySourceDatabase(),
+    database: await memorySourceDatabase(),
     clock: new FakeClock(),
     driverConfig: { deviceRoot },
     filesystem: new MemoryFilesystem(),

@@ -297,7 +297,7 @@ class Lab {
   ): Promise<IosSimctlDriver> {
     await this.filesystem.mkdirp(SIMLOCK_HOME);
     return IosSimctlDriver.create({
-      database: memorySourceDatabase(),
+      database: await memorySourceDatabase(),
       clock: this.clock,
       driverConfig: { deviceRoot: DEVICE_ROOT },
       filesystem: this.filesystem,

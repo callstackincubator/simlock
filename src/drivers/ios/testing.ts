@@ -1,10 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
-
-import type { SqliteDatabase } from "../../ports/index.js";
+import { NodeSqliteOpener, type SqliteDatabase } from "../../ports/index.js";
 import { iosSourceDataOwner, IosSourceTable } from "./source-data.js";
 
-export function memorySourceDatabase(): SqliteDatabase {
-  const database = new DatabaseSync(":memory:");
+export async function memorySourceDatabase(): Promise<SqliteDatabase> {
+  const database = await new NodeSqliteOpener().open(":memory:", { readOnly: false });
   for (const migration of iosSourceDataOwner.migrations) database.exec(migration);
   return database;
 }

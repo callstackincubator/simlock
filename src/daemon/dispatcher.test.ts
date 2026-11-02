@@ -4480,6 +4480,10 @@ describe("Dispatcher: lease.request requires", () => {
       session(),
     );
     await dispatcher.dispatch("lease.release", { leaseId: grant.lease.id }, session());
+    // why: the release deletes the device in the background; its event must land before the baseline.
+    await vi.waitFor(() =>
+      expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["deleted"]),
+    );
     capability.current.state = "off";
     const requestsBefore = registry.leaseRequests().length;
     const eventsBefore = eventBus.replay().length;

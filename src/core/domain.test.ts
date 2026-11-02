@@ -141,15 +141,16 @@ describe("transitionEnteredAt", () => {
 });
 
 describe("mayBeGranted", () => {
-  it("refuses only a fresh device that has ended a lease", () => {
+  it("refuses a virtual device that has ended a lease, whatever its lease identity", () => {
     const ready = { ...baseDevice, state: "ready" as const };
 
     expect(mayBeGranted({ ...ready, leaseIdentity: "fresh", lastLeaseEndedAt: 2_000 })).toBe(false);
-    expect(mayBeGranted({ ...ready, leaseIdentity: "fresh" })).toBe(true);
     expect(mayBeGranted({ ...ready, leaseIdentity: "reusable", lastLeaseEndedAt: 2_000 })).toBe(
-      true,
+      false,
     );
-    expect(mayBeGranted({ ...ready, lastLeaseEndedAt: 2_000 })).toBe(true);
+    expect(mayBeGranted({ ...ready, lastLeaseEndedAt: 2_000 })).toBe(false);
+    expect(mayBeGranted({ ...ready, leaseIdentity: "fresh" })).toBe(true);
+    expect(mayBeGranted({ ...ready })).toBe(true);
   });
 });
 

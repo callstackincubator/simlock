@@ -502,7 +502,7 @@ describe("CleanupReaper", () => {
     harness.reaper.dispose();
   });
 
-  it("shuts down after T1 and destroys after T2 on periodic ticks following a release", async () => {
+  it("destroys a released virtual device at the release, and leaves nothing for the periodic ticks to clean", async () => {
     const harness = await createHarness(automaticCleanupRules, {}, { tickMs: 10_000 });
     const grant = await harness.engine.request(spec, {
       ownerId: "agent-1",
@@ -511,22 +511,16 @@ describe("CleanupReaper", () => {
 
     await harness.engine.release(grant.lease.id, "explicit");
     await flush();
-    harness.clock.advance(10_000);
-    await flush();
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
-
-    harness.clock.advance(10_000);
-    await flush();
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-
-    harness.clock.advance(10_000);
-    await flush();
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-
-    harness.clock.advance(10_000);
-    await flush();
     expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
+
+    const callsAfterRelease = harness.driver.calls.length;
+    for (let tick = 0; tick < 4; tick += 1) {
+      harness.clock.advance(10_000);
+      await flush();
+    }
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
+    expect(harness.driver.calls).toHaveLength(callsAfterRelease);
     harness.reaper.dispose();
   });
 

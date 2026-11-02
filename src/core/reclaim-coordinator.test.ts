@@ -397,116 +397,34 @@ describe("ReclaimCoordinator", () => {
   });
 
   describe("a device whose wipe a daemon start put off", () => {
-    async function deferredHarness(options: {
-      readonly fresh?: boolean;
-      readonly fail?: boolean;
-      readonly slowEraseMs?: number;
-    }) {
+    async function deferredHarness(identity: VirtualDevice["leaseIdentity"]) {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({
-        clock,
-        ...(options.slowEraseMs === undefined
-          ? {}
-          : { latencyMs: { reclaim: options.slowEraseMs } }),
-        platform: "ios",
-        reclaimResult: "ready",
-      });
-      if (options.fail === true) driver.failOn("reclaim", 1, new Error("purge exploded"));
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
       const driverDevice = await driver.provision(spec);
       const target: VirtualDevice = {
         ...device("deferred", "reclaiming", driverDevice.deviceId, spec),
         deferredReclaimLeaseId: "lease-deferred",
-        ...(options.fresh === true ? { leaseIdentity: "fresh" as const } : {}),
+        ...(identity === undefined ? {} : { leaseIdentity: identity }),
         lastLeaseEndedAt: 900,
       };
-      return {
-        ...(await createHarness({ devices: [target], driver })),
-        // The driver's own clock times its erase, not the coordinator's.
-        driverClock: clock,
-        target,
-      };
+      return { ...(await createHarness({ devices: [target], driver })), target };
     }
 
-    it("is purged by the full reclaim, not only shut down, and returns to the pool ready", async () => {
-      const harness = await deferredHarness({});
+    it.each(["fresh", "reusable"] as const)(
+      "is only shut down, never purged, whatever lease.identity says (%s): the device has ended a lease",
+      async (identity) => {
+        const harness = await deferredHarness(identity);
 
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
-      await harness.coordinator.settle();
+        await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
+        await harness.coordinator.settle();
 
-      const operations = harness.driver.calls.map((call) => call.operation);
-      expect(operations).toContain("reclaim");
-      expect(
-        harness.driver.calls.find((call) => call.operation === "reclaim")?.arguments[1],
-      ).toEqual({ clean: "standard" });
-      expect(operations).not.toContain("shutdown");
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-      expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
-    });
-
-    it("hands a failed purge to quarantine under the lease it was deferred for", async () => {
-      const harness = await deferredHarness({ fail: true });
-
-      await harness.coordinator.recoverInterrupted(harness.target.id);
-      await harness.coordinator.settle();
-
-      expect(harness.quarantined).toMatchObject([
-        { deviceId: harness.target.id, kind: "purge-failed", leaseId: "lease-deferred" },
-      ]);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
-    });
-
-    it("is wiped in the background: recovery returns while the erase runs, and the device stays claimed", async () => {
-      const harness = await deferredHarness({ slowEraseMs: 30_000 });
-
-      const outcome = await Promise.race([
-        harness.coordinator.recoverInterrupted(harness.target.id).then((started) => started),
-        new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
-      ]);
-
-      expect(outcome).toBe(true);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
-      expect(harness.claims.claim(harness.target.id)?.kind).toBe("reclaim");
-
-      await new Promise((resolve) => setImmediate(resolve));
-      harness.driverClock.advance(30_000);
-      await harness.coordinator.settle();
-
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-      expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
-      expect(harness.notifyAvailability).toHaveBeenCalled();
-    });
-
-    it("settles, with the claim released, when its commit fails and no logger was given", async () => {
-      const harness = await deferredHarness({});
-      vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
-
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
-      await expect(harness.coordinator.settle()).resolves.toBeUndefined();
-
-      expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
-    });
-
-    it("is left alone when another operation already holds the device", async () => {
-      const harness = await deferredHarness({});
-      const held = harness.claims.tryClaim(harness.target.id, "boot");
-
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(false);
-
-      expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
-      expect(harness.claims.claim(harness.target.id)?.kind).toBe("boot");
-      held?.release();
-    });
-
-    it("is only shut down when the device is a spent fresh one, which is never purged", async () => {
-      const harness = await deferredHarness({ fresh: true });
-
-      await harness.coordinator.recoverInterrupted(harness.target.id);
-
-      const operations = harness.driver.calls.map((call) => call.operation);
-      expect(operations).toContain("shutdown");
-      expect(operations).not.toContain("reclaim");
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
-    });
+        const operations = harness.driver.calls.map((call) => call.operation);
+        expect(operations).toContain("shutdown");
+        expect(operations).not.toContain("reclaim");
+        expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
+        expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
+      },
+    );
   });
 
   describe("a spent fresh device", () => {

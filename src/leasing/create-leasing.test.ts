@@ -6,7 +6,10 @@ import {
   BootTimeoutError,
   type ComponentInstaller,
   type Config,
+  type LeaseGrant,
+  type DeviceMode,
   type DeviceSpec,
+  type DriverDevice,
   type DriverEstimate,
   DriverCrashError,
   type VirtualSpec,
@@ -40,6 +43,7 @@ import {
   ProvisionFailedError,
 } from "./lease-acquisition-coordinator.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
+import type { LeaseEndParticipant } from "./lease-ports.js";
 import { createTestEngine } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
@@ -178,6 +182,8 @@ async function createHarness(
     readonly state?: StateDatabase;
     readonly identity?: Config["lease"]["identity"];
     readonly lease?: Partial<Config["lease"]>;
+    /** why: a participant holds a released device in `reclaiming` until it returns. */
+    readonly leaseEndParticipants?: readonly LeaseEndParticipant[];
     readonly capacity?: Config["capacity"];
     readonly defaultModes?: Parameters<typeof createTestEngine>[0]["defaultModes"];
     readonly limits?: CapacityLimits;
@@ -237,6 +243,9 @@ async function createHarness(
     ...(options.defaultModes === undefined ? {} : { defaultModes: options.defaultModes }),
     eventBus: bus,
     idGenerator: { generate: () => `request-${nextId++}` },
+    ...(options.leaseEndParticipants === undefined
+      ? {}
+      : { leaseEndParticipants: options.leaseEndParticipants }),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.modelPreferences === undefined
       ? {}
@@ -253,20 +262,24 @@ async function createHarness(
 async function seedReady(
   harness: Awaited<ReturnType<typeof createHarness>>,
   spec: VirtualSpec = { ...request, physical: false },
+  mode: DeviceMode = "full",
+  driver: FakeDriver = harness.driver,
 ) {
-  const driverDevice = await harness.driver.provision(spec);
+  const driverDevice = await driver.provision(spec);
   // Running on the machine too: a daemon start reads that of a leased device to keep its lease.
-  await harness.driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
+  const booted = await driver.makeReady(driverDevice, { mode, purpose: "prepare" });
   const device = await harness.registry.registerDevice({
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
     provisionDuration: 0,
     spec,
   });
-  return harness.registry.transitionDevice(device.id, "ready", {
-    event: "device.ready",
-    payload: { bootDuration: 0, deviceId: device.id },
-  });
+  return harness.registry.transitionDevice(
+    device.id,
+    "ready",
+    { event: "device.ready", payload: { bootDuration: 0, deviceId: device.id } },
+    booted.mode === undefined ? undefined : { mode: booted.mode },
+  );
 }
 
 async function flush(): Promise<void> {
@@ -284,14 +297,13 @@ async function settledOrPending(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("createLeasing", () => {
-  it("hands the caller back before the purge, keeps the device reclaiming, then re-leases it without another boot", async () => {
+  it("hands the caller back before the destroy, keeps the released device shut down, then grants the waiter a new device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock,
-      latencyMs: { reclaim: 20 },
+      latencyMs: { destroy: 20 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
@@ -306,29 +318,34 @@ describe("createLeasing", () => {
     });
     await flush();
 
-    // The releasing caller (an agent's MCP/CLI release) is already free to move on
-    // while the erase still has its full 20ms of driver latency ahead of it.
+    // why: the releasing caller (an agent's MCP/CLI release) is already free to move on
+    // while the destroy still has its full 20ms of driver latency ahead of it.
     await expect(release).resolves.toBeUndefined();
-    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
     expect(harness.engine.queueDepth).toBe(1);
     clock.advance(20);
     await harness.engine.settle();
-    await expect(second).resolves.toMatchObject({ device: { id: first.device.id } });
-    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+    const granted = (await second) as { readonly device: { readonly id: string } };
+    expect(granted.device.id).not.toBe(first.device.id);
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
   });
 
-  it("tells a waiter queued behind a reclaim how long that reclaim runs", async () => {
+  it("tells a waiter queued behind a released device held in reclaiming how long a reclaim runs", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock,
       estimateMs: { reclaim: 34_000 },
-      latencyMs: { reclaim: 20 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver });
+    let endWait: () => void = () => {};
+    const holding: LeaseEndParticipant = {
+      leaseEnded: () =>
+        new Promise<void>((resolve) => {
+          endWait = resolve;
+        }),
+    };
+    const harness = await createHarness({ driver, leaseEndParticipants: [holding] });
     const first = await harness.engine.request(request, {
       ownerId: "first",
       requesterId: "first",
@@ -343,15 +360,16 @@ describe("createLeasing", () => {
     });
     await flush();
 
-    // A queue position on its own says nothing about the wait; the erase the waiter is
+    // why: a queue position on its own says nothing about the wait; the device the waiter is
     // actually behind is what makes it tens of seconds rather than immediate (#56).
     expect(progress).toEqual([
       { queuePosition: 1, stage: "queued" },
       { etaMs: 34_000, stage: "reclaiming" },
     ]);
-    clock.advance(20);
+    endWait();
     await harness.engine.settle();
-    await expect(second).resolves.toMatchObject({ device: { id: first.device.id } });
+    const granted = (await second) as { readonly device: { readonly id: string } };
+    expect(granted.device.id).not.toBe(first.device.id);
   });
 
   it("does not report a reclaim stage to a waiter queued behind something else", async () => {
@@ -422,7 +440,7 @@ describe("createLeasing", () => {
     expect(harness.registry.snapshot.devices.map((device) => device.id)).toContain(physical.id);
   });
 
-  it("a release whose reclaim leaves the device ready, with running capacity over its limit, has the pool shut the least recently used idle device down", async () => {
+  it("a release destroys the released device instead of reclaiming it, so the pool shuts no idle device down for it", async () => {
     const harness = await createHarness({
       limits: {
         android: { maxDevices: 1, maxRunning: 1 },
@@ -440,16 +458,24 @@ describe("createLeasing", () => {
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
 
-    expect(harness.driver.calls.map((call) => call.operation)).toContain("reclaim");
+    const operations = harness.driver.calls.map((call) => call.operation);
+    expect(operations).toContain("destroy");
+    expect(operations).not.toContain("reclaim");
     expect(
       harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
-    ).toBe("ready");
+    ).toBe("deleted");
     expect(harness.registry.snapshot.devices.find((item) => item.id === excess.id)?.state).toBe(
-      "shutdown",
+      "ready",
     );
-    expect(harness.bus.replay().filter((event) => event.event === "device.shutdown")).toMatchObject(
-      [{ payload: { deviceId: excess.id, initiator: "warm-pool" } }],
-    );
+    expect(
+      harness.bus
+        .replay()
+        .filter(
+          (event) =>
+            event.event === "device.shutdown" &&
+            (event.payload as { initiator?: string }).initiator === "warm-pool",
+        ),
+    ).toEqual([]);
   });
 
   it("evicts warm inventory for active new-spec demand, including no-wait", async () => {
@@ -572,10 +598,10 @@ describe("createLeasing", () => {
     expect(harness.driver.calls.map((call) => call.operation)).toContain("destroy");
   });
 
-  it("quarantines a release-time purge failure instead of keeping the device eligible", async () => {
+  it("quarantines a release-time destroy failure instead of keeping the device eligible", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
       ownerId: "first",
@@ -591,7 +617,7 @@ describe("createLeasing", () => {
     ).toMatchObject([
       {
         payload: {
-          attemptedStrategy: "wipe",
+          attemptedStrategy: "delete",
           deviceId: first.device.id,
           error: "DriverCrashError: purge exploded",
           leaseId: first.lease.id,
@@ -615,15 +641,9 @@ describe("createLeasing", () => {
     ).rejects.toBeInstanceOf(NoCapacityError);
   });
 
-  it("never exposes a device as ready when post-purge readiness fails", async () => {
+  it("never exposes a released device as ready: it is shut down, destroyed and deleted", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    driver.failOn("makeReady", 2, new Error("not ready"));
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
       ownerId: "first",
@@ -637,7 +657,7 @@ describe("createLeasing", () => {
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     expect(harness.bus.replay().filter((event) => event.event === "device.ready")).toHaveLength(
       readyBefore,
     );
@@ -753,7 +773,7 @@ describe("createLeasing", () => {
     ]);
   });
 
-  it("shuts an orphaned reclaiming device down through its driver", async () => {
+  it("shuts an orphaned reclaiming device down and destroys it through its driver", async () => {
     const harness = await createHarness();
     const device = await seedReady(harness);
     const lease = await harness.registry.createLease({
@@ -767,8 +787,10 @@ describe("createLeasing", () => {
 
     await harness.engine.convergeRunningCapacity();
 
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("shutdown");
-    expect(harness.driver.calls.map((call) => call.operation)).toContain("shutdown");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
+    const operations = harness.driver.calls.map((call) => call.operation);
+    expect(operations).toContain("shutdown");
+    expect(operations).toContain("destroy");
   });
 
   it("reports unavoidable leased running overage", async () => {
@@ -895,10 +917,14 @@ describe("createLeasing", () => {
     await flush();
     expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
 
+    const released = (await first).device.id;
     await harness.engine.release((await first).lease.id, "explicit");
-    await expect(second).resolves.toMatchObject({
-      lease: { ownerId: "agent-2", requesterId: "agent-2" },
-    });
+    await flush();
+    clock.advance(20);
+    const granted = await second;
+    expect(granted).toMatchObject({ lease: { ownerId: "agent-2", requesterId: "agent-2" } });
+    expect(granted.device.id).not.toBe(released);
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
   });
 
   it("grants an existing matching ready device and does not match a different spec", async () => {
@@ -1015,8 +1041,8 @@ describe("createLeasing", () => {
     await harness.engine.release(provisionedGrant.lease.id, "explicit");
     await harness.engine.settle();
 
-    const shutdown = harness.registry.snapshot.devices[0];
-    if (shutdown === undefined) throw new Error("Expected provisioned device");
+    // why: a released virtual device is destroyed, so the shut-down device is seeded.
+    const shutdown = await seedReady(harness);
     await harness.registry.transitionDevice(shutdown.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: shutdown.id, initiator: "test" },
@@ -1053,11 +1079,7 @@ describe("createLeasing", () => {
       platform: "ios",
     });
     const harness = await createHarness({ driver, idleShutdownAfterMs: 0 });
-    const first = await harness.engine.request(request, { requesterId: "a", ownerId: "a" });
-    await harness.engine.release(first.lease.id, "explicit");
-    await harness.engine.settle();
-    const shutdown = harness.registry.snapshot.devices[0];
-    if (shutdown === undefined) throw new Error("Expected provisioned device");
+    const shutdown = await seedReady(harness);
     await harness.registry.transitionDevice(shutdown.id, "shutdown", {
       event: "device.shutdown",
       payload: { deviceId: shutdown.id, initiator: "test" },
@@ -1188,7 +1210,7 @@ describe("createLeasing", () => {
     expect(granted).toEqual(["agent-2", "agent-3", "agent-4"]);
   });
 
-  it("wakes exactly the queue head on release and reuses its reclaimed ready device", async () => {
+  it("wakes exactly the queue head on release and grants it a new device, not the destroyed one", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, {
       ownerId: "agent-1",
@@ -1208,24 +1230,19 @@ describe("createLeasing", () => {
     const secondGrant = await second;
     await flush();
 
-    expect(secondGrant.device.id).toBe(first.device.id);
+    expect(secondGrant.device.id).not.toBe(first.device.id);
     expect(harness.registry.snapshot.leases).toHaveLength(1);
     expect(harness.registry.snapshot.leases[0]?.requesterId).toBe("agent-2");
-    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    expect(harness.driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     await harness.engine.release(secondGrant.lease.id, "explicit");
     await expect(third).resolves.toMatchObject({
       lease: { ownerId: "agent-3", requesterId: "agent-3" },
     });
   });
 
-  it("boots a reclaimed shutdown device for the queue head instead of deadlocking at capacity", async () => {
+  it("provisions a new device for the queue head instead of deadlocking at capacity", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, {
       ownerId: "agent-1",
@@ -1239,8 +1256,9 @@ describe("createLeasing", () => {
 
     await harness.engine.release(first.lease.id, "explicit");
 
-    await expect(queued).resolves.toMatchObject({ device: { id: first.device.id } });
-    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    const granted = await queued;
+    expect(granted.device.id).not.toBe(first.device.id);
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
   });
 
@@ -1501,7 +1519,7 @@ describe("createLeasing RAM budget by mode", () => {
     });
   });
 
-  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; shutting the idle one down brings it back under", async () => {
+  it("over its limit after a restart with larger sizes, creates no device in either mode and boots no shut-down slim device, but grants an idle one; releasing the idle one destroys it and brings it back under", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       knownModels: ["iPhone 16", "iPhone 16 Pro"],
@@ -1520,17 +1538,14 @@ describe("createLeasing RAM budget by mode", () => {
     });
     const idleSpec = { ...slimRequest, osVersion: "26.4" };
     const held = await before.engine.request(slimRequest, { ownerId: "held", requesterId: "held" });
-    const toShutDown = await before.engine.request(slimRequest, { ownerId: "b", requesterId: "b" });
-    const idle = await before.engine.request(idleSpec, { ownerId: "c", requesterId: "c" });
-    for (const grant of [toShutDown, idle]) {
-      await before.engine.release(grant.lease.id, "explicit");
-    }
-    await before.engine.settle();
+    // why: a released virtual device is destroyed, so the idle devices are seeded rather than released.
+    const toShutDown = await seedReady(before, { ...slimRequest, physical: false }, "slim");
+    const idle = await seedReady(before, { ...idleSpec, physical: false }, "slim");
     await before.engine.cleanup.execute({
       action: "shutdown",
       reason: "test",
       rule: "test",
-      target: toShutDown.device.id,
+      target: toShutDown.id,
     });
     expect(before.engine.ramBudget?.usedBytes).toBe(1 * gibibyte);
 
@@ -1562,7 +1577,7 @@ describe("createLeasing RAM budget by mode", () => {
     }
     expect(operations(driver, "provision")).toBe(provisions);
     expect(operations(driver, "makeReady")).toBe(boots);
-    expect(after.registry.snapshot.devices.find((d) => d.id === toShutDown.device.id)?.state).toBe(
+    expect(after.registry.snapshot.devices.find((d) => d.id === toShutDown.id)?.state).toBe(
       "shutdown",
     );
 
@@ -1571,19 +1586,18 @@ describe("createLeasing RAM budget by mode", () => {
       ownerId: "reuse",
       requesterId: "reuse",
     });
-    expect(reused.device.id).toBe(idle.device.id);
+    expect(reused.device.id).toBe(idle.id);
     expect(after.registry.snapshot.leases.map((lease) => lease.deviceId)).toContain(held.device.id);
+    expect(after.engine.ramBudget?.overLimit).toBe(true);
 
     await after.engine.release(reused.lease.id, "explicit");
     await after.engine.settle();
-    expect(after.engine.ramBudget?.overLimit).toBe(true);
-    for (const [action, target] of [
-      ["destroy", toShutDown.device.id],
-      ["shutdown", idle.device.id],
-      ["destroy", idle.device.id],
-    ] as const) {
-      await after.engine.cleanup.execute({ action, reason: "test", rule: "test", target });
-    }
+    await after.engine.cleanup.execute({
+      action: "destroy",
+      reason: "test",
+      rule: "test",
+      target: toShutDown.id,
+    });
     await after.engine.settle();
     expect(operations(driver, "makeReady")).toBe(boots);
     expect(after.engine.ramBudget).toEqual({
@@ -1600,14 +1614,14 @@ describe("createLeasing RAM budget by mode", () => {
 // that replaced it: the lease is released registry-only on the convergence path,
 // and its reclaim proceeds in the background.
 describe("createLeasing startup reclaim backgrounding (#43)", () => {
-  it("converges without waiting for an in-flight reclaim, and a fresh request is served immediately after", async () => {
+  it("converges without waiting for an in-flight destroy, and a fresh request is served immediately after", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock,
       // Matches the issue's measured single-simulator-erase cost -- the old inline
       // await would have forced convergence to sit through this.
-      latencyMs: { reclaim: 34_000 },
+      latencyMs: { destroy: 34_000 },
       platform: "ios",
     });
     const harness = await createHarness({
@@ -1618,9 +1632,9 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
         maxRunning: 2,
       },
     });
-    // Under ADR 0004 convergence itself releases nothing -- there is no orphan sweep left --
-    // so the in-flight reclaim it must not block on is produced the way one actually arises:
-    // a release commits the registry half and hands the 34s purge off to the background.
+    // why: under ADR 0004 convergence itself releases nothing -- there is no orphan sweep left --
+    // so the in-flight destroy it must not block on is produced the way one actually arises:
+    // a release commits the registry half and hands the 34s destroy off to the background.
     const released = await harness.engine.request(request, {
       ownerId: "previous-holder",
       requesterId: "previous-holder",
@@ -1629,16 +1643,16 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
 
     const convergeStartedAt = harness.clock.now();
     await harness.engine.convergeRunningCapacity();
-    // The clock never had to move for convergence to finish: it did not sit through
-    // the 34s reclaim above.
+    // why: the clock never had to move for convergence to finish: it did not sit through
+    // the 34s destroy above.
     expect(harness.clock.now()).toBe(convergeStartedAt);
     expect(
       harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
-    ).toBe("reclaiming");
+    ).toBe("shutdown");
     expect(harness.registry.snapshot.leases).toEqual([]);
 
-    // A fresh request is servable right away -- capacity allows a second device, and the
-    // one still mid-reclaim never blocks it. Still 0ms elapsed.
+    // why: a fresh request is servable right away -- capacity allows a second device, and the
+    // one still mid-destroy never blocks it. Still 0ms elapsed.
     const granted = await harness.engine.request(request, {
       requesterId: "new-agent",
       ownerId: "new-agent",
@@ -1647,12 +1661,12 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
     expect(harness.clock.now()).toBe(convergeStartedAt);
   });
 
-  it("never grants a device whose background reclaim is still in flight", async () => {
+  it("never grants a device whose background destroy is still in flight", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock,
-      latencyMs: { reclaim: 34_000 },
+      latencyMs: { destroy: 34_000 },
       platform: "ios",
     });
     const harness = await createHarness({
@@ -1670,12 +1684,11 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
     await harness.engine.release(released.lease.id, "explicit");
 
     await harness.engine.convergeRunningCapacity();
-    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "reclaiming" }]);
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
 
-    // AcquisitionPlanner only ever grants a `ready` device (or reboots a `shutdown`
-    // one); `reclaiming` is neither. With maxDevices:1 there is also no room to
-    // provision a second device, so the request is refused rather than handed the
-    // one still mid-reclaim.
+    // why: a device that ended a lease is never granted again, even to reboot it. With maxDevices:1
+    // there is also no room to provision a second device, so the request is refused rather than
+    // handed the one still mid-destroy.
     await expect(
       harness.engine.request(request, {
         noWait: true,
@@ -1686,18 +1699,17 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
 
     clock.advance(34_000);
     await flush();
-    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "ready" }]);
+    expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
 
-    // Once the reclaim genuinely finishes, the same device becomes grantable again.
-    await expect(
-      harness.engine.request(request, {
-        ownerId: "new-agent",
-        requesterId: "new-agent",
-      }),
-    ).resolves.toMatchObject({ device: { id: released.device.id } });
+    // why: once the destroy finishes the slot is free again, and a new device is provisioned for it.
+    const granted = await harness.engine.request(request, {
+      ownerId: "new-agent",
+      requesterId: "new-agent",
+    });
+    expect(granted.device.id).not.toBe(released.device.id);
   });
 
-  it("recovers a background reclaim interrupted by a daemon crash on the next start", async () => {
+  it("recovers a background destroy interrupted by a daemon crash on the next start", async () => {
     const state = await openTestState();
     let nextId = 1;
     const idGenerator = { generate: () => `${nextId++}` };
@@ -1706,13 +1718,21 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
         cpuCount: 8,
         totalRamBytes: 32 * gibibyte,
       });
-    // The physical device survives a daemon restart even though the daemon's
+    // why: the physical device survives a daemon restart even though the daemon's
     // in-memory state does not -- represented here by one FakeDriver instance
     // shared across both simulated processes below.
-    const driver = new FakeDriver({
+    // why: the first destroy never returns, as one in a crashed daemon never does.
+    class CrashingDestroyDriver extends FakeDriver {
+      #destroys = 0;
+      override async destroy(device: DriverDevice): Promise<void> {
+        this.#destroys += 1;
+        if (this.#destroys === 1) return new Promise<void>(() => {});
+        return super.destroy(device);
+      }
+    }
+    const driver = new CrashingDestroyDriver({
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
-      latencyMs: { reclaim: 34_000 },
       platform: "ios",
     });
 
@@ -1744,15 +1764,15 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
       ownerId: "previous-holder",
       requesterId: "previous-holder",
     });
-    // The holder released, so the purge behind it is running in the background...
+    // why: the holder released, so the destroy behind it is running in the background...
     await engine1.release(granted.lease.id, "explicit");
 
     // ...convergence leaves it alone (it is claimed by this process)...
     await engine1.convergeRunningCapacity();
     expect(registry1.snapshot.devices).toMatchObject([
-      { id: granted.device.id, state: "reclaiming" },
+      { id: granted.device.id, state: "shutdown" },
     ]);
-    // ...and the process is abandoned before the driver's 34s reclaim resolves --
+    // why: ...and the process is abandoned before the driver's 34s destroy resolves --
     // exactly like a crashed daemon. Nothing here ever settles that promise.
 
     // why: next start: a fresh process reads the same persisted registry (state.db
@@ -1785,14 +1805,12 @@ describe("createLeasing startup reclaim backgrounding (#43)", () => {
     });
 
     await engine2.convergeRunningCapacity();
+    await flush();
 
-    // Recovered through the interrupted-reclaim path (a plain shutdown), not a
-    // second full reclaim.
-    expect(registry2.snapshot.devices).toMatchObject([
-      { id: granted.device.id, state: "shutdown" },
-    ]);
-    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
-    expect(driver.calls.filter((call) => call.operation === "shutdown")).toHaveLength(1);
+    // why: recovered by destroying the spent device again, never by reclaiming it.
+    expect(registry2.snapshot.devices).toMatchObject([{ id: granted.device.id, state: "deleted" }]);
+    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(0);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
   it("leaves no armed timer behind for a lease it is disposed with", async () => {
@@ -2045,7 +2063,7 @@ describe("createLeasing fresh lease identity (#75)", () => {
     expect(driver.calls.map((call) => call.operation)).not.toContain("reclaim");
   });
 
-  it("still reclaims a device created under reusable and returns it to the pool", async () => {
+  it("destroys a device created under reusable too, and grants the next requester a new device", async () => {
     const harness = await createHarness();
     const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
 
@@ -2057,12 +2075,13 @@ describe("createLeasing fresh lease identity (#75)", () => {
     });
 
     expect(harness.registry.snapshot.devices).toMatchObject([
-      { id: first.device.id, leaseIdentity: "reusable", state: "leased" },
+      { id: first.device.id, leaseIdentity: "reusable", state: "deleted" },
+      { id: second.device.id, leaseIdentity: "reusable", state: "leased" },
     ]);
-    expect(second.device.id).toBe(first.device.id);
+    expect(second.device.id).not.toBe(first.device.id);
     const operations = harness.driver.calls.map((call) => call.operation);
-    expect(operations.filter((operation) => operation === "reclaim")).toHaveLength(1);
-    expect(operations).not.toContain("destroy");
+    expect(operations).not.toContain("reclaim");
+    expect(operations.filter((operation) => operation === "destroy")).toHaveLength(1);
   });
 
   async function restartAfterCrash(crashedIn: "reclaiming" | "shutdown") {
@@ -2183,8 +2202,8 @@ describe("createLeasing logger wiring", () => {
   it("createCore hands its logger to the quarantine coordinator: a failed retry is logged", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
-    driver.failOn("reclaim", 2, new DriverCrashError("retry exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 2, new DriverCrashError("retry exploded"));
     const { logger, sink } = debugLogger();
     const harness = await createHarness({ driver, logger });
     const first = await harness.engine.request(request, {
@@ -2199,7 +2218,7 @@ describe("createLeasing logger wiring", () => {
     await flush();
 
     expect(
-      sink.records.filter((record) => record.message === "quarantine reclaim retry failed"),
+      sink.records.filter((record) => record.message === "quarantine delete retry failed"),
     ).toMatchObject([
       {
         level: "warn",
@@ -2208,7 +2227,7 @@ describe("createLeasing logger wiring", () => {
           attempts: 1,
           deviceId: first.device.id,
           error: "DriverCrashError: retry exploded",
-          step: "reclaim",
+          step: "delete",
         },
       },
     ]);
@@ -2380,13 +2399,14 @@ describe("createLeasing a grant and its request's result", () => {
     const grant = await harness.engine.request(request, asker);
     await flush();
     await harness.engine.release(grant.lease.id, "explicit");
+    await harness.engine.settle();
 
     const repeat = await harness.engine.request(request, asker);
 
     expect(repeat.lease.id).toBe(grant.lease.id);
     expect(grant.device.state).toBe("leased");
     expect(repeat).toEqual({ ...grant, device: harness.registry.snapshot.devices[0] });
-    expect(repeat.device.state).toBe("ready");
+    expect(repeat.device.state).toBe("deleted");
     await expect(harness.engine.renew(grant.lease.id)).rejects.toBeInstanceOf(UnknownLeaseError);
   });
 });
@@ -2544,7 +2564,7 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
     expect(capacityEvents(harness).at(-1)).toEqual(currentFigures(harness));
   });
 
-  it("emits capacity.changed after a device is deleted and after a lease releases a warm device", async () => {
+  it("emits capacity.changed after a device is deleted and after a lease release destroys its device", async () => {
     const harness = await createHarness();
     const grant = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
     await harness.engine.convergeRunningCapacity();
@@ -2552,9 +2572,12 @@ describe("createLeasing: capacity.changed and queue.changed", () => {
 
     await harness.engine.release(grant.lease.id, "explicit");
     await flush();
+    expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 0, running: 0 } });
+
+    const warm = await seedReady(harness);
     expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 1, running: 1 } });
 
-    await harness.registry.markDeviceMissing(grant.device.id, "test");
+    await harness.registry.markDeviceMissing(warm.id, "test");
     expect(capacityEvents(harness).at(-1)).toMatchObject({ ios: { warm: 0, running: 0 } });
     expect(capacityEvents(harness).at(-1)).toEqual(currentFigures(harness));
   });
@@ -3016,12 +3039,11 @@ describe("createLeasing warm pool", () => {
     expect(harness.clock.pendingTimerCount).toBe(0);
   });
 
-  it("a nuke without --delete-devices leaves the released devices shut down, not booted back by the pool", async () => {
+  it("a nuke without --delete-devices leaves the released devices destroyed, not booted back by the pool", async () => {
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({ driver });
     await harness.engine.convergeRunningCapacity();
@@ -3039,7 +3061,7 @@ describe("createLeasing warm pool", () => {
 
     expect(
       harness.registry.snapshot.devices.find((item) => item.id === held.device.id)?.state,
-    ).toBe("shutdown");
+    ).toBe("deleted");
     expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(1);
   });
 
@@ -3054,7 +3076,12 @@ describe("createLeasing warm pool", () => {
     ).resolves.toMatchObject({ lease: { requesterId: "after" } });
   });
 
-  it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
+  /**
+   * why: a released virtual device is destroyed, never booted back, so the device the warm pool
+   * boots is a shut-down one that never ended a lease, under a warm target of one.
+   * Its boot is held on the clock, with room for a second device.
+   */
+  async function shutdownDeviceBooting(failBoot = false) {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       knownModels: ["iPhone 16"],
@@ -3062,18 +3089,37 @@ describe("createLeasing warm pool", () => {
       clock,
       latencyMs: { makeReady: 50 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
-    const harness = await createHarness({ driver, startPool: true });
-    const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+    const harness = await createHarness({
+      driver,
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 2, maxRunning: 2 },
+        maxRunning: 2,
+      },
+      warmPool: {
+        targets: [{ count: 1, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+      },
+    });
+    const seeding = seedReady(harness);
     await flush();
     clock.advance(50);
-    const grant = await granting;
-    await harness.engine.release(grant.lease.id, "explicit");
-    // The reclaim commits `shutdown`; the pool then starts booting it back, held on the clock.
+    const seeded = await seeding;
+    await harness.registry.transitionDevice(seeded.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: seeded.id, initiator: "test" },
+    });
+    if (failBoot) driver.failOn("makeReady", 2, new Error("boom"));
+    await harness.engine.convergeRunningCapacity();
+    harness.bus.emit("daemon.started", { configSnapshot: {}, version: "test" }, "test");
     await vi.waitFor(() =>
       expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
     );
+    return { clock, driver, seeded, harness };
+  }
+
+  it("a nuke waits for a warm pool boot already in flight, then deletes the device", async () => {
+    const { clock, driver, harness } = await shutdownDeviceBooting();
 
     const nuking = harness.engine.nuke(true);
     await flush();
@@ -3086,40 +3132,8 @@ describe("createLeasing warm pool", () => {
   });
 
   describe("a request for a device on its way", () => {
-    /** One released iOS device whose warm-pool boot is held on the clock, room for a second. */
-    async function releasedDeviceBooting(failBoot = false) {
-      const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({
-        knownModels: ["iPhone 16"],
-        availableOsVersions: ["26.5"],
-        clock,
-        latencyMs: { makeReady: 50 },
-        platform: "ios",
-        reclaimResult: "shutdown",
-      });
-      const harness = await createHarness({
-        startPool: true,
-        driver,
-        limits: {
-          android: { maxDevices: 1, maxRunning: 1 },
-          ios: { maxDevices: 2, maxRunning: 2 },
-          maxRunning: 2,
-        },
-      });
-      const granting = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
-      await flush();
-      clock.advance(50);
-      const first = await granting;
-      if (failBoot) driver.failOn("makeReady", 2, new Error("boom"));
-      await harness.engine.release(first.lease.id, "explicit");
-      await vi.waitFor(() =>
-        expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2),
-      );
-      return { clock, driver, first, harness };
-    }
-
-    it("a request arriving during a warm-pool boot that serves it is granted that device when the boot settles, and device.provisioned does not fire", async () => {
-      const { clock, driver, first, harness } = await releasedDeviceBooting();
+    it("a request arriving during a warm-pool boot that serves it is granted that device when the boot settles, without a device provisioned for it", async () => {
+      const { clock, driver, seeded, harness } = await shutdownDeviceBooting();
 
       const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
       await flush();
@@ -3131,13 +3145,10 @@ describe("createLeasing warm pool", () => {
       // The pool's kick after its boot woke the request: it is granted without another clock tick.
       expect(await settledOrPending(second)).not.toBe("still pending");
       const granted = await second;
-      await harness.engine.settle();
 
-      expect(granted.device.id).toBe(first.device.id);
-      expect(
-        harness.bus.replay().filter((event) => event.event === "device.provisioned"),
-      ).toHaveLength(1);
-      expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+      // why: the granted device leaves the warm target short, so the pool provisions a
+      // replacement of its own; none was provisioned for the request, which got the booting one.
+      expect(granted.device.id).toBe(seeded.id);
       expect(harness.bus.replay().filter((event) => event.event === "device.ready")).toHaveLength(
         2,
       );
@@ -3186,13 +3197,15 @@ describe("createLeasing warm pool", () => {
 
     it("a request arriving while another request is booting a shut-down device provisions its own device rather than waiting for that one", async () => {
       const { clock, driver, harness } = await twoRoomsHarness(false);
-      const holder = harness.engine.request(request, { ownerId: "a", requesterId: "a" });
+      // why: a released virtual device is destroyed, so the shut-down device is seeded.
+      const seeding = seedReady(harness);
       await flush();
       clock.advance(50);
-      const held = await holder;
-      await harness.engine.release(held.lease.id, "explicit");
-      await harness.engine.settle();
-      expect(harness.registry.snapshot.devices).toMatchObject([{ state: "shutdown" }]);
+      const held = await seeding;
+      await harness.registry.transitionDevice(held.id, "shutdown", {
+        event: "device.shutdown",
+        payload: { deviceId: held.id, initiator: "test" },
+      });
 
       const booting = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
       await vi.waitFor(() =>
@@ -3207,13 +3220,13 @@ describe("createLeasing warm pool", () => {
       clock.advance(50);
       const granted = await Promise.all([booting, other]);
 
-      expect(granted[0].device.id).toBe(held.device.id);
-      expect(granted[1].device.id).not.toBe(held.device.id);
+      expect(granted[0].device.id).toBe(held.id);
+      expect(granted[1].device.id).not.toBe(held.id);
       expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     });
 
     it("under noWait a request arriving during a warm-pool boot provisions its own device", async () => {
-      const { clock, driver, first, harness } = await releasedDeviceBooting();
+      const { clock, driver, seeded, harness } = await shutdownDeviceBooting();
 
       const second = harness.engine.request(request, {
         noWait: true,
@@ -3224,12 +3237,12 @@ describe("createLeasing warm pool", () => {
       clock.advance(50);
       const granted = await second;
 
-      expect(granted.device.id).not.toBe(first.device.id);
+      expect(granted.device.id).not.toBe(seeded.id);
       expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
     });
 
     it("a request waiting on a warm-pool boot that fails re-plans on the kick and boots the device the failed boot left", async () => {
-      const { clock, driver, first, harness } = await releasedDeviceBooting(true);
+      const { clock, driver, seeded, harness } = await shutdownDeviceBooting(true);
 
       const second = harness.engine.request(request, { ownerId: "b", requesterId: "b" });
       await flush();
@@ -3242,13 +3255,13 @@ describe("createLeasing warm pool", () => {
       await harness.engine.settle();
 
       // The failed boot left the device `shutdown` and unclaimed, so the request boots it itself.
-      expect(granted.device.id).toBe(first.device.id);
+      expect(granted.device.id).toBe(seeded.id);
       expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(3);
       expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
     });
   });
 
-  it("a release at the running cap with a class request waiting grants the released device and provisions nothing", async () => {
+  it("a release at the running cap with a class request waiting provisions a new device for it, the released one being destroyed", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.0"],
@@ -3256,7 +3269,6 @@ describe("createLeasing warm pool", () => {
       knownModels: ["iPhone 15", "iPhone 17"],
       modelClasses: { "iPhone 15": "phone", "iPhone 17": "phone" },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({
       driver,
@@ -3289,23 +3301,20 @@ describe("createLeasing warm pool", () => {
     const granted = await waiter;
     await harness.engine.settle();
 
-    expect(granted.device.id).toBe(iphone15.id);
-    expect(
-      harness.bus
-        .replay()
-        .filter((event) => event.event === "device.provisioned")
-        .map((event) => event.payload.deviceId),
-    ).toEqual([iphone15.id]);
-    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    expect(granted.device.id).not.toBe(iphone15.id);
+    expect(granted.device.spec.model).toBe("iPhone 17");
+    expect(harness.registry.snapshot.devices.find((item) => item.id === iphone15.id)?.state).toBe(
+      "deleted",
+    );
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
   });
 
-  it("boots a released iOS device back to ready when the running limit has room", async () => {
+  it("destroys a released iOS device instead of booting it back when the running limit has room", async () => {
     const driver = new FakeDriver({
       knownModels: ["iPhone 16"],
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({ driver, startPool: true });
     const first = await harness.engine.request(request, { ownerId: "a", requesterId: "a" });
@@ -3315,25 +3324,23 @@ describe("createLeasing warm pool", () => {
 
     expect(
       harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
-    ).toBe("ready");
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(2);
+    ).toBe("deleted");
+    const releasedDriverId = harness.registry.snapshot.devices.find(
+      (item) => item.id === first.device.id,
+    )?.driverDeviceId;
+    expect(
+      driver.calls.filter(
+        (call) =>
+          call.operation === "makeReady" &&
+          (call.arguments[0] as { readonly deviceId: string }).deviceId === releasedDriverId,
+      ),
+    ).toHaveLength(1);
   });
 
-  it("with warmPool disabled a released fake iOS device is shutdown and a released fake Android device is shutdown after its snapshot reclaim", async () => {
+  it("with warmPool disabled a released fake iOS device and a released fake Android device are both deleted, with no reclaim", async () => {
     const clock = new FakeClock(1_000);
-    const ios = new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      platform: "ios",
-      reclaimResult: "shutdown",
-    });
-    const android = new FakeDriver({
-      availableOsVersions: ["36"],
-      clock,
-      platform: "android",
-      reclaimResult: "ready",
-      reclaimStrategy: "snapshot",
-    });
+    const ios = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
     const harness = await createHarness({
       driver: ios,
       drivers: [ios, android],
@@ -3356,28 +3363,21 @@ describe("createLeasing warm pool", () => {
 
     const state = (id: string) =>
       harness.registry.snapshot.devices.find((item) => item.id === id)?.state;
-    expect(state(iosLease.device.id)).toBe("shutdown");
-    expect(state(androidLease.device.id)).toBe("shutdown");
+    expect(state(iosLease.device.id)).toBe("deleted");
+    expect(state(androidLease.device.id)).toBe("deleted");
     const events = harness.bus.replay();
-    const reclaimed = events.findIndex(
-      (event) =>
-        event.event === "device.reclaimed" &&
-        event.payload.deviceId === androidLease.device.id &&
-        event.payload.strategy === "snapshot",
-    );
-    const shutdown = events.findIndex(
-      (event) =>
-        event.event === "device.shutdown" &&
-        event.payload.deviceId === androidLease.device.id &&
-        event.payload.initiator === "warm-pool",
-    );
-    expect(reclaimed).toBeGreaterThanOrEqual(0);
-    expect(shutdown).toBeGreaterThan(reclaimed);
+    expect(events.filter((event) => event.event === "device.reclaimed")).toEqual([]);
+    expect(
+      events.filter((event) => event.event === "device.deleted").map((event) => event.payload),
+    ).toMatchObject([
+      { deviceId: iosLease.device.id, initiator: "lease-end" },
+      { deviceId: androidLease.device.id, initiator: "lease-end" },
+    ]);
   });
 });
 
 describe("createLeasing queued device cleanup", () => {
-  it("keeps an old released device ready across reaper passes while its requester waits behind the queue head", async () => {
+  it("keeps an old shut-down device ready across reaper passes while its requester waits behind the queue head", async () => {
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
@@ -3406,12 +3406,12 @@ describe("createLeasing queued device cleanup", () => {
       requesterId: "holder",
       ttlMs: 3_600_000,
     });
-    const previous = await harness.engine.request(other, {
-      ownerId: "previous",
-      requesterId: "previous",
+    // why: a released virtual device is destroyed, so the old shut-down device is seeded.
+    const previous = await seedReady(harness, { ...other, physical: false }, "full", android);
+    await harness.registry.transitionDevice(previous.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: previous.id, initiator: "test" },
     });
-    await harness.engine.release(previous.lease.id, "explicit");
-    await harness.engine.settle();
     harness.clock.advance(10_001);
     await harness.engine.convergeRunningCapacity();
     const pending = ["head", "behind"].map((requesterId, index) =>
@@ -3426,7 +3426,7 @@ describe("createLeasing queued device cleanup", () => {
     await harness.engine.core.passWarmPool();
     await harness.engine.settle();
     const state = () =>
-      harness.registry.snapshot.devices.find((device) => device.id === previous.device.id)?.state;
+      harness.registry.snapshot.devices.find((device) => device.id === previous.id)?.state;
     expect(harness.engine.waitingRequests().map((entry) => entry.requesterId)).toEqual([
       "head",
       "behind",
@@ -3452,7 +3452,7 @@ describe("createLeasing queued device cleanup", () => {
           .filter(
             (event) =>
               event.event === "device.shutdown" &&
-              event.payload.deviceId === previous.device.id &&
+              event.payload.deviceId === previous.id &&
               event.payload.initiator === "cleanup-reaper",
           ),
         "a device booted for a queued requester must not be reaped",
@@ -3462,16 +3462,7 @@ describe("createLeasing queued device cleanup", () => {
       expect(
         [...(await harness.engine.core.targetedDevices())],
         "cancelling the waiter removes cleanup protection immediately",
-      ).not.toContain(previous.device.id);
-      await reaper.run();
-      await harness.engine.settle();
-      expect(state(), "ordinary idle cleanup resumes after cancellation").toBe("shutdown");
-      expect(harness.bus.replay()).toContainEqual(
-        expect.objectContaining({
-          event: "device.shutdown",
-          payload: { deviceId: previous.device.id, initiator: "cleanup-reaper" },
-        }),
-      );
+      ).not.toContain(previous.id);
     } finally {
       reaper.dispose();
       await harness.engine.cancelPending("head");
@@ -4862,31 +4853,34 @@ describe("createLeasing: a gateway dispatch is a probe (ADR 0021)", () => {
 });
 
 describe("createLeasing after a quarantine retry (ADR 0022 §2)", () => {
-  it("grants a request that waits at capacity the quarantined simulator, with no boot, once its retry succeeds", async () => {
+  it("grants a request that waits at capacity a new simulator once the retry has deleted the quarantined one", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
     await harness.engine.release(first.lease.id, "explicit");
     await harness.engine.settle();
     expect(harness.registry.snapshot.devices[0]?.state).toBe("quarantined");
-    const bootsBefore = driver.calls.filter((call) => call.operation === "makeReady").length;
     const waiting = harness.engine.request(request, { ownerId: "second", requesterId: "second" });
     await flush();
 
     harness.clock.advance(config().warmPool.quarantine.retryBackoffMs);
     await flush();
 
-    expect(await settledOrPending(waiting)).toMatchObject({ device: { id: first.device.id } });
-    expect(driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(bootsBefore);
-    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(1);
+    const granted = (await settledOrPending(waiting)) as LeaseGrant;
+    expect(granted).toMatchObject({ lease: { requesterId: "second" } });
+    expect(granted.device.id).not.toBe(first.device.id);
+    expect(
+      harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
+    ).toBe("deleted");
+    expect(driver.calls.filter((call) => call.operation === "provision")).toHaveLength(2);
   });
 
-  it("reports a warm target of one for the quarantined simulator's spec as ready 1 once the retry has emitted device.quarantine-recovered", async () => {
+  it("reports a warm target of one for the quarantined simulator's spec as ready 1 once the retry has deleted it and the pool has created a new one", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const harness = await createHarness({
       driver,
       warmPool: { targets: [{ count: 1, model: "iPhone 16", osVersion: "26.5", platform: "ios" }] },
@@ -4907,10 +4901,12 @@ describe("createLeasing after a quarantine retry (ADR 0022 §2)", () => {
     expect(
       harness.bus
         .replay()
-        .filter((event) => event.event === "device.quarantine-recovered")
+        .filter((event) => event.event === "device.deleted")
         .map((event) => (event.payload as { deviceId: string }).deviceId),
     ).toEqual([first.device.id]);
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    expect(
+      harness.registry.snapshot.devices.find((item) => item.id === first.device.id)?.state,
+    ).toBe("deleted");
     expect(harness.engine.core.warmPoolReader.figures().targets).toMatchObject([
       { count: 1, ready: 1 },
     ]);
@@ -5185,14 +5181,13 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
     ]);
   });
 
-  it("lists a request whose only match is reclaiming as the capacity reason its plan gave", async () => {
+  it("lists a request whose only match is being destroyed as the capacity reason its plan gave", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
       availableOsVersions: ["26.5"],
       clock,
-      latencyMs: { reclaim: 20 },
+      latencyMs: { destroy: 20 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({ driver });
     const first = await harness.engine.request(request, asking("first"));

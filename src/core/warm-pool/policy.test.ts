@@ -39,12 +39,15 @@ function device(
     createdAt?: number;
     readyAt?: number;
     leaseIdentity?: "fresh";
+    spent?: boolean;
   } = {},
 ): VirtualDevice {
   return {
     physical: false,
-    createdAt: options.createdAt ?? 1,
-    ...(options.readyAt === undefined ? {} : { readyAt: options.readyAt }),
+    createdAt: options.createdAt ?? (options.endedAgo === undefined ? 1 : now - options.endedAgo),
+    ...(options.readyAt === undefined && options.endedAgo === undefined
+      ? {}
+      : { readyAt: options.readyAt ?? now }),
     ...(options.leaseIdentity === undefined ? {} : { leaseIdentity: options.leaseIdentity }),
     driverData: {},
     driverDeviceId: `driver-${id}`,
@@ -52,7 +55,12 @@ function device(
     mode: "full",
     spec: options.spec ?? spec("iPhone 15"),
     state,
-    ...(options.endedAgo === undefined ? {} : { lastLeaseEndedAt: now - options.endedAgo }),
+    // why: a virtual device that ended a lease is spent (ADR 0061 §2) and never grantable; `endedAgo`
+    // only orders idle devices (least recently used), so it moves createdAt, and only a spent device
+    // carries the end stamp. Such a device counts as freshly ready, so the never-leased idle rule leaves it be.
+    ...(options.spent === true && options.endedAgo !== undefined
+      ? { lastLeaseEndedAt: now - options.endedAgo }
+      : {}),
   };
 }
 
@@ -732,7 +740,7 @@ describe("warm pool policy", () => {
     const busy = device("busy", "leased");
     const claimed = device("claimed", "shutdown", { endedAgo: 1_000 });
     const spent: VirtualDevice = {
-      ...device("spent", "shutdown", { endedAgo: 1_000 }),
+      ...device("spent", "shutdown", { endedAgo: 1_000, spent: true }),
       leaseIdentity: "fresh",
     };
     const free = device("free", "shutdown", { endedAgo: 2_000 });
@@ -922,7 +930,11 @@ describe("warm pool policy", () => {
 
     it("does not boot a shut-down device that is claimed, leased-identity spent, or reset", () => {
       const claimed = ofKind("claimed", "shutdown");
-      const spent = ofKind("spent", "shutdown", { endedAgo: minute, leaseIdentity: "fresh" });
+      const spent = ofKind("spent", "shutdown", {
+        endedAgo: minute,
+        leaseIdentity: "fresh",
+        spent: true,
+      });
       const reset = ofKind("reset", "shutdown");
 
       const proposals = evaluate(
@@ -941,7 +953,11 @@ describe("warm pool policy", () => {
     it("does not count a leased, claimed or spent device of its kind as ready", () => {
       const leased = ofKind("leased", "leased");
       const claimed = ofKind("claimed", "ready");
-      const spent = ofKind("spent", "ready", { endedAgo: minute, leaseIdentity: "fresh" });
+      const spent = ofKind("spent", "ready", {
+        endedAgo: minute,
+        leaseIdentity: "fresh",
+        spent: true,
+      });
 
       const proposals = evaluate(
         view([leased, claimed, spent], { claimed: ["claimed"], limit: 10, targets: [target(1)] }),
@@ -1050,6 +1066,7 @@ describe("warm pool policy", () => {
       const fresh = device("fresh", "ready", { readyAt: now - 1_000 });
       const leasedBefore = device("leased-before", "ready", {
         endedAgo: shutdownAfterMs * 3,
+        spent: true,
         readyAt: now - shutdownAfterMs * 3,
       });
 
@@ -1586,7 +1603,7 @@ describe("warm pool policy", () => {
           ofKind("leased", "leased"),
           ofKind("claimed", "ready"),
           ofKind("shut", "shutdown"),
-          ofKind("spent", "ready", { endedAgo: 1, leaseIdentity: "fresh" }),
+          ofKind("spent", "ready", { endedAgo: 1, leaseIdentity: "fresh", spent: true }),
           device("slim", "ready", { spec: { ...kind, mode: "slim" } }),
           ofKind("good", "ready"),
         ];
@@ -1640,7 +1657,14 @@ describe("warm pool policy", () => {
           ["shutdown", view([{ ...ready, state: "shutdown" }], { waiting }), []],
           [
             "spent fresh",
-            view([device("ready", "ready", { endedAgo: 1, leaseIdentity: "fresh" })], { waiting }),
+            view([device("ready", "ready", { endedAgo: 1, leaseIdentity: "fresh", spent: true })], {
+              waiting,
+            }),
+            [],
+          ],
+          [
+            "spent without fresh identity",
+            view([device("ready", "ready", { endedAgo: 1, spent: true })], { waiting }),
             [],
           ],
           [

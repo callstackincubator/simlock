@@ -1265,10 +1265,10 @@ describe("Doctor", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const original = driver.reclaim.bind(driver);
-    vi.spyOn(driver, "reclaim").mockImplementation(async (target, options) => {
+    const original = driver.destroy.bind(driver);
+    vi.spyOn(driver, "destroy").mockImplementation(async (target) => {
       await gate;
-      return original(target, options);
+      return original(target);
     });
     const claims = new DeviceOperationClaims();
     const quarantine = new QuarantineCoordinator({

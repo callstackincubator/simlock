@@ -139,12 +139,10 @@ describe("DaemonServer", () => {
 
     harness.clock.advance(40);
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
-    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    // why: a virtual device that ended a lease is deleted, never granted again (ADR 0061).
+    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     await expect(observer.request("status.get", {})).resolves.toMatchObject({
-      payload: {
-        capacity: { global: { warm: 1 }, ios: { warm: 1 } },
-        devices: [{ state: "ready" }],
-      },
+      payload: { devices: [{ state: "deleted" }] },
     });
     await observer.close();
   });
@@ -165,7 +163,7 @@ describe("DaemonServer", () => {
     ).resolves.toMatchObject({ ok: true });
 
     await expect.poll(() => harness.registry.snapshot.leases).toHaveLength(0);
-    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    await expect.poll(() => harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     await holder.close();
   });
 
@@ -1585,7 +1583,7 @@ describe("DaemonServer stored lease requests", () => {
     await holder.request("lease.release", { leaseId: held.payload.lease.id });
     await expect
       .poll(() => harness.registry.snapshot.devices.map((device) => device.state))
-      .toEqual(["ready"]);
+      .toEqual(["deleted"]);
 
     await expect(client.request("lease.request", noWait)).resolves.toMatchObject({
       error: { code: "NO_CAPACITY" },
@@ -2218,7 +2216,7 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await expect.poll(() => second.registry.snapshot.leases).toHaveLength(1);
     second.clock.advance(10);
     await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
-    await expect.poll(() => second.registry.snapshot.devices[0]?.state).toBe("ready");
+    await expect.poll(() => second.registry.snapshot.devices[0]?.state).toBe("deleted");
     await holder.close();
   });
 
@@ -2247,7 +2245,7 @@ describe("DaemonServer lease liveness (ADR 0004)", () => {
     await expect.poll(() => second.registry.snapshot.leases).toEqual([]);
     await expect
       .poll(() => second.registry.snapshot.devices)
-      .toMatchObject([{ id: deviceId, state: "ready" }]);
+      .toMatchObject([{ id: deviceId, state: "deleted" }]);
   });
 
   it("surfaces the stored lastRenewedAt and ttlMs in status and list --leases", async () => {

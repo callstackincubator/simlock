@@ -28,7 +28,6 @@ async function build(
   options: {
     readonly logger?: Logger;
     readonly fresh?: boolean;
-    readonly reclaimLatencyMs?: number;
     readonly driverRejections?: readonly DriverRejection[];
     readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
     readonly warmTargets?: Config["warmPool"]["targets"];
@@ -45,9 +44,6 @@ async function build(
   const driver = new FakeDriver({
     availableOsVersions: ["1"],
     clock,
-    ...(options.reclaimLatencyMs === undefined
-      ? {}
-      : { latencyMs: { reclaim: options.reclaimLatencyMs } }),
     ...(options.physicalDevices === undefined ? {} : { physicalDevices: options.physicalDevices }),
     platform: "ios",
   });
@@ -204,7 +200,7 @@ describe("createCore", () => {
     ]);
   });
 
-  it("after connect, a reclaim tells acquisition the device is back", async () => {
+  it("after connect, a release tells acquisition twice: running capacity is free, then the spent device is deleted", async () => {
     const harness = await build();
     const { device, released } = await releasedLease(harness);
     const order: string[] = [];
@@ -212,8 +208,8 @@ describe("createCore", () => {
 
     await harness.core.reclaim.reclaim(released);
 
-    expect(order).toEqual(["notifyAvailability"]);
-    expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "ready" }]);
+    expect(order).toEqual(["notifyAvailability", "notifyAvailability"]);
+    expect(harness.registry.snapshot.devices).toMatchObject([{ id: device.id, state: "deleted" }]);
   });
 
   it("doctor reports no finding on an empty registry when core was given no rejections and no checks", async () => {
@@ -409,27 +405,18 @@ describe("createCore", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("converge leaves a deferred wipe running in the background under a claim, and settle awaits it", async () => {
-    const harness = await build({ reclaimLatencyMs: 30_000 });
+  it("converge shuts down and deletes a released device whose wipe was deferred, instead of wiping it", async () => {
+    const harness = await build();
     const { released } = await releasedLease(harness, { deferReclaim: true });
     harness.core.connect(ports());
 
-    const startup = await harness.core.readStartup();
-    const outcome = await Promise.race([
-      harness.core.converge(startup).then(() => "returned" as const),
-      new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
-    ]);
+    await harness.core.converge(await harness.core.readStartup());
+    await harness.core.settle();
 
-    expect(outcome).toBe("returned");
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
-    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(true);
-
-    await new Promise((resolve) => setImmediate(resolve));
-    const settled = harness.core.settle();
-    harness.clock.advance(30_000);
-    await settled;
-
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("ready");
+    const operations = harness.driver.calls.map((call) => call.operation);
+    expect(operations).toContain("destroy");
+    expect(operations).not.toContain("reclaim");
+    expect(harness.registry.snapshot.devices[0]?.state).toBe("deleted");
     expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
   });
 
@@ -452,66 +439,6 @@ describe("createCore", () => {
     }
   });
 
-  it("nuke with deleteDevices waits for a deferred startup wipe, then deletes the device it left ready", async () => {
-    const harness = await build({ reclaimLatencyMs: 30_000 });
-    const { released } = await releasedLease(harness, { deferReclaim: true });
-    // Leasing's real acquisition pauses the warm pool while maintenance is open.
-    const base = ports();
-    const paused = { active: false };
-    harness.core.connect({
-      ...base,
-      leaseMaintenance: {
-        ...base.leaseMaintenance,
-        acquisition: {
-          ...base.leaseMaintenance.acquisition,
-          beginMaintenance: async () => void (paused.active = true),
-        },
-      },
-      warmPoolDemand: {
-        defaultMode: () => "full",
-        get maintenanceActive() {
-          return paused.active;
-        },
-        resolve: async () => ({ message: "no driver", refusal: "no-driver" }),
-        waitingDemand: () => [],
-      },
-    });
-    await harness.core.converge(await harness.core.readStartup());
-    expect(harness.registry.snapshot.devices[0]?.state).toBe("reclaiming");
-    await new Promise((resolve) => setImmediate(resolve));
-
-    const nuked = harness.core.nuke.nuke(true);
-    // Long enough for a reset that does not wait to pass the device by.
-    await new Promise((resolve) => setImmediate(resolve));
-    harness.clock.advance(30_000);
-    await nuked;
-
-    expect(
-      harness.registry.snapshot.devices.find((device) => device.id === released.device.id)?.state,
-    ).toBe("deleted");
-  });
-
-  it("logs a deferred wipe whose commit fails, releases its claim, and tells acquisition", async () => {
-    const sink = new MemoryLogSink();
-    const logger = new JsonLinesLogger({ clock: new FakeClock(0), level: "debug", sink });
-    const harness = await build({ logger });
-    const { released } = await releasedLease(harness, { deferReclaim: true });
-    const order: string[] = [];
-    harness.core.connect(ports(order));
-    vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
-
-    await harness.core.converge(await harness.core.readStartup());
-    await harness.core.settle();
-
-    expect(
-      sink.records.filter((record) => record.message === "deferred wipe failed"),
-    ).toMatchObject([
-      { level: "error", fields: { deviceId: released.device.id, error: "write failed" } },
-    ]);
-    expect(harness.core.claimReader.isClaimed(released.device.id)).toBe(false);
-    expect(order).toContain("notifyAvailability");
-  });
-
   describe("startup's quarantine restore", () => {
     async function quarantinedDevice(options: { readonly platformReadable: boolean }) {
       const harness = await build();
@@ -526,20 +453,20 @@ describe("createCore", () => {
       // Lets a retry timer that converge armed fire.
       harness.clock.advance(1);
       await new Promise((resolve) => setImmediate(resolve));
-      const reclaims = harness.driver.calls.filter((call) => call.operation === "reclaim");
-      return { ...harness, reclaims };
+      const retries = harness.driver.calls.filter((call) => call.operation === "destroy");
+      return { ...harness, retries };
     }
 
     it("re-arms the retry of a quarantined device on a platform the read could list", async () => {
-      const { reclaims } = await quarantinedDevice({ platformReadable: true });
+      const { retries } = await quarantinedDevice({ platformReadable: true });
 
-      expect(reclaims).toHaveLength(1);
+      expect(retries).toHaveLength(1);
     });
 
     it("leaves a quarantined device on a platform the read could not list alone: no retry runs", async () => {
-      const { reclaims } = await quarantinedDevice({ platformReadable: false });
+      const { retries } = await quarantinedDevice({ platformReadable: false });
 
-      expect(reclaims).toHaveLength(0);
+      expect(retries).toHaveLength(0);
     });
   });
 

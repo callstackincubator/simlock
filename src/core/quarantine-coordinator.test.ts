@@ -216,9 +216,9 @@ describe("QuarantineCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
-  it("hands the driver's retried reclaim a device marked virtual", async () => {
+  it("hands the driver's retried destroy a device marked virtual", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const harness = await createHarness({
       clock,
       driver,
@@ -229,15 +229,15 @@ describe("QuarantineCoordinator", () => {
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
 
-    const reclaims = driver.calls.filter((call) => call.operation === "reclaim");
-    expect(reclaims.map((call) => call.arguments[0])).toEqual([
+    const destroys = driver.calls.filter((call) => call.operation === "destroy");
+    expect(destroys.map((call) => call.arguments[0])).toEqual([
       expect.objectContaining({ physical: false }),
     ]);
   });
 
-  it("a virtual device's recovery from quarantine does not tell the physical-ready port", async () => {
+  it("a virtual device's retry does not tell the physical-ready port", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const physicalDeviceReady = vi.fn();
     const harness = await createHarness({
       clock,
@@ -250,7 +250,7 @@ describe("QuarantineCoordinator", () => {
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
 
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
+    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
     expect(physicalDeviceReady).not.toHaveBeenCalled();
   });
 
@@ -271,9 +271,9 @@ describe("QuarantineCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
-  it("retries and gives up on a stalled-transition entry exactly like a purge-failure one", async () => {
+  it("retries a stalled-transition entry by deleting the device, exactly like a purge-failure one", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const harness = await createHarness({
       clock,
       driver,
@@ -284,68 +284,18 @@ describe("QuarantineCoordinator", () => {
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
 
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
-      "device.quarantined",
-      "device.quarantine-recovered",
-    ]);
+    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
+    expect(harness.registry.deletions).toEqual(["lease-end"]);
+    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual(["device.quarantined"]);
     expect(harness.notifyAvailability).toHaveBeenCalledTimes(1);
-  });
-
-  it("recovers on a successful retry, rejoins the pool, and wakes availability", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
-    const harness = await createHarness({ clock, driver });
-    await harness.coordinator.enter({
-      attemptedStrategy: "wipe",
-      kind: "purge-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "boom",
-      leaseId: "lease-1",
-    });
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-    expect(harness.registry.snapshot.virtualDevices[0]?.quarantineAttempts).toBeUndefined();
-    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
-      "device.purge-failed",
-      "device.quarantined",
-      "device.quarantine-recovered",
-    ]);
-    expect(eventsOf(harness.bus)[2]).toMatchObject({
-      payload: { attempts: 1, deviceId: harness.target.id },
-    });
-    expect(harness.notifyAvailability).toHaveBeenCalledOnce();
-  });
-
-  it("emits device.quarantine-recovered for a virtual device without a missingApps field", async () => {
-    const harness = await createHarness();
-    await harness.coordinator.enter({
-      attemptedStrategy: "wipe",
-      kind: "purge-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "boom",
-      leaseId: "lease-1",
-    });
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    const payload = eventsOf(harness.bus)[2]?.payload as object;
-    expect("missingApps" in payload).toBe(false);
   });
 
   it("grows the backoff after each failed retry, capped at maxRetryBackoffMs, then gives up and destroys", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
-    // Calls: 1 = the initial purge (handled by the caller, not exercised here),
-    // so reclaim() calls from the coordinator start at call #1 for this fresh device.
-    driver.failOn("reclaim", 1, new Error("still stuck"));
-    driver.failOn("reclaim", 2, new Error("still stuck"));
+    // why: a virtual device is retried by destroy, so the third destroy is the give-up one.
+    driver.failOn("destroy", 1, new Error("still stuck"));
+    driver.failOn("destroy", 2, new Error("still stuck"));
     const harness = await createHarness({ clock, config: retryConfig, driver });
     await harness.coordinator.enter({
       attemptedStrategy: "wipe",
@@ -385,9 +335,9 @@ describe("QuarantineCoordinator", () => {
   it("strands a device whose give-up destroy also fails, rather than losing it silently", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("still stuck"));
-    driver.failOn("reclaim", 2, new Error("still stuck"));
-    driver.failOn("destroy", 1, new Error("destroy blew up"));
+    driver.failOn("destroy", 1, new Error("still stuck"));
+    driver.failOn("destroy", 2, new Error("still stuck"));
+    driver.failOn("destroy", 3, new Error("destroy blew up"));
     const harness = await createHarness({ clock, config: retryConfig, driver });
     await harness.coordinator.enter({
       attemptedStrategy: "wipe",
@@ -422,40 +372,43 @@ describe("QuarantineCoordinator", () => {
     expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
-  it("retries a spent fresh device's delete rather than an erase, and a successful retry reaches deleted, never ready", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
-    const harness = await createHarness({
-      clock,
-      driver,
-      target: { lastLeaseEndedAt: 900, leaseIdentity: "fresh" },
-    });
-    await harness.coordinator.enter({
-      attemptedStrategy: "delete",
-      kind: "delete-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "Error: delete exploded",
-      leaseId: "lease-1",
-    });
+  it.each([
+    ["a spent fresh device", { lastLeaseEndedAt: 900, leaseIdentity: "fresh" as const }],
+    ["a spent reusable device", { lastLeaseEndedAt: 900, leaseIdentity: "reusable" as const }],
+    ["a device that never served a lease", {}],
+  ])(
+    "retries %s's delete rather than an erase, and a successful retry reaches deleted, never ready",
+    async (_case, target) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      const harness = await createHarness({ clock, driver, target });
+      await harness.coordinator.enter({
+        attemptedStrategy: "delete",
+        kind: "delete-failed",
+        deviceId: harness.target.id,
+        duration: 0,
+        error: "Error: delete exploded",
+        leaseId: "lease-1",
+      });
 
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
+      harness.clock.advance(retryConfig.retryBackoffMs);
+      await flush();
 
-    const operations = harness.driver.calls.map((call) => call.operation);
-    expect(operations).toContain("destroy");
-    expect(operations).not.toContain("reclaim");
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
-    expect(harness.registry.deletions).toEqual(["lease-end"]);
-    expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
-      "device.purge-failed",
-      "device.quarantined",
-    ]);
-    expect(eventsOf(harness.bus)[0]).toMatchObject({ payload: { attemptedStrategy: "delete" } });
-    expect(harness.notifyAvailability).toHaveBeenCalledOnce();
-  });
+      const operations = harness.driver.calls.map((call) => call.operation);
+      expect(operations).toContain("destroy");
+      expect(operations).not.toContain("reclaim");
+      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
+      expect(harness.registry.deletions).toEqual(["lease-end"]);
+      expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
+        "device.purge-failed",
+        "device.quarantined",
+      ]);
+      expect(eventsOf(harness.bus)[0]).toMatchObject({ payload: { attemptedStrategy: "delete" } });
+      expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("keeps a spent fresh device quarantined and re-arms when its retried delete fails", async () => {
+  it("keeps a virtual device quarantined and re-arms when its retried delete fails", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
     driver.failOn("destroy", 1, new Error("still stuck"));
@@ -481,42 +434,6 @@ describe("QuarantineCoordinator", () => {
       state: "quarantined",
     });
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
-  });
-
-  it("A failed quarantine reclaim retry logs the error and the attempt number.", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("erase still stuck"));
-    const sink = new MemoryLogSink();
-    const harness = await createHarness({
-      clock,
-      driver,
-      logger: new JsonLinesLogger({ clock, sink }),
-    });
-    await harness.coordinator.enter({
-      attemptedStrategy: "wipe",
-      kind: "purge-failed",
-      deviceId: harness.target.id,
-      duration: 0,
-      error: "boom",
-      leaseId: "lease-1",
-    });
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        module: "daemon.quarantine-coordinator",
-        fields: {
-          attempts: 1,
-          deviceId: harness.target.id,
-          error: "Error: erase still stuck",
-          step: "reclaim",
-        },
-      }),
-    ]);
   });
 
   it("A failed quarantine delete retry logs the error and the attempt number.", async () => {
@@ -572,7 +489,7 @@ describe("QuarantineCoordinator", () => {
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
 
-    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("destroy");
     expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("leased");
   });
 
@@ -604,7 +521,7 @@ describe("QuarantineCoordinator", () => {
     clock.advance(2_000); // now = 3_000, exactly the persisted deadline
     await flush();
 
-    expect(registry.snapshot.virtualDevices[0]?.state).toBe("ready");
+    expect(registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
     expect(notifyAvailability).toHaveBeenCalledOnce();
   });
 
@@ -634,7 +551,7 @@ describe("QuarantineCoordinator", () => {
     clock.advance(10_000);
     await flush();
 
-    expect(driver.calls.map((call) => call.operation)).not.toContain("reclaim");
+    expect(driver.calls.map((call) => call.operation)).not.toContain("destroy");
     expect(registry.snapshot.virtualDevices[0]?.state).toBe("quarantined");
   });
 
@@ -838,7 +755,7 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
 
-    expect(harness.driver.calls.filter((call) => call.operation === "reclaim")).toEqual([]);
+    expect(harness.driver.calls.filter((call) => call.operation === "destroy")).toEqual([]);
     expect(harness.registry.snapshot.virtualDevices[0]).toMatchObject({
       quarantineAttempts: 0,
       state: "quarantined",
@@ -846,32 +763,29 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
     held?.release();
     harness.clock.advance(retryConfig.retryBackoffMs - 1);
     await flush();
-    expect(harness.driver.calls.filter((call) => call.operation === "reclaim")).toEqual([]);
+    expect(harness.driver.calls.filter((call) => call.operation === "destroy")).toEqual([]);
     harness.clock.advance(1);
     await flush();
 
-    expect(harness.driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
-    expect(eventsOf(harness.bus).at(-1)).toMatchObject({
-      event: "device.quarantine-recovered",
-      payload: { attempts: 1 },
-    });
+    expect(harness.driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
+    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
   });
 
   it.each([
     ["succeeds", false],
     ["throws", true],
   ] as const)(
-    "holds the reclaim claim while the driver's reclaim runs, and frees it after the call %s",
+    "holds the reclaim claim while the driver's destroy runs, and frees it after the call %s",
     async (_case, throws) => {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
-      if (throws) driver.failOn("reclaim", 1, new Error("still stuck"));
+      const driver = new FakeDriver({ clock, platform: "ios" });
+      if (throws) driver.failOn("destroy", 1, new Error("still stuck"));
       const harness = await stalled({ clock, driver });
-      const original = driver.reclaim.bind(driver);
+      const original = driver.destroy.bind(driver);
       const duringCall: unknown[] = [];
-      vi.spyOn(driver, "reclaim").mockImplementation(async (device, options) => {
+      vi.spyOn(driver, "destroy").mockImplementation(async (device) => {
         duringCall.push(harness.claims.operationFor(harness.target.id));
-        return original(device, options);
+        return original(device);
       });
 
       harness.clock.advance(retryConfig.retryBackoffMs);
@@ -880,27 +794,13 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
       expect(duringCall).toEqual(["reclaim"]);
       expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
       expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe(
-        throws ? "quarantined" : "ready",
+        throws ? "quarantined" : "deleted",
       );
     },
   );
 
-  it("has freed the claim before it emits and before it wakes availability when a retry recovers the device", async () => {
-    const harness = await stalled({});
-    const claimedAt: boolean[] = [];
-    const sees = () => claimedAt.push(harness.claims.isClaimed(harness.target.id));
-    harness.bus.subscribe("device.quarantine-recovered", sees);
-    harness.notifyAvailability.mockImplementation(sees);
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(harness.notifyAvailability).toHaveBeenCalledTimes(1);
-    expect(claimedAt).toEqual([false, false]);
-  });
-
-  it("has freed the claim before it wakes availability when a retry deletes a spent fresh device", async () => {
-    const harness = await stalled({ target: { lastLeaseEndedAt: 900, leaseIdentity: "fresh" } });
+  it("has freed the claim before it wakes availability when a retry deletes a virtual device", async () => {
+    const harness = await stalled({ target: { lastLeaseEndedAt: 900 } });
     const claimedAt: boolean[] = [];
     harness.notifyAvailability.mockImplementation(() =>
       claimedAt.push(harness.claims.isClaimed(harness.target.id)),
@@ -918,8 +818,8 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
   it("has freed the claim before it emits device.quarantine-abandoned and before it wakes availability when a retry gives up", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("still stuck"));
-    driver.failOn("reclaim", 2, new Error("still stuck"));
+    driver.failOn("destroy", 1, new Error("still stuck"));
+    driver.failOn("destroy", 2, new Error("still stuck"));
     const harness = await stalled({ clock, driver });
     const claimedAt: boolean[] = [];
     const sees = () => claimedAt.push(harness.claims.isClaimed(harness.target.id));
@@ -938,9 +838,9 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
   it("has freed the claim before it emits device.quarantine-stranded when a retry gives up and cannot destroy the device", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("still stuck"));
-    driver.failOn("reclaim", 2, new Error("still stuck"));
-    driver.failOn("destroy", 1, new Error("cannot destroy"));
+    driver.failOn("destroy", 1, new Error("still stuck"));
+    driver.failOn("destroy", 2, new Error("still stuck"));
+    driver.failOn("destroy", 3, new Error("cannot destroy"));
     const harness = await stalled({ clock, driver });
     const claimedAt: boolean[] = [];
     harness.bus.subscribe("device.quarantine-stranded", () =>
@@ -957,7 +857,7 @@ describe("QuarantineCoordinator retry claim (ADR 0022 §2)", () => {
 
   it("frees the claim when a registry write throws during the retry", async () => {
     const harness = await stalled();
-    vi.spyOn(harness.registry, "recoverFromQuarantine").mockRejectedValue(new Error("disk full"));
+    vi.spyOn(harness.registry, "deleteQuarantined").mockRejectedValue(new Error("disk full"));
 
     harness.clock.advance(retryConfig.retryBackoffMs);
     await flush();
@@ -1205,7 +1105,7 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
     return harness.driver.calls.filter((call) => call.operation === operation);
   }
 
-  it("a physical retry while not present makes no reclaim or destroy call, keeps quarantineAttempts, writes quarantineNextRetryAt as now plus health.probeIntervalMs, and re-arms for that time; a virtual retry is unchanged", async () => {
+  it("a physical retry while not present makes no reclaim or destroy call, keeps quarantineAttempts, writes quarantineNextRetryAt as now plus health.probeIntervalMs, and re-arms for that time; a virtual retry reads no presence and deletes the device", async () => {
     const harness = await build();
     const id = await enrollQuarantined(harness);
     const backoff = harness.config.warmPool.quarantine.retryBackoffMs;
@@ -1228,14 +1128,14 @@ describe("QuarantineCoordinator retry of a physical device that is not present (
     expect(record(harness, id)?.state).toBe("ready");
 
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const virtual = await createHarness({ clock, driver, target: { state: "reclaiming" } });
     await virtual.coordinator.enterFromStalledTransition(virtual.target.id, "reclaiming");
     virtual.clock.advance(retryConfig.retryBackoffMs);
     await flush();
-    expect(virtual.driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(virtual.driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
     expect(virtual.driver.calls.map((call) => call.operation)).not.toContain("listPresentPhysical");
-    expect(virtual.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
+    expect(virtual.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
   });
 
   it("a physical retry that runs while present and fails counts one attempt", async () => {
@@ -1472,16 +1372,11 @@ describe("QuarantineCoordinator quarantine cause", () => {
   }
 
   it.each(["ios", "android"] as const)(
-    "device.quarantine-recovered, device.quarantine-abandoned and device.quarantine-stranded carry the device's own platform, for an %s device",
+    "device.quarantine-abandoned and device.quarantine-stranded carry the device's own platform, for an %s device",
     async (platform) => {
-      const recovered = await build({ platform });
-      await recovered.coordinator.enter(failure(recovered.id, "purge-failed", "boom"));
-      recovered.clock.advance(retryConfig.retryBackoffMs);
-      await flush();
-
       const abandoned = await build({ platform });
-      abandoned.driver.failOn("reclaim", 1, new Error("still stuck"));
-      abandoned.driver.failOn("reclaim", 2, new Error("still stuck"));
+      abandoned.driver.failOn("destroy", 1, new Error("still stuck"));
+      abandoned.driver.failOn("destroy", 2, new Error("still stuck"));
       await abandoned.coordinator.enter(failure(abandoned.id, "purge-failed", "boom"));
       abandoned.clock.advance(retryConfig.retryBackoffMs);
       await flush();
@@ -1489,9 +1384,9 @@ describe("QuarantineCoordinator quarantine cause", () => {
       await flush();
 
       const stranded = await build({ platform });
-      stranded.driver.failOn("reclaim", 1, new Error("still stuck"));
-      stranded.driver.failOn("reclaim", 2, new Error("still stuck"));
-      stranded.driver.failOn("destroy", 1, new Error("destroy blew up"));
+      stranded.driver.failOn("destroy", 1, new Error("still stuck"));
+      stranded.driver.failOn("destroy", 2, new Error("still stuck"));
+      stranded.driver.failOn("destroy", 3, new Error("destroy blew up"));
       await stranded.coordinator.enter(failure(stranded.id, "purge-failed", "boom"));
       stranded.clock.advance(retryConfig.retryBackoffMs);
       await flush();
@@ -1501,10 +1396,9 @@ describe("QuarantineCoordinator quarantine cause", () => {
       const payloadOf = (harness: { readonly bus: EventBus }, name: string) =>
         harness.bus.replay().find((event) => event.event === name)?.payload;
       expect([
-        payloadOf(recovered, "device.quarantine-recovered"),
         payloadOf(abandoned, "device.quarantine-abandoned"),
         payloadOf(stranded, "device.quarantine-stranded"),
-      ]).toMatchObject([{ platform }, { platform }, { platform }]);
+      ]).toMatchObject([{ platform }, { platform }]);
     },
   );
 
@@ -1618,21 +1512,6 @@ describe("QuarantineCoordinator quarantine cause", () => {
     }
   });
 
-  it("a failed reclaim retry keeps the cause written at entry", async () => {
-    const harness = await build();
-    harness.driver.failOn("reclaim", 1, new Error("still stuck"));
-    await harness.coordinator.enter(failure(harness.id, "purge-failed", "Error: first"));
-
-    harness.clock.advance(retryConfig.retryBackoffMs);
-    await flush();
-
-    expect(harness.device()).toMatchObject({ quarantineAttempts: 1, state: "quarantined" });
-    expect(harness.device()?.quarantineCause).toEqual({
-      kind: "purge-failed",
-      message: "Error: first",
-    });
-  });
-
   it("a failed delete retry keeps the cause written at entry", async () => {
     const harness = await build({ fresh: true, state: "shutdown" });
     harness.driver.failOn("destroy", 1, new Error("still stuck"));
@@ -1665,9 +1544,9 @@ describe("QuarantineCoordinator quarantine cause", () => {
 
   it("a stranded give-up keeps the cause written at entry", async () => {
     const harness = await build();
-    harness.driver.failOn("reclaim", 1, new Error("still stuck"));
-    harness.driver.failOn("reclaim", 2, new Error("still stuck"));
-    harness.driver.failOn("destroy", 1, new Error("cannot destroy"));
+    harness.driver.failOn("destroy", 1, new Error("still stuck"));
+    harness.driver.failOn("destroy", 2, new Error("still stuck"));
+    harness.driver.failOn("destroy", 3, new Error("cannot destroy"));
     await harness.coordinator.enter(failure(harness.id, "purge-failed", "Error: first"));
 
     harness.clock.advance(retryConfig.retryBackoffMs);

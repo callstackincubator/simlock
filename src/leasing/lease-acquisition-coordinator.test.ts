@@ -962,32 +962,18 @@ describe("LeaseAcquisitionCoordinator", () => {
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
   });
 
-  it("grants a request queued behind a request whose shut-down device failed to boot and then to be destroyed, when another shut-down device and a running slot are free, with no release", async () => {
+  it("grants a request made behind a request whose shut-down device failed to boot and then to be destroyed the other shut-down device, with no release", async () => {
     const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
-    const held = await Promise.all([
-      harness.coordinator.request(request, { ownerId: "x", requesterId: "x" }),
-      harness.coordinator.request(request, { ownerId: "y", requesterId: "y" }),
-    ]);
+    // why: a released virtual device is destroyed, so the shut-down devices are seeded.
+    const shutdown = [await seedShutdown(harness), await seedShutdown(harness)];
+    // why: makeready calls 1 and 2 readied the seeded devices; call 3 is the head's boot. Its device
+    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
+    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
+    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
     const failing = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
     void failing.catch(() => undefined);
     const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
     const secondState = promiseState(second);
-    await settle();
-    expect(harness.coordinator.queueDepth).toBe(2);
-    // Makeready calls 1 and 2 readied the held devices; call 3 is the head's boot. Its device
-    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
-    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
-    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
-    // Both devices come back shut down without the release path, so only the kick below wakes
-    // the queue; its head is the request that fails.
-    for (const grant of held) {
-      await harness.registry.beginRelease(grant.lease.id);
-      await harness.registry.transitionDevice(grant.device.id, "shutdown", {
-        event: "device.reclaimed",
-        payload: { deviceId: grant.device.id, duration: 0, strategy: "wipe" },
-      });
-    }
-    harness.coordinator.kick();
     await settle();
     await expect(failing).rejects.toMatchObject({ name: "BootTimeoutError" });
     const failedDeviceId = (
@@ -995,9 +981,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         | { readonly deviceId: string }
         | undefined
     )?.deviceId;
-    const otherDevice = held
-      .map((grant) => grant.device)
-      .find((device) => device.driverDeviceId !== failedDeviceId);
+    const otherDevice = shutdown.find((device) => device.driverDeviceId !== failedDeviceId);
 
     expect({ queueDepth: harness.coordinator.queueDepth, second: secondState.state }).toEqual({
       queueDepth: 0,
@@ -1290,10 +1274,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
 
     await harness.registry.beginRelease(held.lease.id);
-    await harness.registry.transitionDevice(held.device.id, "ready", {
-      event: "device.reclaimed",
-      payload: { deviceId: held.device.id, duration: 0, strategy: "wipe" },
-    });
+    await harness.registry.completeReclaimWithoutPurge(held.device.id);
     harness.coordinator.kick();
     await settle();
 
@@ -1313,14 +1294,13 @@ describe("LeaseAcquisitionCoordinator", () => {
         ["waiter", "granted"],
       ],
       deadlineFellDueDuringTheGrantWrite: true,
-      deviceStates: ["leased"],
+      deviceStates: ["deleted", "leased"],
       leaseRequesters: ["waiter"],
       outcome: "fulfilled",
     });
-    await expect(waiting).resolves.toMatchObject({
-      device: { id: held.device.id },
-      lease: { requesterId: "waiter" },
-    });
+    const granted = await waiting;
+    expect(granted).toMatchObject({ lease: { requesterId: "waiter" } });
+    expect(granted.device.id).not.toBe(held.device.id);
   });
 
   it.each(["ready", "booted", "provisioned"] as const)(
