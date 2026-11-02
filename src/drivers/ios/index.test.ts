@@ -1983,6 +1983,15 @@ describe("IosSimctlDriver", () => {
     const managedCount = Object.keys(wantedOverrides()).length;
     const trueLabel = widgetsLabels[0] ?? "";
     const falseLabel = "com.apple.siriactionsd";
+    // why: the label written first is not the first in sorted order, so naming the sorted first
+    // differs from naming the first one the readback check meets.
+    const firstWritten = Object.keys(wantedOverrides())[0] ?? "";
+    const firstSorted = Object.keys(wantedOverrides()).sort()[0] ?? "";
+    function flipped(labels: readonly string[]): Record<string, string> {
+      return Object.fromEntries(
+        labels.map((label) => [label, wantedOverrides()[label] === true ? "enabled" : "disabled"]),
+      );
+    }
 
     function slimOptions(bootTimeoutMs = 300_000) {
       return { bootTimeoutMs, categories: ["widgets"] } as const;
@@ -2024,6 +2033,14 @@ describe("IosSimctlDriver", () => {
     it.each([
       { name: "no file yet", existing: undefined, expected: wantedOverrides(), rewritten: true },
       {
+        name: "an unknown category beside a known one, which is reported",
+        existing: undefined,
+        expected: wantedOverrides(),
+        rewritten: true,
+        configured: ["widgets", "nonsense"],
+        unknown: ["nonsense"],
+      },
+      {
         name: "a file with the runtime's own entries, which are kept",
         existing: { "com.apple.runtime.own": true, "com.example.other": false },
         expected: {
@@ -2052,7 +2069,7 @@ describe("IosSimctlDriver", () => {
       },
     ])(
       "writes the launchd overrides before the one boot and grants slim after the readback: $name",
-      async ({ existing, expected, rewritten }) => {
+      async ({ existing, expected, rewritten, configured, unknown }) => {
         const filesystem = new FaultyFilesystem();
         await plantManagedDevice(filesystem);
         if (existing !== undefined) {
@@ -2079,7 +2096,9 @@ describe("IosSimctlDriver", () => {
         const driver = await createSlimDriver(
           runner,
           filesystem,
-          slimOptions(),
+          configured === undefined
+            ? slimOptions()
+            : { bootTimeoutMs: 300_000, categories: configured },
           onSlimmed,
           onSlimSkipped,
         );
@@ -2098,6 +2117,9 @@ describe("IosSimctlDriver", () => {
         expect(fileAtBoot).toBeDefined();
         expect(parseOverrides(fileAtBoot ?? "")).toEqual(expected);
         expect(filesystem.writes).toEqual(rewritten ? [overridesPath(slim18_5.udid)] : []);
+        if (rewritten && existing === undefined) {
+          expect(filesystem.modes).toEqual({ file: 0o644, folder: 0o700 });
+        }
         expect(runner.calls.map((call) => call.args)).toEqual([
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
@@ -2114,7 +2136,7 @@ describe("IosSimctlDriver", () => {
           durationMs: expect.any(Number),
           labelCount: widgetsLabels.length,
           signature: widgetsSignature,
-          unknownLabels: [],
+          unknownLabels: unknown ?? [],
         });
         expect(onSlimSkipped).not.toHaveBeenCalled();
       },
@@ -2141,9 +2163,9 @@ describe("IosSimctlDriver", () => {
       },
       {
         name: "two labels disagree, the first by sort order is named",
-        readback: () => readbackWith({ [falseLabel]: "disabled", [trueLabel]: "enabled" }),
+        readback: () => readbackWith(flipped([firstWritten, firstSorted])),
         mode: "full",
-        detail: `2 of ${managedCount} managed labels did not read back as written at boot; first: ${[trueLabel, falseLabel].sort()[0]}`,
+        detail: `2 of ${managedCount} managed labels did not read back as written at boot; first: ${firstSorted}`,
       },
       {
         name: "a true label reads true (older launchd)",
@@ -4159,6 +4181,7 @@ class RecordingLogger implements Logger {
 /** why: Records what is written and fails the one operation a test names, as a full or unwritable store would. */
 class FaultyFilesystem extends MemoryFilesystem {
   readonly writes: string[] = [];
+  readonly modes: { folder?: number | undefined; file?: number | undefined } = {};
   failing: "writeFileAtomic" | "mkdirp" | "rm" | undefined;
   failureMessage = "disk full";
 
@@ -4172,6 +4195,7 @@ class FaultyFilesystem extends MemoryFilesystem {
     }
     await super.writeFileAtomic(path, contents, options);
     this.writes.push(path);
+    if (path.endsWith("disabled.plist")) this.modes.file = options?.mode;
   }
 
   override async mkdirp(path: string, options?: Parameters<MemoryFilesystem["mkdirp"]>[1]) {
@@ -4179,6 +4203,7 @@ class FaultyFilesystem extends MemoryFilesystem {
       throw new Error(this.failureMessage);
     }
     await super.mkdirp(path, options);
+    if (path.includes("CoreSimulator.SimDevice")) this.modes.folder = options?.mode;
   }
 
   override async rm(path: string): Promise<void> {
