@@ -549,9 +549,12 @@ describe("wire framing", () => {
     await flushMicrotasks();
     expect(connection.closed).toBe(false);
     const chunk = "a".repeat(64 * 1024);
-    for (let sent = 0; sent <= MAX_WIRE_LINE_CHARS; sent += chunk.length) {
-      connection.receiveRaw(chunk);
-    }
+    // why: the largest real reply is a usage ledger of about 54 MB, so an unfinished line of 64 MiB must be accepted: a cap set below it goes red here.
+    let sent = 0;
+    for (; sent < 64 * 1024 * 1024; sent += chunk.length) connection.receiveRaw(chunk);
+    await flushMicrotasks();
+    expect(connection.closed).toBe(false);
+    for (; sent <= MAX_WIRE_LINE_CHARS; sent += chunk.length) connection.receiveRaw(chunk);
     await flushMicrotasks();
     expect(connection.closed).toBe(true);
     await expect(pending).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });

@@ -710,7 +710,7 @@ describe("POST /v1/lease-requests", () => {
     },
   );
 
-  it.each([
+  it.each<[string, Record<string, unknown>, string?]>([
     ["full", { full: true }],
     ["a mode other than slim or full", { mode: "fast" }],
     ["a key the route does not know", { colour: "blue" }],
@@ -720,20 +720,25 @@ describe("POST /v1/lease-requests", () => {
     ],
     ["an image tag with a space", { imageTag: "google apis" }],
     ["an image tag over 64 characters", { imageTag: "a".repeat(65) }],
-    ["a device over 256 characters", { device: "d".repeat(257) }],
-  ])("400s a body carrying %s as BAD_REQUEST before ever dispatching", async (_label, extra) => {
-    const { app, dispatcher } = buildHarness();
-    // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
-    // below rather than by waiting for a 201 that only comes once the request is queued.
-    const response = await Promise.race([
-      postLeaseRequest(app, { ...defaultBody, ...extra }),
-      waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
-    ]);
-    if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
-    expect(response.status).toBe(400);
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
-    expect(dispatcher.calls).toHaveLength(0);
-  });
+    ["a device over 256 characters", { device: "d".repeat(257) }, "device"],
+  ])(
+    "400s a body carrying %s as BAD_REQUEST before ever dispatching",
+    async (_label, extra, named) => {
+      const { app, dispatcher } = buildHarness();
+      // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
+      // below rather than by waiting for a 201 that only comes once the request is queued.
+      const response = await Promise.race([
+        postLeaseRequest(app, { ...defaultBody, ...extra }),
+        waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
+      ]);
+      if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
+      expect(response.status).toBe(400);
+      const { error } = (await response.json()) as { error: { code: string; message: string } };
+      expect(error.code).toBe("BAD_REQUEST");
+      if (named !== undefined) expect(error.message).toContain(named);
+      expect(dispatcher.calls).toHaveLength(0);
+    },
+  );
 
   it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
     ["imageTag", { imageTag: "google_apis_playstore" }],

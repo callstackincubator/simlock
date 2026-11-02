@@ -44,11 +44,13 @@ describe("createSseParser", () => {
     const body = `event: lease.requested\ndata: {"device":"${data}"}\n\n`;
     const original = String.prototype.indexOf;
     let scanned = 0;
+    let searches = 0;
     const spy = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
       this: string,
       ...args: Parameters<typeof original>
     ) {
       const found = original.apply(this, args);
+      searches += 1;
       scanned += (found < 0 ? this.length : found) - (args[1] ?? 0);
       return found;
     });
@@ -64,5 +66,7 @@ describe("createSseParser", () => {
 
     expect(messages).toEqual([{ data: `{"device":"${data}"}`, event: "lease.requested" }]);
     expect(scanned).toBeLessThanOrEqual(3 * body.length);
+    // why: a parser that walks the whole unfinished line by hand on every chunk never searches each chunk, and does the quadratic work this test exists to refuse.
+    expect(searches).toBeGreaterThanOrEqual(Math.ceil(body.length / 16));
   });
 });
