@@ -315,8 +315,12 @@ export class QuarantineCoordinator {
       await this.#retryFailed(device, attempts, claim);
       return;
     }
+    // why: `lastLeaseEndedAt` is the proof the device served its lease; one that never did (a failed boot, a stalled `provisioning`) is the lease engine's to clean up.
     await this.options.decisions.run(() =>
-      this.options.registry.deleteQuarantined(device.id, "lease-end"),
+      this.options.registry.deleteQuarantined(
+        device.id,
+        device.lastLeaseEndedAt === undefined ? "lease-engine" : "lease-end",
+      ),
     );
     claim.release();
     this.options.notifyAvailability();

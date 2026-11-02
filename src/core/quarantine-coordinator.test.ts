@@ -285,7 +285,7 @@ describe("QuarantineCoordinator", () => {
     await flush();
 
     expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
-    expect(harness.registry.deletions).toEqual(["lease-end"]);
+    expect(harness.registry.deletions).toEqual(["lease-engine"]);
     expect(eventsOf(harness.bus).map((event) => event.event)).toEqual(["device.quarantined"]);
     expect(harness.notifyAvailability).toHaveBeenCalledTimes(1);
   });
@@ -373,12 +373,20 @@ describe("QuarantineCoordinator", () => {
   });
 
   it.each([
-    ["a spent fresh device", { lastLeaseEndedAt: 900, leaseIdentity: "fresh" as const }],
-    ["a spent reusable device", { lastLeaseEndedAt: 900, leaseIdentity: "reusable" as const }],
-    ["a device that never served a lease", {}],
+    [
+      "a spent fresh device",
+      { lastLeaseEndedAt: 900, leaseIdentity: "fresh" as const },
+      "lease-end",
+    ],
+    [
+      "a spent reusable device",
+      { lastLeaseEndedAt: 900, leaseIdentity: "reusable" as const },
+      "lease-end",
+    ],
+    ["a device that never served a lease", {}, "lease-engine"],
   ])(
-    "retries %s's delete rather than an erase, and a successful retry reaches deleted, never ready",
-    async (_case, target) => {
+    "retries %s's delete rather than an erase, and a successful retry reaches deleted, never ready, with the initiator of its cause",
+    async (_case, target, initiator) => {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ clock, platform: "ios" });
       const harness = await createHarness({ clock, driver, target });
@@ -398,7 +406,7 @@ describe("QuarantineCoordinator", () => {
       expect(operations).toContain("destroy");
       expect(operations).not.toContain("reclaim");
       expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
-      expect(harness.registry.deletions).toEqual(["lease-end"]);
+      expect(harness.registry.deletions).toEqual([initiator]);
       expect(eventsOf(harness.bus).map((event) => event.event)).toEqual([
         "device.purge-failed",
         "device.quarantined",
