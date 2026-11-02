@@ -9,7 +9,12 @@ export async function memorySourceDatabase(): Promise<SqliteDatabase> {
 
 export function plantReadySeed(
   database: SqliteDatabase,
-  seed: { readonly deviceTypeId: string; readonly runtimeId: string; readonly udid: string },
+  seed: {
+    readonly deviceTypeId: string;
+    readonly runtimeBuild?: string;
+    readonly runtimeId: string;
+    readonly udid: string;
+  },
 ): SqliteDatabase {
   const table = new IosSourceTable(database);
   table.insertMaking({
@@ -19,7 +24,7 @@ export function plantReadySeed(
     maker: "planted",
     model: "iPhone 16",
     osVersion: "26.5",
-    runtimeBuild: undefined,
+    runtimeBuild: seed.runtimeBuild,
     runtimeId: seed.runtimeId,
     setPath: "/Devices/sources",
     sourceId: `planted-${seed.udid}`,

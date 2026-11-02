@@ -184,11 +184,14 @@ function sourcesSimctl(...args: readonly string[]): {
 }
 
 /** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
-async function seededDatabase(): Promise<SqliteDatabase> {
+async function seededDatabase(
+  seed: { readonly runtimeBuild?: string; readonly udid?: string } = {},
+): Promise<SqliteDatabase> {
   return plantReadySeed(await memorySourceDatabase(), {
     deviceTypeId: driverData.deviceTypeId,
     runtimeId: driverData.runtimeId,
     udid: seedUdid,
+    ...seed,
   });
 }
 
@@ -931,6 +934,79 @@ describe("IosSimctlDriver", () => {
         runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
       );
       expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
+    },
+  );
+
+  it.each([
+    { name: "its runtime changed build", seedBuild: "23F77", runtimeBuild: "23F79", remade: true },
+    { name: "its runtime is unchanged", seedBuild: "23F79", runtimeBuild: "23F79", remade: false },
+    { name: "it recorded no build", seedBuild: undefined, runtimeBuild: "23F79", remade: false },
+    {
+      name: "its runtime lists no build now",
+      seedBuild: "23F77",
+      runtimeBuild: undefined,
+      remade: false,
+    },
+  ])(
+    "makes the seed again before copying it only when it is stale: $name -> remade $remade",
+    async ({ seedBuild, runtimeBuild, remade }) => {
+      const staleUdid = "00000000-0000-0000-0000-0000000000bb";
+      const catalog = JSON.parse(listFixture) as {
+        runtimes: { buildversion?: string; identifier: string }[];
+      };
+      for (const entry of catalog.runtimes) {
+        if (entry.identifier === driverData.runtimeId && runtimeBuild !== undefined) {
+          entry.buildversion = runtimeBuild;
+        }
+      }
+      const planted = staleUdid;
+      const cloneOf = (udid: string) => sourcesSimctl("clone", udid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: JSON.stringify(catalog) } },
+        ...(remade
+          ? [
+              { match: sourcesSimctl("shutdown", staleUdid) },
+              { match: sourcesSimctl("delete", staleUdid) },
+              {
+                match: sourcesSimctl(
+                  "create",
+                  "simlock-seed-device-1",
+                  driverData.deviceTypeId,
+                  driverData.runtimeId,
+                ),
+                result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+              },
+              { match: sourcesSimctl("boot", seedUdid) },
+              { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+              { match: sourcesSimctl("listapps", seedUdid) },
+              { match: sourcesSimctl("shutdown", seedUdid) },
+            ]
+          : []),
+        {
+          match: cloneOf(remade ? seedUdid : staleUdid),
+          result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+        },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        filesystem,
+        await seededDatabase({
+          udid: planted,
+          ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
+        }),
+      );
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      await driver.provision(spec);
+
+      expect(runner.calls.map((call) => call.args[3]).filter((verb) => verb !== "list")).toEqual(
+        remade
+          ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
+          : ["clone"],
+      );
     },
   );
 
