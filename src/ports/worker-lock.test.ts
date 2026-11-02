@@ -98,4 +98,21 @@ describe("NodeWorkerLock", () => {
 
     expect((await stat(parent)).mode & 0o777).toBe(0o700);
   });
+
+  it("a worker that wins the socket claim makes the lock again when it is missing and refuses when a live pid in another folder holds it", async () => {
+    const { path } = await lockInTemporaryFolder();
+    const handle = await adapter(path).take(ME);
+
+    await rm(path, { force: true, recursive: true });
+    await handle.claimed();
+    expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(ME);
+
+    const other: WorkerLockOwner = { folder: "/home/other/.simlock", pid: 7, startedAt: "t0" };
+    await writeFile(join(path, "owner.json"), JSON.stringify(other));
+    const refusing = await adapter(path, [7]).take({ ...ME, folder: other.folder });
+    await writeFile(join(path, "owner.json"), JSON.stringify({ ...other, folder: "/elsewhere" }));
+    await expect(refusing.claimed()).rejects.toThrow(
+      "another Simlock worker runs for this user (pid 7, folder /elsewhere, since t0)",
+    );
+  });
 });
