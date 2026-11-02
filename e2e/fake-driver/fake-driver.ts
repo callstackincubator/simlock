@@ -18,6 +18,7 @@ import {
   type DriverCatalogEntry,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   type DriverEstimate,
   type DriverReality,
   type DriverToolVersion,
@@ -443,6 +444,12 @@ export class OutOfProcessFakeDriver implements Driver {
       version: component,
     };
   }
+
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [];
+  }
+
+  async destroySource(_sourceId: string): Promise<void> {}
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", [spec]);

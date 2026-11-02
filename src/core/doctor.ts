@@ -19,6 +19,7 @@ import {
   type DriverDevice,
   type DriverRejection,
   type DriverReality,
+  type DriverSource,
   type DriverRejectionReason,
   type MissingPrerequisite,
   type ObservedDevice,
@@ -132,6 +133,11 @@ type OrphanDeviceFinding = Extract<DoctorFinding, { readonly kind: "orphan-devic
 
 export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
+  readonly sources: readonly DoctorSource[];
+}
+
+export interface DoctorSource extends DriverSource {
+  readonly platform: Platform;
 }
 
 export interface DoctorQuarantine {
@@ -247,7 +253,7 @@ export class Doctor {
       ...this.#optionalModuleFindings(),
     ];
 
-    const report = { findings: remaining };
+    const report = { findings: remaining, sources: [] };
     this.#emitFindingEvents(remaining);
     this.options.eventBus.emit(
       "doctor.reconciled",

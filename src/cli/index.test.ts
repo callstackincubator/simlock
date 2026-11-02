@@ -303,6 +303,7 @@ describe("CLI: exit codes", () => {
           remedy: "Install it.",
         },
       ],
+      sources: [],
     };
     const wrongOwner: DoctorReport = {
       findings: [
@@ -313,10 +314,11 @@ describe("CLI: exit codes", () => {
           detail: "The device set belongs to another user.",
         },
       ],
+      sources: [],
     };
     const cases: readonly (readonly [DoctorReport, string, string, NodeJS.Platform?])[] = [
-      [{ findings: [] }, "ios ok, android ok", ""],
-      [{ findings: [] }, "android ok", "", "linux"],
+      [{ findings: [], sources: [] }, "ios ok, android ok", ""],
+      [{ findings: [], sources: [] }, "android ok", "", "linux"],
       [
         wrongOwner,
         "ios unavailable: wrong-owner, android ok",
@@ -366,8 +368,8 @@ describe("CLI: exit codes", () => {
       remedy: "Install it.",
     } as const;
     const cases: readonly (readonly [DoctorReport, string])[] = [
-      [{ findings: [] }, "ios ok, android ok"],
-      [{ findings: [missingSdk] }, "ios ok, android missing: android-sdk"],
+      [{ findings: [], sources: [] }, "ios ok, android ok"],
+      [{ findings: [missingSdk], sources: [] }, "ios ok, android missing: android-sdk"],
     ];
     for (const [report, summary] of cases) {
       const output = outputCapture();
@@ -2806,7 +2808,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -2840,7 +2842,8 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       runCli(
         ["doctor"],
         output.environmentWith({
-          connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2851,7 +2854,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         "Run `sdkmanager --install emulator`.",
       "Missing [ios] xcode: Xcode is not installed. Run `xcode-select`.",
     ]);
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor prints a service-broken finding to stderr, naming each missing path, and keeps the finding in the JSON report", async () => {
@@ -2883,7 +2886,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
           ["doctor"],
           output.environmentWith({
             connectAdmin: async () =>
-              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+              fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
           }),
         ),
       ).resolves.toBe(0);
@@ -2891,7 +2894,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(output.stderr.split("\n").filter((line) => line.startsWith("Service broken"))).toEqual(
         [testCase.line],
       );
-      expect(JSON.parse(output.stdout)).toEqual({ findings });
+      expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
     }
   });
 
@@ -2945,7 +2948,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stderr.split("\n")).toContain(
       "Unavailable [ios] invalid-device-set: Refusing the ios device set: bad. Restart the daemon.",
     );
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
@@ -3001,7 +3004,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeLessThan(index);
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeGreaterThan(-1);
     }
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor writes <module>  fail  … for a finding of another module", async () => {
@@ -3039,7 +3042,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -3099,7 +3102,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -5475,7 +5478,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           ["doctor"],
           output.environmentWith({
             connectAdmin: async () =>
-              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+              fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
           }),
         ),
       ).resolves.toBe(0);
@@ -5489,7 +5492,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
       ]);
       expect(output.stderr).not.toContain("undefined");
-      expect(JSON.parse(output.stdout)).toEqual({ findings });
+      expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
     });
   });
 
@@ -8331,7 +8334,7 @@ async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
-  const emptyDoctor: DoctorReport = { findings: [] };
+  const emptyDoctor: DoctorReport = { findings: [], sources: [] };
   const emptyLeaseList: LeaseListOutput = { leases: [] };
   const emptyListGet: ListGetOutput = [];
   const emptyTokenList: TokenListOutput = { tokens: [] };

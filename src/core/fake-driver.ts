@@ -20,6 +20,7 @@ import {
   type DriverComponent,
   DriverCrashError,
   type DriverDevice,
+  type DriverSource,
   type DriverEstimate,
   type DriverReality,
   type DriverRefusalReason,
@@ -396,6 +397,12 @@ export class FakeDriver implements Driver {
     return this.#addressIsDeviceId ? deviceId : addressFor(deviceId, bootCount);
   }
 
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [];
+  }
+
+  async destroySource(_sourceId: string): Promise<void> {}
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
@@ -623,6 +630,8 @@ export class FakeDriver implements Driver {
       resolve();
     }
   }
+
+  setSources(_sources: readonly DriverSource[]): void {}
 
   /**
    * why: Stages what `listManaged` reports. Everything passed in is reported back, name and

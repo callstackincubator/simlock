@@ -228,6 +228,19 @@ export type PhysicalInspection =
       readonly message: string;
     };
 
+/** why: a device that booted once and was shut down, kept only to be copied into a lease's device (ADR 0061 §1). */
+export interface DriverSource {
+  readonly id: string;
+  readonly kind: "seed" | "baseline";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly imageTag?: string;
+  /** why: absent when it could not be counted. */
+  readonly sizeBytes?: number;
+  /** why: reads after "is stale:", at most 300 characters. */
+  readonly staleReason?: string;
+}
+
 export interface Driver {
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
@@ -260,7 +273,10 @@ export interface Driver {
     receipt: ComponentReceipt,
     options: { readonly signal: AbortSignal },
   ): Promise<ComponentRemoval>;
-  provision(spec: VirtualSpec): Promise<DriverDevice>;
+  provision(spec: VirtualSpec, options?: { readonly source?: string }): Promise<DriverDevice>;
+  /** why: ready sources only; a source being made is never listed (ADR 0061 §1). */
+  listSources(): Promise<readonly DriverSource[]>;
+  destroySource(sourceId: string): Promise<void>;
   /**
    * why: Boots the device and returns it with a freshly read `address`. Never trust the address a
    * caller passed in or one captured at `provision` -- an Android console port is assigned per

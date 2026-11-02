@@ -87,6 +87,54 @@ describe("Doctor", () => {
     expect(eventBus.replay().at(-1)).toMatchObject({ event: "doctor.reconciled" });
   });
 
+  it("lists each driver's sources, a size only when it was counted and a stale reason when there is one, and a source is no finding", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setSources([
+      { id: "s1", kind: "seed", model: "iPhone 17", osVersion: "27.0", sizeBytes: 4_000_000_000 },
+      { id: "s2", kind: "seed", model: "iPad", osVersion: "27.0" },
+      {
+        id: "s3",
+        kind: "seed",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        sizeBytes: 1,
+        staleReason: "its runtime was removed",
+      },
+    ]);
+
+    const report = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings).toEqual([]);
+    expect(report.sources).toEqual([
+      {
+        kind: "seed",
+        model: "iPhone 17",
+        osVersion: "27.0",
+        platform: "ios",
+        sizeBytes: 4_000_000_000,
+      },
+      { kind: "seed", model: "iPad", osVersion: "27.0", platform: "ios" },
+      {
+        kind: "seed",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+        sizeBytes: 1,
+        staleReason: "its runtime was removed",
+      },
+    ]);
+  });
+
   it("reports but does not correct a leased-state device with no lease record", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);

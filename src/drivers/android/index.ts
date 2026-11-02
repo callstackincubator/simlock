@@ -22,6 +22,7 @@ import {
   type DriverCatalogImage,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
@@ -1046,6 +1047,14 @@ export class AndroidDriver implements Driver {
     }
     error.message = `No installed system image fits ${profile.name}${where}: ${reason}`;
     return error;
+  }
+
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [];
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    throw new DriverCrashError(`Android keeps no source ${sourceId}`);
   }
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {

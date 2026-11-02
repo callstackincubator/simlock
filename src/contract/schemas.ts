@@ -851,7 +851,20 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const doctorReportSchema = z.object({ findings: z.array(doctorFindingSchema) });
+export const doctorSourceSchema = z.object({
+  platform: platformSchema,
+  kind: z.enum(["seed", "baseline"]),
+  model: z.string().max(200),
+  osVersion: z.string().max(200),
+  imageTag: z.string().max(200).optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  staleReason: z.string().max(300).optional(),
+});
+
+export const doctorReportSchema = z.object({
+  findings: z.array(doctorFindingSchema).max(100_000),
+  sources: z.array(doctorSourceSchema).max(100_000),
+});
 
 export const nukeReportSchema = z.object({
   deletedDevices: z.array(z.string()),

@@ -15,6 +15,7 @@ import {
   type DriverCatalogEntry,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
@@ -727,6 +728,12 @@ export class IosSimctlDriver implements Driver {
     }
     throw new DriverCrashError(`xcodebuild ${args.join(" ")} failed: ${message}`);
   }
+
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [];
+  }
+
+  async destroySource(_sourceId: string): Promise<void> {}
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
