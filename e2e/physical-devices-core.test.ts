@@ -356,7 +356,6 @@ describe("the core knows physical devices", () => {
   it("with limits.ios.maxDevices 1, an idle ready iPhone 16 simulator and a ready physical record whose lastLeaseEndedAt is older than the simulator's, lease --platform ios --device iPhone 15 Pro evicts the simulator (a destroy call names it) and is granted a new simulator; the physical record stays ready, and no driver call names it", async () => {
     const env = await startWith([READY], {
       config: { limits: { ios: { maxDevices: 1, maxRunning: 8 } } },
-      script: { reclaimResult: "ready" },
     });
     const first = await leaseSimulator(env, ["--device", "iPhone 16", "--os", PHYSICAL_OS]);
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);

@@ -126,8 +126,6 @@ export interface FakeDriverPlatformScript {
   readonly removalResidue?: string;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
-  readonly reclaimResult?: "ready" | "shutdown";
-  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
   readonly physicalDevices?: readonly ScriptedPhysicalDevice[];

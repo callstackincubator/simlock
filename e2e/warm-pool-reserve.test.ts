@@ -67,7 +67,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
         limits: { maxRunning: 3, ios: { maxDevices: 3, maxRunning: 3 } },
         warmPool: { reserveRunning: { ios: 1 } },
       },
-      driverScript: { ios: { ...IOS, reclaimResult: "shutdown" } },
+      driverScript: { ios: IOS },
     });
     const [first, second, third] = [
       await lease(env, "agent-a"),
@@ -110,7 +110,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
         limits: { maxRunning: 10, ios: { maxDevices: 10, maxRunning: 10 } },
         warmPool: { maxConcurrentBoots: 3 },
       },
-      driverScript: { ios: { ...IOS, reclaimResult: "shutdown" } },
+      driverScript: { ios: IOS },
     });
     const warm = await lease(env, "warm");
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 4_000 } } });
@@ -153,7 +153,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
 
     it("a lease for that device is granted it when it is ready, with no device.provisioned for it", async () => {
       const env = await withDaemon({
-        driverScript: { ios: { ...IOS, reclaimResult: "shutdown" } },
+        driverScript: { ios: IOS },
       });
       const first = await releasedAndBooting(env);
 
@@ -167,7 +167,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
 
     it("the same lease with --no-wait provisions its own device", async () => {
       const env = await withDaemon({
-        driverScript: { ios: { ...IOS, reclaimResult: "shutdown" } },
+        driverScript: { ios: IOS },
       });
       const first = await releasedAndBooting(env);
 

@@ -5,7 +5,6 @@ import { events, waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
 const IOS = {
   availableOsVersions: ["18.4"],
   knownModels: ["iPhone 16"],
-  reclaimResult: "shutdown",
 } as const;
 
 interface Device {
