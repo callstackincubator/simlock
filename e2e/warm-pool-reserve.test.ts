@@ -61,7 +61,7 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     expect(config.json).toEqual({ android: 0, ios: 0 });
   });
 
-  it("with reserveRunning.ios 1 and an iOS running limit of 3, three released leases leave two devices warm and one shut down", async () => {
+  it("with reserveRunning.ios 1 and an iOS running limit of 3, three released leases are deleted and leave two new devices warm", async () => {
     const env = await withDaemon({
       configOverrides: {
         limits: { maxRunning: 3, ios: { maxDevices: 3, maxRunning: 3 } },
@@ -78,13 +78,11 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     // A slow boot, so a pool boot that wrongly starts is still running, and logged, at the check.
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
 
-    // Two leases still held leave no slot above the reserve, so the first device stays down.
+    // why: two leases still held leave no slot above the reserve, so no device is made for the first.
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await env.expectEvents(["lease.released", "device.reclaimed"]);
-    await waitFor(async () => !(await deviceStates(env)).includes("reclaiming"), {
-      label: "the released device finished its reclaim",
-    });
-    expect((await deviceStates(env)).filter((state) => state === "shutdown")).toHaveLength(1);
+    await env.expectEvents(["lease.released", "device.deleted"]);
+    expect((await deviceStates(env)).filter((state) => state === "deleted")).toHaveLength(1);
+    expect(await deviceStates(env)).not.toContain("provisioning");
     expect(await makeReadyCalls(env)).toBe(3);
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore);
 
@@ -98,7 +96,8 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     expect(await makeReadyCalls(env)).toBe(5);
     const states = await deviceStates(env);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
-    expect(states.filter((state) => state === "shutdown")).toHaveLength(1);
+    expect(states.filter((state) => state === "deleted")).toHaveLength(3);
+    expect(states).not.toContain("shutdown");
     expect(await eventsNamed(env, "device.ready")).toHaveLength(readyBefore + 2);
     const status = await env.cli(["status", "--json"]);
     expect(status.json).toMatchObject({ capacity: { ios: { warm: 2 } } });
@@ -116,13 +115,13 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
     await env.driverScript.merge({ ios: { latencyMs: { makeReady: 4_000 } } });
     expect((await env.cli(["release", warm.lease.id])).code).toBe(0);
     await waitFor(async () => (await makeReadyCalls(env)) === 2, {
-      label: "the warm pool's boot of the released device has started",
+      label: "the warm pool's boot of the device that replaces the released one has started",
     });
 
     const grants = ["a1", "a2", "a3", "a4", "a5"].map((agent) =>
       lease(env, agent, ["--timeout", "60s"]),
     );
-    // why: the warm pool's boot of the released device counts among the three.
+    // why: the warm pool's boot of the replacement counts among the three.
     await waitFor(async () => (await makeReadyCalls(env)) === 4, {
       label: "two more boots are running beside the warm pool's",
     });
@@ -134,11 +133,12 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
 
     expect(new Set(granted.map((grant) => grant.device.id)).size).toBe(5);
     expect(await makeReadyCalls(env)).toBe(6);
-    expect(await deviceStates(env)).toEqual(["leased", "leased", "leased", "leased", "leased"]);
+    expect((await deviceStates(env)).filter((state) => state === "leased")).toHaveLength(5);
+    expect((await deviceStates(env)).filter((state) => state === "ready")).toHaveLength(0);
   });
 
-  describe("while the warm pool boots a released device", () => {
-    async function releasedAndBooting(env: TestEnv): Promise<Grant> {
+  describe("while the warm pool boots the device that replaces a released one", () => {
+    async function releasedAndReplacing(env: TestEnv): Promise<Grant> {
       const first = await lease(env, "holder");
       await env.driverScript.merge({ ios: { latencyMs: { makeReady: 3_000 } } });
       expect((await env.cli(["release", first.lease.id])).code).toBe(0);
@@ -151,17 +151,19 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       return first;
     }
 
-    it("a lease for that device is granted it when it is ready, with no device.provisioned for it", async () => {
+    it("a lease for that replacement is granted it when it is ready, with no device.provisioned beyond the first lease's and the pool's", async () => {
       const env = await withDaemon({
         driverScript: { ios: IOS },
       });
-      const first = await releasedAndBooting(env);
+      const first = await releasedAndReplacing(env);
 
       // A bound shorter than the test timeout: a request nobody woke fails here, on QUEUE_TIMEOUT.
       const second = await lease(env, "waiter", ["--timeout", "20s"]);
 
-      expect(second.device.id).toBe(first.device.id);
-      expect(await eventsNamed(env, "device.provisioned")).toHaveLength(1);
+      const provisioned = await eventsNamed(env, "device.provisioned");
+      expect(second.device.id).not.toBe(first.device.id);
+      expect(provisioned).toHaveLength(2);
+      expect(provisioned[1]?.payload).toMatchObject({ deviceId: second.device.id });
       expect(await eventsNamed(env, "device.ready")).toHaveLength(2);
     });
 
@@ -169,12 +171,12 @@ describe("warm pool reserve and requests that wait for a booting device", () => 
       const env = await withDaemon({
         driverScript: { ios: IOS },
       });
-      const first = await releasedAndBooting(env);
+      const first = await releasedAndReplacing(env);
 
       const second = await lease(env, "waiter", ["--no-wait"]);
 
       expect(second.device.id).not.toBe(first.device.id);
-      expect(await eventsNamed(env, "device.provisioned")).toHaveLength(2);
+      expect(await eventsNamed(env, "device.provisioned")).toHaveLength(3);
     });
   });
 });
