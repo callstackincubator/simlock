@@ -181,7 +181,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
  * other call arrived would be a worse contract than one that names the call that wires it.
  */
 export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
-  readonly #server = new WebSocketServer({ noServer: true });
+  readonly #server = new WebSocketServer({ maxPayload: UPLINK_MAX_MESSAGE_BYTES, noServer: true });
   #handlers: UplinkHandlers | undefined;
   #detach: (() => void) | undefined;
   readonly #links = new Map<string, WebSocketUplinkConnection>();
