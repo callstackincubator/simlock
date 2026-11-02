@@ -1,6 +1,6 @@
 # 0059. A worker with real drivers holds a per-user lock
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-02
 - **Issue:** [#1189](https://github.com/callstackincubator/simlock/issues/1189), from bug [#264](https://github.com/callstackincubator/simlock/issues/264)
 - **Narrows:** [ADR 0034](0034-one-worker-per-user-and-the-folder-says-what-a-daemon-is.md)
