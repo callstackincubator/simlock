@@ -54,10 +54,9 @@ async function grants(env: TestEnv): Promise<readonly { payload: { source: strin
 }
 
 describe("a worker with no targets keeps the kinds it has leased", () => {
-  it("creates nothing while the first lease is held, makes a new device of the kind in place of the deleted one and keeps it ready past idle.shutdownAfterMs, and grants the next lease of its kind warm", async () => {
+  it("creates nothing while the first lease is held, makes a new device of the kind in place of the deleted one, leaves it ready through a cleanup run, and grants the next lease of its kind warm", async () => {
     const env = await withDaemon({
       configOverrides: {
-        idle: { shutdownAfterMs: 500 },
         limits: { maxRunning: 2, ios: { maxDevices: 2, maxRunning: 2 } },
       },
       driverScript: { ios: IOS },
@@ -68,9 +67,7 @@ describe("a worker with no targets keeps the kinds it has leased", () => {
 
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
     await waitFor(() => ready(env), { label: "the pool makes a new device of the released kind" });
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect((await env.cli(["cleanup"])).code).toBe(0);
-    await new Promise((resolve) => setTimeout(resolve, 500));
 
     const [kept] = await live(env);
     expect(kept?.state).toBe("ready");

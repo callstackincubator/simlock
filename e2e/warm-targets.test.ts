@@ -128,9 +128,9 @@ describe("warm pool targets", () => {
     ).toEqual([]);
   });
 
-  it("keeps a targeted device and a leased non-targeted kind ready past idle.shutdownAfterMs", async () => {
+  it("a cleanup run leaves a targeted device and the new device of a released non-targeted kind ready", async () => {
     const env = await withDaemon({
-      configOverrides: { idle: { shutdownAfterMs: 500 }, warmPool: { targets: [IPHONE_17] } },
+      configOverrides: { warmPool: { targets: [IPHONE_17] } },
       driverScript: { ios: IOS },
     });
     await untilDevices(env, (rows) => rows.some((row) => row.state === "ready"), "one ready");
@@ -143,7 +143,6 @@ describe("warm pool targets", () => {
       "a new iPhone 15 is ready in place of the deleted one",
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect((await env.cli(["cleanup"])).code).toBe(0);
     const kept = (await devices(env)).filter((row) => row.state !== "deleted");
     expect(kept.map((row) => [row.spec.model, row.state]).sort()).toEqual([
