@@ -954,6 +954,61 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
+    { name: "300 s old is kept", now: 300_000, destroyed: false },
+    { name: "300.001 s old is destroyed", now: 300_001, destroyed: true },
+  ])(
+    "the next seed make of a kind destroys this process's own making row of that kind older than 300 s: a row $name",
+    async ({ now, destroyed }) => {
+      const stuckUdid = "00000000-0000-0000-0000-0000000000dd";
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        maker: "device-1",
+        runtimeId: driverData.runtimeId,
+        state: "making",
+        udid: stuckUdid,
+      });
+      const copyUdid = "00000000-0000-0000-0000-000000000002";
+      const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...(destroyed
+          ? [
+              { match: sourcesSimctl("shutdown", stuckUdid) },
+              { match: sourcesSimctl("delete", stuckUdid) },
+            ]
+          : []),
+        {
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+        },
+        { match: sourcesSimctl("boot", seedUdid) },
+        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+        { match: sourcesSimctl("listapps", seedUdid) },
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
+      const driver = await createDriver(runner, new FakeClock(now), filesystem, database);
+
+      await driver.provision(spec);
+
+      expect(
+        runner.calls.filter((call) => call.args[4] === stuckUdid).map((call) => call.args[3]),
+      ).toEqual(destroyed ? ["shutdown", "delete"] : []);
+      expect(
+        database.prepare("SELECT udid FROM ios_source_data WHERE state = 'making'").all(),
+      ).toEqual(destroyed ? [] : [{ udid: stuckUdid }]);
+    },
+  );
+
+  it.each([
     {
       name: "simctl create fails",
       message: "Invalid runtime",
