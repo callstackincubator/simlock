@@ -1,5 +1,5 @@
 /**
- * The default requester id a frontend declares when the caller names none. Both the CLI and
+ * why: the default requester id a frontend declares when the caller names none. Both the CLI and
  * `simlock mcp` call this one function, so the two cannot drift apart (architecture rule 10).
  * Resolution happens in the frontend; the daemon only sees the id it is sent.
  *
@@ -11,8 +11,8 @@
  *    id, and so its one lease.
  * 3. `fallback`, the frontend's own pid-derived value.
  *
- * The session value gets no more checking than `SIMLOCK_AGENT_ID` does: it is passed through
- * as-is, and only the empty string is skipped.
+ * The session value gets no more checking here than `SIMLOCK_AGENT_ID` does: only the empty
+ * string is skipped. The daemon refuses an id with a control character or over 200 characters.
  */
 
 /** The agent tools whose session id Simlock reads, in the order they are tried. Adding a tool
