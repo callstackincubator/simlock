@@ -907,6 +907,53 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
+    { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
+    { name: "an unknown source is refused", id: "nope", cloned: false },
+    { name: "a stale source is refused", id: "planted-old", cloned: false },
+  ])("provision with a source: $name", async ({ id, cloned }) => {
+    const namedUdid = "00000000-0000-0000-0000-0000000000bb";
+    const oldUdid = "00000000-0000-0000-0000-0000000000cc";
+    const database = await seededDatabase();
+    const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
+    const planted = plantSource(database, { ...kind, kind: "baseline", udid: namedUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-named' WHERE udid = ?")
+      .run(namedUdid);
+    plantSource(planted, { ...kind, kind: "baseline", runtimeBuild: "23F77", udid: oldUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-old' WHERE udid = ?")
+      .run(oldUdid);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const catalog = JSON.parse(listFixture) as {
+      runtimes: { buildversion?: string; identifier: string }[];
+    };
+    for (const runtime of catalog.runtimes) {
+      if (runtime.identifier === driverData.runtimeId) runtime.buildversion = "23F79";
+    }
+    const listed = JSON.stringify(catalog);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listed } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listed } },
+      {
+        match: sourcesSimctl("clone", namedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const provisioned = driver.provision(spec, { source: id });
+
+    if (cloned) {
+      await expect(provisioned).resolves.toMatchObject({ deviceId: driverData.udid });
+      expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+    } else {
+      await expect(provisioned).rejects.toBeInstanceOf(DriverCrashError);
+      expect(runner.calls.map((call) => call.args[3])).not.toContain("clone");
+    }
+  });
+
+  it.each([
     {
       name: "simctl create fails",
       message: "Invalid runtime",

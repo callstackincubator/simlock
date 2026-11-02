@@ -760,7 +760,10 @@ export class IosSimctlDriver implements Driver {
     this.#sources.deleteRow(sourceId);
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async provision(
+    spec: VirtualSpec,
+    _options?: { readonly source?: string },
+  ): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
     const seed = await this.#seedFor(resolved);

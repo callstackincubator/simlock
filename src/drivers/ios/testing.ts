@@ -9,6 +9,7 @@ export async function memorySourceDatabase(): Promise<SqliteDatabase> {
 
 export interface PlantedSource {
   readonly deviceTypeId: string;
+  readonly kind?: "seed" | "baseline";
   readonly maker?: string;
   readonly model?: string;
   readonly osVersion?: string;
@@ -26,7 +27,7 @@ export function plantSource(database: SqliteDatabase, source: PlantedSource): Sq
   table.insertMaking({
     createdAt: 0,
     deviceTypeId: source.deviceTypeId,
-    kind: "seed",
+    kind: source.kind ?? "seed",
     maker: source.maker ?? "planted",
     model: source.model ?? "iPhone 16",
     osVersion: source.osVersion ?? "26.5",
