@@ -1166,6 +1166,67 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  it.each([
+    {
+      name: "copies the seed's disabled.plist to the new simulator",
+      seedHas: true,
+      failing: undefined,
+    },
+    { name: "copies nothing when the seed has none", seedHas: false, failing: undefined },
+    {
+      name: "logs a warning and goes on when the copy fails",
+      seedHas: true,
+      failing: "copyFile" as const,
+    },
+  ])("a provision $name", async ({ seedHas, failing }) => {
+    const filesystem = new FaultyFilesystem();
+    await plantManagedDevice(filesystem);
+    if (seedHas) {
+      await filesystem.mkdirp(overridesFolder(seedUdid));
+      await filesystem.writeFileAtomic(overridesPath(seedUdid), overridesPlist({ "a.b": true }));
+    }
+    filesystem.failing = failing;
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+    ]);
+    const logger = new RecordingLogger();
+    const driver = await IosSimctlDriver.create({
+      database: await seededDatabase(),
+      clock: new FakeClock(),
+      driverConfig: { deviceRoot },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      launchdOverridesRoot: overridesRoot,
+      logger,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+    });
+    scopedRunners.push(runner);
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: driverData.udid });
+
+    const copied = failing === undefined && seedHas;
+    expect(await filesystem.exists(overridesPath(driverData.udid))).toBe(copied);
+    if (copied) {
+      expect(await filesystem.readFile(overridesPath(driverData.udid))).toBe(
+        overridesPlist({ "a.b": true }),
+      );
+    }
+    expect(logger.warnings).toEqual(
+      failing === undefined
+        ? []
+        : [
+            `could not copy the launchd overrides of seed ${seedUdid} to ${driverData.udid}: disk full`,
+          ],
+    );
+  });
+
   it("keeps no copy of a slim spec's mode in driver data", async () => {
     const runner = new ScriptedProcessRunner([
       {
@@ -4414,7 +4475,7 @@ class RecordingLogger implements Logger {
 class FaultyFilesystem extends MemoryFilesystem {
   readonly writes: string[] = [];
   readonly modes: { folder?: number | undefined; file?: number | undefined } = {};
-  failing: "writeFileAtomic" | "mkdirp" | "rm" | undefined;
+  failing: "writeFileAtomic" | "mkdirp" | "rm" | "copyFile" | undefined;
   failureMessage = "disk full";
 
   override async writeFileAtomic(
@@ -4436,6 +4497,11 @@ class FaultyFilesystem extends MemoryFilesystem {
     }
     await super.mkdirp(path, options);
     if (path.includes("CoreSimulator.SimDevice")) this.modes.folder = options?.mode;
+  }
+
+  override async copyFile(from: string, to: string): Promise<void> {
+    if (this.failing === "copyFile") throw new Error(this.failureMessage);
+    await super.copyFile(from, to);
   }
 
   override async rm(path: string): Promise<void> {
