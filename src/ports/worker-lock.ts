@@ -10,6 +10,8 @@ export interface WorkerLockOwner {
 }
 
 export interface WorkerLockHandle {
+  /** why: a live holder in the same folder is a daemon that may lose the socket claim; the one that wins writes itself as the owner. */
+  claimed(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -112,11 +114,19 @@ export class NodeWorkerLock implements WorkerLock {
       const holder = await readOwner(filesystem, ownerFile);
       if (holder !== undefined && processSupervisor.isAlive(holder.pid)) {
         // why: the same folder is a second daemon on one home, which the socket claim answers as today; it holds nothing to release.
-        if (holder.folder === owner.folder) return { release: async () => undefined };
+        if (holder.folder === owner.folder) return this.#handle(owner);
         throw new WorkerLockHeldError(holder);
       }
     }
     await filesystem.writeFileAtomic(ownerFile, JSON.stringify(owner));
-    return { release: async () => undefined };
+    return this.#handle(owner);
+  }
+
+  #handle(owner: WorkerLockOwner): WorkerLockHandle {
+    const { filesystem, path } = this.#options;
+    return {
+      claimed: () => filesystem.writeFileAtomic(join(path, OWNER_FILE), JSON.stringify(owner)),
+      release: async () => undefined,
+    };
   }
 }

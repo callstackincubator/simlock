@@ -121,6 +121,7 @@ import {
   type WebhookPoster,
   defaultWorkerLockPath,
   NodeWorkerLock,
+  type WorkerLockHandle,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -423,8 +424,9 @@ async function composeDaemon(
     path: join(dataDirectory, "instance.json"),
   });
   // why: only a worker whose drivers are discovered touches the machine's adb server, console ports and runtimes; substituted drivers touch none (ADR 0059 §1).
+  let workerLock: WorkerLockHandle | undefined;
   if (options.drivers === undefined && process.env.SIMLOCK_DRIVERS_MODULE === undefined) {
-    await new NodeWorkerLock({
+    workerLock = await new NodeWorkerLock({
       filesystem,
       path:
         options.workerLockPath ??
@@ -619,6 +621,7 @@ async function composeDaemon(
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   let socketClaimed = false;
+  let lockClaim: Promise<void> = Promise.resolve();
   const gatewayStarted: Promise<void> = config.http.enabled
     ? new Promise<void>((resolve, reject) => {
         resolveGatewayStarted = resolve;
@@ -814,6 +817,11 @@ async function composeDaemon(
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
+      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).catch((error: unknown) => {
+        logger.error("Worker lock could not be rewritten", {
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+      });
       startHistory(
         eventHistory,
         logger,
@@ -897,6 +905,7 @@ async function composeDaemon(
     if (!socketClaimed) resolveGatewayStarted?.();
   });
   const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
+  await lockClaim;
   if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
     // why: The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
     // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
