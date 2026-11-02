@@ -3,10 +3,9 @@ import { createHash } from "node:crypto";
 // Data source: simslim (https://github.com/mobai-app/simslim), MIT licensed.
 // Category names, descriptions, and launchd label lists below are copied
 // verbatim from `Categories` in profiles.go at commit
-// 65bda5bd746a32abff14fa1160e4d802e2b057c4 (2026-08-03), the source simslim
-// uses to disable background daemons inside a booted simulator via
-// `xcrun simctl spawn <udid> launchctl disable system/<label>` before a
-// reboot (see docs/agent-rules for how simlock's own driver invokes this).
+// d594c230fe9ed5080189b0ce76afabda6104bae0 (v0.13.0), the source simslim
+// uses to disable background daemons; Simlock writes them into the
+// simulator's launchd overrides file before its one boot (ADR 0060).
 //
 // Apple renames, adds, and removes these daemons between iOS runtime
 // versions, so this list is versioned *data*, not code: it is expected to
@@ -25,13 +24,17 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
   {
     name: "widgets",
     description: "Home and lock screen posters, widgets, and Live Activities.",
-    labels: ["com.apple.PosterBoard", "com.apple.chronod", "com.apple.liveactivitiesd"],
+    labels: [
+      "com.apple.PosterBoard",
+      "com.apple.chronod",
+      "com.apple.liveactivitiesd",
+      "com.apple.navd",
+    ],
   },
   {
     name: "siri",
     description: "Siri, Apple Intelligence, speech, and on-device ML model services.",
     labels: [
-      "com.apple.assistantd",
       "com.apple.assistant_cdmd",
       "com.apple.assistant_service",
       "com.apple.siriactionsd",
@@ -211,7 +214,6 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
       "com.apple.MapKit.SnapshotService",
       "com.apple.jetpackassetd",
       "com.apple.tipsd",
-      "com.apple.gamed",
       "com.apple.gamesaved",
       "com.apple.GameController.gamecontrollerd",
     ],
