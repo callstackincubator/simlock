@@ -4954,6 +4954,7 @@ describe("startDaemon worker lock", () => {
     filesystem: MemoryFilesystem,
     livePids: readonly number[],
     processRunner: ScriptedProcessRunner,
+    dataDirectory?: string,
   ) {
     vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
     return start({
@@ -4964,6 +4965,7 @@ describe("startDaemon worker lock", () => {
       processRunner,
       processSupervisor: new FakeProcessSupervisor(livePids),
       workerLockPath: LOCK_PATH,
+      ...(dataDirectory === undefined ? {} : { dataDirectory }),
     });
   }
 
@@ -5018,4 +5020,18 @@ describe("startDaemon worker lock", () => {
       );
     },
   );
+
+  it("a worker that wins the socket claim while the lock names its folder and another live pid rewrites owner.json with its own pid", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    const filesystem = await filesystemWithLockHeldBy({ folder: dataDirectory, pid: 4242 });
+
+    await startWithRealDrivers(filesystem, [4242], new ScriptedProcessRunner([]), dataDirectory);
+
+    expect(JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")))).toEqual({
+      folder: dataDirectory,
+      pid: process.pid,
+      startedAt: "1970-01-01T00:00:01.000Z",
+    });
+  });
 });
