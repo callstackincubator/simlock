@@ -680,11 +680,12 @@ describe("doctorReportSchema's module-unavailable finding", () => {
     remedy: "install agent-device 0.21.28 or later",
   };
   const parses = (candidate: unknown) =>
-    doctorReportSchema.safeParse({ findings: [candidate] }).success;
+    doctorReportSchema.safeParse({ findings: [candidate], sources: [] }).success;
 
   it("parses a module-unavailable finding, and refuses one without module, without message or without remedy", () => {
-    expect(doctorReportSchema.parse({ findings: [finding] })).toStrictEqual({
+    expect(doctorReportSchema.parse({ findings: [finding], sources: [] })).toStrictEqual({
       findings: [finding],
+      sources: [],
     });
 
     const { module: _module, ...withoutModule } = finding;
@@ -1038,6 +1039,7 @@ describe("opaque fields stay optional on the wire", () => {
       findings: [
         { kind: "orphan-device", platform: "ios", device: { deviceId: "SIM-1", address: "a" } },
       ],
+      sources: [],
     };
     const envelope = { id: "evt_1", seq: 1, timestamp: 1, event: "x", module: "m" };
     expect(deviceRecordSchema.safeParse(record).success).toBe(true);

@@ -125,7 +125,7 @@ export class NukeService implements NukeExecutor {
     for (const driver of this.options.drivers) {
       try {
         for (const source of await driver.listSources()) {
-          if (source.kind !== "seed") continue;
+          if (source.kind !== "seed" || source.orphan === true) continue;
           try {
             await driver.destroySource(source.id);
           } catch (error: unknown) {

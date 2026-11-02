@@ -859,6 +859,7 @@ export const doctorSourceSchema = z.object({
   imageTag: z.string().max(200).optional(),
   sizeBytes: z.number().int().nonnegative().optional(),
   staleReason: z.string().max(300).optional(),
+  orphan: z.literal(true).optional(),
 });
 
 export const doctorReportSchema = z.object({

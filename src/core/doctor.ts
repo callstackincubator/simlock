@@ -253,7 +253,7 @@ export class Doctor {
       ...this.#optionalModuleFindings(),
     ];
 
-    const report = { findings: remaining, sources: await this.#sources() };
+    const report = { findings: remaining, sources: await this.#sources(purgeOrphans) };
     this.#emitFindingEvents(remaining);
     this.options.eventBus.emit(
       "doctor.reconciled",
@@ -268,11 +268,23 @@ export class Doctor {
   }
 
   /** why: a platform whose source read fails lists none; one failure must not hide the rest of the report. */
-  async #sources(): Promise<readonly DoctorSource[]> {
+  async #sources(purgeOrphans: boolean): Promise<readonly DoctorSource[]> {
     const lists = await Promise.all(
       this.options.drivers.map(async (driver) => {
         try {
-          return (await driver.listSources()).map(({ id: _id, ...source }): DoctorSource => ({
+          const listed = await driver.listSources();
+          const kept: DriverSource[] = [];
+          for (const source of listed) {
+            if (
+              purgeOrphans &&
+              source.orphan === true &&
+              (await this.#purgeSource(driver, source))
+            ) {
+              continue;
+            }
+            kept.push(source);
+          }
+          return kept.map(({ id: _id, ...source }): DoctorSource => ({
             ...source,
             platform: driver.platform,
           }));
@@ -285,6 +297,20 @@ export class Doctor {
       }),
     );
     return lists.flat();
+  }
+
+  async #purgeSource(driver: Driver, source: DriverSource): Promise<boolean> {
+    try {
+      await driver.destroySource(source.id);
+      return true;
+    } catch (error: unknown) {
+      this.#logger.error("Could not purge orphan source", {
+        platform: driver.platform,
+        sourceId: source.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   async #realities(
