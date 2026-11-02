@@ -44,6 +44,31 @@ export function defaultWorkerLockPath(
     : `/tmp/simlock-${uid}/worker.lock`;
 }
 
+// why: an owner.json that is missing, not JSON or not the three fields is unreadable, and an unreadable lock is stale.
+async function readOwner(
+  filesystem: Filesystem,
+  ownerFile: string,
+): Promise<WorkerLockOwner | undefined> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await filesystem.readFile(ownerFile));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { folder, pid, startedAt } = parsed as Record<string, unknown>;
+  if (
+    typeof pid !== "number" ||
+    !Number.isInteger(pid) ||
+    pid < 1 ||
+    typeof folder !== "string" ||
+    typeof startedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return { folder, pid, startedAt };
+}
+
 export class NodeWorkerLock implements WorkerLock {
   readonly #options: NodeWorkerLockOptions;
 
@@ -59,8 +84,12 @@ export class NodeWorkerLock implements WorkerLock {
       await filesystem.mkdir(path);
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const holder = JSON.parse(await filesystem.readFile(ownerFile)) as WorkerLockOwner;
-      if (processSupervisor.isAlive(holder.pid) && holder.folder !== owner.folder) {
+      const holder = await readOwner(filesystem, ownerFile);
+      if (
+        holder !== undefined &&
+        processSupervisor.isAlive(holder.pid) &&
+        holder.folder !== owner.folder
+      ) {
         throw new WorkerLockHeldError(holder);
       }
     }
