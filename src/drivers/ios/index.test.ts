@@ -1085,6 +1085,49 @@ describe("IosSimctlDriver", () => {
     },
   );
 
+  it("the first listSources of a process deletes another process's making rows and their simulators, keeps a row whose delete failed, and does not sweep again", async () => {
+    const [gone, stuck, ready] = [1, 2, 3].map(
+      (n) => `00000000-0000-0000-0000-0000000001${String(n)}0`,
+    ) as [string, string, string];
+    const database = await memorySourceDatabase();
+    const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: gone });
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making" });
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: stuck });
+    plantSource(database, { ...kind, udid: ready });
+    const runner = new ScriptedProcessRunner([
+      { match: sourcesSimctl("shutdown", gone) },
+      { match: sourcesSimctl("delete", gone) },
+      { match: sourcesSimctl("shutdown", stuck) },
+      { match: sourcesSimctl("delete", stuck), result: { code: 1, stderr: "busy", stdout: "" } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+    ]);
+    const logger = new RecordingLogger();
+    const driver = await createDriver(runner, new FakeClock(), undefined, database, logger);
+
+    expect(await driver.listSources()).toHaveLength(1);
+    await driver.listSources();
+
+    expect(runner.calls.map((call) => [call.args[3], call.args[4]])).toEqual([
+      ["shutdown", gone],
+      ["delete", gone],
+      ["shutdown", stuck],
+      ["delete", stuck],
+      ["list", "-j"],
+      ["list", "-j"],
+    ]);
+    expect(logger.warnings).toEqual([
+      expect.stringContaining(`could not remove leftover source ${stuck}:`),
+    ]);
+    expect(database.prepare("SELECT udid, state FROM ios_source_data ORDER BY udid").all()).toEqual(
+      [
+        { state: "ready", udid: ready },
+        { state: "making", udid: stuck },
+      ],
+    );
+  });
+
   it("keeps no copy of a slim spec's mode in driver data", async () => {
     const runner = new ScriptedProcessRunner([
       {
@@ -4178,6 +4221,7 @@ async function createDriver(
   clock = new FakeClock(),
   filesystem: Filesystem = new MemoryFilesystem(),
   database?: SqliteDatabase,
+  logger?: Logger,
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
@@ -4187,6 +4231,7 @@ async function createDriver(
     filesystem,
     idGenerator: { generate: () => "device-1" },
     instanceId,
+    ...(logger === undefined ? {} : { logger }),
     processRunner: runner,
     simlockHome: "/home/.simlock",
   });
