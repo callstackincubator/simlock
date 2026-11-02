@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -4949,10 +4949,23 @@ describe("startDaemon worker lock", () => {
     return filesystem;
   }
 
+  async function installAndroidSdk(filesystem: MemoryFilesystem): Promise<void> {
+    vi.stubEnv("ANDROID_HOME", "/android-sdk");
+    for (const binary of [
+      "platform-tools/adb",
+      "emulator/emulator",
+      "cmdline-tools/latest/bin/avdmanager",
+      "cmdline-tools/latest/bin/sdkmanager",
+    ]) {
+      await filesystem.mkdirp(dirname(join("/android-sdk", binary)));
+      await filesystem.writeFileAtomic(join("/android-sdk", binary), "binary");
+    }
+  }
+
   // why: real drivers are the ones discovered, so neither the drivers option nor the substitute module may be set.
   async function startWithRealDrivers(
     filesystem: MemoryFilesystem,
-    livePids: readonly number[],
+    livePids: readonly number[] | FakeProcessSupervisor,
     processRunner: ScriptedProcessRunner,
     dataDirectory?: string,
     extra: Partial<StartDaemonOptions> = {},
@@ -4965,7 +4978,9 @@ describe("startDaemon worker lock", () => {
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
       npm: new FakeNpmCli(),
       processRunner,
-      processSupervisor: new FakeProcessSupervisor(livePids),
+      processSupervisor: Array.isArray(livePids)
+        ? new FakeProcessSupervisor(livePids)
+        : (livePids as FakeProcessSupervisor),
       workerLockPath: LOCK_PATH,
       ...(dataDirectory === undefined ? {} : { dataDirectory }),
     });
@@ -4975,14 +4990,21 @@ describe("startDaemon worker lock", () => {
     vi.unstubAllEnvs();
   });
 
-  it("a worker whose lock is held by a live pid in another folder fails to start with the refusal message, before any driver command", async () => {
+  it("a worker whose lock is held by a live pid in another folder fails to start with the refusal message, before any driver is discovered", async () => {
     const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
+    // why: without an SDK discovery does nothing a test can see, so a lock taken after it would pass; with one, discovery creates the Android device root.
+    await installAndroidSdk(filesystem);
     const processRunner = new ScriptedProcessRunner([]);
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
 
-    await expect(startWithRealDrivers(filesystem, [4242], processRunner)).rejects.toThrow(
+    await expect(
+      startWithRealDrivers(filesystem, [4242], processRunner, dataDirectory),
+    ).rejects.toThrow(
       `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since 2026-11-02T08:00:00.000Z); stop it first: SIMLOCK_HOME=${OTHER_FOLDER} simlock daemon stop`,
     );
     expect(processRunner.calls).toEqual([]);
+    expect(await filesystem.exists(join(dataDirectory, "devices", "android"))).toBe(false);
   });
 
   it.each([
@@ -5071,13 +5093,34 @@ describe("startDaemon worker lock", () => {
     const filesystem = new MemoryFilesystem();
     const ownerFile = join(LOCK_PATH, "owner.json");
     const taken = { folder: OTHER_FOLDER, pid: 4242, startedAt: "t0" };
+    // why: the Android driver's disposal ends the adb server this record names, which is the one thing a test can see a driver do at disposal; the lock must still stand then (ADR 0059 §3).
+    await installAndroidSdk(filesystem);
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    await filesystem.mkdirp(dataDirectory);
+    await filesystem.writeFileAtomic(
+      join(dataDirectory, "adb-server.json"),
+      JSON.stringify({ pid: 4343, port: 5038, startedAt: 1 }),
+    );
+    const supervisor = new FakeProcessSupervisor([4242, 4343]);
+    supervisor.answerCommandLine(4343, "/android-sdk/platform-tools/adb -P 5038 nodaemon server");
+    const lockAtDisposal: Promise<boolean>[] = [];
+    const signal = supervisor.signal.bind(supervisor);
+    supervisor.signal = (pid, kill) => {
+      lockAtDisposal.push(filesystem.exists(LOCK_PATH));
+      signal(pid, kill);
+      supervisor.markDead(pid);
+    };
     const starting = startWithRealDrivers(
       filesystem,
-      [4242],
+      supervisor,
       new ScriptedProcessRunner([]),
-      undefined,
+      dataDirectory,
       // why: a module named like a core route is refused by the module host, which runs after the lock is taken.
-      failedStart ? { optionalModules: [{ name: "status" } as never] } : {},
+      {
+        tcpProbe: new FakeTcpProbe([5038]),
+        ...(failedStart ? { optionalModules: [{ name: "status" } as never] } : {}),
+      },
     );
 
     if (failedStart) {
@@ -5088,6 +5131,7 @@ describe("startDaemon worker lock", () => {
       await daemon.stop("test");
     }
 
+    if (!failedStart) expect(await Promise.all(lockAtDisposal)).toEqual([true]);
     expect(await filesystem.exists(LOCK_PATH)).toBe(takenOver);
     if (takenOver) expect(JSON.parse(await filesystem.readFile(ownerFile))).toEqual(taken);
   });
