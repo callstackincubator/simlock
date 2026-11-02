@@ -3838,6 +3838,33 @@ describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)
     ]);
   });
 
+  it.each([{ answer: null }, { answer: {} }, { answer: { lease: null } }])(
+    "ends a request whose worker answers a malformed grant ($answer) in lease.rejected worker-failed, with no unhandled rejection",
+    async ({ answer }) => {
+      const { client, coordinator, eventBus } = oneWorker();
+      const events = record(eventBus, "lease.rejected");
+      client.requestLeaseQueue.push({ grant: answer as never, kind: "grant" });
+      const unhandled: unknown[] = [];
+      const listener = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", listener);
+      try {
+        const { ended, state } = await start(coordinator);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(state.state).toBe("rejected");
+        await expect(ended).resolves.toMatchObject({ code: "INTERNAL" });
+      } finally {
+        process.off("unhandledRejection", listener);
+      }
+
+      expect(unhandled).toEqual([]);
+      expect(events).toEqual([
+        { name: "lease.rejected", payload: expect.objectContaining({ reason: "worker-failed" }) },
+      ]);
+    },
+  );
+
   it.each([
     {
       elapseMs: 0,
