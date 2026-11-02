@@ -4980,4 +4980,42 @@ describe("startDaemon worker lock", () => {
     );
     expect(processRunner.calls).toEqual([]);
   });
+
+  it.each([
+    { name: "real drivers", substitute: "none" },
+    { name: "drivers passed to startDaemon", substitute: "passed" },
+    { name: "SIMLOCK_DRIVERS_MODULE set", substitute: "module" },
+  ] as const)(
+    "takes the worker lock when drivers are discovered, writing its pid, folder and start time, and reads a held one never otherwise: $name",
+    async ({ substitute }) => {
+      const held = { folder: OTHER_FOLDER, pid: 4242 };
+      const filesystem = await filesystemWithLockHeldBy(
+        substitute === "none" ? { folder: "/gone", pid: 4343 } : held,
+      );
+      vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+      if (substitute === "module") {
+        vi.stubEnv(
+          "SIMLOCK_DRIVERS_MODULE",
+          await writeModule(`export function createDrivers() { return []; }`),
+        );
+      }
+
+      const { directory } = await start({
+        ...(substitute === "passed" ? {} : { drivers: undefined }),
+        filesystem,
+        hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+        npm: new FakeNpmCli(),
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor([4242]),
+        workerLockPath: LOCK_PATH,
+      });
+
+      const owner = JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")));
+      expect(owner).toEqual(
+        substitute === "none"
+          ? { folder: directory, pid: process.pid, startedAt: "1970-01-01T00:00:01.000Z" }
+          : { ...held, startedAt: "2026-11-02T08:00:00.000Z" },
+      );
+    },
+  );
 });
