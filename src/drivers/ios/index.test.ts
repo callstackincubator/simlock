@@ -2078,11 +2078,13 @@ describe("IosSimctlDriver", () => {
         }
         filesystem.writes.length = 0;
         let fileAtBoot: string | undefined;
+        const clock = new FakeClock();
         const calls = slimBootCalls(slim18_5.udid, wantedReadback());
         const runner = new ScriptedProcessRunner([
           {
             ...calls[0]!,
             onSpawn: async () => {
+              clock.advance(40_000);
               const path = overridesPath(slim18_5.udid);
               fileAtBoot = (await filesystem.exists(path))
                 ? await filesystem.readFile(path)
@@ -2101,6 +2103,8 @@ describe("IosSimctlDriver", () => {
             : { bootTimeoutMs: 300_000, categories: configured },
           onSlimmed,
           onSlimSkipped,
+          false,
+          clock,
         );
 
         const result = await driver.makeReady(
@@ -2133,7 +2137,7 @@ describe("IosSimctlDriver", () => {
           address: slim18_5.udid,
           categories: ["widgets"],
           deviceId: slim18_5.udid,
-          durationMs: expect.any(Number),
+          durationMs: 40_000,
           labelCount: widgetsLabels.length,
           signature: widgetsSignature,
           unknownLabels: unknown ?? [],

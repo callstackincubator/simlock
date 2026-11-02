@@ -146,4 +146,4 @@ record of a device's mode. Also writes, and deletes with the device, its folder 
 - **A new Xcode major turns iPhone streams off** until `vendor/screen-capture/Stubs/` is checked
   against that release and the pin moves.
 - **Untested on an iPhone:** DeviceHub or Xcode showing the same device during a stream; the lease holder's `devicectl` commands during one; the source ending after the first picture; `stop()` really stopping the stream. Nothing can observe CoreDevice's state, and a device that serves two streams at once lets a new lease stream even after a leaked one, so the slow lane proves only that the process is gone and that the device streams again. Two viewers of one lease ask for two streams; the two-viewer case finds out whether it serves both (#602 would remove the second).
-- **A cold slim lease takes ~160 s.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
+- **A cold slim lease takes about 60 s (one boot, the cold-boot estimate).** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
