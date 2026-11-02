@@ -83,7 +83,7 @@ export interface UplinkListener {
  *   valid elsewhere and carries no authority here, exactly as a `worker` token carries none on
  *   any other `/v1` route.
  * - `worker-mismatch` (`403`) -- a `worker` token pinned to another worker id, a worker id
- *   another token is pinned to, or no worker id at all.
+ *   another token is pinned to, no worker id at all, or one outside `[A-Za-z0-9_-]{1,128}`.
  */
 export type UplinkAuthOutcome = "accept" | "unauthenticated" | "forbidden" | "worker-mismatch";
 
