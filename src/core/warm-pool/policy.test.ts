@@ -30,24 +30,41 @@ function spec(model: string, overrides: Partial<VirtualSpec> = {}): VirtualSpec 
   return { model, osVersion: "26.0", physical: false, platform: "ios", ...overrides };
 }
 
+interface DeviceOptions {
+  spec?: VirtualSpec;
+  endedAgo?: number;
+  createdAt?: number;
+  readyAt?: number;
+  leaseIdentity?: "fresh";
+  spent?: boolean;
+}
+
+function readyStamp(options: DeviceOptions): Pick<VirtualDevice, "readyAt"> | Record<never, never> {
+  return options.readyAt === undefined && options.endedAgo === undefined
+    ? {}
+    : { readyAt: options.readyAt ?? now };
+}
+
+// why: a virtual device that ended a lease is spent (ADR 0061 §2) and never grantable; `endedAgo`
+// only orders idle devices (least recently used), so it moves createdAt, and only a spent device
+// carries the end stamp. Such a device counts as freshly ready, so the never-leased idle rule leaves it be.
+function endStamp(
+  options: DeviceOptions,
+): Pick<VirtualDevice, "lastLeaseEndedAt"> | Record<never, never> {
+  return options.spent === true && options.endedAgo !== undefined
+    ? { lastLeaseEndedAt: now - options.endedAgo }
+    : {};
+}
+
 function device(
   id: string,
   state: VirtualDevice["state"],
-  options: {
-    spec?: VirtualSpec;
-    endedAgo?: number;
-    createdAt?: number;
-    readyAt?: number;
-    leaseIdentity?: "fresh";
-    spent?: boolean;
-  } = {},
+  options: DeviceOptions = {},
 ): VirtualDevice {
   return {
     physical: false,
     createdAt: options.createdAt ?? (options.endedAgo === undefined ? 1 : now - options.endedAgo),
-    ...(options.readyAt === undefined && options.endedAgo === undefined
-      ? {}
-      : { readyAt: options.readyAt ?? now }),
+    ...readyStamp(options),
     ...(options.leaseIdentity === undefined ? {} : { leaseIdentity: options.leaseIdentity }),
     driverData: {},
     driverDeviceId: `driver-${id}`,
@@ -55,12 +72,7 @@ function device(
     mode: "full",
     spec: options.spec ?? spec("iPhone 15"),
     state,
-    // why: a virtual device that ended a lease is spent (ADR 0061 §2) and never grantable; `endedAgo`
-    // only orders idle devices (least recently used), so it moves createdAt, and only a spent device
-    // carries the end stamp. Such a device counts as freshly ready, so the never-leased idle rule leaves it be.
-    ...(options.spent === true && options.endedAgo !== undefined
-      ? { lastLeaseEndedAt: now - options.endedAgo }
-      : {}),
+    ...endStamp(options),
   };
 }
 

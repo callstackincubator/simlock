@@ -851,7 +851,7 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const doctorSourceSchema = z.object({
+const doctorSourceSchema = z.object({
   platform: platformSchema,
   kind: z.enum(["seed", "baseline"]),
   model: z.string().max(200),
