@@ -283,7 +283,7 @@ export const leaseRequest = defineOperation({
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
   // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
-  // `requesterId`, and `owner` is gated by role in the handler (the resource does not exist yet).
+  // `requesterId` (printable, at most 200 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
