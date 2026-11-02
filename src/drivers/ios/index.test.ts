@@ -853,6 +853,87 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
+  it.each([
+    {
+      name: "simctl create fails",
+      message: "Invalid runtime",
+      script: [{ code: 1, op: "create" }],
+      tail: [],
+    },
+    {
+      name: "the seed's boot fails",
+      message: `seed ${seedUdid} did not boot: `,
+      script: [{ code: 1, op: "bootstatus" }],
+      tail: ["shutdown", "delete"],
+    },
+    {
+      name: "the seed's boot times out",
+      message: `seed ${seedUdid} did not boot: `,
+      script: [{ hangs: true, op: "bootstatus" }],
+      tail: ["shutdown", "shutdown", "delete"],
+    },
+    {
+      name: "the seed's shutdown fails",
+      message: "Unable to shutdown",
+      script: [{ code: 1, op: "shutdown" }],
+      tail: ["shutdown", "delete"],
+    },
+  ] as const)(
+    "a seed make that fails because $name leaves no seed and no row, and the provision throws a DriverCrashError, never a BootTimeoutError",
+    async ({ message, script, tail }) => {
+      const failing = script[0];
+      const steps = ["create", "boot", "bootstatus", "listapps", "shutdown"];
+      const upTo = steps.indexOf(failing.op);
+      const results = new Map<string, { code: number; stderr: string; stdout: string }>([
+        ["create", { code: 0, stderr: "", stdout: `${seedUdid}\n` }],
+      ]);
+      const database = await memorySourceDatabase();
+      const entries = steps.slice(0, upTo + 1).map((op) => {
+        const match = sourcesSimctl(
+          ...(op === "create"
+            ? ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId]
+            : op === "bootstatus"
+              ? [op, seedUdid, "-b"]
+              : [op, seedUdid]),
+        );
+        if (op !== failing.op)
+          return { match, ...(results.has(op) ? { result: results.get(op)! } : {}) };
+        return "hangs" in failing
+          ? { hangs: true, match }
+          : { match, result: { code: failing.code, stderr: message, stdout: "" } };
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...entries,
+        ...tail.map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+      ]);
+      const clock = new FakeClock();
+      const driver = await createDriver(runner, clock, undefined, database);
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      const provisioned = driver.provision(spec);
+      void provisioned.catch(() => undefined);
+      if ("hangs" in failing) {
+        await waitForCalls(runner, entries.length + 1);
+        clock.advance(120_000);
+      }
+      const error = await provisioned.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).not.toBeInstanceOf(BootTimeoutError);
+      expect((error as Error).message).toContain(message);
+      expect(runner.calls.map((call) => call.args[3])).toEqual([
+        "list",
+        ...steps.slice(0, upTo + 1),
+        ...tail,
+      ]);
+      expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
+        runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
+      );
+      expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
+    },
+  );
+
   it("keeps no copy of a slim spec's mode in driver data", async () => {
     const runner = new ScriptedProcessRunner([
       {
