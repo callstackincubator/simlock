@@ -380,7 +380,7 @@ describe("QuarantineCoordinator", () => {
     "retries %s's delete rather than an erase, and a successful retry reaches deleted, never ready",
     async (_case, target) => {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      const driver = new FakeDriver({ clock, platform: "ios" });
       const harness = await createHarness({ clock, driver, target });
       await harness.coordinator.enter({
         attemptedStrategy: "delete",
@@ -410,7 +410,7 @@ describe("QuarantineCoordinator", () => {
 
   it("keeps a virtual device quarantined and re-arms when its retried delete fails", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     driver.failOn("destroy", 1, new Error("still stuck"));
     const harness = await createHarness({
       clock,
@@ -495,7 +495,7 @@ describe("QuarantineCoordinator", () => {
 
   it("restores retry timers for devices still quarantined at startup", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const driverDevice = await driver.provision(spec);
     const registry = new FakeRegistry([
       {
@@ -527,7 +527,7 @@ describe("QuarantineCoordinator", () => {
 
   it("arms no retry for a quarantined device the include filter leaves out, even one already due", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const driverDevice = await driver.provision(spec);
     const registry = new FakeRegistry([
       {
@@ -557,7 +557,7 @@ describe("QuarantineCoordinator", () => {
 
   it("arms no retry timer for a device that is not quarantined", async () => {
     const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const driverDevice = await driver.provision(spec);
     const registry = new FakeRegistry([
       { ...device("dev_ready", driverDevice.deviceId), state: "ready", quarantineNextRetryAt: 500 },
@@ -590,7 +590,7 @@ describe("QuarantineCoordinator for a physical device (ADR 0022 §4)", () => {
   async function physicalHarness(stateName: "reclaiming" | "quarantined") {
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     driver.setPhysicalPresence(physicalRecord.driverDeviceId, true);
     const state = await openTestState();
     const seeding = await loadTestRegistry({
@@ -1290,7 +1290,7 @@ describe("QuarantineCoordinator quarantine cause", () => {
     const platform = options.platform ?? "ios";
     const clock = new FakeClock(1_000);
     const bus = new EventBus(clock);
-    const driver = new FakeDriver({ clock, platform, reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform });
     const state = options.state ?? "reclaiming";
     const testState = await openTestState();
     const seeding = await loadTestRegistry({

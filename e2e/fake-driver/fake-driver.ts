@@ -479,10 +479,7 @@ export class OutOfProcessFakeDriver implements Driver {
   }> {
     const script = await this.#beforeCall("reclaim", [device, options]);
     if (device.physical) return this.#reclaimPhysical(device, script);
-    const state = script.reclaimResult ?? "ready";
-    const strategy = script.reclaimStrategy ?? "erase";
-    this.#devices.set(device.deviceId, state);
-    return { state, strategy };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async #reclaimPhysical(
@@ -535,8 +532,9 @@ export class OutOfProcessFakeDriver implements Driver {
   reclaimStrategy(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "snapshot" | "wipe" | "uninstall" {
-    return device.physical ? "uninstall" : "erase";
+  ): "uninstall" {
+    if (device.physical) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: VirtualDriverDevice): Promise<void> {

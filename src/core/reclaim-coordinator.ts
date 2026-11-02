@@ -96,10 +96,7 @@ export class ReclaimCoordinator {
   reclaim(released: ReleasedLease): Promise<void> {
     // A physical device is never retired: it has no spent state, so only its purge applies.
     if (released.device.physical) return this.#purge(released.device, released.lease.id);
-    if (!mayBeGranted(released.device)) {
-      return this.#retireSpent({ device: released.device, lease: released.lease });
-    }
-    return this.#purge(released.device, released.lease.id);
+    return this.#retireSpent({ device: released.device, lease: released.lease });
   }
 
   async #purge(device: DeviceRecord, leaseId?: string): Promise<void> {

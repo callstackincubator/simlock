@@ -18,6 +18,7 @@ import {
   type DriverCatalogEntry,
   type DriverCatalogImage,
   type DriverComponent,
+  DriverCrashError,
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
@@ -113,8 +114,6 @@ export interface FakeDriverOptions {
   ) => PassthroughCommand;
   readonly platform: Platform;
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
-  readonly reclaimResult?: "ready" | "shutdown";
-  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly physicalDevices?: readonly FakePhysicalDevice[];
   /**
    * why: a real iOS simulator is addressed by its device id; set it to give a virtual device that
@@ -173,8 +172,6 @@ export class FakeDriver implements Driver {
   readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
-  readonly #reclaimResult: "ready" | "shutdown";
-  readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
   readonly #legacyDevices: Map<string, LegacyDevice>;
   readonly #bootCounts = new Map<string, number>();
@@ -214,8 +211,6 @@ export class FakeDriver implements Driver {
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
-    this.#reclaimResult = options.reclaimResult ?? "ready";
-    this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
     this.#scriptedPhysicalDevices = options.physicalDevices;
     this.#install = options;
     this.#receipts = preinstalledReceipts(this.#availableOsVersions);
@@ -454,9 +449,7 @@ export class FakeDriver implements Driver {
   ): Promise<ReclaimResult> {
     await this.#beforeCall("reclaim", device, options);
     if (isPhysicalDriverDevice(device)) return this.#reclaimPhysical(device);
-    this.#requireDevice(device);
-    this.#devices.set(device.deviceId, this.#reclaimResult);
-    return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   #reclaimPhysical(device: PhysicalDriverDevice): ReclaimResult {
@@ -470,8 +463,9 @@ export class FakeDriver implements Driver {
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "snapshot" | "wipe" | "uninstall" {
-    return isPhysicalDriverDevice(device) ? "uninstall" : this.#reclaimStrategy;
+  ): "uninstall" {
+    if (isPhysicalDriverDevice(device)) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {

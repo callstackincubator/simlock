@@ -668,7 +668,6 @@ describe("createLeasing", () => {
       availableOsVersions: ["26.5"],
       clock,
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
     const harness = await createHarness({
@@ -831,7 +830,6 @@ describe("createLeasing", () => {
       availableOsVersions: ["26.5"],
       clock,
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     driver.hangMakeReady();
     const harness = await createHarness({ driver });
@@ -2987,7 +2985,6 @@ describe("createLeasing warm pool", () => {
       availableOsVersions: ["26.5"],
       clock: new FakeClock(1_000),
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({ driver });
     await harness.engine.request(request, { ownerId: "held", requesterId: "held" });
@@ -3161,7 +3158,6 @@ describe("createLeasing warm pool", () => {
         clock,
         latencyMs: { makeReady: 50 },
         platform: "ios",
-        reclaimResult: "shutdown",
       });
       const harness = await createHarness({
         driver,
@@ -3383,13 +3379,11 @@ describe("createLeasing queued device cleanup", () => {
       clock: new FakeClock(1_000),
       knownModels: ["iPhone 16"],
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const android = new FakeDriver({
       availableOsVersions: ["35"],
       clock: new FakeClock(1_000),
       platform: "android",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({
       driver,
@@ -5138,7 +5132,6 @@ describe("createLeasing: a waiting request says why it is not placed (#636)", ()
       clock,
       latencyMs: { makeReady: 50 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     const harness = await createHarness({
       startPool: true,

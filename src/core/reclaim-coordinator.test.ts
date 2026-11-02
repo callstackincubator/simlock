@@ -98,8 +98,7 @@ async function createHarness(
 ) {
   const clock = new FakeClock(1_000);
   const bus = new EventBus(clock);
-  const driver =
-    options.driver ?? new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+  const driver = options.driver ?? new FakeDriver({ clock, platform: "ios" });
   const driverDevice = await driver.provision(spec);
   const reclaiming = device("reclaiming", "reclaiming", driverDevice.deviceId, spec);
   const registry = new TestRegistry(options.devices ?? [reclaiming], options.leases, bus);
@@ -174,6 +173,38 @@ function released(device: VirtualDevice): ReleasedLease {
 }
 
 describe("ReclaimCoordinator", () => {
+  const PHYSICAL_UDID = "00008110-001A2B3C4D5E";
+
+  function physicalFixture(): PhysicalDevice {
+    return {
+      createdAt: 1,
+      driverData: {},
+      driverDeviceId: PHYSICAL_UDID,
+      enrolledApps: [],
+      id: "dev_physical",
+      lastLeaseEndedAt: 1_000,
+      physical: true,
+      spec: {
+        class: "phone",
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        physical: true,
+        platform: "ios",
+      },
+      state: "reclaiming",
+    };
+  }
+
+  function physicalDriverFixture() {
+    return new FakeDriver({
+      clock: new FakeClock(1_000),
+      physicalDevices: [
+        { apps: [], ids: [PHYSICAL_UDID], model: "iPhone 15 Pro", osVersion: "18.4" },
+      ],
+      platform: "ios",
+    });
+  }
+
   it("reclaims a released physical lease through the driver with its enrollment app list, and commits ready with the uninstall strategy and its missing apps", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -231,25 +262,16 @@ describe("ReclaimCoordinator", () => {
     ]);
     expect(harness.quarantined).toEqual([]);
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+    expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
   });
 
-  it("hands the driver's reclaim a device marked virtual", async () => {
-    const harness = await createHarness();
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    const reclaims = harness.driver.calls.filter((call) => call.operation === "reclaim");
-    expect(reclaims.map((call) => call.arguments[0])).toEqual([
-      expect.objectContaining({ physical: false }),
-    ]);
-  });
-
-  it("asks the driver for the strategy of a standard clean before it reclaims", async () => {
-    const harness = await createHarness();
+  it("asks the driver for the strategy of a standard clean before it reclaims a physical device", async () => {
+    const physical = physicalFixture();
+    const harness = await createHarness({ devices: [physical], driver: physicalDriverFixture() });
     const strategy = vi.spyOn(harness.driver, "reclaimStrategy");
     const reclaim = vi.spyOn(harness.driver, "reclaim");
 
-    await harness.coordinator.reclaim(released(harness.reclaiming));
+    await harness.coordinator.reclaim({ ...released(harness.reclaiming), device: physical });
 
     expect(strategy.mock.calls.map((call) => call[1])).toEqual([{ clean: "standard" }]);
     expect(strategy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -293,25 +315,14 @@ describe("ReclaimCoordinator", () => {
     expect(harness.registry.deviceById("dev_physical")?.state).toBe("ready");
   });
 
-  it("commits shutdown, emits device.reclaimed and kicks acquisition when the driver returns shutdown", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
-    expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
-    expect(harness.notifyAvailability).toHaveBeenCalledOnce();
-  });
-
   // ReclaimCoordinator takes no capacity input at all, so "over its limit" cannot be configured
   // here; another device already running is the strongest state the harness can set up, and
   // the reclaim must still commit `ready` without shutting anything down.
-  it("commits ready when the driver returns ready, without shutting it down, even with another device already running", async () => {
-    const harness = await createHarness();
+  it("commits a physical device ready, without shutting it down, even with another device already running", async () => {
+    const physical = physicalFixture();
+    const harness = await createHarness({ devices: [physical], driver: physicalDriverFixture() });
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
-    const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
+    const overloaded = new TestRegistry([physical, extra], [], harness.bus);
     const coordinator = new ReclaimCoordinator({
       claims: harness.claims,
       clock: harness.clock,
@@ -323,49 +334,10 @@ describe("ReclaimCoordinator", () => {
       registry: overloaded,
     });
 
-    await coordinator.reclaim(released(harness.reclaiming));
+    await coordinator.reclaim({ ...released(harness.reclaiming), device: physical });
 
-    expect(
-      overloaded.snapshot.virtualDevices.find((device) => device.id === harness.reclaiming.id)
-        ?.state,
-    ).toBe("ready");
+    expect(overloaded.deviceById("dev_physical")?.state).toBe("ready");
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
-  });
-
-  it("never calls makeReady on a reclaim", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(driver.calls.map((call) => call.operation)).toContain("reclaim");
-    expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
-  });
-
-  it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("purge exploded"));
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.quarantined).toEqual([
-      {
-        attemptedStrategy: "wipe",
-        deviceId: harness.reclaiming.id,
-        duration: 0,
-        error: "Error: purge exploded",
-        kind: "purge-failed",
-        leaseId: "lease-1",
-      },
-    ]);
-    // Quarantine entry is a coordinator concern, not a capacity one: the device
-    // stays running (`reclaiming` and `quarantined` both count), so nothing here
-    // wakes a queued waiter -- and no readiness probe ever runs.
-    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
-    expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
   it("recovers an unleased interrupted reclaim through shutdown, a committed fact, and itself as the emitter", async () => {
@@ -399,7 +371,7 @@ describe("ReclaimCoordinator", () => {
   describe("a device whose wipe a daemon start put off", () => {
     async function deferredHarness(identity: VirtualDevice["leaseIdentity"]) {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      const driver = new FakeDriver({ clock, platform: "ios" });
       const driverDevice = await driver.provision(spec);
       const target: VirtualDevice = {
         ...device("deferred", "reclaiming", driverDevice.deviceId, spec),
@@ -440,7 +412,7 @@ describe("ReclaimCoordinator", () => {
       identity: VirtualDevice["leaseIdentity"] = "fresh",
     ) {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+      const driver = new FakeDriver({ clock, platform: "ios" });
       const target = spent(
         device("fresh", state, (await driver.provision(spec)).deviceId, spec),
         identity,
@@ -554,7 +526,6 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
           { apps: [], ids: [PHYSICAL_ID], model: "iPhone 15 Pro", osVersion: "18.4" },
         ],
         platform: "ios",
-        reclaimResult: "ready",
       });
     const testState = await openTestState();
     const seeding = await loadTestRegistry({
@@ -694,6 +665,8 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     expect(harness.mockedQuarantine.enter.mock.calls.map(([failure]) => failure)).toMatchObject([
       { deviceId: "dev_physical", error: "Error: uninstall exploded", kind: "purge-failed" },
     ]);
+    // why: a purge failure is quarantined, never readiness-checked back in.
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
   });
 
   it("a failed physical reclaim whose presence read rejects, or whose platform has no driver, commits absent with not-present", async () => {
@@ -873,13 +846,14 @@ describe("ReclaimCoordinator readiness callback and returned-device reclaims", (
     expect(physicalDeviceReady).toHaveBeenCalledExactlyOnceWith("dev_physical");
   });
 
-  it("does not call the readiness callback for a virtual device reclaimed to ready", async () => {
+  it("does not call the readiness callback for a virtual device retired on release", async () => {
     const physicalDeviceReady = vi.fn();
     const harness = await createHarness({ physicalDeviceReady });
 
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
-    expect(harness.registry.deviceById("reclaiming")?.state).toBe("ready");
+    // why: ADR 0061 §2 retires a released virtual device; it is never reclaimed back to ready.
+    expect(harness.registry.deviceById("reclaiming")?.state).toBe("deleted");
     expect(physicalDeviceReady).not.toHaveBeenCalled();
   });
 

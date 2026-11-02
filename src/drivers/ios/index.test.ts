@@ -206,13 +206,6 @@ function deviceListResponse(state: string): string {
   });
 }
 
-const VIRTUAL_DEVICE = {
-  address: "",
-  deviceId: "device",
-  driverData: {},
-  physical: false,
-} as const;
-
 const PHYSICAL_DEVICE = {
   address: "00008110-001A2B3C4D5E",
   deviceId: "00008110-001A2B3C4D5E",
@@ -1079,70 +1072,18 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("reclaims by tolerating an already-shutdown response, then erasing", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: simctl("shutdown", driverData.udid),
-        result: {
-          code: 149,
-          stderr: "Unable to shutdown device in current state: Shutdown",
-          stdout: "",
-        },
-      },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const filesystem = new MemoryFilesystem();
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
+  it("throws virtual devices are not reclaimed for a simulator, from reclaim and reclaimStrategy", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(runner);
+    const simulator = { address: driverData.udid, deviceId: driverData.udid, driverData };
 
-    await expect(
-      driver.reclaim(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        { clean: "full" },
-      ),
-    ).resolves.toEqual({ state: "shutdown", strategy: "erase" });
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
-  });
-
-  it("writes a fresh, different token on reclaim than the one written on provision", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: listInvocation,
-        result: { code: 0, stderr: "", stdout: listFixture },
-      },
-      {
-        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
-        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
-      },
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const filesystem = new MemoryFilesystem();
-    const driver = await createTokenDriver(runner, filesystem);
-    await plantManagedDevice(filesystem);
-    await driver.resolveSpec({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    await driver.provision(spec);
-
-    const provisionedDurable = await readToken(filesystem, durableMarkPath);
-    const provisionedErasable = await readToken(filesystem, erasableMarkPath);
-    expect(provisionedDurable).toBe(provisionedErasable);
-
-    await driver.reclaim(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      { clean: "full" },
+    await expect(driver.reclaim(simulator, { clean: "full" })).rejects.toThrow(
+      "virtual devices are not reclaimed",
     );
-
-    expect(await readToken(filesystem, durableMarkPath)).toBe(
-      await readToken(filesystem, erasableMarkPath),
+    expect(() => driver.reclaimStrategy(simulator, { clean: "standard" })).toThrow(
+      "virtual devices are not reclaimed",
     );
-    expect(await readToken(filesystem, durableMarkPath)).not.toBe(provisionedDurable);
+    expect(runner.calls).toEqual([]);
   });
 
   it("shuts down before deleting and uses benchmark estimates", async () => {
@@ -1237,15 +1178,6 @@ describe("IosSimctlDriver", () => {
       );
     },
   );
-
-  it("prices reclaim as the erase it always runs, at either clean level", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("erase");
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "full" })).toBe("erase");
-    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(34_000);
-    expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(34_000);
-  });
 
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
     const driver = await createDriver(scriptedListRunner());
@@ -1460,51 +1392,27 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("derives mark paths from its own root without shelling out to locate a device", async () => {
-    const filesystem = new MemoryFilesystem();
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
-
-    await driver.reclaim(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      { clean: "full" },
-    );
-
-    // why: Owning the set means the data container's path is known, so `reclaim` -- which runs
-    // on every release -- never pays for the `simctl list` it used to need to find it.
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
-    expect(await filesystem.exists(erasableMarkPath)).toBe(true);
-    expect(await filesystem.exists(durableMarkPath)).toBe(true);
-  });
-
   it("leaves neither provenance mark when the erasable half cannot be written", async () => {
     const filesystem = new MemoryFilesystem();
     const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
+      {
+        match: listInvocation,
+        result: { code: 0, stderr: "", stdout: listFixture },
+      },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
     ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
     // why: The device directory exists, its data container does not, and `writeFileAtomic`
     // creates no parents -- the erasable write cannot land.
     await filesystem.mkdirp(`${deviceRoot}/${driverData.udid}`);
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
 
-    await expect(
-      driver.reclaim(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        { clean: "full" },
-      ),
-    ).rejects.toThrow(`ENOENT: no such file or directory, open '${dataPath}'`);
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
+    await expect(driver.provision(spec)).rejects.toThrow(
+      `ENOENT: no such file or directory, open '${dataPath}'`,
+    );
 
     // why: A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
     // a half-written pair would have `doctor` accusing the user of erasing the device
@@ -1990,7 +1898,6 @@ describe("IosSimctlDriver", () => {
         const liveSpec = await driver.resolveSpec({ model: "iPhone 17 Pro", platform: "ios" });
         device = await driver.provision(liveSpec);
         await driver.makeReady(device, prepareFull);
-        await driver.reclaim(device, { clean: "standard" });
       } finally {
         if (device !== undefined) {
           await driver.destroy(device);
@@ -4054,36 +3961,6 @@ async function createDriver(
 }
 
 /**
- * why: `#idGenerator.generate()` is called once while the root is being created, then names
- * the device, then mints a mark token per write -- so the second call must stay
- * "device-1" to match `driverData.name` while later ones vary, proving the reclaim token
- * differs from the provision token.
- */
-async function createTokenDriver(
-  runner: ScriptedProcessRunner,
-  filesystem: Filesystem,
-): Promise<IosSimctlDriver> {
-  let calls = 0;
-  scopedRunners.push(runner);
-  return IosSimctlDriver.create({
-    database: await seededDatabase(),
-    clock: new FakeClock(),
-    driverConfig: { deviceRoot },
-    filesystem,
-    idGenerator: {
-      generate: () => {
-        calls += 1;
-        if (calls === 1) return "root-staging";
-        return calls === 2 ? "device-1" : `tok-${String(calls)}`;
-      },
-    },
-    instanceId,
-    processRunner: runner,
-    simlockHome: "/home/.simlock",
-  });
-}
-
-/**
  * why: Bounded on purpose. An unexpected invocation makes `ScriptedProcessRunner.spawn` throw
  * synchronously, `#invokeSimctl` turns that into a `DriverCrashError`, and the call this
  * is waiting for never arrives -- an unbounded spin then hangs the whole suite instead of
@@ -4123,10 +4000,6 @@ async function plantManagedDevice(filesystem: Filesystem): Promise<void> {
     JSON.stringify(marker),
   );
   await filesystem.mkdirp(dataPath);
-}
-
-async function readToken(filesystem: Filesystem, path: string): Promise<string> {
-  return (JSON.parse(await filesystem.readFile(path)) as { readonly token: string }).token;
 }
 
 /** why: the state a case starts from, with the writes and modes the planting made forgotten. */
@@ -4490,8 +4363,6 @@ describe("IosSimctlDriver device set", () => {
         { args: ["bootstatus", driverData.udid, "-b"], scoped: true },
         { args: ["listapps", driverData.udid], scoped: true },
         { args: ["shutdown", driverData.udid], scoped: true },
-        { args: ["erase", driverData.udid], scoped: true },
-        { args: ["shutdown", driverData.udid], scoped: true },
         { args: ["delete", driverData.udid], scoped: true },
         { args: ["list", "-j", "devices"], scoped: true, stdout: emptyDevices },
         { args: ["runtime", "list", "-j"], scoped: true, stdout: imageList },
@@ -4534,7 +4405,6 @@ describe("IosSimctlDriver device set", () => {
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
       await driver.provision(spec);
       await driver.makeReady(device, prepareFull);
-      await driver.reclaim(device, { clean: "standard" });
       await driver.destroy(device);
       await driver.listManaged();
       await driver.removeComponent(
@@ -4702,7 +4572,7 @@ describe("IosSimctlDriver device set", () => {
     ["simlock", { deviceRoot, deviceSet: "simlock" }, deviceRoot],
     ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`],
   ] as const)(
-    "a new or reclaimed simulator's marks name this instance under deviceSet %s",
+    "a new simulator's marks name this instance under deviceSet %s",
     async (setting, config, devicesDir) => {
       const scoped = setting === "simlock";
       const argv = (...args: string[]) => (scoped ? simctlArgs(...args) : ["simctl", ...args]);
@@ -4733,7 +4603,6 @@ describe("IosSimctlDriver device set", () => {
         });
         return { driver, filesystem, runner };
       };
-      const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
       const created = [
         argv("list", "-j", "devicetypes", "runtimes"),
         [
@@ -4750,16 +4619,9 @@ describe("IosSimctlDriver device set", () => {
       const { driver, filesystem } = await driverFor([
         [created[0] ?? [], listFixture],
         [created[1] ?? [], `${driverData.udid}\n`],
-        [argv("shutdown", driverData.udid)],
-        [argv("erase", driverData.udid)],
       ]);
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
       await driver.provision(spec);
-      for (const path of marks) {
-        expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
-      }
-      for (const path of marks) await filesystem.rm(path);
-      await driver.reclaim(device, { clean: "standard" });
       for (const path of marks) {
         expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
       }

@@ -1248,7 +1248,7 @@ describe("Doctor", () => {
     });
     await registry.beginRelease(lease.id);
     await registry.enterQuarantine(device.id, 10_100, { kind: "purge-failed" });
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const listed = {
       devices: [
         {

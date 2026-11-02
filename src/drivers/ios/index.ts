@@ -997,19 +997,15 @@ export class IosSimctlDriver implements Driver {
     _options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) return this.#physical.reclaim(device);
-    const data = iosDriverData(device);
-    await this.#shutdown(data.udid);
-    await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
-    await this.#writeMark(data.udid);
-
-    return { state: "shutdown", strategy: "erase" };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "uninstall" {
-    return isPhysicalDriverDevice(device) ? "uninstall" : "erase";
+  ): "uninstall" {
+    if (isPhysicalDriverDevice(device)) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
