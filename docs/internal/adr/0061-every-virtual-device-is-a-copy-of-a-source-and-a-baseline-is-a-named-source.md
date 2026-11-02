@@ -110,7 +110,7 @@ text:
 | Step | iOS | Android |
 | ---- | --- | ------- |
 | Copy | `simctl clone <source> simlock-<id>` in the device set; then write both marks (the clone has no root mark, and its `data/` mark is the source's); then copy the source's `/private/var/tmp/…SimDevice.<source udid>/disabled.plist`, if any, to the clone's UDID | make `<root>/<id>/`, copy the source AVD folder into it under the same AVD name (timestamps kept), copy its `.ini` with `path=` rewritten; every command for that device carries `ANDROID_AVD_HOME=<root>/<id>` |
-| Boot | as today (ADR 0060 writes the slim file first) | `-snapshot simlock_boot -no-snapshot-save`; a snapshot that does not load cold-boots the same disk (the emulator does this itself); never `-wipe-data` |
+| Boot | as today (ADR 0060 writes the slim file first) | `-snapshot simlock_boot -no-snapshot-save`; a snapshot that does not load cold-boots the same disk (the emulator does this itself); a copy never boots with `-wipe-data` |
 | Release | destroy (ADR 0060 §4 removes its overrides folder); the next lease gets a new copy | destroy (the ownership check, `emu kill`, delete `<root>/<id>/`); the next lease gets a new copy |
 
 Every virtual device is spent after one lease: core's release path destroys
@@ -196,7 +196,10 @@ devices warm with no configuration.
 A worker's view carries its baselines (the `baseline.list` entry). A
 routing stage `has-baseline` follows `can-serve`. A request naming a
 baseline that no worker holds fails at once with `UNKNOWN_BASELINE`; one
-that workers hold only as stale fails at once with `BASELINE_STALE`. A warm
+that workers hold only as stale fails at once with `BASELINE_STALE`; one
+whose every fresh holder's baseline differs from the request fails at once
+with `BASELINE_MISMATCH`. A worker that answers one of these three is left
+out and the next is tried, as for `UNKNOWN_MODEL`. A warm
 hit also needs the baseline to match. `baseline.save` on a gateway goes to
 the worker of the lease; `baseline.remove` on a gateway takes a `worker`
 and goes to it; `baseline.list` on a gateway lists every worker's
