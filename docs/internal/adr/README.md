@@ -95,3 +95,4 @@ the status is stale.
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding) |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
+| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Proposed; narrows 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
