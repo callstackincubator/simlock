@@ -2072,35 +2072,15 @@ describe("IosSimctlDriver", () => {
       async ({ existing, expected, rewritten, configured, unknown }) => {
         const filesystem = new FaultyFilesystem();
         await plantManagedDevice(filesystem);
-        if (existing !== undefined) {
-          await filesystem.mkdirp(overridesFolder(slim18_5.udid));
-          await filesystem.writeFileAtomic(overridesPath(slim18_5.udid), overridesPlist(existing));
-        }
-        filesystem.writes.length = 0;
-        let fileAtBoot: string | undefined;
+        await plantOverrides(filesystem, existing);
         const clock = new FakeClock();
-        const calls = slimBootCalls(slim18_5.udid, wantedReadback());
-        const runner = new ScriptedProcessRunner([
-          {
-            ...calls[0]!,
-            onSpawn: async () => {
-              clock.advance(40_000);
-              const path = overridesPath(slim18_5.udid);
-              fileAtBoot = (await filesystem.exists(path))
-                ? await filesystem.readFile(path)
-                : undefined;
-            },
-          },
-          ...calls.slice(1),
-        ]);
+        const { runner, fileAtBoot } = runnerReadingFileAtBoot(filesystem, clock);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
         const driver = await createSlimDriver(
           runner,
           filesystem,
-          configured === undefined
-            ? slimOptions()
-            : { bootTimeoutMs: 300_000, categories: configured },
+          { bootTimeoutMs: 300_000, categories: configured ?? ["widgets"] },
           onSlimmed,
           onSlimSkipped,
           false,
@@ -2118,12 +2098,9 @@ describe("IosSimctlDriver", () => {
           driverData: slim18_5,
           mode: "slim",
         });
-        expect(fileAtBoot).toBeDefined();
-        expect(parseOverrides(fileAtBoot ?? "")).toEqual(expected);
+        expect(parseOverrides(fileAtBoot() ?? "")).toEqual(expected);
         expect(filesystem.writes).toEqual(rewritten ? [overridesPath(slim18_5.udid)] : []);
-        if (rewritten && existing === undefined) {
-          expect(filesystem.modes).toEqual({ file: 0o644, folder: 0o700 });
-        }
+        expect(filesystem.modes).toEqual(rewritten ? { file: 0o644, folder: 0o700 } : {});
         expect(runner.calls.map((call) => call.args)).toEqual([
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
@@ -4120,6 +4097,38 @@ async function plantManagedDevice(filesystem: Filesystem): Promise<void> {
 
 async function readToken(filesystem: Filesystem, path: string): Promise<string> {
   return (JSON.parse(await filesystem.readFile(path)) as { readonly token: string }).token;
+}
+
+/** why: the state a case starts from, with the writes and modes the planting made forgotten. */
+async function plantOverrides(
+  filesystem: FaultyFilesystem,
+  existing: Readonly<Record<string, boolean>> | undefined,
+): Promise<void> {
+  if (existing !== undefined) {
+    await filesystem.mkdirp(overridesFolder(driverData.udid));
+    await filesystem.writeFileAtomic(overridesPath(driverData.udid), overridesPlist(existing));
+  }
+  filesystem.writes.length = 0;
+  delete filesystem.modes.file;
+  delete filesystem.modes.folder;
+}
+
+/** why: the boot is where launchd reads the file, so the file is captured as the boot starts. */
+function runnerReadingFileAtBoot(filesystem: FaultyFilesystem, clock: FakeClock) {
+  let contents: string | undefined;
+  const calls = slimBootCalls(driverData.udid, wantedReadback());
+  const runner = new ScriptedProcessRunner([
+    {
+      ...calls[0]!,
+      onSpawn: async () => {
+        clock.advance(40_000);
+        const path = overridesPath(driverData.udid);
+        contents = (await filesystem.exists(path)) ? await filesystem.readFile(path) : undefined;
+      },
+    },
+    ...calls.slice(1),
+  ]);
+  return { fileAtBoot: () => contents, runner };
 }
 
 async function createSlimDriver(

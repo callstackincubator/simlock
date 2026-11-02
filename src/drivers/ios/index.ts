@@ -318,28 +318,12 @@ export class IosSimctlDriver implements Driver {
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
-    this.screenCapture =
-      options.screenCapture === undefined
-        ? undefined
-        : createIosScreenCapture({
-            baseEnvironment: options.screenCapture.baseEnvironment,
-            clock: options.clock,
-            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
-            ...(options.screenCapture.deviceCommand === undefined &&
-            configuredDeviceCaptureCommand(options) === undefined
-              ? {}
-              : {
-                  deviceCommand:
-                    configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
-                }),
-            deviceOsVersion: (udid) => this.#physical.osVersion(udid),
-            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
-            filesystem: options.filesystem,
-            launcher: options.screenCapture.launcher,
-            ...(options.screenCapture.onLog === undefined
-              ? {}
-              : { onLog: options.screenCapture.onLog }),
-          });
+    this.screenCapture = createScreenCaptureFor(
+      options,
+      deviceRoot,
+      rootOptions !== undefined,
+      (udid) => this.#physical.osVersion(udid),
+    );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
   }
 
@@ -2192,6 +2176,28 @@ function planSlimBoot(
   }
 
   return { bootstatusTimeoutMs: slim.bootTimeoutMs, plan: { kind: "apply", slim } };
+}
+
+function createScreenCaptureFor(
+  options: IosSimctlDriverOptions,
+  deviceRoot: string,
+  ownsDeviceSet: boolean,
+  deviceOsVersion: (udid: string) => Promise<string | undefined>,
+): ScreenCapture | undefined {
+  const capture = options.screenCapture;
+  if (capture === undefined) return undefined;
+  const deviceCommand = configuredDeviceCaptureCommand(options) ?? capture.deviceCommand;
+  return createIosScreenCapture({
+    baseEnvironment: capture.baseEnvironment,
+    clock: options.clock,
+    command: configuredScreenCaptureCommand(options) ?? capture.command,
+    ...(deviceCommand === undefined ? {} : { deviceCommand }),
+    deviceOsVersion,
+    ...(ownsDeviceSet ? { deviceSet: deviceRoot } : {}),
+    filesystem: options.filesystem,
+    launcher: capture.launcher,
+    ...(capture.onLog === undefined ? {} : { onLog: capture.onLog }),
+  });
 }
 
 function sameEntries(a: ReadonlyMap<string, boolean>, b: ReadonlyMap<string, boolean>): boolean {
