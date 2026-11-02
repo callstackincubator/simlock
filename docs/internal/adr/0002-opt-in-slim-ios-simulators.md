@@ -1,6 +1,6 @@
 # 0002. Opt-in slim iOS simulators
 
-- **Status:** Accepted; §2, §3, §8, §9, the overrides' location and the no-enable-pass cost superseded by [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md); §10 narrowed by 0060
+- **Status:** Accepted; §2, §3, §5, §8, §9, the overrides' location and the no-enable-pass cost superseded by [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md); §10 narrowed by 0060
 - **Date:** 2026-09-02
 - **Issue:** [#87](https://github.com/callstackincubator/simlock/issues/87)
 - **Supersedes:** nothing
