@@ -123,9 +123,17 @@ export class NodeWorkerLock implements WorkerLock {
   }
 
   #handle(owner: WorkerLockOwner): WorkerLockHandle {
-    const { filesystem, path } = this.#options;
+    const { filesystem, path, processSupervisor } = this.#options;
+    const ownerFile = join(path, OWNER_FILE);
     return {
-      claimed: () => filesystem.writeFileAtomic(join(path, OWNER_FILE), JSON.stringify(owner)),
+      claimed: async () => {
+        const holder = await readOwner(filesystem, ownerFile);
+        if (holder !== undefined && holder.folder !== owner.folder) {
+          if (processSupervisor.isAlive(holder.pid)) throw new WorkerLockHeldError(holder);
+        }
+        await filesystem.mkdirp(path);
+        await filesystem.writeFileAtomic(ownerFile, JSON.stringify(owner));
+      },
       release: async () => undefined,
     };
   }
