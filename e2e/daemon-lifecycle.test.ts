@@ -264,14 +264,20 @@ describe("daemon lifecycle & recovery", () => {
     const env = await withDaemon({
       configOverrides: {
         warmPool: {
-          targets: [{ count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
+          targets: [
+            { count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+            { count: 1, model: "iPhone 15", osVersion: "18.4", platform: "ios" },
+          ],
         },
       },
     });
     await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16", "iPhone 17"], availableOsVersions: ["18.4"] },
+      ios: { knownModels: ["iPhone 15", "iPhone 16", "iPhone 17"], availableOsVersions: ["18.4"] },
     });
-    const idle = await waitForReadyDevice(env, "iPhone 16");
+    const idle = [
+      await waitForReadyDevice(env, "iPhone 16"),
+      await waitForReadyDevice(env, "iPhone 15"),
+    ];
     const result = await env.cli([
       "lease",
       "--platform",
@@ -292,7 +298,7 @@ describe("daemon lifecycle & recovery", () => {
     const shutdowns = (await env.driverLog.calls())
       .filter((call) => call.operation === "shutdown")
       .map((call) => (call.arguments[0] as { deviceId: string }).deviceId);
-    expect(shutdowns).toEqual([idle]);
+    expect([...shutdowns].sort()).toEqual([...idle].sort());
     expect(shutdowns).not.toContain(held.device.driverDeviceId);
   });
 

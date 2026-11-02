@@ -34,6 +34,7 @@ async function build(
     readonly physicalDevices?: readonly FakePhysicalDevice[];
     readonly overrides?: ConfigOverrides;
     readonly sink?: MemoryLogSink;
+    readonly withAndroid?: boolean;
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -47,6 +48,8 @@ async function build(
     ...(options.physicalDevices === undefined ? {} : { physicalDevices: options.physicalDevices }),
     platform: "ios",
   });
+  const androidDriver = new FakeDriver({ clock, platform: "android" });
+  const drivers = options.withAndroid === true ? [driver, androidDriver] : [driver];
   const filesystem = new MemoryFilesystem();
   const systemStats = new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * 1024 ** 3 });
   let next = 1;
@@ -68,7 +71,7 @@ async function build(
       }),
       options.warmTargets,
     ),
-    drivers: [driver],
+    drivers,
     driverRejections: options.driverRejections,
     eventBus,
     logger,
@@ -76,9 +79,9 @@ async function build(
     registry,
     state: testStateOf(registry),
     systemStats,
-    ...testComponentWiring({ clock, drivers: [driver], eventBus, registry }),
+    ...testComponentWiring({ clock, drivers, eventBus, registry }),
   });
-  return { clock, core, driver, registry };
+  return { androidDriver, clock, core, driver, registry };
 }
 
 function withWarmTargets(
@@ -407,13 +410,15 @@ describe("createCore", () => {
 
   it("converge lists each driver's sources once, and goes on after logging a driver whose read failed", async () => {
     const sink = new MemoryLogSink();
-    const { core, driver } = await build({ sink });
+    const { androidDriver, core, driver } = await build({ sink, withAndroid: true });
     core.connect(ports());
     driver.failOn("listSources", 1, new Error("catalog unreadable"));
 
     await expect(core.converge(await core.readStartup())).resolves.toBeUndefined();
 
-    expect(driver.calls.filter((call) => call.operation === "listSources")).toHaveLength(1);
+    for (const each of [driver, androidDriver]) {
+      expect(each.calls.filter((call) => call.operation === "listSources")).toHaveLength(1);
+    }
     expect(JSON.stringify(sink.records)).toContain("catalog unreadable");
   });
 
