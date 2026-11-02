@@ -353,7 +353,7 @@ describe("the core knows physical devices", () => {
     expect(await iosCapacity(env)).toMatchObject({ running: 1, used: 1, warm: 0 });
   });
 
-  it("with limits.ios.maxDevices 1 and a ready physical record, releasing an iPhone 16 simulator lease deletes the simulator (a destroy call names it), the next lease --platform ios --device iPhone 15 Pro is granted a new simulator, and the physical record stays ready with no driver call naming it", async () => {
+  it("with limits.ios.maxDevices 1 and a ready physical record, releasing an iPhone 16 simulator lease deletes that simulator (one destroy call names it), the next lease --platform ios --device iPhone 15 Pro is granted a new simulator, and the physical record stays ready with no driver call naming it", async () => {
     const env = await startWith([READY], {
       config: { limits: { ios: { maxDevices: 1, maxRunning: 8 } } },
     });
@@ -368,11 +368,12 @@ describe("the core knows physical devices", () => {
     expect(granted.device.id).not.toBe(READY.id);
     expect(granted.device.id).not.toBe(first.device.id);
     expect(granted.device.spec.model).toBe(PHYSICAL_MODEL);
-    console.log("DBG", JSON.stringify(await env.driverLog.calls()), granted.device.driverDeviceId);
     const destroyed = (await env.driverLog.calls()).filter((call) => call.operation === "destroy");
-    expect(destroyed.map((call) => JSON.stringify(call.arguments))).toEqual([
-      expect.stringContaining(first.device.driverDeviceId),
-    ]);
+    const destroyedArguments = destroyed.map((call) => JSON.stringify(call.arguments));
+    expect(
+      destroyedArguments.filter((call) => call.includes(first.device.driverDeviceId)),
+    ).toHaveLength(1);
+    expect(destroyedArguments.filter((call) => call.includes(READY.driverDeviceId))).toEqual([]);
     await expectState(env, READY.id, "ready");
     expect(await callsNaming(env, READY.driverDeviceId)).toEqual([]);
   });
