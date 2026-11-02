@@ -213,6 +213,8 @@ export interface IosSimctlDriverOptions {
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
   readonly coreSimulatorRoot?: string;
+  // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
+  readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
   readonly slim?: {

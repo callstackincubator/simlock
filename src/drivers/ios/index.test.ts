@@ -30,12 +30,11 @@ import { promiseState } from "../../test-support/promise-state.js";
 import {
   IosSimctlDriver,
   iosRuntimeVersionFromId,
-  sanitizeSlimLabels,
+  SLIM_CATEGORIES,
   supportsPersistentSlim,
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
-import { labelsFor, resolveSlimCategories } from "./slim-labels.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
 const listDevicesFixture = readFileSync(
@@ -1905,19 +1904,9 @@ describe("IosSimctlDriver", () => {
   );
 
   describe("slim mode", () => {
-    const widgetsLabels = [
-      "com.apple.PosterBoard",
-      "com.apple.chronod",
-      "com.apple.liveactivitiesd",
-    ];
+    const widgetsLabels = widgetsLabelList();
     const widgetsSignature = "v1:1ea7bd351e05525c";
-    const searchSignature = "v1:7587bb9b67a41b64";
     const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
-    const slim18_4 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" };
-    const slim9_0 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-9-0" };
-    const slim17_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-17-5" };
-    const slim26_0 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-0" };
-    const slimGarbageRuntime = { ...driverData, runtimeId: "not-a-runtime-id" };
 
     function slimOptions(bootTimeoutMs = 300_000) {
       return { bootTimeoutMs, categories: ["widgets"] } as const;
@@ -1956,510 +1945,22 @@ describe("IosSimctlDriver", () => {
       expect(supportsPersistentSlim(undefined)).toBe(false);
     });
 
-    it("filters a label that could break out of the generated shell script", () => {
-      expect(
-        sanitizeSlimLabels(["com.apple.good", "system; rm -rf /", 'com.apple."quoted"']),
-      ).toEqual({
-        rejected: ["system; rm -rf /", 'com.apple."quoted"'],
-        safe: ["com.apple.good"],
-      });
-    });
-
-    it.each([false, true])(
-      "boots a slim-spec device on 18.5, applies the disable list, and reboots (slim by default: %s)",
-      async (slimByDefault) => {
-        const filesystem = new MemoryFilesystem();
-        await plantManagedDevice(filesystem);
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          {
-            match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-          },
-          { match: simctl("listapps", slim18_5.udid) },
-          {
-            match: {
-              args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-              command: "xcrun",
-            },
-          },
-          { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          {
-            match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-          },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
-        const onSlimmed = vi.fn();
-        const onSlimSkipped = vi.fn();
-        const driver = await createSlimDriver(
-          runner,
-          filesystem,
-          slimOptions(),
-          onSlimmed,
-          onSlimSkipped,
-          slimByDefault,
-        );
-
-        const result = await driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
-          prepareSlim,
-        );
-
-        expect(result).toEqual({
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: { ...slim18_5, slimSignature: widgetsSignature },
-          mode: "slim",
-        });
-        expect(runner.calls.map((call) => call.args)).toEqual([
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-          simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-          simctlArgs("shutdown", slim18_5.udid),
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-        ]);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
-        expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
-        expect(onSlimmed).toHaveBeenCalledTimes(1);
-        expect(onSlimmed).toHaveBeenCalledWith({
-          address: slim18_5.udid,
-          categories: ["widgets"],
-          deviceId: slim18_5.udid,
-          durationMs: expect.any(Number),
-          labelCount: 3,
-          signature: widgetsSignature,
-          unknownLabels: [],
-        });
-        expect(onSlimSkipped).not.toHaveBeenCalled();
-      },
-    );
-
-    it.each([
-      [
-        "exits non-zero",
-        { result: { code: 1, stderr: "unexpected shutdown failure", stdout: "" } },
-        false,
-      ],
-      // why: A `simctl shutdown` *timeout* (as opposed to a clean non-zero exit) is the case
-      // second-review finding #2 targets: the shutdown may have completed, may still be in
-      // flight, or may never have taken effect. Rather than guess from the exception, the driver
-      // always re-establishes a known-good running device afterward and reports the apply as
-      // uncertain.
-      ["times out", { hangs: true }, true],
-    ])(
-      "downgrades a post-apply shutdown that %s to an apply-failed skip instead of failing the lease, but always reboots first (finding #3 / second-review finding #2, issue #87)",
-      async (_failure, shutdownOutcome, hangs) => {
-        const filesystem = new MemoryFilesystem();
-        await plantManagedDevice(filesystem);
-        const clock = new FakeClock();
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-          {
-            match: {
-              args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-              command: "xcrun",
-            },
-          },
-          {
-            match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) },
-            ...shutdownOutcome,
-          },
-          // why: Always run after the shutdown call, whether or not it succeeded -- `boot` tolerates an
-          // already-booted device either way.
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
-        const onSlimmed = vi.fn();
-        const onSlimSkipped = vi.fn();
-        const driver = await IosSimctlDriver.create({
-          driverConfig: { deviceRoot },
-          instanceId,
-          simlockHome: "/home/.simlock",
-          clock,
-          filesystem,
-          idGenerator: { generate: () => "device-1" },
-          onSlimSkipped,
-          onSlimmed,
-          processRunner: runner,
-          slim: slimOptions(),
-        });
-
-        const ready = driver.makeReady(
-          { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-          prepareSlim,
-        );
-
-        if (hangs) {
-          await waitForCalls(runner, 5);
-          // why: 30 s is COMMAND_TIMEOUT_MS, the `#shutdown` call's own timeout.
-          clock.advance(30_000);
-        }
-
-        const result = await ready;
-
-        expect(result).toEqual({
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slim18_5,
-          mode: "slim",
-        });
-        expect(runner.calls.map((call) => call.args)).toEqual([
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-          simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-          simctlArgs("shutdown", slim18_5.udid),
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-        ]);
-        expect(onSlimmed).not.toHaveBeenCalled();
-        expect(onSlimSkipped).toHaveBeenCalledWith(
-          expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
-        );
-      },
-    );
-
-    it("propagates BootTimeoutError when the shutdown succeeds but the post-slim reboot times out (second-review finding #2, issue #87)", async () => {
-      // why: Unlike the shutdown-failure cases above, the device here genuinely is shut down and the
-      // reboot that should bring it back never completes -- this must still surface as a boot
-      // failure, exactly like any other boot timeout, not as a skip.
+    it("writes the launchd overrides before the one boot and grants slim after the readback", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
+      let fileAtBoot: string | undefined;
+      const calls = slimBootCalls(slim18_5.udid, wantedReadback());
       const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
         {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
+          ...calls[0]!,
+          onSpawn: async () => {
+            const path = overridesPath(slim18_5.udid);
+            fileAtBoot = (await filesystem.exists(path))
+              ? await filesystem.readFile(path)
+              : undefined;
           },
         },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        {
-          hangs: true,
-          match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        onSlimmed,
-        processRunner: runner,
-        slim: slimOptions(),
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      await waitForCalls(runner, 7);
-      clock.advance(300_000); // slim.bootTimeoutMs -- the widened deadline applies to this reboot too
-
-      await expect(ready).rejects.toThrow(BootTimeoutError);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("still fails the lease when the shutdown succeeds but the second boot doesn't -- the device really is left shut down (finding #3, issue #87 review)", async () => {
-      // why: Unlike the shutdown-failure case above, the device here genuinely is no longer running
-      // once `#shutdown` succeeds -- returning it as "ready" from a skip path would be a lie.
-      // This must still raise like any other boot failure.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        {
-          match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) },
-          result: { code: 1, stderr: "current state: Shutting Down", stdout: "" },
-        },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
-
-      await expect(
-        driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
-          prepareSlim,
-        ),
-      ).rejects.toEqual(
-        expect.objectContaining({ message: expect.stringContaining("Shutting Down") }),
-      );
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("is idempotent: same signature and mark token skip the whole slim step (single boot)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
-      const slimmedData = {
-        ...slim18_5,
-        slimMarkToken: "tok-1",
-        slimSignature: widgetsSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      const result = await driver.makeReady(
-        {
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slimmedData,
-        },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slimmedData,
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-    });
-
-    it("re-slims when the mark token differs (device was erased since it was last slimmed)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-fresh" }));
-      const staleData = {
-        ...slim18_5,
-        slimMarkToken: "tok-stale",
-        slimSignature: widgetsSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: staleData },
-        prepareSlim,
-      );
-
-      expect(result.driverData).toEqual({
-        ...slim18_5,
-        slimMarkToken: "tok-fresh",
-        slimSignature: widgetsSignature,
-      });
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-    });
-
-    it("re-slims when the stored signature came from a different category selection", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
-      const driftedData = {
-        ...slim18_5,
-        slimMarkToken: "tok-1",
-        slimSignature: searchSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      await driver.makeReady(
-        {
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: driftedData,
-        },
-        prepareSlim,
-      );
-
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-      expect(onSlimmed).toHaveBeenCalledWith(
-        expect.objectContaining({ signature: widgetsSignature }),
-      );
-    });
-
-    it.each([
-      // why: 9.0 is the lexicographic trap: a string compare would put "9.0" ahead of "18.5".
-      ["runtime-too-old", "iOS 9.0", slim9_0],
-      ["runtime-too-old", "iOS 17.5", slim17_5],
-      ["runtime-too-old", "iOS 18.4", slim18_4],
-      ["unknown-runtime", "an unparseable runtimeId", slimGarbageRuntime],
-    ])(
-      "skips slim with reason %s on %s (single boot, no spawns)",
-      async (reason, _runtime, data) => {
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") } },
-          { match: simctl("listapps", data.udid) },
-        ]);
-        const onSlimSkipped = vi.fn();
-        const driver = await createSlimDriver(
-          runner,
-          new MemoryFilesystem(),
-          slimOptions(),
-          undefined,
-          onSlimSkipped,
-        );
-
-        const result = await driver.makeReady(
-          { address: data.udid, deviceId: data.udid, driverData: data },
-          prepareSlim,
-        );
-
-        expect(result).toEqual({
-          address: data.udid,
-          deviceId: data.udid,
-          driverData: data,
-          mode: "full",
-        });
-        expect(runner.calls).toHaveLength(3);
-        expect(onSlimSkipped).toHaveBeenCalledWith(
-          expect.objectContaining({ deviceId: data.udid, reason }),
-        );
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-      },
-    );
-
-    it("slims iOS 26.0 (version comparison must not be string-lexicographic)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
-        { match: simctl("listapps", slim26_0.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim26_0.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
-        { match: simctl("listapps", slim26_0.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      await driver.makeReady(
-        { address: slim26_0.udid, deviceId: slim26_0.udid, driverData: slim26_0 },
-        prepareSlim,
-      );
-
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-    });
-
-    it("commits a boot with individually-rejected launchd labels instead of retrying it forever (finding #2, issue #87 review; corrected by second-review finding #3)", async () => {
-      // why: CHANGED EXPECTATIONS (second adversarial review, finding #3): the previous version of
-      // this test treated an individual `simlock-slim-failed` line the same as a whole chunk
-      // failing to run, and asserted the marker was withheld. That conflated two very different
-      // failures: a label the in-simulator script itself rejects (renamed/removed daemon on this
-      // runtime) is PERMANENT -- retrying it on every future boot can never change the outcome,
-      // and would cost this device an extra apply+reboot on every single `makeReady`, forever.
-      // Only a whole chunk that never ran at all is transient and worth retrying. The fix splits
-      // the two into `rejectedLabels` (this case) and `unattemptedLabels` (a failed chunk, see
-      // the "4 chunks, one times out" test below); a rejected label alone no longer blocks the
-      // marker -- it now travels in `SlimmedFact.unknownLabels` instead, so a runtime with a
-      // permanently-unknown daemon converges to "slim, minus the labels it doesn't have" after
-      // one boot rather than re-running the whole label set on every boot.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-          result: {
-            code: 0,
-            stderr: "",
-            stdout:
-              "simlock-slim-failed com.apple.chronod\n" +
-              "simlock-slim-failed com.apple.liveactivitiesd\n",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
+        ...calls.slice(1),
       ]);
       const onSlimmed = vi.fn();
       const onSlimSkipped = vi.fn();
@@ -2479,298 +1980,37 @@ describe("IosSimctlDriver", () => {
       expect(result).toEqual({
         address: slim18_5.udid,
         deviceId: slim18_5.udid,
-        driverData: { ...slim18_5, slimSignature: widgetsSignature },
+        driverData: slim18_5,
         mode: "slim",
       });
+      expect(fileAtBoot).toBeDefined();
+      expect(parseOverrides(fileAtBoot ?? "")).toEqual(wantedOverrides());
       expect(runner.calls.map((call) => call.args)).toEqual([
         simctlArgs("boot", slim18_5.udid),
         simctlArgs("bootstatus", slim18_5.udid, "-b"),
         simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-        simctlArgs("shutdown", slim18_5.udid),
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
+        simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
       ]);
+      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
       expect(onSlimmed).toHaveBeenCalledTimes(1);
       expect(onSlimmed).toHaveBeenCalledWith({
         address: slim18_5.udid,
         categories: ["widgets"],
         deviceId: slim18_5.udid,
         durationMs: expect.any(Number),
-        labelCount: 3,
+        labelCount: widgetsLabels.length,
         signature: widgetsSignature,
-        unknownLabels: ["com.apple.chronod", "com.apple.liveactivitiesd"],
+        unknownLabels: [],
       });
       expect(onSlimSkipped).not.toHaveBeenCalled();
     });
-
-    it("4 chunks, one times out: reboots, writes no marker, and a later boot re-applies (finding #2, issue #87 review; second-review finding #3)", async () => {
-      // why: The full, unfiltered label set (~170 labels, per the SLIM_CHUNK_SIZE=50 comment in
-      // index.ts) chunks into 4 `simctl spawn` calls. If the last one times out under load, the
-      // other 3 chunks still ran -- `#applySlimLabels` reports the whole apply as "applied"
-      // (`anyChunkSucceeded`), but with the timed-out chunk's labels folded into
-      // `unattemptedLabels` (unlike an individual `simlock-slim-failed` line, which is permanent
-      // and now lands in `rejectedLabels` instead -- see the "individually-rejected launchd
-      // labels" test above). A whole unattempted chunk is transient and must NOT be enough to
-      // write the idempotence marker: the device reboots (the labels that did apply are worth
-      // keeping), but comes back exactly as it went in, so the very next `makeReady` sees no
-      // stored `slimSignature` and re-applies the whole set again. CHANGED EXPECTATION
-      // (second-review finding #3): the outcome here is `"slim"`, not `"full"` -- the labels
-      // that did apply really are gone, so "full" would be a lie in the dangerous direction.
-      const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
-      const chunkSize = 50;
-      const chunks = [
-        allLabels.slice(0, chunkSize),
-        allLabels.slice(chunkSize, chunkSize * 2),
-        allLabels.slice(chunkSize * 2, chunkSize * 3),
-        allLabels.slice(chunkSize * 3),
-      ].filter((labelChunk) => labelChunk.length > 0);
-      expect(chunks).toHaveLength(4);
-      const lastChunk = chunks[3];
-      if (lastChunk === undefined) {
-        throw new Error("expected a 4th chunk");
-      }
-
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        ...chunks.slice(0, 3).map((labelChunk) => ({
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk)),
-            command: "xcrun",
-          },
-        })),
-        {
-          hangs: true,
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(lastChunk)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        onSlimmed,
-        processRunner: runner,
-        slim: { bootTimeoutMs: 300_000 },
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      await waitForCalls(runner, 7);
-      clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
-
-      const result = await ready;
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[0] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[1] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[2] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(lastChunk)),
-        simctlArgs("shutdown", slim18_5.udid),
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
-      );
-    });
-
-    it("treats a total apply failure as a skip whose detail carries simctl's exit and stderr: single boot, no reboot, no marker, no event", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-          // why: Real simctl stderr ends in a newline; the detail must not carry it.
-          result: { code: 1, stderr: "boom\n", stdout: "" },
-        },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
-
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "full",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceId: slim18_5.udid,
-          detail: "all 1 chunk(s) failed to run; last: exit 1: boom",
-          reason: "apply-failed",
-        }),
-      );
-    });
-
-    it("names the last failed chunk's cause when every chunk fails, a timeout included", async () => {
-      const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
-      const chunks = [0, 1, 2, 3].map((index) => allLabels.slice(index * 50, (index + 1) * 50));
-      expect(allLabels.length).toBeGreaterThan(150);
-      const spawnArgs = (labelChunk: readonly string[]) =>
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk));
-
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        // why: Three different exits before the timeout, so a detail that kept any but the last
-        // failure would name one of them instead.
-        ...["first", "second", "third"].map((stderr, index) => ({
-          match: { args: spawnArgs(chunks[index] ?? []), command: "xcrun" },
-          result: { code: 1, stderr, stdout: "" },
-        })),
-        { hangs: true, match: { args: spawnArgs(chunks[3] ?? []), command: "xcrun" } },
-      ]);
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        processRunner: runner,
-        slim: { bootTimeoutMs: 300_000 },
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-      await waitForCalls(runner, 7);
-      clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
-
-      expect((await ready).mode).toBe("full");
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: "all 4 chunk(s) failed to run; last: timed out after 60000ms",
-          reason: "apply-failed",
-        }),
-      );
-    });
-
-    it.each([false, true])(
-      "boots a full-spec device on 18.5 once, with the normal deadline (slim by default: %s)",
-      async (slimByDefault) => {
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
-        const onSlimmed = vi.fn();
-        const onSlimSkipped = vi.fn();
-        const driver = await createSlimDriver(
-          runner,
-          new MemoryFilesystem(),
-          slimOptions(),
-          onSlimmed,
-          onSlimSkipped,
-          slimByDefault,
-        );
-
-        const result = await driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
-          prepareFull,
-        );
-
-        expect(result).toEqual({
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slim18_5,
-          mode: "full",
-        });
-        expect(runner.calls).toHaveLength(3);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-        expect(onSlimmed).not.toHaveBeenCalled();
-        expect(onSlimSkipped).not.toHaveBeenCalled();
-      },
-    );
 
     it("ignores a full flag an older daemon stamped into driver data: the spec mode decides", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const stamped = { ...slim18_5, full: true };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
-        { match: simctl("listapps", stamped.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", stamped.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
-        { match: simctl("listapps", stamped.udid) },
-      ]);
+      const runner = new ScriptedProcessRunner(slimBootCalls(stamped.udid, wantedReadback()));
       const driver = await createSlimDriver(runner, filesystem, slimOptions());
 
       const result = await driver.makeReady(
@@ -2830,21 +2070,11 @@ describe("IosSimctlDriver", () => {
       expect(onSlimSkipped).not.toHaveBeenCalled();
     });
 
-    it("times out the post-slim bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
+    it("times out the slim boot's bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         {
           hangs: true,
@@ -2859,6 +2089,7 @@ describe("IosSimctlDriver", () => {
         clock,
         filesystem,
         idGenerator: { generate: () => "device-1" },
+        launchdOverridesRoot: overridesRoot,
         processRunner: runner,
         slim: slimOptions(),
       });
@@ -2868,17 +2099,17 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 7);
+      await waitForCalls(runner, 2);
       const readyState = promiseState(ready);
 
-      // why: Just past the default 120s: a reboot timed against it would have given up by now.
+      // why: Just past the default 120s: a boot timed against it would have given up by now.
       clock.advance(120_001);
       await flushMicrotasks221();
       expect(readyState.state).toBe("pending");
 
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
     it("estimates the boot cost with the slim reboot+apply budget for a slim spec", async () => {
@@ -4607,19 +3838,76 @@ async function createSlimDriver(
     idGenerator: { generate: () => "device-1" },
     ...(onSlimmed === undefined ? {} : { onSlimmed }),
     ...(onSlimSkipped === undefined ? {} : { onSlimSkipped }),
+    launchdOverridesRoot: overridesRoot,
     processRunner: runner,
     slim,
     slimByDefault,
   });
 }
 
-/** why: Mirrors `#applySlimLabels`'s generated script -- keeps test expectations in sync by construction. */
-function slimScript(labels: readonly string[]): string {
-  return (
-    `[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT"; ` +
-    `for l in ${labels.join(" ")}; do launchctl disable "system/$l" ` +
-    `>/dev/null 2>&1 || echo "simlock-slim-failed $l"; done`
+const overridesRoot = "/private/var/tmp";
+
+function overridesPath(udid: string): string {
+  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}/disabled.plist`;
+}
+
+// why: spelled out here, not imported: the labels simslim v0.13.0 never disables (ADR 0060 §1).
+const neverDisabled = ["com.apple.assistantd", "com.apple.gamed", "com.apple.sharingd"];
+
+/** why: What the driver must write for categories ["widgets"]: its labels on, every other managed label off. */
+function wantedOverrides(): Record<string, boolean> {
+  const wanted: Record<string, boolean> = {};
+  for (const category of SLIM_CATEGORIES) {
+    for (const label of category.labels) wanted[label] = false;
+  }
+  for (const label of neverDisabled) wanted[label] = false;
+  for (const label of widgetsLabelList()) {
+    if (!neverDisabled.includes(label)) wanted[label] = true;
+  }
+  return wanted;
+}
+
+function widgetsLabelList(): readonly string[] {
+  return SLIM_CATEGORIES.find((category) => category.name === "widgets")?.labels ?? [];
+}
+
+function parseOverrides(plist: string): Record<string, boolean> {
+  const entries: Record<string, boolean> = {};
+  for (const match of plist.matchAll(/<key>([^<]*)<\/key>\s*<(true|false)\/>/g)) {
+    entries[match[1] ?? ""] = match[2] === "true";
+  }
+  return entries;
+}
+
+/** why: `launchctl print-disabled system` as launchd prints it: one `"label" => state` line per entry. */
+function printDisabled(entries: Readonly<Record<string, string>>): string {
+  const lines = Object.entries(entries).map(([label, state]) => `\t"${label}" => ${state}`);
+  return ["disabled services = {", ...lines, "}", ""].join("\n");
+}
+
+/** why: The readback of a boot that honoured every label as written. */
+function wantedReadback(): string {
+  return printDisabled(
+    Object.fromEntries(
+      Object.entries(wantedOverrides()).map(([label, off]) => [
+        label,
+        off ? "disabled" : "enabled",
+      ]),
+    ),
   );
+}
+
+/** why: The calls of one slim boot: the boot, its wait, the installer poll, then the readback. */
+function slimBootCalls(udid: string, readback: string) {
+  return [
+    { match: simctl("boot", udid) },
+    { match: simctl("bootstatus", udid, "-b") },
+    { match: simctl("listapps", udid) },
+    {
+      match: simctl("spawn", udid, "launchctl", "print-disabled", "system"),
+      result: { code: 0, stderr: "", stdout: readback },
+    },
+  ];
 }
 
 function scriptedListRunner(): ScriptedProcessRunner {
