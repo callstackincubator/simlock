@@ -340,6 +340,9 @@ describe("authenticateUplink", () => {
       outcome: "accept",
       tokenId: "tok_worker",
     });
+    await expect(
+      createAuth(await options()).authenticateUplink("slk_worker", "a".repeat(128)),
+    ).resolves.toEqual({ outcome: "accept", tokenId: "tok_worker" });
   });
 
   it("accepts exactly one of two first joins with one worker token at once, and refuses the other as worker-mismatch", async () => {
