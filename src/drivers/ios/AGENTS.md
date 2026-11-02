@@ -56,22 +56,9 @@ Boot — `makeReady`:
    `device.slimmed`.
 4. `purpose: "recover"`: boot only, no write, no readback.
 
-Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simulator Simlock booted once,
-kept in the sources set (`<device set>/sources`; under `deviceSet: default` the owned root
-`$SIMLOCK_HOME/devices/ios-sources`) and known by its `ios_source_data` row (`source-data.ts`), never by
-name. `provision(spec, {source?})`: find the ready seed of the spec key (device type + runtime), make
-it when none or stale (`making` row, `create`, boot, shutdown, `ready` row with its size), then
-`simctl --set <sources> clone <seed> simlock-<id> <device set>`, both marks, the seed's `disabled.plist`
-copied. Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
-`listSources` (ready rows with `staleReason`, plus sources-set simulators no row names as `orphan`) sweeps
-another process's `making` rows on its first call; a `making` row of this process older than 300 s goes at
-the next make of its kind. `destroySource` deletes by a row's UDID, or an orphan's under
-`doctor --purge-orphans`. `removeComponent` deletes the runtime's seeds first. A seed is in no
-`listManaged` and no `simlock simctl list`.
+Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simulator Simlock booted once, kept in the sources set (`<device set>/sources`; under `deviceSet: default` the owned root `$SIMLOCK_HOME/devices/ios-sources`) and known by its `ios_source_data` row (`source-data.ts`), never by name. `provision(spec, {source?})`: find the ready seed of the spec key (device type + runtime), make it when none or stale (`making` row, `create`, boot, shutdown, `ready` row with its size), then `simctl --set <sources> clone <seed> simlock-<id> <device set>`, both marks, the seed's `disabled.plist` copied. Two provisions of a kind make one seed; clones of a seed and its deletion take turns. `listSources` (ready rows with `staleReason`, plus sources-set simulators no row names as `orphan`) sweeps another process's `making` rows on its first call; a `making` row of this process older than 300 s goes at the next make of its kind. `destroySource` deletes by a row's UDID, or an orphan's under `doctor --purge-orphans`. `removeComponent` deletes the runtime's seeds first. A seed is in no `listManaged` and no `simlock simctl list`.
 
-Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end
-destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`.
-`destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
+Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`. `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
 Catalog — models are device type names; class from product family (iPhone `phone`, iPad
 `tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired
@@ -99,16 +86,7 @@ Passthrough —
   (`--json-output`, `--log-output`, `--destination`, `--file`, `--filter`, `-j`, `-l`) are refused before `--`. Adds `--device <udid>` unless the caller names one; another UDID is refused.
 
 Lease environment: virtual `SIMLOCK_IOS_DEVICE_SET=<root>` under `simlock`, none under `default`; physical `SIMLOCK_DEVICE_UDID=<udid>`.
-Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture
-<udid> --codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>` for a
-simulator under `simlock` (the variable is removed from the program's environment under `default`); a physical iPhone runs `simlock-device-capture` with the same arguments, no such
-variable. stdout is the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. A missing program
-→ `ScreenUnavailableError` (the iPhone one refuses iPhone opens only), as does an iPhone below
-iOS 27 per the physical handler's `devicectl list devices` (an unreadable version goes on).
-Programs: dist/bin from `pnpm build`, or `drivers.ios.screenCaptureCommand` and
-`drivers.ios.deviceCaptureCommand`; neither gets `SIMLOCK_COREDEVICE_INFO_PLIST`. The iPhone
-program enforces its pin: a CoreDevice major other than 642 exits 69 with the reason, a 503 for
-the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
+Screen — `screenCapture` (only when `create` is given a launcher): `simlock-screen-capture <udid> --codec avcc --fps --bitrate --max-dimension` with `SIMLOCK_IOS_DEVICE_SET=<root>` for a simulator under `simlock` (the variable is removed from the program's environment under `default`); a physical iPhone runs `simlock-device-capture` with the same arguments, no such variable. stdout is the frames, stdin its liveness. Close: stdin, 2 s, SIGKILL. A missing program → `ScreenUnavailableError` (the iPhone one refuses iPhone opens only), as does an iPhone below iOS 27 per the physical handler's `devicectl list devices` (an unreadable version goes on). Programs: dist/bin from `pnpm build`, or `drivers.ios.screenCaptureCommand` and `drivers.ios.deviceCaptureCommand`; neither gets `SIMLOCK_COREDEVICE_INFO_PLIST`. The iPhone program enforces its pin: a CoreDevice major other than 642 exits 69 with the reason, a 503 for the viewer. Asked to stop while still starting, a program stops and goes inside its 2 s.
 
 Input — `input` (offered with `screenCapture`, same launcher): `simlock-screen-capture <udid> --input` with the same `SIMLOCK_IOS_DEVICE_SET` rule. stdout: one `0x82` `{width,height}` (the device type's native size) within 10 s of spawn, else the open rejects (also for a missing program or an early exit; the helper is stopped).
 stdin: envelopes `[len][tag]{json}` for touch `0x03`, key `0x06`, scroll `0x0b` and orientation `0x07` (`{orientation}`, one of the four names, on every runtime; the helper sends it as a GSEvent to the simulator's `PurpleWorkspacePort` and logs one it could not send); a failed write or a later exit calls `onFailed`. Home runs `xcrun simctl [--set <root>] launch <udid> com.apple.springboard` (10 s; a failure is logged); the app switcher, Lock and Back are dropped.

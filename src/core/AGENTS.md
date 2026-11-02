@@ -83,10 +83,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    leased, gone or moved device. `recoverLeased` reboots under the lease: no commit, no event.
 2. **Provision** — `claimProvision` (lock) → `driver.provision` → `registerDevice` (`provisioning`,
    `device.provisioned`, optional `boot` claim) → ready. Boot failure: destroy, `BootTimeoutError`.
-3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. A virtual device
-   (`mayBeGranted` refuses every released one): shutdown → destroy → `deleted`, initiator `lease-end`.
-   A physical device: commit what `driver.reclaim` returns. Failure → quarantine;
-   physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
+3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. A virtual device (`mayBeGranted` refuses every released one): shutdown → destroy → `deleted`, initiator `lease-end`. A physical device: commit what `driver.reclaim` returns. Failure → quarantine; physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
 4. **Quarantine** — from a failed purge, a failed spent delete, a failed boot-destroy, or
    `doctor --fix` on a stall. Retry under `reclaim` (claim held: wait one backoff): a virtual device is destroyed, a physical one reclaimed. Out of retries: destroy a virtual device
    (`device.quarantine-abandoned`; failed destroy: `device.quarantine-stranded`, stays), unenrol a
