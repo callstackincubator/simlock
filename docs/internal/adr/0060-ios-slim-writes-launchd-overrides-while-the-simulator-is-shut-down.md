@@ -1,6 +1,6 @@
 # 0060. iOS slim writes launchd overrides while the simulator is shut down
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-02
 - **Issue:** [#1192](https://github.com/callstackincubator/simlock/issues/1192) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049))
 - **Supersedes:** [ADR 0002](0002-opt-in-slim-ios-simulators.md) §2, §3, §8 and §9, and its
