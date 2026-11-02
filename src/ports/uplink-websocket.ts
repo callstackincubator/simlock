@@ -411,6 +411,8 @@ function bearerToken(request: IncomingMessage): string | undefined {
  * ~16 KB a raw header can carry. */
 const MAX_CLAIMED_FIELD_LENGTH = 128;
 
+export const UPLINK_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+
 /** why: Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
  * than just truncating -- a raw header value the gateway's own JSON logging already renders
  * safely (`writeResult` JSON-encodes; terminal escapes are not the concern here), but a
