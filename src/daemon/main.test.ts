@@ -4955,9 +4955,11 @@ describe("startDaemon worker lock", () => {
     livePids: readonly number[],
     processRunner: ScriptedProcessRunner,
     dataDirectory?: string,
+    extra: Partial<StartDaemonOptions> = {},
   ) {
     vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
     return start({
+      ...extra,
       drivers: undefined,
       filesystem,
       hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
@@ -5055,6 +5057,39 @@ describe("startDaemon worker lock", () => {
     ).rejects.toThrow(
       `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since t0)`,
     );
+  });
+
+  it.each([
+    { name: "a stop removes the lock it wrote", takenOver: false, failedStart: false },
+    { name: "a stop leaves a lock another worker took over", takenOver: true, failedStart: false },
+    {
+      name: "a start that fails after taking the lock removes it",
+      takenOver: false,
+      failedStart: true,
+    },
+  ])("$name", async ({ failedStart, takenOver }) => {
+    const filesystem = new MemoryFilesystem();
+    const ownerFile = join(LOCK_PATH, "owner.json");
+    const taken = { folder: OTHER_FOLDER, pid: 4242, startedAt: "t0" };
+    const starting = startWithRealDrivers(
+      filesystem,
+      [4242],
+      new ScriptedProcessRunner([]),
+      undefined,
+      // why: a module named like a core route is refused by the module host, which runs after the lock is taken.
+      failedStart ? { optionalModules: [{ name: "status" } as never] } : {},
+    );
+
+    if (failedStart) {
+      await expect(starting).rejects.toThrow("status");
+    } else {
+      const { daemon } = await starting;
+      if (takenOver) await filesystem.writeFileAtomic(ownerFile, JSON.stringify(taken));
+      await daemon.stop("test");
+    }
+
+    expect(await filesystem.exists(LOCK_PATH)).toBe(takenOver);
+    if (takenOver) expect(JSON.parse(await filesystem.readFile(ownerFile))).toEqual(taken);
   });
 
   it("a gateway never takes the worker lock, even when it is held", async () => {
