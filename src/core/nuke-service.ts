@@ -52,9 +52,10 @@ export interface NukeServiceOptions {
 }
 
 /**
- * Coordinates the operator reset workflow without ever addressing driver
- * devices directly. It only forwards current registry records to lifecycle
- * operations, which perform their own final ownership and claim checks.
+ * why: Coordinates the operator reset workflow without ever addressing driver devices directly:
+ * it forwards current registry records to lifecycle operations, which perform their own final
+ * ownership and claim checks. The one thing it asks a driver for is its seeds (`listSources`,
+ * `destroySource`), and never an orphan source, which only `doctor --purge-orphans` deletes.
  */
 export class NukeService implements NukeExecutor {
   #tail: Promise<void> = Promise.resolve();
