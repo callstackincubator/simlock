@@ -25,7 +25,11 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 6. `Registry.load` — the `registry` and device-data tables of `state.db`.
 7. Instance identity — `loadInstanceId`, `instance.json`. Written once per home,
    never regenerated.
-8. Root validation — `discoverDrivers`: each driver checks its owned root against
+8. Worker lock — only when the drivers are discovered (no `drivers` option, no
+   `SIMLOCK_DRIVERS_MODULE`): `NodeWorkerLock.take` before `discoverDrivers`. A live holder in
+   another folder fails the start with its details; a stale or unreadable lock is taken over; a
+   live holder in the same folder is left alone and decided by the socket claim (ADR 0059).
+   Root validation — `discoverDrivers`: each driver checks its owned root against
    the instance id. A refused root (`OwnedRootError`), or on Android an adb server
    it cannot start, drops that platform as a `DriverRejection`; a missing SDK drops
    it silently; any other error fails the start. iOS only on macOS. The Android
@@ -40,6 +44,9 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 11. Claim the socket — `DaemonEndpointHost.start`. A live daemon →
     `DaemonAlreadyRunningError`; the start rejects, the entry logs `Daemon already running` and exits 0. A stale socket file is
     removed.
+    Right after the claim the winner makes sure it holds the worker lock (`claimed`): it
+    writes itself as the owner, and a live holder in another folder fails the start (the entry
+    awaits this after `daemon.start()` settles, then stops the daemon).
 12. Host load sampling starts.
 13. `admin.token` written (0600, atomic).
 14. Converge starts. Health `starting`. From here `hello` and `status.get` answer;
@@ -139,8 +146,10 @@ platform runs the deferred reclaim (step 21.2).
    Then core shuts down every ready device with no lease (`core.shutdownIdle`, initiator
    `daemon-stop`; leased devices keep running), before any driver is disposed.
 6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
-   stop, every driver's `dispose` (all tried; failures logged), then the event history stops
-   (cancels its prune timer, closes `history.db`), so the stop's own events are written.
+   stop, every driver's `dispose` (all tried; failures logged), then the worker lock is
+   released (after the drivers, so no other worker sweeps while this one still acts on devices),
+   then the event history stops (cancels its prune timer, closes `history.db`), so the stop's own
+   events are written. A start that fails in the build releases the lock in `startDaemon`.
 7. Close connections, remove `admin.token`, release the socket (released even when the removal fails).
 
 A gateway's stop: agent-device edge and HTTP, then `FleetLeaseCoordinator` and
