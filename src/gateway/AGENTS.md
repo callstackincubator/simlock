@@ -44,7 +44,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 1. `GatewayService.start`: `registry.load()` (drained ids) before the listener opens.
 2. Upgrade auth (`../daemon/main.ts`, `authenticateUplink` with the claimed id, cut to `MAX_CLAIMED_FIELD_LENGTH`):
-   unknown token `401`, non-`worker` role or `worker-mismatch` `403`. Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
+   unknown token `401`, non-`worker` role or `worker-mismatch` `403` (this includes a claimed id outside `[A-Za-z0-9_-]{1,128}`). Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
 3. A new uplink under a live worker id (so with the token pinned to it) closes and replaces the old link.
 4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch → view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
    first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
