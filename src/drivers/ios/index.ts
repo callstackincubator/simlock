@@ -762,11 +762,14 @@ export class IosSimctlDriver implements Driver {
 
   async provision(
     spec: VirtualSpec,
-    _options?: { readonly source?: string },
+    options?: { readonly source?: string },
   ): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
-    const seed = await this.#seedFor(resolved);
+    const seed =
+      options?.source === undefined
+        ? await this.#seedFor(resolved)
+        : await this.#namedSource(options.source);
     // why: Cosmetic, and deliberately so: what proves this device is Simlock's is that it
     // lives in the device set every call below is scoped to, never what it is called
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
@@ -807,6 +810,16 @@ export class IosSimctlDriver implements Driver {
         udid,
       } satisfies IosDriverData,
     };
+  }
+
+  async #namedSource(sourceId: string): Promise<{ readonly udid: string }> {
+    const row = this.#sources.findRow(sourceId);
+    if (row?.state !== "ready" || row.udid === undefined) {
+      throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
+    }
+    const reason = sourceStaleReason(row, await this.#loadCatalog());
+    if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
+    return { udid: row.udid };
   }
 
   /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
