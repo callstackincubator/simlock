@@ -5034,4 +5034,22 @@ describe("startDaemon worker lock", () => {
       startedAt: "1970-01-01T00:00:01.000Z",
     });
   });
+
+  it("a gateway never takes the worker lock, even when it is held", async () => {
+    const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
+    vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+
+    const { daemon } = await startGateway({
+      // why: a gateway given no drivers is the case where a worker would discover them and take the lock.
+      drivers: undefined as never,
+      filesystem,
+      processSupervisor: new FakeProcessSupervisor([4242]),
+      workerLockPath: LOCK_PATH,
+    });
+
+    expect(daemon.health).toBe("running");
+    expect(JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")))).toMatchObject({
+      pid: 4242,
+    });
+  });
 });
