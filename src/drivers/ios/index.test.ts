@@ -861,6 +861,50 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
   });
 
+  it("two provisions at once make one seed, and the clones of one seed run one at a time", async () => {
+    const copyUdid = "00000000-0000-0000-0000-000000000002";
+    const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl(
+          "create",
+          "simlock-seed-device-1",
+          driverData.deviceTypeId,
+          driverData.runtimeId,
+        ),
+        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+      },
+      { match: sourcesSimctl("boot", seedUdid) },
+      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+      { match: sourcesSimctl("listapps", seedUdid) },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { hangs: true, match: cloneInvocation },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock();
+    const driver = await createDriver(runner, clock, filesystem);
+    await plantManagedDevice(filesystem);
+    const clones = (): number => runner.calls.filter((call) => call.args[3] === "clone").length;
+
+    const first = driver.provision(spec);
+    const second = driver.provision(spec);
+    const firstSettled = first.catch((caught: unknown) => caught);
+    await waitForCalls(runner, 8);
+
+    expect(runner.calls.filter((call) => call.args[3] === "create")).toHaveLength(1);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+    expect(clones()).toBe(1);
+
+    clock.advance(30_000);
+
+    expect(await firstSettled).toBeInstanceOf(DriverCrashError);
+    await expect(second).resolves.toMatchObject({ deviceId: copyUdid });
+    expect(clones()).toBe(2);
+  });
+
   it.each([
     {
       name: "simctl create fails",
