@@ -29,6 +29,7 @@ describe("NodeDaemonLauncher", () => {
   it("hands the daemon the home the launching process already resolved", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
     const logPath = join(directory, "daemon.log");
+    const resolvedHome = join(directory, "resolved", "simlock", "home");
     // why: A relative SIMLOCK_HOME resolves against whatever directory reads it, so passing the
     // variable through unresolved would let the daemon build its device roots somewhere the
     // process that launched it never looks.
@@ -36,14 +37,12 @@ describe("NodeDaemonLauncher", () => {
       args: ["-e", "console.log(process.env.SIMLOCK_HOME)"],
       command: process.execPath,
       logPath,
-      simlockHome: "/resolved/simlock/home",
+      simlockHome: resolvedHome,
     });
 
     try {
       await launcher.launch();
-      await expect
-        .poll(async () => (await readFile(logPath, "utf8")).trim())
-        .toBe("/resolved/simlock/home");
+      await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe(resolvedHome);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
