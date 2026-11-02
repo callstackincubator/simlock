@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -131,7 +131,65 @@ describe("NodeWorkerLock", () => {
     );
   });
 
-  it("a start that lost the claim never removes the lock a winner makes its own while the loser releases", async () => {
+  it.each([
+    { order: "after the winner made the lock folder", hook: "mkdirp" },
+    { order: "while the winner writes owner.json", hook: "write" },
+    { order: "after the winner wrote owner.json", hook: "read-back" },
+  ] as const)(
+    "a start that lost the claim never removes the lock a winner makes its own when the loser releases $order",
+    async ({ hook }) => {
+      const { path } = await lockInTemporaryFolder();
+      const winner: WorkerLockOwner = { ...ME, pid: 200, startedAt: "2026-11-02T09:00:01.000Z" };
+      const winnerFilesystem = new NodeFilesystem();
+      const winnerHandle = await new NodeWorkerLock({
+        filesystem: winnerFilesystem,
+        path,
+        processSupervisor: new FakeProcessSupervisor([]),
+        uid: process.getuid?.(),
+      }).take(winner);
+      const loserHandle = await adapter(path).take(ME);
+      // why: the winner's claim cannot be scheduled between two calls of the loser's release, so the loser's whole release runs at the chosen point of the claim, once.
+      let released = false;
+      const loserRelease = async () => {
+        if (released) return;
+        released = true;
+        await loserHandle.release();
+      };
+      const mkdirpOnce = winnerFilesystem.mkdirp.bind(winnerFilesystem);
+      const writeOnce = winnerFilesystem.writeFileAtomic.bind(winnerFilesystem);
+      const readOnce = winnerFilesystem.readFile.bind(winnerFilesystem);
+      let wrote = false;
+      winnerFilesystem.mkdirp = async (folder, options) => {
+        await mkdirpOnce(folder, options);
+        if (hook === "mkdirp") await loserRelease();
+      };
+      winnerFilesystem.writeFileAtomic = async (file, contents, options) => {
+        if (hook === "write" && !released) {
+          // why: the folder moves after the temporary file is written and before it is renamed, so the rename finds nothing, as the real one does.
+          await loserRelease();
+          throw Object.assign(new Error("ENOENT: rename"), { code: "ENOENT" });
+        }
+        await writeOnce(file, contents, options);
+        wrote = true;
+      };
+      winnerFilesystem.readFile = async (file) => {
+        if (hook === "read-back" && wrote && !released) await loserRelease();
+        return readOnce(file);
+      };
+
+      await winnerHandle.claimed();
+
+      expect(released).toBe(true);
+      expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(winner);
+      expect((await readdir(dirname(path))).filter((name) => name.includes(".release-"))).toEqual(
+        [],
+      );
+      await winnerHandle.release();
+      await expect(stat(path)).rejects.toThrow();
+    },
+  );
+
+  it("a start that lost the claim never removes the lock a winner makes its own when the winner claims after the loser moved the lock away", async () => {
     const { path } = await lockInTemporaryFolder();
     const winner: WorkerLockOwner = { ...ME, pid: 200, startedAt: "2026-11-02T09:00:01.000Z" };
     const winnerHandle = await adapter(path).take(winner);
@@ -158,5 +216,26 @@ describe("NodeWorkerLock", () => {
 
     expect(claimed).toBe(true);
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(winner);
+  });
+
+  it.each([
+    { alive: false, kept: false, name: "whose releasing process is gone" },
+    { alive: true, kept: true, name: "whose releasing process is alive" },
+  ])("a take clears a leftover .release folder $name", async ({ alive, kept }) => {
+    const { path } = await lockInTemporaryFolder();
+    await adapter(path)
+      .take(ME)
+      .then((handle) => handle.release());
+    const aside = `${path}.release-4242-abc`;
+    await mkdir(aside);
+
+    await adapter(path, alive ? [4242] : []).take(ME);
+
+    expect(
+      await stat(aside).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(kept);
   });
 });

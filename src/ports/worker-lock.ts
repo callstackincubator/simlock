@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import type { Filesystem } from "./filesystem.js";
 import type { ProcessSupervisor } from "./process-supervisor.js";
@@ -37,6 +37,7 @@ export interface NodeWorkerLockOptions {
 }
 
 const OWNER_FILE = "owner.json";
+const CLAIM_ATTEMPTS = 5;
 
 export function defaultWorkerLockPath(
   platform: NodeJS.Platform,
@@ -104,10 +105,24 @@ export class NodeWorkerLock implements WorkerLock {
     }
   }
 
+  // why: a release that died between its two renames leaves `<lock>.release-<pid>-<id>`; one whose releasing process is gone is nobody's, and one still alive is mid-release.
+  async #removeAbandonedAsides(): Promise<void> {
+    const { filesystem, path, processSupervisor } = this.#options;
+    const prefix = `${basename(path)}.release-`;
+    const names = await filesystem.readdir(dirname(path)).catch(() => []);
+    for (const name of names) {
+      if (!name.startsWith(prefix)) continue;
+      const pid = Number(name.slice(prefix.length).split("-")[0]);
+      if (Number.isInteger(pid) && pid > 0 && processSupervisor.isAlive(pid)) continue;
+      await filesystem.rm(join(dirname(path), name)).catch(() => undefined);
+    }
+  }
+
   async take(owner: WorkerLockOwner): Promise<WorkerLockHandle> {
     const { filesystem, path, processSupervisor } = this.#options;
     const ownerFile = join(path, OWNER_FILE);
     await this.#prepareParent();
+    await this.#removeAbandonedAsides();
     try {
       await filesystem.mkdir(path);
     } catch (error: unknown) {
@@ -138,8 +153,18 @@ export class NodeWorkerLock implements WorkerLock {
         ) {
           throw new WorkerLockHeldError(holder);
         }
-        await filesystem.mkdirp(path);
-        await filesystem.writeFileAtomic(ownerFile, written);
+        // why: a loser's release can move the lock folder away between any two of these calls, so the claim makes the folder and writes owner.json again until a read shows its own content.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await filesystem.mkdirp(path);
+            await filesystem.writeFileAtomic(ownerFile, written);
+            if ((await filesystem.readFile(ownerFile).catch(() => undefined)) === written) break;
+          } catch (error: unknown) {
+            if (attempt === CLAIM_ATTEMPTS) throw error;
+            continue;
+          }
+          if (attempt === CLAIM_ATTEMPTS) throw new Error(`${ownerFile} does not show this worker`);
+        }
         owns = true;
       },
       release: async () => {
