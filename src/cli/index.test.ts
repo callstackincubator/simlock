@@ -7545,6 +7545,25 @@ describe("CLI: daemon logs --follow", () => {
     await expect(run.exit).resolves.toBe(0);
   });
 
+  it.each([
+    ["ESC", "\u001b", "\\u001b"],
+    ["C1 CSI", "\u009b", "\\u009b"],
+  ])(
+    "prints %s in a log line escaped, in the tail and in a later line",
+    async (_name, raw, escaped) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/simlock");
+      await filesystem.writeFileAtomic(LOG, `a${raw}b\n`);
+      const run = await follow(filesystem);
+      await filesystem.writeFileAtomic(LOG, `a${raw}b\nc${raw}d\n`);
+      await run.tick();
+
+      expect(run.output.stdout).toBe(`a${escaped}b\nc${escaped}d\n`);
+      run.signals.emit("SIGINT");
+      await expect(run.exit).resolves.toBe(0);
+    },
+  );
+
   it("it prints lines written after a rotation, when the new file is already larger than the old offset at the next poll", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/simlock");
@@ -10979,7 +10998,7 @@ describe("CLI text output escapes control characters in remote text", () => {
     ["NUL", "\u0000", "\\u0000"],
     ["C1 CSI", "\u009b", "\\u009b"],
   ])(
-    "simlock stats, worker list, worker update, device add, update and warm forget print %s in remote text escaped",
+    "simlock stats, worker list, worker update, device add, update, warm forget and daemon logs print %s in remote text escaped",
     async (_name, raw, escaped) => {
       const text = `a${raw}b`;
       const shown = `a${escaped}b`;
@@ -10988,6 +11007,7 @@ describe("CLI text output escapes control characters in remote text", () => {
         const code = await runCli(
           [...argv],
           output.environmentWith({
+            readLogFile: async () => `ok\n${text}\n`,
             clock: new FakeClock(NOW),
             connectAdmin: async () => fakeClient(client),
             sleep: async () => undefined,
@@ -11066,7 +11086,9 @@ describe("CLI text output escapes control characters in remote text", () => {
           forgotten: [{ platform: "android", model: text, osVersion: "36", mode: "full" }],
         }),
       });
+      const logs = await run(["daemon", "logs"], {});
       const results = {
+        logs,
         stats,
         list,
         detached,
