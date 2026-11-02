@@ -3746,9 +3746,9 @@ describe("IosSimctlDriver listComponents()", () => {
         ]),
       );
       expect(runner.calls.some((call) => call.args.includes(keptSeed))).toBe(false);
-      expect(runner.calls.findIndex((call) => call.args[3] === "runtime")).toBeGreaterThan(
-        runner.calls.findIndex((call) => call.args[4] === stuckSeed),
-      );
+      expect(
+        runner.calls.findIndex((call) => call.args[3] === "runtime" && call.args[4] === "delete"),
+      ).toBeGreaterThan(runner.calls.findIndex((call) => call.args[4] === stuckSeed));
       expect(logger.warnings).toEqual([
         expect.stringContaining(
           `could not remove seed ${stuckSeed} of removed runtime ${target.runtime}:`,
