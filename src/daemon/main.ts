@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -119,6 +119,8 @@ import {
   type TcpProbe,
   FetchWebhookPoster,
   type WebhookPoster,
+  defaultWorkerLockPath,
+  NodeWorkerLock,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -420,6 +422,20 @@ async function composeDaemon(
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
+  // why: only a worker whose drivers are discovered touches the machine's adb server, console ports and runtimes; substituted drivers touch none (ADR 0059 §1).
+  if (options.drivers === undefined && process.env.SIMLOCK_DRIVERS_MODULE === undefined) {
+    await new NodeWorkerLock({
+      filesystem,
+      path:
+        options.workerLockPath ??
+        defaultWorkerLockPath(process.platform, process.getuid?.() ?? 0, tmpdir()),
+      processSupervisor,
+    }).take({
+      folder: dataDirectory,
+      pid: process.pid,
+      startedAt: new Date(clock.now()).toISOString(),
+    });
+  }
   const { drivers, prerequisiteChecks, rejections } =
     options.drivers === undefined
       ? await discoverDrivers({
