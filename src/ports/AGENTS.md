@@ -2,7 +2,7 @@
 
 Does: one interface per external API, each with a Node adapter and a fake.
 Entry: `index.ts` (barrel). The WebSocket adapters are not in it: `uplink-websocket.ts` (the uplink; it also
-re-exports `createUpgradeRouter` from `upgrade-router.ts`, the one `upgrade` listener of an HTTP server), and `testing.ts` for tests.
+closes an uplink whose single message passes 8 MiB (`UPLINK_MAX_MESSAGE_BYTES`); it also re-exports `createUpgradeRouter` from `upgrade-router.ts`, the one `upgrade` listener of an HTTP server), and `testing.ts` for tests.
 Uses: nothing from other components. Imported by: every component that touches the machine.
 
 ## Ports

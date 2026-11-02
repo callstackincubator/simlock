@@ -26,7 +26,8 @@ import type { ComponentInstallProgress, DeviceOutputChunk, LeaseProgress } from 
  * peer. */
 const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 
-export const MAX_WIRE_LINE_CHARS = 16 * 1024 * 1024;
+// why: the largest real daemon reply is a usage ledger of 100,000 entries, about 54 MB with every field set; this leaves it room.
+export const MAX_WIRE_LINE_CHARS = 128 * 1024 * 1024;
 
 export interface HelloOptions {
   readonly principal?: string;
