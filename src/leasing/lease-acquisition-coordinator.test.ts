@@ -962,14 +962,15 @@ describe("LeaseAcquisitionCoordinator", () => {
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
   });
 
-  it("grants a request made behind a request whose shut-down device failed to boot and then to be destroyed the other shut-down device, with no release", async () => {
-    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
-    // why: a released virtual device is destroyed, so the shut-down devices are seeded.
+  it("grants a request queued behind a request whose shut-down device failed to boot, when another shut-down device and a running slot are free, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 3, maxRunning: 2 });
+    // why: a released virtual device is destroyed, so the shut-down devices are seeded, and a
+    // leased device holds one running slot: the head's boot takes the other, so the request
+    // behind it queues until that boot fails and gives the slot back.
+    await harness.coordinator.request(request, { ownerId: "x", requesterId: "x" });
     const shutdown = [await seedShutdown(harness), await seedShutdown(harness)];
-    // why: makeready calls 1 and 2 readied the seeded devices; call 3 is the head's boot. Its device
-    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
-    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
-    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
+    // why: makeready calls 1 to 3 readied the leased device and the seeded ones; call 4 is the head's boot.
+    harness.driver.failOn("makeReady", 4, new DriverCrashError("simulator never booted"));
     const failing = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
     void failing.catch(() => undefined);
     const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
