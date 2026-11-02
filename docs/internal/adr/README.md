@@ -39,7 +39,7 @@ the status is stale.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`); §1, §2, §3, §5, §6 and §7 narrowed by 0048 for iOS under `deviceSet: "default"`; Consequences' two-instance line narrowed by 0059; §1, §4 and §6 narrowed by 0061 |
+| [0001](0001-simlock-owned-device-roots.md) | Simlock-owned device roots | Accepted; ownership proof and the adb server narrowed by 0022 for physical devices; per-home isolation as a user feature superseded by 0034; §1's layout narrowed by 0036 (`state.db`); §1, §2, §3, §5, §6 and §7 narrowed by 0048 for iOS under `deviceSet: "default"`; Consequences' two-instance line narrowed by 0059; §1, §3, §4, §5 and §6 narrowed by 0061 |
 | [0002](0002-opt-in-slim-ios-simulators.md) | Opt-in slim iOS simulators | Accepted; §2, §3, §5, §8, §9, the overrides' location and the no-enable-pass cost superseded by 0060; §10 narrowed by 0060 |
 | [0003](0003-one-typed-daemon-contract-behind-every-frontend.md) | One typed daemon contract behind every frontend | Accepted |
 | [0004](0004-ttl-first-leases-on-every-transport.md) | TTL-first leases on every transport | Accepted — partly implemented: §2 (the CLI exits when its socket drops instead of keeping its lease) |
@@ -96,4 +96,4 @@ the status is stale.
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
-| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted — not yet implemented; narrows 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
+| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted — not yet implemented; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |

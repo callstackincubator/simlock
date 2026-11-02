@@ -5,9 +5,12 @@
 - **Issue:** [#327](https://github.com/callstackincubator/simlock/issues/327) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049), points 1 and 4)
 - **Supersedes:** nothing. Narrows [ADR 0001](0001-simlock-owned-device-roots.md)
   §1 (the root layout gains `sources/` and, on Android, one folder per
-  device), §4 (the Android per-device folder) and §6 (orphan sources
+  device), §3 (every `simctl` call carries `--set <deviceRoot>`; sources
+  live in a separate sources set and a clone is a cross-set `--set <sources>
+  clone`), §4 (the Android per-device folder), §5 (`listManaged` reports
+  root membership; it never reports a source) and §6 (orphan sources
   are reported, not destroyed, by the rule below). Narrows [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md)
-  §4 ("Reclaim still erases"): an iOS reclaim deletes and clones instead.
+  §4 ("Reclaim still erases"): a released simulator is destroyed and the next lease gets a new copy.
   Narrows the `lease.identity` setting: every virtual device is spent after
   one lease. Narrows [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §6
   and [ADR 0015](0015-a-lease-request-is-a-set-of-constraints.md) §6–7:
@@ -109,7 +112,8 @@ and set `ready` when the source is finished; a `making` row an earlier
 daemon process left is destroyed at start, with its source. A source with
 no row in its driver's table, and a `ready` baseline source no `baselines`
 row names, are not destroyed (ADR 0001 §6: orphans are never auto-destroyed):
-they stay in place, `doctor` reports them as orphan sources, and only
+they stay in place, `doctor` reports them as orphan sources (each driver's
+`listSources()` reports what its sources area holds with no row), and only
 `doctor --purge-orphans` destroys them. Its records follow ADR 0036 §2, with
 no JSON text:
 
@@ -123,7 +127,7 @@ no JSON text:
 - New driver verbs: `provision(spec, { source? })` copies the named source,
   or the spec's seed (made first if missing or stale); `saveSource(device)`
   makes a source from a shut-down device and returns its id and size;
-  `listSources()` and `destroySource(id)` serve doctor, nuke, baseline
+  `listSources()` (also reports sources with no row, as orphans) and `destroySource(id)` serve doctor, nuke, baseline
   removal and component removal.
 
 ### 2. Making a device is copying a source; a reset is a new copy
