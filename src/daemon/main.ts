@@ -430,6 +430,7 @@ async function composeDaemon(
         options.workerLockPath ??
         defaultWorkerLockPath(process.platform, process.getuid?.() ?? 0, tmpdir()),
       processSupervisor,
+      uid: process.platform === "win32" ? undefined : process.getuid?.(),
     }).take({
       folder: dataDirectory,
       pid: process.pid,

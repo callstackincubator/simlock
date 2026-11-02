@@ -77,10 +77,34 @@ export class NodeWorkerLock implements WorkerLock {
     this.#options = options;
   }
 
+  // why: the lock's parent is in a folder every user can write (/tmp), so on POSIX it must be this user's and 0700, or another user could plant a lock.
+  async #prepareParent(): Promise<void> {
+    const parent = dirname(this.#options.path);
+    const reason = await this.#parentProblem(parent);
+    if (reason !== undefined) {
+      throw new Error(`${parent} cannot be used as the worker lock folder: ${reason}`);
+    }
+  }
+
+  async #parentProblem(parent: string): Promise<string | undefined> {
+    const { filesystem, uid } = this.#options;
+    try {
+      await filesystem.mkdirp(parent, { mode: 0o700 });
+      if (uid === undefined) return undefined;
+      const details = await filesystem.lstat(parent);
+      if (details.kind !== "directory") return `it is a ${details.kind}, not a directory`;
+      if (details.uid !== uid) return "owned by another user";
+      if (details.mode !== 0o700) await filesystem.chmod(parent, 0o700);
+      return undefined;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   async take(owner: WorkerLockOwner): Promise<WorkerLockHandle> {
     const { filesystem, path, processSupervisor } = this.#options;
     const ownerFile = join(path, OWNER_FILE);
-    await filesystem.mkdirp(dirname(path), { mode: 0o700 });
+    await this.#prepareParent();
     try {
       await filesystem.mkdir(path);
     } catch (error: unknown) {
