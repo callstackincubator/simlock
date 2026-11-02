@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defaultWorkerLockPath } from "./ports/index.js";
+
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "slow-e2e.sh");
 const PINNED = "0.21.28";
 
@@ -41,6 +43,7 @@ function machine() {
     SIMLOCK_SLOW_LOCK: join(dir, "lane.lock"),
     SIMLOCK_SLOW_TMP: join(dir, "lane"),
     SIMLOCK_SLOW_MIN_FREE_GIB: "0",
+    SIMLOCK_SLOW_WORKER_LOCK: join(dir, "worker.lock"),
     SIMLOCK_E2E_AGENT_DEVICE: "",
   };
   const run = (...args: string[]) =>
@@ -239,5 +242,41 @@ describe("scripts/slow-e2e.sh", () => {
 
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
+  });
+
+  it("the default worker lock path in the script is the one the daemon takes for the current user", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const uid = process.getuid?.() ?? 0;
+
+    const text = /SIMLOCK_SLOW_WORKER_LOCK:-([^}]+)\}/.exec(script)?.[1];
+
+    expect(text?.replace("$(id -u)", String(uid))).toBe(
+      defaultWorkerLockPath("linux", uid, tmpdir()),
+    );
+  });
+
+  it("check and a run exit 69 with the not fit message, freeing the lane lock, while a live pid holds the worker lock; a stale holder lets them go on", () => {
+    const { dir, env, run } = machine();
+    const holderFolder = "/home/other/.simlock";
+    const lockFolder = join(dir, "worker.lock");
+    mkdirSync(lockFolder);
+    const owner = (pid: number) =>
+      writeFileSync(
+        join(lockFolder, "owner.json"),
+        JSON.stringify({ folder: holderFolder, pid, startedAt: "t0" }),
+      );
+    const pid = idleNode(env);
+    owner(pid);
+    const refusal = `not fit: a Simlock worker holds this machine (pid ${pid}, folder ${holderFolder}); stop it first: SIMLOCK_HOME=${holderFolder} simlock daemon stop\n`;
+
+    const check = run("check");
+    const started = run();
+    owner(2_147_483_646);
+    const stale = run("check");
+
+    expect([check.status, check.stderr]).toEqual([69, refusal]);
+    expect([started.status, started.stderr]).toEqual([69, refusal]);
+    expect(existsSync(env.SIMLOCK_SLOW_LOCK)).toBe(false);
+    expect([stale.status, stale.stderr]).toEqual([0, ""]);
   });
 });
