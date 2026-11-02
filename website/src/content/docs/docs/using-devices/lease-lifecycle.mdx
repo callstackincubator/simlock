@@ -121,7 +121,7 @@ Release that lease first, or keep using it. An admin can allow more leases per r
 
 ## Who the requester is
 
-The requester id decides which leases are yours and enforces the one-lease limit. It holds no control characters and is at most 200 characters; a longer or unprintable one is refused with `BAD_REQUEST`. `simlock lease` takes the first of these that is set:
+The requester id decides which leases are yours and enforces the one-lease limit. It holds no control characters and is at most 256 characters; a longer or unprintable one is refused with `BAD_REQUEST`. `simlock lease` takes the first of these that is set:
 
 1. `--agent-id <id>` on the command.
 2. The `SIMLOCK_AGENT_ID` environment variable.

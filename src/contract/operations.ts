@@ -283,7 +283,7 @@ export const leaseRequest = defineOperation({
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
   // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
-  // `requesterId` (printable, at most 200 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
+  // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
@@ -1098,7 +1098,8 @@ const deviceRotate = defineOperation({
     .object({
       leaseId: z.string().min(1).max(256),
       orientation: z.enum(INPUT_ORIENTATIONS),
-      requesterId: z.string().min(1).max(256).optional(),
+      // why: rotate always refused an empty requesterId, so the shared format also keeps min(1).
+      requesterId: requesterIdSchema.pipe(z.string().min(1)).optional(),
     })
     .strict(),
   output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),

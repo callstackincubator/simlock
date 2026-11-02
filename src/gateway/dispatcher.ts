@@ -50,6 +50,7 @@ import {
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -695,7 +696,7 @@ export class GatewayDispatcher {
         // count through a gateway (ADR 0009 §3).
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
-        requesterId: input.requesterId ?? session.principal,
+        requesterId: input.requesterId ?? principalAsRequester(session.principal),
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
         ...(session.onRequestAdmitted === undefined
           ? {}

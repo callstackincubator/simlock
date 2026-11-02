@@ -12,7 +12,7 @@
  * 3. `fallback`, the frontend's own pid-derived value.
  *
  * The session value gets no more checking here than `SIMLOCK_AGENT_ID` does: only the empty
- * string is skipped. The daemon refuses an id with a control character or over 200 characters.
+ * string is skipped. The daemon refuses an id with a control character or over 256 characters.
  */
 
 /** The agent tools whose session id Simlock reads, in the order they are tried. Adding a tool

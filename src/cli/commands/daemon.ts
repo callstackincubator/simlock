@@ -1,5 +1,6 @@
 import { asDaemonRefusal, UsageError } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl } from "../escape.js";
 import { stopRunningDaemon } from "../daemon-service.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
 import { consoleLines, formatStatus, serviceLine, type ServiceReport } from "../format.js";
@@ -69,7 +70,9 @@ async function daemonStatus(context: CommandContext, json: boolean): Promise<num
           error: { code: refusal.code, message: refusal.message },
         });
       } else {
-        write(`Daemon handshake refused: ${refusal.code}: ${refusal.message}\n`);
+        write(
+          `Daemon handshake refused: ${escapeControl(refusal.code)}: ${escapeControl(refusal.message)}\n`,
+        );
       }
       return 1;
     }

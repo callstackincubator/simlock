@@ -10979,7 +10979,7 @@ describe("CLI text output escapes control characters in remote text", () => {
     ["NUL", "\u0000", "\\u0000"],
     ["C1 CSI", "\u009b", "\\u009b"],
   ])(
-    "simlock stats, worker list, worker update and device add print %s in remote text escaped",
+    "simlock stats, worker list, worker update, device add, update and warm forget print %s in remote text escaped",
     async (_name, raw, escaped) => {
       const text = `a${raw}b`;
       const shown = `a${escaped}b`;
@@ -11046,7 +11046,37 @@ describe("CLI text output escapes control characters in remote text", () => {
         }),
       });
 
-      for (const [name, result] of Object.entries({ stats, list, detached, failed, enrolled })) {
+      let polled = 0;
+      const daemonFollowed = await run(["update"], {
+        updateDaemon: async () => {
+          polled += 1;
+          const answer = updateAnswer(text);
+          return polled === 1 ? answer : { ...answer, update: null };
+        },
+      });
+      const daemonFailed = await run(["update"], {
+        updateDaemon: async () => ({
+          ...updateAnswer("0.3.0"),
+          update: null,
+          lastUpdateFailure: failure(text),
+        }),
+      });
+      const forgotten = await run(["warm", "forget", "android", "Pixel"], {
+        forgetWarmKind: async () => ({
+          forgotten: [{ platform: "android", model: text, osVersion: "36", mode: "full" }],
+        }),
+      });
+      const results = {
+        stats,
+        list,
+        detached,
+        failed,
+        enrolled,
+        daemonFollowed,
+        daemonFailed,
+        forgotten,
+      };
+      for (const [name, result] of Object.entries(results)) {
         expect({ name, raw: result.stdout.includes(raw) }).toEqual({ name, raw: false });
         expect({ name, shown: result.stdout.includes(shown) }).toEqual({ name, shown: true });
       }

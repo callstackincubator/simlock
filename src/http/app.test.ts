@@ -1878,7 +1878,7 @@ describe("lease routes", () => {
         { args: "list", tool: "simctl" },
         { args: [], tool: "simctl", unexpected: true },
         { args: [], requesterId: "a\u001b[2Jb", tool: "simctl" },
-        { args: [], requesterId: "x".repeat(201), tool: "simctl" },
+        { args: [], requesterId: "x".repeat(257), tool: "simctl" },
       ]) {
         const response = await postExec(app, body);
         expect(response.status).toBe(400);

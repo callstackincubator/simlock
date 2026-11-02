@@ -66,7 +66,6 @@ import {
   inboxItems,
   OPERATIONS,
   requestedDevice,
-  requesterIdSchema,
   type ComponentProgress,
   type OperationName,
   type StatusLoad,
@@ -80,6 +79,7 @@ import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -462,23 +462,11 @@ export class Dispatcher {
     );
   }
 
-  // why: the principal stands in for a request that names no requesterId, so it meets the same format; it arrives at `hello`, not in the request.
-  #principalAsRequester(principal: string): string {
-    const parsed = requesterIdSchema.safeParse(principal);
-    if (!parsed.success) {
-      throw new DispatchError(
-        "BAD_REQUEST",
-        parsed.error.issues[0]?.message ?? "requesterId is not valid",
-      );
-    }
-    return parsed.data;
-  }
-
   // fallow-ignore-next-line complexity -- lease payload assembly and the download-policy rewrite are one transaction, moved verbatim from DaemonServer's former #requestLease.
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
-    const requesterId = input.requesterId ?? this.#principalAsRequester(session.principal);
+    const requesterId = input.requesterId ?? principalAsRequester(session.principal);
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
