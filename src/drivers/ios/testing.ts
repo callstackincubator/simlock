@@ -26,6 +26,6 @@ export function plantReadySeed(
     specKey: `${seed.deviceTypeId}\u0000${seed.runtimeId}`,
   });
   table.setUdid(`planted-${seed.udid}`, seed.udid);
-  table.markReady(`planted-${seed.udid}`);
+  table.markReady(`planted-${seed.udid}`, undefined);
   return database;
 }

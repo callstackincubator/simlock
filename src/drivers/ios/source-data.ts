@@ -81,10 +81,14 @@ export class IosSourceTable {
       .run(udid, sourceId);
   }
 
-  markReady(sourceId: string): void {
+  markReady(sourceId: string, sizeBytes: number | undefined): void {
     this.#database
-      .prepare("UPDATE ios_source_data SET state = 'ready' WHERE source_id = ?")
-      .run(sourceId);
+      .prepare("UPDATE ios_source_data SET state = 'ready', size_bytes = ? WHERE source_id = ?")
+      .run(sizeBytes ?? null, sourceId);
+  }
+
+  deleteRow(sourceId: string): void {
+    this.#database.prepare("DELETE FROM ios_source_data WHERE source_id = ?").run(sourceId);
   }
 
   findReadySeed(specKey: string): ReadySeed | undefined {

@@ -799,23 +799,66 @@ export class IosSimctlDriver implements Driver {
       sourceId,
       specKey,
     });
-    await this.#filesystem.mkdirp(this.#sourcesSet, { mode: 0o700 });
-    const created = await this.#simctl(
-      [
-        "create",
-        `simlock-seed-${sourceId}`,
-        resolved.deviceType.identifier,
-        resolved.runtime.identifier,
-      ],
-      COMMAND_TIMEOUT_MS,
-      this.#sourcesSet,
-    );
-    const udid = created.stdout.trim();
-    this.#sources.setUdid(sourceId, udid);
-    await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
-    await this.#shutdown(udid, this.#sourcesSet);
-    this.#sources.markReady(sourceId);
-    return { sourceId, udid };
+    try {
+      await this.#ensureSourcesSet();
+      const created = await this.#simctl(
+        [
+          "create",
+          `simlock-seed-${sourceId}`,
+          resolved.deviceType.identifier,
+          resolved.runtime.identifier,
+        ],
+        COMMAND_TIMEOUT_MS,
+        this.#sourcesSet,
+      );
+      const udid = created.stdout.trim();
+      this.#sources.setUdid(sourceId, udid);
+      try {
+        await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
+      } catch (error: unknown) {
+        await this.#deleteSeedSimulator(udid);
+        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+      }
+      try {
+        await this.#shutdown(udid, this.#sourcesSet);
+      } catch (error: unknown) {
+        await this.#deleteSeedSimulator(udid);
+        throw error;
+      }
+      this.#sources.markReady(sourceId, await this.#sizeOf(udid));
+      return { sourceId, udid };
+    } catch (error: unknown) {
+      this.#sources.deleteRow(sourceId);
+      throw error;
+    }
+  }
+
+  async #deleteSeedSimulator(udid: string): Promise<void> {
+    await this.#bestEffortShutdown(udid, this.#sourcesSet);
+    await this.#simctl(["delete", udid], COMMAND_TIMEOUT_MS, this.#sourcesSet);
+  }
+
+  async #ensureSourcesSet(): Promise<void> {
+    if (this.#rootOptions !== undefined) {
+      await this.#filesystem.mkdirp(this.#sourcesSet, { mode: 0o700 });
+      return;
+    }
+    await ensureOwnedRoot({
+      filesystem: this.#filesystem,
+      idGenerator: this.#idGenerator,
+      instanceId: this.#instanceId,
+      path: this.#sourcesSet,
+      platform: "ios",
+    });
+  }
+
+  async #sizeOf(udid: string): Promise<number | undefined> {
+    try {
+      return await this.#filesystem.directorySize(join(this.#sourcesSet, udid));
+    } catch {
+      // why: a size that cannot be counted leaves the seed `ready` with no size; `doctor` then leaves it out.
+      return undefined;
+    }
   }
 
   async makeReady(
