@@ -56,9 +56,21 @@ Boot — `makeReady`:
    `device.slimmed`.
 4. `purpose: "recover"`: boot only, no write, no readback.
 
-Reclaim — `reclaim` ignores the clean level: shut down → `simctl erase` → write mark →
-`shutdown` / `erase`. The erase keeps the overrides file, so the next `prepare` finds it as wanted.
-Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`.
+Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simulator Simlock booted once,
+kept in the sources set (`<device set>/sources`; under `deviceSet: default` the owned root
+`$SIMLOCK_HOME/devices/ios-sources`) and known by its `ios_source_data` row (`source-data.ts`), never by
+name. `provision(spec, {source?})`: find the ready seed of the spec key (device type + runtime), make
+it when none or stale (`making` row, `create`, boot, shutdown, `ready` row with its size), then
+`simctl --set <sources> clone <seed> simlock-<id> <device set>`, both marks, the seed's `disabled.plist`
+copied. Two provisions of a kind make one seed; clones of a seed and its deletion take turns.
+`listSources` (ready rows with `staleReason`, plus sources-set simulators no row names as `orphan`) sweeps
+another process's `making` rows on its first call; a `making` row of this process older than 300 s goes at
+the next make of its kind. `destroySource` deletes by a row's UDID, or an orphan's under
+`doctor --purge-orphans`. `removeComponent` deletes the runtime's seeds first. A seed is in no
+`listManaged` and no `simlock simctl list`.
+
+Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end
+destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`.
 `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
 Catalog — models are device type names; class from product family (iPhone `phone`, iPad

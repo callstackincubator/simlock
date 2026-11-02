@@ -306,9 +306,9 @@ export interface Config {
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
     /**
-     * The lease-identity policy per platform (see `LeaseIdentity`), read by key for a new
-     * device's own platform when it is registered. Daemon configuration only: no lease request
-     * can change it, and a device keeps the value it was created under after this changes.
+     * why: The lease-identity policy per platform (see `LeaseIdentity`) no longer changes anything:
+     * every virtual device serves one lease and is deleted when it ends (ADR 0061 §2). It stays
+     * accepted and stored on each device record.
      */
     readonly identity: {
       readonly ios: LeaseIdentity;
