@@ -2123,6 +2123,75 @@ describe("IosSimctlDriver", () => {
       },
     );
 
+    it.each([
+      {
+        name: "writeFileAtomic throws and the readback is as wanted",
+        failing: "writeFileAtomic" as const,
+        existing: undefined,
+        readback: { stdout: readbackWith({}) },
+        mode: "slim",
+        detail: "could not write the launchd overrides file: disk full",
+      },
+      {
+        name: "mkdirp throws and the readback disagrees",
+        failing: "mkdirp" as const,
+        existing: undefined,
+        readback: { stdout: readbackWith({ [trueLabel]: "enabled" }) },
+        mode: "full",
+        detail: `could not write the launchd overrides file: disk full; 1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "the write throws and the readback fails",
+        failing: "writeFileAtomic" as const,
+        existing: undefined,
+        readback: { code: 1, stderr: "boom" },
+        mode: "slim",
+        detail:
+          "could not write the launchd overrides file: disk full; could not read back the launchd overrides: exit 1: boom",
+      },
+      {
+        name: "the existing file is not a plist dict, is left unchanged, and the readback decides",
+        failing: undefined,
+        existing: "not a plist",
+        readback: { stdout: readbackWith({}) },
+        mode: "slim",
+        detail:
+          "could not write the launchd overrides file: the existing file is not a property list dictionary",
+      },
+    ])(
+      "boots anyway when the overrides file cannot be written and says so: $name",
+      async ({ failing, existing, readback, mode, detail }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        if (existing !== undefined) {
+          await filesystem.mkdirp(overridesFolder(slim18_5.udid));
+          await filesystem.writeFileAtomic(overridesPath(slim18_5.udid), existing);
+        }
+        filesystem.failing = failing;
+
+        const { onSlimSkipped, onSlimmed, result, runner } = await prepareSlimWith(
+          filesystem,
+          readback,
+          slimOptions(),
+        );
+
+        expect(result.mode).toBe(mode);
+        expect(runner.calls.map((call) => call.args[3])).toEqual([
+          "boot",
+          "bootstatus",
+          "listapps",
+          "spawn",
+        ]);
+        expect(onSlimmed).not.toHaveBeenCalled();
+        expect(onSlimSkipped.mock.calls).toEqual([
+          [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
+        ]);
+        if (existing !== undefined) {
+          expect(await filesystem.readFile(overridesPath(slim18_5.udid))).toBe(existing);
+        }
+      },
+    );
+
     it("ignores a full flag an older daemon stamped into driver data: the spec mode decides", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
