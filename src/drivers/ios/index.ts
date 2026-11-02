@@ -63,6 +63,7 @@ import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
+import { IosSourceTable, type ReadySeed } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
@@ -291,6 +292,9 @@ export class IosSimctlDriver implements Driver {
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
+  readonly #sources: IosSourceTable;
+  readonly #sourcesSet: string;
+  #sourceMaker: string | undefined;
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -320,6 +324,11 @@ export class IosSimctlDriver implements Driver {
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
+    this.#sources = new IosSourceTable(options.database);
+    this.#sourcesSet =
+      rootOptions === undefined
+        ? join(options.simlockHome, "devices", "ios-sources")
+        : join(deviceRoot, "sources");
     this.screenCapture = createScreenCaptureFor(
       options,
       deviceRoot,
@@ -722,19 +731,21 @@ export class IosSimctlDriver implements Driver {
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
+    const seed = await this.#seedFor(resolved);
     // why: Cosmetic, and deliberately so: what proves this device is Simlock's is that it
     // lives in the device set every call below is scoped to, never what it is called
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
     const result = await this.#simctl(
-      ["create", name, resolved.deviceType.identifier, resolved.runtime.identifier],
+      ["clone", seed.udid, name, this.#deviceRoot],
       COMMAND_TIMEOUT_MS,
+      this.#sourcesSet,
     );
     const udid = result.stdout.trim();
 
     if (udid === "") {
-      throw new DriverCrashError("simctl create returned no device UDID");
+      throw new DriverCrashError("simctl clone returned no device UDID");
     }
 
     try {
@@ -758,6 +769,46 @@ export class IosSimctlDriver implements Driver {
         udid,
       } satisfies IosDriverData,
     };
+  }
+
+  async #seedFor(resolved: ResolvedIosSpec): Promise<ReadySeed> {
+    const specKey = seedSpecKey(resolved);
+    return this.#sources.findReadySeed(specKey) ?? (await this.#makeSeed(resolved, specKey));
+  }
+
+  async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
+    const sourceId = this.#idGenerator.generate();
+    this.#sourceMaker ??= this.#idGenerator.generate();
+    this.#sources.insertMaking({
+      createdAt: this.#clock.now(),
+      deviceTypeId: resolved.deviceType.identifier,
+      kind: "seed",
+      maker: this.#sourceMaker,
+      model: resolved.spec.model,
+      osVersion: resolved.spec.osVersion,
+      runtimeBuild: resolved.runtime.build,
+      runtimeId: resolved.runtime.identifier,
+      setPath: this.#sourcesSet,
+      sourceId,
+      specKey,
+    });
+    await this.#filesystem.mkdirp(this.#sourcesSet, { mode: 0o700 });
+    const created = await this.#simctl(
+      [
+        "create",
+        `simlock-seed-${sourceId}`,
+        resolved.deviceType.identifier,
+        resolved.runtime.identifier,
+      ],
+      COMMAND_TIMEOUT_MS,
+      this.#sourcesSet,
+    );
+    const udid = created.stdout.trim();
+    this.#sources.setUdid(sourceId, udid);
+    await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
+    await this.#shutdown(udid, this.#sourcesSet);
+    this.#sources.markReady(sourceId);
+    return { sourceId, udid };
   }
 
   async makeReady(
@@ -798,8 +849,13 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  async #bootAndWait(udid: string, deviceId: string, bootstatusTimeoutMs: number): Promise<void> {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+  async #bootAndWait(
+    udid: string,
+    deviceId: string,
+    bootstatusTimeoutMs: number,
+    set?: string,
+  ): Promise<void> {
+    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
     if (boot.kind === "timed-out") {
       throw new BootTimeoutError(deviceId);
     }
@@ -807,23 +863,24 @@ export class IosSimctlDriver implements Driver {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
     const deadline = this.#clock.now() + bootstatusTimeoutMs;
-    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs);
+    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs, set);
 
     if (outcome.kind === "finished") {
       this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
-      if (await this.#waitForInstaller(udid, deadline)) return;
+      if (await this.#waitForInstaller(udid, deadline, set)) return;
     }
 
-    await this.#bestEffortShutdown(udid);
+    await this.#bestEffortShutdown(udid, set);
     throw new BootTimeoutError(deviceId);
   }
 
-  async #waitForInstaller(udid: string, deadline: number): Promise<boolean> {
+  async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {
     // why: bootstatus can finish before the installer accepts requests after an erase (#547).
     while (this.#clock.now() < deadline) {
       const outcome = await this.#invokeSimctl(
         ["listapps", udid],
         Math.min(COMMAND_TIMEOUT_MS, deadline - this.#clock.now()),
+        set,
       );
       if (outcome.kind === "finished" && outcome.result.code === 0) {
         return this.#clock.now() < deadline;
@@ -1472,8 +1529,8 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
-  async #shutdown(udid: string): Promise<void> {
-    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
+  async #shutdown(udid: string, set?: string): Promise<void> {
+    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS, set);
 
     if (outcome.kind === "timed-out") {
       throw new DriverCrashError(`simctl shutdown ${udid} timed out after ${COMMAND_TIMEOUT_MS}ms`);
@@ -1483,16 +1540,16 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
-  async #bestEffortShutdown(udid: string): Promise<void> {
+  async #bestEffortShutdown(udid: string, set?: string): Promise<void> {
     try {
-      await this.#shutdown(udid);
+      await this.#shutdown(udid, set);
     } catch {
       // why: Boot failure cleanup must not obscure the timeout that triggered it.
     }
   }
 
-  async #simctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
-    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs));
+  async #simctl(args: readonly string[], timeoutMs: number, set?: string): Promise<ProcessResult> {
+    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs, set));
   }
 
   async #legacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
@@ -1508,14 +1565,19 @@ export class IosSimctlDriver implements Driver {
     return outcome.result;
   }
 
-  #scopedSimctlArgv(args: readonly string[]): string[] {
+  #scopedSimctlArgv(args: readonly string[], set?: string): string[] {
+    if (set !== undefined) return ["simctl", "--set", set, ...args];
     // why: Xcode's own set is simctl's default, so a call there carries no `--set`.
     if (this.#rootOptions === undefined) return ["simctl", ...args];
     return ["simctl", "--set", this.#deviceRoot, ...args];
   }
 
-  async #invokeSimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
-    return this.#invokeXcrun(this.#scopedSimctlArgv(args), timeoutMs);
+  async #invokeSimctl(
+    args: readonly string[],
+    timeoutMs: number,
+    set?: string,
+  ): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(this.#scopedSimctlArgv(args, set), timeoutMs);
   }
 
   /**
@@ -2212,6 +2274,10 @@ function alreadyShutdown(stderr: string): boolean {
 
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
+}
+
+function seedSpecKey(resolved: ResolvedIosSpec): string {
+  return `${resolved.deviceType.identifier}\u0000${resolved.runtime.identifier}`;
 }
 
 function specKey(spec: VirtualSpec): string {
