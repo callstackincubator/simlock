@@ -1128,6 +1128,44 @@ describe("IosSimctlDriver", () => {
     );
   });
 
+  it.each([
+    { name: "deletes its simulator in the sources set and its row", deleteCode: 0, rows: 0 },
+    { name: "keeps the row and throws when the delete fails", deleteCode: 1, rows: 1 },
+  ])("destroySource $name", async ({ deleteCode, rows }) => {
+    const database = plantSource(await memorySourceDatabase(), {
+      deviceTypeId: driverData.deviceTypeId,
+      runtimeId: driverData.runtimeId,
+      udid: seedUdid,
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      {
+        match: sourcesSimctl("delete", seedUdid),
+        result: { code: deleteCode, stderr: "busy", stdout: "" },
+      },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), undefined, database);
+    const [listed] = await driver.listSources();
+
+    const destroyed = driver.destroySource(listed?.id ?? "");
+
+    if (deleteCode === 0) await expect(destroyed).resolves.toBeUndefined();
+    else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
+    expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
+      n: rows,
+    });
+  });
+
+  it("destroySource refuses an id that names no source, without running simctl", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.destroySource("nope")).rejects.toBeInstanceOf(DriverCrashError);
+    expect(runner.calls).toEqual([]);
+  });
+
   it("keeps no copy of a slim spec's mode in driver data", async () => {
     const runner = new ScriptedProcessRunner([
       {
