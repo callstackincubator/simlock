@@ -785,6 +785,7 @@ export class IosSimctlDriver implements Driver {
       }
       throw error;
     }
+    await this.#copyOverrides(seed.udid, udid);
 
     return {
       address: udid,
@@ -878,6 +879,23 @@ export class IosSimctlDriver implements Driver {
   #maker(): string {
     this.#sourceMaker ??= this.#idGenerator.generate();
     return this.#sourceMaker;
+  }
+
+  /** why: ADR 0060 §1: the slim file is in place before the copy's first boot, so the copy boots with what the seed was given. */
+  async #copyOverrides(seedUdid: string, copyUdid: string): Promise<void> {
+    const from = join(this.#overridesFolder(seedUdid), OVERRIDES_FILE_NAME);
+    try {
+      if (!(await this.#filesystem.exists(from))) return;
+      await this.#filesystem.mkdirp(this.#overridesFolder(copyUdid), { mode: 0o700 });
+      await this.#filesystem.copyFile(
+        from,
+        join(this.#overridesFolder(copyUdid), OVERRIDES_FILE_NAME),
+      );
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   async #destroySeed(seed: ReadySeed): Promise<void> {
