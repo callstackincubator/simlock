@@ -82,7 +82,7 @@ missing from 2 snapshots in a row → dropped; kept across a disconnect, forgott
 
 **HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
 
-1. `openChannel`, then `relay.request` (ids, target, method, url, headers minus credentials, `tenant`, `channel`).
+1. `openChannel`, then `relay.request` (ids, target, method, url, headers minus credentials (`authorization`, `x-agent-device-token`, `cookie` and the configured `http.proxyAuth.header`), `tenant`, `channel`).
 2. Request body up and response body down on that byte channel; head from the `relay-head` push.
 3. Caller abort or cancel → `relay.cancel`. Deadline for the channel and head, then an idle bound on
    the body (a live body runs while bytes come), both on the Clock → `WORKER_UNREACHABLE`, `relay.cancel`.
