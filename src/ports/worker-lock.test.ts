@@ -67,6 +67,10 @@ describe("NodeWorkerLock", () => {
       holder: JSON.stringify({ folder: "/x", pid: -3, startedAt: "t" }),
       name: "an owner.json with a pid below 1",
     },
+    {
+      holder: JSON.stringify({ folder: "/x", pid: 0, startedAt: "t" }),
+      name: "an owner.json with pid 0, which the supervisor would call alive",
+    },
     { holder: JSON.stringify({ pid: 7, startedAt: "t" }), name: "an owner.json without a folder" },
     { holder: undefined, name: "a lock folder without owner.json", bare: true },
   ])("takes the lock and writes the owner over $name", async ({ bare, holder }) => {
@@ -76,7 +80,7 @@ describe("NodeWorkerLock", () => {
     }
     if (holder !== undefined) await writeFile(join(path, "owner.json"), holder);
 
-    await adapter(path).take(ME);
+    await adapter(path, [0, -3]).take(ME);
 
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(ME);
   });
