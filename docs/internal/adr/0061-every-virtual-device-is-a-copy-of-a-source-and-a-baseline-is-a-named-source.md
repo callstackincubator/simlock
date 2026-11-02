@@ -87,9 +87,23 @@ Simlock makes is a copy of one source. There are two kinds:
 - A **baseline**: saved by an operator from a device they hold, under a
   name (§4).
 
-A source lives under the platform's owned device root (ADR 0001), so it is
-inside every ownership proof, and the driver never reports it from
-`listManaged` as a device. Its records follow ADR 0036 §2, with no JSON
+A source lives under an owned root (ADR 0001), so it is inside every
+ownership proof, but where a lease holder cannot reach it: iOS sources are
+in their own `simctl` device set (`<device root>/sources`, or under
+`deviceSet: "default"` the owned root `$SIMLOCK_HOME/devices/ios-sources`),
+and a copy is a cross-set `simctl --set <sources> clone <udid> <name>
+<device set>` (measured: 0.2 s; the copy is listed only in the device set,
+with the source's files); Android sources are under `<root>/sources/`. So
+an agent's `simlock simctl` or `simlock adb` never lists, boots or changes a
+source. The driver never reports a source from `listManaged`.
+
+A driver may destroy its own sources. This amends safety rule 1 ("destroy
+only what the registry holds"): a source is recorded in its driver's own
+table, not the registry. A source row is written first, in state `making`,
+and set `ready` when the source is finished; a `making` row an earlier
+daemon process left, and a source with no row, are destroyed at start. At
+start core also destroys every baseline source no `baselines` row names (a
+restart mid-save). Its records follow ADR 0036 §2, with no JSON
 text:
 
 - Each driver keeps its sources in its own table (`ios_source_data`,
@@ -116,9 +130,9 @@ text:
 Every virtual device is spent after one lease: core's release path destroys
 it, the path `lease.identity: fresh` takes today, and `lease.identity` no
 longer changes anything for virtual devices. A device id lives for one
-lease. The warm pool keeps ready copies, as it keeps devices today. No
-virtual reclaim returns `erase`, `snapshot` or `wipe` any more; physical
-devices keep `uninstall`.
+lease. The warm pool keeps ready copies, as it keeps devices today. Quarantine
+destroys a virtual device and never reclaims it; a driver's `reclaim` is
+for physical devices only (`uninstall`).
 
 The copy goes through one filesystem port verb, `copyTree(from, to)`,
 whose one adapter runs `cp`: `cp -c -p -R` on macOS (clonefile, measured
@@ -165,8 +179,12 @@ device's platform, model, OS, mode and image tag, a version that starts at
 1, the note, its size and when it was saved.
 
 Saving under an existing name replaces it: the version goes up, new
-devices copy the new source, devices already made keep running, and the old
-source is destroyed once no device made from it remains. There is no
+devices copy the new source, leased devices of an older version keep
+running, idle ones are destroyed at once, and the old source is destroyed
+once no device record of its version remains (checked on every device
+deletion, whatever path deleted it). A request is matched to a baseline's
+current version when a device is provisioned or granted for it, so a
+request that waits through a replace gets the new version. There is no
 rollback. `baseline.remove` is refused while a lease holds a device made
 from it; otherwise it destroys the source and every idle device made from
 it. Only the operator or nuke removes a baseline; idle cleanup never does.
@@ -183,7 +201,9 @@ unset, a name matches only that name. A request naming a baseline takes the
 baseline's model, OS, mode and image tag; a request whose platform, model,
 OS, mode or image tag differs from the baseline's fails at once
 (`BASELINE_MISMATCH`), and an unknown name fails at once
-(`UNKNOWN_BASELINE`). A device of an older version than the baseline's
+(`UNKNOWN_BASELINE`). The checks run in that order: unknown, mismatch,
+stale. One function decides a mismatch, and the worker and the gateway both
+call it. A device of an older version than the baseline's
 current one is never granted. A grant and `lease.granted` carry the
 baseline name and version. agent-device does not send a baseline yet; that
 is a later change on both sides.
@@ -193,16 +213,16 @@ devices warm with no configuration.
 
 ### 6. A gateway routes by the baselines a worker holds
 
-A worker's view carries its baselines (the `baseline.list` entry). A
-routing stage `has-baseline` follows `can-serve`. A request naming a
-baseline that no worker holds fails at once with `UNKNOWN_BASELINE`; one
-that workers hold only as stale fails at once with `BASELINE_STALE`; one
-whose every fresh holder's baseline differs from the request fails at once
-with `BASELINE_MISMATCH`. A worker that answers one of these three is left
+A worker's view carries its baselines (the `baseline.list` entry). For a
+request naming a baseline, the gateway first narrows the candidates to the
+workers that hold it and answers at once, in the worker's order: no holder,
+`UNKNOWN_BASELINE`; every holder's baseline differs from the request,
+`BASELINE_MISMATCH`; every holder's is stale, `BASELINE_STALE`. Today's
+checks then run on the holders. A worker that answers one of these three is left
 out and the next is tried, as for `UNKNOWN_MODEL`. A warm
 hit also needs the baseline to match. `baseline.save` on a gateway goes to
-the worker of the lease; `baseline.remove` on a gateway takes a `worker`
-and goes to it; `baseline.list` on a gateway lists every worker's
+the worker of the lease; `baseline.remove` on a gateway takes a `workerId`
+(stripped before it is forwarded) and goes to that worker; `baseline.list` on a gateway lists every worker's
 baselines, each with its worker.
 
 ## Consequences
