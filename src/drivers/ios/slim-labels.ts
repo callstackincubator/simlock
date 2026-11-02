@@ -317,6 +317,32 @@ export function resolveSlimCategories(requested: readonly string[] | undefined):
   return { categories, unknown };
 }
 
+/**
+ * why: Labels simslim never disables (ADR 0060 §1). A device slimmed under an older list gets them
+ * back, because they are written `false` whatever the configured categories say.
+ */
+export const NEVER_DISABLE_LABELS: readonly string[] = [
+  "com.apple.assistantd",
+  "com.apple.gamed",
+  "com.apple.sharingd",
+];
+
+/**
+ * why: Every managed label (all categories plus the never-disable labels) mapped to what the overrides
+ * file must say: `true` (off) for a label of a configured category, `false` for the rest.
+ */
+export function overridesFor(categories: readonly SlimCategory[]): ReadonlyMap<string, boolean> {
+  const wanted = new Map<string, boolean>();
+  for (const category of SLIM_CATEGORIES) {
+    for (const label of category.labels) wanted.set(label, false);
+  }
+  for (const label of NEVER_DISABLE_LABELS) wanted.set(label, false);
+  for (const label of labelsFor(categories)) {
+    if (!NEVER_DISABLE_LABELS.includes(label)) wanted.set(label, true);
+  }
+  return wanted;
+}
+
 /** Deduplicated, deterministically sorted labels across the given categories. */
 export function labelsFor(categories: readonly SlimCategory[]): readonly string[] {
   const labels = new Set<string>();

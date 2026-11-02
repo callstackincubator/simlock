@@ -63,7 +63,8 @@ import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { createIosScreenCapture } from "./screen-capture.js";
-import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 const COMMAND_TIMEOUT_MS = 30_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
@@ -154,35 +155,17 @@ const RECLAIM_INSTEAD =
 // boot, a second one for the post-slim reboot, plus headroom for the chunked `simctl spawn` calls
 // (a handful of ~60s-capped chunks that in practice finish in a few seconds each).
 const SLIM_BOOT_ESTIMATE_MS = 150_000;
-// why: simslim batches ~170 individual `launchctl disable` calls into shell loops rather than one
-// `simctl spawn` per label -- at ~150ms/spawn that is well over half a minute of pure process
-// overhead per full slim, which would swamp the boot budget above. 50 labels/chunk keeps each
-// chunk's own script small (and its timeout comfortably generous) while still cutting spawn count
-// by ~50x versus one-label-per-call.
-const SLIM_CHUNK_SIZE = 50;
-// why: A chunk of 50 `launchctl disable` calls inside a simulator is not instant -- COMMAND_TIMEOUT_MS
-// (30s) has been observed to be tight for this under load, so slim chunks get their own, more
-// generous budget instead of reusing it.
-const SLIM_CHUNK_TIMEOUT_MS = 60_000;
-const SLIM_FAILED_MARKER = "simlock-slim-failed";
-const SLIM_SCRIPT_PRELUDE = '[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT";';
-// why: Built from `SLIM_FAILED_MARKER` (rather than a second hardcoded literal) so a change to the
-// constant can never silently desync the script that emits the marker from the parser that reads
-// it back -- see `#applySlimLabels`.
-const SLIM_FAILED_MARKER_PATTERN = new RegExp(`^${SLIM_FAILED_MARKER} (\\S+)$`);
-// why: Slim labels are compile-time constants from our own data file (`slim-labels.ts`), so this can
-// never actually reject anything in production -- it exists purely as a second line of defense:
-// if that data file ever grew a label containing shell metacharacters, this stops it from
-// escaping the generated `sh -c` script instead of silently trusting the data.
-const SLIM_LABEL_SAFE_PATTERN = /^[A-Za-z0-9._-]+$/;
+// why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
+const READBACK_TIMEOUT_MS = 120_000;
+const OVERRIDES_FILE_NAME = "disabled.plist";
+const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
+const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
 
 interface IosDriverData {
   readonly deviceTypeId: string;
   readonly name: string;
   readonly runtimeId: string;
   readonly udid: string;
-  readonly slimSignature?: string;
-  readonly slimMarkToken?: string;
 }
 
 export interface SlimmedFact {
@@ -237,13 +220,15 @@ export interface IosSimctlDriverOptions {
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
 
-type SlimApplyOutcome =
+type SlimWrite =
+  | { readonly kind: "no-categories"; readonly detail: string }
   | {
-      readonly kind: "applied";
-      readonly rejectedLabels: readonly string[];
-      readonly unattemptedLabels: readonly string[];
-    }
-  | { readonly kind: "failed"; readonly detail: string };
+      readonly kind: "written";
+      readonly resolved: ReturnType<typeof resolveSlimCategories>;
+      readonly wanted: ReadonlyMap<string, boolean>;
+      readonly startedAt: number;
+      readonly writeError: string | undefined;
+    };
 
 const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new Map([
   ["iPhone", "phone"],
@@ -306,6 +291,7 @@ export class IosSimctlDriver implements Driver {
   readonly #deviceRoot: string;
   readonly #instanceId: string;
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
+  readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
 
@@ -333,6 +319,7 @@ export class IosSimctlDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#instanceId = options.instanceId;
     this.#rootOptions = rootOptions;
+    this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
     this.screenCapture =
@@ -797,6 +784,8 @@ export class IosSimctlDriver implements Driver {
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
     const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
+    const write =
+      plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
 
@@ -808,11 +797,14 @@ export class IosSimctlDriver implements Driver {
       });
     }
 
-    if (plan.kind !== "apply") {
+    if (write === undefined) {
       return this.#asIs(device, data, "full");
     }
+    if (write.kind === "no-categories") {
+      return this.#skipApply(device, data, write.detail, "full");
+    }
 
-    return this.#applySlimAndReboot(device, data, plan.slim, bootstatusTimeoutMs);
+    return this.#readBack(device, data, write);
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
@@ -863,109 +855,92 @@ export class IosSimctlDriver implements Driver {
     return false;
   }
 
-  async #applySlimAndReboot(
-    device: DriverDevice,
-    data: IosDriverData,
-    slim: SlimOptions,
-    bootstatusTimeoutMs: number,
-  ): Promise<DriverDevice> {
+  async #writeOverrides(udid: string, slim: SlimOptions): Promise<SlimWrite> {
     const resolved = resolveSlimCategories(slim.categories);
     if (resolved.categories.length === 0) {
-      return this.#skipApply(
-        device,
-        data,
-        `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
-        "full",
-      );
+      return {
+        detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
+        kind: "no-categories",
+      };
     }
 
-    const signature = slimSignature(resolved.categories);
-    const idempotence = await this.#checkAlreadySlimmed(data, signature);
-    if (idempotence.alreadySlimmed) {
-      return this.#asIs(device, data, "slim");
-    }
-
-    const labels = labelsFor(resolved.categories);
     const startedAt = this.#clock.now();
-    const applyOutcome = await this.#applySlimLabels(data.udid, labels);
-    if (applyOutcome.kind === "failed") {
-      return this.#skipApply(device, data, applyOutcome.detail, "full");
-    }
-
-    // why: The reboot below is what makes the disable entries take effect; never write the
-    // idempotence marker or report `device.slimmed` on a device that hasn't actually rebooted
-    // with them applied. `makeReady`'s own contract ("a failed or skipped slim never fails the
-    // lease") holds here too: a hiccup here must downgrade to the skip path rather than fail a
-    // lease that would otherwise have worked -- but the shutdown call's own outcome is never a
-    // reliable signal of what the device is actually doing (see below), so it is captured, not
-    // acted on directly.
-    let shutdownError: unknown;
+    const wanted = overridesFor(resolved.categories);
+    let writeError: string | undefined;
     try {
-      await this.#shutdown(data.udid);
+      const folder = this.#overridesFolder(udid);
+      const file = join(folder, OVERRIDES_FILE_NAME);
+      const existing = await this.#readOverrides(file);
+      const merged = new Map([...existing, ...wanted]);
+      if (!sameEntries(existing, merged)) {
+        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+        await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
+      }
     } catch (error: unknown) {
-      shutdownError = error;
-    }
-    // why: Always re-establish a known-good running device, whether or not the shutdown above actually
-    // completed. `#shutdown` throws on a *timeout* of `simctl shutdown`, which is exactly the
-    // moment the shutdown is most likely to still be in progress or to have already finished --
-    // there is no reliable way to tell which from the exception alone, so this stops guessing:
-    // `boot` already tolerates an already-booted device, so the boot below reaches a known-good
-    // running device either way. A genuine inability to get it running again propagates as
-    // `BootTimeoutError` / `DriverCrashError`, as it should -- that case really does mean the
-    // device is left shut down, not "ready" as returning it would falsely claim.
-    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
-
-    if (shutdownError !== undefined) {
-      // why: The shutdown call itself failed, so whether the labels' reboot actually took effect is
-      // unknown -- this is an uncertain apply, not a confirmed one. Never write the idempotence
-      // marker on it (same reasoning as the partial-apply case below), and report "slim" (not
-      // "full") under that uncertainty: telling a caller a device is slim when it is not is
-      // benign -- it just avoids features it could have used -- while telling it a device is full
-      // when it is not makes push / Spotlight / StoreKit fail with no explanation, exactly the
-      // confusion the `slim` flag exists to prevent.
-      return this.#skipApply(
-        device,
-        data,
-        `slim shutdown failed: ${errorMessage(shutdownError)}`,
-        "slim",
-      );
+      writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
-    if (applyOutcome.unattemptedLabels.length > 0) {
-      // why: Partial apply: at least one chunk failed to run outright, so those labels were never even
-      // attempted. The reboot above already happened -- the labels that did apply are worth
-      // keeping -- but the idempotence marker must NOT be written: writing it here would
-      // permanently mark this device "slim" (see `#checkAlreadySlimmed`) even though part of the
-      // disable list never took effect, and every later boot would then trust the marker and
-      // never retry the labels that were never attempted, with no way back short of
-      // `reclaim`/`erase`. So a partial apply deliberately costs a re-attempt of the *whole*
-      // label set on the next `makeReady` instead -- applying an already-disabled label again is
-      // harmless (same comment on `#checkAlreadySlimmed`). "slim" because the labels that did
-      // apply really are gone.
-      return this.#skipApply(
-        device,
-        data,
-        `${String(applyOutcome.unattemptedLabels.length)} of ${String(labels.length)} labels were never attempted (a chunk failed to run)`,
-        "slim",
-      );
-    }
+    return { kind: "written", resolved, startedAt, wanted, writeError };
+  }
 
-    // why: Every chunk ran (individual labels may still have been rejected by the script itself, or
-    // filtered by `sanitizeSlimLabels` -- `rejectedLabels`, which is permanent, ADR point 8's
-    // "log and continue" case). That is not grounds to withhold the marker: doing so would make a
-    // runtime with one permanently-unknown daemon re-apply the whole label set on every boot,
-    // forever, and never converge. The rejected labels travel in `SlimmedFact.unknownLabels`
-    // instead.
-    return this.#commitSlim(
-      device,
-      data,
-      resolved,
-      labels,
-      signature,
-      idempotence.currentToken,
-      startedAt,
-      applyOutcome,
+  async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
+    if (!(await this.#filesystem.exists(file))) return new Map();
+    const parsed = parseOverridesPlist(await this.#filesystem.readFile(file));
+    if (parsed === undefined)
+      throw new Error("the existing file is not a property list dictionary");
+    return parsed;
+  }
+
+  #overridesFolder(udid: string): string {
+    return join(this.#overridesRoot, `${OVERRIDES_FOLDER_PREFIX}${udid}`);
+  }
+
+  async #readBack(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): Promise<DriverDevice> {
+    const outcome = await this.#invokeSimctl(
+      ["spawn", data.udid, "launchctl", "print-disabled", "system"],
+      READBACK_TIMEOUT_MS,
     );
+    const details = write.writeError === undefined ? [] : [write.writeError];
+
+    if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+      const reason =
+        outcome.kind === "timed-out"
+          ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
+          : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
+      details.push(`could not read back the launchd overrides: ${reason}`);
+      return this.#skipApply(device, data, details.join("; "), "slim");
+    }
+
+    const read = parsePrintDisabled(outcome.result.stdout);
+    const mismatched = [...write.wanted.keys()]
+      .sort()
+      .filter((label) => (read.get(label) ?? false) !== write.wanted.get(label));
+    if (mismatched.length > 0) {
+      details.push(
+        `${String(mismatched.length)} of ${String(write.wanted.size)} managed labels did not read back as written at boot; first: ${mismatched[0] ?? ""}`,
+      );
+      return this.#skipApply(device, data, details.join("; "), "full");
+    }
+    if (details.length > 0) {
+      return this.#skipApply(device, data, details.join("; "), "slim");
+    }
+
+    const labelCount = [...write.wanted.values()].filter(Boolean).length;
+    this.#onSlimmed?.({
+      address: data.udid,
+      categories: write.resolved.categories.map((category) => category.name),
+      deviceId: device.deviceId,
+      durationMs: this.#clock.now() - write.startedAt,
+      labelCount,
+      signature: slimSignature(write.resolved.categories),
+      unknownLabels: [...write.resolved.unknown],
+    });
+
+    return this.#asIs(device, data, "slim");
   }
 
   #skipApply(
@@ -976,118 +951,6 @@ export class IosSimctlDriver implements Driver {
   ): DriverDevice {
     this.#onSlimSkipped?.({ deviceId: device.deviceId, detail, reason: "apply-failed" });
     return this.#asIs(device, data, mode);
-  }
-
-  async #checkAlreadySlimmed(
-    data: IosDriverData,
-    signature: string,
-  ): Promise<{ readonly alreadySlimmed: boolean; readonly currentToken: string | undefined }> {
-    // why: Derived from the owned device set rather than looked up, so unlike the pre-ADR-0001
-    // `simctl list` path it can never come back undefined -- only the token read can.
-    const currentToken = await this.#readToken(join(this.#dataPathFor(data.udid), MARK_FILE_NAME));
-
-    const alreadySlimmed =
-      data.slimSignature !== undefined &&
-      currentToken !== undefined &&
-      data.slimMarkToken !== undefined &&
-      data.slimSignature === signature &&
-      data.slimMarkToken === currentToken;
-
-    return { alreadySlimmed, currentToken };
-  }
-
-  #commitSlim(
-    device: DriverDevice,
-    data: IosDriverData,
-    resolved: ReturnType<typeof resolveSlimCategories>,
-    labels: readonly string[],
-    signature: string,
-    currentToken: string | undefined,
-    startedAt: number,
-    applyOutcome: Extract<SlimApplyOutcome, { readonly kind: "applied" }>,
-  ): DriverDevice {
-    const newDriverData: Record<string, unknown> = {
-      ...(isRecord(device.driverData) ? device.driverData : {}),
-      slimSignature: signature,
-      // why: `currentToken` was read from the erasable mark *before* this reboot -- a reboot alone
-      // never touches the mark (only `provision`/`reclaim` rewrite it), so re-reading afterward
-      // would just repeat the same value at the cost of another filesystem round trip.
-      ...(currentToken === undefined ? {} : { slimMarkToken: currentToken }),
-    };
-
-    this.#onSlimmed?.({
-      address: data.udid,
-      categories: resolved.categories.map((category) => category.name),
-      deviceId: device.deviceId,
-      durationMs: this.#clock.now() - startedAt,
-      labelCount: labels.length,
-      signature,
-      unknownLabels: [...resolved.unknown, ...applyOutcome.rejectedLabels],
-    });
-
-    return {
-      address: data.udid,
-      deviceId: device.deviceId,
-      driverData: newDriverData,
-      mode: "slim",
-    };
-  }
-
-  async #applySlimLabels(udid: string, labels: readonly string[]): Promise<SlimApplyOutcome> {
-    const { safe, rejected } = sanitizeSlimLabels(labels);
-    if (safe.length === 0) {
-      return { detail: "no labels passed the shell-safety filter", kind: "failed" };
-    }
-
-    const chunks = chunk(safe, SLIM_CHUNK_SIZE);
-    // why: `sanitizeSlimLabels`-filtered labels never reached any chunk, so they were rejected the
-    // same way an individual `simlock-slim-failed` line is -- not merely "unattempted" (that's
-    // reserved for a whole chunk that failed to run).
-    const rejectedLabels: string[] = [...rejected];
-    const unattemptedLabels: string[] = [];
-    let anyChunkSucceeded = false;
-    // why: Why the most recent failed chunk failed, so a skip that drops the whole slim pass says
-    // what simctl actually reported rather than only that something went wrong.
-    let lastChunkFailure = "";
-
-    for (const chunkLabels of chunks) {
-      // why: `DYLD_ROOT_PATH` is what makes a bare `launchctl` inside the simulator load the
-      // *simulator's* dyld shared cache; `simctl spawn` sets it for the process it starts, but
-      // dyld strips `DYLD_*` from the environment of a platform binary such as `/bin/sh`, so
-      // every child `launchctl` the script runs would otherwise die with an abort trap
-      // (verified on iOS 26.4 and 27.0 simulators). Re-exporting it from `SIMULATOR_ROOT`
-      // (which survives) is exactly what simslim's own batch script does first.
-      const script =
-        `${SLIM_SCRIPT_PRELUDE} for l in ${chunkLabels.join(" ")}; do launchctl disable "system/$l" ` +
-        `>/dev/null 2>&1 || echo "${SLIM_FAILED_MARKER} $l"; done`;
-      const outcome = await this.#invokeSimctl(
-        ["spawn", udid, "/bin/sh", "-c", script],
-        SLIM_CHUNK_TIMEOUT_MS,
-      );
-
-      if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-        unattemptedLabels.push(...chunkLabels);
-        lastChunkFailure = describeFailedChunk(outcome);
-        continue;
-      }
-
-      anyChunkSucceeded = true;
-      for (const line of outcome.result.stdout.split("\n")) {
-        const match = SLIM_FAILED_MARKER_PATTERN.exec(line.trim());
-        if (match?.[1] !== undefined) {
-          rejectedLabels.push(match[1]);
-        }
-      }
-    }
-
-    if (!anyChunkSucceeded) {
-      return {
-        detail: `all ${String(chunks.length)} chunk(s) failed to run; last: ${lastChunkFailure}`,
-        kind: "failed",
-      };
-    }
-
-    return { kind: "applied", rejectedLabels, unattemptedLabels };
   }
 
   async reclaim(
@@ -2327,31 +2190,8 @@ function planSlimBoot(
   return { bootstatusTimeoutMs: slim.bootTimeoutMs, plan: { kind: "apply", slim } };
 }
 
-export function sanitizeSlimLabels(labels: readonly string[]): {
-  readonly safe: readonly string[];
-  readonly rejected: readonly string[];
-} {
-  const safe: string[] = [];
-  const rejected: string[] = [];
-  for (const label of labels) {
-    (SLIM_LABEL_SAFE_PATTERN.test(label) ? safe : rejected).push(label);
-  }
-  return { rejected, safe };
-}
-
-function describeFailedChunk(outcome: ProcessOutcome): string {
-  if (outcome.kind === "timed-out") {
-    return `timed out after ${String(SLIM_CHUNK_TIMEOUT_MS)}ms`;
-  }
-  return `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
-}
-
-function chunk<T>(items: readonly T[], size: number): readonly (readonly T[])[] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
+function sameEntries(a: ReadonlyMap<string, boolean>, b: ReadonlyMap<string, boolean>): boolean {
+  return a.size === b.size && [...a].every(([label, disabled]) => b.get(label) === disabled);
 }
 
 function alreadyShutdown(stderr: string): boolean {
