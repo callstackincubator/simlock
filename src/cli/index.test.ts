@@ -10957,3 +10957,99 @@ describe("simlock rotate", () => {
     expect(listing.stdout).toContain("  rotate <orientation> [--lease <id>]");
   });
 });
+
+describe("CLI text output escapes control characters in remote text", () => {
+  const NOW = Date.parse("2026-10-05T12:00:00.000Z");
+  type View = Awaited<ReturnType<SimlockAdminClient["listWorkers"]>>["workers"][number];
+  const worker = (overrides: Partial<View> = {}): View => ({
+    connection: "connected",
+    drained: false,
+    id: "3f81a2c4",
+    lastSeenAt: 1_000,
+    version: "0.3.0",
+    ...overrides,
+  });
+  const failure = (message: string) =>
+    ({ at: 2_000, from: "0.3.0", message, stage: "installing", to: "0.4.0" }) as const;
+
+  it.each([
+    ["ESC", "\u001b", "\\u001b"],
+    ["BEL", "\u0007", "\\u0007"],
+    ["CR", "\r", "\\u000d"],
+    ["NUL", "\u0000", "\\u0000"],
+    ["C1 CSI", "\u009b", "\\u009b"],
+  ])(
+    "simlock stats, worker list, worker update and device add print %s in remote text escaped",
+    async (_name, raw, escaped) => {
+      const text = `a${raw}b`;
+      const shown = `a${escaped}b`;
+      const run = async (argv: readonly string[], client: Partial<SimlockAdminClient>) => {
+        const output = outputCapture();
+        const code = await runCli(
+          [...argv],
+          output.environmentWith({
+            clock: new FakeClock(NOW),
+            connectAdmin: async () => fakeClient(client),
+            sleep: async () => undefined,
+          }),
+        );
+        return { code, stdout: output.stdout };
+      };
+      const updateAnswer = (version: string) =>
+        ({
+          health: "running",
+          lastUpdateFailure: null,
+          latestVersion: "0.4.0",
+          resolved: "0.4.0",
+          started: true,
+          update: {
+            forced: false,
+            from: version,
+            stage: "installing",
+            startedAt: 1_000,
+            to: "0.4.0",
+          },
+          upToDate: false,
+          version,
+          workerId: "3f81a2c4",
+        }) as Awaited<ReturnType<SimlockAdminClient["updateWorker"]>>;
+
+      const stats = await run(["stats"], {
+        usage: async (window) =>
+          usageAnswer(window, {
+            requesters: [{ id: text, granted: 0, heldTotalMs: 0, rejected: 0, requests: 1 }],
+          }),
+      });
+      const list = await run(["worker", "list"], {
+        listWorkers: async () => ({ workers: [worker({ version: text })] }),
+      });
+      const detached = await run(["worker", "update", "3f81a2c4", "--detach"], {
+        listWorkers: async () => ({ workers: [worker()] }),
+        updateWorker: async () => updateAnswer(text),
+      });
+      const failed = await run(["worker", "update", "3f81a2c4"], {
+        listWorkers: async () => ({
+          workers: [worker({ lastUpdateFailure: failure(text), update: null })],
+        }),
+        updateWorker: async () => updateAnswer("0.3.0"),
+      });
+      const enrolled = await run(["device", "add", "--platform", "android", "SER-1"], {
+        addDevice: async () => ({
+          appCount: 0,
+          class: "phone",
+          driverDeviceId: "SER-1",
+          id: "dev_1",
+          model: text,
+          osVersion: text,
+          platform: "android",
+          reenrolled: false,
+        }),
+      });
+
+      for (const [name, result] of Object.entries({ stats, list, detached, failed, enrolled })) {
+        expect({ name, raw: result.stdout.includes(raw) }).toEqual({ name, raw: false });
+        expect({ name, shown: result.stdout.includes(shown) }).toEqual({ name, shown: true });
+      }
+    },
+  );
+});
