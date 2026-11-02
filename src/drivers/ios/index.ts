@@ -291,6 +291,7 @@ export class IosSimctlDriver implements Driver {
   readonly #deviceRoot: string;
   readonly #instanceId: string;
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
+  readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #slimByDefault: boolean;
@@ -319,6 +320,7 @@ export class IosSimctlDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#instanceId = options.instanceId;
     this.#rootOptions = rootOptions;
+    this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
     this.#slimByDefault = options.slimByDefault === true;
@@ -981,6 +983,19 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+    await this.#removeOverrides(data.udid);
+  }
+
+  // why: simctl delete leaves the folder behind; a failed removal must not fail a destroy that
+  // already deleted the simulator.
+  async #removeOverrides(udid: string): Promise<void> {
+    try {
+      await this.#filesystem.rm(this.#overridesFolder(udid));
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not remove the launchd overrides folder of ${udid}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
@@ -1015,6 +1030,7 @@ export class IosSimctlDriver implements Driver {
     // why: Best effort: a device that is already shut down reports a failure unrelated to the delete.
     await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
     await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
+    await this.#removeOverrides(udid);
   }
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
