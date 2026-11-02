@@ -56,6 +56,7 @@ export const DEFAULT_LEASE_MAX_REQUEST_RECORDS = 10_000;
 
 const DEFAULT_DISCONNECTED_RETENTION_MS = 24 * 60 * 60_000;
 
+// why: one minute more than the worker's ten-minute `exec.timeoutMs`, so the worker's timeout fires first.
 const DEFAULT_GATEWAY_EXEC_TIMEOUT_MS = 11 * 60_000;
 
 const DEFAULT_LEASE_REQUEST_TIMEOUT_MS = 5 * 60_000;
