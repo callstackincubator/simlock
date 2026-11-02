@@ -5035,6 +5035,28 @@ describe("startDaemon worker lock", () => {
     });
   });
 
+  it("a worker that wins the socket claim while a live pid in another folder holds the lock fails its start with the refusal message", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    const filesystem = await filesystemWithLockHeldBy({ folder: dataDirectory, pid: 4242 });
+    const ownerFile = join(LOCK_PATH, "owner.json");
+    const reads: string[] = [];
+    // why: the other worker takes the lock over between this worker's take and its check after the claim, which a start cannot be made to wait for.
+    const readFile = filesystem.readFile.bind(filesystem);
+    filesystem.readFile = async (path: string) => {
+      if (path === ownerFile) reads.push(path);
+      return path === ownerFile && reads.length > 1
+        ? JSON.stringify({ folder: OTHER_FOLDER, pid: 4242, startedAt: "t0" })
+        : readFile(path);
+    };
+
+    await expect(
+      startWithRealDrivers(filesystem, [4242], new ScriptedProcessRunner([]), dataDirectory),
+    ).rejects.toThrow(
+      `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since t0)`,
+    );
+  });
+
   it("a gateway never takes the worker lock, even when it is held", async () => {
     const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
     vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
