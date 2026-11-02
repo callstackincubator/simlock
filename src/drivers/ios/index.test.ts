@@ -5113,6 +5113,32 @@ describe("IosSimctlDriver device set", () => {
         },
       ],
       [
+        "default with a seed in the sources set Simlock's own set held",
+        { deviceSet: "default" },
+        async (fs) => {
+          await fs.mkdirp(`${ownRoot}/sources/${third}`);
+          await fs.mkdirp(`${ownRoot}/${first}`);
+          await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
+        },
+        {
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`.`,
+          path: ownRoot,
+          reason: "device-set-changed",
+        },
+      ],
+      [
+        "simlock with a seed in the sources set deviceSet default used",
+        { deviceSet: "simlock" },
+        async (fs) => {
+          await fs.mkdirp(`${ownRoot}-sources/${second}`);
+        },
+        {
+          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`.`,
+          path: `${ownRoot}-sources`,
+          reason: "device-set-changed",
+        },
+      ],
+      [
         "default with Simlock's set empty",
         { deviceSet: "default" },
         async (fs) => {
