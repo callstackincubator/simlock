@@ -736,6 +736,20 @@ describe("usage projection: minute rows", () => {
     await r.history.stop();
   });
 
+  it("a relayed worker event stamped after the gateway's clock is recorded at the gateway's clock, so a later gateway step on * lands in its own minute", async () => {
+    const r = await rig({ fleet: true });
+    const YEAR = 365 * DAY;
+    r.relay("w1", "capacity.changed", capacity({ global: [1, 0, 4] }), T0 + YEAR);
+    r.at(T0 + 10_000);
+    r.emit("queue.changed", { depth: 7 });
+
+    const star = (from: number) =>
+      buckets(r, { from, platform: "all", to: from + MIN, workerId: "*" });
+    expect(figure((await star(T0))[0], "queueDepth")?.peak).toBe(7);
+    expect(await star(T0 + YEAR)).toEqual([]);
+    await r.history.stop();
+  });
+
   it("a worker that reconnects after worker.disconnected counts its held leases in the * row again", async () => {
     const r = await rig({ fleet: true });
     r.relay("w1", "capacity.changed", capacity({ global: [1, 0, 4], ios: [1, 0, 2] }), T0);
