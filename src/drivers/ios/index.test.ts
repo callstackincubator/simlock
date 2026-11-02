@@ -1122,8 +1122,8 @@ describe("IosSimctlDriver", () => {
     ]);
     expect(database.prepare("SELECT udid, state FROM ios_source_data ORDER BY udid").all()).toEqual(
       [
-        { state: "ready", udid: ready },
         { state: "making", udid: stuck },
+        { state: "ready", udid: ready },
       ],
     );
   });
