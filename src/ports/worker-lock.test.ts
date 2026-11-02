@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  defaultWorkerLockPath,
   FakeProcessSupervisor,
   NodeFilesystem,
   NodeWorkerLock,
@@ -39,6 +40,16 @@ function adapter(path: string, livePids: readonly number[] = [], uid = process.g
     uid,
   });
 }
+
+describe("defaultWorkerLockPath", () => {
+  it.each([
+    { platform: "darwin", expected: "/tmp/simlock-501/worker.lock" },
+    { platform: "linux", expected: "/tmp/simlock-501/worker.lock" },
+    { platform: "win32", expected: "C:\\Temp\\simlock\\worker.lock" },
+  ] as const)("is $expected on $platform", ({ expected, platform }) => {
+    expect(defaultWorkerLockPath(platform, 501, "C:\\Temp")).toBe(expected);
+  });
+});
 
 describe("NodeWorkerLock", () => {
   it.each([

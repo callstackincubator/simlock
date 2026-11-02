@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defaultWorkerLockPath } from "./ports/index.js";
+
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "slow-e2e.sh");
 const PINNED = "0.21.28";
 
@@ -41,6 +43,7 @@ function machine() {
     SIMLOCK_SLOW_LOCK: join(dir, "lane.lock"),
     SIMLOCK_SLOW_TMP: join(dir, "lane"),
     SIMLOCK_SLOW_MIN_FREE_GIB: "0",
+    SIMLOCK_SLOW_WORKER_LOCK: join(dir, "worker.lock"),
     SIMLOCK_E2E_AGENT_DEVICE: "",
   };
   const run = (...args: string[]) =>
@@ -239,5 +242,16 @@ describe("scripts/slow-e2e.sh", () => {
 
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
+  });
+
+  it("the default worker lock path in the script is the one the daemon takes for the current user", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const uid = process.getuid?.() ?? 0;
+
+    const text = /SIMLOCK_SLOW_WORKER_LOCK:-([^}]+)\}/.exec(script)?.[1];
+
+    expect(text?.replace("$(id -u)", String(uid))).toBe(
+      defaultWorkerLockPath("linux", uid, tmpdir()),
+    );
   });
 });
