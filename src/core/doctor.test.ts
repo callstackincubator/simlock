@@ -92,6 +92,10 @@ describe("Doctor", () => {
     const eventBus = new EventBus(clock);
     const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
     const driver = new FakeDriver({ clock, platform: "ios" });
+    const androidDriver = new FakeDriver({ clock, platform: "android" });
+    androidDriver.setSources([
+      { id: "a1", kind: "seed", model: "Pixel 9", osVersion: "35", sizeBytes: 2 },
+    ]);
     driver.setSources([
       { id: "s1", kind: "seed", model: "iPhone 17", osVersion: "27.0", sizeBytes: 4_000_000_000 },
       { id: "s2", kind: "seed", model: "iPad", osVersion: "27.0" },
@@ -109,7 +113,7 @@ describe("Doctor", () => {
       decisions: new SerializedDecision(),
       clock,
       config: config(),
-      drivers: [driver],
+      drivers: [driver, androidDriver],
       eventBus,
       registry,
     }).reconcile();
@@ -132,6 +136,35 @@ describe("Doctor", () => {
         sizeBytes: 1,
         staleReason: "its runtime was removed",
       },
+      { kind: "seed", model: "Pixel 9", osVersion: "35", platform: "android", sizeBytes: 2 },
+    ]);
+  });
+
+  it("lists no sources for a driver whose listSources fails, still returns the report, and keeps the sources of the drivers that answer", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const failing = new FakeDriver({ clock, platform: "ios" });
+    failing.failOn("listSources", 1, new Error("simctl is gone"));
+    failing.setSources([{ id: "x", kind: "seed", model: "Hidden", osVersion: "1" }]);
+    const ios = new FakeDriver({ clock, platform: "ios" });
+    ios.setSources([{ id: "i1", kind: "seed", model: "iPhone 17", osVersion: "27.0" }]);
+    const android = new FakeDriver({ clock, platform: "android" });
+    android.setSources([{ id: "a1", kind: "seed", model: "Pixel 9", osVersion: "35" }]);
+
+    const report = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [failing, ios, android],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings).toEqual([]);
+    expect(report.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+      { kind: "seed", model: "Pixel 9", osVersion: "35", platform: "android" },
     ]);
   });
 
