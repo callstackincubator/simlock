@@ -5151,7 +5151,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },
@@ -5165,7 +5165,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
           path: ownRoot,
           reason: "device-set-changed",
         },

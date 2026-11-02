@@ -24,7 +24,7 @@ export async function refuseOwnSetLeftovers(filesystem: Filesystem, root: string
   if (udids.length === 0) return;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`.`,
+    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(root, "sources")} delete <udid>\`.`,
     "device-set-changed",
     root,
     "ios",
