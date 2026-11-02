@@ -5,7 +5,8 @@
 - **Issue:** [#327](https://github.com/callstackincubator/simlock/issues/327) (request [#1049](https://github.com/callstackincubator/simlock/issues/1049), points 1 and 4)
 - **Supersedes:** nothing. Narrows [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md)
   §4 ("Reclaim still erases"): an iOS reclaim deletes and clones instead.
-  Narrows [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §6
+  Narrows the `lease.identity` setting: every virtual device is spent after
+  one lease. Narrows [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §6
   and [ADR 0015](0015-a-lease-request-is-a-set-of-constraints.md) §6–7:
   the baseline is one more pool-identity key beside the mode and image
   tag. Narrows [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md)
@@ -78,30 +79,61 @@ A **source** is a device that has booted at least once, was shut down
 cleanly, and is never leased, booted or erased again. Every virtual device
 Simlock makes is a copy of one source. There are two kinds:
 
-- A **seed**: made by Simlock for plain leases, one per platform, model,
-  OS and image tag (the spec without the mode, since iOS slim is written
-  before each boot by ADR 0060 and Android has no slim). It is made on the
-  first provision that needs it: create, one cold boot to ready, clean
-  shutdown. It is internal: no command lists or names it.
+- A **seed**: made by the driver for plain leases, one per platform, model,
+  OS and image tag (the spec without the mode: iOS slim is written before
+  each boot by ADR 0060, and Android has no slim). It is made on the first
+  provision that needs it: create, one cold boot to ready, clean shutdown.
+  No command lists or names it except `doctor`.
 - A **baseline**: saved by an operator from a device they hold, under a
   name (§4).
 
-A source lives under the platform's owned device root (ADR 0001) and has a
-record in `state.db` (owner `sources`, ADR 0036), so doctor, nuke and
-`listManaged` know it and it is never read as an orphan.
+A source lives under the platform's owned device root (ADR 0001), so it is
+inside every ownership proof, and the driver never reports it from
+`listManaged` as a device. Its records follow ADR 0036 §2, with no JSON
+text:
 
-### 2. Making a device is copying a source
+- Each driver keeps its sources in its own table (`ios_source_data`,
+  `android_source_data`), keyed by a source id: the kind, the spec key, the
+  platform's own fields (iOS the UDID; Android the folder and config hash),
+  the size in bytes and the stale reason.
+- Core keeps the baselines in a `baselines` table (owner `baselines`): name,
+  version, platform, model, OS, mode, image tag, note, saved at and the
+  source id. A seed has no core record.
+- New driver verbs: `provision(spec, { source? })` copies the named source,
+  or the spec's seed (made first if missing or stale); `saveSource(device)`
+  makes a source from a shut-down device and returns its id and size;
+  `listSources()` and `destroySource(id)` serve doctor, nuke, baseline
+  removal and component removal.
+
+### 2. Making a device is copying a source; a reset is a new copy
 
 | Step | iOS | Android |
 | ---- | --- | ------- |
-| Copy | `simctl clone <source> simlock-<id>` in the device set; then write both marks (the clone has no root mark and carries the source's `data/` mark); then copy the source's `/private/var/tmp/…SimDevice.<source udid>/disabled.plist`, if any, to the clone's UDID | `mkdir <root>/<id>`; `cp -c -p -R` (reflink where the filesystem has it, else a full copy keeping timestamps) of the source AVD into it under the same AVD name, plus its `.ini` with `path=` rewritten; every command for that device carries `ANDROID_AVD_HOME=<root>/<id>` |
+| Copy | `simctl clone <source> simlock-<id>` in the device set; then write both marks (the clone has no root mark, and its `data/` mark is the source's); then copy the source's `/private/var/tmp/…SimDevice.<source udid>/disabled.plist`, if any, to the clone's UDID | make `<root>/<id>/`, copy the source AVD folder into it under the same AVD name (timestamps kept), copy its `.ini` with `path=` rewritten; every command for that device carries `ANDROID_AVD_HOME=<root>/<id>` |
 | Boot | as today (ADR 0060 writes the slim file first) | `-snapshot simlock_boot -no-snapshot-save`; a snapshot that does not load cold-boots the same disk (the emulator does this itself); never `-wipe-data` |
-| Reclaim | shut down, `simctl delete`, copy again; returns `shutdown` | ownership gate, `emu kill`, delete `<root>/<id>`, copy again, boot; returns `ready` |
+| Release | destroy (ADR 0060 §4 removes its overrides folder); the next lease gets a new copy | destroy (the ownership check, `emu kill`, delete `<root>/<id>/`); the next lease gets a new copy |
 
-`ReclaimResult.strategy` gains `"copy"` for both. `"erase"`, `"snapshot"`
-and `"wipe"` are no longer returned for virtual devices; physical devices
-keep `"uninstall"`. The ownership gate (`emu avd path` names this device's
-own AVD directory) is unchanged: each copy has its own directory.
+Every virtual device is spent after one lease: core's release path destroys
+it, the path `lease.identity: fresh` takes today, and `lease.identity` no
+longer changes anything for virtual devices. A device id lives for one
+lease. The warm pool keeps ready copies, as it keeps devices today. No
+virtual reclaim returns `erase`, `snapshot` or `wipe` any more; physical
+devices keep `uninstall`.
+
+The copy goes through one filesystem port verb, `copyTree(from, to)`,
+whose one adapter runs `cp`: `cp -c -p -R` on macOS (clonefile, measured
+0.05–0.5 s for an AVD), `cp -a --reflink=auto` on Linux (copy-on-write
+where the filesystem has it, else a full copy), and a recursive copy
+keeping modification times elsewhere. Node's own `copyFile` with
+`COPYFILE_FICLONE` did not clone on macOS (measured: 2 GB in 3.6 s, disk
+use doubled), so it is not used. Another adapter can replace this one
+without touching a driver.
+
+Android keys every device by its own AVD folder (`<root>/<id>/<name>.avd`),
+not its AVD name: the per-device lock, the running-emulator lookup and
+`listManaged` use the folder, and `listManaged` maps a serial to a device
+by `emu avd path`, which the ownership check already reads. All copies of
+one source share the AVD name, which is what lets the snapshot load.
 
 An Android source carries one quick-boot snapshot, `simlock_boot`, saved
 after one cold boot of the finished source. The per-AVD
@@ -109,66 +141,75 @@ after one cold boot of the finished source. The per-AVD
 go; the internal word for what is left is "boot snapshot", so "baseline"
 means only §4's.
 
+Devices made before this change have no source. Each is destroyed at its
+next release, as every virtual device now is.
+
 ### 3. A source goes stale; a stale source is never copied
 
 A source is stale when the runtime or system image it was made from is gone
 or changed, or, on Android, when the emulator build changed (the config
-hash of today's driver, kept with the source). A stale seed is deleted and
-made again on the next provision. A stale baseline is kept, marked stale
-with the reason, and a request naming it fails at once
-(`BASELINE_STALE`); it is never replaced by a seed copy.
+hash of today's driver, kept with the source). A stale seed is destroyed
+and made again on the next provision. A stale baseline is kept, marked
+stale with the reason, and a request naming it fails at once
+(`BASELINE_STALE`); it is never replaced by a seed copy. Removing a runtime
+or system image destroys the seeds made from it.
 
 ### 4. A baseline is a named source an operator saves from a held lease
 
 `baseline.save {leaseId, name, note?}` is an admin operation. It ends the
 lease: the device is shut down cleanly (iOS `simctl shutdown`; Android
-`adb shell sync`, `adb shell reboot -p`, then the gate and kill if it has
-not stopped), copied as a source (with its boot snapshot on Android), and
-the leased device goes through its normal reclaim. The baseline carries the
-device's platform, model, OS, mode and image tag, a version that starts
-at 1, the note, its size and when it was saved.
+`adb shell sync`, `adb shell reboot -p`, then the ownership check and
+`emu kill` if it has not stopped), made a source by `saveSource` (with its
+boot snapshot on Android), and destroyed. The baseline carries the
+device's platform, model, OS, mode and image tag, a version that starts at
+1, the note, its size and when it was saved.
 
 Saving under an existing name replaces it: the version goes up, new
 devices copy the new source, devices already made keep running, and the old
-source is deleted once no device made from it remains. There is no
+source is destroyed once no device made from it remains. There is no
 rollback. `baseline.remove` is refused while a lease holds a device made
-from it; otherwise it deletes the source and every idle device made from
-it. Only the operator, nuke or a stale-and-removed path deletes a
-baseline; idle cleanup never does. `baseline.list` shows each baseline's
-name, version, spec, note, size, saved time and stale reason.
+from it; otherwise it destroys the source and every idle device made from
+it. Only the operator or nuke removes a baseline; idle cleanup never does.
+`baseline.list` shows each baseline's name, version, platform, model, OS,
+mode, image tag, note, size, saved time and stale reason.
 
 ### 5. The baseline is a pool key
 
 A device record carries the baseline name and version it was copied from,
-or none. A request carries an optional `baseline` name (CLI `--baseline`,
-`SIMLOCK_BASELINE`, HTTP, MCP, client, agent-device allocate). `fits` and
-`sameSpec` compare it like the image tag: unset matches only unset, a name
-matches only that name. A request naming a baseline takes the baseline's
-model, OS, mode and image tag; a request that names any of them differently
-fails at once (`BASELINE_MISMATCH`), and an unknown name fails at once
+or none. A request carries an optional `baseline` name beside its required
+`platform` (CLI `--baseline`, `SIMLOCK_BASELINE`, HTTP, MCP, the client).
+`fits` and `sameSpec` compare it like the image tag: unset matches only
+unset, a name matches only that name. A request naming a baseline takes the
+baseline's model, OS, mode and image tag; a request whose platform, model,
+OS, mode or image tag differs from the baseline's fails at once
+(`BASELINE_MISMATCH`), and an unknown name fails at once
 (`UNKNOWN_BASELINE`). A device of an older version than the baseline's
-current one is never granted; it is destroyed when idle. A grant and
-`lease.granted` carry the baseline name and version.
+current one is never granted. A grant and `lease.granted` carry the
+baseline name and version. agent-device does not send a baseline yet; that
+is a later change on both sides.
 
 A learned warm kind carries the baseline name, so the pool keeps baseline
 devices warm with no configuration.
 
 ### 6. A gateway routes by the baselines a worker holds
 
-A worker's view carries its baselines' names, versions, specs and stale
-flags. A routing stage `has-baseline` follows `can-serve`; a request
-naming a baseline that no worker holds, fresh, fails at once with
-`UNKNOWN_BASELINE`. A warm hit also needs the baseline to match.
-`baseline.save` on a gateway goes to the worker of the lease; `baseline.remove`
-and `baseline.list` on a gateway take a `worker` and go to it, or list every
-worker's baselines.
+A worker's view carries its baselines (the `baseline.list` entry). A
+routing stage `has-baseline` follows `can-serve`. A request naming a
+baseline that no worker holds fails at once with `UNKNOWN_BASELINE`; one
+that workers hold only as stale fails at once with `BASELINE_STALE`. A warm
+hit also needs the baseline to match. `baseline.save` on a gateway goes to
+the worker of the lease; `baseline.remove` on a gateway takes a `worker`
+and goes to it; `baseline.list` on a gateway lists every worker's
+baselines, each with its worker.
 
 ## Consequences
 
 - Plain leases get faster on both platforms: iOS from ~37–40 s to a clone
-  and a ~7 s boot; Android from a 4–6 s in-place snapshot load to a ~3 s
-  copy and snapshot boot, with no in-place load left to hang (#1047) and no
-  shared hash to invalidate (#1048).
+  and a ~7 s boot; Android from a 4–6 s in-place snapshot load to a copy
+  and a ~4 s snapshot boot, with no in-place load left to hang (#1047) and
+  no shared hash to invalidate (#1048).
+- A device id lives for one lease; anything that kept a device id across
+  leases now sees a new one each time.
 - The first lease of a new kind pays the seed once: a first boot, a clean
   shutdown, then the copy and boot (on Android also the snapshot save).
 - Disk: each source costs its size once (an Android source with its
@@ -178,8 +219,6 @@ worker's baselines.
 - Copies share identity: on Android the same `ANDROID_ID`, and every copy
   of a baseline carries the same signed-in accounts. Two leases at once may
   log each other out. The docs say so.
-- Existing devices made before this change have no source. Each is
-  destroyed at its next reclaim, and the next provision copies a seed.
 - The words "Simlock wipes a device every time a lease ends" on the website
   become "Simlock resets a device to the state it was made from".
 
@@ -200,5 +239,12 @@ worker's baselines.
   Simlock would run configured code on every new device. Rejected: the
   operator prepares on a held lease; a pre-boot hook can be its own
   request.
+- **Keep the device record and swap its UDID on reset.** `simctl clone`
+  always makes a new UDID, so the reclaim would have to hand core new driver
+  data and a new address, and every reader of a device's driver id would
+  have to follow. Rejected: a new device per lease uses the path `fresh`
+  devices already take.
+- **Node's `copyFile` with `COPYFILE_FICLONE`.** Did not clone on macOS
+  (measured). Rejected for the `cp` adapter behind a port.
 - **Agents save back to a baseline they hold.** Needs per-name holds and an
   agent-role write. Rejected for now: only the operator saves.
