@@ -283,6 +283,7 @@ export function createCore(options: CoreOptions): Core {
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
     },
     devices: deviceLifecycle,
+    drivers: options.drivers,
     leases: leaseMaintenance.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
