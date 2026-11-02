@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
@@ -229,7 +230,7 @@ describe.skipIf(process.platform !== "darwin")(
         expect(phone, "the catalog lists no default phone for iOS").toBeDefined();
         const request = ["lease", "--platform", "ios", "--agent-id", "ios-class", "--detach"];
         type Grant = {
-          device: { driverDeviceId: string; spec: { model: string } };
+          device: { id: string; driverDeviceId: string; spec: { model: string } };
           lease: { id: string };
         };
 
@@ -273,7 +274,37 @@ describe.skipIf(process.platform !== "darwin")(
           secondGrant.device.driverDeviceId,
           "a released simulator is never granted again",
         ).not.toBe(udid);
-        expect((await setDevices(deviceSet)).some((device) => device.udid === udid)).toBe(false);
+        const copies = await setDevices(deviceSet);
+        expect(copies.some((device) => device.udid === udid)).toBe(false);
+        expect(
+          copies.map((device) => device.udid),
+          "the device set holds the copy only",
+        ).toEqual([secondGrant.device.driverDeviceId]);
+        const seeds = await setDevices(join(deviceSet, "sources"));
+        expect(
+          seeds.map((seed) => seed.state),
+          "the sources set holds the seed shut down",
+        ).toEqual(["Shutdown"]);
+
+        const doctorReport = await env.cli(["doctor"]);
+        expect(doctorReport.code, doctorReport.stderr).toBe(0);
+        const iosSeeds = (
+          doctorReport.json as {
+            sources: { platform: string; kind: string; sizeBytes?: number }[];
+          }
+        ).sources.filter((source) => source.platform === "ios" && source.kind === "seed");
+        expect(iosSeeds, "doctor lists one iOS seed").toHaveLength(1);
+        expect(iosSeeds[0]?.sizeBytes ?? 0).toBeGreaterThan(0);
+
+        const ready = (await env.events()).find(
+          (entry) =>
+            entry.event === "device.ready" &&
+            (entry.payload as { deviceId?: string }).deviceId === secondGrant.device.id,
+        );
+        expect(
+          (ready?.payload as { bootDuration?: number } | undefined)?.bootDuration,
+          "the second device is a copy of the seed, booted in under 30 s",
+        ).toBeLessThan(30_000);
 
         await env.cli(["release", secondGrant.lease.id]);
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
