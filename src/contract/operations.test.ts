@@ -559,7 +559,8 @@ describe("operation input/output round trips", () => {
     });
     expect(() =>
       OPERATIONS["doctor.run"].output.parse({
-        findings: [{ ...finding, missing: [], sources: [] }],
+        findings: [{ ...finding, missing: [] }],
+        sources: [],
       }),
     ).toThrow();
     for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
