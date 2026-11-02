@@ -44,7 +44,10 @@ class RecordingLogger implements Logger {
   warn(message: string, fields?: Record<string, unknown>): void {
     this.warnings.push(fields === undefined ? { message } : { fields, message });
   }
-  error(): void {}
+  readonly errors: string[] = [];
+  error(message: string): void {
+    this.errors.push(message);
+  }
   child(): Logger {
     return this;
   }
@@ -578,7 +581,7 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
-  it("a relayed event differs from the worker's only in seq and payload.workerId", async () => {
+  it("a relayed event stamped at or before the gateway's clock differs from the worker's only in seq and payload.workerId", async () => {
     const harness = fleet();
     await harness.service.start();
     const worker = new ScriptedWorkerClient();
@@ -601,6 +604,60 @@ describe("GatewayService", () => {
     expect(relayedRest).toEqual(sentRest);
     expect(relayedPayload).toEqual({ ...sentPayload, workerId: "wrk_1" });
     expect(relayedSeq).not.toBe(sentSeq);
+
+    await harness.service.stop();
+  });
+
+  it("a relayed event stamped after the gateway's clock is republished stamped at the gateway's clock, with the worker's own id", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+
+    worker.pushEvent({
+      event: "queue.changed",
+      id: "evt_ahead",
+      module: "wait-queue",
+      payload: { depth: 3 },
+      seq: 5,
+      timestamp: harness.clock.now() + 365 * 24 * 3_600_000,
+    });
+
+    expect(harness.events.filter((event) => event.event === "queue.changed")).toMatchObject([
+      { id: "evt_ahead", timestamp: harness.clock.now() },
+    ]);
+
+    await harness.service.stop();
+  });
+
+  it("a relayed event that cannot be serialized is dropped with one logged error, and the next relayed event still arrives", async () => {
+    const logger = new RecordingLogger();
+    const harness = fleet({ logger });
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    const depth = 20_000;
+    const nested = JSON.parse("[".repeat(depth) + "]".repeat(depth)) as unknown;
+
+    worker.pushEvent({
+      event: "queue.changed",
+      id: "evt_nested",
+      module: "wait-queue",
+      payload: { depth: 1, nested },
+    });
+    worker.pushEvent({
+      event: "queue.changed",
+      id: "evt_after",
+      module: "wait-queue",
+      payload: { depth: 2 },
+    });
+
+    expect(harness.events.filter((event) => event.event === "queue.changed")).toMatchObject([
+      { id: "evt_after" },
+    ]);
+    expect(logger.errors).toHaveLength(1);
 
     await harness.service.stop();
   });

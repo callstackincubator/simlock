@@ -83,7 +83,6 @@ function conformance(
         const projector = definition.create(database, {
           fleet: false,
           metricsRetentionMs: 90 * 24 * 3_600_000,
-          now: () => Number.MAX_SAFE_INTEGER,
         });
         const envelopes = EVENTS.map(
           ([event, payload], index): EventEnvelope =>
@@ -113,11 +112,7 @@ function conformance(
       const database = await openScratch();
       try {
         for (const migration of definition.migrations) database.exec(migration);
-        const options = {
-          fleet: false,
-          metricsRetentionMs: 90 * 24 * 3_600_000,
-          now: () => Number.MAX_SAFE_INTEGER,
-        };
+        const options = { fleet: false, metricsRetentionMs: 90 * 24 * 3_600_000 };
         const at = (minutes: number): number => 60_000 * 1_000 + minutes * 60_000;
         const envelope = (
           index: number,

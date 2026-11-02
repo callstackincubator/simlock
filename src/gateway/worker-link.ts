@@ -534,9 +534,11 @@ export class WorkerLink {
    * (`GATEWAY_OWN_EVENTS`) are refused by name, or a worker would write `worker.removed` or
    * `request.granted` straight into the operator's audit trail. Any other name is forwarded
    * unchanged: a newer worker's vocabulary is a fact its consumers need, and a gateway that
-   * dropped it would lose it from `events.replay`. The name, module, `id` and `timestamp` travel
-   * as they arrived -- the fact happened on that machine at that time, and rewriting either would
-   * make the audit trail lie about where it happened; `workerId` is what says which machine.
+   * dropped it would lose it from `events.replay`. The name, module and `id` travel as they
+   * arrived, and so does the `timestamp` unless it is ahead of this gateway's clock, which it is
+   * set to -- the fact happened on that machine at that time, and rewriting the rest would make the
+   * audit trail lie about where it happened; `workerId` is what says which machine. An event that
+   * cannot be serialized is dropped with one logged error.
    */
   #onWorkerEvent(envelope: {
     readonly id: string;
@@ -555,19 +557,33 @@ export class WorkerLink {
     const payload = isRecord(envelope.payload)
       ? { ...envelope.payload, workerId: this.workerId }
       : { workerId: this.workerId };
-    // The one cast in this file: a worker's event name is a string on the wire (see
+    // why: the one cast in this file: a worker's event name is a string on the wire (see
     // `eventEnvelopeSchema`), and a *newer* worker may legitimately send a name this gateway's
     // `EventMap` has never heard of. Forwarding it is better than dropping it -- the envelope
     // is what `events.replay` returns, and a consumer that knows the name gets it either way.
     // ADR 0014 §2: the worker's `id` and `timestamp` travel with the fact (the wire layer bounded
     // both); only `seq` is this bus's own.
-    this.options.eventBus.republish({
+    // why: a worker stamps its own events, so one stamped after this gateway's clock is set to it -- the stored stamp every consumer reads (history, usage, a rebuild) is then the live one, and the shared `*` usage key cannot be dragged forward.
+    const stamped = {
       event: envelope.event as EventName,
       id: envelope.id,
       module: envelope.module,
       payload: payload as never,
-      timestamp: envelope.timestamp,
-    });
+      timestamp: Math.min(envelope.timestamp, this.options.clock.now()),
+    };
+    // why: one event nobody can serialize (a payload nested too deep) would throw in the IPC push, `events.replay` and the history on every use while it stays in the ring, so it never enters the bus.
+    try {
+      JSON.stringify(stamped);
+    } catch (error: unknown) {
+      this.#logger.error("Worker sent an event that cannot be serialized; dropping it", {
+        workerId: this.workerId,
+        event: envelope.event,
+        eventId: envelope.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    this.options.eventBus.republish(stamped);
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
       void this.refresh({

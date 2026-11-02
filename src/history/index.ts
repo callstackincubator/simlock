@@ -53,8 +53,6 @@ export interface ProjectionHandle {
 export interface HistoryProjectionOptions {
   readonly fleet: boolean;
   readonly metricsRetentionMs: number;
-  /** why: the gateway's clock, so a projection can refuse a relayed timestamp from the future. */
-  readonly now: () => number;
 }
 
 export interface EventHistoryStatus {
@@ -94,7 +92,7 @@ export interface EventHistoryOptions {
   readonly dataDirectory: string;
   readonly config: { readonly retention: number; readonly maxBytes: number };
   readonly projections: readonly HistoryProjectionDefinition[];
-  readonly projectionOptions: Omit<HistoryProjectionOptions, "now">;
+  readonly projectionOptions: HistoryProjectionOptions;
 }
 
 interface RunningProjection {
@@ -277,10 +275,7 @@ class EventHistory implements EventHistoryHandle {
     try {
       this.#projectors = this.#options.projections.map((definition) => ({
         definition,
-        projector: definition.create(database, {
-          ...this.#options.projectionOptions,
-          now: () => this.#options.clock.now(),
-        }),
+        projector: definition.create(database, this.#options.projectionOptions),
       }));
       const rebuilding = this.#projectors.filter(({ definition }) =>
         needsRebuild(database, definition),
