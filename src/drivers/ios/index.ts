@@ -157,7 +157,7 @@ export const SHUTDOWN_ALL_TARGET = "all";
 export const REFUSED_RUNTIME_OPERATION = "delete";
 
 const RECLAIM_INSTEAD =
-  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+  "Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead.";
 
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;

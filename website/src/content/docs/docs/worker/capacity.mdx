@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 A worker limits two numbers per platform:
 
 - **Managed devices**: how many simulators or emulators may exist, booted or shut down.
-- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being wiped after a lease, or quarantined.
+- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being reclaimed after a lease (a physical device), or quarantined.
 
 A capacity strategy sets these limits. The default, `resource`, sizes them from the machine's CPU and RAM. The `fixed` strategy uses a number you write down. Physical devices never count against either limit.
 
@@ -154,7 +154,7 @@ To fit more slim simulators in the RAM budget, give them a smaller size:
 
 ## Keep devices booted: the warm pool
 
-The warm pool keeps idle devices booted, wiped and unleased, so a lease is granted without waiting for a boot. It is on by default.
+The warm pool keeps idle devices booted and unleased, so a lease is granted without waiting for a boot. It is on by default.
 
 It works from two lists:
 
@@ -231,12 +231,8 @@ warm pool: enabled, reserve ios 1 android 0
 
 A target that is filling, or waiting behind a queued lease request, shows no reason. `simlock doctor` also warns when targets add up to more devices than the running limit allows.
 
-## Reuse or replace devices: lease identity
+## One lease per device: lease identity
 
-By default a released device is wiped and kept for a later lease. Set `lease.identity.ios` to `fresh` to give every iOS lease a new simulator, deleted when the lease ends, so no simulator ever serves two leases.
+Every simulator and emulator serves one lease and is deleted when it ends, whatever `lease.identity` says. `lease.identity.ios` and `lease.identity.android` are still accepted and stored, but they no longer change anything.
 
-```sh
-simlock config set lease.identity.ios fresh
-```
-
-Under `fresh`, every lease pays for a create and a boot unless the warm pool has a device of that kind ready. Each device keeps the setting it was created with. `lease.identity.android` accepts `fresh` too, but it is designed for iOS.
+A new iOS simulator is a copy of a simulator Simlock booted once, the seed. Simlock makes one seed for each model and iOS version the first time a lease needs it, keeps it shut down in a device set of its own, and copies it for every lease, so a lease after the first of its kind waits for a short boot, not a factory first boot. `simlock doctor` lists the seeds with their size, and `simlock nuke --delete-devices` deletes them. Removing a runtime deletes the seeds made from it. Android emulators are created for each lease until Android seeds exist.

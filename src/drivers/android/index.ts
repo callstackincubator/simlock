@@ -299,7 +299,7 @@ const ANDROID_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly stri
 };
 
 const RECLAIM_INSTEAD =
-  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+  "Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead.";
 
 /**
  * why: `kill-server` would detach every leased emulator at once -- an agent's most reflexive
