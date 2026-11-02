@@ -59,6 +59,7 @@ import type {
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
+  refuseDefaultSourcesLeftovers,
   refuseOwnSetLeftovers,
   refuseXcodeSetLeftovers,
   UDID_PATTERN,
@@ -365,6 +366,10 @@ export class IosSimctlDriver implements Driver {
       await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
       return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
     }
+    await refuseDefaultSourcesLeftovers(
+      options.filesystem,
+      join(options.simlockHome, "devices", "ios-sources"),
+    );
     if (options.coreSimulatorRoot !== undefined) {
       await refuseXcodeSetLeftovers(
         options.filesystem,
