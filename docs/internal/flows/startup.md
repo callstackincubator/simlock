@@ -5,8 +5,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 ## Both modes, before the branch
 
-1. `prepareDataDirectory` creates the data directory `0700` when missing; an existing one keeps
-   its mode, and one group or others can reach is a `warn` line once the logger exists.
+1. `prepareDataDirectory` creates the data directory `0700` when missing; an existing one keeps its mode, and one group or others can reach is a `warn` line once the logger exists.
    `loadConfig` reads `config.json`; its warnings are logged once the logger exists.
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
@@ -25,15 +24,8 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 6. `Registry.load` — the `registry` and device-data tables of `state.db`.
 7. Instance identity — `loadInstanceId`, `instance.json`. Written once per home,
    never regenerated.
-8. Worker lock — only when the drivers are discovered (no `drivers` option, no
-   `SIMLOCK_DRIVERS_MODULE`): `NodeWorkerLock.take` before `discoverDrivers`. A live holder in
-   another folder fails the start with its details; a stale or unreadable lock is taken over; a
-   live holder in the same folder is left alone and decided by the socket claim (ADR 0059).
-   Root validation — `discoverDrivers`: each driver checks its owned root against
-   the instance id. A refused root (`OwnedRootError`), or on Android an adb server
-   it cannot start, drops that platform as a `DriverRejection`; a missing SDK drops
-   it silently; any other error fails the start. iOS only on macOS. The Android
-   driver starts its adb server and reattaches running emulators here.
+8. Worker lock — only when the drivers are discovered (no `drivers` option, no `SIMLOCK_DRIVERS_MODULE`): `NodeWorkerLock.take` before `discoverDrivers`. A live holder in another folder fails the start with its details; a stale or unreadable lock is taken over; a live holder in the same folder is left alone and decided by the socket claim (ADR 0059).
+   Root validation — `discoverDrivers`: each driver checks its owned root against the instance id. A refused root (`OwnedRootError`), or on Android an adb server it cannot start, drops that platform as a `DriverRejection`; a missing SDK drops it silently; any other error fails the start. iOS only on macOS. The Android driver starts its adb server and reattaches running emulators here.
 9. Host facts read in the background; host load sampler built.
 10. `ComponentInstaller`, `createCore`, the optional-module host (`createModuleHost`; it loads each enabled module's worker half, agent-device's supervisor among them), `createLeasing`,
     `core.connect(leasing.corePorts)`, `CleanupReaper`, `Nuke`, `GatewayUplink` when
@@ -41,19 +33,13 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 
 ## Worker: claim and converge (`DaemonServer.start`)
 
-11. Claim the socket — `DaemonEndpointHost.start`. A live daemon →
-    `DaemonAlreadyRunningError`; the start rejects, the entry logs `Daemon already running` and exits 0. A stale socket file is
-    removed.
-    Right after the claim the winner makes sure it holds the worker lock (`claimed`): it
-    writes itself as the owner, and a live holder in another folder fails the start (the entry
-    awaits this after `daemon.start()` settles, then stops the daemon).
+11. Claim the socket — `DaemonEndpointHost.start`. A live daemon → `DaemonAlreadyRunningError`; the start rejects, the entry logs `Daemon already running` and exits 0. A stale socket file is removed.
+    Right after the claim the winner makes sure it holds the worker lock (`claimed`): it writes itself as the owner, and a live holder in another folder fails the start (the entry awaits this after `daemon.start()` settles, then stops the daemon).
 12. Host load sampling starts.
 13. `admin.token` written (0600, atomic).
 14. Converge starts. Health `starting`. From here `hello` and `status.get` answer;
     every other request parks.
-15. `onSocketClaimed`, nothing awaited: the event history starts (opens `history.db`, sets a
-    damaged one aside, migrates the projections, writes the ring, prunes, rebuilds a projection whose
-    check failed; a newer stored version or a failed migration stops the daemon, exit 1); agent-device starts; the uplink dials once
+15. `onSocketClaimed`, nothing awaited: the event history starts (opens `history.db`, sets a damaged one aside, migrates the projections, writes the ring, prunes, rebuilds a projection whose check failed; a newer stored version or a failed migration stops the daemon, exit 1); agent-device starts; the uplink dials once
     the first host load reading is in; HTTP starts when `http.enabled`.
 
 Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop

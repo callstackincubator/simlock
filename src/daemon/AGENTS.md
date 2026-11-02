@@ -145,7 +145,6 @@ Security model: cooperative identity, not a hostile-process boundary.
 - Handlers never see raw input and never check roles.
 - The claim comes before any write to `admin.token` and before converge.
 - A worker with real drivers takes the worker lock (`ports/worker-lock.ts`) before `discoverDrivers`, makes sure it holds it after the socket claim, and releases it after the drivers are disposed and on a failed start; substituted drivers and gateways never take it.
-- On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before
-  converge ends.
+- On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before converge ends.
 - `daemon.stop` releases nothing; leases persist with their deadlines. A closed connection ends no lease and kills no command.
 - `daemon.started` is emitted only after converge, and never after `daemon.stopping`.
