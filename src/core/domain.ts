@@ -282,14 +282,14 @@ export function readySince(device: DeviceRecord): number {
 }
 
 /**
- * The one answer to "may this device be handed to a new lease?". A `fresh` device that has ended
- * a lease is spent: `beginRelease` stamps `lastLeaseEndedAt` on every lease end, so that stamp is
- * the proof it already served its one lease. Every other device is grantable as far as identity
- * goes; state, spec, and claims are the caller's own checks. A physical device has no
- * `leaseIdentity`, so it is always reusable: `lease.identity` does not apply to it.
+ * why: the one answer to "may this device be handed to a new lease?". A virtual device serves one lease
+ * (ADR 0061 §2): `beginRelease` stamps `lastLeaseEndedAt` on every lease end, so that stamp is the
+ * proof it already served its one lease, whatever `leaseIdentity` says. A physical device is
+ * always grantable: `lease.identity` does not apply to it. State, spec, and claims are the
+ * caller's own checks.
  */
 export function mayBeGranted(device: DeviceRecord): boolean {
-  return device.leaseIdentity !== "fresh" || device.lastLeaseEndedAt === undefined;
+  return device.physical || device.lastLeaseEndedAt === undefined;
 }
 
 export interface LeaseRecord {

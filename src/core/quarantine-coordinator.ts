@@ -5,7 +5,6 @@ import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-opera
 import {
   type DeviceRecord,
   type DeviceState,
-  mayBeGranted,
   type PhysicalDevice,
   type Platform,
   type QuarantineCause,
@@ -226,7 +225,7 @@ export class QuarantineCoordinator {
     }
     const attempts = (device.quarantineAttempts ?? 0) + 1;
     const driver = this.options.drivers.get(device.spec.platform);
-    if (!device.physical && !mayBeGranted(device)) {
+    if (!device.physical) {
       await this.#retryDelete(driver, device, attempts, claim);
       return;
     }
@@ -302,7 +301,7 @@ export class QuarantineCoordinator {
     this.#arm(device.id, nextRetryAt);
   }
 
-  /** A spent fresh device already served its one lease, so a successful reclaim would put it back in the pool for a second one. */
+  /** why: a virtual device is spent after one lease (ADR 0061 §2), so quarantine deletes it and never reclaims it. */
   async #retryDelete(
     driver: Driver,
     device: VirtualDevice,
