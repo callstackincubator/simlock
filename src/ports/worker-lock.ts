@@ -30,6 +30,7 @@ export interface NodeWorkerLockOptions {
   readonly filesystem: Filesystem;
   readonly path: string;
   readonly processSupervisor: ProcessSupervisor;
+  readonly uid?: number | undefined;
 }
 
 const OWNER_FILE = "owner.json";

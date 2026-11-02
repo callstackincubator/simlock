@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -31,11 +31,12 @@ async function lockInTemporaryFolder() {
   return { path: join(root, "simlock-501", "worker.lock"), root };
 }
 
-function adapter(path: string, livePids: readonly number[] = []) {
+function adapter(path: string, livePids: readonly number[] = [], uid = process.getuid?.()) {
   return new NodeWorkerLock({
     filesystem: new NodeFilesystem(),
     path,
     processSupervisor: new FakeProcessSupervisor(livePids),
+    uid,
   });
 }
 
@@ -67,5 +68,20 @@ describe("NodeWorkerLock", () => {
     await adapter(path).take(ME);
 
     expect(JSON.parse(await readFile(join(path, "owner.json"), "utf8"))).toEqual(ME);
+  });
+
+  it("refuses a parent folder owned by another user and tightens one of its own to 0700", async () => {
+    const { path } = await lockInTemporaryFolder();
+    const parent = dirname(path);
+    await mkdir(parent, { mode: 0o755, recursive: true });
+    await chmod(parent, 0o755);
+    const uid = process.getuid?.() ?? 0;
+
+    await expect(adapter(path, [], uid + 1).take(ME)).rejects.toThrow(
+      `${parent} cannot be used as the worker lock folder: owned by another user`,
+    );
+    await adapter(path, [], uid).take(ME);
+
+    expect((await stat(parent)).mode & 0o777).toBe(0o700);
   });
 });
