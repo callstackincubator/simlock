@@ -271,7 +271,11 @@ describe.skipIf(!hasAndroidSdk)(
           expect(() => process.kill(owner.pid, 0)).not.toThrow();
           const stopped = await env.cli(["daemon", "stop"]);
           expect(stopped.code).toBe(0);
-          expect(existsSync(lockFolder), "daemon stop left the worker lock behind").toBe(false);
+          // why: `daemon stop` returns once the stop is asked for; the release runs at the end of the daemon's dispose.
+          await waitFor(() => !existsSync(lockFolder), {
+            timeout: 60_000,
+            label: "daemon stop left the worker lock behind",
+          });
         } finally {
           await rm(planted, { force: true });
           if (createdRoot !== undefined) {
