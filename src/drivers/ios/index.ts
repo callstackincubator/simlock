@@ -69,6 +69,8 @@ import { createIosScreenCapture } from "./screen-capture.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
+/** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
+const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
@@ -855,6 +857,14 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
+    // why: a `making` row of this process older than the longest a make can take belongs to a make that never ended.
+    for (const row of this.#sources.makingRowsOfKindBefore(
+      this.#maker(),
+      specKey,
+      this.#clock.now() - STALE_MAKING_MS,
+    )) {
+      await this.#removeLeftover(row);
+    }
     const sourceId = this.#idGenerator.generate();
     this.#sources.insertMaking({
       createdAt: this.#clock.now(),
@@ -912,14 +922,18 @@ export class IosSimctlDriver implements Driver {
     if (this.#swept) return;
     this.#swept = true;
     for (const row of this.#sources.makingRowsNotMadeBy(this.#maker())) {
-      try {
-        if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
-        this.#sources.deleteRow(row.sourceId);
-      } catch (error: unknown) {
-        this.#logger?.warn(
-          `could not remove leftover source ${row.udid ?? row.sourceId}: ${errorMessage(error)}`,
-        );
-      }
+      await this.#removeLeftover(row);
+    }
+  }
+
+  async #removeLeftover(row: SourceRow): Promise<void> {
+    try {
+      if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+      this.#sources.deleteRow(row.sourceId);
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not remove leftover source ${row.udid ?? row.sourceId}: ${errorMessage(error)}`,
+      );
     }
   }
 

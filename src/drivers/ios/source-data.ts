@@ -124,6 +124,18 @@ export class IosSourceTable {
     return this.#rows("WHERE state = 'making' AND maker != ?", [maker]);
   }
 
+  makingRowsOfKindBefore(
+    maker: string,
+    specKey: string,
+    createdBefore: number,
+  ): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'making' AND maker = ? AND spec_key = ? AND created_at < ?", [
+      maker,
+      specKey,
+      createdBefore,
+    ]);
+  }
+
   findRow(sourceId: string): SourceRow | undefined {
     return this.#rows("WHERE source_id = ?", [sourceId])[0];
   }
@@ -132,7 +144,7 @@ export class IosSourceTable {
     return this.#rows("WHERE state = 'ready' ORDER BY created_at, source_id", []);
   }
 
-  #rows(where: string, parameters: readonly string[]): readonly SourceRow[] {
+  #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
         `SELECT source_id, kind, udid, device_type_id, runtime_id, runtime_build, model, os_version,
