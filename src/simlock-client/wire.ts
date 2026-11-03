@@ -26,6 +26,9 @@ import type { ComponentInstallProgress, DeviceOutputChunk, LeaseProgress } from 
  * peer. */
 const LEGACY_MISMATCH_CODE = "PROTOCOL_VERSION_MISMATCH";
 
+// why: the largest real daemon reply is a usage ledger of 100,000 entries, about 54 MB with every field set; this leaves it room.
+export const MAX_WIRE_LINE_CHARS = 128 * 1024 * 1024;
+
 export interface HelloOptions {
   readonly principal?: string;
   readonly credential?: string;
@@ -117,12 +120,15 @@ export class SimlockWire {
    * duplicate push of the *same* state in a row (the owner-routed fan-out re-delivering one
    * fact) is still suppressed. */
   readonly #lastHealthKind = new Map<string, "device-unhealthy" | "device-recovered">();
-  #buffer = "";
+  #pieces: string[] = [];
+  #pieceChars = 0;
   #nextId = 1;
   #dead: AnySimlockError | undefined;
+  readonly #maxLineChars: number;
 
-  constructor(connection: IpcConnection) {
+  constructor(connection: IpcConnection, maxLineChars: number = MAX_WIRE_LINE_CHARS) {
     this.#connection = connection;
+    this.#maxLineChars = maxLineChars;
     connection.onData((chunk) => this.#read(chunk));
     connection.onError(() =>
       this.#die(
@@ -248,22 +254,48 @@ export class SimlockWire {
     });
   }
 
+  // why: only the new chunk is scanned for a newline and the unfinished line is kept as pieces, so a line split across many chunks costs its length once, not once per chunk.
   #read(chunk: string): void {
-    this.#buffer += chunk;
+    if (this.#dead !== undefined) return;
+    let start = 0;
     for (;;) {
-      const newline = this.#buffer.indexOf("\n");
-      if (newline < 0) return;
-      const line = this.#buffer.slice(0, newline);
-      this.#buffer = this.#buffer.slice(newline + 1);
-      if (line.trim() === "") continue;
-      let value: unknown;
-      try {
-        value = JSON.parse(line) as unknown;
-      } catch {
-        continue; // A malformed line from the daemon is not this client's problem to crash over.
-      }
-      this.#dispatch(value);
+      const newline = chunk.indexOf("\n", start);
+      if (newline < 0) break;
+      this.#pieces.push(chunk.slice(start, newline));
+      const line = this.#pieces.join("");
+      this.#pieces = [];
+      this.#pieceChars = 0;
+      start = newline + 1;
+      this.#handleLine(line);
     }
+    if (start >= chunk.length) return;
+    const rest = start === 0 ? chunk : chunk.slice(start);
+    this.#pieces.push(rest);
+    this.#pieceChars += rest.length;
+    if (this.#pieceChars > this.#maxLineChars) {
+      this.#pieces = [];
+      this.#pieceChars = 0;
+      this.#die(
+        new SimlockError(
+          "DAEMON_CONNECTION_LOST",
+          "transport",
+          "Daemon sent a line longer than the client accepts",
+          {},
+        ),
+      );
+      void this.#connection.close();
+    }
+  }
+
+  #handleLine(line: string): void {
+    if (line.trim() === "") return;
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      return; // why: a malformed line from the daemon is not this client's problem to crash over.
+    }
+    this.#dispatch(value);
   }
 
   // fallow-ignore-next-line complexity -- one frame-kind switch, deliberately not split further.

@@ -82,25 +82,41 @@ function firstString(sources: readonly Fields[], field: string): string | undefi
   return undefined;
 }
 
+const MAX_BATCH_DEPTH = 8;
+const MAX_BATCH_STEPS = 1000;
+
 function stepsOf(unit: Unit): Unit[] {
-  if (unit.command !== "batch") return [];
+  const out: Unit[] = [];
+  collectSteps(unit, 1, out);
+  return out;
+}
+
+function batchStep(step: unknown): Unit {
+  const owner = asRecord(step);
+  if (owner === undefined) throw refuse("refused: malformed batchSteps");
+  if (present(owner["command"]) && typeof owner["command"] !== "string") {
+    throw refuse("refused: malformed command");
+  }
+  return { command: commandName(owner["command"]), isStep: true, kind: "command", owner };
+}
+
+// why: one pass into one list, with the depth and step caps checked before a step is added, so the work follows the step count and a request cannot make the loop copy every descendant once per level.
+function collectSteps(unit: Unit, depth: number, out: Unit[]): void {
+  if (unit.command !== "batch") return;
   const steps = asRecord(unit.owner["flags"])?.["batchSteps"];
-  if (!present(steps)) return [];
+  if (!present(steps)) return;
   if (!Array.isArray(steps)) throw refuse("refused: malformed batchSteps");
-  return steps.flatMap((step: unknown): Unit[] => {
-    const owner = asRecord(step);
-    if (owner === undefined) throw refuse("refused: malformed batchSteps");
-    if (present(owner["command"]) && typeof owner["command"] !== "string") {
-      throw refuse("refused: malformed command");
-    }
-    const inner: Unit = {
-      command: commandName(owner["command"]),
-      isStep: true,
-      kind: "command",
-      owner,
-    };
-    return [inner, ...stepsOf(inner)];
-  });
+  if (depth > MAX_BATCH_DEPTH) {
+    throw refuse(`refused: a batch nests more than ${String(MAX_BATCH_DEPTH)} levels deep`);
+  }
+  if (out.length + steps.length > MAX_BATCH_STEPS) {
+    throw refuse(`refused: a batch has more than ${String(MAX_BATCH_STEPS)} steps`);
+  }
+  for (const step of steps as unknown[]) {
+    const inner = batchStep(step);
+    out.push(inner);
+    collectSteps(inner, depth + 1, out);
+  }
 }
 
 function checkTypes(unit: Unit): void {

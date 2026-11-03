@@ -660,9 +660,15 @@ function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): 
   return { done, options, resolve };
 }
 
+// why: the largest real worker reply is under 1 MB (an `events.replay` page, a `list.get` of the fleet maximum); this is the uplink's 8 MiB message cap, so a worker cannot feed the gateway an unbounded line.
+const WORKER_REPLY_MAX_LINE_CHARS = 8 * 1024 * 1024;
+
 const defaultConnect: WorkerClientFactory = async (connection, principal) =>
   // why: the gateway's session is the one client that also makes relay calls, which `simlock/admin` does not export.
-  (await connectSimlockClient({ connection, principal }, true)) as GatewayWorkerClient;
+  (await connectSimlockClient(
+    { connection, principal, maxLineChars: WORKER_REPLY_MAX_LINE_CHARS },
+    true,
+  )) as GatewayWorkerClient;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
