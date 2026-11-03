@@ -86,14 +86,16 @@ export function deviceFit(
   if (catalog === undefined) return undefined;
   const model = servingModel(catalog, narrowed);
   if (model === undefined) return undefined;
+  const entry = baselineEntry(worker, request);
   const requirement: DeviceRequirement = {
-    imageTag: request.imageTag,
-    osVersion: osRequirement(catalog, model, request),
-    platform: request.platform,
+    imageTag: narrowed.imageTag,
+    osVersion: osRequirement(catalog, model, narrowed),
+    platform: narrowed.platform,
     target:
-      request.model === undefined
-        ? { class: wantedClass(request), kind: "class" }
+      narrowed.model === undefined
+        ? { class: wantedClass(narrowed), kind: "class" }
         : { kind: "model", model },
+    ...(entry === undefined ? {} : { baseline: { name: entry.name, version: entry.version } }),
   };
   return (spec) => fits(requirement, spec, (listed) => modelClass(catalog, listed));
 }
