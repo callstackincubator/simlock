@@ -44,6 +44,8 @@
  */
 import type { EventBus, EventMap } from "../bus/index.js";
 import type {
+  BaselineSaveInput,
+  BaselineSaveOutput,
   LeaseGrant,
   LeaseRecord,
   RotateInput,
@@ -417,6 +419,32 @@ export class FleetLeaseCoordinator {
       throw error;
     }
     return this.#projectRecord(record, entry);
+  }
+
+  /**
+   * why: ADR 0061 §6: a save goes to the worker that holds the lease, by its own lease id; it ends the lease, so the index entry goes as after a release, and the answer waits for a view read with the worker's baselines, so a request after it sees the new copy.
+   */
+  async saveBaseline(
+    gatewayLeaseId: string,
+    input: Pick<BaselineSaveInput, "name" | "note">,
+  ): Promise<BaselineSaveOutput> {
+    const entry = this.#requireEntry(gatewayLeaseId);
+    let saved: BaselineSaveOutput;
+    try {
+      saved = await this.#forwardToWorker(entry.workerId, (client) =>
+        client.saveBaseline({
+          leaseId: entry.workerLeaseId,
+          name: input.name,
+          ...(input.note === undefined ? {} : { note: input.note }),
+        }),
+      );
+    } catch (error: unknown) {
+      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
+      throw error;
+    }
+    this.options.leaseIndex.remove(gatewayLeaseId);
+    await this.options.directory.target(entry.workerId)?.refresh({ includeCatalog: true });
+    return { ...saved, leaseId: gatewayLeaseId };
   }
 
   async release(gatewayLeaseId: string): Promise<void> {

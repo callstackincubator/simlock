@@ -62,7 +62,13 @@ import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
+import {
+  isUplinkLost,
+  liveClient,
+  type WorkerDirectory,
+  type WorkerDispatchTarget,
+} from "./fleet-ports.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -138,6 +144,7 @@ export interface GatewayDispatcherOptions {
     | "cancelPending"
     | "renew"
     | "release"
+    | "saveBaseline"
     | "releaseAll"
     | "exec"
     | "rotate"
@@ -244,6 +251,9 @@ export class GatewayDispatcher {
       "alerts.test": this.#alertsTest,
       "daemon.update": this.#daemonUpdate,
       "worker.install-component": this.#workerInstallComponent,
+      "baseline.save": this.#baselineSave,
+      "baseline.list": this.#baselineList,
+      "baseline.remove": this.#baselineRemove,
       "lease.list": this.#leaseList,
       "lease.get": this.#leaseGet,
       "list.get": this.#listGet,
@@ -252,9 +262,6 @@ export class GatewayDispatcher {
       "nuke.run": unsupportedByDesign("nuke.run"),
       "cleanup.run": unsupportedByDesign("cleanup.run"),
       "warm.forget": unsupportedByDesign("warm.forget"),
-      "baseline.save": unsupportedByDesign("baseline.save"),
-      "baseline.list": unsupportedByDesign("baseline.list"),
-      "baseline.remove": unsupportedByDesign("baseline.remove"),
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
       "component.install": unsupportedByDesign(
@@ -464,19 +471,7 @@ export class GatewayDispatcher {
   });
 
   #workerUpdate: Handler<"worker.update"> = async (input) => {
-    const view = this.options.workers.view(input.workerId);
-    if (view === undefined) {
-      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${input.workerId}`, {
-        workerId: input.workerId,
-      });
-    }
-    const target = this.options.directory.target(input.workerId);
-    const client = liveClient(target);
-    if (view.connection === "disconnected" || client === undefined || target === undefined) {
-      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${input.workerId} is not connected`, {
-        workerId: input.workerId,
-      });
-    }
+    const { client, target } = this.#connectedWorker(input.workerId);
     const { workerId, ...request } = input;
     const answer = await this.#withinUplinkBound(
       client.updateDaemon(request).catch((error: unknown) => {
@@ -488,6 +483,25 @@ export class GatewayDispatcher {
     await target.refresh();
     return { ...answer, workerId };
   };
+
+  // why: `worker.update` and `baseline.remove` name one worker: no view is `UNKNOWN_WORKER`, no live link `WORKER_NOT_CONNECTED`.
+  #connectedWorker(workerId: string): {
+    readonly client: GatewayWorkerClient;
+    readonly target: WorkerDispatchTarget;
+  } {
+    const view = this.options.workers.view(workerId);
+    if (view === undefined) {
+      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${workerId}`, { workerId });
+    }
+    const target = this.options.directory.target(workerId);
+    const client = liveClient(target);
+    if (view.connection === "disconnected" || client === undefined || target === undefined) {
+      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${workerId} is not connected`, {
+        workerId,
+      });
+    }
+    return { client, target };
+  }
 
   // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read.
   #withinUplinkBound<Value>(call: Promise<Value>, workerId: string): Promise<Value> {
@@ -733,6 +747,37 @@ export class GatewayDispatcher {
   #leaseRelease: Handler<"lease.release"> = async (input) => {
     await this.options.coordinator.release(input.leaseId);
     return { leaseId: input.leaseId };
+  };
+
+  #baselineSave: Handler<"baseline.save"> = async (input) =>
+    this.options.coordinator.saveBaseline(input.leaseId, {
+      name: input.name,
+      ...(input.note === undefined ? {} : { note: input.note }),
+    });
+
+  /** why: from the views, so a disconnected worker's last baselines are listed and no worker is called. */
+  #baselineList: Handler<"baseline.list"> = async () => ({
+    baselines: this.options.workers
+      .views()
+      .flatMap((view) =>
+        (view.baselines ?? []).map((baseline) => ({ ...baseline, workerId: view.id })),
+      ),
+  });
+
+  #baselineRemove: Handler<"baseline.remove"> = async (input) => {
+    const { workerId, ...request } = input;
+    if (workerId === undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        "baseline.remove on a gateway needs the worker that holds the baseline: pass --worker <id>",
+      );
+    }
+    const { client, target } = this.#connectedWorker(workerId);
+    const removed = await client.removeBaseline(request).catch((error: unknown) => {
+      throw relayedUpdateError(error, workerId);
+    });
+    await target.refresh({ includeCatalog: true });
+    return removed;
   };
 
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {

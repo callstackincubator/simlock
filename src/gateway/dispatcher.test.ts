@@ -1576,9 +1576,6 @@ describe("GatewayDispatcher", () => {
       "doctor.run",
       "driver.passthrough",
       "warm.forget",
-      "baseline.save",
-      "baseline.list",
-      "baseline.remove",
     ] as const)("%s stays per-worker, permanently", async (operation) => {
       const { dispatcher } = harness();
       const input =
@@ -1586,13 +1583,7 @@ describe("GatewayDispatcher", () => {
           ? { args: ["devices"], tool: "adb" }
           : operation === "warm.forget"
             ? { model: "Pixel", platform: "android" }
-            : operation === "baseline.save"
-              ? { leaseId: "L1", name: "checkout" }
-              : operation === "baseline.list"
-                ? {}
-                : operation === "baseline.remove"
-                  ? { name: "checkout" }
-                  : { fix: true };
+            : { fix: true };
 
       await expect(dispatcher.dispatch(operation, input, session())).rejects.toMatchObject({
         code: "UNSUPPORTED_IN_GATEWAY_MODE",
