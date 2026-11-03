@@ -22,3 +22,23 @@ export async function freeLoopbackPort(): Promise<number> {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
+
+export interface HeldPort {
+  readonly port: number;
+  release(): Promise<void>;
+}
+
+// why: a test that needs a port taken, as another program on the machine would take it, holds one until `release`.
+export async function holdLoopbackPort(): Promise<HeldPort> {
+  const holder = createServer();
+  const port = await new Promise<number>((resolve) => {
+    holder.listen(0, "127.0.0.1", () => {
+      const address = holder.address();
+      resolve(typeof address === "object" && address !== null ? address.port : 0);
+    });
+  });
+  return {
+    port,
+    release: () => new Promise<void>((resolve) => holder.close(() => resolve())),
+  };
+}
