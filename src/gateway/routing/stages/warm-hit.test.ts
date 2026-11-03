@@ -367,8 +367,11 @@ describe("warm-hit with a baseline", () => {
     const device = deviceFixture("dev_1", "ready");
     return { ...device, spec: { ...device.spec, baseline: { name: "smoke", version } } };
   };
-  const worker = (devices: NonNullable<WorkerView["devices"]>): WorkerView => ({
-    baselines: [entry],
+  const worker = (
+    devices: NonNullable<WorkerView["devices"]>,
+    mode: "slim" | "full" = "full",
+  ): WorkerView => ({
+    baselines: [{ ...entry, mode }],
     capacity: statusFixture().capacity,
     catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
       .platforms,
@@ -378,6 +381,17 @@ describe("warm-hit with a baseline", () => {
     id: "wrk_a",
     lastSeenAt: 1,
     leases: [],
+  });
+
+  it("takes the baseline's mode for a request naming none, as the copy's own mode", () => {
+    const slimCopy = { ...copyOf(2), mode: "slim" as const, servesDefaultMode: false };
+
+    expect(warmHit.score(worker([slimCopy], "slim"), { baseline: "smoke", platform: "ios" })).toBe(
+      1,
+    );
+    expect(warmHit.score(worker([slimCopy], "full"), { baseline: "smoke", platform: "ios" })).toBe(
+      0,
+    );
   });
 
   it.each([
