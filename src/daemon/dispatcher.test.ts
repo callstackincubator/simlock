@@ -1748,15 +1748,15 @@ describe("Dispatcher: baseline.remove", () => {
 });
 
 describe("Dispatcher: baseline events", () => {
-  it("records baseline.saved, baseline.removed with its reason and baseline.stale, once each, after the change is committed", async () => {
-    const { dispatcher, driver, eventBus, registry } = await buildDispatcher();
+  it("records baseline.saved, baseline.removed with its reason (nuke --delete-devices removes every baseline, plain nuke keeps them) and baseline.stale, once each, after the change is committed", async () => {
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher({ includeNuke: true });
     const admin = session({ principal: "tok_admin", role: "admin" });
     const events = (name: string): unknown[] =>
       eventBus
         .replay()
         .filter((envelope) => envelope.event === name)
         .map((envelope) => envelope.payload);
-    const save = async (content: string): Promise<string> => {
+    const save = async (content: string, name = "checkout"): Promise<string> => {
       const grant = await dispatcher.dispatch(
         "lease.request",
         { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -1764,11 +1764,7 @@ describe("Dispatcher: baseline events", () => {
       );
       const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
       driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", content);
-      await dispatcher.dispatch(
-        "baseline.save",
-        { leaseId: grant.lease.id, name: "checkout" },
-        admin,
-      );
+      await dispatcher.dispatch("baseline.save", { leaseId: grant.lease.id, name }, admin);
       return grant.lease.id;
     };
 
@@ -1818,6 +1814,22 @@ describe("Dispatcher: baseline events", () => {
       { name: "checkout", reason: "replaced", requesterId: "tok_admin", version: 1 },
       { name: "checkout", reason: "operator", requesterId: "tok_admin", version: 2 },
     ]);
+
+    await save("again");
+    await save("signed in", "login");
+    expect(await dispatcher.dispatch("nuke.run", { deleteDevices: false }, admin)).toMatchObject({
+      removedBaselines: [],
+    });
+    expect((await dispatcher.dispatch("baseline.list", {}, admin)).baselines).toHaveLength(2);
+    expect(await dispatcher.dispatch("nuke.run", { deleteDevices: true }, admin)).toMatchObject({
+      removedBaselines: ["checkout", "login"],
+    });
+    expect(events("baseline.removed").slice(2)).toEqual([
+      { name: "checkout", reason: "nuke", version: 1 },
+      { name: "login", reason: "nuke", version: 1 },
+    ]);
+    expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
+    expect(await driver.listSources()).toEqual([]);
   });
 });
 

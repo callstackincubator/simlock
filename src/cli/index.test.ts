@@ -8396,7 +8396,8 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     releaseAllLeases: () => Promise.resolve({ leaseIds: [] }),
     list: () => Promise.resolve(emptyListGet),
     runCleanup: () => Promise.resolve([]),
-    runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
+    runNuke: () =>
+      Promise.resolve({ deletedDevices: [], releasedLeaseIds: [], removedBaselines: [] }),
     forgetWarmKind: () => Promise.resolve({ forgotten: [] }),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),

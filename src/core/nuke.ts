@@ -17,6 +17,7 @@ export class Nuke {
   async run(options: NukeRunOptions): Promise<{
     readonly deletedDevices: readonly string[];
     readonly releasedLeaseIds: readonly string[];
+    readonly removedBaselines: readonly string[];
   }> {
     const before = this.options.registry.snapshot.devices
       .filter((device) => device.state !== "deleted")
@@ -30,6 +31,7 @@ export class Nuke {
     return {
       deletedDevices: before.filter((deviceId) => deleted.has(deviceId)),
       releasedLeaseIds,
+      removedBaselines: [],
     };
   }
 }

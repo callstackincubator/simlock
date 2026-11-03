@@ -905,6 +905,7 @@ export const doctorReportSchema = z.object({
 export const nukeReportSchema = z.object({
   deletedDevices: z.array(z.string()),
   releasedLeaseIds: z.array(z.string()),
+  removedBaselines: z.array(baselineNameSchema).max(1000),
 });
 
 const MAX_DATE_MS = 8.64e15;
