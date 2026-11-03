@@ -1579,7 +1579,7 @@ describe("Dispatcher: baseline.save refusals", () => {
 });
 
 describe("Dispatcher: baseline.list", () => {
-  it("lists the newest version of each baseline by name with its spec, note, size and saved time, and an agent may list", async () => {
+  it("lists the newest version of each baseline by name with its spec, note, size, saved time and stale reason, cleared when the runtime is back, and an agent may list", async () => {
     const { clock, dispatcher, driver, registry } = await buildDispatcher();
     const agent = session({ role: "agent" });
     const admin = session({ role: "admin" });
@@ -1627,6 +1627,22 @@ describe("Dispatcher: baseline.list", () => {
         },
       ],
     });
+
+    const sources = await driver.listSources();
+    const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-26-5 is not installed";
+    const staleNames = async (): Promise<(string | undefined)[]> =>
+      (await dispatcher.dispatch("baseline.list", {}, agent)).baselines.map(
+        (baseline) => baseline.staleReason,
+      );
+    const [loginSource] = sources;
+    driver.setSources(
+      sources.map((source) =>
+        source === loginSource ? { ...source, staleReason: reason } : source,
+      ),
+    );
+    expect(await staleNames()).toEqual([undefined, reason]);
+    driver.setSources(sources);
+    expect(await staleNames()).toEqual([undefined, undefined]);
   });
 });
 
