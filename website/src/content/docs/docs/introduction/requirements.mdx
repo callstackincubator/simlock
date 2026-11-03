@@ -50,6 +50,8 @@ Watching a simulator's screen from the console needs macOS 14 or later.
   sdkmanager --install emulator platform-tools
   ```
 
+  The emulator must be recent enough to accept every option Simlock launches it with. An older one (Android Emulator 36.1.9, for example) exits as soon as it starts. `simlock doctor` reports it, and `sdkmanager --install emulator` updates it.
+
 - A JDK that `sdkmanager` can run on, with `JAVA_HOME` pointing at it.
 
 To install Android system images, you must also accept the Android SDK licenses in Simlock's configuration. Until you do, an install fails with `LICENSE_NOT_ACCEPTED`. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).

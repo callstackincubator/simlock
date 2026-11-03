@@ -131,6 +131,8 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
+const EMULATOR_LOG_TAIL_BYTES = 8_192;
+const EMULATOR_LOG_TAIL_LINES = 10;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const MARK_READ_TIMEOUT_MS = 5_000;
 const ERASABLE_MARK_READ_BYTES = 4096;
@@ -2052,6 +2054,28 @@ export class AndroidDriver implements Driver {
     }
   }
 
+  #emulatorLogPath(avdName: string): string {
+    return `${this.#configIniPath(avdName).replace(/\/config\.ini$/, "")}/emulator.log`;
+  }
+
+  /** why: bounded, since an emulator that ran a while may have written a lot before it exited. */
+  async #emulatorLogTail(logPath: string): Promise<string> {
+    try {
+      const { size } = await this.#filesystem.stat(logPath);
+      const text = await this.#filesystem.readFileFrom(
+        logPath,
+        Math.max(0, size - EMULATOR_LOG_TAIL_BYTES),
+      );
+      return text
+        .split(/\r?\n/)
+        .filter((line) => line.trim() !== "")
+        .slice(-EMULATOR_LOG_TAIL_LINES)
+        .join("\n");
+    } catch {
+      return "(the emulator's log could not be read)";
+    }
+  }
+
   #configIniPath(avdName: string): string {
     return `${this.#deviceRoot}/${avdName}.avd/config.ini`;
   }
@@ -2135,8 +2159,12 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #waitForReadiness(data: AndroidDriverData, startedAt: number): Promise<void> {
-    while (true) {
+  async #waitForReadiness(
+    data: AndroidDriverData,
+    startedAt: number,
+    abandoned: () => boolean = () => false,
+  ): Promise<void> {
+    while (!abandoned()) {
       if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
         throw new BootTimeoutError(data.avdName);
       }
@@ -2274,7 +2302,9 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
-    // why: `stdio: "ignore"` and `unref()` because an emulator outlives the daemon by design
+    const logPath = this.#emulatorLogPath(data.avdName);
+    await this.#filesystem.writeFileAtomic(logPath, "", { mode: 0o600 });
+    // why: the output goes to a file so a launch that dies at once leaves its own error line to quote (#1199); `unref()` because an emulator outlives the daemon by design
     // (`#reattachRunningEmulators` adopts it after a restart) and is reaped through adb and
     // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
     // the event loop open, and a `daemon stop` that had logged "Daemon stopped" would leave
@@ -2296,7 +2326,7 @@ export class AndroidDriver implements Driver {
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
-      { env: this.#emulatorEnv(), stdio: "ignore" },
+      { env: this.#emulatorEnv(), stdio: { file: logPath } },
     );
     handle.unref();
     state.handle = handle;
@@ -2306,14 +2336,27 @@ export class AndroidDriver implements Driver {
     // adb's retry queue afterwards. The announcement that can land is the one in
     // `#waitForReadiness`, once the serial has stayed silent past the grace period.
 
+    // why: an emulator that exits before it boots never will; waiting out the boot timeout for it hides the reason it left in its log.
+    let waiting = true;
+    const exited = handle.wait().then(async (result): Promise<never> => {
+      if (!waiting) return new Promise<never>(() => undefined);
+      throw new DriverCrashError(
+        `The emulator for ${data.avdName} exited (code ${result.code ?? "none"}) before it booted:\n${await this.#emulatorLogTail(logPath)}`,
+      );
+    });
+    exited.catch(() => undefined);
+    const readiness = this.#waitForReadiness(data, startedAt, () => !waiting);
+    readiness.catch(() => undefined);
     try {
-      await this.#waitForReadiness(data, startedAt);
+      await Promise.race([readiness, exited]);
     } catch (error: unknown) {
+      waiting = false;
       handle.kill("SIGKILL");
       await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
       state.handle = undefined;
       throw error;
     }
+    waiting = false;
 
     const readyAfterMs = this.#clock.now() - startedAt;
     if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {

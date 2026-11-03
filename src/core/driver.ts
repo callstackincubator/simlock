@@ -591,9 +591,25 @@ export class UnknownModelError extends Error {
 }
 
 export class BootTimeoutError extends Error {
-  constructor(readonly deviceId: string) {
-    super(`Timed out waiting for device to boot: ${deviceId}`);
+  /** why: `reason` is the driver's own message for a boot that failed rather than ran out of time. */
+  constructor(
+    readonly deviceId: string,
+    reason?: string,
+  ) {
+    super(
+      reason === undefined
+        ? `Timed out waiting for device to boot: ${deviceId}`
+        : `Device failed to boot: ${deviceId}: ${reason}`,
+    );
     this.name = "BootTimeoutError";
+  }
+
+  /** why: a timeout stays a plain timeout; any other failure carries the driver's own message. */
+  static from(deviceId: string, error: unknown): BootTimeoutError {
+    return new BootTimeoutError(
+      deviceId,
+      error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
+    );
   }
 }
 

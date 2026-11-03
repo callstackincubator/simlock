@@ -123,7 +123,7 @@ export class DeviceProvisioner {
         throw new Error(`Registered device could not be made ready: ${device.id}`);
       return ready;
     } catch (error: unknown) {
-      // The caller only ever sees `BootTimeoutError`; the driver's own reason is kept here.
+      // why: the caller sees `BootTimeoutError` carrying the driver's message; the log keeps the full error.
       this.#logger.warn("new device failed to become ready", {
         deviceId: device.id,
         step: "boot",
@@ -139,7 +139,7 @@ export class DeviceProvisioner {
           error: stableError(destroyError),
         });
       }
-      throw new BootTimeoutError(device.id);
+      throw BootTimeoutError.from(device.id, error);
     } finally {
       options.reservation.release();
     }
