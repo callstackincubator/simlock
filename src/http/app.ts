@@ -19,6 +19,9 @@ import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
 import {
   componentInstallRoute,
+  baselineListRoute,
+  baselineRemoveRoute,
+  baselineSaveRoute,
   componentListRoute,
   componentRemoveRoute,
   eventsRoute,
@@ -295,6 +298,32 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       200,
     );
   });
+
+  app.openapi({ ...baselineListRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("baseline.list", {}, buildHttpSession(c.get("identity"))), 200),
+  );
+
+  app.openapi({ ...baselineSaveRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "baseline.save",
+        c.req.valid("json"),
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    ),
+  );
+
+  app.openapi({ ...baselineRemoveRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "baseline.remove",
+        { name: c.req.valid("param").name },
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    ),
+  );
 
   app.openapi({ ...deviceAddRoute, middleware: [agentAuth] }, async (c) =>
     c.json(
