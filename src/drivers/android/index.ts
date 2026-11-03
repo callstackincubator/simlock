@@ -151,7 +151,7 @@ const SEED_MAKE_ESTIMATE_MS = 150_000;
 // when it did: 2.4-5.1s for the snapshot strategy.
 const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // why: measured on the same hardware at 22.8-42.8s (median 31.7s) for the wipe strategy; the slow
-// branch is the one quoted, so `Doctor` never reads a kept-warm reclaim as stalled.
+// branch is the one quoted, so `Doctor` never reads a slow reclaim as stalled.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
 const SEED_AVD_NAME = "simlock";
 const BOOT_SNAPSHOT = "simlock_boot";
@@ -1428,8 +1428,8 @@ export class AndroidDriver implements Driver {
       if (state.handle !== undefined) {
         const running = this.#onReservedPort(data, state);
         await this.#waitForReadiness(running, this.#clock.now());
-        // why: The device was already running (or booting) under this driver instance -- reclaim
-        // never touched it, so its mark can't have gone stale. Re-mark anyway: this is the
+        // why: The device was already running (or booting) under this driver instance, so its mark
+        // can't have gone stale. Re-mark anyway: this is the
         // single readiness transition that lets a caller re-lease an already-ready device
         // without ever seeing a moment where "ready" and "marked" disagree.
         await this.#writeMark(running);
@@ -1860,8 +1860,8 @@ export class AndroidDriver implements Driver {
         return this.#bootEstimate(estimate.device, estimate.purpose, spec);
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
-        // why: `standard` can still fall back to the wipe branch (about five times longer); `Doctor`
-        // takes the slower clean level instead of averaging the two.
+        // why: the two clean levels price differently (the wipe strategy about five times the snapshot one);
+        // the estimate follows the level asked for, never an average of the two.
         return virtualReclaimStrategy(estimate.clean) === "wipe"
           ? WIPE_RECLAIM_ESTIMATE_MS
           : SNAPSHOT_RECLAIM_ESTIMATE_MS;
@@ -2344,8 +2344,7 @@ export class AndroidDriver implements Driver {
    * why: Writes the same provenance token into both regions of the mark: the durable
    * `simlock.mark` key in `config.ini` (host-side, survives an erase) and the erasable
    * `/data/local/tmp/simlock-mark.json` file on the device (destroyed by an erase). Must be
-   * called after every readiness transition -- see the call sites in `makeReady` and
-   * `reclaim` for why "the tail of `makeReady`" alone is not sufficient.
+   * called after every readiness transition -- see the call sites in `makeReady`.
    */
   async #writeMark(data: AndroidDriverData): Promise<void> {
     const token = this.#idGenerator.generate();
