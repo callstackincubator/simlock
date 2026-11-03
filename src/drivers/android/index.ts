@@ -280,6 +280,13 @@ interface DeviceState {
   restored?: boolean;
 }
 
+interface DeviceEntry {
+  readonly avdName: string;
+  readonly deviceId: string;
+  /** why: the AVD's own folder, which is what an emulator's `emu avd path` answers. */
+  readonly folder: string;
+}
+
 interface SeedRecord {
   readonly configHash: string;
   readonly folder: string;
@@ -1622,15 +1629,15 @@ export class AndroidDriver implements Driver {
   }
 
   async listManaged(): Promise<DriverReality> {
-    const avdNames = await this.#listAvdNames();
+    const entries = await this.#listDeviceEntries();
     const { settledSerials, unattributableTransitionalSerial } = await this.#scanAdbSerials();
-    const { processes, runningByAvdName, erasableMarkByAvdName, unreadableSerial } =
-      await this.#resolveRunningAvds(settledSerials, new Set(avdNames));
+    const { processes, runningByDeviceId, erasableMarkByDeviceId, unreadableSerial } =
+      await this.#resolveRunningAvds(settledSerials, entries);
     const unattributable = unattributableTransitionalSerial || unreadableSerial;
 
     const devices: ObservedDevice[] = await Promise.all(
-      avdNames.map((avdName) =>
-        this.#observedDevice(avdName, runningByAvdName, unattributable, erasableMarkByAvdName),
+      entries.map((entry) =>
+        this.#observedDevice(entry, runningByDeviceId, unattributable, erasableMarkByDeviceId),
       ),
     );
 
@@ -1638,33 +1645,53 @@ export class AndroidDriver implements Driver {
   }
 
   async #observedDevice(
-    avdName: string,
-    runningByAvdName: ReadonlySet<string>,
+    entry: DeviceEntry,
+    runningByDeviceId: ReadonlySet<string>,
     unattributableTransitionalSerial: boolean,
-    erasableMarkByAvdName: ReadonlyMap<string, string | undefined>,
+    erasableMarkByDeviceId: ReadonlyMap<string, string | undefined>,
   ): Promise<ObservedDevice> {
-    const base = observedAndroidDevice(avdName, runningByAvdName, unattributableTransitionalSerial);
-    const running = runningByAvdName.has(avdName);
-    const durable = await this.#readDurableMark(`${this.#deviceRoot}/${avdName}.avd`);
-    const mark = buildObservedMark(durable, running, erasableMarkByAvdName.get(avdName));
+    const base = observedAndroidDevice(
+      entry.deviceId,
+      runningByDeviceId,
+      unattributableTransitionalSerial,
+    );
+    const running = runningByDeviceId.has(entry.deviceId);
+    const durable = await this.#readDurableMark(entry.folder);
+    const mark = buildObservedMark(durable, running, erasableMarkByDeviceId.get(entry.deviceId));
     return mark === undefined ? base : { ...base, mark };
   }
 
   /**
-   * why: Every AVD in the root, whatever it is called. The name is a cosmetic label with no
-   * authority: what makes these AVDs Simlock's is that they sit inside a root Simlock
-   * created empty and marked, which nothing else can put an AVD into (safety rule 8).
+   * why: Every AVD in the root, whatever it is called: a copy's folder `<root>/<id>/` holding
+   * `simlock.avd`, or an AVD made before copies at `<root>/<name>.avd`. The name is a cosmetic
+   * label with no authority: what makes these AVDs Simlock's is that they sit inside a root
+   * Simlock created empty and marked, which nothing else can put an AVD into (safety rule 8).
+   * `<root>/sources/` holds seeds, which are never devices.
    */
-  async #listAvdNames(): Promise<string[]> {
-    const avdNames: string[] = [];
-    if (await this.#filesystem.exists(this.#deviceRoot)) {
-      for (const entry of await this.#filesystem.readdir(this.#deviceRoot)) {
-        const match = /^(.+)\.avd$/.exec(entry);
-        if (match?.[1] === undefined) continue;
-        avdNames.push(match[1]);
+  async #listDeviceEntries(): Promise<DeviceEntry[]> {
+    const entries: DeviceEntry[] = [];
+    if (!(await this.#filesystem.exists(this.#deviceRoot))) return entries;
+    for (const entry of await this.#filesystem.readdir(this.#deviceRoot)) {
+      const old = /^(.+)\.avd$/.exec(entry);
+      if (old?.[1] !== undefined) {
+        entries.push({ avdName: old[1], deviceId: old[1], folder: `${this.#deviceRoot}/${entry}` });
+        continue;
+      }
+      const folder = `${this.#deviceRoot}/${entry}/${SEED_AVD_NAME}.avd`;
+      if (entry !== SOURCES_DIRECTORY && (await this.#holdsAvd(folder))) {
+        entries.push({ avdName: SEED_AVD_NAME, deviceId: entry, folder });
       }
     }
-    return avdNames;
+    return entries;
+  }
+
+  /** why: the root also holds files (the marker), and a path under a file is not an error here, only not an AVD. */
+  async #holdsAvd(folder: string): Promise<boolean> {
+    try {
+      return await this.#filesystem.exists(folder);
+    } catch {
+      return false;
+    }
   }
 
   async #scanAdbSerials(): Promise<{
@@ -1691,16 +1718,16 @@ export class AndroidDriver implements Driver {
 
   async #resolveRunningAvds(
     settledSerials: readonly string[],
-    avdNamesInRoot: ReadonlySet<string>,
+    entries: readonly DeviceEntry[],
   ): Promise<{
-    readonly erasableMarkByAvdName: ReadonlyMap<string, string | undefined>;
+    readonly erasableMarkByDeviceId: ReadonlyMap<string, string | undefined>;
     readonly processes: readonly DriverDevice[];
-    readonly runningByAvdName: ReadonlySet<string>;
+    readonly runningByDeviceId: ReadonlySet<string>;
     readonly unreadableSerial: boolean;
   }> {
     const processes: DriverDevice[] = [];
-    const runningByAvdName = new Set<string>();
-    const erasableMarkByAvdName = new Map<string, string | undefined>();
+    const runningByDeviceId = new Set<string>();
+    const erasableMarkByDeviceId = new Map<string, string | undefined>();
     let unreadableSerial = false;
     for (const candidate of settledSerials) {
       // why: `adb shell` reports the exit status of the last command it ran, so a missing
@@ -1721,8 +1748,9 @@ export class AndroidDriver implements Driver {
         continue;
       }
       const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
-      const avdName = nameLine.trim();
-      if (!avdNamesInRoot.has(avdName)) continue;
+      // why: every copy's AVD is named `simlock`, so the name only narrows the candidates; the path the emulator answers picks the one device.
+      const named = entries.filter((entry) => entry.avdName === nameLine.trim());
+      if (named.length === 0) continue;
       let answered: string;
       try {
         answered = await this.#readAvdPath(candidate);
@@ -1732,15 +1760,22 @@ export class AndroidDriver implements Driver {
         unreadableSerial = true;
         continue;
       }
-      if (!(await this.#sameDirectory(answered, `${this.#deviceRoot}/${avdName}.avd`))) continue;
-      runningByAvdName.add(avdName);
-      erasableMarkByAvdName.set(avdName, parseErasableMark(markLines.join("\n")));
+      let owner: DeviceEntry | undefined;
+      for (const entry of named) {
+        if (await this.#sameDirectory(answered, entry.folder)) owner = entry;
+      }
+      if (owner === undefined) continue;
+      runningByDeviceId.add(owner.deviceId);
+      erasableMarkByDeviceId.set(owner.deviceId, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
       processes.push({
         address: candidate,
-        deviceId: avdName,
+        deviceId: owner.deviceId,
         driverData: {
-          avdName,
+          ...(owner.avdName === SEED_AVD_NAME
+            ? { avdHome: `${this.#deviceRoot}/${owner.deviceId}` }
+            : {}),
+          avdName: owner.avdName,
           configHash: "recovered",
           imageIdentity: "",
           port,
@@ -1748,7 +1783,7 @@ export class AndroidDriver implements Driver {
         } satisfies AndroidDriverData,
       });
     }
-    return { erasableMarkByAvdName, processes, runningByAvdName, unreadableSerial };
+    return { erasableMarkByDeviceId, processes, runningByDeviceId, unreadableSerial };
   }
 
   async #adbShellOrUndefined(args: readonly string[]): Promise<ProcessResult | undefined> {
