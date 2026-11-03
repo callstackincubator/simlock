@@ -357,10 +357,27 @@ export class MemoryFilesystem implements Filesystem {
   }
 
   async copyTree(
-    _from: string,
-    _to: string,
+    from: string,
+    to: string,
     _options: { readonly timeoutMs: number },
-  ): Promise<void> {}
+  ): Promise<void> {
+    this.#failIfDefined(from);
+    this.#failIfDefined(to);
+    this.#rawEntryAt(from);
+    if (this.#entries.has(to)) throw errnoError("EEXIST", `File already exists: ${to}`);
+    this.#requireDirectory(parentPath(to));
+    const prefix = `${from}/`;
+    for (const [entryPath, entry] of Array.from(this.#entries)) {
+      if (entryPath !== from && !entryPath.startsWith(prefix)) continue;
+      this.#entries.set(
+        entryPath === from ? to : joinMemoryPath(to, entryPath.slice(prefix.length)),
+        {
+          ...entry,
+          identity: this.#nextIdentity++,
+        },
+      );
+    }
+  }
 
   async readFileFrom(path: string, offset: number): Promise<string> {
     return Buffer.from(await this.readFile(path), "utf8")

@@ -1,5 +1,5 @@
 import { otherDeviceRefusal } from "../other-device-refusal.js";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import {
   ensureOwnedRoot,
@@ -47,6 +47,7 @@ import {
   RuntimeMissingError,
   sameReceipt,
 } from "../../core/index.js";
+import { AndroidSourceTable } from "./source-data.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
   isMissingPathError,
@@ -163,6 +164,11 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // look stalled, while over-quoting only delays a finding.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
 const CLEAN_BASELINE = "simlock_clean_baseline";
+const SEED_AVD_NAME = "simlock";
+const BOOT_SNAPSHOT = "simlock_boot";
+const SOURCES_DIRECTORY = "sources";
+const SEED_COPY_TIMEOUT_MS = 600_000;
+const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
@@ -268,6 +274,12 @@ interface DeviceState {
    * started may still run the AVD, so `destroy` looks for one.
    */
   restored?: boolean;
+}
+
+interface SeedRecord {
+  readonly configHash: string;
+  readonly folder: string;
+  readonly sourceId: string;
 }
 
 interface SystemImage {
@@ -556,6 +568,7 @@ export class AndroidDriver implements Driver {
   readonly #registrar: AdbRegistrar;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
+  readonly #sources: AndroidSourceTable;
   readonly #tcpProbe: TcpProbe;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
@@ -595,6 +608,7 @@ export class AndroidDriver implements Driver {
     this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
+    this.#sources = new AndroidSourceTable(options.database);
     this.#tcpProbe = options.tcpProbe;
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     const deviceTarget = this.#deviceTargetFor(options, sdk.adb, adbServerPort);
@@ -943,9 +957,10 @@ export class AndroidDriver implements Driver {
    * by default that is `/tmp/android-<user>/emu-crash-<version>.db`, shared with Android Studio and
    * the user's own emulators. A database inside Simlock's own root keeps those dumps untouched.
    */
-  #emulatorEnv(): NodeJS.ProcessEnv {
+  #emulatorEnv(data: AndroidDriverData): NodeJS.ProcessEnv {
     return {
       ...this.#env(),
+      ...(data.avdHome === undefined ? {} : { ANDROID_AVD_HOME: data.avdHome }),
       ANDROID_EMU_CRASH_REPORTING_DATABASE: join(this.#deviceRoot, "emu-crash.db"),
     };
   }
@@ -1052,7 +1067,14 @@ export class AndroidDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
-    return [];
+    return this.#sources.readyRows().map((row) => ({
+      id: row.sourceId,
+      imageTag: row.imageTag,
+      kind: row.kind,
+      model: row.model,
+      osVersion: row.osVersion,
+      ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+    }));
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -1063,48 +1085,26 @@ export class AndroidDriver implements Driver {
     this.#assertAndroidSpec(spec);
     const profile = await this.#profileFor(spec.model);
     const image = await this.#requireImage(profile, spec.osVersion, spec.imageTag);
-    // why: Cosmetic only, and worth saying so: the prefix is a label that makes an emulator
-    // recognisable in `adb devices` and in its window title. Nothing reads it back as
-    // evidence of anything -- ownership comes from the root this AVD is created in.
-    const avdName = `simlock_${this.#idGenerator.generate()}`;
+    // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
+    // folder. Nothing reads it back as evidence of anything -- ownership comes from the root.
+    const deviceId = `simlock_${this.#idGenerator.generate()}`;
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
-
-    if (profile.kind === "library") {
-      assertLibraryProfileWritable(profile);
-    }
-    const seedDeviceId =
-      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
-    await this.#runOrThrow(this.#sdk.avdmanager, [
-      "create",
-      "avd",
-      "-n",
-      avdName,
-      "-k",
-      packageName,
-      "-d",
-      seedDeviceId,
-    ]);
-
-    if (profile.kind === "properties") {
-      // why: Must happen before `#configHash` below captures the driver's snapshot/config-hash
-      // baseline: applying it after would let the baseline settle on the seed device's
-      // hardware and then see a spurious drift on the very next boot.
-      await this.#applyHardwareProperties(avdName, profile.hardwareProperties);
-    }
-
-    if (profile.kind === "library") {
-      await this.#applyLibraryProfile(avdName, profile, image);
-    }
-
-    const configHash = await this.#configHash(avdName, image);
+    const specKey = `${spec.model}|${packageName}`;
+    const seed = await this.#withDeviceLock(`seed:${specKey}`, async () => {
+      const ready = this.#sources.findReadySeed(specKey);
+      return ready ?? (await this.#makeSeed({ image, packageName, profile, spec, specKey }));
+    });
+    const avdHome = join(this.#deviceRoot, deviceId);
+    await this.#copySeed(seed, avdHome);
     const driverData: AndroidDriverData = {
-      avdName,
-      configHash,
+      avdHome,
+      avdName: SEED_AVD_NAME,
+      configHash: seed.configHash,
       imageIdentity: `${image.path}@${image.version}`,
       port: 0,
       serial: "",
     };
-    this.#devices.set(avdName, {
+    this.#devices.set(this.#avdFolder(driverData), {
       baselineCaptured: false,
       handle: undefined,
       imageIdentity: `${image.path}@${image.version}`,
@@ -1113,7 +1113,122 @@ export class AndroidDriver implements Driver {
       snapshotExpected: false,
     });
 
-    return { address: "", deviceId: avdName, driverData };
+    return { address: "", deviceId, driverData };
+  }
+
+  /**
+   * why: A seed is the source every Android device of one kind is copied from: made once, booted
+   * twice (the second boot starts from a disk that was powered off cleanly), saved as one boot
+   * snapshot, and never booted again (ADR 0061 §1). Its row is written `making` before any
+   * folder exists, so a crash leaves a row that names the folder to clean.
+   */
+  async #makeSeed(request: {
+    readonly image: SystemImage;
+    readonly packageName: string;
+    readonly profile: DeviceProfile;
+    readonly spec: VirtualSpec;
+    readonly specKey: string;
+  }): Promise<SeedRecord> {
+    const { image, packageName, profile, spec, specKey } = request;
+    if (profile.kind === "library") {
+      assertLibraryProfileWritable(profile);
+    }
+    const sourceId = `seed_${this.#idGenerator.generate()}`;
+    const folder = join(this.#deviceRoot, SOURCES_DIRECTORY, sourceId);
+    const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
+    const imageIdentity = `${image.path}@${image.version}`;
+    const emulatorVersion = await this.#emulatorVersion();
+    this.#sources.insertMaking({
+      avdName: SEED_AVD_NAME,
+      createdAt: this.#clock.now(),
+      emulatorVersion,
+      folder,
+      imageIdentity,
+      imageTag: image.tag,
+      kind: "seed",
+      model: spec.model,
+      osVersion: image.apiLevel,
+      sourceId,
+      specKey,
+    });
+    await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+    const seedDeviceId =
+      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
+    await this.#runOrThrow(
+      this.#sdk.avdmanager,
+      ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
+      { env: { ...this.#env(), ANDROID_AVD_HOME: folder } },
+    );
+    if (profile.kind === "properties") {
+      await this.#applyHardwareProperties(avdFolder, profile.hardwareProperties);
+    }
+    if (profile.kind === "library") {
+      await this.#applyLibraryProfile(avdFolder, profile, image);
+    }
+    const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
+    await this.#bootSeedTwice({
+      avdHome: folder,
+      avdName: SEED_AVD_NAME,
+      configHash,
+      imageIdentity,
+      port: 0,
+      serial: "",
+    });
+    const sizeBytes = await this.#filesystem.directorySize(avdFolder);
+    this.#sources.markReady(sourceId, configHash, sizeBytes);
+    return { configHash, folder, sourceId };
+  }
+
+  async #bootSeedTwice(seed: AndroidDriverData): Promise<void> {
+    const state: DeviceState = {
+      baselineCaptured: false,
+      handle: undefined,
+      imageIdentity: seed.imageIdentity ?? "",
+      needsWipe: false,
+      port: undefined,
+      snapshotExpected: false,
+    };
+    const booted = await this.#withReservedPort(seed, state);
+    try {
+      await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
+      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"]);
+      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "reboot", "-p"]);
+      const running = state.handle;
+      if (running !== undefined) await this.#waitForExit(running, SEED_POWER_OFF_TIMEOUT_MS);
+      state.handle = undefined;
+      await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
+      await this.#runOrThrow(
+        this.#sdk.adb,
+        ["-s", booted.serial, "emu", "avd", "snapshot", "save", BOOT_SNAPSHOT],
+        { timeoutMs: SNAPSHOT_SAVE_TIMEOUT_MS },
+      );
+      const snapshots = await this.#runOrThrow(
+        this.#sdk.adb,
+        ["-s", booted.serial, "emu", "avd", "snapshot", "list"],
+        { timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
+      );
+      if (!snapshots.stdout.includes(BOOT_SNAPSHOT)) {
+        throw new DriverCrashError(`Android seed boot snapshot ${BOOT_SNAPSHOT} was not saved`);
+      }
+      await this.#shutdown(booted, state);
+    } finally {
+      if (state.port !== undefined) this.#portAllocator.release(state.port);
+    }
+  }
+
+  /** why: `to` of the filesystem port's copy must not exist, so the device's folder is made and the AVD copied into it. */
+  async #copySeed(seed: SeedRecord, avdHome: string): Promise<void> {
+    await this.#filesystem.mkdirp(avdHome, { mode: 0o700 });
+    await this.#filesystem.copyTree(
+      join(seed.folder, `${SEED_AVD_NAME}.avd`),
+      join(avdHome, `${SEED_AVD_NAME}.avd`),
+      { timeoutMs: SEED_COPY_TIMEOUT_MS },
+    );
+    const ini = await this.#filesystem.readFile(join(seed.folder, `${SEED_AVD_NAME}.ini`));
+    await this.#filesystem.writeFileAtomic(
+      join(avdHome, `${SEED_AVD_NAME}.ini`),
+      ini.replace(/^path=.*$/m, `path=${join(avdHome, `${SEED_AVD_NAME}.avd`)}`),
+    );
   }
 
   /**
@@ -1133,7 +1248,7 @@ export class AndroidDriver implements Driver {
     options?: { readonly purpose: "prepare" | "recover" },
   ): Promise<DriverDevice> {
     const data = this.#dataFor(device);
-    return this.#withDeviceLock(data.avdName, async () => {
+    return this.#withDeviceLock(this.#avdFolder(data), async () => {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
         const running = this.#onReservedPort(data, state);
@@ -1150,6 +1265,13 @@ export class AndroidDriver implements Driver {
         await this.#startEmulator(data, state, ["-no-snapshot-load"], false);
         await this.#writeMark(data);
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
+      }
+
+      if (data.avdHome !== undefined) {
+        const copy = await this.#withReservedPort(data, state);
+        await this.#startEmulator(copy, state, ["-snapshot", BOOT_SNAPSHOT], true);
+        await this.#writeMark(copy);
+        return { address: copy.serial, deviceId: device.deviceId, driverData: copy };
       }
 
       await this.#reconcileBaseline(data, state);
@@ -1207,7 +1329,7 @@ export class AndroidDriver implements Driver {
       return this.#physical.reclaim(device);
     }
     const data = this.#dataFor(device);
-    return this.#withDeviceLock(data.avdName, async () => {
+    return this.#withDeviceLock(this.#avdFolder(data), async () => {
       const state = this.#stateFor(data);
 
       if (options.clean === "full") {
@@ -1219,11 +1341,11 @@ export class AndroidDriver implements Driver {
         return { state: "shutdown", strategy: "wipe" };
       }
 
-      const currentHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+      const currentHash = await this.#currentConfigHash(this.#avdFolder(data), state.imageIdentity);
       const baselineHash = await this.#baselineHash(data.avdName);
       if (baselineHash !== currentHash) {
         await this.#shutdown(data, state);
-        await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
+        await this.#filesystem.rm(`${this.#avdFolder(data)}/snapshots`);
         state.needsWipe = true;
         state.snapshotExpected = false;
         state.baselineCaptured = false;
@@ -1282,14 +1404,14 @@ export class AndroidDriver implements Driver {
 
   async shutdown(device: DriverDevice): Promise<void> {
     const data = this.#dataFor(device);
-    await this.#withDeviceLock(data.avdName, async () => {
+    await this.#withDeviceLock(this.#avdFolder(data), async () => {
       await this.#shutdown(data, this.#stateFor(data));
     });
   }
 
   async destroy(device: DriverDevice): Promise<void> {
     const data = this.#dataFor(device);
-    await this.#withDeviceLock(data.avdName, async () => {
+    await this.#withDeviceLock(this.#avdFolder(data), async () => {
       const state = this.#stateFor(data);
       // why: After a restart a stopped device's recorded port may be another device's (#52), so a
       // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
@@ -1299,7 +1421,7 @@ export class AndroidDriver implements Driver {
         await this.#stopUnownedEmulator(data);
       }
       await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
-      this.#devices.delete(data.avdName);
+      this.#devices.delete(this.#avdFolder(data));
       if (state.port !== undefined) {
         this.#portAllocator.release(state.port);
       }
@@ -1312,7 +1434,7 @@ export class AndroidDriver implements Driver {
    * refused when that emulator does not exit in time, never done under a live process.
    */
   async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
-    const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
+    const expected = this.#avdFolder(data);
     const { settledSerials } = await this.#scanAdbSerials();
     const serials: string[] = [];
     for (const serial of settledSerials) {
@@ -1407,7 +1529,7 @@ export class AndroidDriver implements Driver {
   ): Promise<ObservedDevice> {
     const base = observedAndroidDevice(avdName, runningByAvdName, unattributableTransitionalSerial);
     const running = runningByAvdName.has(avdName);
-    const durable = await this.#readDurableMark(avdName);
+    const durable = await this.#readDurableMark(`${this.#deviceRoot}/${avdName}.avd`);
     const mark = buildObservedMark(durable, running, erasableMarkByAvdName.get(avdName));
     return mark === undefined ? base : { ...base, mark };
   }
@@ -1604,19 +1726,19 @@ export class AndroidDriver implements Driver {
   }
 
   async #applyLibraryProfile(
-    avdName: string,
+    folder: string,
     profile: Extract<DeviceProfile, { readonly kind: "library" }>,
     image: SystemImage,
   ): Promise<void> {
     await this.#mergeConfigIniLines(
-      avdName,
+      folder,
       {
         ...profile.hardware,
         "PlayStore.enabled": profile.playStore && isPlayStoreImage(image) ? "yes" : "no",
       },
       (line) => !isSeedHardwareLine(line),
     );
-    const bootPropPath = `${this.#configIniPath(avdName).replace(/\/config\.ini$/, "")}/boot.prop`;
+    const bootPropPath = `${folder}/boot.prop`;
     const properties = Object.entries(profile.bootProperties);
     if (properties.length > 0) {
       await this.#filesystem.writeFileAtomic(
@@ -1629,10 +1751,10 @@ export class AndroidDriver implements Driver {
   }
 
   async #applyHardwareProperties(
-    avdName: string,
+    folder: string,
     properties: Readonly<Record<string, string>>,
   ): Promise<void> {
-    await this.#mergeConfigIniLines(avdName, properties);
+    await this.#mergeConfigIniLines(folder, properties);
   }
 
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
@@ -1980,19 +2102,19 @@ export class AndroidDriver implements Driver {
     return apiLevel;
   }
 
-  async #configHash(avdName: string, image: SystemImage): Promise<string> {
-    return this.#currentConfigHash(avdName, `${image.path}@${image.version}`);
-  }
-
   /**
    * why: What a clean baseline snapshot depends on. A mismatch against the hash stored with the
    * baseline rebuilds it on the next boot rather than loading a snapshot the emulator would
    * refuse, which would degrade every later reclaim to a full wipe.
    */
-  async #currentConfigHash(avdName: string, imageIdentity: string): Promise<string> {
+  async #currentConfigHash(
+    folder: string,
+    imageIdentity: string,
+    knownEmulatorVersion?: string,
+  ): Promise<string> {
     const [emulatorVersion, config] = await Promise.all([
-      this.#emulatorVersion(),
-      this.#avdConfig(avdName),
+      knownEmulatorVersion ?? this.#emulatorVersion(),
+      this.#avdConfig(folder),
     ]);
     return stableHash([imageIdentity, emulatorVersion, config, ...this.#baselineLaunchInputs]);
   }
@@ -2002,9 +2124,9 @@ export class AndroidDriver implements Driver {
     return result.stdout.trim();
   }
 
-  async #avdConfig(avdName: string): Promise<string> {
+  async #avdConfig(folder: string): Promise<string> {
     try {
-      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
+      const contents = await this.#filesystem.readFile(`${folder}/config.ini`);
       return (
         contents
           .split(/\r?\n/)
@@ -2020,8 +2142,11 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  #configIniPath(avdName: string): string {
-    return `${this.#deviceRoot}/${avdName}.avd/config.ini`;
+  /** why: a copy's AVD sits in its own folder under the root; a device made before copies sat at `<root>/<avdName>.avd`. */
+  #avdFolder(data: AndroidDriverData): string {
+    return data.avdHome === undefined
+      ? `${this.#deviceRoot}/${data.avdName}.avd`
+      : `${data.avdHome}/${SEED_AVD_NAME}.avd`;
   }
 
   /**
@@ -2034,17 +2159,17 @@ export class AndroidDriver implements Driver {
   async #writeMark(data: AndroidDriverData): Promise<void> {
     const token = this.#idGenerator.generate();
     await Promise.all([
-      this.#writeDurableMark(data.avdName, token),
+      this.#writeDurableMark(this.#avdFolder(data), token),
       this.#writeErasableMark(data.serial, token),
     ]);
   }
 
-  async #writeDurableMark(avdName: string, token: string): Promise<void> {
-    await this.#mergeConfigIniLines(avdName, { [DURABLE_MARK_KEY]: token });
+  async #writeDurableMark(folder: string, token: string): Promise<void> {
+    await this.#mergeConfigIniLines(folder, { [DURABLE_MARK_KEY]: token });
   }
 
   async #mergeConfigIniLines(
-    avdName: string,
+    folder: string,
     entries: Readonly<Record<string, string>>,
     keepLine: (line: string) => boolean = () => true,
   ): Promise<void> {
@@ -2055,7 +2180,7 @@ export class AndroidDriver implements Driver {
         );
       }
     }
-    const path = this.#configIniPath(avdName);
+    const path = `${folder}/config.ini`;
     let contents: string;
     try {
       contents = await this.#filesystem.readFile(path);
@@ -2090,9 +2215,9 @@ export class AndroidDriver implements Driver {
     ]);
   }
 
-  async #readDurableMark(avdName: string): Promise<string | undefined> {
+  async #readDurableMark(folder: string): Promise<string | undefined> {
     try {
-      const contents = await this.#filesystem.readFile(this.#configIniPath(avdName));
+      const contents = await this.#filesystem.readFile(`${folder}/config.ini`);
       const line = contents
         .split(/\r?\n/)
         .find((entry) => entry.startsWith(`${DURABLE_MARK_KEY}=`));
@@ -2177,7 +2302,7 @@ export class AndroidDriver implements Driver {
    * symlink such as macOS's `/var` -> `/private/var`); anything unreadable fails closed.
    */
   async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
-    const expected = `${this.#deviceRoot}/${data.avdName}.avd`;
+    const expected = this.#avdFolder(data);
     const answered = await this.#readAvdPath(data.serial);
     if (await this.#isOwnAvdPath(answered, expected)) {
       return;
@@ -2208,10 +2333,7 @@ export class AndroidDriver implements Driver {
         { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
       );
       if (result.code !== 0) return false;
-      return await this.#isOwnAvdPath(
-        answeredAvdPath(result.stdout),
-        `${this.#deviceRoot}/${data.avdName}.avd`,
-      );
+      return await this.#isOwnAvdPath(answeredAvdPath(result.stdout), this.#avdFolder(data));
     } catch {
       return false;
     }
@@ -2264,7 +2386,7 @@ export class AndroidDriver implements Driver {
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
-      { env: this.#emulatorEnv(), stdio: "ignore" },
+      { env: this.#emulatorEnv(data), stdio: "ignore" },
     );
     handle.unref();
     state.handle = handle;
@@ -2302,7 +2424,7 @@ export class AndroidDriver implements Driver {
   ): Promise<"load" | "stale" | "none"> {
     const baselineHash = await this.#baselineHash(data.avdName);
     if (needsWipe || baselineHash === undefined) return "none";
-    const currentHash = await this.#currentConfigHash(data.avdName, imageIdentity);
+    const currentHash = await this.#currentConfigHash(this.#avdFolder(data), imageIdentity);
     return baselineHash === currentHash ? "load" : "stale";
   }
 
@@ -2313,7 +2435,7 @@ export class AndroidDriver implements Driver {
   ): Promise<number> {
     if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
     const data = this.#dataFor(device);
-    const state = this.#devices.get(data.avdName);
+    const state = this.#devices.get(this.#avdFolder(data));
     const verdict = await this.#baselineVerdict(
       data,
       state?.needsWipe === true,
@@ -2330,7 +2452,7 @@ export class AndroidDriver implements Driver {
       state.snapshotExpected = true;
       return;
     }
-    await this.#filesystem.rm(`${this.#deviceRoot}/${data.avdName}.avd/snapshots`);
+    await this.#filesystem.rm(`${this.#avdFolder(data)}/snapshots`);
     state.baselineCaptured = false;
     state.needsWipe = true;
     state.snapshotExpected = false;
@@ -2350,7 +2472,7 @@ export class AndroidDriver implements Driver {
     if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
       throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
     }
-    const configHash = await this.#currentConfigHash(data.avdName, state.imageIdentity);
+    const configHash = await this.#currentConfigHash(this.#avdFolder(data), state.imageIdentity);
     await this.#filesystem.writeFileAtomic(
       this.#baselineMetadataPath(data.avdName),
       JSON.stringify({ configHash, snapshot: CLEAN_BASELINE }),
@@ -2454,16 +2576,15 @@ export class AndroidDriver implements Driver {
     if (!isAndroidDriverData(device.driverData)) {
       throw new Error(`Android device ${device.deviceId} has invalid driver data`);
     }
-    if (device.deviceId !== device.driverData.avdName) {
-      throw new Error(
-        `Android device id ${device.deviceId} does not match AVD ${device.driverData.avdName}`,
-      );
+    const { avdHome, avdName } = device.driverData;
+    if (device.deviceId !== (avdHome === undefined ? avdName : basename(avdHome))) {
+      throw new Error(`Android device id ${device.deviceId} does not match AVD ${avdName}`);
     }
     return device.driverData;
   }
 
   #stateFor(data: AndroidDriverData): DeviceState {
-    const existing = this.#devices.get(data.avdName);
+    const existing = this.#devices.get(this.#avdFolder(data));
     if (existing !== undefined) {
       return existing;
     }
@@ -2476,7 +2597,7 @@ export class AndroidDriver implements Driver {
       restored: true,
       snapshotExpected: false,
     };
-    this.#devices.set(data.avdName, restored);
+    this.#devices.set(this.#avdFolder(data), restored);
     return restored;
   }
 
@@ -2991,6 +3112,7 @@ function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAlloca
   return allocator;
 }
 export { androidDeviceDataTable } from "./device-data.js";
+export { androidSourceDataOwner } from "./source-data.js";
 export { androidPrerequisites } from "./prerequisites.js";
 
 function virtualReclaimStrategy(clean: "standard" | "full"): "snapshot" | "wipe" {

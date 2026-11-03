@@ -56,6 +56,7 @@ import {
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidDeviceDataTable,
+  androidSourceDataOwner,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
@@ -365,6 +366,7 @@ async function composeDaemon(
             warmPoolOwner,
             tokensOwner,
             iosSourceDataOwner,
+            androidSourceDataOwner,
             ...new Set(deviceDataTables.values()),
           ],
     sqlite: new NodeSqliteOpener(),

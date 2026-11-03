@@ -6972,6 +6972,7 @@ describe("AndroidDriver image fit", () => {
     function makingTheSeed(): ScriptedProcessExpectation[] {
       const serial = "emulator-5586";
       return [
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         processResult(binaries.avdmanager, [
           "create",
           "avd",
@@ -6982,7 +6983,6 @@ describe("AndroidDriver image fit", () => {
           "-d",
           "pixel_5",
         ]),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ...bootingAt(seedHome, ["-no-snapshot-load"], false),
         processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
@@ -7037,7 +7037,7 @@ describe("AndroidDriver image fit", () => {
         ...makingTheSeed(),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
-        markWriteExpectation("emulator-5586", "device-3"),
+        markWriteExpectation("emulator-5586", "three"),
       ]);
 
       const device = await harness.driver.provision(harness.spec);
@@ -7050,7 +7050,7 @@ describe("AndroidDriver image fit", () => {
         driverData: { avdHome: copyHome, avdName: "simlock" },
       });
       await expect(harness.filesystem.readFile(`${copyHome}/simlock.avd/config.ini`)).resolves.toBe(
-        "hw.ramSize=2048\nsimlock.mark=device-3\n",
+        "hw.ramSize=2048\nsimlock.mark=three\n",
       );
       await expect(harness.filesystem.readFile(`${copyHome}/simlock.ini`)).resolves.toBe(
         `avd.ini.encoding=UTF-8\npath=${copyHome}/simlock.avd\ntarget=android-34\n`,
@@ -7064,7 +7064,7 @@ describe("AndroidDriver image fit", () => {
           osVersion: "34",
         },
       ]);
-      const launches = harness.runner.calls.filter((call) => call.command === binaries.emulator);
+      const launches = harness.runner.calls.filter((call) => call.args.includes("-avd"));
       expect(launches.map((call) => call.options.env?.["ANDROID_AVD_HOME"])).toEqual([
         seedHome,
         seedHome,
