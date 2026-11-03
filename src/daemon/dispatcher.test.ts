@@ -1877,8 +1877,12 @@ describe("Dispatcher: doctor baseline sources", () => {
 
 describe("Dispatcher: baseline events", () => {
   it("records baseline.saved, baseline.removed with its reason (nuke --delete-devices removes every baseline, plain nuke keeps them) and baseline.stale, once each, after the change is committed", async () => {
-    const { dispatcher, driver, eventBus, registry } = await buildDispatcher({ includeNuke: true });
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher({
+      driverOptions: { componentSizes: { "27.0": 1_000 }, knownModels: ["iPhone 17 Pro"] },
+      includeNuke: true,
+    });
     const admin = session({ principal: "tok_admin", role: "admin" });
+    await dispatcher.dispatch("component.install", { platform: "ios", version: "27.0" }, admin);
     const events = (name: string): unknown[] =>
       eventBus
         .replay()
@@ -1936,6 +1940,13 @@ describe("Dispatcher: baseline events", () => {
     await check();
     await check(reason);
     expect(events("baseline.stale")).toHaveLength(2);
+
+    await check();
+    driver.setSources([{ ...(source as NonNullable<typeof source>), staleReason: reason }]);
+    await dispatcher.dispatch("component.remove", { platform: "ios", version: "27.0" }, admin);
+    await vi.waitFor(() => {
+      expect(events("baseline.stale")).toHaveLength(3);
+    });
 
     await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin);
     expect(events("baseline.removed")).toEqual([
