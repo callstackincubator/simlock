@@ -546,6 +546,17 @@ function containsSequence(
   });
 }
 
+// why: The refusal text for the first REFUSED_ADB_SEQUENCES entry the arguments contain, or undefined when none is.
+function refusedSequenceMessage(args: readonly string[]): string | undefined {
+  const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
+    containsSequence(args, candidate.sequence, candidate.allowedNext),
+  );
+  if (refused === undefined) return undefined;
+  const qualifier =
+    refused.allowedNext === undefined ? "" : ` (anything but ${refused.allowedNext.join(", ")})`;
+  return `Refusing \`simlock adb ${refused.sequence.join(" ")}${qualifier}\`: ${refused.reason} ${RECLAIM_INSTEAD}`;
+}
+
 type AndroidTargetFor = (
   device: VirtualDriverDevice | PhysicalDriverDevice,
 ) => Promise<ScreenTarget>;
@@ -918,15 +929,8 @@ export class AndroidDriver implements Driver {
         `Refusing \`simlock adb ${REFUSED_ADB_SUBCOMMAND}\`: it would detach other leased emulators, which adb treats as connections it can drop. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
       );
     }
-    const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
-      containsSequence(args, candidate.sequence, candidate.allowedNext),
-    );
-    if (refused !== undefined) {
-      throw new PassthroughRefusedError(
-        "adb",
-        `Refusing \`simlock adb ${refused.sequence.join(" ")}${refused.allowedNext === undefined ? "" : ` (anything but ${refused.allowedNext.join(", ")})`}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
-      );
-    }
+    const refusedSequence = refusedSequenceMessage(args);
+    if (refusedSequence !== undefined) throw new PassthroughRefusedError("adb", refusedSequence);
 
     const scopeFlag = callerSuppliedScopeFlag(args);
     if (scopeFlag !== undefined) {
