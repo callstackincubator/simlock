@@ -5063,6 +5063,85 @@ describe("CLI: alerts test (ADR 0035 §1)", () => {
   });
 });
 
+describe("CLI: baseline save", () => {
+  const saved = (overrides: Record<string, unknown> = {}) => ({
+    baseline: {
+      mode: "full",
+      model: "Pixel 9",
+      name: "checkout",
+      osVersion: "36",
+      platform: "android",
+      savedAt: "2026-11-02T13:40:00.000Z",
+      version: 1,
+      ...overrides,
+    },
+    leaseId: "L1",
+  });
+
+  async function runSave(argv: string[], answer = saved()) {
+    const output = outputCapture();
+    const inputs: unknown[] = [];
+    let connected = false;
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({
+            saveBaseline: (input) => {
+              inputs.push(input);
+              return Promise.resolve(answer as never);
+            },
+          });
+        },
+      }),
+    );
+    return { code, connected, inputs, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline save sends the name, lease and note and prints the baseline's version, spec and size with the lease it ended, and refuses a missing --lease as USAGE", async () => {
+    const android = await runSave(
+      ["baseline", "save", "checkout", "--lease", "L1", "--note", "app 4.2, test user"],
+      saved({ imageTag: "google_apis", sizeBytes: 4_800_000_000 }),
+    );
+    expect([android.code, android.stdout, android.inputs]).toEqual([
+      0,
+      "Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease L1 ended.\n",
+      [{ leaseId: "L1", name: "checkout", note: "app 4.2, test user" }],
+    ]);
+
+    const ios = await runSave(
+      ["baseline", "save", "login", "--lease", "L5"],
+      saved({
+        mode: "slim",
+        model: "iPhone 17",
+        name: "login",
+        osVersion: "27.0",
+        platform: "ios",
+        sizeBytes: 3_100_000_000,
+      }),
+    );
+    expect(ios.stdout).toBe(
+      "Saved baseline login v1: ios iPhone 17, iOS 27.0, slim, 3.1 GB. Lease L1 ended.\n",
+    );
+    expect(ios.inputs).toEqual([{ leaseId: "L5", name: "login" }]);
+
+    const small = await runSave(
+      ["baseline", "save", "tiny", "--lease", "L1"],
+      saved({ sizeBytes: 250_000_000 }),
+    );
+    expect(small.stdout).toContain("full, 250.0 MB. Lease L1 ended.");
+    const uncounted = await runSave(["baseline", "save", "tiny", "--lease", "L1"], saved());
+    expect(uncounted.stdout).toBe(
+      "Saved baseline checkout v1: android Pixel 9, Android 36, full. Lease L1 ended.\n",
+    );
+
+    const missing = await runSave(["baseline", "save", "checkout"]);
+    expect([missing.code, missing.connected, missing.stdout]).toEqual([2, false, ""]);
+    expect(JSON.parse(missing.stderr)).toMatchObject({ error: { code: "USAGE" } });
+  });
+});
+
 describe("CLI: warm forget", () => {
   const USAGE =
     "Usage: simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]\n";
@@ -8399,6 +8478,9 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     runNuke: () =>
       Promise.resolve({ deletedDevices: [], releasedLeaseIds: [], removedBaselines: [] }),
     forgetWarmKind: () => Promise.resolve({ forgotten: [] }),
+    saveBaseline: () => Promise.reject(new Error("saveBaseline was not expected")),
+    listBaselines: () => Promise.resolve({ baselines: [] }),
+    removeBaseline: () => Promise.reject(new Error("removeBaseline was not expected")),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     updateDaemon: () =>
