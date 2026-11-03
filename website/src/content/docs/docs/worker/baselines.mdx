@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 A baseline is a simulator or emulator you prepared by hand and saved under a name, such as `checkout`: the app installed, a test user signed in. `simlock baseline save` keeps a copy of it on the worker; an agent can start from that copy instead of a factory-fresh device: `simlock lease --baseline checkout` (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
 
-`baseline save` and `baseline remove` need an admin session; an agent session gets `FORBIDDEN`. `baseline list` works from any session. A gateway refuses all three with `UNSUPPORTED_IN_GATEWAY_MODE`; run them against a worker.
+`baseline save` and `baseline remove` need an admin session; an agent session gets `FORBIDDEN`. `baseline list` works from any session. Through a gateway they act on its workers; see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway).
 
 ## Save a baseline
 

@@ -8,17 +8,17 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
 
 ## Files
 
-| File                | Role                                                               |
-| ------------------- | ------------------------------------------------------------------ |
-| `serviceability.ts` | `assess`: the fast-fail table, over every view                     |
-| `pipeline.ts`       | `runStages`; `FilterStage`, `RankStage`                            |
-| `request-match.ts`  | `matchRequest`, `deviceFit`, `physicalMatch` over a view's catalog |
-| `view-state.ts`     | `viewLoadKey`: the view fields a refusal is remembered against     |
-| `stages/`           | One file per stage                                                 |
+| File                | Role                                                                                                                                                      |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serviceability.ts` | `assess`: the fast-fail table, over every view                                                                                                            |
+| `pipeline.ts`       | `runStages`; `FilterStage`, `RankStage`                                                                                                                   |
+| `request-match.ts`  | `matchRequest`, `deviceFit`, `physicalMatch` over a view's catalog; `baselineEntry`, `withBaseline`, `baselineMismatchOf` for a request naming a baseline |
+| `view-state.ts`     | `viewLoadKey`: the view fields a refusal is remembered against                                                                                            |
+| `stages/`           | One file per stage                                                                                                                                        |
 
 ## How it works
 
-1. **Assess** (`assess`), first that applies wins: no worker passes `takes-requests` →
+1. **Assess** (`assess`), first that applies wins: a request naming a baseline first: no known worker holds it → `UNKNOWN_BASELINE`; no holder fits it (core `baselineMismatch`, through `baselineMismatchOf`) → `BASELINE_MISMATCH` (the first holder in worker id order); no fitting holder is fresh → `BASELINE_STALE`; the rest of the table then runs over the fitting, fresh holders, each request narrowed by `withBaseline` (the baseline's model, OS, mode and image tag). Then: no worker passes `takes-requests` →
    `NO_CAPACITY` (`no-worker`); no known worker has the platform → `NO_DRIVER`; none lists the
    model or class → `UNKNOWN_MODEL`; none pairs it with a fitting runtime → `RUNTIME_MISSING`
    (`downloadable: false`); a known worker could, but none taking requests can → `NO_CAPACITY`;
@@ -35,17 +35,18 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
 4. The reported stage is the last rank that removed a worker, else the last that decided.
    `reason` is `warm-hit` when that stage is `warm-hit`, else `free-capacity`.
 
-| Stage              | Kind          | Keeps or prefers                                                                                          | Physical |
-| ------------------ | ------------- | --------------------------------------------------------------------------------------------------------- | -------- |
-| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held) | yes      |
-| `has-capabilities` | filter        | every `requires` entry `available`                                                                        | yes      |
-| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device     | yes      |
-| `healthy`          | filter        | health `running`                                                                                          | yes      |
-| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                        | no       |
-| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); physical: a pickable one        | yes      |
-| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                              | no       |
-| `ram-budget`       | rank          | `atRamBudget` not true                                                                                    | no       |
-| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                    | no       |
+| Stage              | Kind          | Keeps or prefers                                                                                                                                              | Physical |
+| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held)                                                     | yes      |
+| `has-capabilities` | filter        | every `requires` entry `available`                                                                                                                            | yes      |
+| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device                                                         | yes      |
+| `has-baseline`     | filter        | a request naming a baseline: the worker holds it (`no-baseline`), it fits (`baseline-mismatch`), it is fresh (`baseline-stale`)                               | no       |
+| `healthy`          | filter        | health `running`                                                                                                                                              | yes      |
+| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                                                                            | no       |
+| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); for a baseline, a copy of its current version in its mode; physical: a pickable one | yes      |
+| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                                                                                  | no       |
+| `ram-budget`       | rank          | `atRamBudget` not true                                                                                                                                        | no       |
+| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                                                                        | no       |
 
 A physical request has one rank, `warm-hit`: with no pickable device nothing is picked, and it waits.
 
@@ -55,7 +56,8 @@ A physical request has one rank, `warm-hit`: with no pickable device nothing is 
 - A filter returns its own reason and a rank its own zero reason. The pipeline and the policy
   name no stage and compare no stage name.
 - `can-serve` and the fleet table (`assess`) ask the same helpers in the same order, so the reason
-  `can-serve` gives is the code the table would reject with.
+  `can-serve` gives is the code the table would reject with. `has-baseline` and `assess` share
+  `baselineEntry` and `withBaseline`; no field of a baseline is compared in the gateway.
 - `gateway.routing` names a whole list; stage order is code, never config.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.
