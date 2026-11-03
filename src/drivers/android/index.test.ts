@@ -6007,36 +6007,41 @@ describe("AndroidDriver image fit", () => {
       expect(ready.address).toBe("emulator-5586");
     });
 
-    it("reports a copy whose boot snapshot does not load by its device id, and never wipes it", async () => {
-      const clock = new FakeClock();
-      const diagnostics: AndroidDriverDiagnostic[] = [];
-      const harness = await seedHarness(
-        [
-          ...makingTheSeed(),
-          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-          ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true, 1),
-          markWriteExpectation("emulator-5586", "three"),
-        ],
-        { clock, onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
-      );
-      const device = await harness.driver.provision(harness.spec);
+    it("reports a copy whose boot snapshot does not load by its device id, only when it took over 12 s, and never wipes it", async () => {
+      for (const { readyAfterMs, reported } of [
+        { readyAfterMs: 12_000, reported: false },
+        { readyAfterMs: 12_001, reported: true },
+      ]) {
+        const clock = new FakeClock();
+        const diagnostics: AndroidDriverDiagnostic[] = [];
+        const harness = await seedHarness(
+          [
+            ...makingTheSeed(),
+            processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+            ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true, 1),
+            markWriteExpectation("emulator-5586", "three"),
+          ],
+          { clock, onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+        );
+        const device = await harness.driver.provision(harness.spec);
 
-      const ready = harness.driver.makeReady(device);
-      await vi.waitFor(() =>
-        expect(
-          harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
-        ).toHaveLength(3),
-      );
-      clock.advance(13_000);
-      await ready;
+        const ready = harness.driver.makeReady(device);
+        await vi.waitFor(() =>
+          expect(
+            harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
+          ).toHaveLength(3),
+        );
+        clock.advance(readyAfterMs);
+        await ready;
 
-      expect(diagnostics).toEqual([
-        { deviceId: "simlock_one", kind: "snapshot-cold-boot", readyAfterMs: 13_000 },
-      ]);
-      expect(harness.runner.calls.flatMap((call) => call.args)).not.toContain("-wipe-data");
+        expect(diagnostics).toEqual(
+          reported ? [{ deviceId: "simlock_one", kind: "snapshot-cold-boot", readyAfterMs }] : [],
+        );
+        expect(harness.runner.calls.flatMap((call) => call.args)).not.toContain("-wipe-data");
+      }
     });
 
-    it("tells why a seed is stale and clears the reason when the image and emulator match again", async () => {
+    it("tells why a seed is stale, cut to 300 characters, and clears the reason when the image and emulator match again", async () => {
       const imagePath = `${sdk}/system-images/android-34/google_apis/arm64-v8a`;
       const packageName = "system-images;android-34;google_apis;arm64-v8a";
       const revision = (number: string) => `Pkg.Revision=${number}\n`;
@@ -6062,6 +6067,10 @@ describe("AndroidDriver image fit", () => {
         {
           emulatorVersion: "Android emulator version 36.2.0",
           reason: `emulator changed from ${original} to Android emulator version 36.2.0`,
+        },
+        {
+          emulatorVersion: "v".repeat(400),
+          reason: `emulator changed from ${original} to ${"v".repeat(400)}`.slice(0, 300),
         },
         {
           emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: true },
@@ -6151,7 +6160,21 @@ describe("AndroidDriver image fit", () => {
         {
           advance: 60_000,
           expectations: [stage.version, stage.create, ...stuckOff],
+          killsEmulator: true,
           message: "Android seed seed_two did not power off within 60000ms",
+        },
+        {
+          expectations: [
+            stage.version,
+            stage.create,
+            stage.devices,
+            ...stage.firstBoot,
+            stage.sync,
+            stage.powerOff,
+            ...stage.secondBoot,
+            { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+          ],
+          message: "Android seed seed_two: boot snapshot simlock_boot was not saved",
         },
         {
           expectations: [
@@ -6188,6 +6211,18 @@ describe("AndroidDriver image fit", () => {
         }
         await outcome;
 
+        if ("killsEmulator" in failing) {
+          const emulator = harness.runner.calls.findIndex((call) => call.args.includes("-avd"));
+          expect(
+            harness.runner.calls.some((call) => call.args.includes("kill")),
+            "the seed's emulator was asked to quit by its path",
+          ).toBe(true);
+          let exited = false;
+          void harness.runner.handles[emulator]?.wait().then(() => {
+            exited = true;
+          });
+          await vi.waitFor(() => expect(exited, "the seed's emulator was killed").toBe(true));
+        }
         expect(await harness.filesystem.exists(seedHome)).toBe(false);
         await expect(harness.driver.listSources()).resolves.toEqual([]);
         expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
@@ -6281,6 +6316,23 @@ describe("AndroidDriver image fit", () => {
         harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
       ).toEqual([{ state: "making" }, { state: "ready" }]);
       expect(await harness.filesystem.exists(makingHome)).toBe(true);
+
+      // why: after a restart that row is another process's leftover, which only its own kind's make or a listing sweeps.
+      const restarted = await reopened(harness, [
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      await restarted.driver.provision(
+        await restarted.driver.resolveSpec({
+          model: "Pixel 5",
+          osVersion: "34",
+          platform: "android",
+        }),
+      );
+      expect(
+        harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
+      ).toEqual([{ state: "making" }, { state: "ready" }]);
+      expect(await harness.filesystem.exists(makingHome)).toBe(true);
     });
 
     it("quotes a provision at 1 s with a fresh seed and 150 s without one, and a prepare boot at 4 s for a copy and 70 s otherwise", async () => {
@@ -6295,6 +6347,8 @@ describe("AndroidDriver image fit", () => {
       const copy = await harness.driver.provision(harness.spec);
 
       expect(harness.driver.estimate(provision, spec)).toBe(1_000);
+      expect(harness.driver.estimate(provision, { ...spec, model: "Pixel 9" })).toBe(150_000);
+      expect(harness.driver.estimate(provision, { ...spec, imageTag: "android-tv" })).toBe(150_000);
       const prepare = { device: copy, operation: "boot", purpose: "prepare" } as const;
       const oldLayout = {
         address: "",
@@ -6371,7 +6425,7 @@ describe("AndroidDriver image fit", () => {
       expect(seed).not.toHaveProperty("sizeBytes");
     });
 
-    it("sweeps a making row an earlier process left, stopping its emulator by path, and leaves one this process is making", async () => {
+    it("sweeps a making row an earlier process left, stopping its emulator by path, and one this process has been making for over 900 s, and leaves any other this process is making", async () => {
       const serial = "emulator-5586";
       const clock = new FakeClock();
       const stage = seedStages();
@@ -6410,6 +6464,44 @@ describe("AndroidDriver image fit", () => {
       expect(await harness.filesystem.exists(seedHome)).toBe(false);
       clock.advance(180_000);
       await failed;
+
+      const slowClock = new FakeClock();
+      const slow = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          stage.firstBoot[0] as ScriptedProcessExpectation,
+          processResult(
+            binaries.adb,
+            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+            "0\n",
+          ),
+          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ],
+        { clock: slowClock },
+      );
+      const slowMaking = slow.driver.provision(slow.spec);
+      const slowFailed = expect(slowMaking).rejects.toThrow();
+      await vi.waitFor(() =>
+        expect(slow.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
+          true,
+        ),
+      );
+      const ageTo = (ageMs: number) =>
+        slow.database
+          .prepare("UPDATE android_source_data SET created_at = ?")
+          .run(slowClock.now() - ageMs);
+
+      ageTo(900_000);
+      await slow.driver.listSources();
+      expect(await slow.filesystem.exists(seedHome)).toBe(true);
+
+      ageTo(900_001);
+      await slow.driver.listSources();
+      expect(await slow.filesystem.exists(seedHome)).toBe(false);
+      slowClock.advance(180_000);
+      await slowFailed;
     });
 
     it("destroys the seeds made from a system image when it is removed, and a seed it cannot destroy stays listed as stale", async () => {
@@ -6420,10 +6512,27 @@ describe("AndroidDriver image fit", () => {
       const remove = async (
         harness: Awaited<ReturnType<typeof seedHarness>>,
         failingFolder?: string,
+        alsoMake?: { readonly home: string; readonly imageTag: string },
       ) => {
         await harness.driver.provision(harness.spec);
+        if (alsoMake !== undefined) {
+          await harness.filesystem.mkdirp(
+            `${sdk}/system-images/android-34/${alsoMake.imageTag}/arm64-v8a`,
+          );
+          await writeSeedFiles(harness.filesystem, alsoMake.home);
+          await harness.driver.provision(
+            await harness.driver.resolveSpec({
+              imageTag: alsoMake.imageTag,
+              model: "Pixel 5",
+              osVersion: "34",
+              platform: "android",
+            }),
+          );
+        }
         if (failingFolder !== undefined) harness.filesystem.defineFailure(failingFolder, "EACCES");
-        const [target] = await harness.driver.listComponents();
+        const target = (await harness.driver.listComponents()).find(
+          (component) => component.variant === "google_apis/arm64-v8a",
+        );
         // why: the scripted runner only answers; real sdkmanager also deletes the image's folder.
         const spawn = harness.runner.spawn.bind(harness.runner);
         vi.spyOn(harness.runner, "spawn").mockImplementation((command, args, options) => {
@@ -6439,6 +6548,18 @@ describe("AndroidDriver image fit", () => {
       await remove(destroyed);
       expect(await destroyed.filesystem.exists(seedHome)).toBe(false);
       await expect(destroyed.driver.listSources()).resolves.toEqual([]);
+
+      const otherHome = `${sources}/seed_device-4`;
+      const other = await seedHarness([
+        ...makingTheSeed(),
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        ...makingASeedFrom(otherHome),
+        uninstall,
+        noEmulators,
+      ]);
+      await remove(other, undefined, { home: otherHome, imageTag: "google_apis_playstore" });
+      expect(await other.filesystem.exists(seedHome)).toBe(false);
+      expect(await other.filesystem.exists(otherHome)).toBe(true);
 
       const stuck = await seedHarness([
         ...makingTheSeed(),
@@ -6481,7 +6602,7 @@ describe("AndroidDriver image fit", () => {
       expect(launch?.options.env).toMatchObject({ ANDROID_AVD_HOME: copyHome });
     });
 
-    it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
+    it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, an unreadable check or a failing delete throws and keeps it, and a folder outside the root is never deleted", async () => {
       const serial = "emulator-5586";
       const attached = `List of devices attached\n${serial}\tdevice\n`;
       const own = {
@@ -6556,6 +6677,18 @@ describe("AndroidDriver image fit", () => {
       failingDelete.filesystem.defineFailure(copyHome, "EACCES");
       await expect(failingDelete.driver.destroy(own)).rejects.toMatchObject({ code: "EACCES" });
       expect(await failingDelete.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+
+      const outside = await harness([]);
+      await outside.filesystem.mkdirp("/elsewhere/simlock_two");
+      await expect(
+        outside.driver.destroy({
+          ...own,
+          deviceId: "simlock_two",
+          driverData: { ...own.driverData, avdHome: "/elsewhere/simlock_two" },
+        }),
+      ).rejects.toThrow("Android device simlock_two names a folder outside the root");
+      expect(await outside.filesystem.exists("/elsewhere/simlock_two")).toBe(true);
+      expect(await outside.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
 
       const old = await harness([
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),

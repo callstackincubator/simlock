@@ -1673,7 +1673,7 @@ export class AndroidDriver implements Driver {
         continue;
       }
       const folder = `${this.#deviceRoot}/${entry}/${SEED_AVD_NAME}.avd`;
-      if (entry !== SOURCES_DIRECTORY && (await this.#holdsAvd(folder))) {
+      if (await this.#holdsAvd(folder)) {
         entries.push({ avdName: SEED_AVD_NAME, deviceId: entry, folder });
       }
     }
@@ -2686,6 +2686,10 @@ export class AndroidDriver implements Driver {
     const { avdHome, avdName } = device.driverData;
     if (device.deviceId !== (avdHome === undefined ? avdName : basename(avdHome))) {
       throw new Error(`Android device id ${device.deviceId} does not match AVD ${avdName}`);
+    }
+    // why: `destroy` deletes this folder whole, so only the folder the root holds for this device id is accepted (safety rule 8).
+    if (avdHome !== undefined && avdHome !== join(this.#deviceRoot, device.deviceId)) {
+      throw new Error(`Android device ${device.deviceId} names a folder outside the root`);
     }
     return device.driverData;
   }
