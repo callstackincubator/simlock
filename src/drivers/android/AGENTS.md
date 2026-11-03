@@ -121,17 +121,17 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 
 ## State and timers
 
-| What                            | Default                                 | Key                                                             |
-| ------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
-| adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
-| Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
-| adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
-| `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
-| AVD path query (listing / boot) | 5 s                                     | none                                                            |
-| Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
-| `avdmanager list device`        | 30 s                                    | none                                                            |
+| What                                                        | Default                                  | Key                                                             |
+| ----------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| Device root                                                 | `$SIMLOCK_HOME/devices/android`          | `drivers.android.deviceRoot`                                    |
+| adb server port                                             | 5038 (never 5037)                        | `drivers.android.adbServerPort`                                 |
+| Emulator flags                                              | window, auto GPU, audio, boot animation  | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Readiness timeout                                           | 180 s, poll 2 s                          | none                                                            |
+| adb server start / stop                                     | 10 s / SIGTERM, 5 s, SIGKILL             | none                                                            |
+| `adb devices` in `listManaged`                              | 30 s                                     | none                                                            |
+| AVD path query (listing / boot), mark read in `listManaged` | 5 s; the mark read keeps the first 4 KiB | none                                                            |
+| Physical read / uninstall                                   | 30 s / 60 s                              | none                                                            |
+| `avdmanager list device`                                    | 30 s                                     | none                                                            |
 
 Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
