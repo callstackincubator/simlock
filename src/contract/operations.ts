@@ -641,6 +641,19 @@ export const baselineList = defineOperation({
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineRemove = defineOperation({
+  name: "baseline.remove",
+  role: "admin",
+  effect: "write",
+  input: z.object({ name: baselineNameSchema }).strict(),
+  output: z.object({
+    name: baselineNameSchema,
+    versions: z.array(z.number().int().min(1)).max(1000),
+    deletedDevices: z.array(z.string().max(256)).max(1000),
+  }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -1149,6 +1162,7 @@ export const OPERATIONS = {
   "warm.forget": warmForget,
   "baseline.save": baselineSave,
   "baseline.list": baselineList,
+  "baseline.remove": baselineRemove,
   "config.get": configGet,
   "daemon.stop": daemonStop,
   "daemon.update": daemonUpdate,

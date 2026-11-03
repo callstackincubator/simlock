@@ -1646,6 +1646,40 @@ describe("Dispatcher: baseline.list", () => {
   });
 });
 
+describe("Dispatcher: baseline.remove", () => {
+  it("removes every version of an unused baseline with its source, and refuses an unknown name and an agent", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    await dispatcher.dispatch("baseline.save", { leaseId: grant.lease.id, name: "login" }, admin);
+
+    const refused = async (name: string, caller: DispatchSession): Promise<unknown> =>
+      dispatcher.dispatch("baseline.remove", { name }, caller).then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+    expect(await refused("login", session({ role: "agent" }))).toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(await refused("nothere", admin)).toMatchObject({
+      code: "UNKNOWN_BASELINE",
+      details: { name: "nothere" },
+      message: 'no baseline named "nothere" on this worker',
+    });
+    expect((await dispatcher.dispatch("baseline.list", {}, admin)).baselines).toHaveLength(1);
+
+    const removed = await dispatcher.dispatch("baseline.remove", { name: "login" }, admin);
+
+    expect(removed).toEqual({ deletedDevices: [], name: "login", versions: [1] });
+    expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
+    expect(await driver.listSources()).toEqual([]);
+  });
+});
+
 describe("Dispatcher: lease.release-all", () => {
   it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
     const { dispatcher, registry } = await buildDispatcher();

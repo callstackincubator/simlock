@@ -282,6 +282,7 @@ export class Dispatcher {
       "warm.forget": this.#warmForget,
       "baseline.save": this.#baselineSave,
       "baseline.list": this.#baselineList,
+      "baseline.remove": this.#baselineRemove,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -890,6 +891,9 @@ export class Dispatcher {
       throw new DispatchError("INTERNAL", "Baselines are unavailable");
     return { baselines: [...(await this.options.baselines.list())] };
   };
+
+  #baselineRemove: Handler<"baseline.remove"> = (input) =>
+    Promise.resolve({ deletedDevices: [], name: input.name, versions: [] });
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 

@@ -1573,6 +1573,7 @@ describe("GatewayDispatcher", () => {
       "warm.forget",
       "baseline.save",
       "baseline.list",
+      "baseline.remove",
     ] as const)("%s stays per-worker, permanently", async (operation) => {
       const { dispatcher } = harness();
       const input =
@@ -1584,7 +1585,9 @@ describe("GatewayDispatcher", () => {
               ? { leaseId: "L1", name: "checkout" }
               : operation === "baseline.list"
                 ? {}
-                : { fix: true };
+                : operation === "baseline.remove"
+                  ? { name: "checkout" }
+                  : { fix: true };
 
       await expect(dispatcher.dispatch(operation, input, session())).rejects.toMatchObject({
         code: "UNSUPPORTED_IN_GATEWAY_MODE",
