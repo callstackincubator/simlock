@@ -424,6 +424,7 @@ export class FleetLeaseCoordinator {
   /**
    * why: ADR 0061 §6: a save goes to the worker that holds the lease, by its own lease id; it ends the lease, so the index entry goes as after a release, and the answer waits for a view read with the worker's baselines, so a request after it sees the new copy.
    */
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   async saveBaseline(
     gatewayLeaseId: string,
     input: Pick<BaselineSaveInput, "name" | "note">,

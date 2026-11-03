@@ -353,6 +353,14 @@ export class WorkerRegistry {
     };
     const next = built.connection === "connected" ? built : withoutLoad(built);
     this.#workers.set(workerId, next);
+    this.#keepLastReads(workerId, snapshot);
+    if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
+    this.#warnOnLowerMaxTtl(existing, next);
+    this.#notifyViewsChanged();
+  }
+
+  /** why: what routing and retention fall back on while a `starting` view has dropped the read fields. */
+  #keepLastReads(workerId: string, snapshot: Partial<WorkerViewSnapshot>): void {
     if (snapshot.catalog !== undefined) this.#lastCatalog.set(workerId, snapshot.catalog);
     if (snapshot.baselines !== undefined) this.#lastBaselines.set(workerId, snapshot.baselines);
     if (snapshot.leases !== undefined) this.#lastLeases.set(workerId, snapshot.leases);
@@ -362,9 +370,6 @@ export class WorkerRegistry {
         snapshot.devices.filter((device) => device.physical === true),
       );
     }
-    if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
-    this.#warnOnLowerMaxTtl(existing, next);
-    this.#notifyViewsChanged();
   }
 
   // why: both the operator's `worker.update` and an incompatible worker's query read these three fields from a `daemon.update` answer.

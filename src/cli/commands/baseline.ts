@@ -1,3 +1,4 @@
+import type { SimlockAdminClient } from "../../admin/index.js";
 import { commandArgs, subcommandOrUsage, UsageError, withHelpHint, writeResult } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
 import { baselineRemovedLine, baselineSavedLine, baselineTable } from "../format.js";
@@ -74,21 +75,7 @@ async function runRemove(
   const client = await connectDaemonClient(environment, token);
   try {
     if (values.yes !== true && !unnamedOnGateway) {
-      // why: the question names the version the operator is about to lose; a name nobody holds is not asked about, since the daemon answers it.
-      const { baselines } = await client.listBaselines();
-      const held = baselines.find(
-        (baseline) =>
-          baseline.name === name && (workerId === undefined || baseline.workerId === workerId),
-      );
-      if (held !== undefined) {
-        const from = workerId === undefined ? "" : ` from ${workerId}`;
-        const confirmed = await environment.confirm?.(
-          `Remove baseline ${name} v${String(held.version)}${from}? [y/N] `,
-        );
-        if (confirmed !== true) {
-          throw new UsageError("baseline remove requires confirmation or --yes");
-        }
-      }
+      await confirmRemoval(client, environment, name, workerId);
     }
     const removed = await client.removeBaseline({
       name,
@@ -99,6 +86,26 @@ async function runRemove(
   } finally {
     await client.close();
   }
+}
+
+// why: the question names the version the operator is about to lose; a name nobody holds is not asked about, since the daemon answers it.
+async function confirmRemoval(
+  client: SimlockAdminClient,
+  environment: CommandContext["environment"],
+  name: string,
+  workerId: string | undefined,
+): Promise<void> {
+  const { baselines } = await client.listBaselines();
+  const held = baselines.find(
+    (baseline) =>
+      baseline.name === name && (workerId === undefined || baseline.workerId === workerId),
+  );
+  if (held === undefined) return;
+  const from = workerId === undefined ? "" : ` from ${workerId}`;
+  const confirmed = await environment.confirm?.(
+    `Remove baseline ${name} v${String(held.version)}${from}? [y/N] `,
+  );
+  if (confirmed !== true) throw new UsageError("baseline remove requires confirmation or --yes");
 }
 
 async function runSave(
