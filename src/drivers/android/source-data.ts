@@ -50,7 +50,10 @@ export interface SourceRow {
   readonly folder: string;
   readonly avdName: string;
   readonly configHash: string;
+  readonly emulatorVersion: string;
+  readonly imageIdentity: string;
   readonly sizeBytes: number | undefined;
+  readonly staleReason: string | undefined;
 }
 
 /** why: the one place that reads or writes `android_source_data`; nothing outside the Android driver does (ADR 0036 §2). */
@@ -91,6 +94,17 @@ export class AndroidSourceTable {
       .run(configHash, sizeBytes ?? null, sourceId);
   }
 
+  /** why: the reason is recomputed on every provision and listing, so what is stored is the last answer; `undefined` clears it. */
+  setStaleReason(sourceId: string, reason: string | undefined): void {
+    this.#database
+      .prepare("UPDATE android_source_data SET stale_reason = ? WHERE source_id = ?")
+      .run(reason ?? null, sourceId);
+  }
+
+  remove(sourceId: string): void {
+    this.#database.prepare("DELETE FROM android_source_data WHERE source_id = ?").run(sourceId);
+  }
+
   findReadySeed(specKey: string): SourceRow | undefined {
     return this.#rows("WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?", [specKey])[0];
   }
@@ -102,7 +116,8 @@ export class AndroidSourceTable {
   #rows(where: string, parameters: readonly (string | number)[]): readonly SourceRow[] {
     return this.#database
       .prepare(
-        `SELECT source_id, kind, spec_key, model, os_version, image_tag, folder, avd_name, config_hash, size_bytes
+        `SELECT source_id, kind, spec_key, model, os_version, image_tag, folder, avd_name, config_hash, size_bytes,
+           emulator_version, image_identity, stale_reason
          FROM android_source_data ${where}`,
       )
       .all(...parameters)
@@ -116,7 +131,10 @@ export class AndroidSourceTable {
         folder: row["folder"] as string,
         avdName: row["avd_name"] as string,
         configHash: (row["config_hash"] as string | null) ?? "",
+        emulatorVersion: row["emulator_version"] as string,
+        imageIdentity: row["image_identity"] as string,
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,
+        staleReason: (row["stale_reason"] as string | null) ?? undefined,
       }));
   }
 }

@@ -7069,10 +7069,7 @@ describe("AndroidDriver image fit", () => {
       expectations: readonly ScriptedProcessExpectation[],
       options: { readonly emulator?: AndroidEmulatorLaunchOptions } = {},
     ) {
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        ...expectations,
-      ]);
+      const runner = new ScriptedProcessRunner([...expectations]);
       const driver = await createDriver(harness.filesystem, runner, {
         ...options,
         database: harness.database,
@@ -7087,6 +7084,7 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
         markWriteExpectation("emulator-5586", "three"),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ]);
 
       const device = await harness.driver.provision(harness.spec);
@@ -7169,8 +7167,10 @@ describe("AndroidDriver image fit", () => {
         {
           change: async (filesystem: MemoryFilesystem) => filesystem.rm(imagePath),
           emulatorVersion: original,
-          mend: async (filesystem: MemoryFilesystem) =>
-            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1")),
+          mend: async (filesystem: MemoryFilesystem) => {
+            await filesystem.mkdirp(imagePath);
+            await filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1"));
+          },
           reason: `system image ${packageName} is not installed`,
         },
         {
@@ -7216,8 +7216,10 @@ describe("AndroidDriver image fit", () => {
       await writeSeedFiles(harness.filesystem, newHome);
       const newer = "Android emulator version 36.2.0";
       const later = await reopened(harness, [
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         processResult(binaries.emulator, ["-version"], newer),
         ...makingTheSeed(newHome, newer),
+        processResult(binaries.emulator, ["-version"], newer),
       ]);
 
       await later.driver.provision(harness.spec);

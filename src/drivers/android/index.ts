@@ -47,7 +47,7 @@ import {
   RuntimeMissingError,
   sameReceipt,
 } from "../../core/index.js";
-import { AndroidSourceTable } from "./source-data.js";
+import { AndroidSourceTable, type SourceRow } from "./source-data.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
   isMissingPathError,
@@ -166,6 +166,7 @@ const SEED_AVD_NAME = "simlock";
 const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
+const STALE_REASON_MAX_LENGTH = 300;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
@@ -1064,14 +1065,67 @@ export class AndroidDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
-    return this.#sources.readyRows().map((row) => ({
-      id: row.sourceId,
-      imageTag: row.imageTag,
-      kind: row.kind,
-      model: row.model,
-      osVersion: row.osVersion,
-      ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
-    }));
+    const rows = this.#sources.readyRows();
+    if (rows.length === 0) return [];
+    const [images, emulatorVersion] = await Promise.all([
+      this.#installedImages(),
+      this.#emulatorVersion(),
+    ]);
+    const listed: DriverSource[] = [];
+    for (const row of rows) {
+      const staleReason = await this.#staleReasonOf(row, images, emulatorVersion);
+      this.#sources.setStaleReason(row.sourceId, staleReason);
+      listed.push({
+        id: row.sourceId,
+        imageTag: row.imageTag,
+        kind: row.kind,
+        model: row.model,
+        osVersion: row.osVersion,
+        ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+        ...(staleReason === undefined ? {} : { staleReason }),
+      });
+    }
+    return listed;
+  }
+
+  /**
+   * why: A seed is stale when what it was made from no longer matches the machine: its system image
+   * is gone or changed, the emulator is another version, or the launch settings its snapshot
+   * depends on changed. Recomputed on each call, so a reason clears once things match again.
+   */
+  async #staleReasonOf(
+    row: SourceRow,
+    images: readonly SystemImage[],
+    emulatorVersion: string,
+  ): Promise<string | undefined> {
+    const packageName = row.specKey.slice(row.specKey.indexOf("|") + 1);
+    const image = images.find(
+      (candidate) =>
+        systemImagePackage(candidate.apiLevel, candidate.tag, candidate.abi) === packageName,
+    );
+    const revisionOf = (identity: string) => identity.slice(identity.lastIndexOf("@") + 1);
+    let reason: string | undefined;
+    if (image === undefined) {
+      reason = `system image ${packageName} is not installed`;
+    } else if (`${image.path}@${image.version}` !== row.imageIdentity) {
+      reason = `system image ${packageName} changed from revision ${revisionOf(row.imageIdentity)} to ${image.version}`;
+    } else if (emulatorVersion !== row.emulatorVersion) {
+      reason = `emulator changed from ${row.emulatorVersion} to ${emulatorVersion}`;
+    } else if (
+      (await this.#currentConfigHash(
+        join(row.folder, `${row.avdName}.avd`),
+        row.imageIdentity,
+        row.emulatorVersion,
+      )) !== row.configHash
+    ) {
+      reason = "android.emulator launch settings changed";
+    }
+    return reason?.slice(0, STALE_REASON_MAX_LENGTH);
+  }
+
+  async #removeSeed(row: SourceRow): Promise<void> {
+    await this.#filesystem.rm(row.folder);
+    this.#sources.remove(row.sourceId);
   }
 
   async destroySource(sourceId: string): Promise<void> {
@@ -1089,7 +1143,16 @@ export class AndroidDriver implements Driver {
     const specKey = `${spec.model}|${packageName}`;
     const seed = await this.#withDeviceLock(`seed:${specKey}`, async () => {
       const ready = this.#sources.findReadySeed(specKey);
-      return ready ?? (await this.#makeSeed({ image, packageName, profile, spec, specKey }));
+      if (ready !== undefined) {
+        const reason = await this.#staleReasonOf(
+          ready,
+          await this.#installedImages(),
+          await this.#emulatorVersion(),
+        );
+        if (reason === undefined) return ready;
+        await this.#removeSeed(ready);
+      }
+      return this.#makeSeed({ image, packageName, profile, spec, specKey });
     });
     const avdHome = join(this.#deviceRoot, deviceId);
     await this.#copySeed(seed, avdHome);
@@ -1159,15 +1222,16 @@ export class AndroidDriver implements Driver {
     if (profile.kind === "library") {
       await this.#applyLibraryProfile(avdFolder, profile, image);
     }
-    const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
     await this.#bootSeedTwice({
       avdHome: folder,
       avdName: SEED_AVD_NAME,
-      configHash,
+      configHash: "",
       imageIdentity,
       port: 0,
       serial: "",
     });
+    // why: taken after the boots, since the emulator normalizes the config.ini it boots from; a hash from before would read as a launch-settings change at once.
+    const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
     const sizeBytes = await this.#filesystem.directorySize(avdFolder);
     this.#sources.markReady(sourceId, configHash, sizeBytes);
     return { configHash, folder, sourceId };
