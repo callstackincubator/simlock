@@ -1,5 +1,7 @@
-import { type Column, DataTable, Loaded, Page } from "../../ds";
+import { type Column, DataTable, Loaded, Page, Status } from "../../ds";
 import { type BaselineRow, useBaselines } from "../../state/baselines";
+
+const WORKER: Column<BaselineRow> = { cell: (row) => row.worker, header: "Worker" };
 
 const COLUMNS: readonly Column<BaselineRow>[] = [
   { cell: (row) => row.name, header: "Name", mono: true },
@@ -15,6 +17,16 @@ const COLUMNS: readonly Column<BaselineRow>[] = [
     header: "Saved",
     mono: true,
   },
+  {
+    cell: (row) =>
+      row.stale === undefined ? null : (
+        <>
+          <Status tone="warn">stale</Status>
+          {` · ${row.stale}`}
+        </>
+      ),
+    header: "Stale",
+  },
 ];
 
 export function BaselinesScreen() {
@@ -26,7 +38,7 @@ export function BaselinesScreen() {
           <DataTable
             label="Baselines"
             rows={page.rows}
-            columns={COLUMNS}
+            columns={page.gateway ? [WORKER, ...COLUMNS] : COLUMNS}
             rowId={(row) => row.key}
             empty="No baselines."
             paging={page.paging}

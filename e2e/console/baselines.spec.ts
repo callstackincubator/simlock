@@ -108,9 +108,9 @@ test.describe("the Baselines page", () => {
     try {
       const [first, second] = fleet.workers as [RunningDaemon, RunningDaemon];
       await openBaselines(page, fleet.gateway);
-      await expect(page.getByRole("columnheader", { name: "Worker" })).toBeVisible();
 
       await save(first, "alpha", await leaseId(first, "a"));
+      await expect(page.getByRole("columnheader", { name: "Worker" })).toBeVisible();
       await expect(row(page, "alpha")).toContainText("worker-a");
       await save(second, "beta", await leaseId(second, "b"));
       await expect(row(page, "beta")).toContainText("worker-b");
