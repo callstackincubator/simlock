@@ -490,6 +490,13 @@ export const REFUSED_ADB_SEQUENCES: readonly {
       "it destroys the clean-boot snapshot Simlock restores from, turning every later reclaim of this device into a full wipe.",
     sequence: ["emu", "avd", "snapshot", "delete"],
   },
+  {
+    // why: Every name is refused, not only the reserved one: snapshot names on a case-insensitive
+    // disk alias `simlock_clean_baseline`, and a save under it is loaded by every later reclaim.
+    reason:
+      "it would replace the clean-boot snapshot later leases of this device are restored from.",
+    sequence: ["emu", "avd", "snapshot", "save"],
+  },
 ];
 
 /**
