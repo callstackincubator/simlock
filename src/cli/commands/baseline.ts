@@ -1,6 +1,6 @@
 import { commandArgs, subcommandOrUsage, UsageError, withHelpHint, writeResult } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
-import { baselineSavedLine, baselineTable } from "../format.js";
+import { baselineRemovedLine, baselineSavedLine, baselineTable } from "../format.js";
 import type { CommandContext } from "../tree.js";
 
 const BASELINE_USAGE =
@@ -13,6 +13,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   const parsed = subcommandOrUsage(argv, context.path, environment.stdout, BASELINE_USAGE);
   if (parsed === 0) return 0;
   if (parsed.command === "list") return runList(parsed.flagArgs, environment, token);
+  if (parsed.command === "remove") return runRemove(parsed.flagArgs, environment, token);
   if (parsed.command !== "save") {
     throw new UsageError(withHelpHint(`Unknown baseline command: ${String(parsed.command)}`));
   }
@@ -40,6 +41,45 @@ async function runList(
     const listed = await client.listBaselines();
     if (values.json) writeResult((value) => environment.stdout.write(value), listed);
     else environment.stdout.write(baselineTable(listed.baselines));
+    return 0;
+  } finally {
+    await client.close();
+  }
+}
+
+async function runRemove(
+  argv: readonly string[],
+  environment: CommandContext["environment"],
+  token: string | undefined,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    yes: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write(BASELINE_USAGE);
+    return 0;
+  }
+  const [name, ...extra] = values.positionals;
+  if (name === undefined || extra.length > 0) {
+    throw new UsageError(withHelpHint("baseline remove takes one <name>"));
+  }
+  const client = await connectDaemonClient(environment, token);
+  try {
+    if (values.yes !== true) {
+      // why: the question names the version the operator is about to lose; a name nobody holds is not asked about, since the daemon answers it.
+      const { baselines } = await client.listBaselines();
+      const held = baselines.find((baseline) => baseline.name === name);
+      if (held !== undefined) {
+        const confirmed = await environment.confirm?.(
+          `Remove baseline ${name} v${String(held.version)}? [y/N] `,
+        );
+        if (confirmed !== true) {
+          throw new UsageError("baseline remove requires confirmation or --yes");
+        }
+      }
+    }
+    environment.stdout.write(baselineRemovedLine(await client.removeBaseline({ name })));
     return 0;
   } finally {
     await client.close();

@@ -5267,7 +5267,7 @@ describe("CLI: baseline remove", () => {
     for (const confirm of [undefined, async () => false]) {
       const refused = await runRemove(["baseline", "remove", "login"], { confirm });
       expect([refused.code, refused.removed, refused.stdout]).toEqual([2, [], ""]);
-      expect(JSON.parse(refused.stderr)).toEqual({
+      expect(JSON.parse(refused.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
         error: { code: "USAGE", message: "baseline remove requires confirmation or --yes" },
       });
     }

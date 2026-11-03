@@ -1,7 +1,12 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import { isNewerVersion } from "../contract/index.js";
-import type { BaselineSaveOutput, StatusGetOutput, WorkerView } from "../admin/index.js";
+import type {
+  BaselineRemoveOutput,
+  BaselineSaveOutput,
+  StatusGetOutput,
+  WorkerView,
+} from "../admin/index.js";
 import type { BaselineEntry } from "../contract/index.js";
 import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
@@ -404,4 +409,14 @@ export function baselineTable(baselines: readonly BaselineEntry[]): string {
     if (reason !== undefined) lines.push(`  stale: ${reason}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function baselineRemovedLine(removed: BaselineRemoveOutput): string {
+  const versions = removed.versions.map((version) => `v${String(version)}`).join(", ");
+  const count = removed.deletedDevices.length;
+  const devices =
+    count === 0
+      ? ""
+      : ` Deleted ${String(count)} idle ${count === 1 ? "device" : "devices"} made from it.`;
+  return `Removed baseline ${removed.name} ${versions}.${devices}\n`;
 }
