@@ -5142,6 +5142,63 @@ describe("CLI: baseline save", () => {
   });
 });
 
+describe("CLI: baseline list", () => {
+  const checkout = {
+    imageTag: "google_apis",
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "36",
+    platform: "android",
+    savedAt: new Date(2026, 10, 2, 13, 40).toISOString(),
+    sizeBytes: 4_900_000_000,
+    version: 2,
+  } as const;
+  const login = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "login",
+    note: "signed in",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 10, 1, 9, 12).toISOString(),
+    staleReason: "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+    version: 1,
+  } as const;
+
+  async function runList(argv: string[], baselines: readonly (typeof checkout | typeof login)[]) {
+    const output = outputCapture();
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ listBaselines: () => Promise.resolve({ baselines: [...baselines] }) }),
+      }),
+    );
+    return { code, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline list prints a table of each baseline with a - for an uncounted size and its stale reason under the row, --json the baselines, and says when there are none", async () => {
+    const table = await runList(["baseline", "list"], [checkout, login]);
+    expect([table.code, table.stdout]).toEqual([
+      0,
+      [
+        "NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE",
+        "checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40",
+        "login     1        ios       iPhone 17  27.0  slim  -            -       2026-11-01 09:12  signed in",
+        "  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+        "",
+      ].join("\n"),
+    ]);
+
+    const json = await runList(["baseline", "list", "--json"], [checkout, login]);
+    expect([json.code, JSON.parse(json.stdout)]).toEqual([0, { baselines: [checkout, login] }]);
+
+    const none = await runList(["baseline", "list"], []);
+    expect([none.code, none.stdout]).toEqual([0, "No baselines on this worker.\n"]);
+  });
+});
+
 describe("CLI: warm forget", () => {
   const USAGE =
     "Usage: simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]\n";
