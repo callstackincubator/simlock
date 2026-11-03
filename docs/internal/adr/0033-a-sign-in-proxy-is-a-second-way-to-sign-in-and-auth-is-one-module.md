@@ -211,7 +211,7 @@ fix).** The screen stream (`GET /v1/stream/workers/{workerId}/devices/{deviceId}
 and a lease's `/stream`) is a follow stream too: it ends at the opening
 identity's `expiresAt`, on the host that checked the identity (a worker, or a
 gateway for a relayed stream), and the console's screen viewer opens it again
-when the server ends it with no reason.
+when the server ends it with no reason after its picture started.
 
 ### 7. The console signs in through the proxy without a form
 

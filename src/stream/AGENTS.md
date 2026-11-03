@@ -73,7 +73,7 @@ Deadline (ADR 0033 §6): a stream opened through the mount or the lease route by
 sign-in proxy's) ends at that time, on the host that checked the identity: `service.ts` wraps the body in a timer on
 the injected clock (capped at 2^31-1 ms, like the event streams), cancelled when the stream ends first, and cancels the
 capture or the relay. A token or the local socket has no `expiresAt` and is unbounded. The relay door sets none: the
-gateway has already bounded the stream. The console opens the stream again after an end with no reason.
+gateway has already bounded the stream. The console opens the stream again after a started stream ends with no reason, never after a failure or a refusal.
 
 Capability `stream`: `available`, with no reason, when any driver can capture (a platform that
 cannot says why in its 503); `unavailable` when none can, with each platform's reason.

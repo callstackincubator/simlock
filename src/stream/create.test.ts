@@ -393,6 +393,30 @@ describe("createWorkerStream", () => {
     clock.advance(1);
     expect(await settledWithin(next)).toEqual({ done: true, value: undefined });
     expect(relayCancelled).toBe(true);
+
+    // why: a stream that ends or is left before its deadline must not leave the deadline armed.
+    const finished = createGatewayStream({
+      clock,
+      fleet: {
+        knowsWorker: () => true,
+        relay: async () => new Response(new Blob([]).stream(), { headers: STREAM_HEADERS }),
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const ending = await finished.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    expect(await ending.body!.getReader().read()).toEqual({ done: true, value: undefined });
+    expect(clock.pendingTimerCount).toBe(0);
+    const left = await gateway.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    expect(clock.pendingTimerCount).toBe(1);
+    await left.body!.cancel();
+    expect(clock.pendingTimerCount).toBe(0);
   });
 
   it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {

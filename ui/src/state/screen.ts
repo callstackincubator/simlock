@@ -4,7 +4,7 @@
  * the pane's lifecycle is the capture's lifecycle: leaving the tab, closing the drawer, navigating
  * away and signing out are four ways of doing the same single thing, and a capture cannot outlive the
  * pane that asked for it. That is also why nothing here polls or holds a stream open across a
- * navigation; the one retry is a stream the server ended with no reason (see `capture`).
+ * navigation; the one retry is a started stream the server ended with no reason (see `capture`).
  */
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
@@ -162,9 +162,11 @@ export async function capture(
   signal: AbortSignal,
   sinks: CaptureSinks,
 ): Promise<void> {
-  // why: a stream the server ends with no reason is one its deadline ended (a proxy-signed identity's
-  // expiry) or a capture that lost its device; asking again gets the proxy's fresh identity, or the
-  // daemon's own refusal, which is shown. A lease that ended says why in a last frame and is not retried.
+  // why: a stream the server ends with no reason, after it had started a picture, is one its deadline
+  // ended (a proxy-signed identity's expiry) or a capture that lost its device; asking again gets the
+  // proxy's fresh identity, or the daemon's own refusal, which is shown. A stream that never started a
+  // picture, one that failed (a silent capture, a dropped connection) and a lease that ended (it says
+  // why in a last frame) are not retried, so a device that is gone is asked for once, not forever.
   while (await captureOnce(api, workerId, deviceId, signal, sinks)) {
     await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
     if (signal.aborted) return;
@@ -181,6 +183,7 @@ async function captureOnce(
   sinks: CaptureSinks,
 ): Promise<boolean> {
   let reconnect = false;
+  let started = false;
   try {
     const { body } = await api.stream(
       `/v1/stream/workers/${encodeURIComponent(workerId)}/devices/${encodeURIComponent(deviceId)}`,
@@ -193,15 +196,18 @@ async function captureOnce(
       {
         onEnd: (reason) => {
           if (signal.aborted) return;
-          if (reason === undefined) reconnect = true;
-          else sinks.ended(reason);
+          if (reason === undefined && started) reconnect = true;
+          else sinks.ended(reason ?? "The stream ended.");
         },
         onFrame: (frame) => {
           paint(sinks.canvas.current, frame.displayWidth, frame.displayHeight, frame);
           frame.close();
         },
         onImage: (image) => paint(sinks.canvas.current, image.width, image.height, image),
-        onMeta: sinks.setMeta,
+        onMeta: (meta) => {
+          started = true;
+          sinks.setMeta(meta);
+        },
         onStats: sinks.setStats,
       },
       signal,
@@ -211,7 +217,7 @@ async function captureOnce(
     if (error instanceof ApiError && error.status === 409) sinks.conflict(error.message);
     else sinks.ended(refusalOf(error));
   }
-  return reconnect && !signal.aborted;
+  return reconnect;
 }
 
 function paint(

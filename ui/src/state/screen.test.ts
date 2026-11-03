@@ -58,8 +58,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// why: `capture` is the retry loop and the console has no DOM test of the screen panel (a hook over
+// WebCodecs and a canvas); the loop's order of opens, waits and ends is what the surface cannot force.
 describe("a screen stream the server ends", () => {
-  it("is opened again when it ends with no reason, as when a signed-in identity expired, and stays ended when the lease ended or the viewer left", async () => {
+  it("is opened again when a started stream ends with no reason, as when a signed-in identity expired, and stays ended when the lease ended, the viewer left or no picture had started", async () => {
     vi.useFakeTimers();
     const frame = (tag: number, payload: object) => {
       const bytes = new TextEncoder().encode(JSON.stringify(payload));
@@ -85,7 +87,8 @@ describe("a screen stream the server ends", () => {
       setMeta: () => undefined,
       setStats: () => undefined,
     } satisfies CaptureSinks;
-    const answers = [[], [], [frame(0x07, { reason: "explicit" })]];
+    const started = frame(0x05, { codec: "h264", fps: 30, height: 2, width: 1 });
+    const answers = [[started], [started], [started, frame(0x07, { reason: "explicit" })]];
     let opened = 0;
     const api = {
       stream: async () => ({ body: body(answers[opened++] ?? []), date: null }),
@@ -103,5 +106,10 @@ describe("a screen stream the server ends", () => {
     await capture(api, "w1", "dev_1", left.signal, sinks);
     expect(opened).toBe(4);
     expect(ended).toEqual(["The lease was released."]);
+
+    answers.push([]);
+    await capture(api, "w1", "dev_1", new AbortController().signal, sinks);
+    expect(opened).toBe(5);
+    expect(ended).toEqual(["The lease was released.", "The stream ended."]);
   });
 });
