@@ -153,22 +153,25 @@ describe.skipIf(!hasAndroidSdk)(
           { timeout: DEVICE_READY_MS },
         );
         expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-        const grant = lease.json as { lease: { id: string } };
-        const written = await env.cli([
-          "adb",
+        const grant = lease.json as { device: { address: string }; lease: { id: string } };
+        // why: a worker's `simlock adb` has no lease to aim at, and its adb server also lists the pool's spare emulator, so each call names the lease's serial.
+        const adbOn = (address: string, ...args: string[]) =>
+          env.cli(["adb", "-s", address, ...args]);
+        const written = await adbOn(
+          grant.device.address,
           "shell",
           "settings",
           "put",
           "global",
           "simlock_baseline",
           "1",
-        ]);
+        );
         expect(written.code, `settings put failed: ${written.stderr}`).toBe(0);
-        const file = await env.cli([
-          "adb",
+        const file = await adbOn(
+          grant.device.address,
           "shell",
           "echo saved > /data/local/tmp/simlock-baseline.txt",
-        ]);
+        );
         expect(file.code, `writing the file failed: ${file.stderr}`).toBe(0);
 
         const saved = await env.cli(
@@ -191,7 +194,7 @@ describe.skipIf(!hasAndroidSdk)(
         ).toBe(true);
 
         // why: a lease naming the baseline starts from a copy that holds the saved setting and file, and the copy's own changes are gone for the next one.
-        const copyLease = async (): Promise<string> => {
+        const copyLease = async (): Promise<{ address: string; id: string }> => {
           const copy = await env.cli(
             [
               "lease",
@@ -206,49 +209,50 @@ describe.skipIf(!hasAndroidSdk)(
             { timeout: DEVICE_READY_MS },
           );
           expect(copy.code, `lease naming the baseline failed: ${copy.stderr}`).toBe(0);
-          return (copy.json as { lease: { id: string } }).lease.id;
+          const copied = copy.json as { device: { address: string }; lease: { id: string } };
+          return { address: copied.device.address, id: copied.lease.id };
         };
-        const setting = async (): Promise<string> => {
-          const read = await env.cli([
-            "adb",
+        const setting = async (address: string): Promise<string> => {
+          const read = await adbOn(
+            address,
             "shell",
             "settings",
             "get",
             "global",
             "simlock_baseline",
-          ]);
+          );
           return read.stdout.trim();
         };
         // why: a missing file prints nothing to stdout, so the read answers an empty string for it.
-        const fileText = async (name: string): Promise<string> => {
-          const read = await env.cli(["adb", "shell", `cat /data/local/tmp/${name} 2>/dev/null`]);
+        const fileText = async (address: string, name: string): Promise<string> => {
+          const read = await adbOn(address, "shell", `cat /data/local/tmp/${name} 2>/dev/null`);
           return read.stdout.trim();
         };
         const copyId = await copyLease();
-        expect(await setting()).toBe("1");
-        expect(await fileText("simlock-baseline.txt")).toBe("saved");
-        const changed = await env.cli([
-          "adb",
+        expect(await setting(copyId.address)).toBe("1");
+        expect(await fileText(copyId.address, "simlock-baseline.txt")).toBe("saved");
+        const changed = await adbOn(
+          copyId.address,
           "shell",
           "settings",
           "put",
           "global",
           "simlock_baseline",
           "2",
-        ]);
+        );
         expect(changed.code, `settings put failed: ${changed.stderr}`).toBe(0);
-        const left = await env.cli([
-          "adb",
+        const left = await adbOn(
+          copyId.address,
           "shell",
           "echo left > /data/local/tmp/simlock-session.txt",
-        ]);
+        );
         expect(left.code, `writing the file failed: ${left.stderr}`).toBe(0);
-        const released = await env.cli(["release", copyId]);
+        const released = await env.cli(["release", copyId.id]);
         expect(released.code, `release failed: ${released.stderr}`).toBe(0);
-        await copyLease();
-        expect(await setting()).toBe("1");
-        expect(await fileText("simlock-baseline.txt")).toBe("saved");
-        expect(await fileText("simlock-session.txt")).toBe("");
+        const second = await copyLease();
+        expect(await setting(second.address)).toBe("1");
+        expect(await fileText(second.address, "simlock-baseline.txt")).toBe("saved");
+        expect(await fileText(second.address, "simlock-session.txt")).toBe("");
       },
     );
   },
