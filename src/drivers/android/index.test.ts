@@ -6982,14 +6982,11 @@ describe("AndroidDriver image fit", () => {
       ] satisfies ScriptedProcessExpectation[];
     }
 
-    function makingTheSeed(
-      home = seedHome,
-      emulatorVersion = "Android emulator version 36.1.9",
-    ): ScriptedProcessExpectation[] {
+    /** why: the calls of making a seed, by stage, so a test can stop it at the step that fails. */
+    function seedStages(home = seedHome, emulatorVersion = "Android emulator version 36.1.9") {
       const serial = "emulator-5586";
-      return [
-        processResult(binaries.emulator, ["-version"], emulatorVersion),
-        processResult(binaries.avdmanager, [
+      return {
+        create: processResult(binaries.avdmanager, [
           "create",
           "avd",
           "-n",
@@ -6999,12 +6996,21 @@ describe("AndroidDriver image fit", () => {
           "-d",
           "pixel_5",
         ]),
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-        ...bootingAt(home, ["-no-snapshot-load"], false),
-        processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
-        processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
-        ...bootingAt(home, ["-no-snapshot-load"], false),
-        processResult(binaries.adb, [
+        devices: processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        firstBoot: bootingAt(home, ["-no-snapshot-load"], false),
+        kill: processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+        list: processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "snapshot", "list"],
+          "simlock_boot\n",
+        ),
+        powerOff: processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+        probe: processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "path"],
+          `${home}/simlock.avd\r\nOK\r\n`,
+        ),
+        save: processResult(binaries.adb, [
           "-s",
           serial,
           "emu",
@@ -7013,17 +7019,29 @@ describe("AndroidDriver image fit", () => {
           "save",
           "simlock_boot",
         ]),
-        processResult(
-          binaries.adb,
-          ["-s", serial, "emu", "avd", "snapshot", "list"],
-          "simlock_boot\n",
-        ),
-        processResult(
-          binaries.adb,
-          ["-s", serial, "emu", "avd", "path"],
-          `${home}/simlock.avd\r\nOK\r\n`,
-        ),
-        processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+        secondBoot: bootingAt(home, ["-no-snapshot-load"], false),
+        sync: processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
+        version: processResult(binaries.emulator, ["-version"], emulatorVersion),
+      };
+    }
+
+    function makingTheSeed(
+      home = seedHome,
+      emulatorVersion = "Android emulator version 36.1.9",
+    ): ScriptedProcessExpectation[] {
+      const stage = seedStages(home, emulatorVersion);
+      return [
+        stage.version,
+        stage.create,
+        stage.devices,
+        ...stage.firstBoot,
+        stage.sync,
+        stage.powerOff,
+        ...stage.secondBoot,
+        stage.save,
+        stage.list,
+        stage.probe,
+        stage.kill,
       ];
     }
 
@@ -7031,10 +7049,11 @@ describe("AndroidDriver image fit", () => {
       expectations: readonly ScriptedProcessExpectation[],
       options: {
         readonly clock?: FakeClock;
+        readonly filesystem?: MemoryFilesystem;
         readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
       } = {},
     ) {
-      const filesystem = await androidFilesystem();
+      const filesystem = await androidFilesystem({}, options.filesystem);
       await writeSeedFiles(filesystem, seedHome);
       const database = await memoryAndroidSourceDatabase();
       const runner = new ScriptedProcessRunner([
@@ -7042,7 +7061,8 @@ describe("AndroidDriver image fit", () => {
         ...expectations,
       ]);
       const driver = await createDriver(filesystem, runner, {
-        ...options,
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
+        ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
         database,
         ids: ["one", "two", "three"],
       });
@@ -7227,6 +7247,98 @@ describe("AndroidDriver image fit", () => {
       expect(await harness.filesystem.exists(seedHome)).toBe(false);
       expect(later.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
       await expect(later.driver.listSources()).resolves.toMatchObject([{ id: "seed_five" }]);
+    });
+
+    it("removes a seed's folder and row and throws when making it fails at any step", async () => {
+      const stage = seedStages();
+      const serial = "emulator-5586";
+      const neverReady = [
+        stage.devices,
+        bootingAt(seedHome, ["-no-snapshot-load"], true)[0],
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "0\n",
+        ),
+      ] as ScriptedProcessExpectation[];
+      const stuckOff = [
+        stage.devices,
+        ...bootingAt(seedHome, ["-no-snapshot-load"], true),
+        stage.sync,
+        stage.powerOff,
+        stage.probe,
+        stage.kill,
+      ];
+      const cases = [
+        {
+          expectations: [
+            stage.version,
+            { ...stage.create, result: { code: 1, stderr: "no such package", stdout: "" } },
+          ],
+          message: "no such package",
+        },
+        {
+          advance: 180_000,
+          expectations: [stage.version, stage.create, ...neverReady],
+          message: "Timed out waiting for device to boot",
+        },
+        {
+          advance: 60_000,
+          expectations: [stage.version, stage.create, ...stuckOff],
+          message: "Android seed seed_two did not power off within 60000ms",
+        },
+        {
+          expectations: [
+            stage.version,
+            stage.create,
+            stage.devices,
+            ...stage.firstBoot,
+            stage.sync,
+            stage.powerOff,
+            ...stage.secondBoot,
+            stage.save,
+            processResult(binaries.adb, ["-s", serial, "emu", "avd", "snapshot", "list"], "\n"),
+            stage.probe,
+            stage.kill,
+          ],
+          message: "Android seed seed_two: boot snapshot simlock_boot was not saved",
+        },
+      ] as const;
+
+      for (const failing of cases) {
+        const clock = new FakeClock();
+        const harness = await seedHarness(failing.expectations, { clock });
+        const provisioning = harness.driver.provision(harness.spec);
+        const outcome = expect(provisioning).rejects.toThrow(failing.message);
+        if ("advance" in failing) {
+          await vi.waitFor(() =>
+            expect(
+              harness.runner.calls.some(
+                (call) => call.args.includes("sys.boot_completed") || call.args.includes("reboot"),
+              ),
+            ).toBe(true),
+          );
+          clock.advance(failing.advance);
+        }
+        await outcome;
+
+        expect(await harness.filesystem.exists(seedHome)).toBe(false);
+        await expect(harness.driver.listSources()).resolves.toEqual([]);
+        expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
+      }
+    });
+
+    it("removes the device's folder and throws when copying the seed fails", async () => {
+      const harness = await seedHarness(makingTheSeed(), {
+        filesystem: new CopyFailureFilesystem("cp: no space left on device"),
+      });
+
+      await expect(harness.driver.provision(harness.spec)).rejects.toThrow(
+        "copying Android seed seed_two to simlock_one failed: cp: no space left on device",
+      );
+
+      expect(await harness.filesystem.exists(copyHome)).toBe(false);
+      expect(await harness.filesystem.exists(seedHome)).toBe(true);
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
@@ -7486,6 +7598,19 @@ function testLibraryProfile(overrides: Partial<LibraryDeviceProfile> = {}): Libr
     tablet: false,
     ...overrides,
   };
+}
+
+class CopyFailureFilesystem extends MemoryFilesystem {
+  readonly #message: string;
+
+  constructor(message: string) {
+    super();
+    this.#message = message;
+  }
+
+  override copyTree(): Promise<void> {
+    return Promise.reject(new Error(this.#message));
+  }
 }
 
 class WriteFailureFilesystem extends MemoryFilesystem {
