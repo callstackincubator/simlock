@@ -45,7 +45,7 @@ export function formatWorkers(
             : ` -- ${esc(entry.name)} ${esc(entry.state)}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${workerBaselinesLine(worker)}${installs}`;
     })
     .join("\n");
 }
@@ -370,11 +370,22 @@ function baselineSize(bytes: number): string {
   return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(1)} MB`;
 }
 
-function baselineSpec(baseline: BaselineEntry): string {
+function baselineSpec(baseline: BaselineEntry, withSize = true): string {
   const system = baseline.platform === "ios" ? "iOS" : "Android";
   const tag = baseline.imageTag === undefined ? "" : ` (${baseline.imageTag})`;
-  const size = baseline.sizeBytes === undefined ? "" : `, ${baselineSize(baseline.sizeBytes)}`;
+  const size =
+    !withSize || baseline.sizeBytes === undefined ? "" : `, ${baselineSize(baseline.sizeBytes)}`;
   return `${baseline.platform} ${baseline.model}, ${system} ${baseline.osVersion}${tag}, ${baseline.mode}${size}`;
+}
+
+/** why: the `Baselines:` line of `worker list`: each baseline's name, version and spec, `stale` marked, in the order the worker lists them. */
+function workerBaselinesLine(worker: WorkerView): string {
+  if (worker.baselines === undefined) return "";
+  const entries = worker.baselines.map(
+    (baseline) =>
+      `${esc(baseline.name)} v${String(baseline.version)}: ${esc(baselineSpec(baseline, false))}${baseline.staleReason === undefined ? "" : ", stale"}`,
+  );
+  return `\n  Baselines: ${entries.length === 0 ? "none" : entries.join("; ")}`;
 }
 
 export function baselineSavedLine(saved: BaselineSaveOutput): string {
@@ -395,10 +406,17 @@ const BASELINE_COLUMNS = [
   "NOTE",
 ] as const;
 
-/** why: the list an operator reads: one row per baseline, its stale reason on its own line under it. */
-export function baselineTable(baselines: readonly BaselineEntry[]): string {
-  if (baselines.length === 0) return "No baselines on this worker.\n";
+/** why: the list an operator reads: one row per baseline, its stale reason on its own line under it; a gateway's puts the worker first. */
+export function baselineTable(
+  baselines: readonly BaselineEntry[],
+  { gateway }: { readonly gateway: boolean },
+): string {
+  if (baselines.length === 0) {
+    return gateway ? "No baselines on any worker.\n" : "No baselines on this worker.\n";
+  }
+  const columns = gateway ? (["WORKER", ...BASELINE_COLUMNS] as const) : BASELINE_COLUMNS;
   const rows = baselines.map((baseline) => [
+    ...(gateway ? [baseline.workerId ?? ""] : []),
     baseline.name,
     String(baseline.version),
     baseline.platform,
@@ -410,7 +428,7 @@ export function baselineTable(baselines: readonly BaselineEntry[]): string {
     formatLocalMinute(Date.parse(baseline.savedAt)),
     baseline.note ?? "",
   ]);
-  const widths = BASELINE_COLUMNS.map((header, column) =>
+  const widths = columns.map((header, column) =>
     Math.max(header.length, ...rows.map((row) => row[column]?.length ?? 0)),
   );
   const line = (cells: readonly string[]): string =>
@@ -418,7 +436,7 @@ export function baselineTable(baselines: readonly BaselineEntry[]): string {
       .map((cell, column) => cell.padEnd(widths[column] ?? 0))
       .join("  ")
       .trimEnd();
-  const lines = [line(BASELINE_COLUMNS)];
+  const lines = [line(columns)];
   for (const [index, row] of rows.entries()) {
     lines.push(line(row));
     const reason = baselines[index]?.staleReason;
@@ -427,12 +445,13 @@ export function baselineTable(baselines: readonly BaselineEntry[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function baselineRemovedLine(removed: BaselineRemoveOutput): string {
+export function baselineRemovedLine(removed: BaselineRemoveOutput, workerId?: string): string {
   const versions = removed.versions.map((version) => `v${String(version)}`).join(", ");
   const count = removed.deletedDevices.length;
   const devices =
     count === 0
       ? ""
       : ` Deleted ${String(count)} idle ${count === 1 ? "device" : "devices"} made from it.`;
-  return `Removed baseline ${removed.name} ${versions}.${devices}\n`;
+  const from = workerId === undefined ? "" : ` from ${esc(workerId)}`;
+  return `Removed baseline ${removed.name} ${versions}${from}.${devices}\n`;
 }
