@@ -5232,14 +5232,14 @@ describe("createLeasing: a baseline is a pool key", () => {
       label: "an idle plain device and a request naming a baseline",
       idle: plain,
       ask: named,
-      granted: { name: "checkout", version: 1 },
+      granted: { name: "checkout", version: 2 },
       reused: false,
     },
     {
       label: "an idle device of another baseline",
       idle: copyOf("login", 1),
       ask: named,
-      granted: { name: "checkout", version: 1 },
+      granted: { name: "checkout", version: 2 },
       reused: false,
     },
     {

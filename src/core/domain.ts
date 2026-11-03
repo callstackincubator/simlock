@@ -104,7 +104,8 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
     left.model === right.model &&
     left.osVersion === right.osVersion &&
     specMode(left) === specMode(right) &&
-    left.imageTag === right.imageTag
+    left.imageTag === right.imageTag &&
+    sameBaseline(left.baseline, right.baseline)
   );
 }
 
@@ -167,6 +168,13 @@ export function baselineMismatch(
   return undefined;
 }
 
+/** why: a baseline is a pool key (ADR 0061 §5): a plain spec matches only a plain one, and a baseline spec only its own name at its own version. */
+function sameBaseline(left: BaselineRef | undefined, right: BaselineRef | undefined): boolean {
+  return left?.name === right?.name && left?.version === right?.version;
+}
+
+type BaselineRef = { readonly name: string; readonly version: number };
+
 /**
  * The OS a requirement accepts (ADR 0015 §5). `exact` is one version, the one an exact request
  * resolves to or one the request named; `installed` is any runtime the catalog lists as installed,
@@ -189,6 +197,8 @@ export interface DeviceRequirement {
     | { readonly kind: "class"; readonly class: DeviceClass };
   readonly osVersion: OsRequirement;
   readonly imageTag: string | undefined;
+  /** why: the baseline version a device must be a copy of; absent for a plain request, which no baseline copy serves. */
+  readonly baseline?: BaselineRef | undefined;
 }
 
 /**
@@ -210,6 +220,7 @@ export interface WaitingDemand {
 /** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
 export function exactRequirement(spec: VirtualSpec): DeviceRequirement {
   return {
+    baseline: spec.baseline,
     imageTag: spec.imageTag,
     osVersion: { kind: "exact", version: spec.osVersion },
     platform: spec.platform,
@@ -228,6 +239,7 @@ export interface FittableSpec {
   readonly model: string;
   readonly osVersion: string;
   readonly imageTag?: string | undefined;
+  readonly baseline?: BaselineRef | undefined;
 }
 
 export function fits(
@@ -236,7 +248,11 @@ export function fits(
   classOf: (model: string) => DeviceClass | undefined,
 ): boolean {
   if (spec.physical) return false;
-  if (requirement.platform !== spec.platform || requirement.imageTag !== spec.imageTag) {
+  if (
+    requirement.platform !== spec.platform ||
+    requirement.imageTag !== spec.imageTag ||
+    !sameBaseline(requirement.baseline, spec.baseline)
+  ) {
     return false;
   }
   return (
