@@ -312,8 +312,14 @@ describe.skipIf(!hasAndroidSdk)(
               { timeout: DEVICE_READY_MS },
             );
             expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
-            return granted.json as { device: { driverDeviceId: string }; lease: { id: string } };
+            return granted.json as {
+              device: { address?: string; driverDeviceId: string };
+              lease: { id: string };
+            };
           };
+          // why: a worker's `simlock adb` has no lease to aim at (`--lease` is a gateway's), and its adb server lists every emulator, so each call names the lease's own serial.
+          const adbOn = (grant: { device: { address?: string } }, ...args: string[]) =>
+            env.cli(["adb", "-s", grant.device.address ?? "", ...args]);
 
           const [first, second] = await Promise.all([lease("seed-one"), lease("seed-two")]);
 
@@ -324,14 +330,7 @@ describe.skipIf(!hasAndroidSdk)(
           for (const grant of [first, second]) {
             expect(existsSync(join(root, grant.device.driverDeviceId, "simlock.avd"))).toBe(true);
           }
-          const touched = await env.cli([
-            "adb",
-            "--lease",
-            first.lease.id,
-            "shell",
-            "touch",
-            "/data/local/tmp/t2",
-          ]);
+          const touched = await adbOn(first, "shell", "touch", "/data/local/tmp/t2");
           expect(touched.code, touched.stderr).toBe(0);
 
           for (const grant of [first, second]) {
@@ -348,14 +347,7 @@ describe.skipIf(!hasAndroidSdk)(
           expect([first, second].map((grant) => grant.device.driverDeviceId)).not.toContain(
             third.device.driverDeviceId,
           );
-          const listed = await env.cli([
-            "adb",
-            "--lease",
-            third.lease.id,
-            "shell",
-            "ls",
-            "/data/local/tmp/t2",
-          ]);
+          const listed = await adbOn(third, "shell", "ls", "/data/local/tmp/t2");
           expect(listed.code, "the file written on the first lease is not on a later one").not.toBe(
             0,
           );
