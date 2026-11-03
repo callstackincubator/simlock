@@ -5202,6 +5202,126 @@ describe("CLI: baseline list", () => {
   });
 });
 
+describe("CLI: baselines through a gateway (#1208)", () => {
+  const GATEWAY = {
+    daemonHome: { dataDirectory: "/simlock/gateway", gatewayPresent: true, role: "gateway" },
+  } as const;
+  const checkout = {
+    imageTag: "google_apis",
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    note: "app 4.2, test user",
+    osVersion: "36",
+    platform: "android",
+    savedAt: new Date(2026, 10, 2, 13, 10).toISOString(),
+    sizeBytes: 4_800_000_000,
+    version: 2,
+    workerId: "wrk_a",
+  } as const;
+  const smoke = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "smoke",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 9, 30, 9, 2).toISOString(),
+    staleReason: "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+    version: 1,
+    workerId: "wrk_a",
+  } as const;
+
+  it("simlock worker list prints a worker's Baselines line, its image tag in brackets and a stale one marked, none for a worker without any, and no line for one that has not read them", async () => {
+    const output = outputCapture();
+    const worker = { connection: "connected", drained: false, lastSeenAt: 1 } as const;
+    await runCli(
+      ["worker", "list"],
+      output.environmentWith({
+        clock: new FakeClock(1_000),
+        connectAdmin: async () =>
+          fakeClient({
+            listWorkers: () =>
+              Promise.resolve({
+                workers: [
+                  { ...worker, baselines: [checkout, smoke], id: "wrk_a" },
+                  { ...worker, baselines: [], id: "wrk_b" },
+                  { ...worker, health: "starting", id: "wrk_c" },
+                ],
+              } as never),
+          }),
+      }),
+    );
+
+    expect(output.stdout.split("\n").filter((line) => /^\s+Baselines:/.test(line))).toEqual([
+      "  Baselines: checkout v2: android Pixel 9, Android 36 (google_apis), full; smoke v1: ios iPhone 17, iOS 27.0, slim, stale",
+      "  Baselines: none",
+    ]);
+  });
+
+  it("simlock --gateway baseline list puts the worker first in each row, and says when no worker holds a baseline", async () => {
+    const run = async (baselines: readonly (typeof checkout | typeof smoke)[]) => {
+      const output = outputCapture();
+      await runCli(
+        ["--gateway", "baseline", "list"],
+        output.environmentWith({
+          ...GATEWAY,
+          connectAdmin: async () =>
+            fakeClient({ listBaselines: () => Promise.resolve({ baselines: [...baselines] }) }),
+        }),
+      );
+      return output.stdout;
+    };
+
+    expect(await run([checkout, smoke])).toBe(
+      [
+        "WORKER  NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE",
+        "wrk_a   checkout  2        android   Pixel 9    36    full  google_apis  4.8 GB  2026-11-02 13:10  app 4.2, test user",
+        "wrk_a   smoke     1        ios       iPhone 17  27.0  slim  -            -       2026-10-30 09:02",
+        "  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+        "",
+      ].join("\n"),
+    );
+    expect(await run([])).toBe("No baselines on any worker.\n");
+  });
+
+  it("simlock --gateway baseline remove --worker sends the worker, asks and prints ending in from <worker id>, and without --worker asks nothing and sends the remove", async () => {
+    const run = async (argv: string[]) => {
+      const output = outputCapture();
+      const sent: unknown[] = [];
+      const questions: string[] = [];
+      await runCli(
+        ["--gateway", ...argv],
+        output.environmentWith({
+          ...GATEWAY,
+          confirm: async (question) => {
+            questions.push(question);
+            return true;
+          },
+          connectAdmin: async () =>
+            fakeClient({
+              listBaselines: () => Promise.resolve({ baselines: [smoke] }),
+              removeBaseline: (input) => {
+                sent.push(input);
+                return Promise.resolve({ deletedDevices: [], name: input.name, versions: [1] });
+              },
+            }),
+        }),
+      );
+      return { questions, sent, stdout: output.stdout };
+    };
+
+    expect(await run(["baseline", "remove", "smoke", "--worker", "wrk_a"])).toEqual({
+      questions: ["Remove baseline smoke v1 from wrk_a? [y/N] "],
+      sent: [{ name: "smoke", workerId: "wrk_a" }],
+      stdout: "Removed baseline smoke v1 from wrk_a.\n",
+    });
+    expect(await run(["baseline", "remove", "smoke"])).toMatchObject({
+      questions: [],
+      sent: [{ name: "smoke" }],
+    });
+  });
+});
+
 describe("CLI: baseline remove", () => {
   const login = {
     mode: "slim",
