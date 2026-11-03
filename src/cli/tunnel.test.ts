@@ -500,8 +500,13 @@ async function writesToTheCaller(
       .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
     expect(credits).toEqual([65_536, 30_000]);
   });
+  expect(local.closed).toBe(false);
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
   await vi.waitFor(() => expect(local.writeEnded).toBe(true));
+  await vi.waitFor(() => expect(local.closed).toBe(true));
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(5)));
+  await settle();
+  expect(local.written.map((chunk) => chunk.length)).toEqual([65_536, 30_000]);
   page.peer.receive(open(3, 5173));
   await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(2));
   const second = page.cli.tcpStreams.connections[1]?.peer;
@@ -539,7 +544,7 @@ async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<v
 }
 
 describe("simlock tunnel carrying connections", () => {
-  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
+  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole, and a connection whose both halves ended is closed and dropped", async () => {
     await warningsPerTunnel();
     const { local, page } = await responseThroughTheTunnel();
     await writesToTheCaller(page, local);
