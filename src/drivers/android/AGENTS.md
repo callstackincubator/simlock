@@ -37,7 +37,7 @@ Start — `AndroidDriver.create`:
 3. `AdbServerSupervisor.start`. Failure → `AdbServerUnavailableError` → `driver.adb-server-rejected`.
 4. Announce every console port 5586–5682 to that server, so emulators that outlived the last daemon reattach.
 
-Every `adb`, `emulator`, `avdmanager` call carries `ANDROID_AVD_HOME=<root>` (seed making: `<root>/sources/<source id>`; a copy's boot: `<root>/<device id>`) and `ANDROID_ADB_SERVER_PORT=<port>`.
+`androidPrerequisites` runs `emulator -help` (30 s) and reports `android-emulator` when a flag every launch passes is missing. Every `adb`, `emulator`, `avdmanager` call carries `ANDROID_AVD_HOME=<root>` (seed making: `<root>/sources/<source id>`; a copy's boot: `<root>/<device id>`) and `ANDROID_ADB_SERVER_PORT=<port>`.
 
 Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no scanner),
 `ADB_USB=0`, `ADB_MDNS=0`, `ADB_REJECT_KILL_SERVER=1`, `ADB_LOCAL_TRANSPORT_MAX_PORT=5683`:
@@ -54,7 +54,7 @@ Provision — `provision`: every device is a copy of a seed.
 3. Making: row `making` → `avdmanager create avd -n simlock -k <package> -d <profile>` in `<root>/sources/seed_<id>/` (SDK profile id, else the first `avdmanager list device`; devices.xml / library profiles write `config.ini` and `boot.prop`) → cold boot → `shell sync` + `shell reboot -p` (60 s) → cold boot → `emu avd snapshot save simlock_boot` (60 s) + `snapshot list` → `emu kill` → row `ready` with `configHash` and size. Any failure removes folder and row.
 4. Copy: `Filesystem.copyTree` (600 s) of the seed's `simlock.avd` into `<root>/<device id>/`, `simlock.ini` written with its `path=`; failure removes the folder. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` / `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`), `headless`/`gpu` when not default; it is kept only to judge a seed stale.
 
-Boot — `makeReady` (lock per AVD folder):
+Boot — `makeReady` (lock per AVD folder). Output goes to `emulator.log` in the device's AVD folder (0600, truncated at each start); an emulator that exits before it is ready fails the boot with `DriverCrashError` quoting that log's last 10 lines:
 
 1. A copy: `-snapshot simlock_boot`; the emulator cold-boots the same disk itself when the snapshot does not load (`snapshot-cold-boot` with `deviceId`, past 12 s). Never `-wipe-data`, except a device made before copies (once). Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file), and `-crash-report-mode never` (a stale crash dump otherwise opens a modal consent dialog that blocks the boot; `never` deletes the dumps in the database it reads, so the spawn env sets `ANDROID_EMU_CRASH_REPORTING_DATABASE` to `<root>/emu-crash.db`, never the user's shared `/tmp/android-<user>/emu-crash-<version>.db`).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
@@ -95,7 +95,7 @@ Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol r
 
 Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`) `-s <serial>` goes
 first unless the subcommand is on the no-device list (ADR 0047). Refused: another `-s`, `-e`, `-d`, `-t`,
-`adb` on a non-Android lease, `kill-server`, `disconnect`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
+`adb` on a non-Android lease, `kill-server`, `disconnect`, `emu kill`, `emu avd stop`, every `emu avd snapshot` except `list`, other
 globals (a lone `--version`/`--help` passes), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.
 
@@ -111,20 +111,20 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 
 ## State and timers
 
-| What                            | Default                                 | Key                                                             |
-| ------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
-| adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
-| Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
-| adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
-| `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
-| AVD path query (listing / boot) | 5 s                                     | none                                                            |
-| Seed copy / power-off / save    | 600 s / 60 s / 60 s                     | none                                                            |
-| Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
-| `avdmanager list device`        | 30 s                                    | none                                                            |
+| What                                                        | Default                                  | Key                                                             |
+| ----------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| Device root                                                 | `$SIMLOCK_HOME/devices/android`          | `drivers.android.deviceRoot`                                    |
+| adb server port                                             | 5038 (never 5037)                        | `drivers.android.adbServerPort`                                 |
+| Emulator flags                                              | window, auto GPU, audio, boot animation  | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Readiness timeout                                           | 180 s, poll 2 s                          | none                                                            |
+| adb server start / stop                                     | 10 s / SIGTERM, 5 s, SIGKILL             | none                                                            |
+| `adb devices` in `listManaged`                              | 30 s                                     | none                                                            |
+| AVD path query (listing / boot), mark read in `listManaged` | 5 s; the mark read keeps the first 4 KiB | none                                                            |
+| Seed copy / power-off / save                                | 600 s / 60 s / 60 s                      | none                                                            |
+| Physical read / uninstall                                   | 30 s / 60 s                              | none                                                            |
+| `avdmanager list device`                                    | 30 s                                     | none                                                            |
 
-Writes: `<root>/<device id>/` (a copy), `<root>/sources/<source id>/` (a seed, config, boot properties, `simlock_boot`); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
+Writes: `<root>/<device id>/` (a copy, with its `emulator.log`), `<root>/sources/<source id>/` (a seed, config, boot properties, `simlock_boot`); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 

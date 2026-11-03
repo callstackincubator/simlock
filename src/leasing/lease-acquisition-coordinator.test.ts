@@ -1794,7 +1794,10 @@ describe("LeaseAcquisitionCoordinator", () => {
 
     await expect(
       harness.coordinator.request(request, { ownerId: "booter", requesterId: "booter" }),
-    ).rejects.toMatchObject({ name: "BootTimeoutError" });
+    ).rejects.toMatchObject({
+      name: "BootTimeoutError",
+      message: expect.stringContaining("simulator never booted"),
+    });
 
     expect(sink.records.filter((record) => record.fields?.["step"] === "destroy")).toEqual([
       expect.objectContaining({

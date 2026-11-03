@@ -1,4 +1,5 @@
 import type { UsageFigures, UsageOutput } from "../contract/index.js";
+import { escapeControl as esc } from "./escape.js";
 
 export function formatUsage(usage: UsageOutput): string {
   const lines = [`Usage from ${iso(usage.window.from)} to ${iso(usage.window.to)}`];
@@ -19,7 +20,7 @@ export function formatUsage(usage: UsageOutput): string {
       "Workers",
       ...rows(
         usage.workers.map((worker) => [
-          worker.label === undefined ? worker.id : `${worker.label} (${worker.id})`,
+          esc(worker.label === undefined ? worker.id : `${worker.label} (${worker.id})`),
           worker,
         ]),
         (figures) => summary(figures),
@@ -32,7 +33,9 @@ export function formatUsage(usage: UsageOutput): string {
       "Requesters",
       ...rows(
         usage.requesters.map((requester) => [
-          requester.label === undefined ? requester.id : `${requester.label} (${requester.id})`,
+          esc(
+            requester.label === undefined ? requester.id : `${requester.label} (${requester.id})`,
+          ),
           requester,
         ]),
         (requester) =>

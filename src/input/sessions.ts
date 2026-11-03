@@ -181,6 +181,8 @@ export function createInputSessions(options: {
     attached.admitted = true;
     if (entry.config !== undefined) socket.send(encodeInputMessage(INPUT_TAG.config, entry.config));
     socket.onMessage((data) => {
+      // why: a closing socket keeps delivering messages until its peer acks, so a released input must ignore them.
+      if (entry.closed) return;
       const message = parseClientMessage(data);
       if (message === undefined) return;
       if (message.kind === "control") {

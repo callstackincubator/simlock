@@ -150,13 +150,21 @@ function updateToast(name: string): (answer: unknown) => ActionToast {
 // gives up.
 const UPDATE_TIMEOUT_MS = 100_000;
 
+// why: encodeURIComponent keeps "." and "..", and the browser resolves them (even as "%2E") away
+// before sending, so ".." would turn /v1/workers/../update into /v1/update. A dot-only id is
+// double-encoded instead: it reaches the gateway as a name no worker has (a 404), never a route.
+function workerSegment(id: string): string {
+  const segment = encodeURIComponent(id);
+  return /^\.+$/.test(id) ? encodeURIComponent(segment.replace(/\./g, "%2E")) : segment;
+}
+
 function updateBase(worker: WorkerActionInput) {
   return {
     danger: false,
     failure: `Couldn't update ${worker.name}`,
     itemKey: `worker/${worker.id}`,
     method: "POST",
-    path: `/v1/workers/${encodeURIComponent(worker.id)}/update`,
+    path: `/v1/workers/${workerSegment(worker.id)}/update`,
     timeoutMs: UPDATE_TIMEOUT_MS,
   } as const;
 }
@@ -239,7 +247,7 @@ export function workerActions(
 ): readonly ItemAction[] {
   if (mode !== "gateway") return [];
   const itemKey = `worker/${worker.id}`;
-  const path = `/v1/workers/${encodeURIComponent(worker.id)}` as const;
+  const path = `/v1/workers/${workerSegment(worker.id)}` as const;
   const undrain: ItemAction = {
     danger: false,
     id: "undrain",

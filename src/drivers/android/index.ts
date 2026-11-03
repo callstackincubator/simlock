@@ -134,7 +134,11 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
+const EMULATOR_LOG_TAIL_BYTES = 8_192;
+const EMULATOR_LOG_TAIL_LINES = 10;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+const MARK_READ_TIMEOUT_MS = 5_000;
+const ERASABLE_MARK_READ_BYTES = 4096;
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
@@ -497,15 +501,20 @@ function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
 
 export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
+  /** why: The words that may follow the sequence; any other (or none) is refused. Absent: the sequence alone is refused. */
+  readonly allowedNext?: readonly string[];
   readonly reason: string;
 }[] = [
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "kill"] },
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "avd", "stop"] },
   {
     // why: Not drift, which is why it needs saying: the emulator keeps running and nothing looks
-    // wrong. What is gone is the boot snapshot the device was started from.
-    reason: "it deletes the boot snapshot Simlock starts this device from.",
-    sequence: ["emu", "avd", "snapshot", "delete"],
+    // wrong. Any console snapshot subcommand (save, push, pull, delete and its `del` alias, load,
+    // remap, or one a later emulator adds) can replace or remove the boot snapshot Simlock starts
+    // this device from. Only `list` is safe, so the rule is an allowlist of one and not a list of verbs.
+    allowedNext: ["list"],
+    reason: "it can replace or destroy the boot snapshot Simlock starts this device from.",
+    sequence: ["emu", "avd", "snapshot"],
   },
 ];
 
@@ -532,8 +541,41 @@ function isBareShell(args: readonly string[]): boolean {
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
-function containsSequence(args: readonly string[], sequence: readonly string[]): boolean {
-  return args.some((_, index) => sequence.every((token, offset) => args[index + offset] === token));
+/**
+ * why: `adb emu` joins its operands with spaces into one emulator console line, so the words the
+ * console sees are the operands split on whitespace, not the argv tokens. Matching is
+ * case-insensitive (refusing too much is harmless here) and only looks at the operands after the
+ * `emu` subcommand: an `adb shell` argument is a device shell command, never a console line.
+ */
+function containsSequence(
+  args: readonly string[],
+  sequence: readonly string[],
+  allowedNext?: readonly string[],
+): boolean {
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || args[walked.index] !== "emu") return false;
+  const words = args
+    .slice(walked.index + 1)
+    .flatMap((argument) => argument.toLowerCase().split(/\s+/))
+    .filter((word) => word !== "");
+  const consoleWords = sequence.slice(1);
+  return words.some((_, index) => {
+    if (!consoleWords.every((token, offset) => words[index + offset] === token)) return false;
+    if (allowedNext === undefined) return true;
+    const next = words[index + consoleWords.length];
+    return next === undefined || !allowedNext.includes(next);
+  });
+}
+
+// why: The refusal text for the first REFUSED_ADB_SEQUENCES entry the arguments contain, or undefined when none is.
+function refusedSequenceMessage(args: readonly string[]): string | undefined {
+  const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
+    containsSequence(args, candidate.sequence, candidate.allowedNext),
+  );
+  if (refused === undefined) return undefined;
+  const qualifier =
+    refused.allowedNext === undefined ? "" : ` (anything but ${refused.allowedNext.join(", ")})`;
+  return `Refusing \`simlock adb ${refused.sequence.join(" ")}${qualifier}\`: ${refused.reason} ${RECLAIM_INSTEAD}`;
 }
 
 type AndroidTargetFor = (
@@ -932,15 +974,8 @@ export class AndroidDriver implements Driver {
         `Refusing \`simlock adb ${REFUSED_ADB_SUBCOMMAND}\`: it would detach other leased emulators, which adb treats as connections it can drop. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
       );
     }
-    const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
-      containsSequence(args, candidate.sequence),
-    );
-    if (refused !== undefined) {
-      throw new PassthroughRefusedError(
-        "adb",
-        `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
-      );
-    }
+    const refusedSequence = refusedSequenceMessage(args);
+    if (refusedSequence !== undefined) throw new PassthroughRefusedError("adb", refusedSequence);
 
     const scopeFlag = callerSuppliedScopeFlag(args);
     if (scopeFlag !== undefined) {
@@ -1918,12 +1953,15 @@ export class AndroidDriver implements Driver {
     // mark file would fail the whole invocation -- and a missing mark file is exactly
     // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
     // mark an observation rather than a crash.
-    const output = await this.#adbShellOrUndefined([
-      "-s",
-      candidate,
-      "shell",
-      `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
-    ]);
+    const output = await this.#adbShellOrUndefined(
+      [
+        "-s",
+        candidate,
+        "shell",
+        `getprop ro.boot.qemu.avd_name; head -c ${String(ERASABLE_MARK_READ_BYTES)} ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
+      ],
+      MARK_READ_TIMEOUT_MS,
+    );
     if (output === undefined) return { kind: "unreadable" };
     const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
     // why: every copy's AVD is named `simlock`, so the name only narrows the candidates; the path the emulator answers picks the one device.
@@ -1987,9 +2025,16 @@ export class AndroidDriver implements Driver {
     return { erasableMarkByDeviceId, processes, runningByDeviceId, unreadableSerial };
   }
 
-  async #adbShellOrUndefined(args: readonly string[]): Promise<ProcessResult | undefined> {
+  async #adbShellOrUndefined(
+    args: readonly string[],
+    timeoutMs?: number,
+  ): Promise<ProcessResult | undefined> {
     try {
-      return await this.#runOrThrow(this.#sdk.adb, args);
+      return await this.#runOrThrow(
+        this.#sdk.adb,
+        args,
+        timeoutMs === undefined ? {} : { timeoutMs },
+      );
     } catch {
       return undefined;
     }
@@ -2535,6 +2580,28 @@ export class AndroidDriver implements Driver {
       : `${data.avdHome}/${SEED_AVD_NAME}.avd`;
   }
 
+  #emulatorLogPath(data: AndroidDriverData): string {
+    return `${this.#avdFolder(data)}/emulator.log`;
+  }
+
+  /** why: bounded, since an emulator that ran a while may have written a lot before it exited. */
+  async #emulatorLogTail(logPath: string): Promise<string> {
+    try {
+      const { size } = await this.#filesystem.stat(logPath);
+      const text = await this.#filesystem.readFileFrom(
+        logPath,
+        Math.max(0, size - EMULATOR_LOG_TAIL_BYTES),
+      );
+      return text
+        .split(/\r?\n/)
+        .filter((line) => line.trim() !== "")
+        .slice(-EMULATOR_LOG_TAIL_LINES)
+        .join("\n");
+    } catch {
+      return "(the emulator's log could not be read)";
+    }
+  }
+
   /**
    * why: Writes the same provenance token into both regions of the mark: the durable
    * `simlock.mark` key in `config.ini` (host-side, survives an erase) and the erasable
@@ -2613,8 +2680,12 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #waitForReadiness(data: AndroidDriverData, startedAt: number): Promise<void> {
-    while (true) {
+  async #waitForReadiness(
+    data: AndroidDriverData,
+    startedAt: number,
+    abandoned: () => boolean = () => false,
+  ): Promise<void> {
+    while (!abandoned()) {
       if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
         throw new BootTimeoutError(data.avdName);
       }
@@ -2749,7 +2820,9 @@ export class AndroidDriver implements Driver {
     fromSnapshot: boolean,
   ): Promise<void> {
     const startedAt = this.#clock.now();
-    // why: `stdio: "ignore"` and `unref()` because an emulator outlives the daemon by design
+    const logPath = this.#emulatorLogPath(data);
+    await this.#filesystem.writeFileAtomic(logPath, "", { mode: 0o600 });
+    // why: the output goes to a file so a launch that dies at once leaves its own error line to quote (#1199); `unref()` because an emulator outlives the daemon by design
     // (`#reattachRunningEmulators` adopts it after a restart) and is reaped through adb and
     // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
     // the event loop open, and a `daemon stop` that had logged "Daemon stopped" would leave
@@ -2771,7 +2844,7 @@ export class AndroidDriver implements Driver {
         ...this.#emulatorFlags,
         ...launchArgs,
       ],
-      { env: this.#emulatorEnv(data), stdio: "ignore" },
+      { env: this.#emulatorEnv(data), stdio: { file: logPath } },
     );
     handle.unref();
     state.handle = handle;
@@ -2781,14 +2854,27 @@ export class AndroidDriver implements Driver {
     // adb's retry queue afterwards. The announcement that can land is the one in
     // `#waitForReadiness`, once the serial has stayed silent past the grace period.
 
+    // why: an emulator that exits before it boots never will; waiting out the boot timeout for it hides the reason it left in its log.
+    let waiting = true;
+    const exited = handle.wait().then(async (result): Promise<never> => {
+      if (!waiting) return new Promise<never>(() => undefined);
+      throw new DriverCrashError(
+        `The emulator for ${data.avdName} exited (code ${result.code ?? "none"}) before it booted:\n${await this.#emulatorLogTail(logPath)}`,
+      );
+    });
+    exited.catch(() => undefined);
+    const readiness = this.#waitForReadiness(data, startedAt, () => !waiting);
+    readiness.catch(() => undefined);
     try {
-      await this.#waitForReadiness(data, startedAt);
+      await Promise.race([readiness, exited]);
     } catch (error: unknown) {
+      waiting = false;
       handle.kill("SIGKILL");
       await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
       state.handle = undefined;
       throw error;
     }
+    waiting = false;
 
     const readyAfterMs = this.#clock.now() - startedAt;
     if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {

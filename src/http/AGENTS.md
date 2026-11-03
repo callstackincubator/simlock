@@ -87,7 +87,7 @@ A route with a `socket` handler also takes a WebSocket upgrade: `app.leaseSocket
 ## Streams
 
 - `pipeSse` writes `: open` at once (a proxy that holds headers until the first body byte shows the stream), events in order, `: keepalive` every 15 s, unsubscribes on abort. A stream
-  opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`).
+  opened by an identity with `expiresAt` (a proxy JWT) ends then (`sse.ts`, `app.ts`); so does a screen stream (`stream/service.ts`).
 - `GET /v1/events/stream` — dispatches `events.subscribe` (admin, readiness), then
   subscribes to the `EventBus` itself.
 - `GET /v1/events` — reads `since`, `before`, `limit` and `worker` through `eventsPageQuery` (contract), refused as 400 before dispatching `events.replay`; `HISTORY_NOT_KEPT` maps to 422 with `oldestTs`, `HISTORY_UNAVAILABLE` to 503 here too.

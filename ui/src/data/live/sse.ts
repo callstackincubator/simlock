@@ -15,7 +15,6 @@ export interface SseParser {
 // character), so what cannot be finished yet waits for the next chunk.
 export function createSseParser(): SseParser {
   const decoder = new TextDecoder();
-  let buffer = "";
   let event = "";
   let data: string[] = [];
   let id: string | undefined;
@@ -43,16 +42,37 @@ export function createSseParser(): SseParser {
     else if (!text.startsWith(":")) field(text);
   };
 
+  // why: the text of the line still being read, kept in pieces so a line split across many chunks is scanned once, when its chunk arrives, and joined once, when it ends.
+  let pieces: string[] = [];
+  let crPending = false;
+
+  const finish = (out: SseMessage[]) => {
+    const text = pieces.join("");
+    pieces = [];
+    line(text, out);
+  };
+
   return {
     push(chunk) {
-      buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+      const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
       const out: SseMessage[] = [];
-      for (;;) {
-        const end = lineEnd(buffer);
-        if (end === undefined) break;
-        line(buffer.slice(0, end.index), out);
-        buffer = buffer.slice(end.index + end.length);
+      let start = 0;
+      if (crPending) {
+        crPending = false;
+        finish(out);
+        if (text.startsWith("\n")) start = 1;
       }
+      const next = createBreakFinder(text);
+      for (let found = next(start); found !== undefined; found = next(start)) {
+        pieces.push(text.slice(start, found.index));
+        if (found.endsText) {
+          crPending = true;
+          return out;
+        }
+        finish(out);
+        start = found.index + found.length;
+      }
+      if (start < text.length) pieces.push(text.slice(start));
       return out;
     },
   };
@@ -62,16 +82,30 @@ function idField(id: string | undefined): { readonly id?: string } {
   return id === undefined ? {} : { id };
 }
 
-// why: a `\r` at the very end is not complete yet: the next chunk may start with the `\n` that
-// makes it one `\r\n`.
-function lineEnd(text: string): { readonly index: number; readonly length: number } | undefined {
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "\n") return { index, length: 1 };
-    if (char === "\r") {
-      if (index === text.length - 1) return undefined;
-      return { index, length: text[index + 1] === "\n" ? 2 : 1 };
-    }
-  }
-  return undefined;
+interface LineBreak {
+  readonly index: number;
+  readonly length: number;
+  // why: a `\r` at the very end is not complete yet: the next chunk may start with the `\n` that makes it one `\r\n`.
+  readonly endsText: boolean;
+}
+
+// why: each of `\n` and `\r` is searched for again only once the search has moved past its last hit, so the text is scanned once however many breaks it holds.
+function createBreakFinder(text: string): (from: number) => LineBreak | undefined {
+  const find = (char: string, from: number) => {
+    const at = text.indexOf(char, from);
+    return at < 0 ? Infinity : at;
+  };
+  let nextLf = -1;
+  let nextCr = -1;
+  return (from) => {
+    if (nextLf < from) nextLf = find("\n", from);
+    if (nextCr < from) nextCr = find("\r", from);
+    if (nextLf === Infinity && nextCr === Infinity) return undefined;
+    if (nextLf < nextCr) return { endsText: false, index: nextLf, length: 1 };
+    return {
+      endsText: nextCr === text.length - 1,
+      index: nextCr,
+      length: text[nextCr + 1] === "\n" ? 2 : 1,
+    };
+  };
 }

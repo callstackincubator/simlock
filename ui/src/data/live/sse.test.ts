@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createSseParser, type SseMessage } from "./sse";
 
@@ -37,5 +37,36 @@ describe("createSseParser", () => {
 
     expect(parser.push("event: lease.granted\ndata: {}\n")).toEqual([]);
     expect(parser.push("\n")).toEqual([{ data: "{}", event: "lease.granted" }]);
+  });
+
+  it("finds a line split across many chunks without rescanning it", () => {
+    const data = "x".repeat(100_000);
+    const body = `event: lease.requested\ndata: {"device":"${data}"}\n\n`;
+    const original = String.prototype.indexOf;
+    let scanned = 0;
+    let searches = 0;
+    const spy = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      ...args: Parameters<typeof original>
+    ) {
+      const found = original.apply(this, args);
+      searches += 1;
+      scanned += (found < 0 ? this.length : found) - (args[1] ?? 0);
+      return found;
+    });
+    const parser = createSseParser();
+    const messages: SseMessage[] = [];
+    try {
+      for (let at = 0; at < body.length; at += 16) {
+        messages.push(...parser.push(body.slice(at, at + 16)));
+      }
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(messages).toEqual([{ data: `{"device":"${data}"}`, event: "lease.requested" }]);
+    expect(scanned).toBeLessThanOrEqual(3 * body.length);
+    // why: a parser that walks the whole unfinished line by hand on every chunk never searches each chunk, and does the quadratic work this test exists to refuse.
+    expect(searches).toBeGreaterThanOrEqual(Math.ceil(body.length / 16));
   });
 });

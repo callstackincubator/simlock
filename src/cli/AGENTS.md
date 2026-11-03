@@ -31,6 +31,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 | `args.ts`         | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                                                                       |
 | `commands/*.ts`   | One module per command, `run(argv, context)`; loaded by the tree on a hit                                                                        |
 | `format.ts`       | The human renderers for `status`, `worker list`, `daemon start`, the `baseline` lines and table, etc.                                            |
+| `escape.ts`       | `escapeControl`: remote text shown with control characters as `\u00XX`; every renderer and text-printing command applies it                      |
 | `duration.ts`     | `parseDuration` for `--ttl`-style flags                                                                                                          |
 | `termination.ts`  | The signals and parent-exit wait a held lease blocks on                                                                                          |
 | `log-file.ts`     | `readLogFile`: `daemon.log` plus a rotated generation                                                                                            |
@@ -109,7 +110,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    with none running it reads `history.db` itself (read-only; no file is empty, an unreadable
    one is an error, exit 1). `simlock status` adds a `CLI:` line (the CLI's own package version, `cliVersion` in `--json`) and a `History:` line for a history that is not
    written, one for a set-aside file, one after a rebuild of the usage figures and one after a failed rebuild. `simlock config set` drops `eventLog.rotateBytes` and says so on stderr.
-   6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
+   6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`, after any leading control or whitespace characters); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
 7. **`simlock daemon logs --follow`** — `followLog` polls every 250 ms from a byte offset.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
 8. **`simlock config set`** — validates the merged file with `loadConfig`, creates the

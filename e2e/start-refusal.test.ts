@@ -1,9 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { waitFor, withDaemon } from "./helpers/index.js";
+import { holdLoopbackPort, waitFor, withDaemon } from "./helpers/index.js";
 
 describe("an auto-started daemon that refuses to start (#760)", () => {
   it("simlock status prints DAEMON_STARTUP_FAILED with the daemon's start error, exit 1, in under 5 s", async () => {
@@ -27,13 +26,8 @@ describe("an auto-started daemon that refuses to start (#760)", () => {
 
 describe("a daemon start that cannot bind its HTTP port (#981)", () => {
   it("simlock daemon start prints DAEMON_STARTUP_FAILED naming EADDRINUSE and the port, exit 1, and never Daemon running", async () => {
-    const holder = createServer();
-    const port = await new Promise<number>((resolve) => {
-      holder.listen(0, "127.0.0.1", () => {
-        const address = holder.address();
-        resolve(typeof address === "object" && address !== null ? address.port : 0);
-      });
-    });
+    const holder = await holdLoopbackPort();
+    const port = holder.port;
     // why: a slow startup read keeps the daemon converging after its bind fails, so its startup
     // status probe is answered (`starting`) before it stops itself.
     const slowRead = { latencyMs: { listManaged: 5_000 } } as const;
@@ -63,7 +57,7 @@ describe("a daemon start that cannot bind its HTTP port (#981)", () => {
       expect(failure.error?.message).toContain("EADDRINUSE");
       expect(failure.error?.message).toContain(String(port));
     } finally {
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      await holder.release();
     }
   }, 60_000);
 });

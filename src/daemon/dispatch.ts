@@ -24,6 +24,7 @@ import type { RelayConnection } from "./relay.js";
 import {
   describeSchemaIssues,
   OPERATIONS,
+  requesterIdSchema,
   type AuthorizeContext,
   type ComponentProgress,
   type Effect,
@@ -134,6 +135,18 @@ export class DispatchError extends Error {
     super(message);
     this.name = "DispatchError";
   }
+}
+
+// why: the principal stands in for a request that names no requesterId, so it meets the same format; it arrives at `hello`, not in the request. Both dispatchers use it.
+export function principalAsRequester(principal: string): string {
+  const parsed = requesterIdSchema.safeParse(principal);
+  if (!parsed.success) {
+    throw new DispatchError(
+      "BAD_REQUEST",
+      parsed.error.issues[0]?.message ?? "requesterId is not valid",
+    );
+  }
+  return parsed.data;
 }
 
 // why: the one handler both dispatchers use; `name` absent means the principal.

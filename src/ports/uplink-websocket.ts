@@ -181,7 +181,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
  * other call arrived would be a worse contract than one that names the call that wires it.
  */
 export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
-  readonly #server = new WebSocketServer({ noServer: true });
+  readonly #server = new WebSocketServer({ maxPayload: UPLINK_MAX_MESSAGE_BYTES, noServer: true });
   #handlers: UplinkHandlers | undefined;
   #detach: (() => void) | undefined;
   readonly #links = new Map<string, WebSocketUplinkConnection>();
@@ -410,6 +410,8 @@ function bearerToken(request: IncomingMessage): string | undefined {
  * Comfortably longer than any real hostname or label an operator would set, far short of the
  * ~16 KB a raw header can carry. */
 const MAX_CLAIMED_FIELD_LENGTH = 128;
+
+export const UPLINK_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 /** why: Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
  * than just truncating -- a raw header value the gateway's own JSON logging already renders
