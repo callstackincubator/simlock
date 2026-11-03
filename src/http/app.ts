@@ -321,16 +321,17 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
     ),
   );
 
-  app.openapi({ ...baselineRemoveRoute, middleware: [agentAuth] }, async (c) =>
-    c.json(
+  app.openapi({ ...baselineRemoveRoute, middleware: [agentAuth] }, async (c) => {
+    const { workerId } = c.req.valid("query");
+    return c.json(
       await deps.dispatch(
         "baseline.remove",
-        { name: c.req.valid("param").name },
+        { name: c.req.valid("param").name, ...(workerId === undefined ? {} : { workerId }) },
         buildHttpSession(c.get("identity")),
       ),
       200,
-    ),
-  );
+    );
+  });
 
   app.openapi({ ...deviceAddRoute, middleware: [agentAuth] }, async (c) =>
     c.json(
