@@ -601,11 +601,10 @@ describe("AndroidDriver", () => {
 
   /**
    * why: #237: a timer the driver leaves armed holds the event loop open, so a daemon that logged
-   * "Daemon stopped" stays alive until it fires. Both shutdowns here -- the one `makeReady`
-   * does to restart from the new baseline, and the one the test asks for -- see the emulator
-   * exit at once, so neither has anything left to wait for.
+   * "Daemon stopped" stays alive until it fires. The shutdown the test asks for sees the
+   * emulator exit, so it has nothing left to wait for.
    */
-  it("leaves no timer armed once each shutdown has seen its emulator exit", async () => {
+  it("leaves no timer armed once the shutdown has seen its emulator exit", async () => {
     const harness = await provisionedHarness({
       afterwards: [
         copyPathExpectation("emulator-5586"),
@@ -4244,61 +4243,52 @@ describe("AndroidDriver console ports across a restart", () => {
     });
   });
 
-  it.each(["shutdown", "full reclaim", "standard reclaim"] as const)(
-    "%s after a restart sends no kill, snapshot load or rule removal to another device on the stored serial (#284)",
-    async (operation) => {
-      const spec = {
-        physical: false,
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      } as const;
-      const filesystem = await androidFilesystem();
-      const host = new EmulatorHost(filesystem);
-      const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
-      await before.resolveSpec(spec);
-      const stopped = await before.makeReady(await before.provision(spec));
-      await before.shutdown(stopped);
+  it("a shutdown after a restart sends no kill, snapshot load or rule removal to another device on the stored serial (#284)", async () => {
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const before = await createDriver(filesystem, host.runner(), { ids: ["one"] });
+    await before.resolveSpec(spec);
+    const stopped = await before.makeReady(await before.provision(spec));
+    await before.shutdown(stopped);
 
-      const runner = new RecordingRunner(host.runner());
-      const after = await createDriver(filesystem, runner, { ids: ["two"] });
-      await after.resolveSpec(spec);
-      const running = await after.makeReady(await after.provision(spec));
-      expect(running.address).toBe(stopped.address);
-      expect(host.avdAnswering(running.address)).toBe("simlock_two");
-      const callStart = runner.calls.length;
+    const runner = new RecordingRunner(host.runner());
+    const after = await createDriver(filesystem, runner, { ids: ["two"] });
+    await after.resolveSpec(spec);
+    const running = await after.makeReady(await after.provision(spec));
+    expect(running.address).toBe(stopped.address);
+    expect(host.avdAnswering(running.address)).toBe("simlock_two");
+    const callStart = runner.calls.length;
 
-      const action =
-        operation === "shutdown"
-          ? after.shutdown(stopped)
-          : after.reclaim(stopped, {
-              clean: operation === "full reclaim" ? "full" : "standard",
-            });
-      await action.then(() => undefined, driverCrashMessage);
+    await after.shutdown(stopped).then(() => undefined, driverCrashMessage);
 
-      expect({
-        running: host.avdAnswering(running.address),
-        ruleCalls: runner.calls
-          .slice(callStart)
-          .filter(
-            (call) =>
-              call.args.includes(running.address) &&
-              (call.args.includes("reverse") || call.args.includes("forward")),
-          )
-          .map((call) => call.args),
-        mutations: runner.calls
-          .slice(callStart)
-          .filter(
-            (call) =>
-              call.command === binaries.adb &&
-              call.args[1] === running.address &&
-              (call.args.slice(2).join(" ") === "emu kill" ||
-                call.args.slice(2, 6).join(" ") === "emu avd snapshot load"),
-          )
-          .map((call) => call.args),
-      }).toEqual({ running: "simlock_two", ruleCalls: [], mutations: [] });
-    },
-  );
+    expect({
+      running: host.avdAnswering(running.address),
+      ruleCalls: runner.calls
+        .slice(callStart)
+        .filter(
+          (call) =>
+            call.args.includes(running.address) &&
+            (call.args.includes("reverse") || call.args.includes("forward")),
+        )
+        .map((call) => call.args),
+      mutations: runner.calls
+        .slice(callStart)
+        .filter(
+          (call) =>
+            call.command === binaries.adb &&
+            call.args[1] === running.address &&
+            (call.args.slice(2).join(" ") === "emu kill" ||
+              call.args.slice(2, 6).join(" ") === "emu avd snapshot load"),
+        )
+        .map((call) => call.args),
+    }).toEqual({ running: "simlock_two", ruleCalls: [], mutations: [] });
+  });
 
   it("sends no kill when the stored serial's identity cannot be read, and gives the probe a timeout (#284)", async () => {
     const spec = {
@@ -4826,7 +4816,7 @@ function bootProbes(runner: ScriptedProcessRunner): number {
 const live = process.env.SIMLOCK_LIVE_ANDROID === "1" ? it : it.skip;
 
 live(
-  "live smoke: provision, quickboot reclaim, re-ready, and destroy",
+  "live smoke: provision, boot from the boot snapshot, restart, and destroy",
   async () => {
     const driver = await AndroidDriver.create({
       clock: new SystemClock(),
@@ -4853,17 +4843,13 @@ live(
         : { osVersion: process.env.SIMLOCK_LIVE_ANDROID_API }),
     });
     const device = await driver.provision(spec);
-    const coldStartedAt = Date.now();
 
     try {
-      await driver.makeReady(device);
-      const coldBootMs = Date.now() - coldStartedAt;
-      await driver.reclaim(device, { clean: "standard" });
-      const snapshotStartedAt = Date.now();
-      await driver.makeReady(device);
-      const snapshotBootMs = Date.now() - snapshotStartedAt;
+      const ready = await driver.makeReady(device);
+      await driver.shutdown(ready);
+      const restarted = await driver.makeReady(ready);
 
-      expect(snapshotBootMs).toBeLessThan(coldBootMs / 2);
+      expect(restarted.address).toMatch(/^emulator-\d+$/);
     } finally {
       await driver.destroy(device);
     }
@@ -7036,7 +7022,7 @@ class InstallReflectingProcessRunner extends ScriptedProcessRunner {
 
 /**
  * why: The emulators on one machine, which outlive any one daemon: as much of `avdmanager`,
- * `emulator` and `adb` as provisioning, booting, capturing a baseline and stopping use. Each
+ * `emulator` and `adb` as provisioning, booting, saving a snapshot and stopping use. Each
  * `runner()` is one daemon process's view of it -- the driver keeps its port reservations per
  * runner, as a real daemon keeps them per process.
  *

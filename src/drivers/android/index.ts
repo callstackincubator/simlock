@@ -149,9 +149,9 @@ const PROVISION_ESTIMATE_MS = 1_000;
 // why: making a seed is two cold boots, a power-off and a snapshot save.
 const SEED_MAKE_ESTIMATE_MS = 150_000;
 // why: Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
-// (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim loads the clean
-// baseline and commits the device straight back to `ready`, so the driver call is the whole
-// window the device spends `reclaiming`. Held just above the observed maximum.
+// (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim commits the device
+// straight back to `ready`, so the driver call is the whole window the device spends
+// `reclaiming`. Held just above the observed maximum.
 const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // why: Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
 // 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
@@ -565,7 +565,7 @@ export class AndroidDriver implements Driver {
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
   readonly #emulatorFlags: readonly string[];
-  readonly #baselineLaunchInputs: readonly string[];
+  readonly #seedLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
@@ -600,7 +600,7 @@ export class AndroidDriver implements Driver {
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
     this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
-    this.#baselineLaunchInputs = baselineLaunchInputs(options.emulator);
+    this.#seedLaunchInputs = seedLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -2296,7 +2296,7 @@ export class AndroidDriver implements Driver {
       knownEmulatorVersion ?? this.#emulatorVersion(),
       this.#avdConfig(folder),
     ]);
-    return stableHash([imageIdentity, emulatorVersion, config, ...this.#baselineLaunchInputs]);
+    return stableHash([imageIdentity, emulatorVersion, config, ...this.#seedLaunchInputs]);
   }
 
   async #emulatorVersion(): Promise<string> {
@@ -2312,7 +2312,7 @@ export class AndroidDriver implements Driver {
           .split(/\r?\n/)
           .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
           // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
-          // ignores it, so counting it would invalidate the other devices' baselines.
+          // ignores it, so counting it would make every seed stale.
           .filter((line) => !line.startsWith("hw.device.hash2="))
           .sort()
           .join("\n")
@@ -2474,7 +2474,7 @@ export class AndroidDriver implements Driver {
    * will do -- not a sibling's, and never a name (safety rule 8). An emulator whose console
    * port is already held exits without answering, so the one that answers is whoever holds
    * the port -- another device, another Simlock instance, the user's own emulator. Refusing
-   * here, before a mark or a baseline capture touches it, is what keeps a port collision from
+   * here, before a mark or a snapshot save touches it, is what keeps a port collision from
    * readying a device at another device's address; `#serialIsOwn` then keeps the
    * shutdown and destroy that follow a failed boot from sending it `emu kill`, by asking the
    * serial again each time. The reported
@@ -3086,13 +3086,12 @@ function emulatorLaunchFlags(
 }
 
 /**
- * why: The launch settings a baseline snapshot depends on: the window and the GPU mode change the
- * emulator's graphics state, so a baseline taken under one does not load cleanly under the
+ * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
+ * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
  * other. Audio and the boot animation do not, and stay out. Nothing is added while both are at
- * their defaults, so a baseline captured before these settings existed keeps its hash and is
- * not rebuilt (with a data wipe) on the first boot after an upgrade.
+ * their defaults.
  */
-function baselineLaunchInputs(
+function seedLaunchInputs(
   launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
 ): string[] {
   if (
