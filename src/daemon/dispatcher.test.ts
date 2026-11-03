@@ -404,6 +404,7 @@ async function buildDispatcher(
     engine,
     eventBus,
     registry,
+    state,
     tokens,
   };
 }
@@ -1907,6 +1908,7 @@ function seedBaselineRows(state: StateDatabase): void {
   for (const [id, fakeId, deviceState, baseline] of [
     ["dev_idle", "fake-ios-1", "shutdown", "checkout"],
     ["dev_leased", "fake-ios-2", "leased", "busy"],
+    ["dev_quarantined", "fake-ios-3", "quarantined", "login"],
   ] as const) {
     database
       .prepare(
@@ -1926,7 +1928,9 @@ function seedBaselineRows(state: StateDatabase): void {
 
 describe("Dispatcher: baseline.remove", () => {
   it("removes an unused baseline with its source and the idle devices made from it, refuses one a lease uses, an unknown name and an agent", async () => {
-    const { dispatcher, driver, registry } = await buildDispatcher({ seedState: seedBaselineRows });
+    const { dispatcher, driver, engine, registry } = await buildDispatcher({
+      seedState: seedBaselineRows,
+    });
     const spec = {
       model: "iPhone 17 Pro",
       osVersion: "26.5",
@@ -1973,6 +1977,7 @@ describe("Dispatcher: baseline.remove", () => {
       name: "login",
       versions: [1],
     });
+    expect(engine.claimReader.isClaimed("dev_quarantined")).toBe(false);
     expect(await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin)).toEqual({
       deletedDevices: ["dev_idle"],
       name: "checkout",
@@ -1984,6 +1989,7 @@ describe("Dispatcher: baseline.remove", () => {
     expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toEqual([
       ["dev_idle", "deleted"],
       ["dev_leased", "leased"],
+      ["dev_quarantined", "quarantined"],
     ]);
   });
 });
@@ -2053,11 +2059,28 @@ describe("Dispatcher: doctor baseline sources", () => {
 
 describe("Dispatcher: baseline events", () => {
   it("records baseline.saved, baseline.removed with its reason (nuke --delete-devices removes every baseline, plain nuke keeps them) and baseline.stale, once each, after the change is committed", async () => {
-    const { dispatcher, driver, eventBus, registry } = await buildDispatcher({
+    const { dispatcher, driver, eventBus, registry, state } = await buildDispatcher({
       driverOptions: { componentSizes: { "27.0": 1_000 }, knownModels: ["iPhone 17 Pro"] },
       includeNuke: true,
     });
     const admin = session({ principal: "tok_admin", role: "admin" });
+    // why: what the table held at the moment each event reached a subscriber, to prove the change is committed before the event.
+    const seen: { removedRows: number[]; staleReasons: unknown[] } = {
+      removedRows: [],
+      staleReasons: [],
+    };
+    eventBus.subscribe("baseline.removed", ({ payload }) => {
+      const row = state.database
+        .prepare("SELECT COUNT(*) AS count FROM baselines WHERE name = ? AND version = ?")
+        .get(payload.name, payload.version);
+      seen.removedRows.push(Number(row?.count));
+    });
+    eventBus.subscribe("baseline.stale", ({ payload }) => {
+      const row = state.database
+        .prepare("SELECT stale_reason FROM baselines WHERE name = ? AND version = ?")
+        .get(payload.name, payload.version);
+      seen.staleReasons.push(row?.stale_reason);
+    });
     await dispatcher.dispatch("component.install", { platform: "ios", version: "27.0" }, admin);
     const events = (name: string): unknown[] =>
       eventBus
@@ -2119,9 +2142,16 @@ describe("Dispatcher: baseline events", () => {
 
     await check();
     driver.setSources([{ ...(source as NonNullable<typeof source>), staleReason: reason }]);
+    await Promise.all([
+      dispatcher.dispatch("baseline.list", {}, admin),
+      dispatcher.dispatch("baseline.list", {}, admin),
+    ]);
+    expect(events("baseline.stale")).toHaveLength(3);
+    await check();
+    driver.setSources([{ ...(source as NonNullable<typeof source>), staleReason: reason }]);
     await dispatcher.dispatch("component.remove", { platform: "ios", version: "27.0" }, admin);
     await vi.waitFor(() => {
-      expect(events("baseline.stale")).toHaveLength(3);
+      expect(events("baseline.stale")).toHaveLength(4);
     });
 
     await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin);
@@ -2136,6 +2166,11 @@ describe("Dispatcher: baseline events", () => {
       removedBaselines: [],
     });
     expect((await dispatcher.dispatch("baseline.list", {}, admin)).baselines).toHaveLength(2);
+    driver.failOn(
+      "destroySource",
+      driver.calls.filter((call) => call.operation === "destroySource").length + 1,
+      new Error("simctl delete failed"),
+    );
     expect(await dispatcher.dispatch("nuke.run", { deleteDevices: true }, admin)).toMatchObject({
       removedBaselines: ["checkout", "login"],
     });
@@ -2144,7 +2179,9 @@ describe("Dispatcher: baseline events", () => {
       { name: "login", reason: "nuke", version: 1 },
     ]);
     expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
-    expect(await driver.listSources()).toEqual([]);
+    expect(await driver.listSources()).toHaveLength(1);
+    expect(seen.removedRows).toEqual([0, 0, 0, 0]);
+    expect(seen.staleReasons).toEqual([reason, reason, reason, reason]);
   });
 });
 

@@ -102,6 +102,8 @@ export interface BaselineServiceOptions {
  */
 export class BaselineService {
   #queue: Promise<unknown> = Promise.resolve();
+  /** why: two overlapping stale checks must not both see the old reason, or one transition emits twice; it is apart from `#queue` so a list does not wait behind a save. */
+  #staleQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: BaselineServiceOptions) {}
 
@@ -212,7 +214,13 @@ export class BaselineService {
   }
 
   /** why: a baseline is stale when its source's runtime or image changed since the save, and fresh again when it is back; the driver words the reason. */
-  async checkStale(): Promise<void> {
+  checkStale(): Promise<void> {
+    const result = this.#staleQueue.then(() => this.#checkStale());
+    this.#staleQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  async #checkStale(): Promise<void> {
     const { database } = this.options.state;
     const rows = database
       .prepare("SELECT name, version, platform, source_id, stale_reason FROM baselines")
@@ -276,15 +284,24 @@ export class BaselineService {
     if (rows.length === 0) throw new UnknownBaselineError(request.name);
     const claimed = await this.options.decisions.run(() => this.#claimIdleDevices(request.name));
     const deletedDevices: string[] = [];
+    let failure: unknown;
     for (const { claim, device } of claimed) {
-      const deleted = await this.options.lifecycle.dispose(
-        device,
-        "baseline-remove",
-        "cleanup",
-        claim,
-      );
-      if (deleted !== undefined) deletedDevices.push(device.id);
+      try {
+        const deleted = await this.options.lifecycle.dispose(
+          device,
+          "baseline-remove",
+          "cleanup",
+          claim,
+        );
+        if (deleted !== undefined) deletedDevices.push(device.id);
+      } catch (error: unknown) {
+        failure ??= error;
+      } finally {
+        // why: dispose leaves the claim held when it refuses a quarantined or busy device, and the retry and the reaper never act on a claimed one.
+        claim.release();
+      }
     }
+    if (failure !== undefined) throw failure;
     for (const row of rows) await this.#deleteVersion(row, "operator", request.requesterId);
     return {
       deletedDevices,
@@ -296,9 +313,9 @@ export class BaselineService {
   /**
    * why: nuke's removal of every baseline: the rows go first, then the sources, so a source that
    * will not delete is an orphan `doctor` lists and not a baseline that points at nothing. Every
-   * source is tried; the first failure is thrown after the rest.
+   * source is tried; the names whose rows went are answered with the first failure, if any.
    */
-  async removeAll(): Promise<readonly string[]> {
+  async removeAll(): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }> {
     const rows = this.options.state.database
       .prepare("SELECT name, version, platform, source_id FROM baselines ORDER BY name, version")
       .all();
@@ -318,8 +335,8 @@ export class BaselineService {
         failure ??= error;
       }
     }
-    if (failure !== undefined) throw failure;
-    return [...new Set(rows.map((row) => String(row.name)))];
+    const names = [...new Set(rows.map((row) => String(row.name)))];
+    return failure === undefined ? { names } : { failure, names };
   }
 
   /** why: the in-use check and the claim on each idle device run in one decision-gate section, so a lease cannot be granted on a device in between. */

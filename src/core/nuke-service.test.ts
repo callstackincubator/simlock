@@ -39,7 +39,10 @@ function createHarness(
   devices: VirtualDevice[],
   onForget: () => void = () => undefined,
   drivers: readonly FakeDriver[] = [],
-  removeBaselines: () => Promise<readonly string[]> = async () => [],
+  removeBaselines: () => Promise<{
+    readonly failure?: unknown;
+    readonly names: readonly string[];
+  }> = async () => ({ names: [] }),
 ) {
   const registry = new MutableRegistry(devices);
   const calls: string[] = [];
@@ -140,19 +143,17 @@ describe("NukeService", () => {
     expect((await driver.listSources()).map((source) => source.id)).toEqual(["seed-stuck"]);
   });
 
-  it("still reports the released leases and reopens admission when a baseline will not remove, answering no removed baselines", async () => {
+  it("still reports the released leases and reopens admission when a baseline source will not delete, answering the names whose rows went", async () => {
     const harness = createHarness(
       [],
       () => undefined,
       [],
-      async () => {
-        throw new Error("destroySource failed");
-      },
+      async () => ({ failure: new Error("destroySource failed"), names: ["checkout"] }),
     );
 
     await expect(harness.service.nuke(true)).resolves.toEqual({
       releasedLeaseIds: ["lse_1", "lse_2"],
-      removedBaselines: [],
+      removedBaselines: ["checkout"],
     });
     expect(harness.calls.at(-1)).toBe("maintenance:end");
   });
@@ -309,7 +310,7 @@ describe("NukeService", () => {
           harness.calls.push("maintenance:end");
         },
       },
-      baselines: { removeAll: async () => [] },
+      baselines: { removeAll: async () => ({ names: [] }) },
       devices: harness.lifecycle,
       drivers: [],
       leases: {
@@ -379,7 +380,7 @@ describe("NukeService", () => {
         async beginMaintenance() {},
         async endMaintenance() {},
       },
-      baselines: { removeAll: async () => [] },
+      baselines: { removeAll: async () => ({ names: [] }) },
       devices: lifecycle,
       drivers: [],
       leases: {
@@ -485,7 +486,7 @@ describe("NukeService", () => {
     };
     const service = new NukeService({
       acquisition: { async beginMaintenance() {}, async endMaintenance() {} },
-      baselines: { removeAll: async () => [] },
+      baselines: { removeAll: async () => ({ names: [] }) },
       devices: harness.lifecycle,
       drivers: [],
       leases: {

@@ -49,7 +49,9 @@ export interface NukeServiceOptions {
   readonly acquisition: AcquisitionMaintenance;
   readonly leases: LeaseMaintenance;
   /** why: nuke --delete-devices removes every baseline and answers their names. */
-  readonly baselines: { removeAll(): Promise<readonly string[]> };
+  readonly baselines: {
+    removeAll(): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }>;
+  };
   readonly registry: NukeRegistryView;
   /** why: nuke --delete-devices also deletes the seeds the drivers keep; it names no other source (ADR 0061 §1). */
   readonly drivers: readonly Pick<Driver, "platform" | "listSources" | "destroySource">[];
@@ -127,14 +129,13 @@ export class NukeService implements NukeExecutor {
     }
   }
 
-  /** why: a baseline that will not delete must not fail the reset; the names it did remove are still reported, and `doctor` lists what stayed. */
+  /** why: a baseline source that will not delete must not fail the reset; its row is already gone, so every name is reported, and `doctor` lists the source that stayed. */
   async #removeBaselines(): Promise<readonly string[]> {
-    try {
-      return await this.options.baselines.removeAll();
-    } catch (error: unknown) {
-      this.#logger.error("nuke could not remove every baseline", { error: stableError(error) });
-      return [];
+    const { failure, names } = await this.options.baselines.removeAll();
+    if (failure !== undefined) {
+      this.#logger.error("nuke could not remove every baseline", { error: stableError(failure) });
     }
+    return names;
   }
 
   /** why: one unreadable or stuck seed must not stop the rest of the reset; the seed stays and `doctor` lists it. */
