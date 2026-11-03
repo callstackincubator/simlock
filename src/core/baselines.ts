@@ -173,6 +173,7 @@ export class BaselineService {
   }
 
   /** why: the version a provision copies stays until its copy has a record, then a replace may drop it. */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the provisioner holds.
   hold(name: string, version: number): () => void {
     const key = `${name}\u0000${version}`;
     this.#holds.set(key, (this.#holds.get(key) ?? 0) + 1);
@@ -217,6 +218,7 @@ export class BaselineService {
   }
 
   /** why: the newest version of a name, with the source a copy is made from; the coordinator and the provisioner read it, each in their own step, so a save between them is seen. */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the coordinator, provisioner and warm pool hold.
   current(name: string): CurrentBaseline | undefined {
     const row = this.options.state.database
       .prepare("SELECT * FROM baselines WHERE name = ? ORDER BY version DESC LIMIT 1")

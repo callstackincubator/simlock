@@ -3273,6 +3273,36 @@ describe("Dispatcher: a baseline lease is released", () => {
   );
 });
 
+// why: an idle copy of version 1 is what a warm pool leaves behind; the registry is written as the pool's provisioner would.
+async function seedIdleCopy(
+  driver: FakeDriver,
+  registry: Awaited<ReturnType<typeof buildDispatcher>>["registry"],
+  model: string,
+): Promise<{ readonly id: string }> {
+  const [source] = await driver.listSources();
+  const spec = {
+    baseline: { name: "checkout", version: 1 },
+    model,
+    osVersion: "26.5",
+    physical: false,
+    platform: "ios",
+  } as const;
+  const driverDevice = await driver.provision(spec, { source: source?.id ?? "" });
+  const booted = await driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
+  const registered = await registry.registerDevice({
+    driverData: driverDevice.driverData,
+    driverDeviceId: driverDevice.deviceId,
+    provisionDuration: 0,
+    spec,
+  });
+  return registry.transitionDevice(
+    registered.id,
+    "ready",
+    { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
+    booted.mode === undefined ? undefined : { mode: booted.mode },
+  );
+}
+
 describe("Dispatcher: an operator replaces a baseline", () => {
   const model = "iPhone 17 Pro";
   const oneDevice = {
@@ -3354,31 +3384,7 @@ describe("Dispatcher: an operator replaces a baseline", () => {
         scenario === "running"
           ? await lease({ baseline: "checkout", requesterId: "agent-1" })
           : undefined;
-      let idle: { readonly id: string } | undefined;
-      if (scenario === "idle") {
-        const [source] = await driver.listSources();
-        const spec = {
-          baseline: { name: "checkout", version: 1 },
-          model,
-          osVersion: "26.5",
-          physical: false,
-          platform: "ios",
-        } as const;
-        const driverDevice = await driver.provision(spec, { source: source?.id ?? "" });
-        const booted = await driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
-        const registered = await registry.registerDevice({
-          driverData: driverDevice.driverData,
-          driverDeviceId: driverDevice.deviceId,
-          provisionDuration: 0,
-          spec,
-        });
-        idle = await registry.transitionDevice(
-          registered.id,
-          "ready",
-          { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
-          booted.mode === undefined ? undefined : { mode: booted.mode },
-        );
-      }
+      const idle = scenario === "idle" ? await seedIdleCopy(driver, registry, model) : undefined;
       const operator = await lease({ model, requesterId: "operator" });
       const waiting =
         scenario === "waiting" || scenario === "making"

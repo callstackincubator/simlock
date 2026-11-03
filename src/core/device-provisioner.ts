@@ -62,6 +62,24 @@ export class DeviceProvisioner {
     this.#logger = options.logger?.child("device-provisioner") ?? new NoopLogger();
   }
 
+  /** why: the claim, and for a baseline copy the version and source, are taken in one gate section, so the copy is of the version current at that moment and a replace keeps its source until the copy has a record. */
+  #claim(
+    requested: VirtualSpec,
+    made: { spec: VirtualSpec; source?: string; hold: () => void },
+  ): () => void {
+    const release = this.options.components.claimProvision(requested);
+    if (requested.baseline === undefined) return release;
+    const current = this.options.baselines().current(requested.baseline.name);
+    if (current === undefined) {
+      release();
+      throw new UnknownBaselineError(requested.baseline.name);
+    }
+    made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
+    made.source = current.sourceId;
+    made.hold = this.options.baselines().hold(current.name, current.version);
+    return release;
+  }
+
   async provision(
     requested: VirtualSpec,
     options: ProvisionDeviceOptions,
@@ -75,21 +93,7 @@ export class DeviceProvisioner {
     // driver creates it, or this claim sees the removal's mark and refuses.
     let releaseClaim: () => void;
     try {
-      releaseClaim = await this.options.decisions.run(() => {
-        const release = this.options.components.claimProvision(requested);
-        if (requested.baseline === undefined) return release;
-        // why: the version and its source are read in the section that takes the claim, so the copy is of the version current at that moment.
-        const current = this.options.baselines().current(requested.baseline.name);
-        if (current === undefined) {
-          release();
-          throw new UnknownBaselineError(requested.baseline.name);
-        }
-        made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
-        made.source = current.sourceId;
-        // why: the hold keeps the version's source from being deleted by a replace until the copy has a record.
-        made.hold = this.options.baselines().hold(current.name, current.version);
-        return release;
-      });
+      releaseClaim = await this.options.decisions.run(() => this.#claim(requested, made));
     } catch (error: unknown) {
       options.reservation.release();
       throw error;

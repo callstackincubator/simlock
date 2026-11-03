@@ -135,37 +135,57 @@ export function baselineMismatch(
   request: Pick<DeviceRequest, "platform" | "model" | "osVersion" | "mode" | "imageTag">,
   catalogEntry: Pick<DriverCatalogEntry, "models" | "modelAliases">,
 ): BaselineMismatch | undefined {
-  const is = (value: string, asked: string): string =>
-    `baseline ${baseline.name} is ${value}, the request asks for ${asked}`;
-  if (request.platform !== baseline.platform) {
-    return { field: "platform", message: is(baseline.platform, request.platform) };
-  }
-  if (request.model !== undefined) {
-    const listed = findCatalogModel(catalogEntry, request.model) ?? request.model;
-    if (listed.toLowerCase() !== baseline.model.toLowerCase()) {
-      return { field: "model", message: is(baseline.model, request.model) };
-    }
-  }
-  if (request.osVersion !== undefined) {
-    const parsed = parseOsConstraint(request.osVersion);
-    if (!parsed.ok || !satisfies(baseline.osVersion, parsed.constraint)) {
-      const label = baseline.platform === "ios" ? "iOS" : "Android";
-      return {
-        field: "osVersion",
-        message: is(`${label} ${baseline.osVersion}`, request.osVersion),
-      };
-    }
-  }
-  if (request.mode !== undefined && request.mode !== baseline.mode) {
-    return { field: "mode", message: is(baseline.mode, request.mode) };
-  }
-  if (request.imageTag !== undefined && request.imageTag !== baseline.imageTag) {
-    return {
-      field: "imageTag",
-      message: is(`image tag ${baseline.imageTag ?? "none"}`, request.imageTag),
-    };
-  }
-  return undefined;
+  const label = baseline.platform === "ios" ? "iOS" : "Android";
+  const checks: readonly (readonly [
+    BaselineMismatch["field"],
+    boolean,
+    string,
+    string | undefined,
+  ])[] = [
+    ["platform", request.platform !== baseline.platform, baseline.platform, request.platform],
+    ["model", modelDiffers(baseline, request.model, catalogEntry), baseline.model, request.model],
+    [
+      "osVersion",
+      osDiffers(baseline, request.osVersion),
+      `${label} ${baseline.osVersion}`,
+      request.osVersion,
+    ],
+    [
+      "mode",
+      request.mode !== undefined && request.mode !== baseline.mode,
+      baseline.mode,
+      request.mode,
+    ],
+    [
+      "imageTag",
+      request.imageTag !== undefined && request.imageTag !== baseline.imageTag,
+      `image tag ${baseline.imageTag ?? "none"}`,
+      request.imageTag,
+    ],
+  ];
+  const differing = checks.find(([, differs]) => differs);
+  if (differing === undefined) return undefined;
+  const [field, , is, asked] = differing;
+  return {
+    field,
+    message: `baseline ${baseline.name} is ${is}, the request asks for ${asked ?? ""}`,
+  };
+}
+
+function modelDiffers(
+  baseline: BaselineFacts,
+  asked: string | undefined,
+  catalogEntry: Pick<DriverCatalogEntry, "models" | "modelAliases">,
+): boolean {
+  if (asked === undefined) return false;
+  const listed = findCatalogModel(catalogEntry, asked) ?? asked;
+  return listed.toLowerCase() !== baseline.model.toLowerCase();
+}
+
+function osDiffers(baseline: BaselineFacts, asked: string | undefined): boolean {
+  if (asked === undefined) return false;
+  const parsed = parseOsConstraint(asked);
+  return !parsed.ok || !satisfies(baseline.osVersion, parsed.constraint);
 }
 
 /** why: a baseline is a pool key (ADR 0061 §5): a plain spec matches only a plain one, and a baseline spec only its own name at its own version. */
