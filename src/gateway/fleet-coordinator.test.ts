@@ -1301,6 +1301,39 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
   });
 
+  it("times out a forwarded device.rotate after gateway.execTimeoutMs when the worker never answers", async () => {
+    const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    connectWorker(workers, "wrk_a");
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    const grant = await coordinator.request(REQUEST, requestOptions());
+    client.hangingCalls.add("device.rotate");
+
+    const rotation = coordinator.rotate(
+      { leaseId: grant.lease.id, orientation: "landscape_left" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent-1",
+        role: "agent",
+      },
+    );
+    const rotationState = promiseState(rotation);
+    const rejection = rotation.catch((error: unknown) => error);
+    await tick();
+    clock.advance(4_999);
+    await tick();
+    expect(rotationState.state).toBe("pending");
+
+    clock.advance(1);
+    await tick();
+    expect(rotationState.state).toBe("rejected");
+    const error = await rejection;
+    expect(error).toBeInstanceOf(DispatchError);
+    expect((error as DispatchError).code).toBe("EXEC_TIMEOUT");
+  });
+
   it("stops relaying a worker's device.exec output once gateway.execTimeoutMs has already rejected the call (H4, round 3 review)", async () => {
     const { clock, coordinator, directory, workers } = harness({ execTimeoutMs: 5_000 });
     const client = new ScriptedWorkerClient();
@@ -3804,6 +3837,33 @@ describe("FleetLeaseCoordinator records every fleet request's outcome (ADR 0021)
       },
     ]);
   });
+
+  it.each([{ answer: null }, { answer: {} }, { answer: { lease: null } }])(
+    "ends a request whose worker answers a malformed grant ($answer) in lease.rejected worker-failed, with no unhandled rejection",
+    async ({ answer }) => {
+      const { client, coordinator, eventBus } = oneWorker();
+      const events = record(eventBus, "lease.rejected");
+      client.requestLeaseQueue.push({ grant: answer as never, kind: "grant" });
+      const unhandled: unknown[] = [];
+      const listener = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", listener);
+      try {
+        const { ended, state } = await start(coordinator);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(state.state).toBe("rejected");
+        await expect(ended).resolves.toMatchObject({ code: "INTERNAL" });
+      } finally {
+        process.off("unhandledRejection", listener);
+      }
+
+      expect(unhandled).toEqual([]);
+      expect(events).toEqual([
+        { name: "lease.rejected", payload: expect.objectContaining({ reason: "worker-failed" }) },
+      ]);
+    },
+  );
 
   it.each([
     {

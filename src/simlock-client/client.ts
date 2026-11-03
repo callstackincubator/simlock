@@ -51,6 +51,8 @@ import type {
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
+  RotateInput,
+  RotateOutput,
   DoctorReport,
   DoctorRunInput,
   DriverPassthroughInput,
@@ -79,6 +81,7 @@ import type {
   ListGetOutput,
   NukeReport,
   NukeRunInput,
+  ConfigGetInput,
   WarmForgetInput,
   WarmForgetOutput,
   RequestLeaseOptions,
@@ -123,6 +126,8 @@ export type {
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
+  RotateInput,
+  RotateOutput,
   DeviceOutputChunk,
   DoctorReport,
   DoctorRunInput,
@@ -201,6 +206,9 @@ export interface ConnectOptions {
    * option (programmatic client)". Only meaningful via `connectSimlockAdmin` -- the base
    * `connectSimlock` does not accept one, by design (ADR §10: "the split is by import path"). */
   readonly credential?: string;
+  /** why: the longest unfinished line the wire keeps before it closes the connection; a peer
+   * with a smaller largest reply than the local socket's (the gateway's worker uplink) sets its own. */
+  readonly maxLineChars?: number;
 }
 
 /** The full agent-visible method surface (ADR §3's operation matrix, `agent` rows) plus the
@@ -237,6 +245,14 @@ export interface SimlockClient {
    * line-oriented commands work and full-screen ones do not (§19c).
    */
   exec(input: ExecInput, options?: ExecOptions): Promise<ExecOutput>;
+  /**
+   * why: turns the lease's iOS phone or tablet simulator to `orientation`, whether or not the daemon's input module is on. `requesterId` is for an operator that acts for the lease's requester, as `exec`'s is.
+   */
+  rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options?: { readonly requesterId?: string },
+  ): Promise<RotateOutput>;
 
   /**
    * Reports a lease the *daemon* ended -- an expiry, an operator release, an unrecoverable
@@ -263,7 +279,7 @@ export interface SimlockAdminClient extends SimlockClient {
   runCleanup(input?: CleanupRunInput): Promise<CleanupRunOutput>;
   runNuke(input?: NukeRunInput): Promise<NukeReport>;
   forgetWarmKind(input: WarmForgetInput): Promise<WarmForgetOutput>;
-  getConfig(): Promise<SimlockConfig>;
+  getConfig(input?: ConfigGetInput): Promise<SimlockConfig>;
   /** ADR §6's frozen exception: accepted by the daemon at any protocol version it has ever
    * spoken, even before `hello`/role resolve. Exposed here rather than on the base client
    * purely as an API-surface choice matching the ADR's operation matrix (the daemon itself
@@ -366,7 +382,7 @@ export async function connectSimlockClient(
   admin: boolean,
 ): Promise<SimlockClient | SimlockAdminClient> {
   const connection = await resolveConnection(options);
-  const wire = new SimlockWire(connection);
+  const wire = new SimlockWire(connection, options.maxLineChars);
   let hello: Awaited<ReturnType<SimlockWire["hello"]>>;
   try {
     hello = await wire.hello({
@@ -429,6 +445,7 @@ function buildDegradedClient(
     runDoctor: () => rejected(),
     resolvePassthrough: () => rejected(),
     exec: () => rejected(),
+    rotate: () => rejected(),
 
     onLeaseLost: () => () => {},
     onDeviceUnhealthy: () => () => {},
@@ -577,8 +594,8 @@ class SimlockClientImpl {
 
     if (signal?.aborted === true) throw cancelledError();
 
-    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then(
-      (grant) => grant as LeaseGrant,
+    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then((grant) =>
+      this.#parseOutput("lease.request", grant),
     );
 
     if (signal === undefined) return requestPromise;
@@ -621,6 +638,14 @@ class SimlockClientImpl {
       onStarted: options.onStarted,
     });
     return this.#parseOutput("device.exec", payload);
+  }
+
+  rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options: { readonly requesterId?: string } = {},
+  ): Promise<RotateOutput> {
+    return this.#call("device.rotate", { leaseId, orientation, ...options });
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
@@ -687,8 +712,8 @@ class SimlockClientImpl {
     return this.#call("warm.forget", input);
   }
 
-  getConfig(): Promise<SimlockConfig> {
-    return this.#call("config.get", {});
+  getConfig(input: ConfigGetInput = {}): Promise<SimlockConfig> {
+    return this.#call("config.get", input);
   }
 
   stopDaemon(): Promise<DaemonStopOutput> {

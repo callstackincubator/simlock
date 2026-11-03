@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach } from "vitest";
 
@@ -476,9 +476,35 @@ interface PidDiscoveryResult {
   readonly pids: number[];
 }
 
+/**
+ * why: a failed run's daemon logs are the evidence of why it failed, and teardown deletes the
+ * home they live in. A failed copy is swallowed so it never hides teardown's own error.
+ */
+async function keepDaemonLogs(dataDirectory: string, home: string): Promise<void> {
+  const logDirectory = process.env.SIMLOCK_E2E_LOG_DIR;
+  if (logDirectory === undefined || logDirectory === "") return;
+  try {
+    const target = join(logDirectory, basename(home));
+    await mkdir(target, { recursive: true });
+    for (const name of await readdir(dataDirectory)) {
+      if (name.startsWith("daemon.log")) await cp(join(dataDirectory, name), join(target, name));
+    }
+  } catch {
+    // why: see above; the copy is best effort.
+  }
+}
+
 async function teardown(state: TeardownState): Promise<void> {
-  const { backgroundProcesses, env, gatewayFlag, home, mcpClients, realDrivers, socketPath } =
-    state;
+  const {
+    backgroundProcesses,
+    dataDirectory,
+    env,
+    gatewayFlag,
+    home,
+    mcpClients,
+    realDrivers,
+    socketPath,
+  } = state;
   for (const client of mcpClients) {
     await client.close().catch(() => undefined);
   }
@@ -499,6 +525,7 @@ async function teardown(state: TeardownState): Promise<void> {
 
   // why: a timed-out test may still be running and writing into its simulator home
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
+  await keepDaemonLogs(dataDirectory, home);
   await rm(home, { force: true, recursive: true });
 
   if (stopResult.stopError !== undefined) throw stopResult.stopError;

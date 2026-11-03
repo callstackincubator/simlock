@@ -63,7 +63,7 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 
 | Code | Exit | What it means | What to do |
 | --- | --- | --- | --- |
-| `USAGE` | 2 | `simlock simctl` or `simlock adb` refused a command that would break a device or affect every agent, such as `erase` or `kill-server`. Over HTTP and the client the code is `PASSTHROUGH_REFUSED` (`422`). | Do what the message says, usually `simlock release` to get a clean device. See [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses). |
+| `USAGE` | 2 | A bad `config.json` value that stops a command from starting the daemon, or `simlock simctl` or `simlock adb` refused a command that would break a device or affect every agent, such as `erase` or `kill-server`. Over HTTP and the client the code is `PASSTHROUGH_REFUSED` (`422`). | Do what the message says, usually `simlock release` to get a clean device. See [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses). |
 | `UNKNOWN_PASSTHROUGH_TOOL` | 2 | `exec` named a tool no platform on that machine provides, such as `xcodebuild`. The CLI reports it as `USAGE`. | Use `simctl` or `adb`, or `devicectl` on a physical iPhone or iPad. `simctl` on a physical lease and `devicectl` on a simulator are refused with `PASSTHROUGH_REFUSED`. |
 | `EXEC_TIMEOUT` | 10 | The command ran longer than the machine allows (10 minutes by default) and was stopped. | Split the work, or ask an operator to raise `exec.timeoutMs`. |
 | `WORKER_UNREACHABLE` | 1 | Through a gateway, the worker that holds your device is not connected. | Retry. The lease is still yours until it expires. |
@@ -72,7 +72,7 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 
 | Code | Exit | What it means | What to do |
 | --- | --- | --- | --- |
-| `DAEMON_STARTUP_FAILED` | 1 | The CLI started the daemon and it did not come up, often because of a bad config file. The message says why. | Fix what the message names, then run the command again. `simlock daemon logs` shows the daemon's own log. |
+| `DAEMON_STARTUP_FAILED` | 1 | The CLI started the daemon and it did not come up, often because of a failure the daemon only logs. The message says why. | Fix what the message names, then run the command again. `simlock daemon logs` shows the daemon's own log. |
 | `DAEMON_CONNECTION_LOST` | 1 | The daemon stopped or crashed while the command was talking to it. A held lease is not released. | Run the command again; the daemon starts on demand. Renew a held lease with `simlock lease renew <lease-id>`. |
 | `DAEMON_STOPPING` | 1 | The daemon is shutting down. | Wait a moment and run the command again. |
 | `SERVICE_FAILED` | 1 | `simlock daemon install`, `uninstall` or a start through the service could not finish: `launchctl` failed or ran past 10 s, or the old daemon did not stop within 300 s. The message names the command and its first error line. | Fix what the message names and run the command again. A failed load removes the service file. |

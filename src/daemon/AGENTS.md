@@ -10,23 +10,24 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 
 ## Files
 
-| File                    | Role                                                                                                                                           |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `main.ts`               | Composition root; worker or gateway; driver discovery; log sinks                                                                               |
-| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                                                            |
-| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                                                     |
-| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                                                            |
-| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                                                      |
-| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                                                             |
-| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                                                |
-| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi`                               |
-| `update-coordinator.ts` | `createUpdateCoordinator`: `daemon.update`'s state (`waiting`, `installing`), the updater launch, `status.get`'s update fields                 |
-| `version-check.ts`      | `startVersionCheck`: npm's `latest` Simlock version, read at start and every 24 h (`update.check`); `status.get`'s `latestVersion`, both roles |
-| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                                      |
-| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                  |
-| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                         |
-| `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                 |
-| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                               |
+| File                    | Role                                                                                                                                                                                                                                                 |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main.ts`               | Composition root; worker or gateway; worker lock; driver discovery; log sinks                                                                                                                                                                        |
+| `server.ts`             | `DaemonServer`: framing, `hello`, sessions, pushes, readiness, stop                                                                                                                                                                                  |
+| `dispatch.ts`           | `runDispatch` pipeline, `DispatchSession`, `DispatchError`                                                                                                                                                                                           |
+| `dispatcher.ts`         | `Dispatcher`: the worker's handlers                                                                                                                                                                                                                  |
+| `connection-host.ts`    | `DaemonEndpointHost`: socket claim, stale-socket recovery                                                                                                                                                                                            |
+| `owner-routed-facts.ts` | `OwnerRoutedFactBus`: lease facts with their owner                                                                                                                                                                                                   |
+| `gateway-uplink.ts`     | `GatewayUplink`: a worker's dial to its gateway                                                                                                                                                                                                      |
+| `openapi.ts`            | `openApiDocument`, `writeOpenApiDocument`: the HTTP API document from the module registry; run by `pnpm openapi`                                                                                                                                     |
+| `update-coordinator.ts` | `createUpdateCoordinator`: `daemon.update`'s state (`waiting`, `installing`), the updater launch, `status.get`'s update fields                                                                                                                       |
+| `version-check.ts`      | `startVersionCheck`: npm's `latest` Simlock version, read at start and every 24 h (`update.check`); `status.get`'s `latestVersion`, both roles                                                                                                       |
+| `relay.ts`              | `RelayTargets`, `RelayConnection`: relays over the uplink                                                                                                                                                                                            |
+| `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                                                                                                                        |
+| `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                                                                                                                               |
+| `lease-inputs.ts`       | `createLeaseInputs`: the per-lease device input shared by the input module's sockets and `device.rotate`, closed by its last release, failure or the lease's end; `rotation-refusal.ts`: `rotationRefusal`, `device.rotate`'s `ROTATION_UNSUPPORTED` |
+| `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                                                                                                                       |
+| `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                                                                                                                                     |
 
 ## Composition (`main.ts`)
 
@@ -59,7 +60,7 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 66, max: 66 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 69, max: 69 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
@@ -113,7 +114,7 @@ Security model: cooperative identity, not a hostile-process boundary.
   An existing directory is never chmod'ed; the daemon warns when group or others can reach it. On Windows the endpoint is a named pipe no directory guards: see [ports](../ports/AGENTS.md).
 - A `hello.principal` is a claim. Ownership checks stop accidents, not attacks.
 - Admin comes only from a credential at `hello`, never from the socket itself.
-- A worker that joins a fleet grants its gateway `admin` over itself.
+- A worker that joins a fleet grants its gateway `admin` over itself, and must not be able to crash, stall or corrupt it: see [gateway](../gateway/AGENTS.md#rules).
 - An `agent` token is shell access to the worker: `device.exec` runs host tools as the daemon's
   user, with only the keys `execBaseEnvironment` (`exec-env.ts`) keeps plus the command's own.
 
@@ -143,8 +144,7 @@ Security model: cooperative identity, not a hostile-process boundary.
 - One `Dispatcher` instance serves the socket, the uplink and HTTP; HTTP calls `DaemonServer.dispatch` in process.
 - Handlers never see raw input and never check roles.
 - The claim comes before any write to `admin.token` and before converge.
-- On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before
-  converge ends.
-- `daemon.stop` releases nothing. Leases persist with their deadlines.
-- A closed connection ends no lease and kills no command.
+- A worker with real drivers takes the worker lock (`ports/worker-lock.ts`) before `discoverDrivers`, makes sure it holds it after the socket claim, and releases it after the drivers are disposed and on a failed start; substituted drivers and gateways never take it.
+- On a worker, no request but `hello`, `status.get` and `daemon.stop` runs before converge ends.
+- `daemon.stop` releases nothing; leases persist with their deadlines. A closed connection ends no lease and kills no command.
 - `daemon.started` is emitted only after converge, and never after `daemon.stopping`.

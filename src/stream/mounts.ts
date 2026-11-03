@@ -11,10 +11,14 @@ import {
 // stream is the same exchange whether a console on this host asks for it or a gateway relays one, and a
 // component that imports the front end it is mounted into cannot be mounted into a relay as well.
 export interface StreamMount {
-  handle(
-    request: Request,
-    identity: { readonly principal: string; readonly role: string },
-  ): Promise<Response>;
+  handle(request: Request, identity: StreamIdentity): Promise<Response>;
+}
+
+// why: `expiresAt` is set only for an identity that signed in through a proxy; a token or the local socket has none.
+export interface StreamIdentity {
+  readonly principal: string;
+  readonly role: string;
+  readonly expiresAt?: number | undefined;
 }
 
 export interface StreamRelayTarget {
@@ -22,11 +26,7 @@ export interface StreamRelayTarget {
 }
 
 export interface StreamLeaseHandler {
-  (
-    request: Request,
-    identity: { readonly principal: string; readonly role: string },
-    lease: ModuleLease,
-  ): Promise<Response>;
+  (request: Request, identity: StreamIdentity, lease: ModuleLease): Promise<Response>;
 }
 
 // why: the lease is resolved and its owner checked by the HTTP layer before this runs, so the handler
@@ -45,6 +45,7 @@ export function createStreamLeaseHandler(options: StreamServiceOptions): StreamL
         ...(lease.workerId === undefined ? {} : { workerId: lease.workerId }),
         ...(lease.workerLeaseId === undefined ? {} : { workerLeaseId: lease.workerLeaseId }),
       },
+      identity.expiresAt,
     );
 }
 
@@ -59,6 +60,7 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
           role: identity.role === "operator" ? "operator" : "agent",
         },
         streamTargetOf(new URL(request.url).pathname),
+        identity.expiresAt,
       ),
   };
 }

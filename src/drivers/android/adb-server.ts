@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import type { AdbServerRejectionReason } from "../../core/index.js";
 import type {
   Clock,
@@ -83,6 +85,8 @@ export interface AdbServerSupervisorOptions {
    */
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly filesystem: Filesystem;
+  /** why: `${SIMLOCK_HOME}/logs/adb-server.log` is where the server's stdout and stderr go. */
+  readonly logPath: string;
   readonly port: number;
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
@@ -265,17 +269,36 @@ export class AdbServerSupervisor {
     );
   }
 
-  async #startServer(): Promise<void> {
-    const startedAt = this.#options.clock.now();
-    // `nodaemon server` runs the server in the foreground, so the pid recorded below is
+  /**
+   * why: replaced rather than truncated in place so the file is 0600 whatever it was before, and
+   * so a previous server's trace never leads the new one's.
+   */
+  async #resetLog(): Promise<void> {
+    await this.#options.filesystem.mkdirp(dirname(this.#options.logPath), { mode: 0o700 });
+    await this.#options.filesystem.writeFileAtomic(this.#options.logPath, "", { mode: 0o600 });
+  }
+
+  async #prepareLog(): Promise<void> {
+    try {
+      await this.#resetLog();
+    } catch (error: unknown) {
+      throw this.#unavailable(
+        "start-failed",
+        `Simlock could not prepare the adb server's log at ${this.#options.logPath}: ${messageOf(error)}`,
+      );
+    }
+  }
+
+  #spawnServer(): ProcessHandle {
+    // why: `nodaemon server` runs the server in the foreground, so the pid recorded by the caller is
     // the server itself. `start-server` would fork one and hand back the pid of a launcher
     // that exits immediately -- a pid that identifies nothing by the time it is needed.
-    // `stdio: "ignore"` because this child outlives every call made to it: captured output
-    // would accumulate in the handle's buffers for as long as the daemon runs, and there is
-    // nothing to read it. Diagnosis happens through the probe and the record instead.
-    let handle;
+    // why: the output goes to a file rather than a pipe because this child outlives every call
+    // made to it: captured output would accumulate in the handle's buffers for as long as
+    // the daemon runs. In `nodaemon` mode adb logs to stderr only, so the file is the only
+    // place `ADB_TRACE` (passed through from `env`) can land.
     try {
-      handle = this.#options.processRunner.spawn(
+      return this.#options.processRunner.spawn(
         this.#options.adbPath,
         ["-P", String(this.#options.port), "nodaemon", "server"],
         {
@@ -284,7 +307,7 @@ export class AdbServerSupervisor {
             ...SCOPED_ENVIRONMENT,
             ANDROID_ADB_SERVER_PORT: String(this.#options.port),
           },
-          stdio: "ignore",
+          stdio: { file: this.#options.logPath },
         },
       );
     } catch (error: unknown) {
@@ -296,6 +319,12 @@ export class AdbServerSupervisor {
         `Simlock could not start an adb server from ${this.#options.adbPath}: ${messageOf(error)}`,
       );
     }
+  }
+
+  async #startServer(): Promise<void> {
+    const startedAt = this.#options.clock.now();
+    await this.#prepareLog();
+    const handle = this.#spawnServer();
 
     // This child is meant to outlive the daemon: it is reaped by pid, never awaited, and
     // `nodaemon server` never exits on its own. Left referenced it would hold the event

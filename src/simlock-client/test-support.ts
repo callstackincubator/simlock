@@ -58,6 +58,11 @@ export class ScriptedConnection implements IpcConnection {
     for (const listener of this.#dataListeners) listener(`${JSON.stringify(frame)}\n`);
   }
 
+  /** why: a line split across chunks needs the text fed with no newline added. */
+  receiveRaw(text: string): void {
+    for (const listener of this.#dataListeners) listener(text);
+  }
+
   /** Feeds one raw line of text, for a wire value `JSON.stringify` cannot produce (`1e999`). */
   receiveLine(line: string): void {
     for (const listener of this.#dataListeners) listener(`${line}\n`);

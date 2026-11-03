@@ -4,10 +4,13 @@ import {
   deviceClassSchema,
   deviceRecordSchema,
   imageTagSchema,
+  INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
   refuseModelWithClass,
+  requesterIdSchema,
   waitingRequestSchema,
+  WARM_POOL_NAME_MAX,
 } from "../contract/index.js";
 import { declareRoute, firstValue, sseMessage } from "./routes.js";
 
@@ -134,10 +137,7 @@ const execBodySchema = z
       .string()
       .nullish()
       .transform((value) => value ?? undefined),
-    requesterId: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
+    requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
 
@@ -160,6 +160,26 @@ export const leaseExecRoute = declareRoute({
   errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
 });
 
+const rotateBodySchema = z.object({ orientation: z.enum(INPUT_ORIENTATIONS) }).strict();
+
+export const leaseRotateRoute = declareRoute({
+  method: "post",
+  path: "/v1/leases/{id}/rotate",
+  tag: "Leases",
+  summary: "Rotate the lease's iOS simulator",
+  role: "agent",
+  notes:
+    "Turns an iPhone or iPad simulator, whether or not the input module is on. Answers once the event is written to the simulator's input helper. Any other device answers 422.",
+  request: { params: leaseParamsSchema, json: rotateBodySchema },
+  reply: OPERATIONS["device.rotate"].output,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    422: ["ROTATION_UNSUPPORTED"],
+    503: ["INPUT_UNAVAILABLE", "WORKER_UNREACHABLE"],
+    504: ["EXEC_TIMEOUT"],
+  },
+});
+
 export const leaseRequestGetRoute = declareRoute({
   method: "get",
   path: "/v1/lease-requests/{id}",
@@ -176,7 +196,7 @@ export const leaseRequestBodySchema = z
   .object({
     allowDownload: z.boolean().optional(),
     class: deviceClassSchema.optional(),
-    device: z.string().min(1).optional(),
+    device: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
@@ -345,6 +365,7 @@ export const LEASE_ROUTES = [
   leaseGetRoute,
   leaseRenewRoute,
   leaseExecRoute,
+  leaseRotateRoute,
   leaseEventsRoute,
   leaseReleaseRoute,
 ] as const;

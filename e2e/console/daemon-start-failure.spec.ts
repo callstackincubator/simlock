@@ -1,5 +1,4 @@
-import { createServer } from "node:net";
-
+import { holdLoopbackPort } from "../helpers/port.js";
 import { expect, startDaemon, test } from "./fixtures.js";
 
 /**
@@ -18,17 +17,6 @@ function reported(error: unknown): string {
     : `${error.message}\ncause: ${String(error.cause)}`;
 }
 
-async function hold(port: number): Promise<() => Promise<void>> {
-  const holder = createServer();
-  await new Promise<void>((resolve, reject) => {
-    holder.once("error", (error: Error) =>
-      reject(new Error(`premise: could not hold port ${String(port)}: ${error.message}`)),
-    );
-    holder.listen(port, "127.0.0.1", () => resolve());
-  });
-  return () => new Promise<void>((resolve) => holder.close(() => resolve()));
-}
-
 test("a daemon start that cannot bind its HTTP port reports the port conflict", async () => {
   const daemon = await startDaemon("worker");
   try {
@@ -38,7 +26,7 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict", 
     await daemon.start();
 
     await daemon.stop();
-    const release = await hold(daemon.port);
+    const held = await holdLoopbackPort(daemon.port);
     let failure: unknown;
     let started = false;
     try {
@@ -47,7 +35,7 @@ test("a daemon start that cannot bind its HTTP port reports the port conflict", 
     } catch (error: unknown) {
       failure = error;
     } finally {
-      await release();
+      await held.release();
     }
 
     if (started) {

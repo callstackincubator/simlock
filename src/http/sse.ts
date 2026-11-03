@@ -48,12 +48,15 @@ export function pipeSse(c: Context, clock: Clock, source: SseSource, endsAt?: nu
     // below check, and it can't go true until after `writeChain` has already been awaited.
     const finish = () => resolveDone();
 
-    // Serializes writes: `send` can be invoked synchronously (an immediate current-state
+    // why: serializes writes: `send` can be invoked synchronously (an immediate current-state
     // event on subscribe) or later from an event-bus callback, and writes must land in order.
     // The promise for *this* event is handed back so a source that can slow down does; the
     // chain itself swallows the failure so an event nobody awaited cannot become an unhandled
-    // rejection.
-    let writeChain: Promise<void> = Promise.resolve();
+    // rejection. The first write is `: open`: a proxy that holds response headers until the first body byte (Cloudflare Tunnel) shows nothing before it.
+    let writeChain: Promise<void> = stream.write(": open\n\n").then(
+      () => undefined,
+      () => undefined,
+    );
     const send = (event: SseEvent): Promise<void> => {
       if (stream.closed) return Promise.resolve();
       const written = writeChain.then(async () => {

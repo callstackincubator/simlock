@@ -40,13 +40,14 @@ const SIMLOCK_CLI = `## simlock CLI
 - The JSON line holds \`lease.id\`, \`lease.ttlDeadline\`, \`device.address\` and \`environment\`. \`--export-env\` prints \`environment\` as shell \`export\` lines.
 - Release with \`simlock release <lease-id>\`, or stop the background \`simlock lease\`.
 - Reach the device through \`simlock simctl\` and \`simlock adb -s <device.address>\`, or through the grant's \`environment\`. On another machine, use \`simlock simctl --lease <lease-id>\` and \`simlock adb --lease <lease-id>\`.
+- Turn an iOS simulator with \`simlock rotate <orientation>\` (\`portrait\`, \`portrait-upside-down\`, \`landscape-left\` or \`landscape-right\`); add \`--lease <lease-id>\` when you hold more than one lease.
 - If this machine runs a gateway and the operator says to use it, put \`--gateway\` right after \`simlock\`.
 
 Some commands are refused on purpose, because they break the device for Simlock or for other agents. Do not work around them; release the lease instead.
 
 - \`simlock simctl\` refuses \`simlock simctl create\`, \`simlock simctl erase\`, \`simlock simctl delete\`, \`simlock simctl shutdown all\` and \`simlock simctl runtime delete\`.
 - \`simlock simctl\` refuses any option before the subcommand, \`--set\` and \`--profiles\` included.
-- \`simlock adb kill-server\`, \`simlock adb emu kill\`, \`simlock adb emu avd stop\` and \`simlock adb emu avd snapshot delete\` are refused.
+- \`simlock adb kill-server\`, \`simlock adb disconnect\`, \`simlock adb emu kill\`, \`simlock adb emu avd stop\` and every \`simlock adb emu avd snapshot\` subcommand except \`list\` are refused.
 - \`simlock adb\` refuses any option before the subcommand other than \`-s\`, \`-t\`, \`-d\` or \`-e\`.
 - On another machine, \`simlock adb shell\` needs a command to run.
 
@@ -61,13 +62,14 @@ Every failure writes one JSON line on stderr, \`{"error":{"code":"...","message"
 
 const MCP = `## MCP
 
-When Simlock is connected to you as an MCP server, it has five tools:
+When Simlock is connected to you as an MCP server, it has six tools:
 
 - \`list_devices\`: what can be leased, and the enrolled phones in \`physicalDevices\`. Call it before leasing. Over HTTP, phones are the \`GET /v1/status\` devices with \`physical: true\` and a state other than \`deleted\`, on a connected, undrained worker.
 - \`lease_simulator\`: lease one device. It is renewed for you and released when the server exits.
 - \`release_simulator\`: give the device back.
 - \`lease_status\`: whether you still hold a lease, and which. Call it after a context compaction.
 - \`run_on_device\`: run one \`simctl\`, \`adb\` or \`devicectl\` command on your leased device, for example install and launch an app. Leave the device out; Simlock fills it in. It returns \`exitCode\`, \`stdout\`, \`stderr\` and \`truncated\`; a non-zero exit code is the command's answer, not an error.
+- \`rotate_device\`: turn your leased iOS simulator to \`portrait\`, \`portrait-upside-down\`, \`landscape-left\` or \`landscape-right\`. It returns \`leaseId\` and \`orientation\`; an Android emulator is refused.
 
 Under Codex and pi, the MCP server and the CLI are two identities: use only one of them per session.`;
 

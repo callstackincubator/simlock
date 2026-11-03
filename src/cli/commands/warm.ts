@@ -1,6 +1,7 @@
 import { commandArgs, subcommandOrUsage, UsageError, withHelpHint, writeResult } from "../args.js";
 import type { WarmForgetOutput } from "../../admin/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl } from "../escape.js";
 import type { CommandContext } from "../tree.js";
 
 const WARM_USAGE =
@@ -72,8 +73,12 @@ function describe(forgotten: WarmForgetOutput["forgotten"], asked: Kind): string
 
 // why: one spelling for a kind forgotten and a kind asked for: the words given, then mode and image tag in brackets.
 function named(kind: Kind): string {
-  const words = [kind.platform, kind.model, kind.osVersion].filter((word) => word !== undefined);
-  const details = [kind.mode, kind.imageTag].filter((detail) => detail !== undefined);
+  const words = [kind.platform, kind.model, kind.osVersion]
+    .filter((word) => word !== undefined)
+    .map(escapeControl);
+  const details = [kind.mode, kind.imageTag]
+    .filter((detail) => detail !== undefined)
+    .map(escapeControl);
   return details.length === 0 ? words.join(" ") : `${words.join(" ")} (${details.join(", ")})`;
 }
 

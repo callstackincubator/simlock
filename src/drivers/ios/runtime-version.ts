@@ -1,6 +1,6 @@
 // why: the iOS major and minor a simulator's runtime id names; the slim pass and the device input both decide by it.
 export function iosRuntimeVersionFromId(runtimeId: string): readonly [number, number] | undefined {
-  const match = /iOS-(\d+)(?:-(\d+))?(?:-(\d+))?$/.exec(runtimeId);
+  const match = /iOS-(\d+)(?:-(\d+))?(?:-(\d+))?(?:-[A-Za-z][A-Za-z0-9-]*)?$/.exec(runtimeId);
   if (match === null) {
     return undefined;
   }

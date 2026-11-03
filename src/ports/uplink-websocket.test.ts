@@ -14,7 +14,7 @@
  * fabricated request object.
  */
 import { createServer, type Server } from "node:http";
-import { createServer as createTcpServer, type AddressInfo } from "node:net";
+import { connect, createServer as createTcpServer, type AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -29,6 +29,7 @@ import type {
 } from "./uplink.js";
 import { UplinkError } from "./uplink.js";
 import {
+  UPLINK_MAX_MESSAGE_BYTES,
   UPLINK_PING_INTERVAL_MS,
   WebSocketUplinkConnector,
   WebSocketUplinkListenerFactory,
@@ -142,6 +143,60 @@ describe("WebSocketUplinkListenerFactory refusals", () => {
   });
 });
 
+describe("WebSocketUplinkListenerFactory client reset", () => {
+  it("survives a client that resets while authenticate is pending, and never accepts it", async () => {
+    let release: () => void = () => undefined;
+    let authenticating: () => void = () => undefined;
+    const authenticateCalled = new Promise<void>((resolve) => {
+      authenticating = resolve;
+    });
+    const accept = vi.fn();
+    const factory = new WebSocketUplinkListenerFactory();
+    await factory.listen({
+      authenticate: () => {
+        authenticating();
+        return new Promise<UplinkAuthOutcome>((resolve) => {
+          release = () => resolve("accept");
+        });
+      },
+      accept,
+    });
+    let upgraded: Promise<void> = Promise.resolve();
+    let serverSideClosed: Promise<void> = Promise.resolve();
+    server = createServer();
+    server.on("upgrade", (request, socket, head: Buffer) => {
+      serverSideClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      upgraded = factory.handleUpgrade(request, socket, head);
+    });
+    await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const crashes: unknown[] = [];
+    const saved = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    process.on("uncaughtException", (error) => crashes.push(error));
+    try {
+      const raw = connect(port, "127.0.0.1");
+      raw.on("error", () => undefined);
+      raw.write(
+        "GET /v1/uplink HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" +
+          "Authorization: Bearer slk_x\r\nX-Simlock-Worker-Id: wrk_1\r\n\r\n",
+      );
+      await authenticateCalled;
+      raw.resetAndDestroy();
+      await serverSideClosed;
+      release();
+      await upgraded;
+
+      expect(crashes).toEqual([]);
+      expect(accept).not.toHaveBeenCalled();
+    } finally {
+      process.removeAllListeners("uncaughtException");
+      for (const listener of saved) process.on("uncaughtException", listener);
+    }
+  });
+});
+
 async function startAcceptingGateway(): Promise<{
   url: string;
   accepted: Promise<UplinkTransportConnection>;
@@ -200,6 +255,24 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await worker.writeBinary(new Uint8Array([4, 5, 6]));
 
     await vi.waitFor(() => expect(received).toEqual([[4, 5, 6]]));
+  });
+
+  it("accepts a message of the maximum payload and closes the connection on one a byte over", async () => {
+    const { accepted, url } = await startAcceptingGateway();
+    const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
+    const gateway = await accepted;
+    const sizes: number[] = [];
+    gateway.onBinary((bytes) => sizes.push(bytes.length));
+    const closed = vi.fn();
+    gateway.onClose(closed);
+
+    await worker.writeBinary(new Uint8Array(UPLINK_MAX_MESSAGE_BYTES));
+    await vi.waitFor(() => expect(sizes).toEqual([UPLINK_MAX_MESSAGE_BYTES]));
+    expect(closed).not.toHaveBeenCalled();
+
+    await worker.writeBinary(new Uint8Array(UPLINK_MAX_MESSAGE_BYTES + 1));
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+    expect(sizes).toEqual([UPLINK_MAX_MESSAGE_BYTES]);
   });
 
   it("drops a binary message that arrives with no listener", async () => {

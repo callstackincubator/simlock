@@ -1,5 +1,6 @@
 import type { SimlockAdminClient } from "../../admin/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, subcommandOrUsage, UsageError, withHelpHint } from "../args.js";
 import type { CommandContext } from "../tree.js";
 
@@ -83,7 +84,7 @@ async function removeDevice(
 }
 
 function describeRemoved(result: { readonly driverDeviceId: string }): string {
-  return `Removed ${result.driverDeviceId}. It is no longer enrolled; nothing on the device changed.`;
+  return `Removed ${esc(result.driverDeviceId)}. It is no longer enrolled; nothing on the device changed.`;
 }
 
 function describeEnrolled(result: {
@@ -94,9 +95,9 @@ function describeEnrolled(result: {
   readonly platform: "ios" | "android";
   readonly reenrolled: boolean;
 }): string {
-  const os = `${result.platform === "ios" ? "iOS" : "Android"} ${result.osVersion}`;
+  const os = `${result.platform === "ios" ? "iOS" : "Android"} ${esc(result.osVersion)}`;
   const apps = `${String(result.appCount)} user app${result.appCount === 1 ? "" : "s"}`;
-  return `Enrolled ${result.model} (${os}) as ${result.driverDeviceId}${result.reenrolled ? " again" : ""}, ${apps} recorded.`;
+  return `Enrolled ${esc(result.model)} (${os}) as ${esc(result.driverDeviceId)}${result.reenrolled ? " again" : ""}, ${apps} recorded.`;
 }
 
 export { run };

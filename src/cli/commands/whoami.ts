@@ -1,4 +1,5 @@
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, writeResult } from "../args.js";
 import type { CommandContext } from "../tree.js";
 
@@ -20,7 +21,7 @@ async function run(
     if (values.json) writeResult((value) => environment.stdout.write(value), identity);
     else {
       environment.stdout.write(
-        `Principal: ${identity.principal}\nName:      ${identity.name}\nRole:      ${identity.role}\nVia:       ${identity.via}\n`,
+        `Principal: ${esc(identity.principal)}\nName:      ${esc(identity.name)}\nRole:      ${esc(identity.role)}\nVia:       ${esc(identity.via)}\n`,
       );
     }
     return 0;

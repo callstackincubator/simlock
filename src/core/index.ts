@@ -46,7 +46,13 @@ export {
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
-export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
+export {
+  ConfigError,
+  integerInRange,
+  invalidValue,
+  nonEmptyString,
+  objectValidator,
+} from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,
@@ -102,6 +108,13 @@ export {
   type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export {
+  DeviceTcpError,
+  unsupportedTunnelMessage,
+  type DeviceReverse,
+  type DeviceTcp,
+  type SweptDevice,
+} from "./device-tcp.js";
 export {
   closeReason,
   type DeviceInput,

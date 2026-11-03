@@ -7,6 +7,7 @@ import {
   EVENTS_PAGE_WITH_SINCE_MESSAGE,
   eventsPageWithoutSince,
 } from "./events-page.js";
+import { INPUT_ORIENTATIONS } from "./orientation.js";
 import { parseOsConstraint } from "./os-range.js";
 import { relayChannelSchema, relayHeadersSchema, relayIdSchema } from "./relay.js";
 import { ownsLease, type AuthorizeContext, type Role } from "./roles.js";
@@ -25,6 +26,7 @@ import {
   eventEnvelopeSchema,
   EVENT_ID_PATTERN,
   hostFactsSchema,
+  requesterIdSchema,
   historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
@@ -146,7 +148,7 @@ const EXACT_OS_VERSION_BOUND =
 
 const leaseRequestBaseSchema = z
   .object({
-    model: z.string().min(1).optional(),
+    model: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
     // why: A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
@@ -155,7 +157,7 @@ const leaseRequestBaseSchema = z
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
     physical: z.boolean().optional(),
-    requesterId: z.string().optional(),
+    requesterId: requesterIdSchema.optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
@@ -281,7 +283,7 @@ export const leaseRequest = defineOperation({
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
   // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
-  // `requesterId`, and `owner` is gated by role in the handler (the resource does not exist yet).
+  // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
@@ -317,7 +319,10 @@ export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   effect: "write",
-  input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
+  input: z.object({
+    requesterId: requesterIdSchema.optional(),
+    platform: platformSchema.optional(),
+  }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
    * why: ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
@@ -449,7 +454,7 @@ export const deviceExec = defineOperation({
        * identity and is answered as if it had not is the kind of silence that reads like
        * authorization (round 4, F4).
        */
-      requesterId: z.string().optional(),
+      requesterId: requesterIdSchema.optional(),
     })
     .strict(),
   /**
@@ -485,16 +490,7 @@ export const deviceExec = defineOperation({
    * authorized, the same convention `ownsLease` uses, so the handler's own `UNKNOWN_LEASE`
    * surfaces instead of a misleading `FORBIDDEN`.
    */
-  authorize: (input, context) => {
-    if (context.role !== "admin") {
-      if (input.requesterId !== undefined) return false;
-      const ownerId = context.ownerId(input.leaseId);
-      return ownerId === undefined || ownerId === context.principal;
-    }
-    const requesterId = input.requesterId ?? context.principal;
-    const leaseRequesterId = context.leaseRequesterId(input.leaseId);
-    return leaseRequesterId === undefined || leaseRequesterId === requesterId;
-  },
+  authorize: authorizeOneLeaseCall,
 });
 
 /**
@@ -626,7 +622,7 @@ export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
   effect: "read",
-  input: z.object({}),
+  input: z.object({ showSecrets: z.boolean().optional() }),
   output: configSchema,
 });
 
@@ -1074,6 +1070,42 @@ const identityGet = defineOperation({
   }),
 });
 
+/**
+ * why: `device.exec`'s and `device.rotate`'s one rule, so a gateway's admin session is held to the lease's requester on both.
+ */
+function authorizeOneLeaseCall(
+  input: { readonly leaseId: string; readonly requesterId?: string | undefined },
+  context: AuthorizeContext,
+): boolean {
+  if (context.role !== "admin") {
+    if (input.requesterId !== undefined) return false;
+    const ownerId = context.ownerId(input.leaseId);
+    return ownerId === undefined || ownerId === context.principal;
+  }
+  const requesterId = input.requesterId ?? context.principal;
+  const leaseRequesterId = context.leaseRequesterId(input.leaseId);
+  return leaseRequesterId === undefined || leaseRequesterId === requesterId;
+}
+
+/**
+ * why: turns a leased iOS phone or tablet simulator, through the lease's device input, whether or not the input module is on.
+ */
+const deviceRotate = defineOperation({
+  name: "device.rotate",
+  role: "agent",
+  effect: "write",
+  input: z
+    .object({
+      leaseId: z.string().min(1).max(256),
+      orientation: z.enum(INPUT_ORIENTATIONS),
+      // why: rotate always refused an empty requesterId, so the shared format also keeps min(1).
+      requesterId: requesterIdSchema.pipe(z.string().min(1)).optional(),
+    })
+    .strict(),
+  output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),
+  authorize: authorizeOneLeaseCall,
+});
+
 export const OPERATIONS = {
   "identity.get": identityGet,
   "catalog.get": catalogGet,
@@ -1086,6 +1118,7 @@ export const OPERATIONS = {
   "lease.get": leaseGet,
   "driver.passthrough": driverPassthrough,
   "device.exec": deviceExec,
+  "device.rotate": deviceRotate,
   "doctor.run": doctorRun,
   "lease.release-all": leaseReleaseAll,
   "list.get": listGet,

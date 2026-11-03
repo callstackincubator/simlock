@@ -386,6 +386,28 @@ describe("createEventHistory", () => {
     await history.stop();
   });
 
+  it("an event JSON.stringify cannot serialize is dropped with one logged error, and the next event is still written", async () => {
+    const rigged = await rig({ capacity: 4 });
+    const history = rigged.history();
+    await history.start();
+    const depth = 20_000;
+    const nested = JSON.parse("[".repeat(depth) + "]".repeat(depth)) as unknown;
+
+    rigged.bus.republish({
+      event: "daemon.stopping",
+      id: "evt_nested",
+      module: "daemon",
+      payload: { nested, reason: "nested" } as never,
+      timestamp: NOW,
+    });
+    stopping(rigged.bus, "after");
+
+    expect(history.status().writing).toBe(true);
+    expect(levelRecords(rigged, "error")).toBe(1);
+    expect(await countRows(rigged.dbPath, "events")).toBe(1);
+    await history.stop();
+  });
+
   it("replays the ring without sinceTs", async () => {
     const rigged = await rig({ capacity: 2 });
     const history = rigged.history();

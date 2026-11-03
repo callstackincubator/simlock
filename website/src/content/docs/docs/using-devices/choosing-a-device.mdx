@@ -41,7 +41,7 @@ A model with `(no paired runtime)` cannot be leased until a runtime it supports 
 
 Use one of these, never both:
 
-- `--device <model>` asks for an exact model, written as the catalog prints it: `"iPhone 16"`, `"Pixel 8"`.
+- `--device <model>` asks for an exact model, written as the catalog prints it: `"iPhone 16"`, `"Pixel 8"`. A model name is at most 256 characters; a longer one is refused with `BAD_REQUEST`.
 - `--class <class>` asks for a kind of device and lets Simlock pick the model. The classes are `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` and `desktop`.
 - With neither, the lease asks for a `phone`.
 
@@ -79,7 +79,7 @@ A range takes an idle device whose OS is inside it first, and otherwise creates 
 
 ## Choose slim or full (iOS)
 
-`--mode slim` asks for a lighter iOS simulator with background services that agents rarely need switched off: widgets, Siri, Spotlight, iCloud, the App Store, Photos, Health and similar. A slim simulator uses far less memory, but its first boot takes longer.
+`--mode slim` asks for a lighter iOS simulator with background services that agents rarely need switched off: widgets, Siri, Spotlight, iCloud, the App Store, Photos, Health and similar. A slim simulator uses far less memory.
 
 `--mode full` asks for a normal simulator. Without `--mode`, you get the machine's default mode, which is `full` unless an admin changed it.
 

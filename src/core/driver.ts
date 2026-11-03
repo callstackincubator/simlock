@@ -1,6 +1,7 @@
 import type { EventMap } from "../bus/index.js";
 import type { Filesystem, SqliteDatabase, SqliteSchemaOwner } from "../ports/index.js";
 import type { RootRejectionReason } from "./device-root.js";
+import type { DeviceTcp } from "./device-tcp.js";
 import type { DeviceInputFactory } from "./input.js";
 import type { ScreenCapture } from "./screen.js";
 import type {
@@ -306,6 +307,8 @@ export interface Driver {
   // why: optional like `screenCapture`: a platform whose device takes no input leaves it out, and a
   // lease's input socket then says the device is unavailable.
   readonly input?: DeviceInputFactory | undefined;
+  // why: optional like `input`: a platform whose device cannot reach a port on the worker leaves it out, and a tunnel is then refused as unsupported.
+  readonly deviceTcp?: DeviceTcp | undefined;
   /** why: `device.exec` has no pseudo-terminal (ADR 0005 §19c), so a driver may refuse there what it allows locally. */
   passthrough?(
     tool: string,
@@ -588,9 +591,25 @@ export class UnknownModelError extends Error {
 }
 
 export class BootTimeoutError extends Error {
-  constructor(readonly deviceId: string) {
-    super(`Timed out waiting for device to boot: ${deviceId}`);
+  /** why: `reason` is the driver's own message for a boot that failed rather than ran out of time. */
+  constructor(
+    readonly deviceId: string,
+    reason?: string,
+  ) {
+    super(
+      reason === undefined
+        ? `Timed out waiting for device to boot: ${deviceId}`
+        : `Device failed to boot: ${deviceId}: ${reason}`,
+    );
     this.name = "BootTimeoutError";
+  }
+
+  /** why: a timeout stays a plain timeout; any other failure carries the driver's own message. */
+  static from(deviceId: string, error: unknown): BootTimeoutError {
+    return new BootTimeoutError(
+      deviceId,
+      error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
+    );
   }
 }
 

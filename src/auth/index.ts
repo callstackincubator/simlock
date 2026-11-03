@@ -108,7 +108,9 @@ export function createAuthFrom(
       const record = await store.verify(credential);
       if (record === undefined) return "unauthenticated";
       if (record.role !== "worker") return "forbidden";
-      if (claimedWorkerId === undefined || claimedWorkerId === "") return "worker-mismatch";
+      if (claimedWorkerId === undefined || !WORKER_ID_PATTERN.test(claimedWorkerId)) {
+        return "worker-mismatch";
+      }
       const pinned =
         record.workerId === undefined
           ? await store.pinWorker(record.id, claimedWorkerId)
@@ -127,6 +129,10 @@ export function createAuthFrom(
     },
   };
 }
+
+// why: the id becomes a path segment and a history key; "*" is the fleet key and ".." escapes the
+// worker routes, so only this alphabet joins. Real ids are UUIDs.
+const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function createAuth(options: AuthOptions): Auth {
   return createAuthFrom(authStrategies, options);

@@ -38,8 +38,8 @@ function cellText(column: (typeof COLUMNS)[number], entry: UsageLedgerEntry): st
 }
 
 function cell(text: string): string {
-  // why: a spreadsheet runs a cell that starts with one of these as a formula, and requester ids and labels are free text.
-  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  // why: a spreadsheet runs a cell as a formula when one of these follows any leading control or whitespace characters, and requester ids and labels are free text.
+  const safe = /^[\p{Cc}\s]*[=+\-@]/u.test(text) ? `'${text}` : text;
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 

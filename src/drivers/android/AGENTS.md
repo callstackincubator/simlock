@@ -36,7 +36,7 @@ Start — `AndroidDriver.create`:
 3. `AdbServerSupervisor.start`. Failure → `AdbServerUnavailableError` → `driver.adb-server-rejected`.
 4. Announce every console port 5586–5682 to that server, so emulators that outlived the last daemon reattach.
 
-Every `adb`, `emulator`, `avdmanager` call carries `ANDROID_AVD_HOME=<root>` and `ANDROID_ADB_SERVER_PORT=<port>`.
+`androidPrerequisites` runs `emulator -help` (30 s) and reports `android-emulator` when a flag every launch passes is missing. Every `adb`, `emulator`, `avdmanager` call carries `ANDROID_AVD_HOME=<root>` and `ANDROID_ADB_SERVER_PORT=<port>`.
 
 Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no scanner),
 `ADB_USB=0`, `ADB_MDNS=0`, `ADB_REJECT_KILL_SERVER=1`, `ADB_LOCAL_TRANSPORT_MAX_PORT=5683`:
@@ -56,12 +56,12 @@ Provision — `provision`:
    into `config.ini`; a library profile replaces the seed's `hw.*`/`skin.*` keys, sets
    `PlayStore.enabled`, writes `boot.prop`.
 4. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` /
-   `image.sysdir.1` / `disk.dataPartition.*` lines, and `headless`/`gpu` when not default.
+   `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`, which `avdmanager` adds to every AVD), and `headless`/`gpu` when not default.
 
-Boot — `makeReady` (per-device lock):
+Boot — `makeReady` (per-device lock). Output goes to `<root>/<avd>.avd/emulator.log` (0600, truncated at each start); an emulator that exits before it is ready fails the boot with `DriverCrashError` quoting that log's last 10 lines:
 
 1. Baseline: stored hash matches → `-snapshot simlock_clean_baseline`; differs → delete
-   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file).
+   the snapshots, `-wipe-data`; none → cold boot. Always `-no-snapshot-save`, and `-grpc <console port + 3000> -grpc-use-token` (without `-grpc`, `-port` leaves the emulator with no gRPC endpoint and no `avd/running` discovery file), and `-crash-report-mode never` (a stale crash dump otherwise opens a modal consent dialog that blocks the boot; `never` deletes the dumps in the database it reads, so the spawn env sets `ANDROID_EMU_CRASH_REPORTING_DATABASE` to `<root>/emu-crash.db`, never the user's shared `/tmp/android-<user>/emu-crash-<version>.db`).
 2. Console port reserved at the first `prepare` boot in this process: even 5586–5682, not in
    `adb devices`, not reserved, port, port+1 and port+3000 (gRPC) not listening.
 3. Ready = `sys.boot_completed` 1, `init.svc.bootanim` stopped or unset, `adb emu avd path`
@@ -74,7 +74,7 @@ Boot — `makeReady` (per-device lock):
 Reclaim — `reclaim`:
 
 - `full` → shut down; wipe on the next `makeReady`. Returns `shutdown` / `wipe`.
-- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` → readiness → mark. Returns `ready` / `snapshot`.
+- `standard`, hash still matches → ownership probe (below), then `emu avd snapshot load` (60 s on the driver clock; a timeout kills the load, and a timeout, non-zero exit or no OK is a failed load: shut down and wipe) → readiness → mark. Returns `ready` / `snapshot`.
 - Hash changed or load failed → as `full`.
 - Physical → uninstall every user app not on the enrollment list. Returns `ready` / `uninstall`.
 
@@ -105,7 +105,7 @@ Mismatch or unreadable → no command, advisory `adb-protocol-mismatch`. Enrol r
 
 Passthrough — virtual: `adb -P <port> …`; with a device that has an address (`device.exec`) `-s <serial>` goes
 first unless the subcommand is on the no-device list (ADR 0047). Refused: another `-s`, `-e`, `-d`, `-t`,
-`adb` on a non-Android lease, `kill-server`, `emu kill`, `emu avd stop`, `emu avd snapshot delete`, other
+`adb` on a non-Android lease, `kill-server`, `disconnect`, `emu kill`, `emu avd stop`, every `emu avd snapshot` except `list`, other
 globals (a lone `--version`/`--help` passes), a bare `shell` with no terminal. Physical: `adb -P 5037 -s <serial> …`;
 refuses any leading flag, server and transport verbs, `reboot` to bootloader/recovery/sideload/fastboot.
 
@@ -114,25 +114,26 @@ Lease environment: virtual `ANDROID_ADB_SERVER_PORT=<port>`; physical `ANDROID_A
 No slim: `resolveSpec` ignores `mode` and returns a full spec. `fresh` is core's.
 
 Screen — `screenCapture` and `input`, only when `create` got `scrcpyServerPath` and `tcpStreamConnector`: [screen](screen/AGENTS.md), [input](input/AGENTS.md).
+Tunnels — `deviceTcp` (`device-tcp.ts`), only when `create` got `tcpListener`: `reverse` listens on a free loopback port in 47000-47999 (busy ones skipped; none free → `TUNNEL_FAILED`) and runs `adb reverse --no-rebind tcp:<device> tcp:<port>` on the device's own server (an emulator's on Simlock's port, a phone's on 5037 behind the gate), 10 s per call; `cannot rebind existing socket` → `TUNNEL_PORT_IN_USE`, any other failure → `TUNNEL_FAILED` (message cut to 200 characters). `connect` (needs `tcpStreamConnector`, else `TUNNEL_FAILED`) opens `tcp:<port>` through `openDeviceSocket` on the screen's target, with no `adb forward`: an emulator's configured server port, a phone's 5037 behind the gate (a closed gate rejects with its message); both answers share 5 s, then `timeout`, and `FAIL` rejects with its reason. `close` removes the rule, then the listener; a removal that fails keeps the listener, closing every connection at once, and the driver's `reclaim` of that device frees every port still held for it (`release`) once its rules are gone; a phone's reclaim reads its `reverse --list` first and frees only the ports no rule there points to (a failed read frees none). The refusal messages name the call (`reverse <port>: the device port is already reversed; remove that rule first`, `reverse <port>: <adb's message>`). Cleanup: reclaim (with or without `tcpListener`) of an emulator once its ownership probe passed runs `reverse --remove-all` and removes this serial's `forward --list` lines one by one with `forward --remove <local>` (never `--remove-all`); an emulator not proved its own is left alone, and a phone's reclaim runs neither (safety rule 1: only the tunnel's own `reverse --remove` at socket close touches a phone). `deviceTcp.sweep` (only with `tcpListener`), called by the daemon before any request is served, removes on every present idle owned emulator the `reverse --list` rules whose host side is `tcp:47000`-`tcp:47999`; on a leased emulator it removes nothing and keeps the ports those rules point to from the next `reverse` until its reclaim; on a phone, idle or leased, it only reads the rules and keeps those ports the same way. A failed removal is a `warn`; reclaim and start go on.
 
 Plain facts: `listCatalog`, a resolve of a model the library lacks and a library provision (seed) share one `AvdmanagerDeviceList`: `avdmanager list device` runs again only when the size or modified time of a file it reads profiles from changed, or one appeared or went: the tools package's `lib/sdklib/sdklib.core.jar` (legacy `tools/lib/sdklib*.jar`) and `source.properties`, the user's devices.xml, `devices.xml` in each `system-images/*/*/*` and `add-ons/*` directory (a new image is a new path), and `devices.xml` and `source.properties` in each `extras/*/*` directory (avdmanager reads an extra whose `source.properties` says `Extra.Path=DeviceProfiles`).
 Otherwise the last good answer is served; a failed run is not kept; concurrent callers share one run. The sdkmanager catalog is never read. Existing devices are not re-checked for fit.
 
 ## State and timers
 
-| What                            | Default                                 | Key                                                             |
-| ------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| Device root                     | `$SIMLOCK_HOME/devices/android`         | `drivers.android.deviceRoot`                                    |
-| adb server port                 | 5038 (never 5037)                       | `drivers.android.adbServerPort`                                 |
-| Emulator flags                  | window, auto GPU, audio, boot animation | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout               | 180 s, poll 2 s                         | none                                                            |
-| adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
-| `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
-| AVD path query (listing / boot) | 5 s                                     | none                                                            |
-| Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
-| `avdmanager list device`        | 30 s                                    | none                                                            |
+| What                                                        | Default                                  | Key                                                             |
+| ----------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| Device root                                                 | `$SIMLOCK_HOME/devices/android`          | `drivers.android.deviceRoot`                                    |
+| adb server port                                             | 5038 (never 5037)                        | `drivers.android.adbServerPort`                                 |
+| Emulator flags                                              | window, auto GPU, audio, boot animation  | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Readiness timeout                                           | 180 s, poll 2 s                          | none                                                            |
+| adb server start / stop                                     | 10 s / SIGTERM, 5 s, SIGKILL             | none                                                            |
+| `adb devices` in `listManaged`                              | 30 s                                     | none                                                            |
+| AVD path query (listing / boot), mark read in `listManaged` | 5 s; the mark read keeps the first 4 KiB | none                                                            |
+| Physical read / uninstall                                   | 30 s / 60 s                              | none                                                            |
+| `avdmanager list device`                                    | 30 s                                     | none                                                            |
 
-Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`). Reads only: the user's AVD home, devices.xml, the SDK.
+Writes: `<root>/<avd>.avd/` (config, boot properties, snapshots, baseline marker, `emulator.log`); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
 ## Rules
 

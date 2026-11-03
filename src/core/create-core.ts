@@ -129,6 +129,12 @@ export interface Core {
   settle(): Promise<void>;
   drain(): Promise<void>;
   /**
+   * why: Shuts down every ready virtual device (no lease, no claim held) so a stopping daemon leaves
+   * no idle simulator or emulator running. Run after `settle` and before the drivers are
+   * disposed. A device that fails to shut down is logged and the rest go on.
+   */
+  shutdownIdle(): Promise<void>;
+  /**
    * why: closes the warm pool before leasing settles, so a reclaim
    * that commits meanwhile cannot start a creation `drain` would then wait for.
    */
@@ -370,6 +376,21 @@ export function createCore(options: CoreOptions): Core {
     },
     async drain() {
       await warmPool.drain();
+    },
+    async shutdownIdle() {
+      const ready = registry.snapshot.virtualDevices.filter((device) => device.state === "ready");
+      await Promise.all(
+        ready.map(async (device) => {
+          try {
+            await deviceLifecycle.shutdown(device, "daemon-stop", "cleanup");
+          } catch (error: unknown) {
+            options.logger?.error("shutdown of an idle device at daemon stop failed", {
+              deviceId: device.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
     },
     async settle() {
       // The wipe's commit can start a pool pass, so the wipes are awaited first.

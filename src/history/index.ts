@@ -403,8 +403,18 @@ class EventHistory implements EventHistoryHandle {
   #write(envelope: EventEnvelope): void {
     const database = this.#database;
     if (!this.#writing || database === undefined) return;
+    let json: string;
     try {
-      const json = JSON.stringify(envelope);
+      json = JSON.stringify(envelope);
+    } catch (error: unknown) {
+      // why: one event nobody can serialize (a relayed payload nested too deep) is that event's loss, not the writer's.
+      this.#options.logger.error("History dropped an event that cannot be serialized", {
+        error: describe(error),
+        eventId: envelope.id,
+      });
+      return;
+    }
+    try {
       const size = envelopeSize(json);
       this.#stored += this.#store(database, envelope, size, json);
     } catch (error: unknown) {

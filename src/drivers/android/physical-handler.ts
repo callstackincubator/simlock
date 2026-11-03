@@ -10,7 +10,7 @@ import {
   ScreenUnavailableError,
   uninstallPlan,
 } from "../../core/index.js";
-import type { ProcessRunner, TcpStreamConnector } from "../../ports/index.js";
+import type { ProcessResult, ProcessRunner, TcpStreamConnector } from "../../ports/index.js";
 import type { ScreenTarget } from "./screen/index.js";
 import {
   type AdbGateAnswer,
@@ -124,6 +124,20 @@ export class AndroidPhysicalHandler {
         });
       },
     };
+  }
+
+  // why: a phone's adb call goes through the same version check as every other phone command.
+  async runAdb(
+    device: PhysicalDriverDevice,
+    args: readonly string[],
+    timeoutMs: number,
+  ): Promise<ProcessResult> {
+    const answer = await this.#gate.check();
+    if (!answer.open) throw new Error(answer.message);
+    return await this.#processRunner.run(this.#adb, ["-P", PORT, "-s", device.deviceId, ...args], {
+      env: this.#env,
+      timeoutMs,
+    });
   }
 
   async advisories(): Promise<readonly DriverAdvisory[]> {

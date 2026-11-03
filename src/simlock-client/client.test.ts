@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { connectSimlockAdmin } from "../admin/index.js";
 import { connectSimlock } from "../client/index.js";
-import type { SimlockAdminClient } from "./client.js";
+import type { SimlockAdminClient, SimlockClient } from "./client.js";
 import type { LeaseGrant } from "./types.js";
+import { MAX_WIRE_LINE_CHARS } from "./wire.js";
 import { completeHello, ScriptedConnection } from "./test-support.js";
 
 async function flushMicrotasks(times = 10): Promise<void> {
@@ -383,20 +384,39 @@ describe("connectSimlock: handshake", () => {
     expect(await refused).toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("wraps a malformed daemon response instead of throwing a raw parse failure", async () => {
-    const connection = new ScriptedConnection();
-    const connectPromise = connectSimlock({ connection });
-    await flushMicrotasks();
-    completeHello(connection);
-    const client = await connectPromise;
+  it.each([
+    {
+      call: (client: SimlockClient) => client.getCatalog(),
+      operation: "catalog.get",
+      reply: { notPlatforms: true },
+    },
+    {
+      call: (client: SimlockClient) => client.requestLease({ model: "iPhone 17", platform: "ios" }),
+      operation: "lease.request",
+      reply: null,
+    },
+    {
+      call: (client: SimlockClient) => client.requestLease({ model: "iPhone 17", platform: "ios" }),
+      operation: "lease.request",
+      reply: { lease: null },
+    },
+  ])(
+    "wraps a malformed $operation response ($reply) instead of throwing a raw parse failure",
+    async ({ call: callOperation, operation, reply }) => {
+      const connection = new ScriptedConnection();
+      const connectPromise = connectSimlock({ connection });
+      await flushMicrotasks();
+      completeHello(connection);
+      const client = await connectPromise;
 
-    const callPromise = client.getCatalog();
-    await flushMicrotasks();
-    const call = connection.lastSentOf("catalog.get")!;
-    connection.reply(call.id, { notPlatforms: true });
+      const callPromise = callOperation(client);
+      await flushMicrotasks();
+      const call = connection.lastSentOf(operation)!;
+      connection.reply(call.id, reply);
 
-    await expect(callPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
-  });
+      await expect(callPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
+    },
+  );
 
   it("rejects status.get from a worker with an over-long host string by the gateway's schema", async () => {
     // A gateway reads each worker through this client (`WorkerLink`), so this parse is where
@@ -511,6 +531,52 @@ describe("connection death", () => {
 
     await expect(client.getStatus()).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
     expect(connection.sent.filter((f) => f.type === "status.get")).toHaveLength(1);
+  });
+});
+
+describe("wire framing", () => {
+  it("finds a reply split across many chunks scanning each byte a bounded number of times, and closes the connection when an unfinished line passes its cap", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const statusPromise = client.getStatus();
+    await flushMicrotasks();
+    const call = connection.lastSentOf("status.get")!;
+    const line = `${JSON.stringify({ id: call.id, ok: true, payload: { notStatus: "x".repeat(20_000) } })}\n`;
+    let scanned = 0;
+    const original = String.prototype.indexOf;
+    const spy = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      ...args: Parameters<typeof original>
+    ) {
+      scanned += this.length;
+      return original.apply(this, args);
+    });
+    try {
+      for (let at = 0; at < line.length; at += 16) connection.receiveRaw(line.slice(at, at + 16));
+    } finally {
+      spy.mockRestore();
+    }
+    // why: the payload fails the status schema, so BAD_FRAME proves the split line reached its call.
+    await expect(statusPromise).rejects.toMatchObject({ code: "BAD_FRAME" });
+    expect(scanned).toBeLessThanOrEqual(3 * line.length);
+
+    const pending = client.getStatus();
+    await flushMicrotasks();
+    expect(connection.closed).toBe(false);
+    const chunk = "a".repeat(64 * 1024);
+    // why: the largest real reply is a usage ledger of about 54 MB, so an unfinished line of 64 MiB must be accepted: a cap set below it goes red here.
+    let sent = 0;
+    for (; sent < 64 * 1024 * 1024; sent += chunk.length) connection.receiveRaw(chunk);
+    await flushMicrotasks();
+    expect(connection.closed).toBe(false);
+    for (; sent <= MAX_WIRE_LINE_CHARS; sent += chunk.length) connection.receiveRaw(chunk);
+    await flushMicrotasks();
+    expect(connection.closed).toBe(true);
+    await expect(pending).rejects.toMatchObject({ code: "DAEMON_CONNECTION_LOST" });
   });
 });
 
@@ -662,6 +728,43 @@ describe("pushes", () => {
     // caller that has already been told the command finished.
     connection.push("output", { chunk: "late", requestId: execCall.id, stream: "stdout" });
     expect(onOutput).toHaveBeenCalledTimes(2);
+  });
+
+  it("rotate sends device.rotate for the lease and answers its output, or throws the daemon's typed refusal", async () => {
+    const connection = new ScriptedConnection();
+    const connectPromise = connectSimlock({ connection });
+    await flushMicrotasks();
+    completeHello(connection);
+    const client = await connectPromise;
+
+    const rotated = client.rotate("lease_1", "landscape_left");
+    await flushMicrotasks();
+    expect(connection.sent.map((frame) => frame.type)).toContain("device.rotate");
+    const call = connection.lastSentOf("device.rotate")!;
+    expect(call.payload).toEqual({ leaseId: "lease_1", orientation: "landscape_left" });
+    connection.reply(call.id, { leaseId: "lease_1", orientation: "landscape_left" });
+    await expect(rotated).resolves.toEqual({ leaseId: "lease_1", orientation: "landscape_left" });
+
+    const refused = client.rotate("lease_2", "portrait", { requesterId: "agent-1" });
+    await flushMicrotasks();
+    const refusedCall = connection.lastSentOf("device.rotate")!;
+    expect(refusedCall.payload).toEqual({
+      leaseId: "lease_2",
+      orientation: "portrait",
+      requesterId: "agent-1",
+    });
+    const details = { class: "tv", leaseId: "lease_2", physical: false, platform: "ios" };
+    connection.fail(
+      refusedCall.id,
+      "ROTATION_UNSUPPORTED",
+      "Lease lease_2 is on an Apple TV simulator; only an iOS simulator can be rotated",
+      details,
+    );
+    await expect(refused).rejects.toMatchObject({
+      code: "ROTATION_UNSUPPORTED",
+      details,
+      kind: "domain",
+    });
   });
 
   it("routes a device.exec started push to that call's onStarted, once, before output, and not to another call in flight", async () => {

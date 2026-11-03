@@ -83,7 +83,7 @@ simlock daemon logs
 | --- | --- | --- |
 | `Uplink to gateway established` | The worker joined. | Nothing. |
 | `Uplink to gateway failed; retrying` with reason `rejected` and `The gateway refused the uplink with HTTP 401` | The gateway does not know the token: it is mistyped, revoked, or made on another daemon. | Make a new join token on the gateway and set it on the worker. |
-| The same, with `HTTP 403` | The token is real but is not a worker token, or it is paired with another worker. | Make a new join token for this worker with `--role worker`. On the gateway, `simlock events` shows `worker.rejected` with the reason: `forbidden` or `worker-mismatch`. |
+| The same, with `HTTP 403` | The token is real but is not a worker token, or it is paired with another worker, or the worker id is not made of letters, digits, `_` and `-` (1 to 128 characters; real ids are UUIDs). | Make a new join token for this worker with `--role worker`. On the gateway, `simlock events` shows `worker.rejected` with the reason: `forbidden` or `worker-mismatch`. |
 | `Uplink to gateway failed; retrying` with any other reason | The worker cannot reach the gateway. | Check the address, DNS, and that the reverse proxy passes WebSocket upgrades. |
 
 A worker shown as `incompatible` is connected, but it and the gateway run Simlock versions that cannot talk to each other. The gateway sends it no requests. Update the older one.

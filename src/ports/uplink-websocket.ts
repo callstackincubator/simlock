@@ -1,12 +1,13 @@
 /**
- * why: The WebSocket adapters behind the uplink port (`./uplink.ts`) -- the one file in the tree
- * that imports `ws`, kept out of the ports barrel so processes that never open an uplink (the
- * CLI, the MCP server) never load it.
+ * why: The WebSocket adapters behind the uplink port (`./uplink.ts`) -- imports `ws` statically,
+ * kept out of the ports barrel so processes that never open an uplink (the CLI, the MCP
+ * server) never load it.
  *
- * Why `ws` at all: Node 22 ships a WebSocket *client* and no server, and its client cannot set
- * request headers -- and the join token and the worker id both travel in headers at upgrade
- * time (ADR 0005 §4). Both halves therefore use `ws`, pinned to an exact version in
- * package.json.
+ * Why `ws` at all: Node 22 ships a WebSocket *client* and no server, so the gateway's half needs
+ * it, and the join token and the worker id both travel in headers at upgrade time (ADR 0005 §4).
+ * Node's client can set headers too; `ws` is chosen for this client because it exposes a refused
+ * upgrade's status and body and every ping, which Node's client hides. `ws` is pinned to an exact
+ * version in package.json.
  *
  * The gateway's half is deliberately `noServer: true`: the uplink lives on the gateway's
  * *existing* HTTP listener, upgraded on `/v1/uplink`, so the whole fleet still has exactly one
@@ -180,7 +181,7 @@ class WebSocketUplinkConnection implements UplinkTransportConnection {
  * other call arrived would be a worse contract than one that names the call that wires it.
  */
 export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
-  readonly #server = new WebSocketServer({ noServer: true });
+  readonly #server = new WebSocketServer({ maxPayload: UPLINK_MAX_MESSAGE_BYTES, noServer: true });
   #handlers: UplinkHandlers | undefined;
   #detach: (() => void) | undefined;
   readonly #links = new Map<string, WebSocketUplinkConnection>();
@@ -215,6 +216,8 @@ export class WebSocketUplinkListenerFactory implements UplinkListenerFactory {
   // why: public so the upgrade router, which owns the server's one `upgrade` listener, hands this
   // factory the requests for `/v1/uplink` exactly as `attach` does.
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    // why: a client that resets while `authenticate` is pending would emit `error` on a raw socket nothing listens to yet, and that ends the process; `ws` takes the socket's errors over once it upgrades.
+    socket.on("error", () => undefined);
     const handlers = this.#handlers;
     if (handlers === undefined) {
       // why: Nothing is listening for uplinks (a daemon mid-shutdown): refuse rather than leave the
@@ -407,6 +410,8 @@ function bearerToken(request: IncomingMessage): string | undefined {
  * Comfortably longer than any real hostname or label an operator would set, far short of the
  * ~16 KB a raw header can carry. */
 const MAX_CLAIMED_FIELD_LENGTH = 128;
+
+export const UPLINK_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 /** why: Control characters (C0 and DEL), the one thing worth rejecting a label outright for rather
  * than just truncating -- a raw header value the gateway's own JSON logging already renders

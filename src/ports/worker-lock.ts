@@ -1,0 +1,189 @@
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join } from "node:path";
+
+import type { Filesystem } from "./filesystem.js";
+import type { ProcessSupervisor } from "./process-supervisor.js";
+
+export interface WorkerLockOwner {
+  readonly pid: number;
+  readonly folder: string;
+  readonly startedAt: string;
+}
+
+export interface WorkerLockHandle {
+  /** why: a live holder in the same folder is a daemon that may lose the socket claim; the one that wins writes itself as the owner. */
+  claimed(): Promise<void>;
+  release(): Promise<void>;
+}
+
+interface WorkerLock {
+  take(owner: WorkerLockOwner): Promise<WorkerLockHandle>;
+}
+
+class WorkerLockHeldError extends Error {
+  constructor(readonly holder: WorkerLockOwner) {
+    super(
+      `another Simlock worker runs for this user (pid ${holder.pid}, folder ${holder.folder}, since ${holder.startedAt}); stop it first: SIMLOCK_HOME=${holder.folder} simlock daemon stop`,
+    );
+    this.name = "WorkerLockHeldError";
+  }
+}
+
+export interface NodeWorkerLockOptions {
+  readonly filesystem: Filesystem;
+  readonly path: string;
+  readonly processSupervisor: ProcessSupervisor;
+  readonly uid?: number | undefined;
+}
+
+const OWNER_FILE = "owner.json";
+const CLAIM_ATTEMPTS = 5;
+
+export function defaultWorkerLockPath(
+  platform: NodeJS.Platform,
+  uid: number,
+  tmpdir: string,
+): string {
+  return platform === "win32"
+    ? `${tmpdir}\\simlock\\worker.lock`
+    : `/tmp/simlock-${uid}/worker.lock`;
+}
+
+// why: an owner.json that is missing, not JSON or not the three fields is unreadable, and an unreadable lock is stale.
+async function readOwner(
+  filesystem: Filesystem,
+  ownerFile: string,
+): Promise<WorkerLockOwner | undefined> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await filesystem.readFile(ownerFile));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { folder, pid, startedAt } = parsed as Record<string, unknown>;
+  if (
+    typeof pid !== "number" ||
+    !Number.isInteger(pid) ||
+    pid < 1 ||
+    typeof folder !== "string" ||
+    typeof startedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return { folder, pid, startedAt };
+}
+
+export class NodeWorkerLock implements WorkerLock {
+  readonly #options: NodeWorkerLockOptions;
+
+  constructor(options: NodeWorkerLockOptions) {
+    this.#options = options;
+  }
+
+  // why: the lock's parent is in a folder every user can write (/tmp), so on POSIX it must be this user's and 0700, or another user could plant a lock.
+  async #prepareParent(): Promise<void> {
+    const parent = dirname(this.#options.path);
+    const reason = await this.#parentProblem(parent);
+    if (reason !== undefined) {
+      throw new Error(`${parent} cannot be used as the worker lock folder: ${reason}`);
+    }
+  }
+
+  async #parentProblem(parent: string): Promise<string | undefined> {
+    const { filesystem, uid } = this.#options;
+    try {
+      await filesystem.mkdirp(parent, { mode: 0o700 });
+      if (uid === undefined) return undefined;
+      const details = await filesystem.lstat(parent);
+      if (details.kind !== "directory") return `it is a ${details.kind}, not a directory`;
+      if (details.uid !== uid) return "owned by another user";
+      if (details.mode !== 0o700) await filesystem.chmod(parent, 0o700);
+      return undefined;
+    } catch (error: unknown) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  // why: a release that died between its two renames leaves `<lock>.release-<pid>-<id>`; one whose releasing process is gone is nobody's, and one still alive is mid-release.
+  async #removeAbandonedAsides(): Promise<void> {
+    const { filesystem, path, processSupervisor } = this.#options;
+    const prefix = `${basename(path)}.release-`;
+    const names = await filesystem.readdir(dirname(path)).catch(() => []);
+    for (const name of names) {
+      if (!name.startsWith(prefix)) continue;
+      const pid = Number(name.slice(prefix.length).split("-")[0]);
+      if (Number.isInteger(pid) && pid > 0 && processSupervisor.isAlive(pid)) continue;
+      await filesystem.rm(join(dirname(path), name)).catch(() => undefined);
+    }
+  }
+
+  async take(owner: WorkerLockOwner): Promise<WorkerLockHandle> {
+    const { filesystem, path, processSupervisor } = this.#options;
+    const ownerFile = join(path, OWNER_FILE);
+    await this.#prepareParent();
+    await this.#removeAbandonedAsides();
+    try {
+      await filesystem.mkdir(path);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const holder = await readOwner(filesystem, ownerFile);
+      if (holder !== undefined && processSupervisor.isAlive(holder.pid)) {
+        // why: the same folder is a second daemon on one home, which the socket claim answers as today; it holds nothing to release.
+        if (holder.folder === owner.folder) return this.#handle(owner, false);
+        throw new WorkerLockHeldError(holder);
+      }
+    }
+    await filesystem.writeFileAtomic(ownerFile, JSON.stringify(owner));
+    return this.#handle(owner, true);
+  }
+
+  #handle(owner: WorkerLockOwner, owned: boolean): WorkerLockHandle {
+    const { filesystem, path, processSupervisor } = this.#options;
+    const ownerFile = join(path, OWNER_FILE);
+    const written = JSON.stringify(owner);
+    let owns = owned;
+    return {
+      claimed: async () => {
+        const holder = await readOwner(filesystem, ownerFile);
+        if (
+          holder !== undefined &&
+          holder.folder !== owner.folder &&
+          processSupervisor.isAlive(holder.pid)
+        ) {
+          throw new WorkerLockHeldError(holder);
+        }
+        // why: a loser's release can move the lock folder away between any two of these calls, so the claim makes the folder and writes owner.json again until a read shows its own content.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await filesystem.mkdirp(path);
+            await filesystem.writeFileAtomic(ownerFile, written);
+            if ((await filesystem.readFile(ownerFile).catch(() => undefined)) === written) break;
+          } catch (error: unknown) {
+            if (attempt === CLAIM_ATTEMPTS) throw error;
+            continue;
+          }
+          if (attempt === CLAIM_ATTEMPTS) throw new Error(`${ownerFile} does not show this worker`);
+        }
+        owns = true;
+      },
+      release: async () => {
+        if (!owns) return;
+        owns = false;
+        // why: the lock is renamed away first, so the owner read and the removal see one lock: a winner that rewrites owner.json meanwhile makes a new one at the path, never loses its own.
+        const aside = `${path}.release-${process.pid}-${randomUUID()}`;
+        try {
+          await filesystem.rename(path, aside);
+        } catch {
+          return;
+        }
+        const current = await filesystem.readFile(join(aside, OWNER_FILE)).catch(() => undefined);
+        if (current !== written) {
+          // why: another worker took a stale-looking lock over; it is put back unless a lock has been made at the path since.
+          await filesystem.rename(aside, path).catch(() => undefined);
+        }
+        await filesystem.rm(aside);
+      },
+    };
+  }
+}

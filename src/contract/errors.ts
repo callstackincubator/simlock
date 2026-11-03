@@ -89,6 +89,15 @@ export interface ErrorDetailsMap {
   COMPONENT_IN_USE: { readonly devices: number; readonly foreignDevices: number };
   COMPONENT_BUSY: Record<string, never>;
   UNKNOWN_LEASE: { readonly leaseId: string };
+  TUNNEL_UNSUPPORTED: Record<string, never>;
+  TUNNEL_PORT_IN_USE: Record<string, never>;
+  TUNNEL_BAD_PORT: Record<string, never>;
+  TUNNEL_LIMIT: Record<string, never>;
+  TUNNEL_FAILED: Record<string, never>;
+  TUNNEL_UNAVAILABLE: Record<string, never>;
+  TUNNEL_DISCONNECTED: Record<string, never>;
+  TUNNEL_CALLER_PORT_IN_USE: Record<string, never>;
+  TUNNEL_LEASE_ENDED: Record<string, never>;
   DEVICE_NOT_ENROLLABLE: {
     readonly platform: Platform;
     readonly id: string;
@@ -100,6 +109,15 @@ export interface ErrorDetailsMap {
   PASSTHROUGH_REFUSED: { readonly tool: string };
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   EXEC_TIMEOUT: Record<string, never>;
+  /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator; `class` is the physical class, the simulator's model family, or `emulator`. */
+  ROTATION_UNSUPPORTED: {
+    readonly leaseId: string;
+    readonly platform: Platform;
+    readonly physical: boolean;
+    readonly class: string;
+  };
+  /** why: `device.rotate` could not reach the lease's input helper; `reason` is the driver's text, cut to 200 characters. */
+  INPUT_UNAVAILABLE: { readonly leaseId: string; readonly reason: string };
   DOCTOR_UNAVAILABLE: Record<string, never>;
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
@@ -193,6 +211,8 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   DOWNLOADS_DISABLED: true,
   COMPONENT_IN_USE: true,
   UNKNOWN_LEASE: true,
+  ROTATION_UNSUPPORTED: true,
+  INPUT_UNAVAILABLE: true,
   DEVICE_NOT_ENROLLABLE: true,
   DEVICE_BUSY: true,
   UNKNOWN_DEVICE: true,
@@ -314,6 +334,46 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   UNKNOWN_LEASE: { code: "UNKNOWN_LEASE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // why: a lease's tunnel socket refuses with these (ADR 0054 section 7), so every surface reports them alike.
+  TUNNEL_UNSUPPORTED: {
+    code: "TUNNEL_UNSUPPORTED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 422,
+  },
+  TUNNEL_PORT_IN_USE: {
+    code: "TUNNEL_PORT_IN_USE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 409,
+  },
+  TUNNEL_BAD_PORT: { code: "TUNNEL_BAD_PORT", kind: "domain", cliExitCode: 1, httpStatus: 422 },
+  TUNNEL_LIMIT: { code: "TUNNEL_LIMIT", kind: "domain", cliExitCode: 1, httpStatus: 409 },
+  TUNNEL_FAILED: { code: "TUNNEL_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 502 },
+  TUNNEL_UNAVAILABLE: {
+    code: "TUNNEL_UNAVAILABLE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  TUNNEL_DISCONNECTED: {
+    code: "TUNNEL_DISCONNECTED",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 503,
+  },
+  TUNNEL_CALLER_PORT_IN_USE: {
+    code: "TUNNEL_CALLER_PORT_IN_USE",
+    kind: "domain",
+    cliExitCode: 1,
+    httpStatus: 409,
+  },
+  TUNNEL_LEASE_ENDED: {
+    code: "TUNNEL_LEASE_ENDED",
+    kind: "domain",
+    cliExitCode: 14,
+    httpStatus: 410,
+  },
   // A device that cannot be enrolled is a fact about the device, as `RUNTIME_MISSING` is about
   // the host: 422 and 12. A busy device passes once what holds it ends, as `NO_CAPACITY` does:
   // 409 and 11. An unknown device is the "what you named does not exist" class: 404 and 12.
@@ -344,6 +404,15 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   // out of time" outcome (`QUEUE_TIMEOUT`) already uses -- so a script branching on "timed
   // out" does not need a second number for the second kind of wait.
   EXEC_TIMEOUT: { code: "EXEC_TIMEOUT", kind: "domain", cliExitCode: 10, httpStatus: 504 },
+  // why: a fact about the lease's device, as `RUNTIME_MISSING` is about the host: 422 and 12.
+  ROTATION_UNSUPPORTED: {
+    code: "ROTATION_UNSUPPORTED",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 422,
+  },
+  // why: the helper that takes the touch is down, like `DOCTOR_UNAVAILABLE`: 503 and 1.
+  INPUT_UNAVAILABLE: { code: "INPUT_UNAVAILABLE", kind: "domain", cliExitCode: 1, httpStatus: 503 },
   DOWNLOAD_TIMEOUT: {
     code: "DOWNLOAD_TIMEOUT",
     kind: "domain",

@@ -32,6 +32,7 @@ export {
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
 export { readyTransitionUpdate } from "./driver.js";
+export { FakeDeviceTcp } from "./fake-device-tcp.js";
 export { FakeInputFactory } from "./fake-device-input.js";
 export { FakeDriver, fakeDeviceDataTable } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";

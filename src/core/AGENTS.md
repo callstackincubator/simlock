@@ -82,7 +82,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    grant; `bootWarm` drops it at `ready`. `shutdown`, `destroy`, `dispose` answer `undefined` for a
    leased, gone or moved device. `recoverLeased` reboots under the lease: no commit, no event.
 2. **Provision** — `claimProvision` (lock) → `driver.provision` → `registerDevice` (`provisioning`,
-   `device.provisioned`, optional `boot` claim) → ready. Boot failure: destroy, `BootTimeoutError`.
+   `device.provisioned`, optional `boot` claim) → ready. Boot failure: destroy, `BootTimeoutError` carrying the driver's message.
 3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. Spent `fresh`:
    shutdown → destroy → `deleted`. Else commit what `driver.reclaim` returns. Failure → quarantine;
    physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.

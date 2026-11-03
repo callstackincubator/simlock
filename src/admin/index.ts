@@ -37,6 +37,8 @@ export type {
   DeviceUnhealthyPush,
   ExecInput,
   ExecOutput,
+  RotateInput,
+  RotateOutput,
   DeviceOutputChunk,
   ExecOptions,
   DoctorReport,

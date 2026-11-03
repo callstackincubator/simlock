@@ -172,18 +172,18 @@ class IosDeviceInput implements DeviceInput {
     this.#config = config;
   }
 
-  send(message: InputMessage): void {
+  send(message: InputMessage): Promise<void> {
     if (message.kind === "button") {
       if (message.button === "home") this.#home();
-      return;
+      return Promise.resolve();
     }
-    if (message.kind === "key" && !this.#keys) return;
-    this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
-      this.#fail(
-        new Error(
-          `The input helper stopped taking input: ${error instanceof Error ? error.message : String(error)}`,
-        ),
+    if (message.kind === "key" && !this.#keys) return Promise.resolve();
+    return this.#child.writeStdin(frameOfMessage(message)).catch((error: unknown) => {
+      const failure = new Error(
+        `The input helper stopped taking input: ${error instanceof Error ? error.message : String(error)}`,
       );
+      this.#fail(failure);
+      throw failure;
     });
   }
 

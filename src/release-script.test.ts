@@ -133,6 +133,19 @@ describe("scripts/release.mjs changelog", () => {
     );
   });
 
+  it("collapses runs of blank lines and \\r\\n line ends in the notes to single blank lines, as oxfmt formats them", () => {
+    const cwd = scratch({
+      "CHANGELOG.md": `# Changelog\n\n${released}\n\nold\n`,
+      "notes.md":
+        "## What's Changed\r\n* feat: a by @x in https://example/1\r\n\r\n\r\n\r\n**Full Changelog**: https://example/compare\r\n",
+    });
+    expect(run(cwd, ["changelog", "0.4.0", "v0.3.0", "notes.md"]).status).toBe(0);
+    const today = new Date().toISOString().slice(0, 10);
+    expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(
+      `# Changelog\n\n## [0.4.0](${REPOSITORY}/compare/v0.3.0...v0.4.0) (${today})\n\n### What's Changed\n\n- feat: a by @x in https://example/1\n\n**Full Changelog**: https://example/compare\n\n${released}\n\nold\n`,
+    );
+  });
+
   it("leaves CHANGELOG.md alone when the notes file is missing", () => {
     const cwd = scratch({ "CHANGELOG.md": "# Changelog\n" });
     expect(run(cwd, ["changelog", "0.4.0", "v0.3.0", "missing.md"]).status).toBe(1);

@@ -209,6 +209,34 @@ function facts(overrides: Partial<UpdateFacts> = {}): UpdateFacts {
 
 const STARTED = { forced: false, from: "0.3.0", startedAt: 1, to: "0.4.0" } as const;
 
+describe("the paths the worker actions build", () => {
+  it("stay under /v1/workers/<id>/ for any id string, including .. and .", () => {
+    const seen = new Set<string>();
+    for (const id of ["..", ".", "a/b", "a b", "wrk_1"]) {
+      for (const connection of ["incompatible", "disconnected"] as const) {
+        const actions = workerActions(
+          {
+            connection,
+            drained: false,
+            id,
+            name: "mac-mini-1",
+            updateFacts: facts({ version: "0.1.0" }),
+          },
+          "gateway",
+        );
+        for (const action of actions) {
+          seen.add(action.id);
+          const sent = new URL(action.path, "https://gateway.example").pathname.split("/");
+          const label = `${action.id} for ${id}`;
+          expect(sent.slice(0, 3), label).toEqual(["", "v1", "workers"]);
+          expect(sent.length, label).toBe(action.id === "remove-worker" ? 4 : 5);
+        }
+      }
+    }
+    expect([...seen].sort()).toEqual(["drain", "remove-worker", "update-worker"]);
+  });
+});
+
 describe("the update actions a worker offers", () => {
   it("offers Update… and Update now as the table says, and keeps Drain and Undrain", () => {
     const cases: readonly {

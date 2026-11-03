@@ -710,7 +710,7 @@ describe("POST /v1/lease-requests", () => {
     },
   );
 
-  it.each([
+  it.each<[string, Record<string, unknown>, string?]>([
     ["full", { full: true }],
     ["a mode other than slim or full", { mode: "fast" }],
     ["a key the route does not know", { colour: "blue" }],
@@ -720,33 +720,44 @@ describe("POST /v1/lease-requests", () => {
     ],
     ["an image tag with a space", { imageTag: "google apis" }],
     ["an image tag over 64 characters", { imageTag: "a".repeat(65) }],
-  ])("400s a body carrying %s as BAD_REQUEST before ever dispatching", async (_label, extra) => {
-    const { app, dispatcher } = buildHarness();
-    // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
-    // below rather than by waiting for a 201 that only comes once the request is queued.
-    const response = await Promise.race([
-      postLeaseRequest(app, { ...defaultBody, ...extra }),
-      waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
-    ]);
-    if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
-    expect(response.status).toBe(400);
-    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
-    expect(dispatcher.calls).toHaveLength(0);
-  });
+    ["a device over 256 characters", { device: "d".repeat(257) }, "device"],
+  ])(
+    "400s a body carrying %s as BAD_REQUEST before ever dispatching",
+    async (_label, extra, named) => {
+      const { app, dispatcher } = buildHarness();
+      // why: raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
+      // below rather than by waiting for a 201 that only comes once the request is queued.
+      const response = await Promise.race([
+        postLeaseRequest(app, { ...defaultBody, ...extra }),
+        waitForDispatch(dispatcher, "lease.request").then(() => "dispatched" as const),
+      ]);
+      if (response === "dispatched") throw new Error("the body was dispatched instead of refused");
+      expect(response.status).toBe(400);
+      const { error } = (await response.json()) as { error: { code: string; message: string } };
+      expect(error.code).toBe("BAD_REQUEST");
+      if (named !== undefined) expect(error.message).toContain(named);
+      expect(dispatcher.calls).toHaveLength(0);
+    },
+  );
 
-  it.each([
+  it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
     ["imageTag", { imageTag: "google_apis_playstore" }],
     ["mode", { mode: "slim" }],
     ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
     ["physical true", { physical: true }],
-  ])("forwards a body's %s to the dispatched lease.request", async (_label, extra) => {
+    [
+      "a device of exactly 256 characters, as the model",
+      { device: "d".repeat(256) },
+      { model: "d".repeat(256) },
+    ],
+  ])("forwards a body's %s to the dispatched lease.request", async (_label, extra, forwarded) => {
     const { app, dispatcher } = buildHarness();
     const first = await Promise.race([
       postLeaseRequest(app, { ...defaultBody, ...extra }),
       waitForDispatch(dispatcher, "lease.request").then((call) => call),
     ]);
     if (first instanceof Response) throw new Error(`the body was refused with ${first.status}`);
-    expect(first.input).toMatchObject(extra);
+    expect(first.input).toMatchObject(forwarded ?? extra);
   });
 
   it("answers 400 BAD_REQUEST naming allowDownload for a body with physical true and allowDownload true", async () => {
@@ -1877,6 +1888,8 @@ describe("lease routes", () => {
         { args: [] },
         { args: "list", tool: "simctl" },
         { args: [], tool: "simctl", unexpected: true },
+        { args: [], requesterId: "a\u001b[2Jb", tool: "simctl" },
+        { args: [], requesterId: "x".repeat(257), tool: "simctl" },
       ]) {
         const response = await postExec(app, body);
         expect(response.status).toBe(400);
@@ -2470,6 +2483,26 @@ describe("operator-only listing routes", () => {
     eventBus.emit("daemon.stopping", { reason: "live" }, "test");
     const frames = await framesPromise;
     expect(frames[0]?.event).toBe("daemon.stopping");
+  });
+
+  it("GET /v1/events/stream writes a comment or retry line as soon as it opens, before any keepalive is due", async () => {
+    const { app, dispatcher } = buildHarness();
+    dispatcher.handlers["events.subscribe"] = (_input, session) => ({
+      subscribed: true,
+      subscriptionId: session.manageEventSubscription(true),
+    });
+    const response = await app.request("/v1/events/stream", { headers: operatorAuth });
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("response has no body");
+    let written = "nothing written";
+    void reader.read().then(({ value, done }) => {
+      written = done ? "stream ended" : new TextDecoder().decode(value);
+    });
+    for (let turn = 0; turn < 50; turn += 1) await settle();
+    const writtenBeforeCancel = written;
+    await reader.cancel();
+
+    expect(writtenBeforeCancel).toMatch(/^(:[^\n]*|retry: ?\d+)\n\n$/);
   });
 });
 
@@ -3314,5 +3347,50 @@ describe("ETag on a JSON read under /v1", () => {
     await Promise.resolve();
     eventBus.emit("daemon.stopping", { reason: "live" }, "test");
     expect((await framesPromise)[0]?.event).toBe("daemon.stopping");
+  });
+});
+
+describe("Cache-Control on a JSON answer under /v1", () => {
+  it("a JSON read, its 304, a JSON error and /v1/healthz each carry Cache-Control: no-store, so a CDN never stores an answer, and a mount's answer keeps the Cache-Control it set", async () => {
+    const { app, dispatcher } = buildHarness({
+      mounts: [
+        { prefix: "json-mount", handle: () => Response.json({ ok: true }) },
+        {
+          prefix: "cached-mount",
+          handle: () => Response.json({ ok: true }, { headers: { "Cache-Control": "max-age=60" } }),
+        },
+      ] as never,
+    });
+    dispatcher.handlers["token.list"] = () => ({ tokens: [{ id: "tok_1" }] });
+    const read = (path: string, headers: Record<string, string> = {}) =>
+      app.request(path, { headers: { ...operatorAuth, ...headers } });
+
+    const first = await read("/v1/tokens");
+    const unchanged = await read("/v1/tokens", {
+      "If-None-Match": first.headers.get("etag") ?? "",
+    });
+    const missing = await read("/v1/leases/lse_none");
+    const health = await app.request("/v1/healthz");
+    const plainMount = await read("/v1/json-mount");
+    const cachedMount = await read("/v1/cached-mount");
+
+    expect([first.status, unchanged.status, missing.status, health.status]).toEqual([
+      200, 304, 404, 200,
+    ]);
+    expect({
+      plain: plainMount.headers.get("cache-control"),
+      cached: cachedMount.headers.get("cache-control"),
+    }).toEqual({ plain: null, cached: "max-age=60" });
+    expect({
+      read: first.headers.get("cache-control"),
+      notModified: unchanged.headers.get("cache-control"),
+      error: missing.headers.get("cache-control"),
+      healthz: health.headers.get("cache-control"),
+    }).toEqual({
+      read: "no-store",
+      notModified: "no-store",
+      error: "no-store",
+      healthz: "no-store",
+    });
   });
 });

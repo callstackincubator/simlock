@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { DeviceRecord, LeaseRecord } from "../core/index.js";
+import { isUnavailableInput, type DeviceRecord, type LeaseRecord } from "../core/index.js";
 import { FakeInputFactory } from "../core/testing.js";
 import type { ModuleEndedLease, WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
@@ -32,7 +32,12 @@ async function setup(): Promise<{
   const loaded = await inputModule.loadWorker();
   const worker = loaded.createWorker({
     ...ctx,
-    inputs: { openInput: () => factory.open() },
+    inputs: {
+      leaseInput: async () => {
+        const input = await factory.open();
+        return { input, release: () => void (isUnavailableInput(input) || input.close()) };
+      },
+    },
     registry,
   });
   return { clock, factory, leases, worker };
@@ -64,6 +69,13 @@ function endLease(
   reason: ModuleEndedLease["reason"],
 ): Promise<void> | undefined {
   return worker.hooks?.beforeDeviceReclaim?.(ended(reason), new AbortController().signal);
+}
+
+// why: a ws socket during the closing handshake: close() was called, its messages still arrive until the peer acks.
+class HalfClosingSocket extends MemoryLeaseSocket {
+  override close(code: number, reason: string): void {
+    if (this.closed === undefined) this.closed = { code, reason };
+  }
 }
 
 const REFUSED = { code: 1013, reason: "Input is unavailable for this lease" };
@@ -200,6 +212,26 @@ describe("a worker's input socket", () => {
     accept(after);
     expect(after.closed).toEqual({ code: 4001, reason: "lease ended" });
     expect(after.sent).toEqual([]);
+  });
+
+  it("does not pass a message to the device input after the lease's input is released, while the socket's close handshake is open; a message before the end still goes through", async () => {
+    const { factory, worker } = await setup();
+    const opened = await worker.socket?.open(new Request("http://simlock/input"), IDENTITY, {
+      deviceId: "dev_1",
+      id: "L-1",
+    });
+    if (typeof opened !== "function") throw new Error("the socket was refused");
+    const socket = new HalfClosingSocket();
+    opened(socket);
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+
+    socket.receive(message(0x04, { button: "home" }));
+    expect(factory.opened[0]?.sent).toEqual([{ button: "home", kind: "button" }]);
+
+    await endLease(worker, "explicit");
+    expect(socket.closed?.code).toBe(4001);
+    socket.receive(message(0x04, { button: "home" }));
+    expect(factory.opened[0]?.sent).toHaveLength(1);
   });
 
   it("keeps the device input open for a socket that joins while it is still opening after the first one left", async () => {
