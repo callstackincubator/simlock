@@ -4544,6 +4544,14 @@ describe("AndroidDriver.create", () => {
       [["emu", "avd", "snapshot", "save", "simlock_clean_baseline"], /replace the clean-boot/],
       [["emu", "avd", "snapshot", "save", "my_snapshot"], /replace the clean-boot/],
       [["-s", "emulator-5586", "emu", "avd", "snapshot", "save", "x"], /replace the clean-boot/],
+      // why: adb joins the `emu` operands with spaces, so one argument may carry several words.
+      [["emu", "avd snapshot save x"], /replace the clean-boot/],
+      [["emu", "avd", "snapshot save x"], /replace the clean-boot/],
+      [["emu", "avd snapshot delete x"], /full wipe/],
+      [["emu", "AVD", "Snapshot", "Save", "x"], /replace the clean-boot/],
+      [["emu", "avd snapshot list\navd snapshot save x"], /replace the clean-boot/],
+      [["emu", "kill"], /simlock cleanup/],
+      [["emu", "avd stop"], /simlock release/],
     ] as const) {
       const label = `adb ${args.join(" ")}`;
       await expect(passthroughOf(driver, [...args]), label).rejects.toThrow(
@@ -4554,6 +4562,10 @@ describe("AndroidDriver.create", () => {
 
     const listed = await passthroughOf(driver, ["emu", "avd", "snapshot", "list"]);
     expect(listed.args.slice(-4)).toEqual(["emu", "avd", "snapshot", "list"]);
+
+    // why: only console operands after `emu` are matched; a device shell argument is not one.
+    const shelled = await passthroughOf(driver, ["shell", "echo", "emu kill"]);
+    expect(shelled.args.slice(-3)).toEqual(["shell", "echo", "emu kill"]);
   });
 
   it("refuses an emu kill pair even behind the -s serial that targets a device", async () => {

@@ -522,8 +522,23 @@ function isBareShell(args: readonly string[]): boolean {
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
+/**
+ * why: `adb emu` joins its operands with spaces into one emulator console line, so the words the
+ * console sees are the operands split on whitespace, not the argv tokens. Matching is
+ * case-insensitive (refusing too much is harmless here) and only looks at the operands after the
+ * `emu` subcommand: an `adb shell` argument is a device shell command, never a console line.
+ */
 function containsSequence(args: readonly string[], sequence: readonly string[]): boolean {
-  return args.some((_, index) => sequence.every((token, offset) => args[index + offset] === token));
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || args[walked.index] !== "emu") return false;
+  const words = args
+    .slice(walked.index + 1)
+    .flatMap((argument) => argument.toLowerCase().split(/\s+/))
+    .filter((word) => word !== "");
+  const consoleWords = sequence.slice(1);
+  return words.some((_, index) =>
+    consoleWords.every((token, offset) => words[index + offset] === token),
+  );
 }
 
 type AndroidTargetFor = (
