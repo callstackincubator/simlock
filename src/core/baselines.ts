@@ -177,10 +177,7 @@ export class BaselineService {
   hold(name: string, version: number): () => void {
     const key = `${name}\u0000${version}`;
     this.#holds.set(key, (this.#holds.get(key) ?? 0) + 1);
-    let released = false;
     return () => {
-      if (released) return;
-      released = true;
       const left = (this.#holds.get(key) ?? 1) - 1;
       if (left === 0) this.#holds.delete(key);
       else this.#holds.set(key, left);

@@ -5,7 +5,7 @@ description: Save a prepared simulator or emulator under a name, see which basel
 
 import { Aside } from '@astrojs/starlight/components';
 
-A baseline is a simulator or emulator you prepared by hand and saved under a name, such as `checkout`: the app installed, a test user signed in. `simlock baseline save` keeps a copy of it on the worker; later work can start from that copy instead of a factory-fresh device. Leasing from a baseline is not part of this release: today you can save, list and remove baselines.
+A baseline is a simulator or emulator you prepared by hand and saved under a name, such as `checkout`: the app installed, a test user signed in. `simlock baseline save` keeps a copy of it on the worker; an agent can start from that copy instead of a factory-fresh device: `simlock lease --baseline checkout` (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
 
 `baseline save` and `baseline remove` need an admin session; an agent session gets `FORBIDDEN`. `baseline list` works from any session. A gateway refuses all three with `UNSUPPORTED_IN_GATEWAY_MODE`; run them against a worker.
 
@@ -25,7 +25,7 @@ Saving ends the lease and deletes the device: the baseline is the only thing lef
 
 The name is 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, starting with a letter or digit. The note is up to 200 characters on one line. A bad name or note is refused before the lease ends.
 
-Saving under a name that exists makes the next version and deletes the older one. Two saves of one name at once take turns: the second becomes the next version.
+Saving under a name that exists makes the next version. Running leases keep their device, idle copies of the older version are deleted, and the next lease, also a request that was already waiting, gets the new version. The older version's saved copy is deleted when its last device is gone. Two saves of one name at once take turns: the second becomes the next version.
 
 If Simlock cannot make the copy, the lease has still ended, the device is quarantined for the doctor to look at, and the answer is `BASELINE_SAVE_FAILED` with the reason. No baseline is listed.
 

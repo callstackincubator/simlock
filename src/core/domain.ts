@@ -179,7 +179,7 @@ function modelDiffers(
 ): boolean {
   if (asked === undefined) return false;
   const listed = findCatalogModel(catalogEntry, asked) ?? asked;
-  return listed.toLowerCase() !== baseline.model.toLowerCase();
+  return listed !== baseline.model;
 }
 
 function osDiffers(baseline: BaselineFacts, asked: string | undefined): boolean {

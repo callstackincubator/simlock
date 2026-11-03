@@ -6589,6 +6589,14 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     expect(capturedInput?.noWait).toBe(true);
   });
 
+  // why: the real environment builder reads `SIMLOCK_BASELINE`, so the rows below prove the variable, not a hand-set field.
+  const fromEnv = (value: string): Partial<CliEnvironment> => {
+    const { baselineFromEnv } = buildCliEnvironment(realCliEnvironmentPorts(), {
+      SIMLOCK_BASELINE: value,
+    });
+    return baselineFromEnv === undefined ? {} : { baselineFromEnv };
+  };
+
   it.each([
     {
       flag: "--image-tag",
@@ -6596,7 +6604,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "google_apis_playstore",
       lease: ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
       flagArgs: ["--image-tag", "google_apis_playstore"],
-      envOverride: {},
+      envOverride: () => ({}),
     },
     {
       flag: "--baseline",
@@ -6604,7 +6612,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "checkout",
       lease: ["lease", "--platform", "android", "--detach"],
       flagArgs: ["--baseline", "checkout"],
-      envOverride: {},
+      envOverride: () => ({}),
     },
     {
       flag: "SIMLOCK_BASELINE",
@@ -6612,7 +6620,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "checkout",
       lease: ["lease", "--platform", "android", "--detach"],
       flagArgs: [],
-      envOverride: { baselineFromEnv: "checkout" },
+      envOverride: () => fromEnv("checkout"),
     },
     {
       flag: "--baseline over SIMLOCK_BASELINE",
@@ -6620,7 +6628,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "other",
       lease: ["lease", "--platform", "android", "--detach"],
       flagArgs: ["--baseline", "other"],
-      envOverride: { baselineFromEnv: "checkout" },
+      envOverride: () => fromEnv("checkout"),
     },
     {
       flag: "an empty SIMLOCK_BASELINE",
@@ -6628,7 +6636,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: undefined,
       lease: ["lease", "--platform", "android", "--detach"],
       flagArgs: [],
-      envOverride: { baselineFromEnv: "" },
+      envOverride: () => fromEnv(""),
     },
     {
       flag: "--physical",
@@ -6636,7 +6644,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: true,
       lease: ["lease", "--platform", "ios", "--detach"],
       flagArgs: ["--physical"],
-      envOverride: {},
+      envOverride: () => ({}),
     },
   ])(
     "maps $flag onto the contract's $field input field, and sends none without it",
@@ -6683,7 +6691,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 
       await runCli(
         [...lease, ...flagArgs],
-        outputCapture().environmentWith({ connectAdmin: async () => client, ...envOverride }),
+        outputCapture().environmentWith({ connectAdmin: async () => client, ...envOverride() }),
       );
       await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 

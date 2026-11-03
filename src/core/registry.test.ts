@@ -286,7 +286,7 @@ describe("Registry", () => {
       const plain = await register("drv-plain", spec, "fk-plain");
       const full = await register(
         "drv-full",
-        { ...spec, imageTag: "default", mode: "slim" },
+        { ...spec, baseline: { name: "checkout", version: 2 }, imageTag: "default", mode: "slim" },
         "fk-full",
       );
       await ready(full.id, {
@@ -454,7 +454,12 @@ describe("Registry", () => {
         readyAt: 1_000,
         recoveringSince: 1_013,
         recoveryAttempts: 1,
-        spec: { ...spec, imageTag: "default", mode: "slim" },
+        spec: {
+          ...spec,
+          baseline: { name: "checkout", version: 2 },
+          imageTag: "default",
+          mode: "slim",
+        },
         state: "leased",
       });
       expect(reloaded.snapshot.devices.find((device) => device.id === physical.id)).toMatchObject({

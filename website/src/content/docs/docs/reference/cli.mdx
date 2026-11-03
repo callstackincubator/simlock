@@ -526,7 +526,7 @@ A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
 ### simlock warm forget
 
-Forget the kinds the warm pool learned for one model, so it stops keeping their devices booted. Use it after a lease of the wrong model. Needs the admin role. See [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind).
+Forget the kinds the warm pool learned for one model, baseline kinds included, so it stops keeping their devices booted. Use it after a lease of the wrong model. Needs the admin role. See [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind).
 
 ```text
 simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]

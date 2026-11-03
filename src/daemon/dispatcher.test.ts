@@ -3303,8 +3303,12 @@ async function seedIdleCopy(
   );
 }
 
-describe("Dispatcher: an operator replaces a baseline", () => {
-  const model = "iPhone 17 Pro";
+type ReplaceScenario = "running" | "idle" | "waiting" | "making";
+
+const replaceModel = "iPhone 17 Pro";
+
+async function buildReplaceHarness(scenario: ReplaceScenario) {
+  const clock = new FakeClock(1_000);
   const oneDevice = {
     config: {
       limits: {
@@ -3316,118 +3320,141 @@ describe("Dispatcher: an operator replaces a baseline", () => {
     },
     strategy: "resource",
   } as const;
+  const built = await buildDispatcher({
+    ...(scenario === "waiting" ? { capacity: oneDevice } : {}),
+    clock,
+    driverOptions: {
+      knownModels: [replaceModel],
+      ...(scenario === "making" ? { latencyMs: { provision: 5_000 } } : {}),
+    },
+  });
+  const { dispatcher, driver, eventBus, registry, state } = built;
+  const settle = async <Result>(pending: Promise<Result>, step = 5_000): Promise<Result> => {
+    let done = false;
+    void pending.then(
+      () => (done = true),
+      () => (done = true),
+    );
+    while (!done) {
+      clock.advance(step);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    return pending;
+  };
+  const lease = (input: Record<string, unknown>) =>
+    settle(dispatcher.dispatch("lease.request", { platform: "ios", ...input } as never, session()));
+  const driverIdOf = (deviceId: string): string =>
+    registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.driverDeviceId ?? "";
+  const saveCheckout = (leaseId: string, step?: number) =>
+    settle(
+      dispatcher.dispatch(
+        "baseline.save",
+        { leaseId, name: "checkout" },
+        session({ role: "admin" }),
+      ),
+      step,
+    );
+  return {
+    dispatcher,
+    driver,
+    fileOf: (deviceId: string) => driver.deviceFile(driverIdOf(deviceId), "data/version.txt"),
+    lease,
+    registry,
+    copiesOf: (version: number): number =>
+      registry.snapshot.virtualDevices.filter((device) => device.spec.baseline?.version === version)
+        .length,
+    removed: () =>
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "baseline.removed")
+        .map((envelope) => envelope.payload),
+    saveCheckout,
+    saveFrom: async (requesterId: string, marker: string): Promise<void> => {
+      const held = await lease({ model: replaceModel, requesterId });
+      driver.writeDeviceFile(driverIdOf(held.device.id), "data/version.txt", marker);
+      await saveCheckout(held.lease.id);
+    },
+    settle,
+    stateOf: (deviceId: string): string | undefined =>
+      registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.state,
+    versions: (): number[] =>
+      state.database
+        .prepare("SELECT version FROM baselines WHERE name = 'checkout' ORDER BY version")
+        .all()
+        .map((row) => Number(row.version)),
+    writeFile: (deviceId: string, marker: string) =>
+      driver.writeDeviceFile(driverIdOf(deviceId), "data/version.txt", marker),
+  };
+}
 
+type ReplaceHarness = Awaited<ReturnType<typeof buildReplaceHarness>>;
+
+/** why: the v1 baseline exists; the scenario's lease, idle copy or waiting request is arranged around the operator's lease. */
+async function arrangeReplace(harness: ReplaceHarness, scenario: ReplaceScenario) {
+  await harness.saveFrom("operator", "one");
+  expect(harness.versions()).toEqual([1]);
+  const running =
+    scenario === "running"
+      ? await harness.lease({ baseline: "checkout", requesterId: "agent-1" })
+      : undefined;
+  const idle =
+    scenario === "idle"
+      ? await seedIdleCopy(harness.driver, harness.registry, replaceModel)
+      : undefined;
+  const operator = await harness.lease({ model: replaceModel, requesterId: "operator" });
+  const waiting =
+    scenario === "waiting" || scenario === "making"
+      ? harness.dispatcher.dispatch(
+          "lease.request",
+          { baseline: "checkout", platform: "ios", requesterId: "agent-2" },
+          session(),
+        )
+      : undefined;
+  for (let turn = 0; waiting !== undefined && turn < 10; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { idle, operator, running, waiting };
+}
+
+describe("Dispatcher: an operator replaces a baseline", () => {
   it.each([
-    { label: "a lease is running", case: "running" },
-    { label: "no lease is running", case: "idle" },
-    { label: "a request is waiting", case: "waiting" },
-    { label: "a copy is being made", case: "making" },
+    { label: "a lease is running", case: "running", oldCopies: 1 },
+    { label: "no lease is running", case: "idle", oldCopies: 1 },
+    { label: "a request is waiting", case: "waiting", oldCopies: 0 },
+    { label: "a copy is being made", case: "making", oldCopies: 1 },
   ] as const)(
-    "running leases keep their device, the next lease gets the new version, a waiting request too, idle old-version devices are destroyed, and the old version goes with its last device ($label)",
-    async ({ case: scenario }) => {
-      const clock = new FakeClock(1_000);
-      const { dispatcher, driver, eventBus, registry, state } = await buildDispatcher({
-        ...(scenario === "waiting" ? { capacity: oneDevice } : {}),
-        clock,
-        driverOptions: {
-          knownModels: [model],
-          ...(scenario === "making" ? { latencyMs: { provision: 5_000 } } : {}),
-        },
-      });
-      const admin = session({ role: "admin" });
-      const settle = async <Result>(pending: Promise<Result>, step = 5_000): Promise<Result> => {
-        let done = false;
-        void pending.then(
-          () => (done = true),
-          () => (done = true),
-        );
-        while (!done) {
-          clock.advance(step);
-          await new Promise((resolve) => setImmediate(resolve));
-        }
-        return pending;
-      };
-      const lease = (input: Record<string, unknown>) =>
-        settle(
-          dispatcher.dispatch("lease.request", { platform: "ios", ...input } as never, session()),
-        );
-      const driverIdOf = (deviceId: string): string =>
-        registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.driverDeviceId ??
-        "";
-      const stateOf = (deviceId: string): string | undefined =>
-        registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.state;
-      const versions = (): number[] =>
-        state.database
-          .prepare("SELECT version FROM baselines WHERE name = 'checkout' ORDER BY version")
-          .all()
-          .map((row) => Number(row.version));
-      const saveFrom = async (requesterId: string, marker: string): Promise<void> => {
-        const held = await lease({ model, requesterId });
-        driver.writeDeviceFile(driverIdOf(held.device.id), "data/version.txt", marker);
-        await dispatcher.dispatch(
-          "baseline.save",
-          { leaseId: held.lease.id, name: "checkout" },
-          admin,
-        );
-      };
-      const removed = () =>
-        eventBus
-          .replay()
-          .filter((envelope) => envelope.event === "baseline.removed")
-          .map((envelope) => envelope.payload);
-      const fileOf = (deviceId: string) =>
-        driver.deviceFile(driverIdOf(deviceId), "data/version.txt");
+    "running leases keep their device, the next lease gets the new version, a waiting request too, idle old-version devices are destroyed, a copy of the old version finished after the save is deleted and never granted, and the old version goes with its last device ($label)",
+    async ({ case: scenario, oldCopies }) => {
+      const harness = await buildReplaceHarness(scenario);
+      const { idle, operator, running, waiting } = await arrangeReplace(harness, scenario);
+      harness.writeFile(operator.device.id, "two");
 
-      await saveFrom("operator", "one");
-      expect(versions()).toEqual([1]);
-      const running =
-        scenario === "running"
-          ? await lease({ baseline: "checkout", requesterId: "agent-1" })
-          : undefined;
-      const idle = scenario === "idle" ? await seedIdleCopy(driver, registry, model) : undefined;
-      const operator = await lease({ model, requesterId: "operator" });
-      const waiting =
-        scenario === "waiting" || scenario === "making"
-          ? dispatcher.dispatch(
-              "lease.request",
-              { baseline: "checkout", platform: "ios", requesterId: "agent-2" },
-              session(),
-            )
-          : undefined;
-      for (let turn = 0; waiting !== undefined && turn < 10; turn += 1) {
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      driver.writeDeviceFile(driverIdOf(operator.device.id), "data/version.txt", "two");
-
-      await settle(
-        dispatcher.dispatch(
-          "baseline.save",
-          { leaseId: operator.lease.id, name: "checkout" },
-          admin,
-        ),
-        100,
-      );
+      await harness.saveCheckout(operator.lease.id, 100);
       if (running !== undefined) {
-        expect(stateOf(running.device.id)).toBe("leased");
-        expect(versions()).toEqual([1, 2]);
-        expect(removed()).toEqual([]);
+        expect(harness.stateOf(running.device.id)).toBe("leased");
+        expect(harness.versions()).toEqual([1, 2]);
+        expect(harness.removed()).toEqual([]);
       }
-      if (idle !== undefined) expect(stateOf(idle.id)).toBe("deleted");
-      const next =
-        waiting === undefined
-          ? await lease({ baseline: "checkout", requesterId: "agent-3" })
-          : await settle(waiting);
+      if (idle !== undefined) expect(harness.stateOf(idle.id)).toBe("deleted");
+      const next = await (waiting === undefined
+        ? harness.lease({ baseline: "checkout", requesterId: "agent-3" })
+        : harness.settle(waiting));
       expect(next.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
-      expect(fileOf(next.device.id)).toBe("two");
+      expect(harness.fileOf(next.device.id)).toBe("two");
+      expect(harness.copiesOf(1)).toBe(oldCopies);
       if (running !== undefined) {
-        await dispatcher.dispatch("lease.release", { leaseId: running.lease.id }, session());
+        await harness.dispatcher.dispatch(
+          "lease.release",
+          { leaseId: running.lease.id },
+          session(),
+        );
       }
       await new Promise((resolve) => setImmediate(resolve));
-      expect(versions()).toEqual([2]);
-      expect(removed()).toEqual([
+      expect(harness.versions()).toEqual([2]);
+      expect(harness.removed()).toEqual([
         expect.objectContaining({ name: "checkout", reason: "replaced", version: 1 }),
       ]);
-      expect(await driver.listSources()).toHaveLength(1);
+      expect(await harness.driver.listSources()).toHaveLength(1);
     },
   );
 });

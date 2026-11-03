@@ -353,7 +353,7 @@ describe("statusDeviceSchema's device projection", () => {
     expect(deviceRecordSchema.parse(device).spec).not.toHaveProperty("mode");
   });
 
-  it("shows a device spec's image tag and baseline in a grant, a status device, and a list.get record", () => {
+  it("shows a device spec's image tag and baseline in a grant, a status device, and a list.get record, and refuses a baseline version below 1 or a name the name rule refuses", () => {
     const device = {
       ...fullCoreShapedDevice(),
       spec: {
@@ -381,6 +381,14 @@ describe("statusDeviceSchema's device projection", () => {
     expect(grantedDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(statusDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(deviceRecordSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
+    for (const baseline of [
+      { name: "checkout", version: 0 },
+      { name: "Not A Name", version: 1 },
+    ]) {
+      expect(
+        grantedDeviceSchema.safeParse({ ...device, spec: { ...device.spec, baseline } }).success,
+      ).toBe(false);
+    }
   });
 
   it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
@@ -1113,15 +1121,17 @@ describe("statusWarmPoolSchema", () => {
   });
   const { origin: _origin, ...withoutOrigin } = entry;
 
-  it("accepts origin configured and learned, an optional imageTag, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, and 321 entries", () => {
+  it("accepts origin configured and learned, an optional imageTag, an optional baseline, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, a baseline name the name rule refuses, and 321 entries", () => {
     const cases: readonly { name: string; targets: readonly unknown[]; accepted: boolean }[] = [
       { accepted: true, name: "learned", targets: [entry] },
       { accepted: true, name: "configured", targets: [{ ...entry, origin: "configured" }] },
       { accepted: true, name: "a tag", targets: [{ ...entry, imageTag: "google_apis_playstore" }] },
       { accepted: true, name: "320 entries", targets: Array.from({ length: 320 }, () => entry) },
+      { accepted: true, name: "a baseline", targets: [{ ...entry, baseline: "checkout" }] },
       { accepted: false, name: "no origin", targets: [withoutOrigin] },
       { accepted: false, name: "another word", targets: [{ ...entry, origin: "remembered" }] },
       { accepted: false, name: "a bad tag", targets: [{ ...entry, imageTag: "no spaces" }] },
+      { accepted: false, name: "a bad baseline", targets: [{ ...entry, baseline: "Not A Name" }] },
       { accepted: false, name: "321 entries", targets: Array.from({ length: 321 }, () => entry) },
     ];
 
@@ -1134,5 +1144,8 @@ describe("statusWarmPoolSchema", () => {
     expect(
       statusWarmPoolSchema.parse(block([{ ...entry, imageTag: "google_apis" }])).targets[0],
     ).toMatchObject({ imageTag: "google_apis", origin: "learned" });
+    expect(
+      statusWarmPoolSchema.parse(block([{ ...entry, baseline: "checkout" }])).targets[0],
+    ).toMatchObject({ baseline: "checkout", origin: "learned" });
   });
 });

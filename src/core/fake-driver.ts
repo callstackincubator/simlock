@@ -413,6 +413,7 @@ export class FakeDriver implements Driver {
   async destroySource(sourceId: string): Promise<void> {
     await this.#beforeCall("destroySource", sourceId);
     this.#sources = this.#sources.filter((source) => source.id !== sourceId);
+    this.#sourceFiles.delete(sourceId);
   }
 
   async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes: number }> {

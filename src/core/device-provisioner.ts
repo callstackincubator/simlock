@@ -152,12 +152,23 @@ export class DeviceProvisioner {
       throw error;
     }
     const { bootClaim, device } = registered;
+    return this.#makeReady(
+      device,
+      bootClaim,
+      () => driver.estimate({ operation: "boot" }, spec),
+      options,
+    );
+  }
 
+  /** why: a registered device that cannot be made ready is destroyed and the caller sees `BootTimeoutError`; the reservation ends on every path. */
+  async #makeReady(
+    device: VirtualDevice,
+    bootClaim: DeviceOperationClaim | undefined,
+    bootEstimate: () => number,
+    options: ProvisionDeviceOptions,
+  ): Promise<ReadyDeviceHandoff> {
     try {
-      options.onProgress?.({
-        stage: "booting",
-        etaMs: driver.estimate({ operation: "boot" }, spec),
-      });
+      options.onProgress?.({ stage: "booting", etaMs: bootEstimate() });
       const ready = await this.options.lifecycle.readyProvisionedForLease(device, bootClaim);
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);

@@ -1329,7 +1329,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#defer(waiter, "waiting-for-device");
       } finally {
         capacityReservation?.release();
-        if (!superseded) handoff.claim.release();
+        handoff.claim.release();
       }
     });
     if (superseded) await this.#discardSuperseded(waiter, handoff);
@@ -1345,8 +1345,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   /** why: the superseded copy is deleted outside the gate, and its waiter plans again against the newest version. */
   async #discardSuperseded(waiter: AcquisitionWaiter, handoff: ReadyDeviceHandoff): Promise<void> {
-    // why: the handoff's claim is for a boot, and `dispose` takes its own claim for a cleanup.
-    handoff.claim.release();
     try {
       await this.options.lifecycle.dispose(handoff.device, "baseline-replaced", "cleanup");
     } catch (error: unknown) {
