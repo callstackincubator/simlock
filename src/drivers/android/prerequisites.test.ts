@@ -38,6 +38,31 @@ function sdkmanagerVersion(result: ProcessResult): ScriptedProcessExpectation {
 
 const SDKMANAGER_RUNS = sdkmanagerVersion({ code: 0, stderr: "", stdout: "12.0\n" });
 
+const emulator = `${sdk}/emulator/emulator`;
+// why: the flags Simlock puts on every emulator launch; each is listed in `emulator -help` by the emulators that accept it.
+const LAUNCH_FLAGS = [
+  "-avd",
+  "-port",
+  "-no-snapshot-save",
+  "-grpc",
+  "-grpc-use-token",
+  "-crash-report-mode",
+] as const;
+
+function emulatorHelp(listed: readonly string[]): ScriptedProcessExpectation {
+  const lines = listed.map((flag) => `    ${flag} <value>      what ${flag} does`);
+  return {
+    match: { args: ["-help"], command: emulator },
+    result: {
+      code: 0,
+      stderr: "",
+      stdout: `Android Emulator usage: emulator [options]\n${lines.join("\n")}\n`,
+    },
+  };
+}
+
+const EMULATOR_ACCEPTS_EVERYTHING = emulatorHelp(LAUNCH_FLAGS);
+
 function check(filesystem: MemoryFilesystem, runner: ScriptedProcessRunner) {
   return androidPrerequisites({
     env: { ANDROID_HOME: sdk },
@@ -50,11 +75,12 @@ function check(filesystem: MemoryFilesystem, runner: ScriptedProcessRunner) {
 
 describe("androidPrerequisites", () => {
   it("reports nothing missing for a complete SDK whose sdkmanager runs, starting only `sdkmanager --version`, bounded at 30 seconds", async () => {
-    const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS]);
+    const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING]);
 
     await expect(check(await sdkFilesystem(), runner).check()).resolves.toEqual([]);
     expect(runner.calls.map((call) => [call.command, ...call.args])).toEqual([
       [sdkmanager, "--version"],
+      [emulator, "-help"],
     ]);
     expect(runner.calls[0]?.options.timeoutMs).toBe(30_000);
   });
@@ -65,7 +91,9 @@ describe("androidPrerequisites", () => {
   ] as const)(
     "reports the package with its `sdkmanager --install` remedy when only %s is missing",
     async (without, prerequisite, remedy) => {
-      const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS]);
+      const runner = new ScriptedProcessRunner(
+        without === "emulator" ? [SDKMANAGER_RUNS] : [SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING],
+      );
 
       const missing = await check(await sdkFilesystem([without]), runner).check();
 
@@ -78,11 +106,34 @@ describe("androidPrerequisites", () => {
     },
   );
 
+  it("reports an installed emulator that does not list a flag Simlock always passes, naming the flag and `sdkmanager --install emulator`, and nothing for one that lists every flag", async () => {
+    const lacking = await check(
+      await sdkFilesystem(),
+      new ScriptedProcessRunner([
+        SDKMANAGER_RUNS,
+        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-crash-report-mode")),
+      ]),
+    ).check();
+    const complete = await check(
+      await sdkFilesystem(),
+      new ScriptedProcessRunner([SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING]),
+    ).check();
+
+    expect(lacking).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("-crash-report-mode") as unknown,
+        prerequisite: "android-emulator",
+        remedy: expect.stringContaining("sdkmanager --install emulator") as unknown,
+      }),
+    ]);
+    expect(complete).toEqual([]);
+  });
+
   it("stops reporting a package on the next check once it is installed", async () => {
     const filesystem = await sdkFilesystem(["emulator"]);
     const prerequisites = check(
       filesystem,
-      new ScriptedProcessRunner([SDKMANAGER_RUNS, SDKMANAGER_RUNS]),
+      new ScriptedProcessRunner([SDKMANAGER_RUNS, SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING]),
     );
     expect((await prerequisites.check()).map((found) => found.prerequisite)).toEqual([
       "android-emulator",
@@ -97,7 +148,7 @@ describe("androidPrerequisites", () => {
     const filesystem = await sdkFilesystem(["cmdline-tools"]);
     // A bin with only one of the two tools is not complete.
     await writeFile(filesystem, sdkmanager);
-    const runner = new ScriptedProcessRunner([]);
+    const runner = new ScriptedProcessRunner([EMULATOR_ACCEPTS_EVERYTHING]);
 
     const missing = await check(filesystem, runner).check();
 
@@ -109,7 +160,7 @@ describe("androidPrerequisites", () => {
         ) as unknown,
       }),
     ]);
-    expect(runner.calls).toEqual([]);
+    expect(runner.calls.map((call) => call.command)).toEqual([emulator]);
   });
 
   it("reports one android-sdk finding that lists the searched paths when no root exists, and no per-tool finding", async () => {
@@ -149,6 +200,10 @@ describe("androidPrerequisites", () => {
       {
         match: { args: ["--version"], command: `${studioSdk}/cmdline-tools/latest/bin/sdkmanager` },
         result: { code: 0, stderr: "", stdout: "12.0\n" },
+      },
+      {
+        ...EMULATOR_ACCEPTS_EVERYTHING,
+        match: { args: ["-help"], command: `${studioSdk}/emulator/emulator` },
       },
     ]);
     const prerequisites = androidPrerequisites({
@@ -195,6 +250,7 @@ describe("androidPrerequisites", () => {
           "\nERROR: JAVA_HOME is not set and no 'java' command could be found.\nPlease set it.\n",
         stdout: "",
       }),
+      EMULATOR_ACCEPTS_EVERYTHING,
     ]);
 
     const missing = await check(await sdkFilesystem(), runner).check();
@@ -266,11 +322,16 @@ describe("androidPrerequisites on Windows", () => {
       const sdkmanager = sdkmanagerIn(root);
       const runner = new ScriptedProcessRunner([
         { ...WINDOWS_SDKMANAGER_RUNS, match: { args: ["--version"], command: sdkmanager } },
+        {
+          ...EMULATOR_ACCEPTS_EVERYTHING,
+          match: { args: ["-help"], command: `${root}/emulator/emulator.exe` },
+        },
       ]);
 
       await expect(windowsCheck(await windowsSdk(root), runner, env).check()).resolves.toEqual([]);
       expect(runner.calls.map((call) => [call.command, ...call.args])).toEqual([
         [sdkmanager, "--version"],
+        [`${root}/emulator/emulator.exe`, "-help"],
       ]);
     },
   );
