@@ -478,24 +478,22 @@ function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
 
 export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
+  /** why: The words that may follow the sequence; any other (or none) is refused. Absent: the sequence alone is refused. */
+  readonly allowedNext?: readonly string[];
   readonly reason: string;
 }[] = [
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "kill"] },
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "avd", "stop"] },
   {
     // why: Not drift, which is why it needs saying: the emulator keeps running and nothing looks
-    // wrong. What is gone is the clean baseline `reclaimStrategy` restores from, so every
-    // later reclaim of this device silently degrades from a snapshot load to a full wipe.
+    // wrong. Any console snapshot subcommand (save, push, pull, delete and its `del` alias, load,
+    // remap, or one a later emulator adds) can replace or remove the clean baseline `reclaimStrategy`
+    // restores from, so every later reclaim of this device silently degrades from a snapshot load to
+    // a full wipe. Only `list` is safe, so the rule is an allowlist of one and not a list of verbs.
+    allowedNext: ["list"],
     reason:
-      "it destroys the clean-boot snapshot Simlock restores from, turning every later reclaim of this device into a full wipe.",
-    sequence: ["emu", "avd", "snapshot", "delete"],
-  },
-  {
-    // why: Every name is refused, not only the reserved one: snapshot names on a case-insensitive
-    // disk alias `simlock_clean_baseline`, and a save under it is loaded by every later reclaim.
-    reason:
-      "it would replace the clean-boot snapshot later leases of this device are restored from.",
-    sequence: ["emu", "avd", "snapshot", "save"],
+      "it can replace or destroy the clean-boot snapshot Simlock restores later leases of this device from.",
+    sequence: ["emu", "avd", "snapshot"],
   },
 ];
 
@@ -528,7 +526,11 @@ const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
  * case-insensitive (refusing too much is harmless here) and only looks at the operands after the
  * `emu` subcommand: an `adb shell` argument is a device shell command, never a console line.
  */
-function containsSequence(args: readonly string[], sequence: readonly string[]): boolean {
+function containsSequence(
+  args: readonly string[],
+  sequence: readonly string[],
+  allowedNext?: readonly string[],
+): boolean {
   const walked = walkGlobals(args);
   if (walked.kind !== "subcommand" || args[walked.index] !== "emu") return false;
   const words = args
@@ -536,9 +538,12 @@ function containsSequence(args: readonly string[], sequence: readonly string[]):
     .flatMap((argument) => argument.toLowerCase().split(/\s+/))
     .filter((word) => word !== "");
   const consoleWords = sequence.slice(1);
-  return words.some((_, index) =>
-    consoleWords.every((token, offset) => words[index + offset] === token),
-  );
+  return words.some((_, index) => {
+    if (!consoleWords.every((token, offset) => words[index + offset] === token)) return false;
+    if (allowedNext === undefined) return true;
+    const next = words[index + consoleWords.length];
+    return next === undefined || !allowedNext.includes(next);
+  });
 }
 
 type AndroidTargetFor = (
@@ -914,12 +919,12 @@ export class AndroidDriver implements Driver {
       );
     }
     const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
-      containsSequence(args, candidate.sequence),
+      containsSequence(args, candidate.sequence, candidate.allowedNext),
     );
     if (refused !== undefined) {
       throw new PassthroughRefusedError(
         "adb",
-        `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
+        `Refusing \`simlock adb ${refused.sequence.join(" ")}${refused.allowedNext === undefined ? "" : ` (anything but ${refused.allowedNext.join(", ")})`}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
       );
     }
 

@@ -4535,21 +4535,30 @@ describe("AndroidDriver.create", () => {
     },
   );
 
-  it("refuses to delete or save a snapshot, since later reclaims restore from the clean one, and still passes snapshot list", async () => {
+  it("refuses every emu avd snapshot subcommand except list, since later reclaims restore from the clean one", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
     for (const [args, reason] of [
-      [["emu", "avd", "snapshot", "delete", "default_boot"], /full wipe/],
-      [["emu", "avd", "snapshot", "save", "simlock_clean_baseline"], /replace the clean-boot/],
-      [["emu", "avd", "snapshot", "save", "my_snapshot"], /replace the clean-boot/],
-      [["-s", "emulator-5586", "emu", "avd", "snapshot", "save", "x"], /replace the clean-boot/],
+      [["emu", "avd", "snapshot", "delete", "default_boot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "del", "default_boot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "save", "simlock_clean_baseline"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "save", "my_snapshot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "push", "x", "/tmp/x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "pull", "x", "/tmp/x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "remap", "1"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "load", "x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "frobnicate"], /replace or destroy/],
+      [["emu", "avd", "snapshot"], /replace or destroy/],
+      [["emu", "avd snapshot"], /replace or destroy/],
+      [["-s", "emulator-5586", "emu", "avd", "snapshot", "save", "x"], /replace or destroy/],
       // why: adb joins the `emu` operands with spaces, so one argument may carry several words.
-      [["emu", "avd snapshot save x"], /replace the clean-boot/],
-      [["emu", "avd", "snapshot save x"], /replace the clean-boot/],
-      [["emu", "avd snapshot delete x"], /full wipe/],
-      [["emu", "AVD", "Snapshot", "Save", "x"], /replace the clean-boot/],
-      [["emu", "avd snapshot list\navd snapshot save x"], /replace the clean-boot/],
+      [["emu", "avd snapshot save x"], /replace or destroy/],
+      [["emu", "avd", "snapshot save x"], /replace or destroy/],
+      [["emu", "avd snapshot push x y"], /replace or destroy/],
+      [["emu", "AVD", "Snapshot", "Save", "x"], /replace or destroy/],
+      [["emu", "AVD", "Snapshot", "DEL", "x"], /replace or destroy/],
+      [["emu", "avd snapshot list\navd snapshot save x"], /replace or destroy/],
       [["emu", "kill"], /simlock cleanup/],
       [["emu", "avd stop"], /simlock release/],
     ] as const) {
