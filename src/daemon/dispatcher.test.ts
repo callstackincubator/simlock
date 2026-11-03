@@ -1452,6 +1452,66 @@ describe("Dispatcher: baseline.save", () => {
   });
 });
 
+describe("Dispatcher: baseline.save refusals", () => {
+  it("refuses a bad name or note, a non-admin, an unknown lease and a physical lease, and ends no lease", async () => {
+    const { dispatcher, driver, engine, registry } = await buildDispatcher({
+      physicalDevices: [
+        {
+          createdAt: 1,
+          driverDeviceId: "00008110-001A2B3C4D5E",
+          enrolledApps: [],
+          id: "dev_phys",
+          spec: { class: "tablet", model: "iPad Pro", osVersion: "18.4" },
+          state: "ready",
+        },
+      ],
+    });
+    await engine.convergeRunningCapacity();
+    driver.setPhysicalPresence("00008110-001A2B3C4D5E", true);
+    const virtual = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const physical = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPad Pro", physical: true, platform: "ios" },
+      session({ principal: "tok_physical" }),
+    );
+    const admin = session({ role: "admin" });
+    const accepted = { leaseId: virtual.lease.id, name: "checkout" };
+    expect(OPERATIONS["baseline.save"].input.safeParse(accepted).success).toBe(true);
+
+    const refusals: readonly [string, unknown, DispatchSession, string, string?][] = [
+      ["Checkout", { ...accepted, name: "Checkout" }, admin, "BAD_REQUEST"],
+      ["-checkout", { ...accepted, name: "-checkout" }, admin, "BAD_REQUEST"],
+      ["65 characters", { ...accepted, name: "a".repeat(65) }, admin, "BAD_REQUEST"],
+      ["201-character note", { ...accepted, note: "n".repeat(201) }, admin, "BAD_REQUEST"],
+      ["note with a newline", { ...accepted, note: "two\nlines" }, admin, "BAD_REQUEST"],
+      ["an agent token", accepted, session({ role: "agent" }), "FORBIDDEN"],
+      ["unknown lease", { ...accepted, leaseId: "lse_gone" }, admin, "UNKNOWN_LEASE"],
+      [
+        "physical lease",
+        { ...accepted, leaseId: physical.lease.id },
+        admin,
+        "BAD_REQUEST",
+        `lease ${physical.lease.id} is on a physical device; only a simulator or emulator can be saved as a baseline`,
+      ],
+    ];
+    for (const [label, input, caller, code, message] of refusals) {
+      const error = await dispatcher.dispatch("baseline.save", input as never, caller).then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+      expect(classifyError(error), label).toBe(code);
+      if (message !== undefined) expect((error as Error).message, label).toBe(message);
+      expect(registry.snapshot.leases.map((lease) => lease.id).sort(), label).toEqual(
+        [virtual.lease.id, physical.lease.id].sort(),
+      );
+    }
+  });
+});
+
 describe("Dispatcher: lease.release-all", () => {
   it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
     const { dispatcher, registry } = await buildDispatcher();
