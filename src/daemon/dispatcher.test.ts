@@ -1452,6 +1452,39 @@ describe("Dispatcher: baseline.save", () => {
   });
 });
 
+describe("Dispatcher: baseline.save versions", () => {
+  it("numbers each save under one name one more than the last, one at a time or two at once, and keeps only the newest version's source", async () => {
+    const { dispatcher, driver, registry } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const lease = async (who: string): Promise<string> => {
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        session({ principal: who }),
+      );
+      const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+      driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/who", who);
+      return grant.lease.id;
+    };
+    const save = (leaseId: string) =>
+      dispatcher.dispatch("baseline.save", { leaseId, name: "checkout" }, admin);
+    const keptSources = async () =>
+      (await driver.listSources()).map((source) => driver.sourceFiles(source.id));
+
+    const first = await save(await lease("tok_a"));
+    const second = await save(await lease("tok_b"));
+    expect([first.baseline.version, second.baseline.version]).toEqual([1, 2]);
+    expect(await keptSources()).toEqual([new Map([["data/who", "tok_b"]])]);
+
+    const [c, d] = [await lease("tok_c"), await lease("tok_d")];
+    const results = await Promise.all([save(c), save(d)]);
+    expect(results.map((result) => result.baseline.version).sort()).toEqual([3, 4]);
+    const newest =
+      results.find((result) => result.baseline.version === 4)?.leaseId === c ? "tok_c" : "tok_d";
+    expect(await keptSources()).toEqual([new Map([["data/who", newest]])]);
+  });
+});
+
 describe("Dispatcher: baseline.save refusals", () => {
   it("refuses a bad name or note, a non-admin, an unknown lease and a physical lease, and ends no lease", async () => {
     const { dispatcher, driver, engine, registry } = await buildDispatcher({
