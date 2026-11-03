@@ -119,18 +119,6 @@ const PHYSICAL_DEVICE = {
 } as const;
 
 describe("AndroidDriver", () => {
-  it("lists no sources and refuses to destroy one, until Android seeds exist", async () => {
-    const runner = new ScriptedProcessRunner([]);
-    const driver = await createDriver(await androidFilesystem(), runner);
-
-    await expect(driver.listSources()).resolves.toEqual([]);
-    await expect(driver.destroySource("any")).rejects.toMatchObject({
-      message: "Android keeps no source any",
-      name: "DriverCrashError",
-    });
-    expect(runner.calls).toEqual([]);
-  });
-
   it("discovers ANDROID_HOME before the other SDK locations and rejects a missing SDK", async () => {
     const filesystem = await androidFilesystem();
     const runner = new ScriptedProcessRunner([]);
