@@ -148,7 +148,7 @@ export interface DispatcherOptions {
   /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
   readonly warmKinds?: WarmKindForgetter;
   /** why: the baselines' one way in; optional so tests that never save need none. */
-  readonly baselines?: Pick<BaselineService, "save">;
+  readonly baselines?: Pick<BaselineService, "list" | "save">;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
@@ -885,7 +885,11 @@ export class Dispatcher {
     }
   };
 
-  #baselineList: Handler<"baseline.list"> = () => Promise.resolve({ baselines: [] });
+  #baselineList: Handler<"baseline.list"> = async () => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    return { baselines: [...(await this.options.baselines.list())] };
+  };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 

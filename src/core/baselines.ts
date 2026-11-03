@@ -32,7 +32,7 @@ export class BaselineSaveFailedError extends Error {
 
 export interface BaselineServiceOptions {
   readonly clock: Clock;
-  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource"> };
+  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource" | "listSources"> };
   readonly leaseSave: () => {
     releaseToSave<Result>(
       leaseId: string,
@@ -76,6 +76,38 @@ export class BaselineService {
       });
     await this.#dropOlderVersions(baseline.name, baseline.version);
     return { baseline, leaseId: request.leaseId };
+  }
+
+  /** why: the newest version of each name, by name; the size is the source's, read from its driver. */
+  async list(): Promise<readonly BaselineEntry[]> {
+    const rows = this.options.state.database
+      .prepare(
+        `SELECT * FROM baselines AS b
+         WHERE version = (SELECT MAX(version) FROM baselines WHERE name = b.name)
+         ORDER BY name`,
+      )
+      .all();
+    const sizes = new Map<string, number | undefined>();
+    for (const platform of new Set(rows.map((row) => String(row.platform) as Platform))) {
+      for (const source of await this.options.drivers.get(platform).listSources()) {
+        sizes.set(source.id, source.sizeBytes);
+      }
+    }
+    return rows.map((row): BaselineEntry => {
+      const sizeBytes = sizes.get(String(row.source_id));
+      return {
+        mode: String(row.mode) as BaselineEntry["mode"],
+        model: String(row.model),
+        name: String(row.name),
+        osVersion: String(row.os_version),
+        platform: String(row.platform) as Platform,
+        savedAt: String(row.saved_at),
+        version: Number(row.version),
+        ...(row.image_tag === null ? {} : { imageTag: String(row.image_tag) }),
+        ...(row.note === null ? {} : { note: String(row.note) }),
+        ...(sizeBytes === undefined ? {} : { sizeBytes }),
+      };
+    });
   }
 
   /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
