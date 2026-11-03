@@ -3469,7 +3469,6 @@ describe("Dispatcher: an operator replaces a baseline", () => {
   it.each([
     { label: "a lease is running", case: "running", oldCopies: 1 },
     { label: "no lease is running", case: "idle", oldCopies: 1 },
-    { label: "an idle copy's delete fails", case: "idle", oldCopies: 1, failDelete: true },
     {
       label: "the running lease's delete fails at its release",
       case: "running",
@@ -3489,18 +3488,12 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       if (failDelete) harness.driver.failOn("destroy", 3, new Error("destroy failed"));
 
       await harness.saveCheckout(operator.lease.id, 100);
-      if (failDelete) {
-        // why: the save succeeds though the idle old copy would not delete; the copy stays shut down and keeps version 1.
-        if (idle !== undefined) expect(harness.stateOf(idle.id)).toBe("shutdown");
-        expect(harness.versions()).toEqual([1, 2]);
-        expect(harness.removed()).toEqual([]);
-      }
       if (running !== undefined) {
         expect(harness.stateOf(running.device.id)).toBe("leased");
         expect(harness.versions()).toEqual([1, 2]);
         expect(harness.removed()).toEqual([]);
       }
-      if (idle !== undefined && !failDelete) expect(harness.stateOf(idle.id)).toBe("deleted");
+      if (idle !== undefined) expect(harness.stateOf(idle.id)).toBe("deleted");
       const next = await (waiting === undefined
         ? harness.lease({ baseline: "checkout", requesterId: "agent-3" })
         : harness.settle(waiting));
@@ -3515,11 +3508,6 @@ describe("Dispatcher: an operator replaces a baseline", () => {
         );
       }
       await new Promise((resolve) => setImmediate(resolve));
-      if (failDelete && idle !== undefined) {
-        expect(harness.versions()).toEqual([1, 2]);
-        expect(harness.removed()).toEqual([]);
-        return;
-      }
       if (failDelete && running !== undefined) {
         // why: the last device of version 1 leaves through the quarantine's delete retry, and that drops the version.
         expect(harness.stateOf(running.device.id)).toBe("quarantined");
@@ -3537,6 +3525,25 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       expect(await harness.driver.listSources()).toHaveLength(1);
     },
   );
+});
+
+describe("Dispatcher: an operator replaces a baseline while an idle old copy will not delete", () => {
+  it("the save succeeds, the idle old-version device stays shut down, and version 1 stays with it", async () => {
+    const harness = await buildReplaceHarness("idle");
+    const { idle, operator } = await arrangeReplace(harness, "idle");
+    harness.writeFile(operator.device.id, "two");
+    // why: the first save in the arrangement and this lease's own save destroy a device before the idle copy.
+    harness.driver.failOn("destroy", 3, new Error("destroy failed"));
+
+    await harness.saveCheckout(operator.lease.id, 100);
+
+    if (idle === undefined) throw new Error("the arrangement left no idle device");
+    expect(harness.stateOf(idle.id)).toBe("shutdown");
+    expect(harness.versions()).toEqual([1, 2]);
+    expect(harness.removed()).toEqual([]);
+    const next = await harness.lease({ baseline: "checkout", requesterId: "agent-3" });
+    expect(next.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
+  });
 });
 
 describe("Dispatcher: two copies of one baseline version are made at once", () => {
