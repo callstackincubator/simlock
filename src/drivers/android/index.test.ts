@@ -2294,7 +2294,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         "simlock_running\n",
       ),
@@ -2642,7 +2642,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         'simlock_one\n{"token":"tok-123"}',
       ),
@@ -2672,7 +2672,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         "simlock_one\n",
       ),
@@ -2702,7 +2702,7 @@ describe("AndroidDriver", () => {
             "-s",
             "emulator-5586",
             "shell",
-            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+            "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
           ],
           command: binaries.adb,
         },
@@ -5265,7 +5265,7 @@ describe("AndroidDriver console ports across a restart", () => {
           command === binaries.adb &&
           args[2] === "shell" &&
           args[3] ===
-            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true"
+            "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true"
         ) {
           return ok(`${host.avdAnswering(args[1]) ?? ""}\n`);
         }

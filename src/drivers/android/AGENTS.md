@@ -130,6 +130,7 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 | adb server start / stop         | 10 s / SIGTERM, 5 s, SIGKILL            | none                                                            |
 | `adb devices` in `listManaged`  | 30 s                                    | none                                                            |
 | AVD path query (listing / boot) | 5 s                                     | none                                                            |
+| Mark read in `listManaged`      | 5 s, first 4 KiB of the file            | none                                                            |
 | Physical read / uninstall       | 30 s / 60 s                             | none                                                            |
 | `avdmanager list device`        | 30 s                                    | none                                                            |
 

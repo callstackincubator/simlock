@@ -133,6 +133,7 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const MARK_READ_TIMEOUT_MS = 5_000;
+const ERASABLE_MARK_READ_BYTES = 4096;
 // why: Saving the clean baseline writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
@@ -1464,7 +1465,7 @@ export class AndroidDriver implements Driver {
           "-s",
           candidate,
           "shell",
-          `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
+          `getprop ro.boot.qemu.avd_name; head -c ${String(ERASABLE_MARK_READ_BYTES)} ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
         ],
         MARK_READ_TIMEOUT_MS,
       );
