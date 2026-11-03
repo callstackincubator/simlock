@@ -246,6 +246,51 @@ describe("LearnedKinds", () => {
     second.close();
   });
 
+  it("learns a baseline kind beside the plain kind of its model, forgets both naming the baseline, and migrates a file at warm pool version 1 keeping each kind and its leases", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-learned-"));
+    directories.push(directory);
+    const openFile = (owner: typeof warmPoolOwner) =>
+      openStateDatabase({
+        dataDirectory: directory,
+        filesystem: new NodeFilesystem(),
+        logger: new NoopLogger(),
+        oldFiles: [],
+        owners: [owner],
+        sqlite: new NodeSqliteOpener(),
+        upgradeStep: "",
+      });
+    const first = await openFile({
+      ...warmPoolOwner,
+      migrations: warmPoolOwner.migrations.slice(0, 1),
+      version: 1,
+    });
+    const old = new LearnedKinds(first);
+    old.learn(spec("iPhone 16"), "a", T0);
+    old.learn(spec("iPhone 16"), "b", T0 + 1);
+    old.ended("a", T0 + 2);
+    first.close();
+
+    const second = await openFile(warmPoolOwner);
+    const kinds = new LearnedKinds(second);
+    expect(kinds.kinds(T0 + 5).map((kind) => [kind.spec.model, kind.count])).toEqual([
+      ["iPhone 16", 2],
+    ]);
+    kinds.learn(spec("iPhone 16", { baseline: { name: "checkout", version: 3 } }), "c", T0 + 6);
+    kinds.learn(spec("iPhone 16", { baseline: { name: "login", version: 1 } }), "d", T0 + 7);
+
+    const learned = kinds.kinds(T0 + 8);
+    expect(learned.map((kind) => kind.spec.baseline?.name)).toEqual([
+      "login",
+      "checkout",
+      undefined,
+    ]);
+    expect(learned.map((kind) => kind.count)).toEqual([1, 1, 2]);
+    const forgotten = kinds.forgetMatching({ model: "iPhone 16", platform: "ios" });
+    expect(forgotten.map((kind) => kind.baseline?.name)).toEqual(["login", "checkout", undefined]);
+    expect(kinds.kinds(T0 + 8)).toEqual([]);
+    second.close();
+  });
+
   it("warmPoolOwner version 1 creates both STRICT tables with their columns", async () => {
     const { state } = await open();
     const table = (name: string) =>
