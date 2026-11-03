@@ -1,6 +1,7 @@
 import {
   chmod,
   copyFile,
+  cp,
   link,
   lstat,
   mkdir,
@@ -16,7 +17,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import type { ProcessRunner } from "./process-runner.js";
+import { NodeProcessRunner, type ProcessRunner } from "./process-runner.js";
 
 export interface FileStat {
   readonly kind: "file" | "directory";
@@ -129,7 +130,13 @@ export interface NodeFilesystemOptions {
 }
 
 export class NodeFilesystem implements Filesystem {
-  constructor(_options: NodeFilesystemOptions = {}) {}
+  readonly #platform: NodeJS.Platform;
+  readonly #processRunner: ProcessRunner;
+
+  constructor(options: NodeFilesystemOptions = {}) {
+    this.#platform = options.platform ?? process.platform;
+    this.#processRunner = options.processRunner ?? new NodeProcessRunner();
+  }
 
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
@@ -139,11 +146,40 @@ export class NodeFilesystem implements Filesystem {
     await copyFile(from, to);
   }
 
-  async copyTree(
-    _from: string,
-    _to: string,
-    _options: { readonly timeoutMs: number },
-  ): Promise<void> {}
+  async copyTree(from: string, to: string, options: { readonly timeoutMs: number }): Promise<void> {
+    if (this.#platform === "darwin") return this.#copyWithCp(["-c", "-p", "-R", from, to], options);
+    if (this.#platform === "linux") {
+      return this.#copyWithCp(["-a", "--reflink=auto", from, to], options);
+    }
+    // why: no child process runs here, so `timeoutMs` bounds nothing on this path.
+    await cp(from, to, {
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true,
+      recursive: true,
+    });
+  }
+
+  async #copyWithCp(
+    args: readonly string[],
+    options: { readonly timeoutMs: number },
+  ): Promise<void> {
+    const handle = this.#processRunner.spawn("cp", args);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      handle.kill();
+    }, options.timeoutMs);
+    try {
+      const result = await handle.wait();
+      if (timedOut) throw new Error(`timed out after ${options.timeoutMs}ms`);
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || `cp exited with code ${String(result.code)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async readFileFrom(path: string, offset: number): Promise<string> {
     const handle = await open(path, "r");

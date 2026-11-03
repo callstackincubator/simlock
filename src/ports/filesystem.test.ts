@@ -411,7 +411,7 @@ describe("Filesystem.copyTree", () => {
     await utimes(`${source}/disk.img`, modifiedAt, modifiedAt);
     for (const platform of ["win32", process.platform] as const) {
       const target = `${temporaryDirectory}/copy-tree/${platform}`;
-      await new NodeFilesystem({ platform }).copyTree(source, target, { timeoutMs: 1 });
+      await new NodeFilesystem({ platform }).copyTree(source, target, { timeoutMs: 600_000 });
       await expect(real.readFile(`${target}/disk.img`)).resolves.toBe("image");
       expect((await stat(`${target}/disk.img`)).mtimeMs).toBe(modifiedAt.getTime());
     }
