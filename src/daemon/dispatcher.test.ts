@@ -1790,6 +1790,69 @@ describe("Dispatcher: baseline.remove", () => {
   });
 });
 
+describe("Dispatcher: doctor baseline sources", () => {
+  it("lists a baseline's source with its name and version, a ready baseline source no row names as an orphan only doctor --purge-orphans deletes, and finds a stale baseline", async () => {
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+    driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", "abc");
+    await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: grant.lease.id, name: "checkout" },
+      admin,
+    );
+    const [named] = await driver.listSources();
+    const unnamed = {
+      id: "left-over",
+      kind: "baseline",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+    } as const;
+    driver.setSources([named as NonNullable<typeof named>, unnamed]);
+
+    const listed = await dispatcher.dispatch("doctor.run", {}, admin);
+    expect(listed.findings).toEqual([]);
+    expect(listed.sources).toEqual([
+      {
+        baselineName: "checkout",
+        baselineVersion: 1,
+        kind: "baseline",
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+        platform: "ios",
+        sizeBytes: 3,
+      },
+      {
+        kind: "baseline",
+        model: "iPhone 17 Pro",
+        orphan: true,
+        osVersion: "26.5",
+        platform: "ios",
+      },
+    ]);
+    expect((await driver.listSources()).map((source) => source.id)).toContain("left-over");
+
+    const purged = await dispatcher.dispatch("doctor.run", { purgeOrphans: true }, admin);
+    expect(purged.sources.map((source) => source.orphan)).toEqual([undefined]);
+    expect((await driver.listSources()).map((source) => source.id)).not.toContain("left-over");
+
+    const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-26-5 is not installed";
+    driver.setSources([{ ...(named as NonNullable<typeof named>), staleReason: reason }]);
+    await dispatcher.dispatch("doctor.run", {}, admin);
+    expect(
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "baseline.stale")
+        .map((envelope) => envelope.payload),
+    ).toEqual([{ name: "checkout", reason, version: 1 }]);
+  });
+});
+
 describe("Dispatcher: baseline events", () => {
   it("records baseline.saved, baseline.removed with its reason (nuke --delete-devices removes every baseline, plain nuke keeps them) and baseline.stale, once each, after the change is committed", async () => {
     const { dispatcher, driver, eventBus, registry } = await buildDispatcher({ includeNuke: true });
