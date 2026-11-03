@@ -1463,6 +1463,21 @@ describe("IosSimctlDriver", () => {
         message: expect.stringContaining("No space left on device"),
       });
       expect(emptyDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+
+      const stuckRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: simctl("shutdown", driverData.udid),
+          result: { code: 1, stderr: "Unable to shut down device", stdout: "" },
+        },
+      ]);
+      const stuckDatabase = await memorySourceDatabase();
+      const stuck = await createDriver(stuckRunner, new FakeClock(), filesystem, stuckDatabase);
+      await expect(stuck.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("Unable to shut down device"),
+      });
+      expect(stuckRunner.calls.map((call) => call.args[1])).not.toContain("clone");
+      expect(stuckDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     });
   });
 
