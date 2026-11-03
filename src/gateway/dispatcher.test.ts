@@ -17,7 +17,12 @@ import {
   T0,
   usageRig,
 } from "../history/testing.js";
-import { OPERATIONS, SimlockError, type OperationName } from "../contract/index.js";
+import {
+  type BaselineEntry,
+  OPERATIONS,
+  SimlockError,
+  type OperationName,
+} from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
 import {
   FakeClock,
@@ -1682,25 +1687,44 @@ describe("GatewayDispatcher", () => {
   });
 
   describe("a lease request naming a baseline (#1208)", () => {
-    const PIXEL_CATALOG = catalogFixture([
+    const CATALOG = catalogFixture([
       {
         modelClasses: { "Pixel 9": "phone" } as const,
         models: ["Pixel 9"],
         platform: "android",
         runtimes: ["36"],
       },
+      {
+        modelClasses: { "iPhone 17": "phone" } as const,
+        models: ["iPhone 17"],
+        platform: "ios",
+        runtimes: ["27.0"],
+      },
     ]).platforms;
-    const checkout = {
-      mode: "full" as const,
+    const checkout: BaselineEntry = {
+      mode: "full",
       model: "Pixel 9",
       name: "checkout",
       osVersion: "36",
-      platform: "android" as const,
+      platform: "android",
       savedAt: "2026-11-02T13:10:00Z",
       version: 2,
     };
+    const smoke: BaselineEntry = {
+      ...checkout,
+      mode: "slim",
+      model: "iPhone 17",
+      name: "smoke",
+      osVersion: "27.0",
+      platform: "ios",
+      version: 1,
+    };
+    const stale = (entry: BaselineEntry) => ({
+      ...entry,
+      staleReason: "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+    });
 
-    function fleet(baselinesByWorker: Record<string, readonly (typeof checkout)[]>) {
+    function fleet(baselinesByWorker: Record<string, readonly BaselineEntry[]>) {
       const rig = harness();
       const clients: Record<string, ScriptedWorkerClient> = {};
       for (const [workerId, baselines] of Object.entries(baselinesByWorker)) {
@@ -1711,7 +1735,7 @@ describe("GatewayDispatcher", () => {
         rig.workers.refresh(workerId, {
           baselines: [...baselines],
           capacity: statusFixture().capacity,
-          catalog: PIXEL_CATALOG,
+          catalog: CATALOG,
           devices: [],
           downloads: { policy: "on-request" },
           health: "running",
@@ -1722,20 +1746,104 @@ describe("GatewayDispatcher", () => {
       return { ...rig, clients };
     }
 
-    it("sends a request naming a baseline only to a worker that holds it, fresh", async () => {
-      const { clients, dispatcher } = fleet({ wrk_a: [], wrk_b: [checkout] });
-      clients["wrk_b"]?.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    type Rejected = { readonly code: string; readonly message: string };
+    const cases: readonly [
+      string,
+      Record<string, readonly BaselineEntry[]>,
+      Record<string, unknown>,
+      { readonly grantedBy: string } | { readonly rejected: Rejected },
+    ][] = [
+      [
+        "one worker holds it, another has none",
+        { wrk_a: [], wrk_b: [checkout] },
+        { baseline: "checkout", platform: "android" },
+        { grantedBy: "wrk_b" },
+      ],
+      [
+        "an OS range that holds the baseline's OS",
+        { wrk_a: [], wrk_b: [checkout] },
+        { baseline: "checkout", osVersion: ">=35", platform: "android" },
+        { grantedBy: "wrk_b" },
+      ],
+      [
+        "no worker holds a baseline of the name",
+        { wrk_a: [checkout], wrk_b: [] },
+        { baseline: "nothere", platform: "android" },
+        {
+          rejected: {
+            code: "UNKNOWN_BASELINE",
+            message: 'no worker holds a baseline named "nothere"',
+          },
+        },
+      ],
+      [
+        "every holder differs from the request",
+        { wrk_a: [checkout], wrk_b: [checkout] },
+        { baseline: "checkout", osVersion: "35", platform: "android" },
+        {
+          rejected: {
+            code: "BASELINE_MISMATCH",
+            message: "baseline checkout is Android 36, the request asks for 35",
+          },
+        },
+      ],
+      [
+        "every holder is stale",
+        { wrk_a: [stale(smoke)], wrk_b: [stale(smoke)] },
+        { baseline: "smoke", platform: "ios" },
+        {
+          rejected: {
+            code: "BASELINE_STALE",
+            message:
+              "baseline smoke is stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+          },
+        },
+      ],
+      [
+        "every holder is stale and differs: the mismatch is checked first",
+        { wrk_a: [stale(smoke)] },
+        { baseline: "smoke", mode: "full", platform: "ios" },
+        {
+          rejected: {
+            code: "BASELINE_MISMATCH",
+            message: "baseline smoke is slim, the request asks for full",
+          },
+        },
+      ],
+    ];
 
-      const grant = await dispatcher.dispatch(
-        "lease.request",
-        { baseline: "checkout", noWait: true, platform: "android" },
-        session({ role: "agent" }),
-      );
+    it.each(cases)(
+      "sends a request naming a baseline only to a worker that holds it, fresh: %s",
+      async (_label, baselines, ask, outcome) => {
+        const { clients, dispatcher } = fleet(baselines);
+        for (const client of Object.values(clients)) {
+          client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+        }
 
-      expect(grant.lease.id).toMatch(/^wrk_b\./);
-      expect(clients["wrk_b"]?.lastRequestLeaseInput).toMatchObject({ baseline: "checkout" });
-      expect(clients["wrk_a"]?.lastRequestLeaseInput).toBeUndefined();
-    });
+        const answer = dispatcher.dispatch(
+          "lease.request",
+          { ...ask, noWait: true } as never,
+          session({ role: "agent" }),
+        );
+
+        if ("rejected" in outcome) {
+          await expect(answer).rejects.toMatchObject(outcome.rejected);
+          for (const client of Object.values(clients)) {
+            expect(client.lastRequestLeaseInput).toBeUndefined();
+          }
+          return;
+        }
+        const grant = await answer;
+        expect(grant.lease.id).toMatch(new RegExp(`^${outcome.grantedBy}\\.`));
+        for (const [workerId, client] of Object.entries(clients)) {
+          if (workerId === outcome.grantedBy) {
+            expect(client.lastRequestLeaseInput).toMatchObject({ baseline: ask["baseline"] });
+          } else {
+            expect(client.lastRequestLeaseInput).toBeUndefined();
+          }
+        }
+      },
+    );
   });
 
   describe("lease lifecycle and device.exec (#118)", () => {
