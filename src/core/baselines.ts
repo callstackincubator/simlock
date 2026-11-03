@@ -18,6 +18,18 @@ export interface BaselineSaveResult {
   readonly leaseId: string;
 }
 
+/** why: the lease has ended and no baseline was kept, which the caller must be told apart from a refusal. */
+export class BaselineSaveFailedError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly leaseId: string,
+    readonly reason: string,
+  ) {
+    super(`baseline ${baselineName} was not saved: ${reason}. Lease ${leaseId} has ended.`);
+    this.name = "BaselineSaveFailedError";
+  }
+}
+
 export interface BaselineServiceOptions {
   readonly clock: Clock;
   readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource"> };
@@ -43,12 +55,24 @@ export class BaselineService {
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {
         const device = assertVirtual(released.device);
-        let entry: BaselineEntry | undefined;
-        await this.options.reclaim.retireSaved({ device, lease: released.lease }, async (saved) => {
-          entry = this.#insert(request, device, saved);
-        });
-        if (entry === undefined) throw new Error("A saved baseline was not recorded");
-        return entry;
+        const recorded: { entry?: BaselineEntry } = {};
+        try {
+          await this.options.reclaim.retireSaved(
+            { device, lease: released.lease },
+            async (saved) => {
+              recorded.entry = this.#insert(request, device, saved);
+            },
+          );
+        } catch (error: unknown) {
+          if (recorded.entry !== undefined) throw error;
+          throw new BaselineSaveFailedError(
+            request.name,
+            request.leaseId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        if (recorded.entry === undefined) throw new Error("A saved baseline was not recorded");
+        return recorded.entry;
       });
     await this.#dropOlderVersions(baseline.name, baseline.version);
     return { baseline, leaseId: request.leaseId };

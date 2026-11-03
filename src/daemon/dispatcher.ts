@@ -30,6 +30,7 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  BaselineSaveFailedError,
   type BaselineService,
   type WarmKindForgetter,
   type WarmPoolReader,
@@ -865,12 +866,22 @@ export class Dispatcher {
         `lease ${lease.id} is on a physical device; only a simulator or emulator can be saved as a baseline`,
       );
     }
-    return this.options.baselines.save({
-      leaseId: input.leaseId,
-      name: input.name,
-      ...(input.note === undefined ? {} : { note: input.note }),
-      requesterId: session.principal,
-    });
+    try {
+      return await this.options.baselines.save({
+        leaseId: input.leaseId,
+        name: input.name,
+        ...(input.note === undefined ? {} : { note: input.note }),
+        requesterId: session.principal,
+      });
+    } catch (error: unknown) {
+      if (error instanceof BaselineSaveFailedError) {
+        throw new DispatchError("BASELINE_SAVE_FAILED", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
+      throw error;
+    }
   };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
