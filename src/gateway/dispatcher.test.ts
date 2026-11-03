@@ -1993,6 +1993,118 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("baselines through a gateway (#1208)", () => {
+    const entry = (name: string, overrides: Partial<BaselineEntry> = {}): BaselineEntry => ({
+      mode: "full",
+      model: "Pixel 9",
+      name,
+      osVersion: "36",
+      platform: "android",
+      savedAt: "2026-11-02T13:10:00Z",
+      version: 1,
+      ...overrides,
+    });
+
+    function workersWith(baselinesByWorker: Record<string, BaselineEntry[]>) {
+      const rig = harness();
+      const clients: Record<string, ScriptedWorkerClient> = {};
+      for (const [workerId, baselines] of Object.entries(baselinesByWorker)) {
+        const client = new ScriptedWorkerClient();
+        client.baselines = baselines;
+        clients[workerId] = client;
+        rig.directory.add(workerId, client);
+        rig.workers.connected(workerId, undefined, "0.3.0");
+        rig.workers.refresh(workerId, {
+          baselines,
+          capacity: statusFixture().capacity,
+          health: "running",
+          queueDepth: 0,
+        });
+      }
+      return { ...rig, clients };
+    }
+
+    it("saves a baseline on the worker that holds the lease, with the worker's lease id, and drops the lease from its index", async () => {
+      const { clients, directory, dispatcher, leaseIndex, workers } = workersWith({
+        wrk_a: [],
+        wrk_b: [],
+      });
+      workers.refresh("wrk_a", {
+        leases: [
+          {
+            ...leaseFixture("L7", "dev_1"),
+            ownerId: "alice-principal",
+            requesterId: `${GATEWAY_REQUESTER_PREFIX}alice`,
+          },
+        ],
+      });
+
+      const saved = await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: "wrk_a.L7", name: "checkout", note: "app 4.3" },
+        session(),
+      );
+
+      expect(clients["wrk_a"]?.savedBaselines).toEqual([
+        { leaseId: "L7", name: "checkout", note: "app 4.3" },
+      ]);
+      expect(clients["wrk_b"]?.savedBaselines).toEqual([]);
+      expect(saved).toMatchObject({ baseline: { name: "checkout" }, leaseId: "wrk_a.L7" });
+      expect(leaseIndex.resolve("wrk_a.L7")).toBeUndefined();
+      expect(directory.refreshCalls).toContain("wrk_a");
+    });
+
+    it("lists every worker's baselines, each with its workerId, in worker id order, a disconnected worker's last ones too", async () => {
+      const { dispatcher, workers } = workersWith({
+        wrk_b: [entry("smoke", { platform: "ios" })],
+        wrk_a: [entry("checkout", { version: 2 }), entry("login")],
+        wrk_c: [],
+      });
+      workers.disconnected("wrk_b");
+
+      const listed = await dispatcher.dispatch("baseline.list", {}, session({ role: "agent" }));
+
+      expect(listed.baselines.map(({ name, workerId }) => [workerId, name])).toEqual([
+        ["wrk_a", "checkout"],
+        ["wrk_a", "login"],
+        ["wrk_b", "smoke"],
+      ]);
+    });
+
+    it("removes a baseline from the worker it names without sending the workerId, and refuses an unknown, a disconnected or no worker", async () => {
+      const { clients, directory, dispatcher, workers } = workersWith({
+        wrk_a: [entry("smoke")],
+        wrk_b: [entry("smoke")],
+      });
+
+      await expect(
+        dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_a" }, session()),
+      ).resolves.toMatchObject({ name: "smoke" });
+      expect(clients["wrk_a"]?.removedBaselines).toEqual([{ name: "smoke" }]);
+      expect(directory.refreshCalls).toContain("wrk_a");
+
+      await expect(
+        dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_x" }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_WORKER", message: "Unknown worker: wrk_x" });
+      workers.disconnected("wrk_b");
+      await expect(
+        dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_b" }, session()),
+      ).rejects.toMatchObject({
+        code: "WORKER_NOT_CONNECTED",
+        message: "worker wrk_b is not connected",
+      });
+      await expect(
+        dispatcher.dispatch("baseline.remove", { name: "smoke" }, session()),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message:
+          "baseline.remove on a gateway needs the worker that holds the baseline: pass --worker <id>",
+      });
+      expect(clients["wrk_a"]?.removedBaselines).toHaveLength(1);
+      expect(clients["wrk_b"]?.removedBaselines).toEqual([]);
+    });
+  });
+
   describe("lease lifecycle and device.exec (#118)", () => {
     it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
       const { dispatcher } = harness();

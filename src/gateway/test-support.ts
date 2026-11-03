@@ -9,6 +9,10 @@
 import type { z } from "zod";
 
 import type {
+  BaselineRemoveInput,
+  BaselineRemoveOutput,
+  BaselineSaveInput,
+  BaselineSaveOutput,
   ComponentInstallInput,
   ComponentInstallOutput,
   DaemonUpdateInput,
@@ -281,6 +285,9 @@ export class ScriptedWorkerClient {
   status: StatusGetOutput = statusFixture();
   devices: unknown[] = [];
   catalog: CatalogOutput = catalogFixture([]);
+  /** why: the inputs of the `baseline.save` and `baseline.remove` calls this worker answered. */
+  readonly savedBaselines: BaselineSaveInput[] = [];
+  readonly removedBaselines: BaselineRemoveInput[] = [];
   /** why: what `baseline.list` answers; the view carries it for routing (ADR 0061 §6). */
   baselines: BaselineEntry[] = [];
   /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
@@ -528,6 +535,34 @@ export class ScriptedWorkerClient {
     if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.catalog;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async saveBaseline(input: BaselineSaveInput): Promise<BaselineSaveOutput> {
+    this.calls.push("baseline.save");
+    this.#throwIfFailing();
+    this.savedBaselines.push(input);
+    const baseline = this.baselines.find((entry) => entry.name === input.name);
+    return {
+      baseline: baseline ?? {
+        mode: "full",
+        model: "iPhone 17",
+        name: input.name,
+        osVersion: "26.0",
+        platform: "ios",
+        savedAt: "2026-11-02T13:10:00Z",
+        version: 1,
+      },
+      leaseId: input.leaseId,
+    };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async removeBaseline(input: BaselineRemoveInput): Promise<BaselineRemoveOutput> {
+    this.calls.push("baseline.remove");
+    this.#throwIfFailing();
+    this.removedBaselines.push(input);
+    return { deletedDevices: [], name: input.name, versions: [1] };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
