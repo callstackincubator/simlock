@@ -1927,6 +1927,43 @@ function seedBaselineRows(state: StateDatabase): void {
     .run();
 }
 
+describe("Dispatcher: baselines beside a gateway's worker view", () => {
+  it("answers worker.list with the baselines its own baseline.list gives", async () => {
+    const { dispatcher, driver, registry } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+    driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", "signed in");
+    await dispatcher.dispatch("baseline.save", { leaseId: grant.lease.id, name: "login" }, admin);
+
+    const { baselines } = await dispatcher.dispatch("baseline.list", {}, admin);
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(baselines).toHaveLength(1);
+    expect(workers[0]?.baselines).toEqual(baselines);
+  });
+
+  it("refuses baseline.remove with a workerId, which names a gateway's worker", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "baseline.remove",
+        { name: "login", workerId: "wrk_a" },
+        session({ role: "admin" }),
+      ),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message:
+        "workerId names a gateway's worker, and this daemon is not a gateway; remove without --worker",
+    });
+  });
+});
+
 describe("Dispatcher: baseline.remove", () => {
   it("removes an unused baseline with its source and the idle devices made from it, refuses one a lease uses, an unknown name and an agent", async () => {
     const { dispatcher, driver, engine, registry } = await buildDispatcher({
