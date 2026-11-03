@@ -52,6 +52,7 @@ import {
   type ModelPreferences,
   type CatalogReader,
   type BaselineService,
+  type CurrentBaseline,
   UnknownBaselineError,
   BaselineMismatchError,
   BaselineStaleError,
@@ -148,6 +149,19 @@ export type AcquisitionQueue = Pick<
   | "resolve"
 >;
 
+/** why: the exact spec of a baseline's current version, which a request naming the baseline stands for. */
+function baselineSpec(current: CurrentBaseline): VirtualSpec {
+  return {
+    baseline: { name: current.name, version: current.version },
+    model: current.model,
+    osVersion: current.osVersion,
+    physical: false,
+    platform: current.platform,
+    ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+    ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+  };
+}
+
 export interface LeaseAcquisitionCoordinatorOptions {
   readonly baselines: Pick<BaselineService, "current">;
   readonly catalog: Pick<CatalogReader, "listCatalog">;
@@ -218,6 +232,7 @@ const noTiming: LeaseTiming = {
 export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #activeWorkflows = new Set<Promise<void>>();
   readonly #driving = new WeakSet<AcquisitionWaiter>();
+  readonly #planAgain = new WeakSet<AcquisitionWaiter>();
   #admissionClosed = false;
   // why: apart from #admissionClosed, which also stops the warm pool; an update refuses leases and leaves the pool running.
   #updateHold = false;
@@ -552,15 +567,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       throw new BaselineMismatchError(name, mismatch.field, mismatch.message);
     }
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
-    const spec: VirtualSpec = {
-      baseline: { name, version: current.version },
-      model: current.model,
-      osVersion: current.osVersion,
-      physical: false,
-      platform: current.platform,
-      ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
-      ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
-    };
+    const spec = baselineSpec(current);
     return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
 
@@ -804,6 +811,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.#perform(waiter, action);
     } finally {
       this.#driving.delete(waiter);
+      // why: the wake inside the drive that discarded a superseded copy found the waiter still driving, so nothing else would plan it again.
+      if (this.#planAgain.delete(waiter)) this.#wakeQueue();
     }
   }
 
@@ -1039,6 +1048,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return undefined;
     }
     if (this.#refuseUnderHold(waiter)) return undefined;
+    this.#followBaseline(waiter);
     const head = this.options.queue.head;
     if (head !== undefined && head !== waiter) {
       const reason = "behind-earlier-request";
@@ -1052,6 +1062,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requirement: waiter.requirement,
       classOf: waiter.classOf,
     });
+  }
+
+  /** why: a save between two decisions makes the baseline's newest version the one a waiting request gets (ADR 0061 §5), so each decision plans against the version current at that moment. */
+  #followBaseline(waiter: AcquisitionWaiter): void {
+    const named = waiter.spec?.baseline;
+    if (named === undefined) return;
+    const current = this.options.baselines.current(named.name);
+    if (current === undefined || current.version === named.version) return;
+    waiter.spec = baselineSpec(current);
+    waiter.requirement = exactRequirement(waiter.spec);
   }
 
   async #grant(
@@ -1283,9 +1303,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     kind: GrantingPlanKind,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
+    let superseded = false;
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
+        if (this.#isSuperseded(handoff.device)) {
+          superseded = true;
+          return;
+        }
         await this.#grant(waiter, handoff.device, kind);
       } catch (error: unknown) {
         // why: a grant that failed to store leaves no lease behind (`#commit` mutates memory
@@ -1304,10 +1329,37 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#defer(waiter, "waiting-for-device");
       } finally {
         capacityReservation?.release();
-        handoff.claim.release();
+        if (!superseded) handoff.claim.release();
       }
     });
+    if (superseded) await this.#discardSuperseded(waiter, handoff);
     this.#wakeQueue();
+  }
+
+  /** why: a copy of a version that a save replaced while it was being made is never granted. */
+  #isSuperseded(device: VirtualDevice): boolean {
+    const made = device.spec.baseline;
+    if (made === undefined) return false;
+    return this.options.baselines.current(made.name)?.version !== made.version;
+  }
+
+  /** why: the superseded copy is deleted outside the gate, and its waiter plans again against the newest version. */
+  async #discardSuperseded(waiter: AcquisitionWaiter, handoff: ReadyDeviceHandoff): Promise<void> {
+    // why: the handoff's claim is for a boot, and `dispose` takes its own claim for a cleanup.
+    handoff.claim.release();
+    try {
+      await this.options.lifecycle.dispose(handoff.device, "baseline-replaced", "cleanup");
+    } catch (error: unknown) {
+      this.#logFailure(
+        "deleting a copy of a replaced baseline failed",
+        waiter,
+        handoff.device,
+        "delete",
+        error,
+      );
+    }
+    await this.options.decisions.run(() => this.#defer(waiter, "waiting-for-device"));
+    this.#planAgain.add(waiter);
   }
 
   #enqueue(waiter: AcquisitionWaiter, reason: WaitingReason): void {

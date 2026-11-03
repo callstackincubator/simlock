@@ -210,7 +210,7 @@ async function createHarness(
       registry,
     });
   const provisioner = new DeviceProvisioner({
-    baselines: () => ({ current: () => undefined }),
+    baselines: () => ({ current: () => undefined, hold: () => () => undefined }),
     catalog,
     claims,
     clock,

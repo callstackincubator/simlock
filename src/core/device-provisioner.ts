@@ -26,7 +26,10 @@ export interface DeviceProvisionerRegistry {
 
 export interface DeviceProvisionerOptions {
   /** why: a function, so the provisioner can be built before the store it reads. */
-  readonly baselines: () => { current(name: string): CurrentBaseline | undefined };
+  readonly baselines: () => {
+    current(name: string): CurrentBaseline | undefined;
+    hold(name: string, version: number): () => void;
+  };
   readonly catalog: DriverCatalog;
   readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
@@ -64,7 +67,10 @@ export class DeviceProvisioner {
     options: ProvisionDeviceOptions,
   ): Promise<ReadyDeviceHandoff> {
     const driver = this.options.catalog.get(requested.platform);
-    const made: { spec: VirtualSpec; source?: string } = { spec: requested };
+    const made: { spec: VirtualSpec; source?: string; hold: () => void } = {
+      hold: () => undefined,
+      spec: requested,
+    };
     // Claimed inside the gate, so a removal's own count in the gate sees this device before the
     // driver creates it, or this claim sees the removal's mark and refuses.
     let releaseClaim: () => void;
@@ -80,6 +86,8 @@ export class DeviceProvisioner {
         }
         made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
         made.source = current.sourceId;
+        // why: the hold keeps the version's source from being deleted by a replace until the copy has a record.
+        made.hold = this.options.baselines().hold(current.name, current.version);
         return release;
       });
     } catch (error: unknown) {
@@ -97,6 +105,7 @@ export class DeviceProvisioner {
       driverDevice = await driver.provision(spec, source === undefined ? undefined : { source });
     } catch (error: unknown) {
       releaseClaim();
+      made.hold();
       options.reservation.release();
       throw error;
     }
@@ -124,6 +133,7 @@ export class DeviceProvisioner {
           return registered;
         } finally {
           releaseClaim();
+          made.hold();
         }
       });
     } catch (error: unknown) {

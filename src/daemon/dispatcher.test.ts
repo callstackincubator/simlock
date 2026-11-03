@@ -3291,14 +3291,14 @@ describe("Dispatcher: an operator replaces a baseline", () => {
         },
       });
       const admin = session({ role: "admin" });
-      const settle = async <Result>(pending: Promise<Result>): Promise<Result> => {
+      const settle = async <Result>(pending: Promise<Result>, step = 5_000): Promise<Result> => {
         let done = false;
         void pending.then(
           () => (done = true),
           () => (done = true),
         );
         while (!done) {
-          clock.advance(5_000);
+          clock.advance(step);
           await new Promise((resolve) => setImmediate(resolve));
         }
         return pending;
@@ -3368,12 +3368,10 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       const operator = await lease({ model, requesterId: "operator" });
       const waiting =
         scenario === "waiting" || scenario === "making"
-          ? settle(
-              dispatcher.dispatch(
-                "lease.request",
-                { baseline: "checkout", platform: "ios", requesterId: "agent-2" },
-                session(),
-              ),
+          ? dispatcher.dispatch(
+              "lease.request",
+              { baseline: "checkout", platform: "ios", requesterId: "agent-2" },
+              session(),
             )
           : undefined;
       for (let turn = 0; waiting !== undefined && turn < 10; turn += 1) {
@@ -3381,12 +3379,14 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       }
       driver.writeDeviceFile(driverIdOf(operator.device.id), "data/version.txt", "two");
 
-      await dispatcher.dispatch(
-        "baseline.save",
-        { leaseId: operator.lease.id, name: "checkout" },
-        admin,
+      await settle(
+        dispatcher.dispatch(
+          "baseline.save",
+          { leaseId: operator.lease.id, name: "checkout" },
+          admin,
+        ),
+        100,
       );
-
       if (running !== undefined) {
         expect(stateOf(running.device.id)).toBe("leased");
         expect(versions()).toEqual([1, 2]);
@@ -3396,7 +3396,7 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       const next =
         waiting === undefined
           ? await lease({ baseline: "checkout", requesterId: "agent-3" })
-          : await waiting;
+          : await settle(waiting);
       expect(next.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
       expect(fileOf(next.device.id)).toBe("two");
       if (running !== undefined) {

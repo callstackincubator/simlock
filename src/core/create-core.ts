@@ -262,6 +262,16 @@ export function createCore(options: CoreOptions): Core {
       );
     });
   });
+  const dropReplacedBaselines = (): Promise<void> =>
+    baselines.dropReplaced().catch((error: unknown) => {
+      options.logger?.warn(
+        `could not drop a replaced baseline version: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  // why: the last device of a replaced version leaving, by any path, is what lets its source go.
+  options.eventBus.subscribe("device.deleted", () => {
+    void dropReplacedBaselines();
+  });
   const enrollment = new PhysicalEnrollment({
     claims,
     decisions,
@@ -397,6 +407,7 @@ export function createCore(options: CoreOptions): Core {
       readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
     async converge(read) {
       await startup.converge(read);
+      await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
       warmPool.start();
       capacityObserver.start();

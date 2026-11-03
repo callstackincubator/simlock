@@ -117,6 +117,8 @@ export class BaselineService {
   #queue: Promise<unknown> = Promise.resolve();
   /** why: two overlapping stale checks must not both see the old reason, or one transition emits twice; it is apart from `#queue` so a list does not wait behind a save. */
   #staleQueue: Promise<unknown> = Promise.resolve();
+  /** why: a provision reads a version's source in one gate section and registers its copy in a later one; the count keeps a replace from deleting the source in between. */
+  readonly #holds = new Map<string, number>();
 
   constructor(private readonly options: BaselineServiceOptions) {}
 
@@ -165,8 +167,53 @@ export class BaselineService {
         if (recorded.entry === undefined) throw new Error("A saved baseline was not recorded");
         return recorded.entry;
       });
-    await this.#dropOlderVersions(baseline.name, baseline.version, request.requesterId);
+    await this.#destroyIdleOlderDevices(baseline.name, baseline.version);
+    await this.#dropReplaced(request.requesterId);
     return { baseline, leaseId: request.leaseId };
+  }
+
+  /** why: the version a provision copies stays until its copy has a record, then a replace may drop it. */
+  hold(name: string, version: number): () => void {
+    const key = `${name}\u0000${version}`;
+    this.#holds.set(key, (this.#holds.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.#holds.get(key) ?? 1) - 1;
+      if (left === 0) this.#holds.delete(key);
+      else this.#holds.set(key, left);
+    };
+  }
+
+  /** why: a version that is no longer the newest is dropped once no device record and no provision hold it; every `device.deleted` and the daemon start run it, so the last device of a version leaving by any path drops it. */
+  dropReplaced(): Promise<void> {
+    return this.#serial(() => this.#dropReplaced());
+  }
+
+  /** why: a replace deletes the devices of an older version nobody holds, in the gate and under a claim like a remove, and leaves a leased or busy one to its lease. */
+  async #destroyIdleOlderDevices(name: string, version: number): Promise<void> {
+    const claimed = await this.options.decisions.run(() => {
+      const { leases, virtualDevices } = this.options.registry.snapshot;
+      const taken: { claim: DeviceOperationClaim; device: VirtualDevice }[] = [];
+      for (const device of virtualDevices) {
+        const made = device.spec.baseline;
+        if (made?.name !== name || made.version >= version || device.state === "deleted") continue;
+        if (leases.some((lease) => lease.deviceId === device.id)) continue;
+        const claim = this.options.claims.tryClaim(device.id, "cleanup");
+        if (claim !== undefined) taken.push({ claim, device });
+      }
+      return taken;
+    });
+    for (const { claim, device } of claimed) {
+      try {
+        await this.options.lifecycle.dispose(device, "baseline-replaced", "cleanup", claim);
+      } catch {
+        // why: a device that will not delete goes to quarantine as any failed destroy does, and the save itself has succeeded.
+      } finally {
+        claim.release();
+      }
+    }
   }
 
   /** why: the newest version of a name, with the source a copy is made from; the coordinator and the provisioner read it, each in their own step, so a save between them is seen. */
@@ -393,12 +440,27 @@ export class BaselineService {
     return claimed;
   }
 
-  /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
-  async #dropOlderVersions(name: string, version: number, requesterId: string): Promise<void> {
-    const older = this.options.state.database
-      .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? AND version < ?")
-      .all(name, version);
-    for (const row of older) await this.#deleteVersion({ ...row, name }, "replaced", requesterId);
+  async #dropReplaced(requesterId?: string): Promise<void> {
+    const rows = this.options.state.database
+      .prepare(
+        `SELECT name, version, platform, source_id FROM baselines AS b
+         WHERE version < (SELECT MAX(version) FROM baselines WHERE name = b.name)`,
+      )
+      .all();
+    const { virtualDevices } = this.options.registry.snapshot;
+    for (const row of rows) {
+      const name = String(row.name);
+      const version = Number(row.version);
+      const inUse =
+        this.#holds.has(`${name}\u0000${version}`) ||
+        virtualDevices.some(
+          (device) =>
+            device.state !== "deleted" &&
+            device.spec.baseline?.name === name &&
+            device.spec.baseline.version === version,
+        );
+      if (!inUse) await this.#deleteVersion(row, "replaced", requesterId);
+    }
   }
 
   /** why: the source goes first and the row after, so a failed destroy leaves the row for the next try; the event follows the deleted row (events rule 3). */
