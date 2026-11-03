@@ -99,7 +99,9 @@ Three identities:
   is nothing to show, and absent until the first status read. A status without an update clears `update`.
 - A `starting` worker's view is `health`, `host` and `load` only. Absent, never empty.
 - Full re-read every `WORKER_VIEW_REFRESH_INTERVAL_MS` (30 s); catalog at once on
-  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); status at once on
+  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); baselines (`baseline.list`, read with the
+  catalog) at once on `WORKER_VIEW_BASELINE_EVENTS` (`baseline.saved`, `baseline.removed`,
+  `baseline.stale`); status at once on
   `WORKER_VIEW_UPDATE_EVENTS` (`daemon.update-started`, `daemon.update-failed`).
 
 ## OS ranges and durations

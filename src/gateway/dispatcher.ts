@@ -13,7 +13,8 @@
  *    gateway mints its own credentials, §24), `usage.get` (read from the gateway's own history by
  *    `createUsageReader`), and -- as of #118 -- the lease *lifecycle*
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
- *    through `FleetLeaseCoordinator`.
+ *    through `FleetLeaseCoordinator`, and `baseline.save` (forwarded to the lease's worker),
+ *    `baseline.list` (read from the views) and `baseline.remove` (forwarded to the worker it names).
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`,
  *    `warm.forget` and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
  *    and `component.install` (ADR 0010 §7), which installs on one machine; its message points at
