@@ -14,7 +14,7 @@ export const deviceClassSchema = z.enum([
 ]);
 export type DeviceClass = z.infer<typeof deviceClassSchema>;
 
-const deviceStateSchema = z.enum([
+export const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
   "leased",
@@ -25,7 +25,7 @@ const deviceStateSchema = z.enum([
   "deleted",
 ]);
 
-const absentReasonSchema = z.enum(["locked", "untrusted", "not-present"]);
+export const absentReasonSchema = z.enum(["locked", "untrusted", "not-present"]);
 
 const devicePresenceSchema = z.discriminatedUnion("present", [
   z.object({ present: z.literal(true) }),
@@ -36,7 +36,7 @@ const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
-const physicalClassSchema = z.enum(["phone", "tablet"]);
+export const physicalClassSchema = z.enum(["phone", "tablet"]);
 
 function checkDeviceType(
   device: { readonly physical: boolean; readonly mode?: unknown; readonly class?: unknown },
