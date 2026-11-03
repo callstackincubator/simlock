@@ -104,7 +104,6 @@ export class LeaseReleaseCoordinator
    * same claim, as a normal release workflow: nuke's maintenance waits for it and no other
    * workflow picks the device. The caller sees the save's own outcome.
    */
-  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   async releaseToSave<Result>(
     leaseId: string,
     save: (released: ReleasedLease) => Promise<Result>,
