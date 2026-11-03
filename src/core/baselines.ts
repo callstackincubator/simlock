@@ -1,3 +1,4 @@
+import type { EventBus } from "../bus/index.js";
 import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
@@ -41,6 +42,19 @@ export class UnknownBaselineError extends Error {
   }
 }
 
+function savedPayload(entry: BaselineEntry) {
+  return {
+    mode: entry.mode,
+    model: entry.model,
+    name: entry.name,
+    osVersion: entry.osVersion,
+    platform: entry.platform,
+    version: entry.version,
+    ...(entry.imageTag === undefined ? {} : { imageTag: entry.imageTag }),
+    ...(entry.sizeBytes === undefined ? {} : { sizeBytes: entry.sizeBytes }),
+  };
+}
+
 /** why: a remove would delete a device a lease holds, which no operation may do. */
 export class BaselineInUseError extends Error {
   constructor(
@@ -69,6 +83,7 @@ export interface BaselineServiceOptions {
   };
   readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly decisions: SerializedDecision;
+  readonly eventBus: Pick<EventBus, "emit">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
   readonly reclaim: Pick<ReclaimCoordinator, "retireSaved">;
   readonly registry: { readonly snapshot: Pick<Registry["snapshot"], "leases" | "virtualDevices"> };
@@ -93,6 +108,15 @@ export class BaselineService {
             { device, lease: released.lease },
             async (saved) => {
               recorded.entry = this.#insert(request, device, saved);
+              this.options.eventBus.emit(
+                "baseline.saved",
+                {
+                  ...savedPayload(recorded.entry),
+                  leaseId: request.leaseId,
+                  requesterId: request.requesterId,
+                },
+                "baselines",
+              );
             },
           );
         } catch (error: unknown) {
@@ -106,7 +130,7 @@ export class BaselineService {
         if (recorded.entry === undefined) throw new Error("A saved baseline was not recorded");
         return recorded.entry;
       });
-    await this.#dropOlderVersions(baseline.name, baseline.version);
+    await this.#dropOlderVersions(baseline.name, baseline.version, request.requesterId);
     return { baseline, leaseId: request.leaseId };
   }
 
@@ -142,7 +166,9 @@ export class BaselineService {
   /** why: a baseline is stale when its source's runtime or image changed since the save, and fresh again when it is back; the driver words the reason. */
   async checkStale(): Promise<void> {
     const { database } = this.options.state;
-    const rows = database.prepare("SELECT name, version, platform, source_id FROM baselines").all();
+    const rows = database
+      .prepare("SELECT name, version, platform, source_id, stale_reason FROM baselines")
+      .all();
     const sources = await this.#readSources(rows);
     for (const row of rows) {
       const source = sources.get(String(row.source_id));
@@ -150,6 +176,13 @@ export class BaselineService {
       database
         .prepare("UPDATE baselines SET stale_reason = ? WHERE name = ? AND version = ?")
         .run(source.staleReason ?? null, String(row.name), Number(row.version));
+      if (source.staleReason !== undefined && row.stale_reason === null) {
+        this.options.eventBus.emit(
+          "baseline.stale",
+          { name: String(row.name), reason: source.staleReason, version: Number(row.version) },
+          "baselines",
+        );
+      }
     }
   }
 
@@ -166,10 +199,15 @@ export class BaselineService {
   }
 
   /** why: removes every version of a name, oldest first; the row goes only after its source is destroyed, so a failed destroy leaves the row for the next try. */
-  async remove(request: { readonly name: string }): Promise<BaselineRemoveResult> {
+  async remove(request: {
+    readonly name: string;
+    readonly requesterId: string;
+  }): Promise<BaselineRemoveResult> {
     const { database } = this.options.state;
     const rows = database
-      .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? ORDER BY version")
+      .prepare(
+        "SELECT name, version, platform, source_id FROM baselines WHERE name = ? ORDER BY version",
+      )
       .all(request.name);
     if (rows.length === 0) throw new UnknownBaselineError(request.name);
     const claimed = await this.options.decisions.run(() => this.#claimIdleDevices(request.name));
@@ -183,14 +221,7 @@ export class BaselineService {
       );
       if (deleted !== undefined) deletedDevices.push(device.id);
     }
-    for (const row of rows) {
-      await this.options.drivers
-        .get(String(row.platform) as Platform)
-        .destroySource(String(row.source_id));
-      database
-        .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
-        .run(request.name, Number(row.version));
-    }
+    for (const row of rows) await this.#deleteVersion(row, "operator", request.requesterId);
     return {
       deletedDevices,
       name: request.name,
@@ -221,19 +252,32 @@ export class BaselineService {
   }
 
   /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
-  async #dropOlderVersions(name: string, version: number): Promise<void> {
-    const { database } = this.options.state;
-    const older = database
+  async #dropOlderVersions(name: string, version: number, requesterId: string): Promise<void> {
+    const older = this.options.state.database
       .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? AND version < ?")
       .all(name, version);
-    for (const row of older) {
-      await this.options.drivers
-        .get(String(row.platform) as Platform)
-        .destroySource(String(row.source_id));
-      database
-        .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
-        .run(name, Number(row.version));
-    }
+    for (const row of older) await this.#deleteVersion({ ...row, name }, "replaced", requesterId);
+  }
+
+  /** why: the source goes first and the row after, so a failed destroy leaves the row for the next try; the event follows the deleted row (events rule 3). */
+  async #deleteVersion(
+    row: Record<string, unknown>,
+    reason: "operator" | "nuke" | "replaced",
+    requesterId?: string,
+  ): Promise<void> {
+    const name = String(row.name);
+    const version = Number(row.version);
+    await this.options.drivers
+      .get(String(row.platform) as Platform)
+      .destroySource(String(row.source_id));
+    this.options.state.database
+      .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
+      .run(name, version);
+    this.options.eventBus.emit(
+      "baseline.removed",
+      { name, reason, version, ...(requesterId === undefined ? {} : { requesterId }) },
+      "baselines",
+    );
   }
 
   #insert(

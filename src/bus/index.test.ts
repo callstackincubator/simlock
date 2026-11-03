@@ -71,7 +71,7 @@ const EVENT_NAMES: Record<EventName, true> = {
 const CATALOGS = ["docs/internal/EVENTS.md", "website/src/content/docs/docs/reference/events.mdx"];
 
 // why: the facts whose past tense does not end in "ed"; a new one is a choice, so it is added here.
-const NOT_ED = new Set(["ready", "stopping", "shutdown"]);
+const NOT_ED = new Set(["ready", "stale", "stopping", "shutdown"]);
 
 /** The first-column `` `subject.fact` `` of every catalog table row in an EVENTS.md, sorted. */
 function documentedEventNames(markdown: string): string[] {

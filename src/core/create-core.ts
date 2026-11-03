@@ -246,6 +246,7 @@ export function createCore(options: CoreOptions): Core {
     clock: options.clock,
     decisions,
     drivers,
+    eventBus: options.eventBus,
     leaseSave: () => port("leaseSave"),
     lifecycle: deviceLifecycle,
     reclaim,

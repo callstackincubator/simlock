@@ -894,11 +894,14 @@ export class Dispatcher {
     return { baselines: [...(await this.options.baselines.list())] };
   };
 
-  #baselineRemove: Handler<"baseline.remove"> = async (input) => {
+  #baselineRemove: Handler<"baseline.remove"> = async (input, session) => {
     if (this.options.baselines === undefined)
       throw new DispatchError("INTERNAL", "Baselines are unavailable");
     try {
-      const removed = await this.options.baselines.remove({ name: input.name });
+      const removed = await this.options.baselines.remove({
+        name: input.name,
+        requesterId: session.principal,
+      });
       return {
         deletedDevices: [...removed.deletedDevices],
         name: removed.name,
