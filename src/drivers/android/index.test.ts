@@ -6004,6 +6004,16 @@ describe("AndroidDriver image fit", () => {
         copyHome,
       ]);
       expect(launches.flatMap((call) => call.args)).not.toContain("-wipe-data");
+      const shellRuns = harness.runner.calls.filter(
+        (call) => call.args.includes("sync") || call.args.includes("-p"),
+      );
+      expect(
+        shellRuns.map((call) => [call.args.at(-1), call.options.timeoutMs]),
+        "the seed's sync and power-off are each bounded, so a wedged adbd cannot hold the make",
+      ).toEqual([
+        ["sync", 60_000],
+        ["-p", 60_000],
+      ]);
       expect(ready.address).toBe("emulator-5586");
     });
 
@@ -6171,7 +6181,7 @@ describe("AndroidDriver image fit", () => {
             ...stage.firstBoot,
             stage.sync,
             stage.powerOff,
-            ...stage.secondBoot,
+            ...bootingAt(seedHome, ["-no-snapshot-load"], true),
             { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
           ],
           message: "Android seed seed_two: boot snapshot simlock_boot was not saved",
@@ -6184,7 +6194,7 @@ describe("AndroidDriver image fit", () => {
             ...stage.firstBoot,
             stage.sync,
             stage.powerOff,
-            ...stage.secondBoot,
+            ...bootingAt(seedHome, ["-no-snapshot-load"], true),
             stage.save,
             processResult(binaries.adb, ["-s", serial, "emu", "avd", "snapshot", "list"], "\n"),
             stage.probe,
@@ -6212,11 +6222,15 @@ describe("AndroidDriver image fit", () => {
         await outcome;
 
         if ("killsEmulator" in failing) {
-          const emulator = harness.runner.calls.findIndex((call) => call.args.includes("-avd"));
           expect(
             harness.runner.calls.some((call) => call.args.includes("kill")),
             "the seed's emulator was asked to quit by its path",
           ).toBe(true);
+        }
+        const emulators = harness.runner.calls.flatMap((call, index) =>
+          call.args.includes("-avd") ? [index] : [],
+        );
+        for (const emulator of emulators) {
           let exited = false;
           void harness.runner.handles[emulator]?.wait().then(() => {
             exited = true;

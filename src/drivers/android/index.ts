@@ -139,8 +139,6 @@ const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
-// why: A snapshot load on a loaded machine has hung for 18 minutes (#1047); past this the reclaim gives
-// the load up and takes the shutdown-and-wipe path, so the device's slot comes back.
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -148,21 +146,12 @@ const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
 // why: making a seed is two cold boots, a power-off and a snapshot save.
 const SEED_MAKE_ESTIMATE_MS = 150_000;
-// why: Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
-// (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim commits the device
-// straight back to `ready`, so the driver call is the whole window the device spends
-// `reclaiming`. Held just above the observed maximum.
+// why: the reclaim estimates below price the two strategies `virtualReclaimStrategy` still names; the Android driver
+// reclaims no virtual device (a released one is deleted), so they were measured on an M3 Pro against Pixel 8 / API 35
+// when it did: 2.4-5.1s for the snapshot strategy.
 const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
-// why: Measured at 22.8-42.8s on the same hardware (median 31.7s) -- an order of magnitude above the
-// 3s this first guessed, for a reason worth stating precisely. `reclaim` itself really does
-// only shut the emulator down and defer the wipe to the next `makeReady`; what it does not do
-// is end the device's time in `reclaiming`. `ReclaimCoordinator` commits what `reclaim` returns,
-// so the window is the driver call alone; the figure below still prices the wipe boot a
-// kept-warm reclaim used to land inside it, and is kept high. That window, not the driver call,
-// is what both consumers of this number measure: a waiting requester's ETA, and the state age
-// `Doctor` compares against.
-// The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
-// look stalled, while over-quoting only delays a finding.
+// why: measured on the same hardware at 22.8-42.8s (median 31.7s) for the wipe strategy; the slow
+// branch is the one quoted, so `Doctor` never reads a kept-warm reclaim as stalled.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
 const SEED_AVD_NAME = "simlock";
 const BOOT_SNAPSHOT = "simlock_boot";
@@ -172,6 +161,8 @@ const STALE_REASON_MAX_LENGTH = 300;
 // why: avdmanager create has no limit of its own, so this is the ceiling of one seed make.
 const SEED_MAKE_CEILING_MS = 900_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
+// why: adb shell sync and reboot -p have no limit of their own; a wedged adbd would hold the kind's lock.
+const SEED_SHELL_TIMEOUT_MS = 60_000;
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
@@ -1332,8 +1323,12 @@ export class AndroidDriver implements Driver {
     const booted = await this.#withReservedPort(seed, state);
     try {
       await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
-      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"]);
-      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "reboot", "-p"]);
+      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"], {
+        timeoutMs: SEED_SHELL_TIMEOUT_MS,
+      });
+      await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "reboot", "-p"], {
+        timeoutMs: SEED_SHELL_TIMEOUT_MS,
+      });
       await this.#awaitSeedPowerOff(sourceId, booted, state);
       await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
       await this.#saveBootSnapshot(sourceId, booted);
@@ -2516,7 +2511,7 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * why: The gate before any emulator mutation (`emu kill`, snapshot load): asks the emulator on the
+   * why: The gate before any emulator mutation (`emu kill`): asks the emulator on the
    * serial for its AVD path, bounded by a timeout, on every call -- the answer is never kept,
    * because the serial can change hands between calls. An unreachable, timed-out or unreadable
    * answer is "not ours" (fail closed), so nothing is sent.

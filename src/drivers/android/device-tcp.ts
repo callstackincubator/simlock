@@ -141,7 +141,7 @@ interface HeldPort {
 }
 
 export interface AndroidDeviceTcp extends DeviceTcp {
-  // why: called by the driver's reclaim of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
+  // why: called by the driver's reclaim of a phone and its destroy of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
   release(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<void>;
 }
 
