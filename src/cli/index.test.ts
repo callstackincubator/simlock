@@ -9487,6 +9487,9 @@ describe("simlock list --requests", () => {
       ["full", "android", "platform-running-limit", "full: running limit for Android"],
       ["no-free-physical", "ios", undefined, "every matching device is leased or absent"],
       ["not-chosen", "ios", undefined, "not chosen this time"],
+      ["no-baseline", "ios", undefined, "does not hold the baseline"],
+      ["baseline-stale", "ios", undefined, "baseline is stale"],
+      ["baseline-mismatch", "ios", undefined, "baseline is for another device"],
     ] as const)(
       "prints %s on %s with capacity reason %s as '  wrk_a: %s'",
       async (reason, platform, capacityReason, text) => {
