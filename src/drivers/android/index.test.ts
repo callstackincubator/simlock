@@ -233,20 +233,9 @@ describe("AndroidDriver", () => {
     ) {
       const filesystem = await androidFilesystem({ images });
       await writeSeedFiles(filesystem, defaultSeedHome);
-      const making = makingTheSeed();
-      making[1] = processResult(binaries.avdmanager, [
-        "create",
-        "avd",
-        "-n",
-        "simlock",
-        "-k",
-        /.+/,
-        "-d",
-        "pixel_5",
-      ]);
       const runner = new ScriptedProcessRunner([
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        ...making,
+        ...makingASeedFrom(defaultSeedHome, "pixel_5"),
         ...copyBootExpectations({ copyHome: `${avdDirectory}/simlock_one` }),
         markWriteExpectation("emulator-5586", "device-3"),
       ]);
@@ -4349,16 +4338,16 @@ describe("AndroidDriver console port reservations", () => {
   it("keeps a device's console port across its stops, so a call on its stopped record reaches no other device", async () => {
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
-    // why: Each boot's mark write takes the id after its device's.
+    // why: The first provision makes the seed, which takes the id after its device's; each boot's mark write takes the next.
     const driver = await createDriver(filesystem, host.runner(), {
-      ids: ["one", "mark-1", "two", "mark-2", "mark-3"],
+      ids: ["one", "seed", "mark-1", "two", "mark-2", "mark-3"],
     });
     await driver.resolveSpec(spec);
     const stopped = await driver.makeReady(await driver.provision(spec));
-    await driver.reclaim(stopped, { clean: "full" });
+    await driver.shutdown(stopped);
     const running = await driver.makeReady(await driver.provision(spec));
 
-    await driver.reclaim(stopped, { clean: "full" });
+    await driver.shutdown(stopped);
 
     expect({
       rebooted: (await driver.makeReady(stopped)).address,
@@ -4969,6 +4958,25 @@ function makingTheSeed(
   ];
 }
 
+/** why: making a seed from whichever image and device profile the test's request resolves to; `device` pins the profile when the test cares. */
+function makingASeedFrom(
+  home = defaultSeedHome,
+  device: string | RegExp = /.+/,
+): ScriptedProcessExpectation[] {
+  const making = makingTheSeed(home);
+  making[1] = processResult(binaries.avdmanager, [
+    "create",
+    "avd",
+    "-n",
+    "simlock",
+    "-k",
+    /.+/,
+    "-d",
+    device,
+  ]);
+  return making;
+}
+
 async function writeSeedFiles(
   filesystem: MemoryFilesystem,
   home: string,
@@ -5307,23 +5315,11 @@ async function fitHarness(
     }
   }
   if (options.devicesXml !== undefined) await writeDevicesXml(filesystem, options.devicesXml);
-  const runner = new ListingRunner(options.listing ?? fitDevices, [
-    processResult(binaries.avdmanager, [
-      "create",
-      "avd",
-      "-n",
-      "simlock_one",
-      "-k",
-      /.+/,
-      "-d",
-      /.+/,
-    ]),
-    processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-    processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-  ]);
+  await writeSeedFiles(filesystem, defaultSeedHome);
+  const runner = new ListingRunner(options.listing ?? fitDevices, makingASeedFrom());
   const driver = await createDriver(filesystem, runner, {
     hostAbi: options.hostAbi ?? "arm64-v8a",
-    ids: ["one"],
+    ids: ["one", "two"],
     ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv }),
     ...(options.profiles === undefined
       ? {}
@@ -6769,20 +6765,9 @@ async function libraryHarness(
     await filesystem.writeFileAtomic(bootPropPath, options.seedBootProp);
   }
   const listing = options.listing ?? pixelDevices;
-  const making = makingTheSeed(seedFolder);
-  making[1] = processResult(binaries.avdmanager, [
-    "create",
-    "avd",
-    "-n",
-    "simlock",
-    "-k",
-    /.+/,
-    "-d",
-    /.+/,
-  ]);
   const runner = new ScriptedProcessRunner([
     processResult(binaries.avdmanager, ["list", "device"], listing),
-    ...making,
+    ...makingASeedFrom(seedFolder),
   ]);
   const sources =
     options.profiles === undefined
