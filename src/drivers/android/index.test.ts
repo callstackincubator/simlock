@@ -6445,7 +6445,7 @@ describe("AndroidDriver image fit", () => {
             .filter((call) => call.args.includes("-avd"))
             .map((call) => [call.options.env?.["ANDROID_AVD_HOME"], call.args.at(-1)]);
 
-        const powered = await seedHarness([...leasing(false), ...savingSteps, ...sourceBoot()], {
+        const powered = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
           config,
           ids,
         });
@@ -6486,14 +6486,17 @@ describe("AndroidDriver image fit", () => {
           { clock, config, ids },
         );
         const stuckReady = await stuck.driver.makeReady(await stuck.driver.provision(stuck.spec));
+        // why: the stuck emulator ignores `reboot -p` and `emu kill`; only the deadlines and a SIGKILL end it.
+        stuck.runner.ignoresEmuKill = true;
         const stuckSaving = stuck.driver.saveSource({ ...stuckReady, physical: false as const });
         await vi.waitFor(() =>
-          expect(stuck.runner.calls.some((call) => call.args.includes("reboot"))).toBe(true),
+          expect(stuck.runner.calls.filter((call) => call.args.includes("reboot"))).toHaveLength(2),
         );
         clock.advance(60_000);
         await vi.waitFor(() =>
-          expect(stuck.runner.calls.some((call) => call.args.includes("kill"))).toBe(true),
+          expect(stuck.runner.calls.filter((call) => call.args.includes("kill"))).toHaveLength(2),
         );
+        stuck.runner.ignoresEmuKill = false;
         let stuckDone = false;
         void stuckSaving.then(
           () => (stuckDone = true),
@@ -6509,7 +6512,7 @@ describe("AndroidDriver image fit", () => {
           expect.arrayContaining(["emu avd path", "emu kill"]),
         );
 
-        const restarted = await seedHarness(leasing(false), { config, ids });
+        const restarted = await seedHarness(leasing(true), { config, ids });
         const restartedReady = await restarted.driver.makeReady(
           await restarted.driver.provision(restarted.spec),
         );
@@ -6590,7 +6593,7 @@ describe("AndroidDriver image fit", () => {
             [
               ...makingTheSeed(),
               processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-              ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], false),
+              ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
               markWriteExpectation(serial, "three"),
               ...failing.expectations,
             ],
@@ -6621,7 +6624,8 @@ describe("AndroidDriver image fit", () => {
           const emulators = harness.runner.calls.flatMap((call, index) =>
             call.args.includes("-avd") ? [index] : [],
           );
-          for (const emulator of emulators.slice(2)) {
+          // why: the first two launches make the seed and the third is the device's own, which a failure before `reboot -p` leaves running; what follows is the source's boot.
+          for (const emulator of emulators.slice(3)) {
             let exited = false;
             void harness.runner.handles[emulator]?.wait().then(() => {
               exited = true;
