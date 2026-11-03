@@ -117,22 +117,6 @@ function fields(output: string): string[][] {
     .filter((parts) => parts.length >= 3);
 }
 
-// why: reclaim of a device proved its own leaves none of the lease's rules: every reverse rule of this serial, and this serial's forwards one by one, because `forward --remove-all` would end every device's on the server.
-export async function removeDeviceRules(
-  run: RunAdb,
-  warn: Warn,
-  device: Target,
-  serial: string,
-): Promise<void> {
-  await attempt(run, warn, device, ["reverse", "--remove-all"]);
-  const listed = await attempt(run, warn, device, ["forward", "--list"]);
-  for (const [owner, local] of fields(listed ?? "")) {
-    if (owner === serial && local !== undefined) {
-      await attempt(run, warn, device, ["forward", "--remove", local]);
-    }
-  }
-}
-
 // why: at start only a rule into the loopback range the worker keeps for tunnels is Simlock's own; a holder's other rules are not read as such.
 async function tunnelRules(
   run: RunAdb,

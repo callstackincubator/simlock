@@ -7135,6 +7135,7 @@ describe("AndroidDriver image fit", () => {
       expect(await failingDelete.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
 
       const old = await harness([
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
       ]);
       await old.driver.destroy({
@@ -7142,7 +7143,7 @@ describe("AndroidDriver image fit", () => {
         deviceId: "simlock_old",
         driverData: { avdName: "simlock_old", configHash: "hash", port: 0, serial: "" },
       });
-      expect(old.runner.calls[0]?.options.env).toMatchObject({ ANDROID_AVD_HOME: avdDirectory });
+      expect(old.runner.calls[1]?.options.env).toMatchObject({ ANDROID_AVD_HOME: avdDirectory });
 
       await expect(old.driver.reclaim(own, { clean: "standard" })).rejects.toMatchObject({
         message: "virtual devices are not reclaimed",

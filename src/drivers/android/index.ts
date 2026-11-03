@@ -65,7 +65,7 @@ import {
   type TcpStreamConnector,
   type TimerHandle,
 } from "../../ports/index.js";
-import { createAndroidDeviceTcp, removeDeviceRules, type AndroidDeviceTcp } from "./device-tcp.js";
+import { createAndroidDeviceTcp, type AndroidDeviceTcp } from "./device-tcp.js";
 import { AdbRegistrar } from "./adb-registrar.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import { isAndroidDriverData, type AndroidDriverData } from "./data.js";
@@ -141,7 +141,6 @@ const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 // why: A snapshot load on a loaded machine has hung for 18 minutes (#1047); past this the reclaim gives
 // the load up and takes the shutdown-and-wipe path, so the device's slot comes back.
-const SNAPSHOT_LOAD_TIMEOUT_MS = 60_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -163,7 +162,6 @@ const SNAPSHOT_RECLAIM_ESTIMATE_MS = 6_000;
 // The slow branch is the one to quote: pricing the fast one would make every kept-warm reclaim
 // look stalled, while over-quoting only delays a finding.
 const WIPE_RECLAIM_ESTIMATE_MS = 32_000;
-const CLEAN_BASELINE = "simlock_clean_baseline";
 const SEED_AVD_NAME = "simlock";
 const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
@@ -257,10 +255,8 @@ export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
 }
 
 interface DeviceState {
-  baselineCaptured: boolean;
   handle: ProcessHandle | undefined;
   imageIdentity: string;
-  needsWipe: boolean;
   /**
    * why: The console port this process reserved for the device: taken at its first `prepare` boot
    * here, kept across its stops so no other device is handed the port its record names while
@@ -268,7 +264,6 @@ interface DeviceState {
    * device holds none until it boots again (#52). A recovery boot reserves nothing.
    */
   port: number | undefined;
-  snapshotExpected: boolean;
   /**
    * why: Set for a device this process never provisioned: after a restart an emulator it never
    * started may still run the AVD, so `destroy` looks for one.
@@ -558,7 +553,6 @@ export class AndroidDriver implements Driver {
   readonly #emulatorFlags: readonly string[];
   readonly #baselineLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
-  readonly #warnCleanup: (message: string, detail: Record<string, unknown>) => void;
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #portAllocator: PortAllocator;
   readonly #processRunner: ProcessRunner;
@@ -626,7 +620,6 @@ export class AndroidDriver implements Driver {
             runAdb: (device, args, timeoutMs) => this.#runAdbOn(device, args, timeoutMs),
             warn: (message, detail) => options.logger?.warn(message, detail),
           });
-    this.#warnCleanup = (message, detail) => options.logger?.warn(message, detail);
     // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -1105,12 +1098,9 @@ export class AndroidDriver implements Driver {
       serial: "",
     };
     this.#devices.set(this.#avdFolder(driverData), {
-      baselineCaptured: false,
       handle: undefined,
       imageIdentity: `${image.path}@${image.version}`,
-      needsWipe: false,
       port: undefined,
-      snapshotExpected: false,
     });
 
     return { address: "", deviceId, driverData };
@@ -1181,12 +1171,9 @@ export class AndroidDriver implements Driver {
 
   async #bootSeedTwice(seed: AndroidDriverData): Promise<void> {
     const state: DeviceState = {
-      baselineCaptured: false,
       handle: undefined,
       imageIdentity: seed.imageIdentity ?? "",
-      needsWipe: false,
       port: undefined,
-      snapshotExpected: false,
     };
     const booted = await this.#withReservedPort(seed, state);
     try {
@@ -1274,19 +1261,9 @@ export class AndroidDriver implements Driver {
         return { address: copy.serial, deviceId: device.deviceId, driverData: copy };
       }
 
-      await this.#reconcileBaseline(data, state);
+      // why: a device made before copies has no boot snapshot: it boots once with a wipe and is destroyed at its release.
       const booted = await this.#withReservedPort(data, state);
-      await this.#startEmulator(booted, state, prepareLaunchArgs(state), state.snapshotExpected);
-      state.needsWipe = false;
-      state.snapshotExpected = false;
-      if (!state.baselineCaptured) {
-        await this.#captureBaseline(booted, state);
-        await this.#shutdown(booted, state);
-        await this.#startEmulator(booted, state, ["-snapshot", CLEAN_BASELINE], true);
-      }
-      // why: Covers all three boot paths above (wipe, snapshot restore, cold boot -- including the
-      // baseline-capture restart) with a single call: whichever path ran, the device is ready
-      // now and must be re-marked unconditionally.
+      await this.#startEmulator(booted, state, ["-wipe-data", "-no-snapshot-load"], false);
       await this.#writeMark(booted);
       return { address: booted.serial, deviceId: device.deviceId, driverData: booted };
     });
@@ -1315,78 +1292,18 @@ export class AndroidDriver implements Driver {
     options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     const result = await this.#reclaimDevice(device, options);
-    await this.deviceTcp?.release(
-      isPhysicalDriverDevice(device) ? device : { ...device, physical: false as const },
-    );
+    if (isPhysicalDriverDevice(device)) await this.deviceTcp?.release(device);
     return result;
   }
 
   async #reclaimDevice(
     device: DriverDevice,
-    options: { readonly clean: "standard" | "full" },
+    _options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) {
       return this.#physical.reclaim(device);
     }
-    const data = this.#dataFor(device);
-    return this.#withDeviceLock(this.#avdFolder(data), async () => {
-      const state = this.#stateFor(data);
-
-      if (options.clean === "full") {
-        // why: No mark write: `-wipe-data` is deferred to the next `makeReady`, which writes the mark.
-        await this.#shutdown(data, state);
-        state.needsWipe = true;
-        state.snapshotExpected = false;
-        state.baselineCaptured = false;
-        return { state: "shutdown", strategy: "wipe" };
-      }
-
-      const currentHash = await this.#currentConfigHash(this.#avdFolder(data), state.imageIdentity);
-      const baselineHash = await this.#baselineHash(data.avdName);
-      if (baselineHash !== currentHash) {
-        await this.#shutdown(data, state);
-        await this.#filesystem.rm(`${this.#avdFolder(data)}/snapshots`);
-        state.needsWipe = true;
-        state.snapshotExpected = false;
-        state.baselineCaptured = false;
-        return { state: "shutdown", strategy: "wipe" };
-      }
-
-      // why: After a restart the serial is from the registry and may answer as another device's
-      // emulator (#284), so the snapshot load goes only to an emulator proved to be this one's.
-      if (!(await this.#serialIsOwn(data))) {
-        await this.#shutdown(data, state);
-        state.needsWipe = true;
-        state.baselineCaptured = false;
-        return { state: "shutdown", strategy: "wipe" };
-      }
-      await this.#removeRules({ ...device, physical: false as const }, data.serial);
-      const restored = await this.#loadCleanBaseline(data);
-      if (
-        restored === undefined ||
-        !/OK|loaded|success/i.test(`${restored.stdout}\n${restored.stderr}`)
-      ) {
-        await this.#shutdown(data, state);
-        state.needsWipe = true;
-        state.baselineCaptured = false;
-        return { state: "shutdown", strategy: "wipe" };
-      }
-      await this.#waitForReadiness(data, this.#clock.now());
-      // why: Snapshot restore reverts the mark to its capture-time value and this path skips `makeReady`,
-      // so the mark is written here.
-      await this.#writeMark(data);
-      return { state: "ready", strategy: "snapshot" };
-    });
-  }
-
-  // why: reclaim of an emulator proved its own leaves no rule of the lease; it never throws, so a failed removal does not fail the reclaim.
-  async #removeRules(device: VirtualDriverDevice, serial: string): Promise<void> {
-    await removeDeviceRules(
-      (target, args, timeoutMs) => this.#runAdbOn(target, args, timeoutMs),
-      this.#warnCleanup,
-      device,
-      serial,
-    );
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async #deviceIsOwn(device: VirtualDriverDevice): Promise<boolean> {
@@ -1396,10 +1313,10 @@ export class AndroidDriver implements Driver {
 
   reclaimStrategy(
     device: DriverDevice,
-    options: { readonly clean: "standard" | "full" },
+    _options: { readonly clean: "standard" | "full" },
   ): "snapshot" | "wipe" | "uninstall" {
     if (isPhysicalDriverDevice(device)) return "uninstall";
-    return virtualReclaimStrategy(options.clean);
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -1420,11 +1337,17 @@ export class AndroidDriver implements Driver {
       } else if (state.restored === true) {
         await this.#stopUnownedEmulator(data);
       }
-      await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
+      if (data.avdHome === undefined) {
+        await this.#runOrThrow(this.#sdk.avdmanager, ["delete", "avd", "-n", data.avdName]);
+      } else {
+        await this.#filesystem.rm(data.avdHome);
+      }
       this.#devices.delete(this.#avdFolder(data));
       if (state.port !== undefined) {
         this.#portAllocator.release(state.port);
       }
+      await this.deviceTcp?.release({ ...device, physical: false as const });
+      await this.deviceTcp?.release({ ...device, physical: false as const });
     });
   }
 
@@ -1441,7 +1364,7 @@ export class AndroidDriver implements Driver {
       const answered = await this.#answeredAvdPathOf(serial);
       if (answered === undefined || answered === "") {
         throw new DriverCrashError(
-          `Refusing to delete ${data.avdName}: could not tell which AVD the emulator on ${serial} runs`,
+          `Refusing to delete ${deviceIdOf(data)}: could not tell which AVD the emulator on ${serial} runs`,
         );
       }
       if (await this.#isOwnAvdPath(answered, expected)) serials.push(serial);
@@ -1460,7 +1383,7 @@ export class AndroidDriver implements Driver {
       if (remaining.length === 0) return;
       if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
         throw new DriverCrashError(
-          `Refusing to delete ${data.avdName}: its emulator on ${remaining.join(", ")} did not exit`,
+          `Refusing to delete ${deviceIdOf(data)}: its emulator on ${remaining.join(", ")} did not exit`,
         );
       }
       await this.#delay(PORT_POLL_INTERVAL_MS);
@@ -2411,93 +2334,15 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  /**
-   * why: The one decision both `makeReady` (through `#reconcileBaseline`) and the boot estimate read,
-   * so the figure quoted is the boot `makeReady` then takes: `load` where the baseline is recorded
-   * and matches the current emulator and image, `stale` where it is recorded but no longer matches,
-   * and `none` where a wipe is pending or no baseline is recorded. It changes nothing.
-   */
-  async #baselineVerdict(
-    data: AndroidDriverData,
-    needsWipe: boolean,
-    imageIdentity: string,
-  ): Promise<"load" | "stale" | "none"> {
-    const baselineHash = await this.#baselineHash(data.avdName);
-    if (needsWipe || baselineHash === undefined) return "none";
-    const currentHash = await this.#currentConfigHash(this.#avdFolder(data), imageIdentity);
-    return baselineHash === currentHash ? "load" : "stale";
-  }
-
   async #bootEstimate(
     device: DriverDevice,
     purpose: "prepare" | "recover" | undefined,
     spec: DeviceSpec,
   ): Promise<number> {
     if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
-    const data = this.#dataFor(device);
-    const state = this.#devices.get(this.#avdFolder(data));
-    const verdict = await this.#baselineVerdict(
-      data,
-      state?.needsWipe === true,
-      state?.imageIdentity ?? data.imageIdentity ?? "",
-    );
-    return verdict === "load" ? SNAPSHOT_BOOT_ESTIMATE_MS : COLD_BOOT_ESTIMATE_MS;
-  }
-
-  async #reconcileBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    const verdict = await this.#baselineVerdict(data, state.needsWipe, state.imageIdentity);
-    if (verdict === "none") return;
-    if (verdict === "load") {
-      state.baselineCaptured = true;
-      state.snapshotExpected = true;
-      return;
-    }
-    await this.#filesystem.rm(`${this.#avdFolder(data)}/snapshots`);
-    state.baselineCaptured = false;
-    state.needsWipe = true;
-    state.snapshotExpected = false;
-  }
-
-  async #captureBaseline(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    await this.#runOrThrow(
-      this.#sdk.adb,
-      ["-s", data.serial, "emu", "avd", "snapshot", "save", CLEAN_BASELINE],
-      { timeoutMs: SNAPSHOT_SAVE_TIMEOUT_MS },
-    );
-    const snapshots = await this.#runOrThrow(
-      this.#sdk.adb,
-      ["-s", data.serial, "emu", "avd", "snapshot", "list"],
-      { timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
-    );
-    if (!snapshots.stdout.includes(CLEAN_BASELINE)) {
-      throw new DriverCrashError(`Android clean baseline ${CLEAN_BASELINE} was not validated`);
-    }
-    const configHash = await this.#currentConfigHash(this.#avdFolder(data), state.imageIdentity);
-    await this.#filesystem.writeFileAtomic(
-      this.#baselineMetadataPath(data.avdName),
-      JSON.stringify({ configHash, snapshot: CLEAN_BASELINE }),
-    );
-    state.baselineCaptured = true;
-  }
-
-  async #baselineHash(avdName: string): Promise<string | undefined> {
-    try {
-      const value = JSON.parse(
-        await this.#filesystem.readFile(this.#baselineMetadataPath(avdName)),
-      ) as {
-        readonly configHash?: unknown;
-        readonly snapshot?: unknown;
-      };
-      return value.snapshot === CLEAN_BASELINE && typeof value.configHash === "string"
-        ? value.configHash
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  #baselineMetadataPath(avdName: string): string {
-    return `${this.#deviceRoot}/${avdName}.avd/simlock-clean-baseline.json`;
+    return this.#dataFor(device).avdHome === undefined
+      ? COLD_BOOT_ESTIMATE_MS
+      : SNAPSHOT_BOOT_ESTIMATE_MS;
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
@@ -2518,21 +2363,6 @@ export class AndroidDriver implements Driver {
       await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
     }
     state.handle = undefined;
-  }
-
-  async #loadCleanBaseline(data: AndroidDriverData): Promise<ProcessResult | undefined> {
-    const handle = this.#processRunner.spawn(
-      this.#sdk.adb,
-      ["-s", data.serial, "emu", "avd", "snapshot", "load", CLEAN_BASELINE],
-      { env: this.#env() },
-    );
-    if (!(await this.#waitForExit(handle, SNAPSHOT_LOAD_TIMEOUT_MS))) {
-      handle.kill("SIGKILL");
-      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
-      return undefined;
-    }
-    const result = await handle.wait();
-    return result.code === 0 ? result : undefined;
   }
 
   async #waitForExit(handle: ProcessHandle, timeoutMs: number): Promise<boolean> {
@@ -2589,13 +2419,10 @@ export class AndroidDriver implements Driver {
       return existing;
     }
     const restored: DeviceState = {
-      baselineCaptured: false,
       handle: undefined,
       imageIdentity: data.imageIdentity ?? "",
-      needsWipe: false,
       port: undefined,
       restored: true,
-      snapshotExpected: false,
     };
     this.#devices.set(this.#avdFolder(data), restored);
     return restored;
@@ -2860,6 +2687,10 @@ function answeredAvdPath(stdout: string): string {
   return (stdout.split("\n")[0] ?? "").trim().replace(/(?<=.)\/+$/, "");
 }
 
+function deviceIdOf(data: AndroidDriverData): string {
+  return data.avdHome === undefined ? data.avdName : basename(data.avdHome);
+}
+
 function serialFor(port: number): string {
   return `emulator-${port}`;
 }
@@ -3007,13 +2838,6 @@ function baselineLaunchInputs(
     return [];
   }
   return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
-}
-
-function prepareLaunchArgs(state: DeviceState): readonly string[] {
-  if (state.needsWipe) {
-    return ["-wipe-data", "-no-snapshot-load"];
-  }
-  return state.snapshotExpected ? ["-snapshot", CLEAN_BASELINE] : ["-no-snapshot-load"];
 }
 
 function stableHash(parts: readonly string[]): string {
