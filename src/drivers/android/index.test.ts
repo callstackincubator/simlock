@@ -7341,6 +7341,28 @@ describe("AndroidDriver image fit", () => {
       expect(await harness.filesystem.exists(seedHome)).toBe(true);
     });
 
+    it("makes one seed when two plain leases of one kind are provisioned at once", async () => {
+      const madeHome = `${sources}/seed_three`;
+      const harness = await seedHarness([
+        ...makingTheSeed(madeHome),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      await writeSeedFiles(harness.filesystem, madeHome);
+
+      const [first, second] = await Promise.all([
+        harness.driver.provision(harness.spec),
+        harness.driver.provision(harness.spec),
+      ]);
+
+      expect(harness.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
+      expect([first.deviceId, second.deviceId]).toEqual(["simlock_one", "simlock_two"]);
+      await expect(
+        harness.filesystem.exists(`${avdDirectory}/simlock_two/simlock.avd`),
+      ).resolves.toBe(true);
+      await expect(harness.driver.listSources()).resolves.toHaveLength(1);
+    });
+
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
       const serial = "emulator-5586";
       const attached = `List of devices attached\n${serial}\tdevice\n`;
