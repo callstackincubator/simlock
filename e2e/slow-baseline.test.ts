@@ -75,7 +75,10 @@ describe.skipIf(process.platform !== "darwin")(
         const sourcesSets = [join(deviceSet, "sources"), join(env.home, "devices", "ios-sources")];
         const sourcesSet = sourcesSets.find((candidate) => existsSync(candidate));
         expect(sourcesSet, "no sources set exists after a save").toBeDefined();
-        const inSources = await setDevices(sourcesSet as string);
+        // why: the sources set also holds the seed the next device is copied from; the baseline's clone is the one named `simlock-baseline-<id>`.
+        const inSources = (await setDevices(sourcesSet as string)).filter((device) =>
+          device.name.startsWith("simlock-baseline-"),
+        );
         expect(inSources).toHaveLength(1);
         const source = inSources[0];
         const inDeviceSet = await setDevices(iosDeviceSet(env.home));
