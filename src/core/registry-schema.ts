@@ -115,8 +115,13 @@ CREATE TABLE component_receipt (
 ) STRICT;
 `;
 
+const REGISTRY_V2 = `
+ALTER TABLE devices ADD COLUMN baseline_name TEXT;
+ALTER TABLE devices ADD COLUMN baseline_version INTEGER;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1],
+  migrations: [REGISTRY_V1, REGISTRY_V2],
   name: "registry",
-  version: 1,
+  version: 2,
 };

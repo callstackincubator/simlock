@@ -260,6 +260,8 @@ async function buildDispatcher(
     readonly extraDrivers?: readonly FakeDriver[];
     readonly engine?: Pick<Parameters<typeof createTestEngine>[0], "defaultModes">;
     readonly physicalDevices?: readonly SeededPhysicalDevice[];
+    /** why: rows a test writes to `state.db` before the registry loads. */
+    readonly seedState?: (state: StateDatabase) => void;
     readonly presence?: (driverDeviceId: string) => LatestPresence | undefined;
     readonly capabilitySources?: DispatcherOptions["capabilitySources"];
     readonly load?: DispatcherOptions["load"];
@@ -271,6 +273,7 @@ async function buildDispatcher(
   const filesystem = new MemoryFilesystem();
   const state = await openTestState();
   seedPhysicalDevices(state, overrides.physicalDevices ?? []);
+  overrides.seedState?.(state);
   const registry = await loadTestRegistry({
     clock,
     eventBus,
@@ -1646,22 +1649,69 @@ describe("Dispatcher: baseline.list", () => {
   });
 });
 
-describe("Dispatcher: baseline.remove", () => {
-  it("removes every version of an unused baseline with its source, and refuses an unknown name and an agent", async () => {
-    const { dispatcher, driver } = await buildDispatcher();
-    const admin = session({ role: "admin" });
-    const grant = await dispatcher.dispatch(
-      "lease.request",
-      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
-      session(),
-    );
-    await dispatcher.dispatch("baseline.save", { leaseId: grant.lease.id, name: "login" }, admin);
+/** why: #1207 writes a device's baseline at provision; until then a test writes the registry rows a remove reads. */
+function seedBaselineRows(state: StateDatabase): void {
+  const { database } = state;
+  const spec = ["ios", "iPhone 17 Pro", "26.5", "full"];
+  for (const [name, sourceId] of [
+    ["login", "src-login"],
+    ["checkout", "src-checkout"],
+    ["busy", "src-busy"],
+  ] as const) {
+    database
+      .prepare(
+        "INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id) VALUES (?, 1, ?, ?, ?, ?, '2026-11-02T13:40:00.000Z', ?)",
+      )
+      .run(name, ...spec, sourceId);
+  }
+  for (const [id, fakeId, deviceState, baseline] of [
+    ["dev_idle", "fake-ios-1", "shutdown", "checkout"],
+    ["dev_leased", "fake-ios-2", "leased", "busy"],
+  ] as const) {
+    database
+      .prepare(
+        "INSERT INTO devices (id, platform, physical, driver_device_id, state, model, os_version, mode, created_at, baseline_name, baseline_version) VALUES (?, 'ios', 0, ?, ?, 'iPhone 17 Pro', '26.5', 'full', 1, ?, 1)",
+      )
+      .run(id, fakeId, deviceState, baseline);
+    database
+      .prepare("INSERT INTO fake_device_data (device_id, fake_device_id) VALUES (?, ?)")
+      .run(id, fakeId);
+  }
+  database
+    .prepare(
+      "INSERT INTO leases (id, device_id, requester_id, owner_id, granted_at, ttl_ms, ttl_deadline, last_renewed_at, id_chosen_by_requester) VALUES ('lse_busy', 'dev_leased', 'tok_a', 'tok_a', 1, 3600000, 3600001, 1, 0)",
+    )
+    .run();
+}
 
+describe("Dispatcher: baseline.remove", () => {
+  it("removes an unused baseline with its source and the idle devices made from it, refuses one a lease uses, an unknown name and an agent", async () => {
+    const { dispatcher, driver, registry } = await buildDispatcher({ seedState: seedBaselineRows });
+    const spec = {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      physical: false,
+      platform: "ios",
+    } as const;
+    await driver.provision(spec);
+    await driver.provision(spec);
+    driver.setSources(
+      ["login", "checkout", "busy"].map((name) => ({
+        id: `src-${name}`,
+        kind: "baseline" as const,
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+      })),
+    );
+    const admin = session({ role: "admin" });
     const refused = async (name: string, caller: DispatchSession): Promise<unknown> =>
       dispatcher.dispatch("baseline.remove", { name }, caller).then(
         () => undefined,
         (rejected: unknown) => rejected,
       );
+    const listed = async (): Promise<string[]> =>
+      (await dispatcher.dispatch("baseline.list", {}, admin)).baselines.map(({ name }) => name);
+
     expect(await refused("login", session({ role: "agent" }))).toMatchObject({
       code: "FORBIDDEN",
     });
@@ -1670,13 +1720,30 @@ describe("Dispatcher: baseline.remove", () => {
       details: { name: "nothere" },
       message: 'no baseline named "nothere" on this worker',
     });
-    expect((await dispatcher.dispatch("baseline.list", {}, admin)).baselines).toHaveLength(1);
+    expect(await refused("busy", admin)).toMatchObject({
+      code: "BASELINE_IN_USE",
+      details: { leaseId: "lse_busy", name: "busy" },
+      message: "baseline busy is in use by lease lse_busy",
+    });
+    expect(await listed()).toEqual(["busy", "checkout", "login"]);
 
-    const removed = await dispatcher.dispatch("baseline.remove", { name: "login" }, admin);
+    expect(await dispatcher.dispatch("baseline.remove", { name: "login" }, admin)).toEqual({
+      deletedDevices: [],
+      name: "login",
+      versions: [1],
+    });
+    expect(await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin)).toEqual({
+      deletedDevices: ["dev_idle"],
+      name: "checkout",
+      versions: [1],
+    });
 
-    expect(removed).toEqual({ deletedDevices: [], name: "login", versions: [1] });
-    expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
-    expect(await driver.listSources()).toEqual([]);
+    expect(await listed()).toEqual(["busy"]);
+    expect((await driver.listSources()).map((source) => source.id)).toEqual(["src-busy"]);
+    expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toEqual([
+      ["dev_idle", "deleted"],
+      ["dev_leased", "leased"],
+    ]);
   });
 });
 
