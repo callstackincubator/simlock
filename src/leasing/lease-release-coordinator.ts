@@ -99,6 +99,34 @@ export class LeaseReleaseCoordinator
     await this.#runNormal(() => this.#release(leaseId, reason, { reclaim: "background" }));
   }
 
+  /**
+   * why: ends the lease like an explicit release, but runs `save` in the reclaim's place, under the
+   * same claim, as a normal release workflow: nuke's maintenance waits for it and no other
+   * workflow picks the device. The caller sees the save's own outcome.
+   */
+  async releaseToSave<Result>(
+    leaseId: string,
+    save: (released: ReleasedLease) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runNormal(async () => {
+      const released = await this.options.decisions.run(() =>
+        this.options.lifecycle.beginRelease(
+          leaseId,
+          "explicit",
+          this.#hasParticipants ? { deferReclaim: true } : {},
+        ),
+      );
+      const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
+      try {
+        await this.#callParticipants(released, "explicit", true)?.done;
+        return await save(released);
+      } finally {
+        claim?.release();
+        this.options.notifyAvailability();
+      }
+    });
+  }
+
   async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
     return this.#runNormal(() => this.#releaseAll(reason, "background"));
   }

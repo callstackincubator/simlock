@@ -30,7 +30,7 @@ import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from 
 import { PhysicalEnrollment } from "./physical-enrollment.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
-import type { Registry } from "./registry.js";
+import type { Registry, ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { stableError } from "./stable-error.js";
@@ -80,6 +80,13 @@ export interface CorePorts {
     readonly leases: LeaseMaintenance;
   };
   readonly leaseExpirer: LeaseExpirer;
+  /** why: ends a lease for a baseline save; core never imports leasing, so leasing supplies the verb. */
+  readonly leaseSave: {
+    releaseToSave<Result>(
+      leaseId: string,
+      save: (released: ReleasedLease) => Promise<Result>,
+    ): Promise<Result>;
+  };
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
@@ -234,6 +241,12 @@ export function createCore(options: CoreOptions): Core {
     quarantine,
     registry,
   });
+  const baselines = new BaselineService({
+    clock: options.clock,
+    leaseSave: () => port("leaseSave"),
+    reclaim,
+    state: options.state,
+  });
   const enrollment = new PhysicalEnrollment({
     claims,
     decisions,
@@ -345,7 +358,7 @@ export function createCore(options: CoreOptions): Core {
     capacityReader,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
-    baselines: new BaselineService(),
+    baselines,
     catalog: drivers,
     claims,
     claimReader: claims,

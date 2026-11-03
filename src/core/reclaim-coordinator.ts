@@ -19,6 +19,11 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 
+export interface SavedSource {
+  readonly sourceId: string;
+  readonly sizeBytes?: number;
+}
+
 export interface ReclaimDriverCatalog {
   get(platform: Platform): Driver;
 }
@@ -248,6 +253,52 @@ export class ReclaimCoordinator {
     return wipe;
   }
 
+  /**
+   * why: the spent path with `saveSource` in place of `shutdown`: the driver keeps a copy of the
+   * device and shuts it down itself. `afterSave` commits the baseline before the device is
+   * destroyed, so a destroy that fails leaves a saved baseline and a quarantined device, never the reverse.
+   */
+  async retireSaved(
+    released: { readonly device: VirtualDevice; readonly lease: LeaseRecord },
+    afterSave: (saved: SavedSource) => Promise<void>,
+  ): Promise<SavedSource> {
+    const { device, lease } = released;
+    const driver = this.options.drivers.get(device.spec.platform);
+    const startedAt = this.options.clock.now();
+    let saved: SavedSource;
+    try {
+      saved = await driver.saveSource(toDriverDevice(device));
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(
+        device.id,
+        lease.id,
+        startedAt,
+        "delete",
+        "shutdown-failed",
+        error,
+      );
+      throw error;
+    }
+    const shutdown = await this.options.decisions.run(async () =>
+      assertVirtual(await this.options.registry.completeReclaimWithoutPurge(device.id)),
+    );
+    this.options.notifyAvailability();
+    await afterSave(saved);
+    try {
+      await this.#deleteSpent(shutdown, "baseline-save");
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(
+        device.id,
+        lease.id,
+        startedAt,
+        "delete",
+        "delete-failed",
+        error,
+      );
+    }
+    return saved;
+  }
+
   async deleteSpent(deviceId: string): Promise<boolean> {
     const device = await this.options.decisions.run(async () => {
       const current = this.#unleasedDevice(deviceId, "shutdown");
@@ -297,13 +348,13 @@ export class ReclaimCoordinator {
   }
 
   /** Destroys a spent device and commits `shutdown -> deleted`, if it is still that device. */
-  async #deleteSpent(device: VirtualDevice): Promise<boolean> {
+  async #deleteSpent(device: VirtualDevice, initiator = "lease-end"): Promise<boolean> {
     await this.options.drivers.get(device.spec.platform).destroy(toDriverDevice(device));
     const deleted = await this.options.decisions.run(async () => {
       if (this.#unleasedDevice(device.id, "shutdown") === undefined) return false;
       await this.options.registry.transitionDevice(device.id, "deleted", {
         event: "device.deleted",
-        payload: { deviceId: device.id, initiator: "lease-end" },
+        payload: { deviceId: device.id, initiator },
       });
       return true;
     });

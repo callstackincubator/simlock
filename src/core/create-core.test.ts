@@ -137,6 +137,9 @@ function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
         },
       },
     },
+    leaseSave: {
+      releaseToSave: async (_leaseId, save) => save(await Promise.reject(new Error("unused"))),
+    },
     notifyAvailability: () => void order.push("notifyAvailability"),
     warmPoolDemand: {
       maintenanceActive: false,

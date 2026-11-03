@@ -1,4 +1,9 @@
 import type { BaselineEntry } from "../contract/index.js";
+import type { Clock } from "../ports/index.js";
+import type { StateDatabase } from "../state/index.js";
+import { assertVirtual } from "./domain.js";
+import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
+import type { ReleasedLease } from "./registry.js";
 
 export interface BaselineSaveRequest {
   readonly leaseId: string;
@@ -12,19 +17,81 @@ export interface BaselineSaveResult {
   readonly leaseId: string;
 }
 
+export interface BaselineServiceOptions {
+  readonly clock: Clock;
+  readonly leaseSave: () => {
+    releaseToSave<Result>(
+      leaseId: string,
+      save: (released: ReleasedLease) => Promise<Result>,
+    ): Promise<Result>;
+  };
+  readonly reclaim: Pick<ReclaimCoordinator, "retireSaved">;
+  readonly state: StateDatabase;
+}
+
+/**
+ * why: a baseline is a named source an operator saved from a held lease (ADR 0061 §4); the
+ * `baselines` table holds the name, version and spec, and the driver holds the source itself.
+ */
 export class BaselineService {
-  async save(_request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+  constructor(private readonly options: BaselineServiceOptions) {}
+
+  async save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+    const baseline = await this.options
+      .leaseSave()
+      .releaseToSave(request.leaseId, async (released) => {
+        const device = assertVirtual(released.device);
+        let entry: BaselineEntry | undefined;
+        await this.options.reclaim.retireSaved({ device, lease: released.lease }, async (saved) => {
+          entry = this.#insert(request, device, saved);
+        });
+        if (entry === undefined) throw new Error("A saved baseline was not recorded");
+        return entry;
+      });
+    return { baseline, leaseId: request.leaseId };
+  }
+
+  #insert(
+    request: BaselineSaveRequest,
+    device: ReturnType<typeof assertVirtual>,
+    saved: SavedSource,
+  ): BaselineEntry {
+    const { database } = this.options.state;
+    const next = database
+      .prepare("SELECT COALESCE(MAX(version), 0) + 1 AS version FROM baselines WHERE name = ?")
+      .get(request.name);
+    const version = Number(next?.version);
+    const savedAt = new Date(this.options.clock.now()).toISOString();
+    const { imageTag } = device.spec;
+    database
+      .prepare(
+        `INSERT INTO baselines
+           (name, version, platform, model, os_version, mode, image_tag, note, saved_at, source_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        request.name,
+        version,
+        device.spec.platform,
+        device.spec.model,
+        device.spec.osVersion,
+        device.mode,
+        imageTag ?? null,
+        request.note ?? null,
+        savedAt,
+        saved.sourceId,
+      );
     return {
-      baseline: {
-        mode: "full",
-        model: "",
-        name: "unsaved",
-        osVersion: "",
-        platform: "ios",
-        savedAt: "",
-        version: 1,
-      },
-      leaseId: "unsaved",
+      mode: device.mode,
+      model: device.spec.model,
+      name: request.name,
+      osVersion: device.spec.osVersion,
+      platform: device.spec.platform,
+      savedAt,
+      version,
+      ...(imageTag === undefined ? {} : { imageTag }),
+      ...(request.note === undefined ? {} : { note: request.note }),
+      ...(saved.sizeBytes === undefined ? {} : { sizeBytes: saved.sizeBytes }),
     };
   }
 }

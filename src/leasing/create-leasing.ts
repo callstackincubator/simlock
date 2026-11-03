@@ -233,6 +233,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
         },
       },
       leaseMaintenance: { acquisition, leases: releaseCoordinator },
+      leaseSave: releaseCoordinator,
       notifyAvailability: () => acquisition.kick(),
       physicalDeviceReady: (deviceId) => physicalDeviceWatcher.reset(deviceId),
       warmPoolDemand: {
