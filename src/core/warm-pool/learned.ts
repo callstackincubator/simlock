@@ -23,10 +23,38 @@ CREATE TABLE warm_kind_leases (
 ) STRICT;
 `;
 
+// why: the unique key gains the baseline name, which SQLite can only do by rebuilding the table; `id` is kept, and the lease rows are set aside while the old table is dropped, since dropping a parent with children breaks the foreign key.
+const WARM_POOL_V2 = `
+CREATE TABLE warm_kinds_next (
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL,
+  model TEXT NOT NULL,
+  os_version TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  image_tag TEXT NOT NULL,
+  baseline TEXT NOT NULL DEFAULT '',
+  last_leased_at INTEGER NOT NULL,
+  UNIQUE (platform, model, os_version, mode, image_tag, baseline)
+) STRICT;
+
+INSERT INTO warm_kinds_next (id, platform, model, os_version, mode, image_tag, last_leased_at)
+  SELECT id, platform, model, os_version, mode, image_tag, last_leased_at FROM warm_kinds;
+
+CREATE TEMP TABLE warm_kind_leases_kept AS SELECT * FROM warm_kind_leases;
+DELETE FROM warm_kind_leases;
+
+DROP TABLE warm_kinds;
+
+ALTER TABLE warm_kinds_next RENAME TO warm_kinds;
+
+INSERT INTO warm_kind_leases SELECT * FROM warm_kind_leases_kept;
+DROP TABLE warm_kind_leases_kept;
+`;
+
 export const warmPoolOwner: SqliteSchemaOwner = {
-  migrations: [WARM_POOL_V1],
+  migrations: [WARM_POOL_V1, WARM_POOL_V2],
   name: "warm-pool",
-  version: 1,
+  version: 2,
 };
 
 const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -54,9 +82,9 @@ export class LearnedKinds {
       const database = this.#state.database;
       const row = database
         .prepare(
-          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, last_leased_at)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT (platform, model, os_version, mode, image_tag)
+          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
            DO UPDATE SET last_leased_at = excluded.last_leased_at
            RETURNING id`,
         )
@@ -66,6 +94,7 @@ export class LearnedKinds {
           spec.osVersion,
           spec.mode ?? "full",
           spec.imageTag ?? "",
+          spec.baseline?.name ?? "",
           at,
         );
       database
@@ -115,7 +144,7 @@ export class LearnedKinds {
     return this.#state.transaction(() => {
       const forgotten = this.#state.database
         .prepare(
-          "SELECT platform, model, os_version, mode, image_tag FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+          "SELECT platform, model, os_version, mode, image_tag, baseline FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
         )
         .all()
         .map(specOf)
@@ -127,13 +156,15 @@ export class LearnedKinds {
 
   #delete(spec: VirtualSpec): void {
     const database = this.#state.database;
-    const where = "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ?";
+    const where =
+      "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ? AND baseline = ?";
     const key = [
       spec.platform,
       spec.model,
       spec.osVersion,
       spec.mode ?? "full",
       spec.imageTag ?? "",
+      spec.baseline?.name ?? "",
     ];
     database
       .prepare(
@@ -155,7 +186,7 @@ export class LearnedKinds {
     const windowStart = now - LEARNED_WINDOW_MS;
     return database
       .prepare(
-        "SELECT id, platform, model, os_version, mode, image_tag, last_leased_at FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+        "SELECT id, platform, model, os_version, mode, image_tag, baseline, last_leased_at FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
       )
       .all()
       .map((row) => {
@@ -227,5 +258,7 @@ function specOf(row: Record<string, unknown>): VirtualSpec {
     platform: String(row.platform) as Platform,
     ...(row.mode === "slim" ? { mode: "slim" as const } : {}),
     ...(row.image_tag === "" ? {} : { imageTag: String(row.image_tag) }),
+    // why: the version is the baseline's current one, which the converger reads at each pass; a learned kind stores only the name.
+    ...(row.baseline === "" ? {} : { baseline: { name: String(row.baseline), version: 0 } }),
   };
 }
