@@ -253,6 +253,14 @@ export function createCore(options: CoreOptions): Core {
     registry,
     state: options.state,
   });
+  // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
+  options.eventBus.subscribe("component.removed", () => {
+    baselines.checkStale().catch((error: unknown) => {
+      options.logger?.warn(
+        `could not check baselines after a component was removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  });
   const enrollment = new PhysicalEnrollment({
     claims,
     decisions,
