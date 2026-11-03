@@ -245,6 +245,7 @@ describe("createWorkerStream", () => {
 
     const relays: string[] = [];
     const gateway = createGatewayStream({
+      clock: new FakeClock(),
       fleet: {
         knowsWorker: () => true,
         relay: async (workerId) => {
@@ -285,6 +286,7 @@ describe("createWorkerStream", () => {
     };
     const relays: { workerId: string; url: string; tenant: string }[] = [];
     const gateway = createGatewayStream({
+      clock: new FakeClock(),
       fleet: {
         knowsWorker: (workerId) => workerId in answers,
         relay: async (workerId, call) => {

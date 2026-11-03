@@ -45,6 +45,7 @@ export function createStreamLeaseHandler(options: StreamServiceOptions): StreamL
         ...(lease.workerId === undefined ? {} : { workerId: lease.workerId }),
         ...(lease.workerLeaseId === undefined ? {} : { workerLeaseId: lease.workerLeaseId }),
       },
+      identity.expiresAt,
     );
 }
 
@@ -59,6 +60,7 @@ export function createStreamMount(options: StreamServiceOptions): StreamMount {
           role: identity.role === "operator" ? "operator" : "agent",
         },
         streamTargetOf(new URL(request.url).pathname),
+        identity.expiresAt,
       ),
   };
 }
