@@ -16,6 +16,8 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
+import type { ProcessRunner } from "./process-runner.js";
+
 export interface FileStat {
   readonly kind: "file" | "directory";
   readonly size: number;
@@ -121,7 +123,14 @@ async function createDirectory(directory: string, mode: number): Promise<boolean
   }
 }
 
+export interface NodeFilesystemOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly processRunner?: ProcessRunner;
+}
+
 export class NodeFilesystem implements Filesystem {
+  constructor(_options: NodeFilesystemOptions = {}) {}
+
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
   }
