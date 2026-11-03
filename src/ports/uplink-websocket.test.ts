@@ -29,6 +29,7 @@ import type {
 } from "./uplink.js";
 import { UplinkError } from "./uplink.js";
 import {
+  UPLINK_MAX_MESSAGE_BYTES,
   UPLINK_PING_INTERVAL_MS,
   WebSocketUplinkConnector,
   WebSocketUplinkListenerFactory,
@@ -254,6 +255,24 @@ describe("WebSocketUplinkConnection binary messages", () => {
     await worker.writeBinary(new Uint8Array([4, 5, 6]));
 
     await vi.waitFor(() => expect(received).toEqual([[4, 5, 6]]));
+  });
+
+  it("accepts a message of the maximum payload and closes the connection on one a byte over", async () => {
+    const { accepted, url } = await startAcceptingGateway();
+    const worker = await new WebSocketUplinkConnector().connect(dialOptions(url));
+    const gateway = await accepted;
+    const sizes: number[] = [];
+    gateway.onBinary((bytes) => sizes.push(bytes.length));
+    const closed = vi.fn();
+    gateway.onClose(closed);
+
+    await worker.writeBinary(new Uint8Array(UPLINK_MAX_MESSAGE_BYTES));
+    await vi.waitFor(() => expect(sizes).toEqual([UPLINK_MAX_MESSAGE_BYTES]));
+    expect(closed).not.toHaveBeenCalled();
+
+    await worker.writeBinary(new Uint8Array(UPLINK_MAX_MESSAGE_BYTES + 1));
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+    expect(sizes).toEqual([UPLINK_MAX_MESSAGE_BYTES]);
   });
 
   it("drops a binary message that arrives with no listener", async () => {

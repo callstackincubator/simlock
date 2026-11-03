@@ -1695,6 +1695,18 @@ describe("GatewayDispatcher", () => {
       }
     });
 
+    it("refuses a lease.request that names no requesterId when the session principal has a control character", async () => {
+      const { dispatcher } = harness();
+
+      await expect(
+        dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17", noWait: true, platform: "ios" },
+          session({ principal: "a\u001b[2Jb", role: "agent" }),
+        ),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
     it.each([
       ["with noWait: true", { noWait: true }],
       ["without noWait", {}],
@@ -2189,7 +2201,7 @@ describe("GatewayDispatcher: waiting requests", () => {
     expect(status.waiting).toEqual([listed[0]]);
   });
 
-  it("lease.cancel {platform} cancels only the named platform's waiting fleet request and is gated on that request's owner", async () => {
+  it("status.get lists and lease.cancel {platform} cancels only the named platform's waiting fleet request, each gated on that request's owner", async () => {
     const { coordinator, dispatcher, workers } = harness();
     const capacity = statusFixture().capacity;
     // why: both platforms are full, so each fleet request waits in the gateway's own queue.
@@ -2230,6 +2242,16 @@ describe("GatewayDispatcher: waiting requests", () => {
         .map((waiting) => waiting.spec.platform)
         .sort();
     expect(waitingPlatforms()).toEqual(["android", "ios"]);
+
+    // why: both rows share one requester label, so a status lookup that ignored the platform would list the android row to the iOS owner.
+    const listedTo = async (principal: string) =>
+      (
+        await dispatcher.dispatch("status.get", {}, session({ principal, role: "agent" }))
+      ).waiting?.map((waiting) => waiting.spec.platform);
+    expect([await listedTo("owner-ios"), await listedTo("owner-android")]).toEqual([
+      ["ios"],
+      ["android"],
+    ]);
 
     // why: the iOS request is the earliest, so a hook that ignored the platform would name its owner.
     await expect(

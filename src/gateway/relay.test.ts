@@ -120,6 +120,7 @@ async function setup(
     readonly holdOpen?: boolean;
     readonly idleMs?: number;
     readonly clock?: Clock;
+    readonly proxyAuthHeader?: string;
   } = {},
 ) {
   const connection = new FakeLink();
@@ -141,6 +142,9 @@ async function setup(
       ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
       ...(options.idleMs === undefined ? {} : { idleMs: options.idleMs }),
       ...(options.clock === undefined ? {} : { clock: options.clock }),
+      ...(options.proxyAuthHeader === undefined
+        ? {}
+        : { proxyAuthHeader: options.proxyAuthHeader }),
     }),
   };
 }
@@ -227,6 +231,26 @@ async function openTwoWay(signal?: AbortSignal) {
 }
 
 describe("GatewayRelay on a byte channel", () => {
+  it("with http.proxyAuth.header configured, relays neither that header nor cookie, keeps authorization and x-agent-device-token dropped, and passes other headers", async () => {
+    const { connection, relay } = await setup({ proxyAuthHeader: "CF-Access-JWT-Assertion" });
+    const request = new Request("http://gateway.test:4321/agent-device/rpc", {
+      headers: {
+        authorization: "Bearer slk_agent",
+        "cf-access-jwt-assertion": "person.jwt.signed-by-proxy",
+        cookie: "CF_Authorization=person.jwt.signed-by-proxy",
+        "x-agent-device-token": "token",
+        "x-note": "kept",
+      },
+    });
+    void relay
+      .relay(WORKER_ID, { request, target: "echo", tenant: "gw:g1:alice" })
+      .catch(() => undefined);
+    const frame = await sentFrame(connection, "relay.request");
+    expect((frame.payload as { headers: [string, string][] }).headers).toEqual([
+      ["x-note", "kept"],
+    ]);
+  });
+
   it("opens a channel, names it in relay.request, closes its writable at once for a GET, and sends no relay.body", async () => {
     const { connection, relay } = await setup();
 

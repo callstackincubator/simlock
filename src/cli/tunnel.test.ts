@@ -500,21 +500,36 @@ async function writesToTheCaller(
       .map((f) => new DataView(f.payload.buffer, f.payload.byteOffset).getUint32(0));
     expect(credits).toEqual([65_536, 30_000]);
   });
+  expect(local.closed).toBe(false);
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
   await vi.waitFor(() => expect(local.writeEnded).toBe(true));
-  page.peer.receive(open(3, 5173));
+  await vi.waitFor(() => expect(local.closed).toBe(true));
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 1, new Uint8Array(5)));
+  await settle();
+  expect(local.written.map((chunk) => chunk.length)).toEqual([65_536, 30_000]);
+  page.peer.receive(open(1, 5173));
   await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(2));
   const second = page.cli.tcpStreams.connections[1]?.peer;
   expect(second?.closed).toBe(false);
-  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, 3));
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 1));
+  await vi.waitFor(() => expect(second?.writeEnded).toBe(true));
+  await settle();
+  expect(second?.closed).toBe(false);
+  second?.end();
   await vi.waitFor(() => expect(second?.closed).toBe(true));
+  page.peer.receive(open(3, 5173));
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(3));
+  const reset = page.cli.tcpStreams.connections[2]?.peer;
+  expect(reset?.closed).toBe(false);
+  page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, 3));
+  await vi.waitFor(() => expect(reset?.closed).toBe(true));
 }
 
 async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<void> {
   page.peer.receive(open(5, 5173));
-  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(3));
-  const broken = page.cli.tcpStreams.connections[2]?.peer;
-  if (broken === undefined) throw new Error("no third connection");
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(4));
+  const broken = page.cli.tcpStreams.connections[3]?.peer;
+  if (broken === undefined) throw new Error("no fourth connection");
   broken.writeFailure = new Error("write EPIPE");
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 5, new Uint8Array(10)));
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 5));
@@ -532,14 +547,14 @@ async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<v
   );
   expect(page.cli.err).toEqual([]);
   page.peer.receive(open(7, 5173));
-  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(4));
-  expect(page.cli.tcpStreams.connections[3]?.peer.closed).toBe(false);
+  await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(5));
+  expect(page.cli.tcpStreams.connections[4]?.peer.closed).toBe(false);
   page.cli.signals.emit("SIGINT");
   expect(await page.exit).toBe(0);
 }
 
 describe("simlock tunnel carrying connections", () => {
-  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole", async () => {
+  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole, a connection whose both halves ended is closed and dropped, and one with a single half ended keeps relaying the other", async () => {
     await warningsPerTunnel();
     const { local, page } = await responseThroughTheTunnel();
     await writesToTheCaller(page, local);

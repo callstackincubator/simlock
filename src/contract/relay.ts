@@ -38,10 +38,12 @@ const FRAMING_HEADERS: ReadonlySet<string> = new Set([
   "proxy-authenticate",
 ]);
 
-// why: a worker never holds a gateway credential (ADR 0026).
+// why: a worker never holds a gateway credential (ADR 0026); the cookie can carry the sign-in proxy's token, which the
+// gateway accepts from whoever presents it.
 const GATEWAY_CREDENTIAL_HEADERS: ReadonlySet<string> = new Set([
   "authorization",
   "x-agent-device-token",
+  "cookie",
 ]);
 
 export function isRelayFramingHeader(name: string): boolean {
@@ -50,12 +52,14 @@ export function isRelayFramingHeader(name: string): boolean {
 
 export function relayHeaderPairs(
   headers: Headers,
-  options: { readonly dropCredentials: boolean },
+  options: { readonly dropCredentials: boolean; readonly proxyAuthHeader?: string },
 ): [string, string][] {
+  const proxyHeader = options.proxyAuthHeader?.toLowerCase();
   const pairs: [string, string][] = [];
   for (const [name, value] of headers) {
     if (FRAMING_HEADERS.has(name)) continue;
     if (options.dropCredentials && GATEWAY_CREDENTIAL_HEADERS.has(name)) continue;
+    if (options.dropCredentials && name === proxyHeader) continue;
     if (name === "set-cookie") continue;
     pairs.push([name, value]);
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,7 @@ describe("NodeDaemonLauncher", () => {
   it("hands the daemon the home the launching process already resolved", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
     const logPath = join(directory, "daemon.log");
+    const resolvedHome = join(directory, "resolved", "simlock", "home");
     // why: A relative SIMLOCK_HOME resolves against whatever directory reads it, so passing the
     // variable through unresolved would let the daemon build its device roots somewhere the
     // process that launched it never looks.
@@ -36,14 +37,12 @@ describe("NodeDaemonLauncher", () => {
       args: ["-e", "console.log(process.env.SIMLOCK_HOME)"],
       command: process.execPath,
       logPath,
-      simlockHome: "/resolved/simlock/home",
+      simlockHome: resolvedHome,
     });
 
     try {
       await launcher.launch();
-      await expect
-        .poll(async () => (await readFile(logPath, "utf8")).trim())
-        .toBe("/resolved/simlock/home");
+      await expect.poll(async () => (await readFile(logPath, "utf8")).trim()).toBe(resolvedHome);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -72,6 +71,35 @@ describe("NodeDaemonLauncher", () => {
     } finally {
       process.umask(previousUmask);
       await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("creates SIMLOCK_HOME 0700 under umask 002, and leaves an existing one's mode", async () => {
+    const previousUmask = process.umask(0o002);
+    const root = await mkdtemp(join(tmpdir(), "simlock-launcher-"));
+    try {
+      const modes: Record<string, number> = {};
+      for (const [name, existing] of [
+        ["created", undefined],
+        ["existing", 0o775],
+      ] as const) {
+        const home = join(root, name);
+        if (existing !== undefined) {
+          await mkdir(home);
+          await chmod(home, existing);
+        }
+        await new NodeDaemonLauncher({
+          args: ["-e", "0"],
+          command: process.execPath,
+          logPath: join(home, "gateway", "daemon.log"),
+          simlockHome: home,
+        }).launch();
+        modes[name] = (await stat(home)).mode & 0o777;
+      }
+      expect(modes).toEqual({ created: 0o700, existing: 0o775 });
+    } finally {
+      process.umask(previousUmask);
+      await rm(root, { force: true, recursive: true });
     }
   });
 

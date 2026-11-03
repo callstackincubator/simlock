@@ -11,6 +11,8 @@
   0011](0011-the-console-is-a-built-app-the-daemon-serves.md) (Context, §6
   and the rejected cookie session: a proxy cookie now reaches the API, so
   the CSRF defence that alternative named is built).
+- **Amended:** §6 on 2026-11-03, on the maintainer's decision: the screen stream
+  is a follow stream.
 - **Depends on:** ADR 0003 §4–§5 (principal, role, the hello credential),
   ADR 0005 §4 and §25 (the join token), ADR 0011 §6 (console sign-in), ADR
   0013 (the console follows the event stream with `fetch`), ADR 0027 (the
@@ -198,11 +200,18 @@ today, and the docs say to serve the proxy over HTTPS.
 ### 6. A stream ends when its identity expires
 
 A follow stream (the event stream, a lease's events, a lease request's
-events) opened with an identity that has `expiresAt` ends at that time. A
+events, a screen stream) opened with an identity that has `expiresAt` ends at that time. A
 command's stream (`exec`, a component install) runs to its own end and
 limit. The console reconnects, and the proxy sends a
 fresh JWT. Without this a person whose access was removed keeps watching an
 open stream.
+
+**Amendment, 2026-11-03 (maintainer-approved, part of the screen-stream expiry
+fix).** The screen stream (`GET /v1/stream/workers/{workerId}/devices/{deviceId}`
+and a lease's `/stream`) is a follow stream too: it ends at the opening
+identity's `expiresAt`, on the host that checked the identity (a worker, or a
+gateway for a relayed stream), and the console's screen viewer opens it again
+when the server ends it with no reason after its picture started.
 
 ### 7. The console signs in through the proxy without a form
 

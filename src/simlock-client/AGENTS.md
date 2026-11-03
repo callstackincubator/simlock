@@ -4,7 +4,7 @@ Does: the one implementation behind `simlock/client` and `simlock/admin` — one
 Entry: `client.ts` → `connectSimlockClient(options, admin)`; `SimlockWire` (`wire.ts`) for framing.
 Uses: contract, daemon-protocol, link (byte channels), ports. Never imports: core, daemon, drivers.
 
-- `SimlockWire`: newline JSON frames, request ids, push routing, `DAEMON_CONNECTION_LOST` on close.
+- `SimlockWire`: newline JSON frames, request ids, push routing, `DAEMON_CONNECTION_LOST` on close. A line over 128 MiB with no newline closes the connection (`MAX_WIRE_LINE_CHARS`); `ConnectOptions.maxLineChars` lowers it, as the gateway's worker uplink does (8 MiB).
   A repeated `lease-lost` for one lease is delivered once.
 - `hello` first; a version mismatch yields a client whose every call rejects with it, but `stopDaemon` and `updateDaemon` (the two frozen calls) work.
 - Every type in `types.ts` is `z.infer`red from the contract; `no-core-leak.test.ts` checks the emitted declarations.

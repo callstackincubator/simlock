@@ -86,6 +86,8 @@ export class Channel implements BulkSource {
   #granted = 0;
   #readTotal = 0;
   #inQueue: Uint8Array[] = [];
+  #inTail: Uint8Array | undefined;
+  #inTailLength = 0;
   #inEnded = false;
   #stopSent = false;
   #wantRead = false;
@@ -175,7 +177,7 @@ export class Channel implements BulkSource {
     }
     if (payload.length === 0) return;
     this.#received += payload.length;
-    this.#inQueue.push(payload);
+    this.#store(payload);
     this.#deliver();
   }
 
@@ -205,7 +207,8 @@ export class Channel implements BulkSource {
   onCredit(amount: number | undefined): void {
     if (this.#failure !== undefined) return;
     if (amount === undefined || amount < 1) return this.#invalid("a CREDIT of 0");
-    const taken = this.#handed + this.#queuedBytes;
+    // why: credit acknowledges bytes the peer received, so only bytes handed to the transport count; bytes still queued here cannot have been received.
+    const taken = this.#handed;
     if (this.#allowance + amount > taken + CHANNEL_WINDOW) {
       return this.#invalid("credit beyond 4 MiB outstanding");
     }
@@ -247,7 +250,7 @@ export class Channel implements BulkSource {
     this.#host.scheduler.removeBulk(this);
     this.#queue = [];
     this.#queuedBytes = 0;
-    this.#inQueue = [];
+    this.#clearIncoming();
     this.#wantRead = false;
     this.#failOutgoing(error);
     try {
@@ -354,7 +357,7 @@ export class Channel implements BulkSource {
   #deliver(): void {
     const controller = this.#readableController;
     if (controller === undefined || !this.#wantRead || this.#stopSent) return;
-    const chunk = this.#inQueue.shift();
+    const chunk = this.#inQueue.shift() ?? this.#takeTail();
     if (chunk !== undefined) {
       this.#wantRead = false;
       this.#readTotal += chunk.length;
@@ -368,17 +371,53 @@ export class Channel implements BulkSource {
     }
   }
 
+  // why: fragments the reader has not asked for yet are packed into 64 KiB chunks, so a peer's stream of one-byte DATA messages costs one small copy each and no queue entry each.
+  #store(payload: Uint8Array): void {
+    const nothingHeld = this.#inQueue.length === 0 && this.#inTailLength === 0;
+    if (nothingHeld && this.#wantRead) {
+      this.#inQueue.push(payload);
+      return;
+    }
+    let offset = 0;
+    while (offset < payload.length) {
+      const tail = this.#inTail ?? new Uint8Array(MAX_DATA_BYTES);
+      const room = Math.min(MAX_DATA_BYTES - this.#inTailLength, payload.length - offset);
+      tail.set(payload.subarray(offset, offset + room), this.#inTailLength);
+      offset += room;
+      this.#inTailLength += room;
+      if (this.#inTailLength === MAX_DATA_BYTES) {
+        this.#inQueue.push(tail);
+        this.#inTail = undefined;
+        this.#inTailLength = 0;
+      } else this.#inTail = tail;
+    }
+  }
+
+  #takeTail(): Uint8Array | undefined {
+    if (this.#inTail === undefined || this.#inTailLength === 0) return undefined;
+    const chunk = this.#inTail.subarray(0, this.#inTailLength);
+    this.#inTail = undefined;
+    this.#inTailLength = 0;
+    return chunk;
+  }
+
+  #clearIncoming(): void {
+    this.#inQueue = [];
+    this.#inTail = undefined;
+    this.#inTailLength = 0;
+  }
+
   #grant(): void {
     const unread = this.#readTotal - this.#granted;
     if (unread <= 0 || this.#inEnded) return;
-    if (unread < 64 * KIB && this.#inQueue.length > 0) return;
+    if (unread < 64 * KIB && (this.#inQueue.length > 0 || this.#inTailLength > 0)) return;
     this.#granted += unread;
     this.#host.scheduler.binary(encodeCredit(this.number, unread));
   }
 
   #cancelReadable(): void {
     if (this.#stopSent || this.#failure !== undefined) return;
-    this.#inQueue = [];
+    this.#clearIncoming();
     this.#wantRead = false;
     if (this.#inEnded) return;
     this.#stopSent = true;

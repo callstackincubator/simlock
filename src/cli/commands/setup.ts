@@ -9,6 +9,7 @@ import {
 import type { DoctorReport } from "../../admin/index.js";
 import { commandArgs, UsageError } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl } from "../escape.js";
 import type { CommandContext } from "../tree.js";
 import { writeDoctorFindings } from "./doctor.js";
 
@@ -62,12 +63,12 @@ function renderReport(report: SetupReport | MachineSetupReport): string {
       `${label}  skill  ${skill.status.padEnd(SKILL_STATUS_WIDTH)}  ${skill.path}${skipped}`,
     );
     if (mcp !== undefined) {
-      const reason = mcp.reason === undefined ? "" : `  (${mcp.reason})`;
+      const reason = mcp.reason === undefined ? "" : `  (${escapeControl(mcp.reason)})`;
       lines.push(`${label}  mcp    ${mcp.status}${reason}`);
     }
   }
   if ("machine" in report)
-    lines.push(`${"machine".padEnd(TOOL_ID_WIDTH)}  ${report.machine.summary}`);
+    lines.push(`${"machine".padEnd(TOOL_ID_WIDTH)}  ${escapeControl(report.machine.summary)}`);
   return `${lines.join("\n")}\n`;
 }
 

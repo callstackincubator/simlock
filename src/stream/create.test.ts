@@ -87,6 +87,36 @@ async function settledWithin<T>(promise: Promise<T>): Promise<T | "pending"> {
   return await Promise.race([promise, Promise.resolve("pending" as const)]);
 }
 
+function openOnRoute(
+  stream: ReturnType<typeof worker>["stream"],
+  route: "device" | "lease",
+  expiresAt?: number,
+): Promise<Response> {
+  if (route === "device") {
+    return stream.mount.handle(deviceRequest("w1", "dev_leased"), { ...OPERATOR, expiresAt });
+  }
+  return stream.leaseRoute(
+    new Request("http://daemon/v1/leases/lse_1/stream"),
+    { principal: "tok_agent", role: "agent", expiresAt },
+    { deviceId: "dev_leased", id: "lse_1" },
+  );
+}
+
+async function endsWhileFramesArrive(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  clock: FakeClock,
+  feed: { keyframe(): void },
+): Promise<boolean> {
+  // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
+  for (let step = 0; step < 4; step += 1) {
+    const next = reader.read().then((result) => result.done === true);
+    clock.advance(20_000);
+    feed.keyframe();
+    if ((await settledWithin(next)) === true) return true;
+  }
+  return false;
+}
+
 describe("createWorkerStream", () => {
   it("reports the stream available, with no reason, when any platform can capture", async () => {
     for (const availability of [
@@ -245,6 +275,7 @@ describe("createWorkerStream", () => {
 
     const relays: string[] = [];
     const gateway = createGatewayStream({
+      clock: new FakeClock(),
       fleet: {
         knowsWorker: () => true,
         relay: async (workerId) => {
@@ -285,6 +316,7 @@ describe("createWorkerStream", () => {
     };
     const relays: { workerId: string; url: string; tenant: string }[] = [];
     const gateway = createGatewayStream({
+      clock: new FakeClock(),
       fleet: {
         knowsWorker: (workerId) => workerId in answers,
         relay: async (workerId, call) => {
@@ -327,6 +359,111 @@ describe("createWorkerStream", () => {
       expect(await refused.json(), workerId).toEqual({ error: { code, message } });
     }
     expect(relays.map((relay) => relay.workerId)).toEqual(["w1", "w_busy", "w_missing", "w_gone"]);
+  });
+
+  it("ends a screen stream opened with an identity whose expiresAt is 1 minute ahead when the clock passes it, on either route; one opened without expiresAt keeps running past that time", async () => {
+    for (const route of ["device", "lease"] as const) {
+      for (const expires of [true, false]) {
+        const label = `${route} route, ${expires ? "with" : "without"} expiresAt`;
+        const { clock, feeds, stream } = worker();
+        const served = await openOnRoute(stream, route, expires ? clock.now() + 60_000 : undefined);
+        const reader = served.body!.getReader();
+        await reader.read();
+        const ended = await endsWhileFramesArrive(reader, clock, feeds[0]!);
+        expect(ended, label).toBe(expires);
+        if (expires) expect(clock.now(), label).toBe(60_000);
+      }
+    }
+  });
+
+  it("ends a screen stream the gateway relays for a proxy identity at that identity's expiresAt", async () => {
+    const clock = new FakeClock();
+    let relayCancelled = false;
+    const gateway = createGatewayStream({
+      clock,
+      fleet: {
+        knowsWorker: () => true,
+        relay: async () => {
+          const body = new ReadableStream<Uint8Array>({
+            cancel: () => {
+              relayCancelled = true;
+            },
+          });
+          return new Response(body, { headers: STREAM_HEADERS });
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const served = await gateway.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    const next = served.body!.getReader().read();
+    clock.advance(59_999);
+    expect(await settledWithin(next)).toBe("pending");
+    clock.advance(1);
+    expect(await settledWithin(next)).toEqual({ done: true, value: undefined });
+    expect(relayCancelled).toBe(true);
+
+    // why: a stream that ends or is left before its deadline must not leave the deadline armed.
+    const finished = createGatewayStream({
+      clock,
+      fleet: {
+        knowsWorker: () => true,
+        relay: async () => new Response(new Blob([]).stream(), { headers: STREAM_HEADERS }),
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const ending = await finished.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    expect(await ending.body!.getReader().read()).toEqual({ done: true, value: undefined });
+    expect(clock.pendingTimerCount).toBe(0);
+    const left = await gateway.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    expect(clock.pendingTimerCount).toBe(1);
+    await left.body!.cancel();
+    expect(clock.pendingTimerCount).toBe(0);
+
+    // why: the same holds when the viewer cancels with its first frame already buffered (no read is
+    // pending to finish the stream) and when the capture's body fails mid-stream.
+    const bodies = {
+      "a viewer that cancels with a frame buffered": () =>
+        new ReadableStream<Uint8Array>({
+          start: (controller) => controller.enqueue(new Uint8Array([1])),
+        }),
+      "a body that errors": () =>
+        new ReadableStream<Uint8Array>({
+          pull: (controller) => controller.error(new Error("capture failed")),
+        }),
+    };
+    for (const [label, body] of Object.entries(bodies)) {
+      const ended = createGatewayStream({
+        clock,
+        fleet: {
+          knowsWorker: () => true,
+          relay: async () => new Response(body(), { headers: STREAM_HEADERS }),
+          requesterPrefix: "gw:inst:",
+        },
+        logger: new NoopLogger(),
+      });
+      const opened = await ended.mount.handle(deviceRequest("w1", "dev_9"), {
+        ...OPERATOR,
+        expiresAt: clock.now() + 60_000,
+      });
+      expect(clock.pendingTimerCount, label).toBe(1);
+      await settledWithin(Promise.resolve());
+      if (label === "a body that errors") {
+        await expect(opened.body!.getReader().read()).rejects.toThrow("capture failed");
+      } else await opened.body!.cancel();
+      expect(clock.pendingTimerCount, label).toBe(0);
+      expect(() => clock.advance(60_000), label).not.toThrow();
+    }
   });
 
   it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {

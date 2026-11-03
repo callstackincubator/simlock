@@ -4,6 +4,7 @@ import {
   type Filesystem,
   type TimerHandle,
 } from "../ports/index.js";
+import { escapeControlLines } from "./escape.js";
 import type { Signals } from "./types.js";
 
 export interface FollowLogOptions {
@@ -39,7 +40,9 @@ const MAX_TAIL_ATTEMPTS = 3;
  * leaving the same, if a read fails for any reason but a missing file.
  */
 export async function followLog(options: FollowLogOptions): Promise<void> {
-  const { clock, filesystem, path, signals, write } = options;
+  const { clock, filesystem, path, signals } = options;
+  // why: log lines can hold remote text (request paths, hello principals); every chunk written is whole lines.
+  const write = (text: string): void => options.write(escapeControlLines(text));
   const rotatedPath = `${path}.1`;
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
   // The tail: the rotated file, then the current one. Both reads are only trusted if the

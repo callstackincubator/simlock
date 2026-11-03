@@ -36,6 +36,22 @@ describe("ledger CSV", () => {
     expect(rows[6]).toBe(`"'=1,2",plain,,${tail}`);
   });
 
+  it("prefixes an apostrophe to a cell whose first non-control, non-whitespace character is =, +, - or @", () => {
+    const cases = [
+      ["\u0000=1+1", "'\u0000=1+1"],
+      ["\t=1", "'\t=1"],
+      [" =1", "' =1"],
+      ["\u001b@x", "'\u001b@x"],
+      [" \u0000 +1", "' \u0000 +1"],
+      ["\t1=1", "\t1=1"],
+      ["  ", "  "],
+    ] as const;
+    const rows = ledgerCsv(cases.map(([model]) => entry({ model }))).split("\r\n");
+    for (const [index, [model, cell]] of cases.entries()) {
+      expect({ model, cell: rows[index + 1]?.split(",")[4] }).toEqual({ model, cell });
+    }
+  });
+
   it("writes a duration as whole milliseconds, rounding a fraction, and a time as ISO 8601 UTC", () => {
     const csv = ledgerCsv([entry({ heldMs: 507_600.4, turnaroundMs: 508_000.6, waitMs: 400 })]);
 
