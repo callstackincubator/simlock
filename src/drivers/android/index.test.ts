@@ -6302,6 +6302,97 @@ describe("AndroidDriver image fit", () => {
       });
     });
 
+    describe("saveSource failures", () => {
+      const savedHome = `${sources}/baseline_four`;
+      const serial = "emulator-5586";
+      const config =
+        "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n";
+      const version = processResult(
+        binaries.emulator,
+        ["-version"],
+        "Android emulator version 36.1.9",
+      );
+      const probe = (path = `${copyHome}/simlock.avd`) =>
+        processResult(binaries.adb, ["-s", serial, "emu", "avd", "path"], `${path}\r\nOK\r\n`);
+      const poweredOff = [
+        version,
+        probe(),
+        processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
+        processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+      ];
+      const stage = seedStages(savedHome);
+
+      it("deletes the source's folder and row and throws when the ownership check fails, the copy fails or the boot snapshot is not saved, leaving the device as it was", async () => {
+        const cases = [
+          {
+            expectations: [version, probe(`${avdDirectory}/other.avd`)],
+            message: "emulator-5586 is not its emulator",
+            sent: false,
+          },
+          {
+            copyFails: true,
+            expectations: poweredOff,
+            message: "copying Android device simlock_one to source baseline_four failed: no space",
+          },
+          {
+            expectations: [
+              ...poweredOff,
+              stage.devices,
+              ...stage.secondBoot,
+              { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+            ],
+            message: "Android seed baseline_four: boot snapshot simlock_boot was not saved",
+          },
+        ] as const;
+
+        for (const failing of cases) {
+          const filesystem = new ArmedCopyFailureFilesystem("no space");
+          const harness = await seedHarness(
+            [
+              ...makingTheSeed(),
+              processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+              ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], false),
+              markWriteExpectation(serial, "three"),
+              ...failing.expectations,
+            ],
+            { config, filesystem, ids: ["one", "two", "three", "four"] },
+          );
+          const ready = await harness.driver.makeReady(
+            await harness.driver.provision(harness.spec),
+          );
+          filesystem.armed = "copyFails" in failing;
+          const before = harness.runner.calls.length;
+
+          await expect(
+            harness.driver.saveSource({ ...ready, physical: false as const }),
+          ).rejects.toThrow(failing.message);
+
+          const sentToDevice = harness.runner.calls
+            .slice(before)
+            .filter((call) => call.args.includes("sync") || call.args.includes("reboot"));
+          expect(sentToDevice.length > 0, failing.message).toBe(!("sent" in failing));
+          expect(await harness.filesystem.exists(savedHome), failing.message).toBe(false);
+          expect(await harness.filesystem.exists(copyHome), failing.message).toBe(true);
+          expect(
+            harness.database
+              .prepare("SELECT source_id FROM android_source_data WHERE kind = 'baseline'")
+              .all(),
+            failing.message,
+          ).toEqual([]);
+          const emulators = harness.runner.calls.flatMap((call, index) =>
+            call.args.includes("-avd") ? [index] : [],
+          );
+          for (const emulator of emulators.slice(2)) {
+            let exited = false;
+            void harness.runner.handles[emulator]?.wait().then(() => {
+              exited = true;
+            });
+            await vi.waitFor(() => expect(exited, "the source's emulator was stopped").toBe(true));
+          }
+        }
+      });
+    });
+
     it("removes a seed's folder and row and throws when making it fails at any step", async () => {
       const stage = seedStages();
       const serial = "emulator-5586";
@@ -7096,6 +7187,23 @@ class CopyFailureFilesystem extends MemoryFilesystem {
 
   override copyTree(): Promise<void> {
     return Promise.reject(new Error(this.#message));
+  }
+}
+
+/** why: copies work until a test arms the failure, so a device can be provisioned from a seed first. */
+class ArmedCopyFailureFilesystem extends MemoryFilesystem {
+  armed = false;
+
+  constructor(private readonly message: string) {
+    super();
+  }
+
+  override copyTree(
+    from: string,
+    to: string,
+    options: { readonly timeoutMs: number },
+  ): Promise<void> {
+    return this.armed ? Promise.reject(new Error(this.message)) : super.copyTree(from, to, options);
   }
 }
 
