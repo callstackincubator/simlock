@@ -1488,6 +1488,49 @@ describe("Dispatcher: baseline.save versions", () => {
   });
 });
 
+describe("Dispatcher: baseline.save and baseline.remove queue", () => {
+  it("runs a remove sent during a save after it, so the remove deletes the version the save made", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      driverOptions: { latencyMs: { saveSource: 1_000 } },
+    });
+    const admin = session({ role: "admin" });
+    const lease = async (): Promise<string> =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+          session(),
+        )
+      ).lease.id;
+    const settled = async (...pending: Promise<unknown>[]): Promise<void> => {
+      let open = pending.length;
+      for (const promise of pending) void promise.then(() => (open -= 1));
+      await vi.waitFor(() => {
+        clock.advance(1_000);
+        expect(open).toBe(0);
+      });
+    };
+    const first = dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: await lease(), name: "checkout" },
+      admin,
+    );
+    await settled(first);
+
+    const second = dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: await lease(), name: "checkout" },
+      admin,
+    );
+    const removed = dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin);
+    await settled(second, removed);
+
+    expect(await removed).toEqual({ deletedDevices: [], name: "checkout", versions: [2] });
+    expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
+    expect(registry.snapshot.leases).toEqual([]);
+  });
+});
+
 describe("Dispatcher: baseline.save failure", () => {
   it("answers BASELINE_SAVE_FAILED when the driver cannot save, with the lease ended, the device quarantined and no baseline recorded", async () => {
     const { dispatcher, driver, registry } = await buildDispatcher();
