@@ -31,6 +31,7 @@ import {
   UnknownLeaseError,
   type CapacityReader,
   BaselineSaveFailedError,
+  UnknownBaselineError,
   type BaselineService,
   type WarmKindForgetter,
   type WarmPoolReader,
@@ -148,7 +149,7 @@ export interface DispatcherOptions {
   /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
   readonly warmKinds?: WarmKindForgetter;
   /** why: the baselines' one way in; optional so tests that never save need none. */
-  readonly baselines?: Pick<BaselineService, "list" | "save">;
+  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
@@ -892,8 +893,23 @@ export class Dispatcher {
     return { baselines: [...(await this.options.baselines.list())] };
   };
 
-  #baselineRemove: Handler<"baseline.remove"> = (input) =>
-    Promise.resolve({ deletedDevices: [], name: input.name, versions: [] });
+  #baselineRemove: Handler<"baseline.remove"> = async (input) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    try {
+      const removed = await this.options.baselines.remove({ name: input.name });
+      return {
+        deletedDevices: [...removed.deletedDevices],
+        name: removed.name,
+        versions: [...removed.versions],
+      };
+    } catch (error: unknown) {
+      if (error instanceof UnknownBaselineError) {
+        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+      }
+      throw error;
+    }
+  };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 

@@ -26,7 +26,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | 2 | `USAGE`, `BAD_REQUEST`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `SETUP_REFUSED`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
-| 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `ROTATION_UNSUPPORTED`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
+| 12 | `NO_DRIVER`, `CAPABILITY_MISSING`, `RUNTIME_MISSING`, `UNKNOWN_MODEL`, `ROTATION_UNSUPPORTED`, `INSUFFICIENT_DISK_SPACE`, `LICENSE_NOT_ACCEPTED`, `DOWNLOADS_DISABLED`, `COMPONENT_NOT_OWNED`, `COMPONENT_IN_USE`, `UNKNOWN_BASELINE`, `DEVICE_NOT_ENROLLABLE`, `UNKNOWN_DEVICE`, `HISTORY_NOT_KEPT`, `UNKNOWN_WORKER`, `UNKNOWN_ALERT_DESTINATION` | What you named does not exist here, or this machine cannot provide it. |
 | 13 | `REQUESTER_ALREADY_LEASED`, `LEASE_ID_TAKEN` | The request clashes with a lease or request that already exists. |
 | 14 | `TUNNEL_LEASE_ENDED` | `simlock lease` without `--detach`: the daemon ended the lease before you did (expiry, an operator's release, or a device that could not be recovered). The `lease-lost` line on stderr gives the reason. |
 | 15 | — | `simlock component install` with `--worker` or `--all-workers`: at least one worker did not end `installed` or `already-installed`. The result on stdout says which. |
@@ -63,6 +63,7 @@ Branch on `code`, not on the message: the message wording can change, the code d
 | `COMPONENT_NOT_OWNED` | 12 | 409 | `component remove` of a component Simlock did not install, or one that changed on disk since. | Remove it with the platform's own tools if you mean to. |
 | `COMPONENT_IN_USE` | 12 | 409 | `component remove` of a component a device still uses, Simlock's or one of yours. | Delete those devices first. |
 | `BASELINE_SAVE_FAILED` | 1 | 500 | `baseline save` ended the lease, but the driver could not keep a copy of the device. The message gives the driver's reason; the device is quarantined and no baseline exists. | Lease a fresh device, prepare it again and save again. |
+| `UNKNOWN_BASELINE` | 12 | 404 | `baseline remove` of a name no baseline on this worker has. | List the baselines with `simlock baseline list`. |
 | `COMPONENT_BUSY` | 11 | 409 | `component remove` while an install or removal runs or waits on that platform. | Try again once it ends. |
 
 ## Physical devices

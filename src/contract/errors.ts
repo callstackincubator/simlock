@@ -91,6 +91,7 @@ export interface ErrorDetailsMap {
   UNKNOWN_LEASE: { readonly leaseId: string };
   /** why: a save that ended the lease but kept no baseline: the driver could not make the source. */
   BASELINE_SAVE_FAILED: { readonly name: string; readonly leaseId: string };
+  UNKNOWN_BASELINE: { readonly name: string };
   TUNNEL_UNSUPPORTED: Record<string, never>;
   TUNNEL_PORT_IN_USE: Record<string, never>;
   TUNNEL_BAD_PORT: Record<string, never>;
@@ -214,6 +215,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   COMPONENT_IN_USE: true,
   UNKNOWN_LEASE: true,
   BASELINE_SAVE_FAILED: true,
+  UNKNOWN_BASELINE: true,
   ROTATION_UNSUPPORTED: true,
   INPUT_UNAVAILABLE: true,
   DEVICE_NOT_ENROLLABLE: true,
@@ -444,6 +446,12 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     kind: "domain",
     cliExitCode: 12,
     httpStatus: 409,
+  },
+  UNKNOWN_BASELINE: {
+    code: "UNKNOWN_BASELINE",
+    kind: "domain",
+    cliExitCode: 12,
+    httpStatus: 404,
   },
   COMPONENT_BUSY: { code: "COMPONENT_BUSY", kind: "domain", cliExitCode: 11, httpStatus: 409 },
   BASELINE_SAVE_FAILED: {

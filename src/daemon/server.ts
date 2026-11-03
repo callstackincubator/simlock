@@ -163,7 +163,7 @@ export interface DaemonServerEngineOptions {
   readonly enrollment?: DispatcherOptions["enrollment"];
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
-  readonly baselines?: Pick<BaselineService, "list" | "save">;
+  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
@@ -1174,6 +1174,12 @@ export class DaemonServer {
       case "baseline.list":
         return this.#dispatcher.dispatch(
           "baseline.list",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "baseline.remove":
+        return this.#dispatcher.dispatch(
+          "baseline.remove",
           frame.payload ?? {},
           this.#session(connection),
         );

@@ -30,6 +30,20 @@ export class BaselineSaveFailedError extends Error {
   }
 }
 
+/** why: a remove names a baseline the worker does not hold. */
+export class UnknownBaselineError extends Error {
+  constructor(readonly baselineName: string) {
+    super(`no baseline named "${baselineName}" on this worker`);
+    this.name = "UnknownBaselineError";
+  }
+}
+
+export interface BaselineRemoveResult {
+  readonly name: string;
+  readonly versions: readonly number[];
+  readonly deletedDevices: readonly string[];
+}
+
 export interface BaselineServiceOptions {
   readonly clock: Clock;
   readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource" | "listSources"> };
@@ -131,6 +145,28 @@ export class BaselineService {
       }
     }
     return sources;
+  }
+
+  /** why: removes every version of a name, oldest first; the row goes only after its source is destroyed, so a failed destroy leaves the row for the next try. */
+  async remove(request: { readonly name: string }): Promise<BaselineRemoveResult> {
+    const { database } = this.options.state;
+    const rows = database
+      .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? ORDER BY version")
+      .all(request.name);
+    if (rows.length === 0) throw new UnknownBaselineError(request.name);
+    for (const row of rows) {
+      await this.options.drivers
+        .get(String(row.platform) as Platform)
+        .destroySource(String(row.source_id));
+      database
+        .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
+        .run(request.name, Number(row.version));
+    }
+    return {
+      deletedDevices: [],
+      name: request.name,
+      versions: rows.map((row) => Number(row.version)),
+    };
   }
 
   /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
