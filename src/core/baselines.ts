@@ -2,7 +2,7 @@ import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import { assertVirtual, type Platform } from "./domain.js";
-import type { Driver } from "./driver.js";
+import type { Driver, DriverSource } from "./driver.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 
@@ -80,6 +80,7 @@ export class BaselineService {
 
   /** why: the newest version of each name, by name; the size is the source's, read from its driver. */
   async list(): Promise<readonly BaselineEntry[]> {
+    await this.checkStale();
     const rows = this.options.state.database
       .prepare(
         `SELECT * FROM baselines AS b
@@ -87,14 +88,9 @@ export class BaselineService {
          ORDER BY name`,
       )
       .all();
-    const sizes = new Map<string, number | undefined>();
-    for (const platform of new Set(rows.map((row) => String(row.platform) as Platform))) {
-      for (const source of await this.options.drivers.get(platform).listSources()) {
-        sizes.set(source.id, source.sizeBytes);
-      }
-    }
+    const sources = await this.#readSources(rows);
     return rows.map((row): BaselineEntry => {
-      const sizeBytes = sizes.get(String(row.source_id));
+      const sizeBytes = sources.get(String(row.source_id))?.sizeBytes;
       return {
         mode: String(row.mode) as BaselineEntry["mode"],
         model: String(row.model),
@@ -106,8 +102,35 @@ export class BaselineService {
         ...(row.image_tag === null ? {} : { imageTag: String(row.image_tag) }),
         ...(row.note === null ? {} : { note: String(row.note) }),
         ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        ...(row.stale_reason === null ? {} : { staleReason: String(row.stale_reason) }),
       };
     });
+  }
+
+  /** why: a baseline is stale when its source's runtime or image changed since the save, and fresh again when it is back; the driver words the reason. */
+  async checkStale(): Promise<void> {
+    const { database } = this.options.state;
+    const rows = database.prepare("SELECT name, version, platform, source_id FROM baselines").all();
+    const sources = await this.#readSources(rows);
+    for (const row of rows) {
+      const source = sources.get(String(row.source_id));
+      if (source === undefined) continue;
+      database
+        .prepare("UPDATE baselines SET stale_reason = ? WHERE name = ? AND version = ?")
+        .run(source.staleReason ?? null, String(row.name), Number(row.version));
+    }
+  }
+
+  async #readSources(
+    rows: readonly Record<string, unknown>[],
+  ): Promise<ReadonlyMap<string, DriverSource>> {
+    const sources = new Map<string, DriverSource>();
+    for (const platform of new Set(rows.map((row) => String(row.platform) as Platform))) {
+      for (const source of await this.options.drivers.get(platform).listSources()) {
+        sources.set(source.id, source);
+      }
+    }
+    return sources;
   }
 
   /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
