@@ -72,7 +72,7 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
+The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Baselines**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
 
 Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
 
@@ -119,7 +119,7 @@ Select the worker to see its CPU, memory and disk, each with a bar, how many lea
 
 Select a device on the worker to open its drawer, which has two tabs:
 
-- **Details**: the model, runtime, state, holder, lease and UDID. The drawer opens here.
+- **Details**: the model, runtime, the baseline and version the device was copied from (a device made from a baseline only), state, holder, lease and UDID. The drawer opens here.
 - **Screen**: the device's live picture, whether or not it is leased. The picture starts when you open the tab and stops when you leave it or close the drawer. The **Stream details** button (ⓘ) shows the stream's state, picture size, frames, rate, bandwidth and dropped frames. A device that is not running says why instead: for example "The device is shut down. Its screen shows while it runs." The picture starts by itself once the device is `ready` again. Where screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
 
 The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
@@ -176,6 +176,12 @@ Select a request to see when it was made, its place, its stage and, for a `queue
 | Every matching device is leased or absent | The request names physical devices that are all in use or unplugged. |
 
 A request leaves the list as soon as it gets its device, fails or is cancelled. To change how many devices the worker runs, see [Capacity and the warm pool](/simlock/docs/worker/capacity).
+
+## Baselines
+
+**Baselines** lists every baseline the worker holds, one row each: its name, version, platform, model (with the image tag when it has one), OS version, mode, note, size, how long ago it was saved (hover for the exact time) and whether it is stale. A stale baseline shows `stale` and its reason, for example `stale · runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed`. Rows are ordered by name, and a baseline saved, removed or gone stale shows within about a second, with no reload. With none, the page says `No baselines.`
+
+The page only shows. Save and remove baselines from the command line with `simlock baseline save` and `simlock baseline remove`.
 
 ## Attention
 
