@@ -2,6 +2,7 @@ import type { BaselineEntry } from "../../../src/contract/index";
 import { platformName } from "../../../src/contract/inbox";
 import { formatBytes } from "./load";
 import { formatDuration } from "./time";
+import type { WorkerView } from "./workers";
 
 export interface BaselineList {
   readonly baselines: readonly BaselineEntry[];
@@ -9,6 +10,8 @@ export interface BaselineList {
 
 export interface BaselineRow {
   readonly key: string;
+  readonly worker?: string;
+  readonly stale?: string;
   readonly name: string;
   readonly version: number;
   readonly platform: string;
@@ -23,6 +26,7 @@ export interface BaselineRow {
 
 export function baselineRows(
   entries: readonly BaselineEntry[],
+  _workers: readonly WorkerView[],
   now: number,
 ): readonly BaselineRow[] {
   return entries.map((entry) => ({

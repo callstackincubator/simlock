@@ -16,7 +16,7 @@ export interface BaselinesPage {
 export function useBaselines(): LoadView<BaselinesPage> {
   const list = loadView(useRouteQuery<BaselineList>("/v1/baselines"));
   const now = useNow();
-  const rows = mapView(list, (all) => baselineRows(all.baselines, now.server));
+  const rows = mapView(list, (all) => baselineRows(all.baselines, [], now.server));
   const paging = usePaging({
     sizes: TABLE_SIZES,
     total: rows.kind === "ready" ? rows.data.length : undefined,
