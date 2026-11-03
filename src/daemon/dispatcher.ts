@@ -281,6 +281,7 @@ export class Dispatcher {
       "nuke.run": this.#nukeRun,
       "warm.forget": this.#warmForget,
       "baseline.save": this.#baselineSave,
+      "baseline.list": this.#baselineList,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -883,6 +884,8 @@ export class Dispatcher {
       throw error;
     }
   };
+
+  #baselineList: Handler<"baseline.list"> = () => Promise.resolve({ baselines: [] });
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 

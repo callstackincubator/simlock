@@ -632,6 +632,15 @@ export const baselineSave = defineOperation({
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineList = defineOperation({
+  name: "baseline.list",
+  role: "agent",
+  effect: "read",
+  input: z.object({}).strict(),
+  output: z.object({ baselines: z.array(baselineEntrySchema).max(1000) }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -1139,6 +1148,7 @@ export const OPERATIONS = {
   "nuke.run": nukeRun,
   "warm.forget": warmForget,
   "baseline.save": baselineSave,
+  "baseline.list": baselineList,
   "config.get": configGet,
   "daemon.stop": daemonStop,
   "daemon.update": daemonUpdate,

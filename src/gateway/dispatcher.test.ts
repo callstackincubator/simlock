@@ -1572,6 +1572,7 @@ describe("GatewayDispatcher", () => {
       "driver.passthrough",
       "warm.forget",
       "baseline.save",
+      "baseline.list",
     ] as const)("%s stays per-worker, permanently", async (operation) => {
       const { dispatcher } = harness();
       const input =
@@ -1581,7 +1582,9 @@ describe("GatewayDispatcher", () => {
             ? { model: "Pixel", platform: "android" }
             : operation === "baseline.save"
               ? { leaseId: "L1", name: "checkout" }
-              : { fix: true };
+              : operation === "baseline.list"
+                ? {}
+                : { fix: true };
 
       await expect(dispatcher.dispatch(operation, input, session())).rejects.toMatchObject({
         code: "UNSUPPORTED_IN_GATEWAY_MODE",

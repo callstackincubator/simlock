@@ -1578,6 +1578,58 @@ describe("Dispatcher: baseline.save refusals", () => {
   });
 });
 
+describe("Dispatcher: baseline.list", () => {
+  it("lists the newest version of each baseline by name with its spec, note, size and saved time, and an agent may list", async () => {
+    const { clock, dispatcher, driver, registry } = await buildDispatcher();
+    const agent = session({ role: "agent" });
+    const admin = session({ role: "admin" });
+    expect(await dispatcher.dispatch("baseline.list", {}, agent)).toEqual({ baselines: [] });
+    const save = async (name: string, content: string, note?: string): Promise<void> => {
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        session(),
+      );
+      const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+      driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", content);
+      await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: grant.lease.id, name, ...(note === undefined ? {} : { note }) },
+        admin,
+      );
+    };
+    await save("login", "signed in", "signed in");
+    await save("checkout", "v1");
+    await save("checkout", "version two");
+
+    expect(await dispatcher.dispatch("baseline.list", {}, agent)).toEqual({
+      baselines: [
+        {
+          mode: "full",
+          model: "iPhone 17 Pro",
+          name: "checkout",
+          osVersion: "26.5",
+          platform: "ios",
+          savedAt: new Date(clock.now()).toISOString(),
+          sizeBytes: "version two".length,
+          version: 2,
+        },
+        {
+          mode: "full",
+          model: "iPhone 17 Pro",
+          name: "login",
+          note: "signed in",
+          osVersion: "26.5",
+          platform: "ios",
+          savedAt: new Date(clock.now()).toISOString(),
+          sizeBytes: "signed in".length,
+          version: 1,
+        },
+      ],
+    });
+  });
+});
+
 describe("Dispatcher: lease.release-all", () => {
   it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
     const { dispatcher, registry } = await buildDispatcher();
