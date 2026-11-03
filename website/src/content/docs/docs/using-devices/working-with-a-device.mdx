@@ -101,7 +101,7 @@ Some commands would break a device behind Simlock's back or hit every agent at o
 | adb | `kill-server` | Disconnects every leased emulator. |
 | adb | `disconnect`, with or without an address | Drops the connection of other leases' emulators. `adb shell echo disconnect` still runs. |
 | adb | `emu kill`, `emu avd stop` | Stops a device Simlock thinks is running. |
-| adb | `emu avd snapshot delete` | Deletes the snapshot Simlock restores the device from. |
+| adb | `emu avd snapshot`, except `list` | Can replace or delete the snapshot Simlock restores the device from. |
 | adb | any global flag before the subcommand except `-s`, `-t`, `-d`, `-e` | `-P`, `-H`, `-L` and others would point adb at another server. |
 
 ```json
