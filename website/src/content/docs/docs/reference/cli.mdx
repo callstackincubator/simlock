@@ -519,7 +519,6 @@ simlock nuke [--delete-devices] [--yes]
 | --- | --- | --- |
 | `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
-| `--worker <id>` | The worker to remove it from. Required on a gateway, which answers `BAD_REQUEST` and removes nothing without it; a worker refuses it. | — |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
@@ -645,6 +644,7 @@ Delete every version of a baseline and the idle devices made from it. Needs the 
 | --- | --- | --- |
 | `<name>` | The baseline to remove. Required. | — |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
+| `--worker <id>` | The worker to remove it from. Required on a gateway, which answers `BAD_REQUEST` and removes nothing without it; a worker refuses it. | — |
 
 ```text
 $ simlock baseline remove login
