@@ -852,6 +852,19 @@ export class Dispatcher {
   #baselineSave: Handler<"baseline.save"> = async (input, session) => {
     if (this.options.baselines === undefined)
       throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const held = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (held?.physical === true) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `lease ${lease.id} is on a physical device; only a simulator or emulator can be saved as a baseline`,
+      );
+    }
     return this.options.baselines.save({
       leaseId: input.leaseId,
       name: input.name,
