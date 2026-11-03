@@ -1478,6 +1478,27 @@ describe("IosSimctlDriver", () => {
       });
       expect(stuckRunner.calls.map((call) => call.args[1])).not.toContain("clone");
       expect(stuckDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+
+      const lateRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+        { match: sourcesSimctl("shutdown", cloneUdid) },
+        { match: sourcesSimctl("delete", cloneUdid) },
+      ]);
+      const lateDatabase = await memorySourceDatabase();
+      lateDatabase.exec(
+        "CREATE TRIGGER refuse_update BEFORE UPDATE ON ios_source_data BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+      );
+      const late = await createDriver(lateRunner, new FakeClock(), filesystem, lateDatabase);
+      await expect(late.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("source row locked"),
+      });
+      expect(
+        lateRunner.calls.slice(3).map((call) => call.args.at(-2)),
+        "the clone made before the failure is shut down and deleted from the sources set",
+      ).toEqual(["shutdown", "delete"]);
+      expect(lateDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     });
   });
 

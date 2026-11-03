@@ -2802,6 +2802,28 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
     await client.close();
   });
 
+  it("routes baseline.save, baseline.list and baseline.remove from the socket to the dispatcher", async () => {
+    const harness = await createHarness();
+    const client = await createClient(harness.socketPath);
+    await hello(client);
+
+    const routed = [
+      { operation: "baseline.save", payload: { leaseId: "lse_gone", name: "login" } },
+      { operation: "baseline.list", payload: {} },
+      { operation: "baseline.remove", payload: { name: "login" } },
+    ] as const;
+    const answers = [];
+    for (const { operation, payload } of routed) {
+      const answer = await client.request(operation, payload);
+      answers.push({
+        operation,
+        unknownRequest: answer.error?.code === "UNKNOWN_REQUEST",
+      });
+    }
+    expect(answers).toEqual(routed.map(({ operation }) => ({ operation, unknownRequest: false })));
+    await client.close();
+  });
+
   it("still lets an agent call doctor.run with fix:false, but not fix:true (input-dependent role)", async () => {
     const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
     const client = await createClient(harness.socketPath);

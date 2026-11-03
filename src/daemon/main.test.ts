@@ -14,6 +14,7 @@ import {
   type OwnedRootError,
   REDACTED_VALUE,
   registryOwner,
+  baselinesOwner,
 } from "../core/index.js";
 import { agentDeviceModule } from "../agent-device/definition.js";
 import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
@@ -1146,6 +1147,55 @@ describe("startDaemon wires core and leasing together", () => {
 
     expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
     expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
+  });
+
+  it("marks a saved baseline whose runtime is gone as stale at start, before anything lists baselines", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable, baselinesOwner],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    state.database
+      .prepare(
+        "INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id) VALUES ('login', 1, 'ios', 'iPhone 17 Pro', '26.5', 'full', '2026-11-02T13:40:00.000Z', 'src-login')",
+      )
+      .run();
+    state.close();
+    const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-26-5 is not installed";
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.setSources([
+      {
+        id: "src-login",
+        kind: "baseline",
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+        staleReason: reason,
+      },
+    ]);
+
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: STANDALONE_OFF,
+      dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [driver],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      version: "1.2.3",
+    });
+    runningDaemons.push(daemon);
+
+    const stale = await historyEventsWhen(directory, hasEvent("baseline.stale"));
+    expect(
+      stale.filter((event) => event.event === "baseline.stale").map((event) => event.payload),
+    ).toEqual([{ name: "login", reason, version: 1 }]);
   });
 
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
