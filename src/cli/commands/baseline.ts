@@ -1,6 +1,6 @@
-import { commandArgs, subcommandOrUsage, UsageError, withHelpHint } from "../args.js";
+import { commandArgs, subcommandOrUsage, UsageError, withHelpHint, writeResult } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
-import { baselineSavedLine } from "../format.js";
+import { baselineSavedLine, baselineTable } from "../format.js";
 import type { CommandContext } from "../tree.js";
 
 const BASELINE_USAGE =
@@ -12,10 +12,38 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   const { environment, token } = context;
   const parsed = subcommandOrUsage(argv, context.path, environment.stdout, BASELINE_USAGE);
   if (parsed === 0) return 0;
+  if (parsed.command === "list") return runList(parsed.flagArgs, environment, token);
   if (parsed.command !== "save") {
     throw new UsageError(withHelpHint(`Unknown baseline command: ${String(parsed.command)}`));
   }
   return runSave(parsed.flagArgs, environment, token);
+}
+
+async function runList(
+  argv: readonly string[],
+  environment: CommandContext["environment"],
+  token: string | undefined,
+): Promise<number> {
+  const values = commandArgs(argv, {
+    help: { type: "boolean", short: "h" },
+    json: { type: "boolean" },
+  });
+  if (values.help) {
+    environment.stdout.write(BASELINE_USAGE);
+    return 0;
+  }
+  if (values.positionals.length > 0) {
+    throw new UsageError(withHelpHint("baseline list takes no positional arguments"));
+  }
+  const client = await connectDaemonClient(environment, token);
+  try {
+    const listed = await client.listBaselines();
+    if (values.json) writeResult((value) => environment.stdout.write(value), listed);
+    else environment.stdout.write(baselineTable(listed.baselines));
+    return 0;
+  } finally {
+    await client.close();
+  }
 }
 
 async function runSave(

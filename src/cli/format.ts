@@ -360,3 +360,48 @@ export function baselineSavedLine(saved: BaselineSaveOutput): string {
   const { baseline } = saved;
   return `Saved baseline ${baseline.name} v${String(baseline.version)}: ${baselineSpec(baseline)}. Lease ${saved.leaseId} ended.\n`;
 }
+
+const BASELINE_COLUMNS = [
+  "NAME",
+  "VERSION",
+  "PLATFORM",
+  "MODEL",
+  "OS",
+  "MODE",
+  "IMAGE",
+  "SIZE",
+  "SAVED",
+  "NOTE",
+] as const;
+
+/** why: the list an operator reads: one row per baseline, its stale reason on its own line under it. */
+export function baselineTable(baselines: readonly BaselineEntry[]): string {
+  if (baselines.length === 0) return "No baselines on this worker.\n";
+  const rows = baselines.map((baseline) => [
+    baseline.name,
+    String(baseline.version),
+    baseline.platform,
+    baseline.model,
+    baseline.osVersion,
+    baseline.mode,
+    baseline.imageTag ?? "-",
+    baseline.sizeBytes === undefined ? "-" : baselineSize(baseline.sizeBytes),
+    formatLocalMinute(Date.parse(baseline.savedAt)),
+    baseline.note ?? "",
+  ]);
+  const widths = BASELINE_COLUMNS.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  const line = (cells: readonly string[]): string =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join("  ")
+      .trimEnd();
+  const lines = [line(BASELINE_COLUMNS)];
+  for (const [index, row] of rows.entries()) {
+    lines.push(line(row));
+    const reason = baselines[index]?.staleReason;
+    if (reason !== undefined) lines.push(`  stale: ${reason}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
