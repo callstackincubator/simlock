@@ -2170,6 +2170,23 @@ describe("GatewayDispatcher", () => {
           dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_a" }, session()),
         ).rejects.toMatchObject({ code: failure.code, message: "worker's words" });
       }
+
+      // why: an uplink that drops under the call is the gateway's WORKER_NOT_CONNECTED, not the client's transport code.
+      const client = clients["wrk_a"];
+      if (client !== undefined) {
+        client.failWith = new SimlockError(
+          "DAEMON_CONNECTION_LOST",
+          "transport",
+          "Daemon connection closed",
+          {},
+        );
+      }
+      await expect(
+        dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_a" }, session()),
+      ).rejects.toMatchObject({
+        code: "WORKER_NOT_CONNECTED",
+        message: "worker wrk_a is not connected",
+      });
     });
   });
 
