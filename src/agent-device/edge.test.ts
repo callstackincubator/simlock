@@ -751,6 +751,26 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
+  it('allocate with `deviceMode` "full" or "slim" makes a lease request whose `mode` is it and an allocate the agent-device daemon receives without it; a `deviceMode` that is neither is refused with `refused: deviceMode must be slim or full` and no lease', async () => {
+    const rig = await setUp({ maxRunning: 8 });
+
+    await granted(rig, 1, { deviceMode: "full" });
+    await granted(rig, 2, { deviceMode: "slim" });
+    for (const deviceMode of ["fast", 1]) {
+      await refused(
+        rig,
+        () => allocate(rig, 3, { deviceMode }),
+        "refused: deviceMode must be slim or full",
+      );
+    }
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([{ mode: "full", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([{ mode: "slim", platform: "ios" }]);
+    expect(receivedAllocate(rig, 1)).not.toHaveProperty("deviceMode");
+    expect(receivedAllocate(rig, 2)).not.toHaveProperty("deviceMode");
+    expect(await listed(rig)).toEqual([hex(1), hex(2)]);
+  });
+
   it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig = await setUp({
       drivers: (clock) => [

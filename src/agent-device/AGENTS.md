@@ -91,12 +91,12 @@ under leasing's signal (`lease.endWaitMs`).
 ## Flow: agent on a worker
 
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
-2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, a `physical` that is not a boolean, or a `--target` it does not map.
+2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, a `physical` that is not a boolean, a `deviceMode` that is not `slim` or `full`, or a `--target` it does not map.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
+   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `--device-mode` (`deviceMode`) → `mode`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
-   `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`physical` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
+   `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceMode`/`physical` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
 5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag? }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → reclaim; lease-end finds no scope left.

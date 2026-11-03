@@ -44,6 +44,7 @@ const CLASS_OF_TARGET: Record<string, "phone" | "tv" | "desktop"> = {
 };
 
 const present = (value: unknown): boolean => value !== undefined && value !== null;
+const MODES: readonly unknown[] = ["slim", "full"];
 
 interface Plan {
   readonly leaseId: string;
@@ -52,6 +53,7 @@ interface Plan {
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
+  readonly mode?: "slim" | "full";
   readonly physical?: true;
   readonly ttlMs?: number;
 }
@@ -83,6 +85,9 @@ function notPlain(params: Record<string, unknown>): boolean {
 
 function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply | undefined {
   if (!present(fields.platform)) return refusal("refused: name --platform ios or android");
+  if (present(fields.deviceMode) && !MODES.includes(fields.deviceMode)) {
+    return refusal("refused: deviceMode must be slim or full");
+  }
   return undefined;
 }
 
@@ -119,6 +124,7 @@ function stringFields(fields: ReturnType<typeof leaseCallFields>) {
   return {
     ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
     ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+    ...(present(fields.deviceMode) ? { mode: fields.deviceMode as "slim" | "full" } : {}),
   };
 }
 
@@ -268,6 +274,7 @@ function forwardedBody(
   const {
     device: _device,
     deviceKey: _deviceKey,
+    deviceMode: _deviceMode,
     imageTag: _imageTag,
     osVersion: _osVersion,
     physical: _physical,
