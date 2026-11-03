@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { OWNED_ROOT_MARKER_FILE } from "../../core/index.js";
@@ -78,9 +80,9 @@ describe("AndroidDriver with two Simlock instances on one machine (#257)", () =>
 });
 
 /**
- * One machine: the SDK, every emulator running on it, and the adb servers Simlock instances
- * run. As much of `avdmanager`, `emulator` and `adb` as provisioning, a first boot and a
- * baseline capture use.
+ * why: One machine: the SDK, every emulator running on it, and the adb servers Simlock instances
+ * run. As much of `avdmanager`, `emulator` and `adb` as making a seed, copying it and booting
+ * the copy use.
  *
  * What it models is adb's, not Simlock's. Each server holds a transport only for an emulator
  * that was announced to it -- the emulator announces itself to the server its
@@ -222,6 +224,10 @@ class Machine {
       `${avdHome}/${avdName}.avd/config.ini`,
       "hw.ramSize=2048\n",
     );
+    await this.filesystem.writeFileAtomic(
+      `${avdHome}/${avdName}.ini`,
+      `avd.ini.encoding=UTF-8\npath=${avdHome}/${avdName}.avd\n`,
+    );
     return ok();
   }
 
@@ -238,7 +244,7 @@ class Machine {
       return { code: 1, stderr: `adb: device '${args[1]}' not found`, stdout: "" };
     }
     const rest = args.slice(2).join(" ");
-    if (rest === "emu kill") {
+    if (rest === "emu kill" || rest === "shell reboot -p") {
       this.#exit(port);
       return ok("OK: killing emulator, bye bye\n");
     }
@@ -257,7 +263,8 @@ class Machine {
     if (command !== binaries.emulator || args[0] !== "-avd") {
       throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
     }
-    const avdName = args[1] ?? "";
+    // why: every AVD is named `simlock`; what tells the devices (and seeds) apart is the folder each one's AVD lives in.
+    const avdName = basename(options?.env?.["ANDROID_AVD_HOME"] ?? "");
     const port = Number(args[args.indexOf("-port") + 1]);
     this.spawnedOn.set(avdName, port);
     let exit!: (result: ProcessResult) => void;
@@ -267,7 +274,7 @@ class Machine {
     const bound = !this.#listening.has(port);
     if (bound) {
       this.#listening.set(port, avdName);
-      this.#avdPaths.set(port, `${options?.env?.["ANDROID_AVD_HOME"] ?? ""}/${avdName}.avd`);
+      this.#avdPaths.set(port, `${options?.env?.["ANDROID_AVD_HOME"] ?? ""}/${args[1] ?? ""}.avd`);
       this.#exits.set(port, () => exit(ok()));
       // An emulator announces itself to the server its environment names.
       this.#attach(port, serverPortOf(options));
@@ -302,13 +309,14 @@ class Machine {
   }
 }
 
-/** What a booted emulator answers to the `adb -s <serial>` commands a first boot and a baseline capture send. */
+/** why: What a booted emulator answers to the `adb -s <serial>` commands a boot and a snapshot save send. */
 const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
   ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
-  ["emu avd snapshot save simlock_clean_baseline", "OK\n"],
-  ["emu avd snapshot list", "simlock_clean_baseline\n"],
+  ["shell sync", ""],
+  ["emu avd snapshot save simlock_boot", "OK\n"],
+  ["emu avd snapshot list", "simlock_boot\n"],
 ]);
 
 function deviceRootOf(instance: Instance): string {
