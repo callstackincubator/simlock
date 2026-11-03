@@ -87,6 +87,36 @@ async function settledWithin<T>(promise: Promise<T>): Promise<T | "pending"> {
   return await Promise.race([promise, Promise.resolve("pending" as const)]);
 }
 
+function openOnRoute(
+  stream: ReturnType<typeof worker>["stream"],
+  route: "device" | "lease",
+  expiresAt?: number,
+): Promise<Response> {
+  if (route === "device") {
+    return stream.mount.handle(deviceRequest("w1", "dev_leased"), { ...OPERATOR, expiresAt });
+  }
+  return stream.leaseRoute(
+    new Request("http://daemon/v1/leases/lse_1/stream"),
+    { principal: "tok_agent", role: "agent", expiresAt },
+    { deviceId: "dev_leased", id: "lse_1" },
+  );
+}
+
+async function endsWhileFramesArrive(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  clock: FakeClock,
+  feed: { keyframe(): void },
+): Promise<boolean> {
+  // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
+  for (let step = 0; step < 4; step += 1) {
+    const next = reader.read().then((result) => result.done === true);
+    clock.advance(20_000);
+    feed.keyframe();
+    if ((await settledWithin(next)) === true) return true;
+  }
+  return false;
+}
+
 describe("createWorkerStream", () => {
   it("reports the stream available, with no reason, when any platform can capture", async () => {
     for (const availability of [
@@ -332,32 +362,14 @@ describe("createWorkerStream", () => {
   });
 
   it("ends a screen stream opened with an identity whose expiresAt is 1 minute ahead when the clock passes it, on either route; one opened without expiresAt keeps running past that time", async () => {
-    const routes = {
-      device: (stream: ReturnType<typeof worker>["stream"], expiresAt?: number) =>
-        stream.mount.handle(deviceRequest("w1", "dev_leased"), { ...OPERATOR, expiresAt }),
-      lease: (stream: ReturnType<typeof worker>["stream"], expiresAt?: number) =>
-        stream.leaseRoute(
-          new Request("http://daemon/v1/leases/lse_1/stream"),
-          { principal: "tok_agent", role: "agent", expiresAt },
-          { deviceId: "dev_leased", id: "lse_1" },
-        ),
-    };
-    for (const [route, open] of Object.entries(routes)) {
+    for (const route of ["device", "lease"] as const) {
       for (const expires of [true, false]) {
         const label = `${route} route, ${expires ? "with" : "without"} expiresAt`;
         const { clock, feeds, stream } = worker();
-        const served = await open(stream, expires ? clock.now() + 60_000 : undefined);
+        const served = await openOnRoute(stream, route, expires ? clock.now() + 60_000 : undefined);
         const reader = served.body!.getReader();
         await reader.read();
-        // why: a capture that writes nothing for 30 s ends on its own, so frames keep arriving.
-        let ended = false;
-        for (let step = 0; step < 4; step += 1) {
-          const next = reader.read().then((result) => result.done === true);
-          clock.advance(20_000);
-          feeds[0]!.keyframe();
-          ended = (await settledWithin(next)) === true;
-          if (ended) break;
-        }
+        const ended = await endsWhileFramesArrive(reader, clock, feeds[0]!);
         expect(ended, label).toBe(expires);
         if (expires) expect(clock.now(), label).toBe(60_000);
       }
