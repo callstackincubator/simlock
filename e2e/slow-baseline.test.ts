@@ -85,6 +85,51 @@ describe.skipIf(process.platform !== "darwin")(
         expect(
           await readdir(join(sourcesSet as string, source?.udid ?? "", "data", "tmp")),
         ).toContain("simlock-baseline.txt");
+
+        // why: a lease naming the baseline starts from a copy that holds the saved file, and the copy's own changes are gone for the next one.
+        const copyDirectory = async (): Promise<{ leaseId: string; directory: string }> => {
+          const copy = await env.cli(
+            [
+              "lease",
+              "--platform",
+              "ios",
+              "--baseline",
+              "slow-ios",
+              "--agent-id",
+              "baseline-ios",
+              "--detach",
+            ],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(copy.code, `lease naming the baseline failed: ${copy.stderr}`).toBe(0);
+          const copied = copy.json as {
+            device: {
+              driverDeviceId: string;
+              spec: { baseline?: { name: string; version: number } };
+            };
+            environment: Record<string, string>;
+            lease: { id: string };
+          };
+          expect(copied.device.spec.baseline).toEqual({ name: "slow-ios", version: 1 });
+          return {
+            directory: join(
+              copied.environment.SIMLOCK_IOS_DEVICE_SET as string,
+              copied.device.driverDeviceId,
+              "data",
+              "tmp",
+            ),
+            leaseId: copied.lease.id,
+          };
+        };
+        const first = await copyDirectory();
+        expect(await readdir(first.directory)).toContain("simlock-baseline.txt");
+        await writeFile(join(first.directory, "simlock-session.txt"), "left behind");
+        const released = await env.cli(["release", first.leaseId]);
+        expect(released.code, `release failed: ${released.stderr}`).toBe(0);
+        const second = await copyDirectory();
+        const files = await readdir(second.directory);
+        expect(files).toContain("simlock-baseline.txt");
+        expect(files).not.toContain("simlock-session.txt");
       },
     );
   },
@@ -134,6 +179,52 @@ describe.skipIf(!hasAndroidSdk)(
           snapshots.some((snapshot) => existsSync(snapshot)),
           "the source holds no snapshots/simlock_boot folder",
         ).toBe(true);
+
+        // why: a lease naming the baseline starts from a copy that holds the saved setting, and the copy's own changes are gone for the next one.
+        const copyLease = async (): Promise<string> => {
+          const copy = await env.cli(
+            [
+              "lease",
+              "--platform",
+              "android",
+              "--baseline",
+              "slow-android",
+              "--agent-id",
+              "baseline-android",
+              "--detach",
+            ],
+            { timeout: DEVICE_READY_MS },
+          );
+          expect(copy.code, `lease naming the baseline failed: ${copy.stderr}`).toBe(0);
+          return (copy.json as { lease: { id: string } }).lease.id;
+        };
+        const setting = async (): Promise<string> => {
+          const read = await env.cli([
+            "adb",
+            "shell",
+            "settings",
+            "get",
+            "global",
+            "simlock_baseline",
+          ]);
+          return read.stdout.trim();
+        };
+        const copyId = await copyLease();
+        expect(await setting()).toBe("1");
+        const changed = await env.cli([
+          "adb",
+          "shell",
+          "settings",
+          "put",
+          "global",
+          "simlock_baseline",
+          "2",
+        ]);
+        expect(changed.code, `settings put failed: ${changed.stderr}`).toBe(0);
+        const released = await env.cli(["release", copyId]);
+        expect(released.code, `release failed: ${released.stderr}`).toBe(0);
+        await copyLease();
+        expect(await setting()).toBe("1");
       },
     );
   },

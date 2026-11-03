@@ -111,7 +111,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
     `claimProvision` throws `ComponentBeingRemovedError` → `removeComponent` → delete record.
 12. **Baselines** — `BaselineService` (`core.baselines`), ADR 0061 §4. `save` queues behind any save or remove, then leasing's
     `releaseToSave` ends the lease and `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim: row,
-    `baseline.saved`, `destroy`; a driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`. A replace drops older versions at once. `remove` refuses a
+    `baseline.saved`, `destroy`; a driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`. A replace deletes the idle, unclaimed devices of older versions in the gate and keeps leased ones; an older version (row and source) is dropped only when no device record and no provision (`hold`) has it, checked after a save, on every `device.deleted` and at startup (`baseline.removed` reason `replaced`). `remove` refuses a
     baseline a lease uses (`BaselineInUseError`), disposes its idle devices, then deletes sources and rows. `checkStale` runs before
     `list` and `doctor` and after `component.removed`. `nameSources` marks a baseline source no row names `orphan`. `removeAll` (nuke) deletes rows first.
 
