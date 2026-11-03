@@ -104,7 +104,6 @@ kind gets and the merge gate:
 | Test hardening     | `harden-tests`      | weekly |
 | Test audit         | `audit-tests`       | weekly |
 | Comment gardening  | `garden-comments`   | weekly |
-| Review calibration | `calibrate-reviews` | weekly |
 | Recurring findings | `recurring-findings` | weekly |
 | Refactor           | `refactor`          | weekly |
 | Upstream check     | `check-upstream`    | weekly |

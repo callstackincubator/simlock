@@ -43,9 +43,8 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    (`run_in_background: false`), each
    prompt the ledger tag line (`toolchain.md`, "Review measurement"), then
    inputs, worktree, round and lens, then the full text of
-   `<inputs>/briefs/calibration.md`, of `review-later-round.md` for a
-   later round, and of the lens's own brief, each under a line naming the
-   file: a lens opens nothing to learn its procedure, and the text is the
+   `review-later-round.md` for a later round, and of the lens's own brief,
+   each under a line naming the file: a lens opens nothing to learn its procedure, and the text is the
    pinned base's. A user prohibiting delegation: do the
    checks yourself and label the report author self-check.
 3. **Synthesis.** Wait for every lens, then follow REVIEW.md "Synthesis and
