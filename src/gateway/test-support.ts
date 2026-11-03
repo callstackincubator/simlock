@@ -31,7 +31,7 @@ import type {
 import type { GatewayWorkerClient } from "./worker-client.js";
 import { SimlockError } from "../admin/index.js";
 import { OPERATIONS, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
-import type { platformCatalogSchema } from "../contract/index.js";
+import type { BaselineEntry, platformCatalogSchema } from "../contract/index.js";
 
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
 type PlatformCatalog = z.infer<typeof platformCatalogSchema>;
@@ -281,6 +281,8 @@ export class ScriptedWorkerClient {
   status: StatusGetOutput = statusFixture();
   devices: unknown[] = [];
   catalog: CatalogOutput = catalogFixture([]);
+  /** why: what `baseline.list` answers; the view carries it for routing (ADR 0061 §6). */
+  baselines: BaselineEntry[] = [];
   /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
   downloadPolicy: DownloadPolicy = "on-request";
   /** What `config.get` reports for `downloads.timeoutMs` (ADR 0010 §7). */
@@ -526,6 +528,14 @@ export class ScriptedWorkerClient {
     if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.catalog;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async listBaselines(): Promise<{ readonly baselines: BaselineEntry[] }> {
+    this.calls.push("baseline.list");
+    if (this.hangingCalls.has("baseline.list")) return new Promise<never>(() => {});
+    this.#throwIfFailing();
+    return { baselines: this.baselines };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
