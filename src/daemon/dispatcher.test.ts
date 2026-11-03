@@ -244,6 +244,8 @@ async function buildDispatcher(
     readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly withoutTokens?: boolean;
+    /** why: a daemon wired without the baseline service. */
+    readonly withoutBaselines?: boolean;
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
@@ -366,7 +368,7 @@ async function buildDispatcher(
       : { capabilitySources: overrides.capabilitySources }),
     capacity: engine,
     warmPool: engine,
-    baselines: engine.core.baselines,
+    ...(overrides.withoutBaselines === true ? {} : { baselines: engine.core.baselines }),
     deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
@@ -1928,7 +1930,7 @@ function seedBaselineRows(state: StateDatabase): void {
 }
 
 describe("Dispatcher: baselines beside a gateway's worker view", () => {
-  it("answers worker.list with the baselines its own baseline.list gives", async () => {
+  it("answers worker.list with the baselines its own baseline.list gives, and with none when no baseline service is wired", async () => {
     const { dispatcher, driver, registry } = await buildDispatcher();
     const admin = session({ role: "admin" });
     const grant = await dispatcher.dispatch(
@@ -1945,6 +1947,10 @@ describe("Dispatcher: baselines beside a gateway's worker view", () => {
 
     expect(baselines.map((baseline) => baseline.name)).toEqual(["login"]);
     expect(workers[0]?.baselines).toEqual(baselines);
+
+    const bare = await buildDispatcher({ withoutBaselines: true });
+    const listed = await bare.dispatcher.dispatch("worker.list", {}, admin);
+    expect(listed.workers[0]).not.toHaveProperty("baselines");
   });
 
   it("refuses baseline.remove with a workerId, which names a gateway's worker", async () => {

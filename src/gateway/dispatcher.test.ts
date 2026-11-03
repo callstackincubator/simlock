@@ -2053,7 +2053,7 @@ describe("GatewayDispatcher", () => {
       return { ...rig, clients };
     }
 
-    it("saves a baseline on the worker that holds the lease, with the worker's lease id, and drops the lease from its index", async () => {
+    it("saves a baseline on the worker that holds the lease, with the worker's lease id, and drops the lease from its index, or keeps it when the worker has no live link", async () => {
       const { clients, directory, dispatcher, leaseIndex, workers } = workersWith({
         wrk_a: [],
         wrk_b: [],
@@ -2081,6 +2081,30 @@ describe("GatewayDispatcher", () => {
       expect(saved).toMatchObject({ baseline: { name: "checkout" }, leaseId: "wrk_a.L7" });
       expect(leaseIndex.resolve("wrk_a.L7")).toBeUndefined();
       expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
+
+      // why: a worker that no longer knows the lease drops the index entry; one with no live link answers WORKER_UNREACHABLE and keeps it.
+      const gatewayLease = (id: string, deviceId: string) => ({
+        ...leaseFixture(id, deviceId),
+        ownerId: "alice-principal",
+        requesterId: `${GATEWAY_REQUESTER_PREFIX}alice`,
+      });
+      workers.refresh("wrk_a", { leases: [gatewayLease("L8", "dev_2")] });
+      workers.refresh("wrk_b", { leases: [gatewayLease("L9", "dev_3")] });
+      expect(leaseIndex.resolve("wrk_a.L8")).toBeDefined();
+      const unknown = new SimlockError("UNKNOWN_LEASE", "domain", "no such lease", {
+        leaseId: "L8",
+      });
+      if (clients["wrk_a"] !== undefined) clients["wrk_a"].failWith = unknown;
+      await expect(
+        dispatcher.dispatch("baseline.save", { leaseId: "wrk_a.L8", name: "x" }, session()),
+      ).rejects.toMatchObject({ code: "UNKNOWN_LEASE" });
+      expect(leaseIndex.resolve("wrk_a.L8")).toBeUndefined();
+
+      directory.clients.delete("wrk_b");
+      await expect(
+        dispatcher.dispatch("baseline.save", { leaseId: "wrk_b.L9", name: "x" }, session()),
+      ).rejects.toMatchObject({ code: "WORKER_UNREACHABLE" });
+      expect(leaseIndex.resolve("wrk_b.L9")).toBeDefined();
     });
 
     it("lists every worker's baselines, each with its workerId, in worker id order, a disconnected worker's last ones too", async () => {
@@ -2100,7 +2124,7 @@ describe("GatewayDispatcher", () => {
       ]);
     });
 
-    it("removes a baseline from the worker it names without sending the workerId, and refuses an unknown, a disconnected or no worker", async () => {
+    it("removes a baseline from the worker it names without sending the workerId, and refuses an unknown, a disconnected or no worker, and relays the worker's own refusals", async () => {
       const { clients, directory, dispatcher, workers } = workersWith({
         wrk_a: [entry("smoke")],
         wrk_b: [entry("smoke")],
@@ -2131,6 +2155,21 @@ describe("GatewayDispatcher", () => {
       });
       expect(clients["wrk_a"]?.removedBaselines).toHaveLength(1);
       expect(clients["wrk_b"]?.removedBaselines).toEqual([]);
+
+      // why: a worker's own refusal reaches the caller with its code and words.
+      for (const failure of [
+        new SimlockError("BASELINE_IN_USE", "domain", "worker's words", {
+          leaseId: "L1",
+          name: "smoke",
+        }),
+        new SimlockError("UNKNOWN_BASELINE", "domain", "worker's words", { name: "smoke" }),
+      ]) {
+        const client = clients["wrk_a"];
+        if (client !== undefined) client.failWith = failure;
+        await expect(
+          dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_a" }, session()),
+        ).rejects.toMatchObject({ code: failure.code, message: "worker's words" });
+      }
     });
   });
 
