@@ -7363,6 +7363,39 @@ describe("AndroidDriver image fit", () => {
       await expect(harness.driver.listSources()).resolves.toHaveLength(1);
     });
 
+    it("quotes a provision at 1 s with a fresh seed and 150 s without one, and a prepare boot at 4 s for a copy and 70 s otherwise", async () => {
+      const harness = await seedHarness([
+        ...makingTheSeed(),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      const spec = { ...harness.spec, physical: false } as const;
+      const provision = { operation: "provision" } as const;
+      expect(harness.driver.estimate(provision, spec)).toBe(150_000);
+
+      const copy = await harness.driver.provision(harness.spec);
+
+      expect(harness.driver.estimate(provision, spec)).toBe(1_000);
+      const prepare = { device: copy, operation: "boot", purpose: "prepare" } as const;
+      const oldLayout = {
+        address: "",
+        deviceId: "simlock_old",
+        driverData: { avdName: "simlock_old", configHash: "hash", port: 0, serial: "" },
+      };
+      expect(
+        await Promise.all([
+          harness.driver.estimate(prepare, spec),
+          harness.driver.estimate({ ...prepare, purpose: "recover" }, spec),
+          harness.driver.estimate({ ...prepare, device: oldLayout }, spec),
+        ]),
+      ).toEqual([4_000, 70_000, 70_000]);
+
+      const staled = await reopened(harness, [
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.2.0"),
+      ]);
+      await staled.driver.listSources();
+      expect(staled.driver.estimate(provision, spec)).toBe(150_000);
+    });
+
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
       const serial = "emulator-5586";
       const attached = `List of devices attached\n${serial}\tdevice\n`;

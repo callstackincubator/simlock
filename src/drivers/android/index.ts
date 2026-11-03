@@ -146,6 +146,8 @@ const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 // mid-download.
 const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
+// why: making a seed is two cold boots, a power-off and a snapshot save.
+const SEED_MAKE_ESTIMATE_MS = 150_000;
 // why: Measured on an M3 Pro against Pixel 8 / API 35: 2.4-5.1s over nine steady-state reclaims
 // (median 4.6s), and 3.7-5.7s with three running at once. A `snapshot` reclaim loads the clean
 // baseline and commits the device straight back to `ready`, so the driver call is the whole
@@ -1741,7 +1743,9 @@ export class AndroidDriver implements Driver {
   estimate(estimate: DriverEstimate, spec: DeviceSpec): number | Promise<number> {
     switch (estimate.operation) {
       case "provision":
-        return PROVISION_ESTIMATE_MS;
+        return spec.physical || this.#hasFreshSeed(spec)
+          ? PROVISION_ESTIMATE_MS
+          : SEED_MAKE_ESTIMATE_MS;
       case "boot":
         if (estimate.device === undefined) return COLD_BOOT_ESTIMATE_MS;
         return this.#bootEstimate(estimate.device, estimate.purpose, spec);
@@ -1753,6 +1757,20 @@ export class AndroidDriver implements Driver {
           ? WIPE_RECLAIM_ESTIMATE_MS
           : SNAPSHOT_RECLAIM_ESTIMATE_MS;
     }
+  }
+
+  /** why: read from the table with no process call: the estimate is asked often and the stale check is only worth a process at provision. */
+  #hasFreshSeed(spec: VirtualSpec): boolean {
+    return this.#sources
+      .readyRows()
+      .some(
+        (row) =>
+          row.kind === "seed" &&
+          row.model === spec.model &&
+          row.osVersion === spec.osVersion &&
+          (spec.imageTag === undefined || row.imageTag === spec.imageTag) &&
+          row.staleReason === undefined,
+      );
   }
 
   async #profileFor(model: string): Promise<DeviceProfile> {
