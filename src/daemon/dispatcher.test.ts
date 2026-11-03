@@ -3184,6 +3184,69 @@ describe("Dispatcher: lease.request naming a baseline that cannot serve it", () 
   });
 });
 
+describe("Dispatcher: a baseline lease is released", () => {
+  it.each([
+    { platform: "ios", model: "iPhone 17 Pro", osVersion: "26.5" },
+    { platform: "android", model: "Pixel 8", osVersion: "36" },
+  ] as const)(
+    "the next lease naming the baseline gets a new copy with none of the previous lease's changes ($platform)",
+    async ({ model, osVersion, platform }) => {
+      const clock = new FakeClock(1_000);
+      const android = new FakeDriver({ availableOsVersions: ["36"], clock, platform: "android" });
+      const { dispatcher, driver, registry } = await buildDispatcher({
+        clock,
+        driverOptions: { knownModels: ["iPhone 17 Pro"] },
+        extraDrivers: [android],
+      });
+      const device = platform === "ios" ? driver : android;
+      const fileOf = (deviceId: string, path: string): string | undefined =>
+        device.deviceFile(
+          registry.snapshot.virtualDevices.find((candidate) => candidate.id === deviceId)
+            ?.driverDeviceId ?? "",
+          path,
+        );
+      const operator = await dispatcher.dispatch(
+        "lease.request",
+        { model, osVersion, platform },
+        session(),
+      );
+      const prepared = registry.snapshot.virtualDevices.find(
+        (candidate) => candidate.id === operator.device.id,
+      );
+      device.writeDeviceFile(prepared?.driverDeviceId ?? "", "data/login.txt", "signed in");
+      await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: operator.lease.id, name: "checkout" },
+        session({ role: "admin" }),
+      );
+
+      const first = await dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", platform },
+        session(),
+      );
+      expect(fileOf(first.device.id, "data/login.txt")).toBe("signed in");
+      device.writeDeviceFile(
+        registry.snapshot.virtualDevices.find((candidate) => candidate.id === first.device.id)
+          ?.driverDeviceId ?? "",
+        "data/session.txt",
+        "left behind",
+      );
+      await dispatcher.dispatch("lease.release", { leaseId: first.lease.id }, session());
+      const second = await dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", platform },
+        session(),
+      );
+
+      expect(second.device.id).not.toBe(first.device.id);
+      expect(second.device.spec.baseline).toEqual({ name: "checkout", version: 1 });
+      expect(fileOf(second.device.id, "data/login.txt")).toBe("signed in");
+      expect(fileOf(second.device.id, "data/session.txt")).toBeUndefined();
+    },
+  );
+});
+
 describe("Dispatcher: the download policy clamp applies regardless of caller", () => {
   it("starts no install for allowDownload:true when downloads.policy is 'never'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "never" });
