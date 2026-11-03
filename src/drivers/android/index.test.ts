@@ -2592,7 +2592,7 @@ describe("AndroidDriver deviceTcp", () => {
   }
 
   // fallow-ignore-next-line complexity -- one Tests line: the driver's reverse, its close and each refusal are the cases of one scenario.
-  it("sets adb reverse --no-rebind to a loopback listener in 47000-47999 and removes it on close, as an emulator or a phone, keeps the port of a rule that could not be removed until the device's reclaim, and refuses with TUNNEL_PORT_IN_USE when adb cannot rebind and TUNNEL_FAILED for any other adb failure or when every tunnel port is busy, and opens a device port for a forward tunnel through the target's adb server (an emulator's configured one, a phone's after its check) with no adb forward rule, and rejects with the check's message when a phone's check is closed, with adb's reason when adb answers FAIL, and with \"timeout\" when adb does not answer in 5 s", async () => {
+  it("sets adb reverse --no-rebind to a loopback listener in 47000-47999 and removes it on close, as an emulator or a phone, keeps the port of a rule that could not be removed until the device's destroy (a phone's reclaim), and refuses with TUNNEL_PORT_IN_USE when adb cannot rebind and TUNNEL_FAILED for any other adb failure or when every tunnel port is busy, and opens a device port for a forward tunnel through the target's adb server (an emulator's configured one, a phone's after its check) with no adb forward rule, and rejects with the check's message when a phone's check is closed, with adb's reason when adb answers FAIL, and with \"timeout\" when adb does not answer in 5 s", async () => {
     const { driver, listeners, runner } = await driverWith([
       { match: adb("-P", "5038", "-s", "emulator-5586", ...reverseArgs(47_002)), result: ok },
       {
@@ -2779,7 +2779,7 @@ describe("AndroidDriver deviceTcp", () => {
     );
   });
 
-  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its reclaim, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
+  it("sweeps at start only the reverse rules into 47000-47999 on an idle device proved its own, only reads a leased device's rules and keeps their ports from the next reverse until its destroy, touches nothing on an emulator that answers as another's, and on an idle phone removes nothing and keeps the ports its rules point to from the next reverse", async () => {
     const own = await driverWith([
       avdPathExpectation("emulator-5586"),
       {
