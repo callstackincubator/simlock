@@ -58,7 +58,7 @@ describe("buildOpenApiDocument", () => {
     });
   });
 
-  it("an integrator reads the lease routes in the document, each with its own codes and every SSE event's data schema", () => {
+  it("an integrator reads the lease routes in the document, each with its own tag and codes", () => {
     const paths = buildOpenApiDocument([]).paths ?? {};
     const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     const post = operation("/v1/lease-requests", "post");
@@ -171,7 +171,11 @@ describe("buildOpenApiDocument", () => {
       leaseId: ["code", "message", "leaseId"],
       retryAfter: [["Retry-After", false]],
     });
+  });
 
+  it("an integrator reads every lease SSE event's name and data schema in the document", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+    const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     expect({
       exec: streamEvents(operation("/v1/leases/{id}/exec", "post")),
       lease: streamEvents(operation("/v1/leases/{id}/events", "get")),
