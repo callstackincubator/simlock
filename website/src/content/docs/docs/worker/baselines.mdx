@@ -1,0 +1,59 @@
+---
+title: Baselines
+description: Save a prepared simulator or emulator under a name, see which baselines a worker holds and whether they are stale, and remove one.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A baseline is a simulator or emulator you prepared by hand and saved under a name, such as `checkout`: the app installed, a test user signed in. `simlock baseline save` keeps a copy of it on the worker; later work can start from that copy instead of a factory-fresh device. Leasing from a baseline is not part of this release: today you can save, list and remove baselines.
+
+`baseline save` and `baseline remove` need an admin session; an agent session gets `FORBIDDEN`. `baseline list` works from any session. A gateway refuses all three with `UNSUPPORTED_IN_GATEWAY_MODE`; run them against a worker.
+
+## Save a baseline
+
+Lease a simulator or emulator, prepare it, then save it by its lease id.
+
+```sh
+simlock baseline save checkout --lease L1 --note "app 4.2, test user"
+```
+
+```text
+Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease L1 ended.
+```
+
+Saving ends the lease and deletes the device: the baseline is the only thing left. Simlock shuts the device down cleanly first, so what you prepared is kept. A lease on a physical device cannot be saved.
+
+The name is 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, starting with a letter or digit. The note is up to 200 characters on one line. A bad name or note is refused before the lease ends.
+
+Saving under a name that exists makes the next version and deletes the older one. Two saves of one name at once take turns: the second becomes the next version.
+
+If Simlock cannot make the copy, the lease has still ended, the device is quarantined for the doctor to look at, and the answer is `BASELINE_SAVE_FAILED` with the reason. No baseline is listed.
+
+## List baselines
+
+```sh
+simlock baseline list
+```
+
+```text
+NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE
+checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40
+login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11-01 09:12  signed in
+  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
+```
+
+A baseline is stale when the runtime, system image or emulator it was made with changed after the save, for example when you removed the Android 36 image. The reason is on its own line under the row. It is fresh again when that runtime or image comes back. The `baseline.stale` event fires once when a baseline becomes stale.
+
+## Remove a baseline
+
+```sh
+simlock baseline remove login
+```
+
+Removing deletes every version of the name, its copy on disk, and the idle devices made from it. Simlock refuses with `BASELINE_IN_USE`, naming the lease, when a lease holds a device made from it. `simlock nuke --delete-devices` removes every baseline.
+
+<Aside type="note">
+`simlock doctor` lists each baseline's copy under `sources`, with its name and version. A copy no baseline names is reported as an orphan, and only `simlock doctor --purge-orphans` deletes it.
+</Aside>
+
+See [Events](/simlock/docs/reference/events) for `baseline.saved`, `baseline.removed` and `baseline.stale`, and [CLI reference](/simlock/docs/reference/cli#simlock-baseline) for every flag.

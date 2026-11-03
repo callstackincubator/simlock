@@ -1,6 +1,6 @@
 # Core
 
-Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, doctor.
+Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, baselines, doctor.
 Entry: `index.ts` → `createCore(options)`, then `core.connect(ports)` once, before any request.
 Uses: auth (config strategies), bus, ports, contract, history (`usage/` only). Never imports: leasing, drivers, daemon, gateway, agent-device.
 Imported by: daemon, leasing, cli, http, agent-device, drivers (`Driver`, `ensureOwnedRoot`), gateway (catalog match, `fits`, `createUsageReader`).
@@ -34,6 +34,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 | `doctor.ts`, `host-facts.ts`                              | `Doctor` findings and fixes (`service-broken` from an injected `serviceCheck`, never drift); `HostFactsReader` for status                                                                                                                                                                                                                                                                 |
 | `driver.ts`, `driver-catalog.ts`, `screen.ts`, `input.ts` | `Driver`, errors, `DiskSpaceGuard`; `DriverCatalog` (`openScreen`, `openInput`); `ScreenCapture`, frame tags; `DeviceInput`, the input messages and their parser                                                                                                                                                                                                                          |
 | `catalog-match.ts`                                        | Model name, class and paired runtimes against a catalog entry                                                                                                                                                                                                                                                                                                                             |
+| `baselines.ts`, `baselines-schema.ts`                     | `BaselineService`: save, list, remove, `removeAll` (nuke), stale check, `nameSources` (doctor); owner `baselines`. One save or remove at a time                                                                                                                                                                                                                                           |
 | `component-installer.ts`                                  | `ComponentInstaller`: install, list, remove                                                                                                                                                                                                                                                                                                                                               |
 | `physical-enrollment.ts`, `physical-presence.ts`          | `device add`/`remove`; every presence read, `latestPresence`                                                                                                                                                                                                                                                                                                                              |
 | `device-root.ts`, `instance-identity.ts`                  | `ensureOwnedRoot`; `loadInstanceId`                                                                                                                                                                                                                                                                                                                                                       |
@@ -111,6 +112,16 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
     `component.installed`. `effectiveAllowDownload`: `never` refuses, `always` grants, `on-request`
     follows the caller. Remove: own it → no users → platform idle (`dryRun` stops) → mark (lock):
     `claimProvision` throws `ComponentBeingRemovedError` → `removeComponent` → delete record.
+12. **Baselines** — `BaselineService` (`core.baselines`), ADR 0061 §4. `save`: queued behind any save
+    or remove, then leasing's `releaseToSave` (the `leaseSave` port) ends the lease and
+    `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim; the
+    `baselines` row, `baseline.saved`, then `destroy`. A driver failure quarantines the device
+    (`shutdown-failed`) and answers `BASELINE_SAVE_FAILED`. A replace drops older versions at once.
+    `remove` refuses a baseline a lease uses (`BaselineInUseError`), claims and disposes its idle
+    devices, then deletes sources and rows. `checkStale` runs before `list` and `doctor`, and after
+    `component.removed`; a platform with no driver lists as stale without a stored reason.
+    `nameSources` gives `doctor` a source's baseline name and version, and marks a baseline source no
+    row names `orphan`. `removeAll` (nuke `--delete-devices`) deletes rows first, then sources.
 
 ## State and timers
 

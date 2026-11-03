@@ -30,7 +30,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 | `connect.ts`      | `connectDaemonClient`: credential order, the admin session, the notice                                                                           |
 | `args.ts`         | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                                                                       |
 | `commands/*.ts`   | One module per command, `run(argv, context)`; loaded by the tree on a hit                                                                        |
-| `format.ts`       | The human renderers for `status`, `worker list`, `daemon start`, etc.                                                                            |
+| `format.ts`       | The human renderers for `status`, `worker list`, `daemon start`, the `baseline` lines and table, etc.                                            |
 | `duration.ts`     | `parseDuration` for `--ttl`-style flags                                                                                                          |
 | `termination.ts`  | The signals and parent-exit wait a held lease blocks on                                                                                          |
 | `log-file.ts`     | `readLogFile`: `daemon.log` plus a rotated generation                                                                                            |
