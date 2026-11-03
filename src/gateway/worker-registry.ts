@@ -15,6 +15,7 @@ export type WorkerView = z.infer<typeof workerViewSchema>;
 
 export type WorkerViewSnapshot = Pick<
   WorkerView,
+  | "baselines"
   | "capabilities"
   | "capacity"
   | "catalog"

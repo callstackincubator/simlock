@@ -1681,6 +1681,63 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("a lease request naming a baseline (#1208)", () => {
+    const PIXEL_CATALOG = catalogFixture([
+      {
+        modelClasses: { "Pixel 9": "phone" } as const,
+        models: ["Pixel 9"],
+        platform: "android",
+        runtimes: ["36"],
+      },
+    ]).platforms;
+    const checkout = {
+      mode: "full" as const,
+      model: "Pixel 9",
+      name: "checkout",
+      osVersion: "36",
+      platform: "android" as const,
+      savedAt: "2026-11-02T13:10:00Z",
+      version: 2,
+    };
+
+    function fleet(baselinesByWorker: Record<string, readonly (typeof checkout)[]>) {
+      const rig = harness();
+      const clients: Record<string, ScriptedWorkerClient> = {};
+      for (const [workerId, baselines] of Object.entries(baselinesByWorker)) {
+        const client = new ScriptedWorkerClient();
+        clients[workerId] = client;
+        rig.directory.add(workerId, client);
+        rig.workers.connected(workerId, undefined, "0.3.0");
+        rig.workers.refresh(workerId, {
+          baselines: [...baselines],
+          capacity: statusFixture().capacity,
+          catalog: PIXEL_CATALOG,
+          devices: [],
+          downloads: { policy: "on-request" },
+          health: "running",
+          leases: [],
+          queueDepth: 0,
+        });
+      }
+      return { ...rig, clients };
+    }
+
+    it("sends a request naming a baseline only to a worker that holds it, fresh", async () => {
+      const { clients, dispatcher } = fleet({ wrk_a: [], wrk_b: [checkout] });
+      clients["wrk_b"]?.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", noWait: true, platform: "android" },
+        session({ role: "agent" }),
+      );
+
+      expect(grant.lease.id).toMatch(/^wrk_b\./);
+      expect(clients["wrk_b"]?.lastRequestLeaseInput).toMatchObject({ baseline: "checkout" });
+      expect(clients["wrk_a"]?.lastRequestLeaseInput).toBeUndefined();
+    });
+  });
+
   describe("lease lifecycle and device.exec (#118)", () => {
     it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
       const { dispatcher } = harness();
