@@ -191,8 +191,9 @@ export function hasPlatform(worker: WorkerView, request: RoutableRequest): boole
  * §4 tells a missing model from a missing runtime with it.
  */
 export function listsModel(worker: WorkerView, request: RoutableRequest): boolean {
-  const catalog = catalogOf(worker, request);
-  return catalog !== undefined && candidates(catalog, request).length > 0;
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
+  return catalog !== undefined && candidates(catalog, narrowed).length > 0;
 }
 
 type PlatformEntry = NonNullable<WorkerView["catalog"]>[number];
