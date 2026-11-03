@@ -6243,6 +6243,59 @@ describe("AndroidDriver image fit", () => {
       expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
     });
 
+    it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
+      const makingHome = `${sources}/seed_device-4`;
+      const harness = await seedHarness([
+        ...makingTheSeed(),
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        // why: the other kind's make never gets past its first boot: its emulator never says it booted.
+        ...makingASeedFrom(makingHome).slice(0, 3),
+        {
+          hangs: true,
+          match: {
+            args: ["-avd", "simlock", ...seedEmulatorLine, "-no-snapshot-load"],
+            command: binaries.emulator,
+          },
+        },
+        {
+          hangs: true,
+          match: {
+            args: ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+            command: binaries.adb,
+          },
+        },
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      await harness.driver.provision(harness.spec);
+      await harness.filesystem.mkdirp(
+        `${sdk}/system-images/android-34/google_apis_playstore/arm64-v8a`,
+      );
+      await writeSeedFiles(harness.filesystem, makingHome);
+      const otherKind = await harness.driver.resolveSpec({
+        imageTag: "google_apis_playstore",
+        model: "Pixel 5",
+        osVersion: "34",
+        platform: "android",
+      });
+      void harness.driver.provision(otherKind).catch(() => undefined);
+      await vi.waitFor(() => expect(bootProbes(harness.runner)).toBeGreaterThan(2));
+
+      let settled = false;
+      const provisioning = harness.driver.provision(harness.spec).finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(() =>
+        expect(settled, "the kind with a ready seed waited for the other kind's make").toBe(true),
+      );
+      const second = await provisioning;
+
+      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("/simlock_") });
+      expect(
+        harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
+      ).toEqual([{ state: "making" }, { state: "ready" }]);
+      expect(await harness.filesystem.exists(makingHome)).toBe(true);
+    });
+
     it("quotes a provision at 1 s with a fresh seed and 150 s without one, and a prepare boot at 4 s for a copy and 70 s otherwise", async () => {
       const harness = await seedHarness([
         ...makingTheSeed(),
