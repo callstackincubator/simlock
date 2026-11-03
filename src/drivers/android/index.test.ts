@@ -7360,7 +7360,8 @@ describe("AndroidDriver image fit", () => {
       await expect(
         harness.filesystem.exists(`${avdDirectory}/simlock_two/simlock.avd`),
       ).resolves.toBe(true);
-      await expect(harness.driver.listSources()).resolves.toHaveLength(1);
+      const listed = await harness.driver.listSources();
+      expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
     });
 
     it("quotes a provision at 1 s with a fresh seed and 150 s without one, and a prepare boot at 4 s for a copy and 70 s otherwise", async () => {
@@ -7394,6 +7395,102 @@ describe("AndroidDriver image fit", () => {
       ]);
       await staled.driver.listSources();
       expect(staled.driver.estimate(provision, spec)).toBe(150_000);
+    });
+
+    it("lists each ready seed with its size, reports a sources folder no row names as an orphan, and destroys a source by id after stopping its emulator by path", async () => {
+      const serial = "emulator-5586";
+      const orphanHome = `${sources}/seed_orphan`;
+      const harness = await seedHarness([
+        ...makingTheSeed(),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        processResult(binaries.adb, ["devices"], `List of devices attached\n${serial}\tdevice\n`),
+        seedStages().probe,
+        seedStages().kill,
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      await harness.driver.provision(harness.spec);
+      await writeSeedFiles(harness.filesystem, orphanHome);
+
+      await expect(harness.driver.listSources()).resolves.toEqual([
+        {
+          id: "seed_two",
+          imageTag: "google_apis",
+          kind: "seed",
+          model: "Pixel 5",
+          osVersion: "34",
+          sizeBytes: 16,
+        },
+        { id: "seed_orphan", kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
+      ]);
+      expect(await harness.filesystem.exists(orphanHome)).toBe(true);
+
+      await harness.driver.destroySource("seed_orphan");
+      await harness.driver.destroySource("seed_two");
+
+      expect(await harness.filesystem.exists(`${sources}/seed_two`)).toBe(false);
+      expect(await harness.filesystem.exists(orphanHome)).toBe(false);
+      await expect(harness.driver.destroySource("seed_two")).rejects.toThrow(
+        "Android keeps no source seed_two",
+      );
+    });
+
+    it("lists no size for a seed whose size cannot be counted", async () => {
+      const filesystem = new SizeFailureFilesystem();
+      const harness = await seedHarness(
+        [
+          ...makingTheSeed(),
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ],
+        { filesystem },
+      );
+      await harness.driver.provision(harness.spec);
+
+      const [seed] = await harness.driver.listSources();
+
+      expect(seed).toMatchObject({ id: "seed_two" });
+      expect(seed).not.toHaveProperty("sizeBytes");
+    });
+
+    it("sweeps a making row an earlier process left, stopping its emulator by path, and leaves one this process is making", async () => {
+      const serial = "emulator-5586";
+      const clock = new FakeClock();
+      const stage = seedStages();
+      const harness = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          stage.firstBoot[0] as ScriptedProcessExpectation,
+          processResult(
+            binaries.adb,
+            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+            "0\n",
+          ),
+        ],
+        { clock },
+      );
+      const making = harness.driver.provision(harness.spec);
+      const failed = expect(making).rejects.toThrow("Timed out waiting for device to boot");
+      await vi.waitFor(() =>
+        expect(harness.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
+          true,
+        ),
+      );
+
+      await expect(harness.driver.listSources()).resolves.toEqual([]);
+      expect(await harness.filesystem.exists(seedHome)).toBe(true);
+
+      const restarted = await reopened(harness, [
+        processResult(binaries.adb, ["devices"], `List of devices attached\n${serial}\tdevice\n`),
+        stage.probe,
+        stage.kill,
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      await expect(restarted.driver.listSources()).resolves.toEqual([]);
+      expect(await harness.filesystem.exists(seedHome)).toBe(false);
+      clock.advance(180_000);
+      await failed;
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
@@ -7653,6 +7750,12 @@ function testLibraryProfile(overrides: Partial<LibraryDeviceProfile> = {}): Libr
     tablet: false,
     ...overrides,
   };
+}
+
+class SizeFailureFilesystem extends MemoryFilesystem {
+  override directorySize(): Promise<number> {
+    return Promise.reject(new Error("EIO"));
+  }
 }
 
 class CopyFailureFilesystem extends MemoryFilesystem {

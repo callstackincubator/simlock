@@ -50,6 +50,7 @@ export interface SourceRow {
   readonly folder: string;
   readonly avdName: string;
   readonly configHash: string;
+  readonly createdAt: number;
   readonly emulatorVersion: string;
   readonly imageIdentity: string;
   readonly sizeBytes: number | undefined;
@@ -109,6 +110,19 @@ export class AndroidSourceTable {
     return this.#rows("WHERE kind = 'seed' AND state = 'ready' AND spec_key = ?", [specKey])[0];
   }
 
+  findRow(sourceId: string): SourceRow | undefined {
+    return this.#rows("WHERE source_id = ?", [sourceId])[0];
+  }
+
+  /** why: every row in any state, so a folder under the sources set is an orphan only when none names it. */
+  allIds(): readonly string[] {
+    return this.#rows("", []).map((row) => row.sourceId);
+  }
+
+  makingRows(): readonly SourceRow[] {
+    return this.#rows("WHERE state = 'making' ORDER BY created_at, source_id", []);
+  }
+
   readyRows(): readonly SourceRow[] {
     return this.#rows("WHERE state = 'ready' ORDER BY created_at, source_id", []);
   }
@@ -117,7 +131,7 @@ export class AndroidSourceTable {
     return this.#database
       .prepare(
         `SELECT source_id, kind, spec_key, model, os_version, image_tag, folder, avd_name, config_hash, size_bytes,
-           emulator_version, image_identity, stale_reason
+           emulator_version, image_identity, stale_reason, created_at
          FROM android_source_data ${where}`,
       )
       .all(...parameters)
@@ -131,6 +145,7 @@ export class AndroidSourceTable {
         folder: row["folder"] as string,
         avdName: row["avd_name"] as string,
         configHash: (row["config_hash"] as string | null) ?? "",
+        createdAt: row["created_at"] as number,
         emulatorVersion: row["emulator_version"] as string,
         imageIdentity: row["image_identity"] as string,
         sizeBytes: (row["size_bytes"] as number | null) ?? undefined,

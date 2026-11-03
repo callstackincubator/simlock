@@ -169,6 +169,8 @@ const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
+// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make.
+const SEED_MAKE_CEILING_MS = 900_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 const DURABLE_MARK_KEY = "simlock.mark";
 const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
@@ -1069,8 +1071,10 @@ export class AndroidDriver implements Driver {
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
+    await this.#sweepLeftovers();
     const rows = this.#sources.readyRows();
-    if (rows.length === 0) return [];
+    const orphans = await this.#orphanSources();
+    if (rows.length === 0) return orphans;
     const [images, emulatorVersion] = await Promise.all([
       this.#installedImages(),
       this.#emulatorVersion(),
@@ -1089,7 +1093,57 @@ export class AndroidDriver implements Driver {
         ...(staleReason === undefined ? {} : { staleReason }),
       });
     }
-    return listed;
+    return [...listed, ...orphans];
+  }
+
+  /**
+   * why: A `making` row is a leftover when this process is not making it, or has been for longer
+   * than any make takes; its emulator is stopped by its own path and its folder and row deleted.
+   * A row this process is making is never touched. `onlyKind` limits the sweep to one kind.
+   */
+  async #sweepLeftovers(onlyKind?: string): Promise<void> {
+    for (const row of this.#sources.makingRows()) {
+      if (onlyKind !== undefined && row.specKey !== onlyKind) continue;
+      const mine = this.#making.has(row.sourceId);
+      if (mine && this.#clock.now() - row.createdAt <= SEED_MAKE_CEILING_MS) continue;
+      await this.#removeSource(row.sourceId, row.folder, row.avdName);
+    }
+  }
+
+  /** why: a sources folder no row names is a leftover of a crash; `doctor` reports it and only `--purge-orphans` deletes it. */
+  async #orphanSources(): Promise<readonly DriverSource[]> {
+    const named = new Set(this.#sources.allIds());
+    return (await this.#sourceFolders())
+      .filter((entry) => !named.has(entry))
+      .map((entry) => ({
+        id: entry,
+        kind: "seed",
+        model: "unknown",
+        orphan: true,
+        osVersion: "unknown",
+      }));
+  }
+
+  async #sourceFolders(): Promise<readonly string[]> {
+    try {
+      return await this.#filesystem.readdir(join(this.#deviceRoot, SOURCES_DIRECTORY));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  /** why: the emulator running a source's AVD is found by its path and stopped before the folder goes, so nothing is deleted under a live process. */
+  async #removeSource(sourceId: string, folder: string, avdName: string): Promise<void> {
+    await this.#stopUnownedEmulator({
+      avdHome: folder,
+      avdName,
+      configHash: "",
+      port: 0,
+      serial: "",
+    });
+    await this.#filesystem.rm(folder);
+    this.#sources.remove(sourceId);
   }
 
   /**
@@ -1133,7 +1187,20 @@ export class AndroidDriver implements Driver {
   }
 
   async destroySource(sourceId: string): Promise<void> {
-    throw new DriverCrashError(`Android keeps no source ${sourceId}`);
+    const row = this.#sources.findRow(sourceId);
+    if (row !== undefined) {
+      await this.#removeSource(row.sourceId, row.folder, row.avdName);
+      return;
+    }
+    // why: safety rule 1 (ADR 0061 §1): a name no row holds is deleted only when it is a folder of the sources set.
+    if (!(await this.#sourceFolders()).includes(sourceId)) {
+      throw new DriverCrashError(`Android keeps no source ${sourceId}`);
+    }
+    await this.#removeSource(
+      sourceId,
+      join(this.#deviceRoot, SOURCES_DIRECTORY, sourceId),
+      SEED_AVD_NAME,
+    );
   }
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
@@ -1146,6 +1213,7 @@ export class AndroidDriver implements Driver {
     const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
     const specKey = `${spec.model}|${packageName}`;
     const seed = await this.#withDeviceLock(`seed:${specKey}`, async () => {
+      await this.#sweepLeftovers(specKey);
       const ready = this.#sources.findReadySeed(specKey);
       if (ready !== undefined) {
         const reason = await this.#staleReasonOf(
@@ -1238,7 +1306,7 @@ export class AndroidDriver implements Driver {
       });
       // why: taken after the boots, since the emulator normalizes the config.ini it boots from; a hash from before would read as a launch-settings change at once.
       const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
-      const sizeBytes = await this.#filesystem.directorySize(avdFolder);
+      const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
       this.#sources.markReady(sourceId, configHash, sizeBytes);
       return { configHash, folder, sourceId };
     } catch (error: unknown) {
