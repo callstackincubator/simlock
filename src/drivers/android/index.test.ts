@@ -7580,6 +7580,35 @@ describe("AndroidDriver image fit", () => {
       ]);
     });
 
+    it("boots a recovered copy cold from its disk on its recorded port: no snapshot is loaded and nothing is wiped", async () => {
+      const harness = await seedHarness([
+        ...bootingAt(copyHome, ["-no-snapshot-load"], true),
+        markWriteExpectation("emulator-5586", "one"),
+      ]);
+      await writeSeedFiles(harness.filesystem, copyHome);
+
+      await harness.driver.makeReady(
+        {
+          address: "emulator-5586",
+          deviceId: "simlock_one",
+          driverData: {
+            avdHome: copyHome,
+            avdName: "simlock",
+            configHash: "hash",
+            port: 5586,
+            serial: "emulator-5586",
+          },
+        },
+        { purpose: "recover" },
+      );
+
+      const launch = harness.runner.calls.find((call) => call.args.includes("-avd"));
+      expect(launch?.args).toContain("-no-snapshot-load");
+      expect(launch?.args).not.toContain("-snapshot");
+      expect(launch?.args).not.toContain("-wipe-data");
+      expect(launch?.options.env).toMatchObject({ ANDROID_AVD_HOME: copyHome });
+    });
+
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
       const serial = "emulator-5586";
       const attached = `List of devices attached\n${serial}\tdevice\n`;
@@ -7619,6 +7648,22 @@ describe("AndroidDriver image fit", () => {
       await passes.driver.destroy(own);
       expect(await passes.filesystem.exists(copyHome)).toBe(false);
       expect(await passes.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+
+      const neighbour = await harness([
+        processResult(
+          binaries.adb,
+          ["devices"],
+          "List of devices attached\nemulator-5588\tdevice\n",
+        ),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5588", "emu", "avd", "path"],
+          `${avdDirectory}/simlock_two/simlock.avd\r\nOK\r\n`,
+        ),
+      ]);
+      await neighbour.driver.destroy(own);
+      expect(await neighbour.filesystem.exists(copyHome)).toBe(false);
+      expect(neighbour.runner.calls.flatMap((call) => call.args)).not.toContain("kill");
 
       const unreadable = await harness([
         processResult(binaries.adb, ["devices"], attached),
