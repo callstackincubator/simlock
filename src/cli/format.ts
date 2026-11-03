@@ -1,7 +1,8 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import { isNewerVersion } from "../contract/index.js";
-import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type { BaselineSaveOutput, StatusGetOutput, WorkerView } from "../admin/index.js";
+import type { BaselineEntry } from "../contract/index.js";
 import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 
 export function formatWorkers(
@@ -341,4 +342,21 @@ function quarantineCauseText(cause: {
   if (cause.kind === "stalled") return `stalled while ${cause.stalledState ?? ""}`;
   const text = cause.kind.replace("-", " ");
   return cause.message === undefined ? text : `${text}: ${cause.message}`;
+}
+
+/** why: sizes in the baseline lines are decimal, the way a disk is sold: GB from 10^9 bytes, MB below. */
+function baselineSize(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function baselineSpec(baseline: BaselineEntry): string {
+  const system = baseline.platform === "ios" ? "iOS" : "Android";
+  const tag = baseline.imageTag === undefined ? "" : ` (${baseline.imageTag})`;
+  const size = baseline.sizeBytes === undefined ? "" : `, ${baselineSize(baseline.sizeBytes)}`;
+  return `${baseline.platform} ${baseline.model}, ${system} ${baseline.osVersion}${tag}, ${baseline.mode}${size}`;
+}
+
+export function baselineSavedLine(saved: BaselineSaveOutput): string {
+  const { baseline } = saved;
+  return `Saved baseline ${baseline.name} v${String(baseline.version)}: ${baselineSpec(baseline)}. Lease ${saved.leaseId} ended.\n`;
 }

@@ -30,6 +30,11 @@ Commands:
                               List installed runtimes and system images
   component remove <ios|android> <version> [--dry-run] [--yes]
                               Remove a runtime or system image Simlock installed
+  baseline save <name> --lease <id> [--note <text>]
+                              Keep a held simulator or emulator as a named baseline; ends the lease
+  baseline list [--json]      List the baselines on this worker
+  baseline remove <name> [--yes]
+                              Delete a baseline nobody uses
   device add --platform <ios|android> <id> [--json]
                               Enrol a physical device plugged into this host
   device remove <id> [--json] Forget an enrolled physical device; the device is untouched
