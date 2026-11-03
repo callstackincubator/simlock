@@ -334,6 +334,7 @@ async function buildDispatcher(
     registry,
   });
   const doctor = new Doctor({
+    baselines: engine.core.baselines,
     decisions: wiring.decisions,
     claims: engine.claimReader,
     clock,

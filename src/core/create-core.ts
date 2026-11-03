@@ -313,6 +313,7 @@ export function createCore(options: CoreOptions): Core {
     warmPool: { forget: () => warmPool.forget() },
   });
   const doctor = new Doctor({
+    baselines,
     // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
     // erase, and is now how every release purges -- reads as a stalled transition.
     claims,

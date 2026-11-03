@@ -66,6 +66,11 @@ export class BaselineInUseError extends Error {
   }
 }
 
+export interface NamedSource extends DriverSource {
+  readonly baselineName?: string;
+  readonly baselineVersion?: number;
+}
+
 export interface BaselineRemoveResult {
   readonly name: string;
   readonly versions: readonly number[];
@@ -173,6 +178,26 @@ export class BaselineService {
         ...(sizeBytes === undefined ? {} : { sizeBytes }),
         ...(row.stale_reason === null ? {} : { staleReason: String(row.stale_reason) }),
       };
+    });
+  }
+
+  /**
+   * why: the driver cannot tell a baseline source from an orphan, since only the `baselines` table
+   * names one: a source a row names carries its name and version, a ready one no row names is an
+   * orphan for `doctor --purge-orphans` to delete.
+   */
+  nameSources(sources: readonly DriverSource[]): readonly NamedSource[] {
+    const names = new Map(
+      this.options.state.database
+        .prepare("SELECT name, version, source_id FROM baselines")
+        .all()
+        .map((row) => [String(row.source_id), row] as const),
+    );
+    return sources.map((source): NamedSource => {
+      if (source.kind !== "baseline") return source;
+      const row = names.get(source.id);
+      if (row === undefined) return { ...source, orphan: true };
+      return { ...source, baselineName: String(row.name), baselineVersion: Number(row.version) };
     });
   }
 

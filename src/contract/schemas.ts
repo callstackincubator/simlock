@@ -895,6 +895,8 @@ const doctorSourceSchema = z.object({
   sizeBytes: z.number().int().nonnegative().optional(),
   staleReason: z.string().max(300).optional(),
   orphan: z.literal(true).optional(),
+  baselineName: baselineNameSchema.optional(),
+  baselineVersion: z.number().int().min(1).optional(),
 });
 
 export const doctorReportSchema = z.object({
