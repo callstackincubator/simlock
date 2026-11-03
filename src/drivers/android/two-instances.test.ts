@@ -231,6 +231,7 @@ class Machine {
     return ok();
   }
 
+  // fallow-ignore-next-line complexity -- one fake adb: each branch answers one command of the table.
   #adb(args: readonly string[], serverPort: number): ProcessResult | undefined {
     if (args[0] === "devices") {
       const lines = [...this.#listening.keys()]

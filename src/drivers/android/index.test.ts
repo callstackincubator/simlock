@@ -5090,6 +5090,7 @@ function copyBootExpectations(options: {
  * and the copy's the first, so a copy's folder is `<root>/simlock_one/` and the mark token of its
  * first boot is the third id, `device-3`.
  */
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function provisionedHarness(
   options: {
     readonly bootCompleted?: string;
@@ -7092,6 +7093,7 @@ class EmulatorHost {
     return ok();
   }
 
+  // fallow-ignore-next-line complexity -- one fake adb: each branch answers one command of the table.
   #adb(args: readonly string[]): ProcessResult | undefined {
     if (args[0] === "devices") {
       const lines = [...this.#listening.keys()].map((port) => `emulator-${port}\tdevice\n`);

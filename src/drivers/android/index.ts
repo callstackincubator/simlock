@@ -1711,6 +1711,50 @@ export class AndroidDriver implements Driver {
     return { settledSerials, unattributableTransitionalSerial };
   }
 
+  /**
+   * why: Names the device an attached emulator runs, if it is one of ours. Unreadable means the
+   * emulator died between `adb devices` and this call: losing the whole reality view over one dead
+   * serial would strand every other device, so it is unattributable this tick, nothing concluded.
+   */
+  async #attributeSerial(
+    candidate: string,
+    entries: readonly DeviceEntry[],
+  ): Promise<
+    | { readonly kind: "foreign" }
+    | { readonly kind: "own"; readonly markLines: readonly string[]; readonly owner: DeviceEntry }
+    | { readonly kind: "unreadable" }
+  > {
+    // why: `adb shell` reports the exit status of the last command it ran, so a missing
+    // mark file would fail the whole invocation -- and a missing mark file is exactly
+    // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
+    // mark an observation rather than a crash.
+    const output = await this.#adbShellOrUndefined([
+      "-s",
+      candidate,
+      "shell",
+      `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
+    ]);
+    if (output === undefined) return { kind: "unreadable" };
+    const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
+    // why: every copy's AVD is named `simlock`, so the name only narrows the candidates; the path the emulator answers picks the one device.
+    const named = entries.filter((entry) => entry.avdName === nameLine.trim());
+    if (named.length === 0) return { kind: "foreign" };
+    let answered: string;
+    try {
+      answered = await this.#readAvdPath(candidate);
+    } catch {
+      // why: A serial can disappear after its shell answered; keep the observation
+      // inconclusive just as when it disappears before that shell call.
+      return { kind: "unreadable" };
+    }
+    for (const entry of named) {
+      if (await this.#sameDirectory(answered, entry.folder)) {
+        return { kind: "own", markLines, owner: entry };
+      }
+    }
+    return { kind: "foreign" };
+  }
+
   async #resolveRunningAvds(
     settledSerials: readonly string[],
     entries: readonly DeviceEntry[],
@@ -1725,41 +1769,13 @@ export class AndroidDriver implements Driver {
     const erasableMarkByDeviceId = new Map<string, string | undefined>();
     let unreadableSerial = false;
     for (const candidate of settledSerials) {
-      // why: `adb shell` reports the exit status of the last command it ran, so a missing
-      // mark file would fail the whole invocation -- and a missing mark file is exactly
-      // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
-      // mark an observation rather than a crash.
-      const output = await this.#adbShellOrUndefined([
-        "-s",
-        candidate,
-        "shell",
-        `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
-      ]);
-      // why: An emulator can die between `adb devices` and this call. Losing the whole
-      // reality view over one dead serial would strand every other device, so treat it
-      // like a transitional serial: unattributable this tick, nothing concluded.
-      if (output === undefined) {
+      const attribution = await this.#attributeSerial(candidate, entries);
+      if (attribution.kind === "unreadable") {
         unreadableSerial = true;
         continue;
       }
-      const [nameLine = "", ...markLines] = output.stdout.split(/\r?\n/);
-      // why: every copy's AVD is named `simlock`, so the name only narrows the candidates; the path the emulator answers picks the one device.
-      const named = entries.filter((entry) => entry.avdName === nameLine.trim());
-      if (named.length === 0) continue;
-      let answered: string;
-      try {
-        answered = await this.#readAvdPath(candidate);
-      } catch {
-        // why: A serial can disappear after its shell answered; keep the observation
-        // inconclusive just as when it disappears before that shell call.
-        unreadableSerial = true;
-        continue;
-      }
-      let owner: DeviceEntry | undefined;
-      for (const entry of named) {
-        if (await this.#sameDirectory(answered, entry.folder)) owner = entry;
-      }
-      if (owner === undefined) continue;
+      if (attribution.kind === "foreign") continue;
+      const { markLines, owner } = attribution;
       runningByDeviceId.add(owner.deviceId);
       erasableMarkByDeviceId.set(owner.deviceId, parseErasableMark(markLines.join("\n")));
       const port = Number(candidate.slice("emulator-".length));
