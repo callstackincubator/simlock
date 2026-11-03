@@ -568,6 +568,8 @@ export class AndroidDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #sources: AndroidSourceTable;
+  /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
+  readonly #making = new Set<string>();
   readonly #tcpProbe: TcpProbe;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
@@ -1208,36 +1210,45 @@ export class AndroidDriver implements Driver {
       sourceId,
       specKey,
     });
-    await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-    const seedDeviceId =
-      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
-    await this.#runOrThrow(
-      this.#sdk.avdmanager,
-      ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
-      { env: { ...this.#env(), ANDROID_AVD_HOME: folder } },
-    );
-    if (profile.kind === "properties") {
-      await this.#applyHardwareProperties(avdFolder, profile.hardwareProperties);
+    this.#making.add(sourceId);
+    try {
+      await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+      const seedDeviceId =
+        profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
+      await this.#runOrThrow(
+        this.#sdk.avdmanager,
+        ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
+        { env: { ...this.#env(), ANDROID_AVD_HOME: folder } },
+      );
+      if (profile.kind === "properties") {
+        await this.#applyHardwareProperties(avdFolder, profile.hardwareProperties);
+      }
+      if (profile.kind === "library") {
+        await this.#applyLibraryProfile(avdFolder, profile, image);
+      }
+      await this.#bootSeedTwice(sourceId, {
+        avdHome: folder,
+        avdName: SEED_AVD_NAME,
+        configHash: "",
+        imageIdentity,
+        port: 0,
+        serial: "",
+      });
+      // why: taken after the boots, since the emulator normalizes the config.ini it boots from; a hash from before would read as a launch-settings change at once.
+      const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
+      const sizeBytes = await this.#filesystem.directorySize(avdFolder);
+      this.#sources.markReady(sourceId, configHash, sizeBytes);
+      return { configHash, folder, sourceId };
+    } catch (error: unknown) {
+      await this.#filesystem.rm(folder);
+      this.#sources.remove(sourceId);
+      throw error;
+    } finally {
+      this.#making.delete(sourceId);
     }
-    if (profile.kind === "library") {
-      await this.#applyLibraryProfile(avdFolder, profile, image);
-    }
-    await this.#bootSeedTwice({
-      avdHome: folder,
-      avdName: SEED_AVD_NAME,
-      configHash: "",
-      imageIdentity,
-      port: 0,
-      serial: "",
-    });
-    // why: taken after the boots, since the emulator normalizes the config.ini it boots from; a hash from before would read as a launch-settings change at once.
-    const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
-    const sizeBytes = await this.#filesystem.directorySize(avdFolder);
-    this.#sources.markReady(sourceId, configHash, sizeBytes);
-    return { configHash, folder, sourceId };
   }
 
-  async #bootSeedTwice(seed: AndroidDriverData): Promise<void> {
+  async #bootSeedTwice(sourceId: string, seed: AndroidDriverData): Promise<void> {
     const state: DeviceState = {
       handle: undefined,
       imageIdentity: seed.imageIdentity ?? "",
@@ -1248,37 +1259,81 @@ export class AndroidDriver implements Driver {
       await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
       await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"]);
       await this.#runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "reboot", "-p"]);
-      const running = state.handle;
-      if (running !== undefined) await this.#waitForExit(running, SEED_POWER_OFF_TIMEOUT_MS);
-      state.handle = undefined;
+      await this.#awaitSeedPowerOff(sourceId, booted, state);
       await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
+      await this.#saveBootSnapshot(sourceId, booted);
+      await this.#shutdown(booted, state);
+    } finally {
+      state.handle?.kill("SIGKILL");
+      if (state.port !== undefined) this.#portAllocator.release(state.port);
+    }
+  }
+
+  async #awaitSeedPowerOff(
+    sourceId: string,
+    seed: AndroidDriverData,
+    state: DeviceState,
+  ): Promise<void> {
+    const running = state.handle;
+    if (running === undefined) return;
+    if (await this.#waitForExit(running, SEED_POWER_OFF_TIMEOUT_MS)) {
+      state.handle = undefined;
+      return;
+    }
+    if (await this.#serialIsOwn(seed)) {
+      await this.#processRunner.run(this.#sdk.adb, ["-s", seed.serial, "emu", "kill"], {
+        env: this.#env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
+      });
+    }
+    running.kill("SIGKILL");
+    await this.#waitForExit(running, SIGKILL_REAP_TIMEOUT_MS);
+    state.handle = undefined;
+    throw new DriverCrashError(
+      `Android seed ${sourceId} did not power off within ${String(SEED_POWER_OFF_TIMEOUT_MS)}ms`,
+    );
+  }
+
+  /** why: the boot snapshot is what every copy starts from, so a save that did not list is a failed make. */
+  async #saveBootSnapshot(sourceId: string, seed: AndroidDriverData): Promise<void> {
+    let saved = false;
+    try {
       await this.#runOrThrow(
         this.#sdk.adb,
-        ["-s", booted.serial, "emu", "avd", "snapshot", "save", BOOT_SNAPSHOT],
+        ["-s", seed.serial, "emu", "avd", "snapshot", "save", BOOT_SNAPSHOT],
         { timeoutMs: SNAPSHOT_SAVE_TIMEOUT_MS },
       );
       const snapshots = await this.#runOrThrow(
         this.#sdk.adb,
-        ["-s", booted.serial, "emu", "avd", "snapshot", "list"],
+        ["-s", seed.serial, "emu", "avd", "snapshot", "list"],
         { timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
       );
-      if (!snapshots.stdout.includes(BOOT_SNAPSHOT)) {
-        throw new DriverCrashError(`Android seed boot snapshot ${BOOT_SNAPSHOT} was not saved`);
-      }
-      await this.#shutdown(booted, state);
-    } finally {
-      if (state.port !== undefined) this.#portAllocator.release(state.port);
+      saved = snapshots.stdout.includes(BOOT_SNAPSHOT);
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      throw new DriverCrashError(
+        `Android seed ${sourceId}: boot snapshot ${BOOT_SNAPSHOT} was not saved`,
+      );
     }
   }
 
   /** why: `to` of the filesystem port's copy must not exist, so the device's folder is made and the AVD copied into it. */
   async #copySeed(seed: SeedRecord, avdHome: string): Promise<void> {
-    await this.#filesystem.mkdirp(avdHome, { mode: 0o700 });
-    await this.#filesystem.copyTree(
-      join(seed.folder, `${SEED_AVD_NAME}.avd`),
-      join(avdHome, `${SEED_AVD_NAME}.avd`),
-      { timeoutMs: SEED_COPY_TIMEOUT_MS },
-    );
+    try {
+      await this.#filesystem.mkdirp(avdHome, { mode: 0o700 });
+      await this.#filesystem.copyTree(
+        join(seed.folder, `${SEED_AVD_NAME}.avd`),
+        join(avdHome, `${SEED_AVD_NAME}.avd`),
+        { timeoutMs: SEED_COPY_TIMEOUT_MS },
+      );
+    } catch (error: unknown) {
+      await this.#filesystem.rm(avdHome);
+      throw new DriverCrashError(
+        `copying Android seed ${seed.sourceId} to ${basename(avdHome)} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const ini = await this.#filesystem.readFile(join(seed.folder, `${SEED_AVD_NAME}.ini`));
     await this.#filesystem.writeFileAtomic(
       join(avdHome, `${SEED_AVD_NAME}.ini`),
