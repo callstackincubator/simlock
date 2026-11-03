@@ -143,6 +143,7 @@ test.describe("the Baselines page", () => {
       await expect(row(page, "base-25")).toHaveCount(0);
       const stale = row(page, "base-00");
       await expect(stale).toContainText(`stale · ${reason}`);
+      await expect(stale.locator(".status.status-warn")).toHaveText("stale");
       await expect(stale).toContainText("—");
       await page.getByRole("button", { name: "Next" }).click();
       await expect(row(page, "base-25")).toBeVisible();

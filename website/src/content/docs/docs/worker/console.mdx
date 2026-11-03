@@ -119,7 +119,7 @@ Select the worker to see its CPU, memory and disk, each with a bar, how many lea
 
 Select a device on the worker to open its drawer, which has two tabs:
 
-- **Details**: the model, runtime, the baseline and version the device was copied from (a device made from a baseline only), state, holder, lease and UDID. The drawer opens here.
+- **Details**: the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID. The drawer opens here.
 - **Screen**: the device's live picture, whether or not it is leased. The picture starts when you open the tab and stops when you leave it or close the drawer. The **Stream details** button (ⓘ) shows the stream's state, picture size, frames, rate, bandwidth and dropped frames. A device that is not running says why instead: for example "The device is shut down. Its screen shows while it runs." The picture starts by itself once the device is `ready` again. Where screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
 
 The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
