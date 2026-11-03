@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SimlockError } from "../client/index.js";
 import { RELEASE_TIMEOUT_MS } from "../lease-policy/index.js";
 import { FakeClock } from "../ports/index.js";
-import { FakeSimlockClient, sampleGrant } from "./test-support.js";
+import { FakeSimlockClient, sampleGrant, startingStatus } from "./test-support.js";
 import { McpSession } from "./session.js";
 
 /** Lets an awaited renewal settle; the fake clock never moves on its own. */
@@ -59,9 +59,10 @@ describe("McpSession", () => {
     ]);
   });
 
-  it("forwards list_devices straight to getCatalog", async () => {
+  it("forwards list_devices's input to getCatalog and reads getStatus beside it", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     const session = new McpSession({
       clock: new FakeClock(),
       connect: async () => client,
@@ -69,7 +70,10 @@ describe("McpSession", () => {
     });
 
     await session.listDevices({ platform: "ios" });
-    expect(client.calls).toEqual([{ input: { platform: "ios" }, method: "getCatalog" }]);
+    expect(client.calls).toEqual([
+      { input: { platform: "ios" }, method: "getCatalog" },
+      { input: undefined, method: "getStatus" },
+    ]);
   });
 
   it("answers lease_status with one lease.list call each time, not a cache", async () => {
@@ -191,6 +195,7 @@ describe("McpSession", () => {
       connectCalls += 1;
       const client = new FakeSimlockClient();
       client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+      client.getStatusImpl = () => Promise.resolve(startingStatus());
       clients.push(client);
       return client;
     };
@@ -253,6 +258,7 @@ describe("McpSession", () => {
     const closeCall = session.close();
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     resolveConnect(client);
 
     await closeCall;
@@ -949,6 +955,7 @@ describe("McpSession", () => {
     first.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
     const second = new FakeSimlockClient();
     second.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    second.getStatusImpl = () => Promise.resolve(startingStatus());
     let toolCallConnects = 0;
     let failRenewConnect!: (error: unknown) => void;
     const session = new McpSession({
@@ -980,7 +987,7 @@ describe("McpSession", () => {
       new SimlockError("DAEMON_CONNECTION_LOST", "transport", "nothing is listening", {}),
     );
 
-    await expect(listing).resolves.toEqual({ platforms: [] });
+    await expect(listing).resolves.toEqual({ platforms: [], physicalDevices: [] });
     expect(toolCallConnects, "the tool call's own attempt, made alone").toBe(2);
 
     await session.close();
@@ -995,6 +1002,7 @@ describe("McpSession", () => {
     first.requestLeaseImpl = () => Promise.resolve(sampleGrant({ leaseId: "lease-1" }));
     const second = new FakeSimlockClient();
     second.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    second.getStatusImpl = () => Promise.resolve(startingStatus());
     second.renewLeaseImpl = (input) =>
       Promise.resolve({
         deviceId: "device-1",
@@ -1036,7 +1044,7 @@ describe("McpSession", () => {
     expect(renewConnects, "it joined the attempt already in flight").toBe(0);
 
     answerToolCallConnect(second);
-    await expect(listing).resolves.toEqual({ platforms: [] });
+    await expect(listing).resolves.toEqual({ platforms: [], physicalDevices: [] });
     await flushMicrotasks();
 
     expect(renewConnects).toBe(0);
@@ -1084,6 +1092,7 @@ describe("McpSession", () => {
     // dozens of leases later.
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     const session = new McpSession({
       clock: new FakeClock(),
       connect: async () => client,
@@ -1120,6 +1129,7 @@ describe("McpSession", () => {
   it("relays the client's lease-lost, device-unhealthy, and device-recovered pushes to session listeners", async () => {
     const client = new FakeSimlockClient();
     client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
+    client.getStatusImpl = () => Promise.resolve(startingStatus());
     const session = new McpSession({
       clock: new FakeClock(),
       connect: async () => client,
