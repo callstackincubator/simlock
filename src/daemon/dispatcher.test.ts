@@ -1747,6 +1747,80 @@ describe("Dispatcher: baseline.remove", () => {
   });
 });
 
+describe("Dispatcher: baseline events", () => {
+  it("records baseline.saved, baseline.removed with its reason and baseline.stale, once each, after the change is committed", async () => {
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher();
+    const admin = session({ principal: "tok_admin", role: "admin" });
+    const events = (name: string): unknown[] =>
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === name)
+        .map((envelope) => envelope.payload);
+    const save = async (content: string): Promise<string> => {
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+        session(),
+      );
+      const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+      driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", content);
+      await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: grant.lease.id, name: "checkout" },
+        admin,
+      );
+      return grant.lease.id;
+    };
+
+    const first = await save("v1");
+    expect(events("baseline.saved")).toEqual([
+      {
+        leaseId: first,
+        mode: "full",
+        model: "iPhone 17 Pro",
+        name: "checkout",
+        osVersion: "26.5",
+        platform: "ios",
+        requesterId: "tok_admin",
+        sizeBytes: 2,
+        version: 1,
+      },
+    ]);
+    expect(events("device.deleted")).toMatchObject([{ initiator: "baseline-save" }]);
+    expect(events("baseline.removed")).toEqual([]);
+
+    await save("v2");
+    expect(events("baseline.saved")).toHaveLength(2);
+    expect(events("baseline.removed")).toEqual([
+      { name: "checkout", reason: "replaced", requesterId: "tok_admin", version: 1 },
+    ]);
+
+    const [source] = await driver.listSources();
+    const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-26-5 is not installed";
+    const check = async (staleReason?: string): Promise<void> => {
+      driver.setSources([
+        {
+          ...(source as NonNullable<typeof source>),
+          ...(staleReason === undefined ? {} : { staleReason }),
+        },
+      ]);
+      await dispatcher.dispatch("baseline.list", {}, admin);
+    };
+    await check(reason);
+    await check(reason);
+    expect(events("baseline.stale")).toEqual([{ name: "checkout", reason, version: 2 }]);
+    await check();
+    await check(reason);
+    expect(events("baseline.stale")).toHaveLength(2);
+
+    await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin);
+    expect(events("baseline.removed")).toEqual([
+      { name: "checkout", reason: "replaced", requesterId: "tok_admin", version: 1 },
+      { name: "checkout", reason: "operator", requesterId: "tok_admin", version: 2 },
+    ]);
+  });
+});
+
 describe("Dispatcher: lease.release-all", () => {
   it("rejects an agent session with FORBIDDEN, without releasing anything", async () => {
     const { dispatcher, registry } = await buildDispatcher();

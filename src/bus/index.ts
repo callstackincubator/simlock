@@ -232,6 +232,29 @@ export interface EventMap {
     readonly residue?: string;
     readonly requesterId: string;
   };
+  "baseline.saved": {
+    readonly name: string;
+    readonly version: number;
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly mode: "slim" | "full";
+    readonly imageTag?: string;
+    readonly sizeBytes?: number;
+    readonly leaseId: string;
+    readonly requesterId: string;
+  };
+  "baseline.removed": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: "operator" | "nuke" | "replaced";
+    readonly requesterId?: string;
+  };
+  "baseline.stale": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: string;
+  };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "daemon.update-failed": {
