@@ -8,7 +8,9 @@ import {
   leaseIdSchema,
   OPERATIONS,
   refuseModelWithClass,
+  requesterIdSchema,
   waitingRequestSchema,
+  WARM_POOL_NAME_MAX,
 } from "../contract/index.js";
 import { declareRoute, firstValue, sseMessage } from "./routes.js";
 
@@ -135,10 +137,7 @@ const execBodySchema = z
       .string()
       .nullish()
       .transform((value) => value ?? undefined),
-    requesterId: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
+    requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
 
@@ -197,7 +196,7 @@ export const leaseRequestBodySchema = z
   .object({
     allowDownload: z.boolean().optional(),
     class: deviceClassSchema.optional(),
-    device: z.string().min(1).optional(),
+    device: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),

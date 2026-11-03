@@ -26,6 +26,7 @@ import {
   eventEnvelopeSchema,
   EVENT_ID_PATTERN,
   hostFactsSchema,
+  requesterIdSchema,
   historyStatusSchema,
   hostLoadSchema,
   imageTagSchema,
@@ -147,7 +148,7 @@ const EXACT_OS_VERSION_BOUND =
 
 const leaseRequestBaseSchema = z
   .object({
-    model: z.string().min(1).optional(),
+    model: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     class: deviceClassSchema.optional(),
     platform: platformSchema,
     // why: A plain string, checked by `refuseBadOsVersion`: a refined field would be checked by the MCP SDK
@@ -156,7 +157,7 @@ const leaseRequestBaseSchema = z
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
     physical: z.boolean().optional(),
-    requesterId: z.string().optional(),
+    requesterId: requesterIdSchema.optional(),
     allowDownload: z.boolean().optional(),
     noWait: z.boolean().optional(),
     timeoutMs: z.number().finite().positive().optional(),
@@ -282,7 +283,7 @@ export const leaseRequest = defineOperation({
   input: leaseRequestInputSchema,
   output: leaseGrantSchema,
   // why: No `authorize` hook on purpose: any agent session may request under an arbitrary
-  // `requesterId`, and `owner` is gated by role in the handler (the resource does not exist yet).
+  // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
 export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
@@ -318,7 +319,10 @@ export const leaseCancel = defineOperation({
   name: "lease.cancel",
   role: "agent",
   effect: "write",
-  input: z.object({ requesterId: z.string().optional(), platform: platformSchema.optional() }),
+  input: z.object({
+    requesterId: requesterIdSchema.optional(),
+    platform: platformSchema.optional(),
+  }),
   output: z.object({ result: z.enum(["cancelled", "not-found", "not-cancellable"]) }),
   /**
    * why: ADR §9: "cancels this principal's pending request by requester id". Gated on the pending
@@ -450,7 +454,7 @@ export const deviceExec = defineOperation({
        * identity and is answered as if it had not is the kind of silence that reads like
        * authorization (round 4, F4).
        */
-      requesterId: z.string().optional(),
+      requesterId: requesterIdSchema.optional(),
     })
     .strict(),
   /**
@@ -1094,7 +1098,8 @@ const deviceRotate = defineOperation({
     .object({
       leaseId: z.string().min(1).max(256),
       orientation: z.enum(INPUT_ORIENTATIONS),
-      requesterId: z.string().min(1).max(256).optional(),
+      // why: rotate always refused an empty requesterId, so the shared format also keeps min(1).
+      requesterId: requesterIdSchema.pipe(z.string().min(1)).optional(),
     })
     .strict(),
   output: z.object({ leaseId: z.string().max(256), orientation: z.enum(INPUT_ORIENTATIONS) }),

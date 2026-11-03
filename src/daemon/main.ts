@@ -1033,7 +1033,13 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     views: gatewayService.workers,
   });
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
-  const gatewayRelay = new GatewayRelay({ clock, directory: gatewayService });
+  const gatewayRelay = new GatewayRelay({
+    clock,
+    directory: gatewayService,
+    ...(config.http.proxyAuth === undefined
+      ? {}
+      : { proxyAuthHeader: config.http.proxyAuth.header }),
+  });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
   const moduleHost = await createModuleHost({

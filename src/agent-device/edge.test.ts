@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { NodeSqliteOpener } from "../ports/index.js";
@@ -3521,6 +3521,56 @@ describe("the agent-device front's request rules", () => {
         expect(commandsReceived(rig)).toHaveLength(1);
       },
     );
+  });
+
+  describe("batch caps", () => {
+    const leaf = { command: "snapshot" };
+    const nest = (levels: number, leaves = 1): Record<string, unknown>[] => {
+      let steps: Record<string, unknown>[] = Array.from({ length: leaves }, () => leaf);
+      for (let level = 1; level < levels; level += 1) {
+        steps = [{ command: "batch", flags: { batchSteps: steps } }];
+      }
+      return steps;
+    };
+
+    it("a batch nested deeper than 8 levels or with more than 1000 steps is refused before any step reaches agent-device, and flattening copies each step a bounded number of times", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => batch(rig, undefined, nest(8)));
+      await forwarded(rig, () => batch(rig, undefined, nest(1, 1000)));
+
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(9)),
+        "refused: a batch nests more than 8 levels deep",
+      );
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(1, 1001)),
+        "refused: a batch has more than 1000 steps",
+      );
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(2, 1000)),
+        "refused: a batch has more than 1000 steps",
+      );
+
+      const original = Array.prototype.flatMap;
+      let copied = 0;
+      const spy = vi.spyOn(Array.prototype, "flatMap").mockImplementation(function (
+        this: unknown[],
+        ...args: Parameters<typeof original>
+      ) {
+        const result = original.apply(this, args) as unknown[];
+        copied += result.length;
+        return result;
+      });
+      try {
+        await forwarded(rig, () => batch(rig, undefined, nest(8, 500)));
+      } finally {
+        spy.mockRestore();
+      }
+      expect(copied).toBeLessThanOrEqual(2 * 507);
+    });
   });
 
   describe("rule 6, device selectors", () => {

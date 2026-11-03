@@ -62,6 +62,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
       screens: options.screens,
       settings: options.settings,
     }),
+    clock: options.clock,
     logger: options.logger,
   };
   // why: a device that stops with no lease end (the warm pool's shutdown, the reaper, a phone unplugged,
@@ -95,6 +96,7 @@ export function createWorkerStream(options: WorkerStreamOptions): WorkerStream {
 
 export interface GatewayStreamOptions {
   readonly fleet: FleetPort;
+  readonly clock: Clock;
   readonly logger: Logger;
 }
 
@@ -103,6 +105,7 @@ export function createGatewayStream(options: GatewayStreamOptions): {
   readonly leaseRoute: StreamLeaseHandler;
 } {
   const service: StreamServiceOptions = {
+    clock: options.clock,
     link: createGatewayStreamLink({ fleet: options.fleet }),
     logger: options.logger,
   };

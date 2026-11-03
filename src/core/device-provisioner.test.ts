@@ -211,14 +211,16 @@ describe("DeviceProvisioner", () => {
     expect(harness.claims.isClaimed(failed?.id ?? "")).toBe(false);
   });
 
-  it("rolls back a registered device and returns BootTimeoutError-compatible failure on boot failure", async () => {
+  it("rolls back a registered device and gives the requester BootTimeoutError carrying the driver's message on boot failure", async () => {
     const harness = await createHarness();
     const reserved = reservation();
     harness.driver.failOn("makeReady", 1, new DriverCrashError("boot failed"));
 
-    await expect(
-      harness.provisioner.provision(spec, { reservation: reserved }),
-    ).rejects.toBeInstanceOf(BootTimeoutError);
+    const failure = await harness.provisioner
+      .provision(spec, { reservation: reserved })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BootTimeoutError);
+    expect(failure).toMatchObject({ message: expect.stringContaining("boot failed") });
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(harness.eventBus.replay()).toContainEqual(
       expect.objectContaining({

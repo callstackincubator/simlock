@@ -79,6 +79,7 @@ import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -465,7 +466,7 @@ export class Dispatcher {
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
-    const requesterId = input.requesterId ?? session.principal;
+    const requesterId = input.requesterId ?? principalAsRequester(session.principal);
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
@@ -587,14 +588,15 @@ export class Dispatcher {
     );
   }
 
-  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester decides.
+  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester on that row's platform decides.
   #waitingFor(session: DispatchSession) {
     return this.options.queue
       .waitingRequests()
       .filter(
         (request) =>
           session.role === "admin" ||
-          this.options.queue.pendingRequestOwner(request.requesterId) === session.principal,
+          this.options.queue.pendingRequestOwner(request.requesterId, request.spec.platform) ===
+            session.principal,
       );
   }
 

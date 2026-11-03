@@ -292,7 +292,7 @@ export interface EventMap {
    * `unauthenticated` (`401`) is a missing or unrecognized join token -- a revoked or mistyped
    * one lands here; `forbidden` (`403`) is a real token whose role is not `worker`; and
    * `worker-mismatch` (`403`) is a join token pinned to another worker id, or a worker id
-   * another token is pinned to.
+   * another token is pinned to, or an id outside `[A-Za-z0-9_-]{1,128}`.
    *
    * Version skew is deliberately *not* one of these: a worker whose `hello` finds no
    * overlapping protocol range authenticated fine, so it enters the registry as
