@@ -168,6 +168,7 @@ export {
   BaselineInUseError,
   BaselineSaveFailedError,
   BaselineService,
+  type CurrentBaseline,
   UnknownBaselineError,
 } from "./baselines.js";
 export { baselinesOwner } from "./baselines-schema.js";

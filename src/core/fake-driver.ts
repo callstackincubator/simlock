@@ -458,7 +458,10 @@ export class FakeDriver implements Driver {
     return this.#sourceFiles.get(sourceId);
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async provision(
+    spec: VirtualSpec,
+    options?: { readonly source?: string },
+  ): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
 
@@ -466,6 +469,11 @@ export class FakeDriver implements Driver {
     this.#nextDeviceNumber += 1;
     this.#deviceSpecs.set(deviceId, spec);
     this.#devices.set(deviceId, "provisioned");
+    if (options?.source !== undefined) {
+      const files = this.#sourceFiles.get(options.source);
+      if (files === undefined) throw new Error(`No source ${options.source}`);
+      this.#deviceFiles.set(deviceId, new Map(files));
+    }
 
     return {
       address: this.#addressOf(deviceId, 0),

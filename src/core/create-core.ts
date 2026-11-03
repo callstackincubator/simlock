@@ -206,16 +206,6 @@ export function createCore(options: CoreOptions): Core {
     claims,
     options.clock,
   );
-  const provisioner = new DeviceProvisioner({
-    catalog: drivers,
-    claims,
-    clock: options.clock,
-    components: options.components,
-    decisions,
-    lifecycle: deviceLifecycle,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-    registry,
-  });
   const quarantine = new QuarantineCoordinator({
     claims,
     clock: options.clock,
@@ -252,6 +242,17 @@ export function createCore(options: CoreOptions): Core {
     reclaim,
     registry,
     state: options.state,
+  });
+  const provisioner = new DeviceProvisioner({
+    baselines: () => baselines,
+    catalog: drivers,
+    claims,
+    clock: options.clock,
+    components: options.components,
+    decisions,
+    lifecycle: deviceLifecycle,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    registry,
   });
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {

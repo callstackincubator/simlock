@@ -69,6 +69,7 @@ export interface PhysicalSpec {
   readonly class: PhysicalClass;
   readonly mode?: undefined;
   readonly imageTag?: undefined;
+  readonly baseline?: undefined;
 }
 
 export type DeviceSpec = VirtualSpec | PhysicalSpec;

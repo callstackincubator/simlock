@@ -210,6 +210,7 @@ async function createHarness(
       registry,
     });
   const provisioner = new DeviceProvisioner({
+    baselines: () => ({ current: () => undefined }),
     catalog,
     claims,
     clock,
@@ -267,6 +268,7 @@ async function createHarness(
       timeoutMs: 1_200_000,
     });
   coordinator = new LeaseAcquisitionCoordinator({
+    baselines: { current: () => undefined },
     catalog: options.catalogReader ?? catalog,
     claims,
     components,

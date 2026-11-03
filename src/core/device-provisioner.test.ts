@@ -71,6 +71,7 @@ async function createHarness(
     timeoutMs: 1_200_000,
   });
   const provisioner = new DeviceProvisioner({
+    baselines: () => ({ current: () => undefined }),
     catalog: new DriverCatalog([driver]),
     claims,
     clock,
@@ -329,6 +330,7 @@ describe("DeviceProvisioner", () => {
     const reserved = reservation();
     const registrationError = new Error("state persistence failed");
     const provisioner = new DeviceProvisioner({
+      baselines: () => ({ current: () => undefined }),
       catalog: new DriverCatalog([harness.driver]),
       claims: harness.claims,
       clock: harness.clock,

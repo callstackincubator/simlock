@@ -4,6 +4,7 @@ import type { CapacityReservation } from "./capacity/index.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import type { LeaseProgress, VirtualDevice, VirtualSpec } from "./domain.js";
+import { UnknownBaselineError, type CurrentBaseline } from "./baselines.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
@@ -24,6 +25,8 @@ export interface DeviceProvisionerRegistry {
 }
 
 export interface DeviceProvisionerOptions {
+  /** why: a function, so the provisioner can be built before the store it reads. */
+  readonly baselines: () => { current(name: string): CurrentBaseline | undefined };
   readonly catalog: DriverCatalog;
   readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
@@ -56,19 +59,34 @@ export class DeviceProvisioner {
     this.#logger = options.logger?.child("device-provisioner") ?? new NoopLogger();
   }
 
-  async provision(spec: VirtualSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
-    const driver = this.options.catalog.get(spec.platform);
+  async provision(
+    requested: VirtualSpec,
+    options: ProvisionDeviceOptions,
+  ): Promise<ReadyDeviceHandoff> {
+    const driver = this.options.catalog.get(requested.platform);
+    const made: { spec: VirtualSpec; source?: string } = { spec: requested };
     // Claimed inside the gate, so a removal's own count in the gate sees this device before the
     // driver creates it, or this claim sees the removal's mark and refuses.
     let releaseClaim: () => void;
     try {
-      releaseClaim = await this.options.decisions.run(() =>
-        this.options.components.claimProvision(spec),
-      );
+      releaseClaim = await this.options.decisions.run(() => {
+        const release = this.options.components.claimProvision(requested);
+        if (requested.baseline === undefined) return release;
+        // why: the version and its source are read in the section that takes the claim, so the copy is of the version current at that moment.
+        const current = this.options.baselines().current(requested.baseline.name);
+        if (current === undefined) {
+          release();
+          throw new UnknownBaselineError(requested.baseline.name);
+        }
+        made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
+        made.source = current.sourceId;
+        return release;
+      });
     } catch (error: unknown) {
       options.reservation.release();
       throw error;
     }
+    const { spec, source } = made;
     const startedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
     try {
@@ -76,7 +94,7 @@ export class DeviceProvisioner {
         stage: "provisioning",
         etaMs: driver.estimate({ operation: "provision" }, spec),
       });
-      driverDevice = await driver.provision(spec);
+      driverDevice = await driver.provision(spec, source === undefined ? undefined : { source });
     } catch (error: unknown) {
       releaseClaim();
       options.reservation.release();

@@ -51,6 +51,8 @@ import {
   type DriverCatalog,
   type ModelPreferences,
   type CatalogReader,
+  type BaselineService,
+  UnknownBaselineError,
   type AcquisitionMaintenance,
   type Core,
   type ManagedDeviceLifecycle,
@@ -144,6 +146,7 @@ export type AcquisitionQueue = Pick<
 >;
 
 export interface LeaseAcquisitionCoordinatorOptions {
+  readonly baselines: Pick<BaselineService, "current">;
   readonly catalog: Pick<CatalogReader, "listCatalog">;
   readonly claims: AcquisitionClaims;
   readonly components: Pick<ComponentInstaller, "install">;
@@ -508,6 +511,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
+    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline);
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     const range = requestedRange(request);
@@ -526,6 +530,26 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requirement: target.requirement ?? exactRequirement(spec),
       spec,
     };
+  }
+
+  /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
+  #resolveBaseline(name: string): {
+    readonly spec: VirtualSpec;
+    readonly requirement: DeviceRequirement;
+    readonly classOf: undefined;
+  } {
+    const current = this.options.baselines.current(name);
+    if (current === undefined) throw new UnknownBaselineError(name);
+    const spec: VirtualSpec = {
+      baseline: { name, version: current.version },
+      model: current.model,
+      osVersion: current.osVersion,
+      physical: false,
+      platform: current.platform,
+      ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+      ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+    };
+    return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
 
   /**

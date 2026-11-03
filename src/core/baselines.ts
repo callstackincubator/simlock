@@ -67,6 +67,19 @@ export class BaselineInUseError extends Error {
   }
 }
 
+/** why: one baseline version as a lease request reads it: the spec a copy has and the source it is copied from. */
+export interface CurrentBaseline {
+  readonly imageTag?: string;
+  readonly mode: "slim" | "full";
+  readonly model: string;
+  readonly name: string;
+  readonly osVersion: string;
+  readonly platform: Platform;
+  readonly sourceId: string;
+  readonly staleReason?: string;
+  readonly version: number;
+}
+
 export interface NamedSource extends DriverSource {
   readonly baselineName?: string;
   readonly baselineVersion?: number;
@@ -154,6 +167,25 @@ export class BaselineService {
       });
     await this.#dropOlderVersions(baseline.name, baseline.version, request.requesterId);
     return { baseline, leaseId: request.leaseId };
+  }
+
+  /** why: the newest version of a name, with the source a copy is made from; the coordinator and the provisioner read it, each in their own step, so a save between them is seen. */
+  current(name: string): CurrentBaseline | undefined {
+    const row = this.options.state.database
+      .prepare("SELECT * FROM baselines WHERE name = ? ORDER BY version DESC LIMIT 1")
+      .get(name);
+    if (row === undefined) return undefined;
+    return {
+      mode: String(row.mode) as CurrentBaseline["mode"],
+      model: String(row.model),
+      name,
+      osVersion: String(row.os_version),
+      platform: String(row.platform) as Platform,
+      sourceId: String(row.source_id),
+      version: Number(row.version),
+      ...(row.image_tag === null ? {} : { imageTag: String(row.image_tag) }),
+      ...(row.stale_reason === null ? {} : { staleReason: String(row.stale_reason) }),
+    };
   }
 
   /** why: the newest version of each name, by name; the size is the source's, read from its driver. */
