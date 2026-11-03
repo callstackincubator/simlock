@@ -196,12 +196,31 @@ export function refuseModelWithClass(
   };
 }
 
+function refuseBaselineWithClass(): <
+  T extends { readonly baseline?: unknown; readonly class?: unknown },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    if (input.baseline !== undefined && input.class !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "a request names a baseline or a class, not both: send only one of `baseline` and `class`",
+        path: ["class"],
+      });
+    }
+  };
+}
+
 /** why: `allowDownload: false` passes because the CLI always sends it. */
 function refusePhysicalWithImageFields(): <
   T extends {
     readonly physical?: boolean | undefined;
     readonly mode?: unknown;
     readonly imageTag?: unknown;
+    readonly baseline?: unknown;
     readonly allowDownload?: boolean | undefined;
   },
 >(
@@ -213,6 +232,7 @@ function refusePhysicalWithImageFields(): <
     const refused = [
       input.mode === undefined ? undefined : "mode",
       input.imageTag === undefined ? undefined : "imageTag",
+      input.baseline === undefined ? undefined : "baseline",
       input.allowDownload === true ? "allowDownload" : undefined,
     ];
     for (const field of refused) {
@@ -275,6 +295,7 @@ export const leaseRequestFields = leaseRequestBaseSchema;
 
 const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseModelWithClass())
+  .superRefine(refuseBaselineWithClass())
   .superRefine(refuseBadOsVersion())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());

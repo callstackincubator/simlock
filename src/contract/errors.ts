@@ -92,6 +92,13 @@ export interface ErrorDetailsMap {
   /** why: a save that ended the lease but kept no baseline: the driver could not make the source. */
   BASELINE_SAVE_FAILED: { readonly name: string; readonly leaseId: string };
   UNKNOWN_BASELINE: { readonly name: string };
+  /** why: a lease request named a baseline and a field it also named differs; `field` is the first that differs. */
+  BASELINE_MISMATCH: {
+    readonly baseline: string;
+    readonly field: "platform" | "model" | "osVersion" | "mode" | "imageTag";
+  };
+  /** why: a lease request named a baseline whose runtime or image is gone; `reason` is the driver's own wording. */
+  BASELINE_STALE: { readonly baseline: string; readonly reason: string };
   BASELINE_IN_USE: { readonly name: string; readonly leaseId: string };
   TUNNEL_UNSUPPORTED: Record<string, never>;
   TUNNEL_PORT_IN_USE: Record<string, never>;
@@ -217,6 +224,8 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNKNOWN_LEASE: true,
   BASELINE_SAVE_FAILED: true,
   UNKNOWN_BASELINE: true,
+  BASELINE_MISMATCH: true,
+  BASELINE_STALE: true,
   BASELINE_IN_USE: true,
   ROTATION_UNSUPPORTED: true,
   INPUT_UNAVAILABLE: true,
@@ -461,6 +470,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     cliExitCode: 12,
     httpStatus: 404,
   },
+  BASELINE_MISMATCH: {
+    code: "BASELINE_MISMATCH",
+    kind: "domain",
+    cliExitCode: 2,
+    httpStatus: 422,
+  },
+  BASELINE_STALE: { code: "BASELINE_STALE", kind: "domain", cliExitCode: 12, httpStatus: 422 },
   COMPONENT_BUSY: { code: "COMPONENT_BUSY", kind: "domain", cliExitCode: 11, httpStatus: 409 },
   BASELINE_SAVE_FAILED: {
     code: "BASELINE_SAVE_FAILED",

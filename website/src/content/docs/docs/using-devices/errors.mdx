@@ -39,6 +39,9 @@ Branch on the exit code or on `code`; the message is for people and can change. 
 | --- | --- | --- | --- |
 | `UNKNOWN_MODEL` | 12 | The model is not one this machine knows, no model of the class is listed, or (with `--physical`) no enrolled device could ever match. | Check the spelling against `simlock catalog`. For a class, an admin can name a model in `ios.defaultModels` or `android.defaultModels`. For a physical device, remember `--os` is exact. |
 | `RUNTIME_MISSING` | 12 | The OS version, or the Android image, is not installed. An OS range or `--image-tag` never downloads. | Pass `--allow-download` for an exact version, or ask an admin to install it. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device#when-the-runtime-is-not-installed). |
+| `UNKNOWN_BASELINE` | 12 | `--baseline` names a baseline this machine does not have. | Check the name with `simlock baseline list`. |
+| `BASELINE_MISMATCH` | 2 | `--baseline` came with a platform, model, OS, mode or image tag that differs from the baseline. The message names the first one that differs. | Drop that option: the baseline already decides it. |
+| `BASELINE_STALE` | 12 | The baseline's runtime or image was removed since it was saved. | Ask an admin to install it again, or save the baseline again. |
 | `LICENSE_NOT_ACCEPTED` | 12 | An Android download needs the SDK licences, which this machine has not accepted. | An admin sets `downloads.acceptAndroidLicenses` to `true`. |
 | `INSUFFICIENT_DISK_SPACE` | 12 | The download does not fit on the disk. The message says how much is needed and free. | Free disk space on that machine, or ask for an installed version. |
 | `DOWNLOAD_TIMEOUT` | 10 | The download, including time waiting behind another download, took longer than the machine allows. | Retry; the download may already be further along. Or ask an admin to install the runtime. |

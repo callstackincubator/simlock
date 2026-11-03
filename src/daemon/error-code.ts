@@ -20,6 +20,8 @@
  * dispatcher, so it never reaches HTTP either) -- that stays local to `server.ts`.
  */
 import {
+  BaselineMismatchError,
+  BaselineStaleError,
   ComponentBusyError,
   ComponentInstallerClosedError,
   ComponentInstallTimeoutError,
@@ -29,6 +31,7 @@ import {
   NoDriverError,
   PassthroughRefusedError,
   RuntimeMissingError,
+  UnknownBaselineError,
   UnknownLeaseError,
   UnknownModelError,
   UnknownPassthroughToolError,
@@ -138,6 +141,15 @@ export function classifyError(error: unknown): SimlockErrorCode | undefined {
   }
   if (error instanceof UnknownModelError) {
     return "UNKNOWN_MODEL";
+  }
+  if (error instanceof UnknownBaselineError) {
+    return "UNKNOWN_BASELINE";
+  }
+  if (error instanceof BaselineMismatchError) {
+    return "BASELINE_MISMATCH";
+  }
+  if (error instanceof BaselineStaleError) {
+    return "BASELINE_STALE";
   }
   // A request option the platform's driver does not have: the request itself is wrong, and
   // asking again unchanged can never succeed.

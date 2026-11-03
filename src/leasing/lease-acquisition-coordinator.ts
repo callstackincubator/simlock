@@ -53,6 +53,9 @@ import {
   type CatalogReader,
   type BaselineService,
   UnknownBaselineError,
+  BaselineMismatchError,
+  BaselineStaleError,
+  baselineMismatch,
   type AcquisitionMaintenance,
   type Core,
   type ManagedDeviceLifecycle,
@@ -511,7 +514,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline);
+    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline, request);
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     const range = requestedRange(request);
@@ -533,13 +536,22 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
-  #resolveBaseline(name: string): {
+  async #resolveBaseline(
+    name: string,
+    request: DeviceRequest,
+  ): Promise<{
     readonly spec: VirtualSpec;
     readonly requirement: DeviceRequirement;
     readonly classOf: undefined;
-  } {
+  }> {
     const current = this.options.baselines.current(name);
     if (current === undefined) throw new UnknownBaselineError(name);
+    const entry = (await this.options.catalog.listCatalog(current.platform))[0];
+    const mismatch = baselineMismatch(current, request, entry ?? { modelAliases: {}, models: [] });
+    if (mismatch !== undefined) {
+      throw new BaselineMismatchError(name, mismatch.field, mismatch.message);
+    }
+    if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec: VirtualSpec = {
       baseline: { name, version: current.version },
       model: current.model,

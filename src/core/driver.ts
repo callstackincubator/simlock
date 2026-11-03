@@ -617,6 +617,29 @@ export class UnknownModelError extends Error {
   }
 }
 
+/** why: a request naming a baseline also named a field that differs from it; `field` is the first that differs. */
+export class BaselineMismatchError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly field: "platform" | "model" | "osVersion" | "mode" | "imageTag",
+    message: string,
+  ) {
+    super(message);
+    this.name = "BaselineMismatchError";
+  }
+}
+
+/** why: a request named a baseline whose runtime or image is gone, so no copy of it can be made. */
+export class BaselineStaleError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly reason: string,
+  ) {
+    super(`baseline ${baselineName} is stale: ${reason}`);
+    this.name = "BaselineStaleError";
+  }
+}
+
 export class BootTimeoutError extends Error {
   /** why: `reason` is the driver's own message for a boot that failed rather than ran out of time. */
   constructor(

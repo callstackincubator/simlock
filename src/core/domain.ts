@@ -4,7 +4,8 @@ import {
   parseOsConstraint,
   satisfies,
 } from "../contract/index.js";
-import type { DeviceRequest } from "./driver.js";
+import { findCatalogModel } from "./catalog-match.js";
+import type { DeviceRequest, DriverCatalogEntry } from "./driver.js";
 
 export type Platform = "ios" | "android";
 
@@ -105,6 +106,65 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
     specMode(left) === specMode(right) &&
     left.imageTag === right.imageTag
   );
+}
+
+/** why: the fields of a saved baseline a request can name, as `baselineMismatch` compares them. */
+export interface BaselineFacts {
+  readonly name: string;
+  readonly platform: Platform;
+  readonly model: string;
+  readonly osVersion: string;
+  readonly mode: DeviceMode;
+  readonly imageTag?: string | undefined;
+}
+
+export type BaselineMismatch = {
+  readonly field: "platform" | "model" | "osVersion" | "mode" | "imageTag";
+  readonly message: string;
+};
+
+/**
+ * why: the one rule for whether a request naming a baseline agrees with it (architecture rule 10).
+ * A field the request does not name is not compared; the first field that differs, in the order
+ * platform, model, OS, mode, image tag, is named. A model matches by the catalog's case and alias
+ * rule, an OS by `satisfiesOs`.
+ */
+export function baselineMismatch(
+  baseline: BaselineFacts,
+  request: Pick<DeviceRequest, "platform" | "model" | "osVersion" | "mode" | "imageTag">,
+  catalogEntry: Pick<DriverCatalogEntry, "models" | "modelAliases">,
+): BaselineMismatch | undefined {
+  const is = (value: string, asked: string): string =>
+    `baseline ${baseline.name} is ${value}, the request asks for ${asked}`;
+  if (request.platform !== baseline.platform) {
+    return { field: "platform", message: is(baseline.platform, request.platform) };
+  }
+  if (request.model !== undefined) {
+    const listed = findCatalogModel(catalogEntry, request.model) ?? request.model;
+    if (listed.toLowerCase() !== baseline.model.toLowerCase()) {
+      return { field: "model", message: is(baseline.model, request.model) };
+    }
+  }
+  if (request.osVersion !== undefined) {
+    const parsed = parseOsConstraint(request.osVersion);
+    if (!parsed.ok || !satisfies(baseline.osVersion, parsed.constraint)) {
+      const label = baseline.platform === "ios" ? "iOS" : "Android";
+      return {
+        field: "osVersion",
+        message: is(`${label} ${baseline.osVersion}`, request.osVersion),
+      };
+    }
+  }
+  if (request.mode !== undefined && request.mode !== baseline.mode) {
+    return { field: "mode", message: is(baseline.mode, request.mode) };
+  }
+  if (request.imageTag !== undefined && request.imageTag !== baseline.imageTag) {
+    return {
+      field: "imageTag",
+      message: is(`image tag ${baseline.imageTag ?? "none"}`, request.imageTag),
+    };
+  }
+  return undefined;
 }
 
 /**

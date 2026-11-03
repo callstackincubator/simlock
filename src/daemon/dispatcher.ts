@@ -31,6 +31,8 @@ import {
   UnknownLeaseError,
   type CapacityReader,
   BaselineInUseError,
+  BaselineMismatchError,
+  BaselineStaleError,
   BaselineSaveFailedError,
   UnknownBaselineError,
   type BaselineService,
@@ -527,6 +529,21 @@ export class Dispatcher {
     } catch (error: unknown) {
       if (error instanceof LeaseIdTakenError) {
         throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
+      if (error instanceof UnknownBaselineError) {
+        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+      }
+      if (error instanceof BaselineMismatchError) {
+        throw new DispatchError("BASELINE_MISMATCH", error.message, {
+          baseline: error.baselineName,
+          field: error.field,
+        });
+      }
+      if (error instanceof BaselineStaleError) {
+        throw new DispatchError("BASELINE_STALE", error.message, {
+          baseline: error.baselineName,
+          reason: error.reason,
+        });
       }
       if (error instanceof NoCapacityError) {
         const capacityReason = capacityReasonOf(error.reason);
