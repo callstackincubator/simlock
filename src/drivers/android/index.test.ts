@@ -7073,6 +7073,82 @@ describe("AndroidDriver image fit", () => {
       expect(launches.flatMap((call) => call.args)).not.toContain("-wipe-data");
       expect(ready.address).toBe("emulator-5586");
     });
+
+    it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
+      const serial = "emulator-5586";
+      const attached = `List of devices attached\n${serial}\tdevice\n`;
+      const own = {
+        address: serial,
+        deviceId: "simlock_one",
+        driverData: {
+          avdHome: copyHome,
+          avdName: "simlock",
+          configHash: "hash",
+          port: 5586,
+          serial,
+        },
+      };
+      const harness = async (expectations: readonly ScriptedProcessExpectation[]) => {
+        const filesystem = await androidFilesystem();
+        for (const home of [copyHome, `${avdDirectory}/simlock_two`]) {
+          await filesystem.mkdirp(`${home}/simlock.avd`);
+          await filesystem.writeFileAtomic(`${home}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
+        }
+        const runner = new ScriptedProcessRunner([...expectations]);
+        return { driver: await createDriver(filesystem, runner), filesystem, runner };
+      };
+      const answersWith = (folder: string) =>
+        processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "path"],
+          `${folder}/simlock.avd\r\nOK\r\n`,
+        );
+
+      const passes = await harness([
+        processResult(binaries.adb, ["devices"], attached),
+        answersWith(copyHome),
+        processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      await passes.driver.destroy(own);
+      expect(await passes.filesystem.exists(copyHome)).toBe(false);
+      expect(await passes.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+
+      const unreadable = await harness([
+        processResult(binaries.adb, ["devices"], attached),
+        {
+          match: { args: ["-s", serial, "emu", "avd", "path"], command: binaries.adb },
+          result: { code: 1, stderr: "error", stdout: "" },
+        },
+      ]);
+      await expect(unreadable.driver.destroy(own)).rejects.toThrow(
+        `Refusing to delete simlock_one: could not tell which AVD the emulator on ${serial} runs`,
+      );
+      expect(await unreadable.filesystem.exists(copyHome)).toBe(true);
+      expect(unreadable.runner.calls.flatMap((call) => call.args)).not.toContain("kill");
+
+      const failingDelete = await harness([
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+      ]);
+      failingDelete.filesystem.defineFailure(copyHome, "EACCES");
+      await expect(failingDelete.driver.destroy(own)).rejects.toMatchObject({ code: "EACCES" });
+      expect(await failingDelete.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
+
+      const old = await harness([
+        processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
+      ]);
+      await old.driver.destroy({
+        ...own,
+        deviceId: "simlock_old",
+        driverData: { avdName: "simlock_old", configHash: "hash", port: 0, serial: "" },
+      });
+      expect(old.runner.calls[0]?.options.env).toMatchObject({ ANDROID_AVD_HOME: avdDirectory });
+
+      await expect(old.driver.reclaim(own, { clean: "standard" })).rejects.toMatchObject({
+        message: "virtual devices are not reclaimed",
+        name: "DriverCrashError",
+      });
+    });
   });
 
   describe("an image tag whose image misfits", () => {
