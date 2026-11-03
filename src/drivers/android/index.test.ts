@@ -6434,6 +6434,25 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
       ];
 
+      it("provisions a device named after a baseline source as a copy of that source's folder, with no seed made and no tool run", async () => {
+        const harness = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
+          config,
+          ids: [...ids, "five"],
+        });
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+        await harness.driver.saveSource({ ...ready, physical: false as const });
+        await harness.filesystem.writeFileAtomic(`${savedHome}/simlock.avd/marker.txt`, "saved");
+        const callsBefore = harness.runner.calls.length;
+
+        const copy = await harness.driver.provision(harness.spec, { source: "baseline_four" });
+
+        expect(copy.deviceId).toBe("simlock_five");
+        await expect(
+          harness.filesystem.readFile(`${avdDirectory}/simlock_five/simlock.avd/marker.txt`),
+        ).resolves.toBe("saved");
+        expect(harness.runner.calls).toHaveLength(callsBefore);
+      });
+
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
         const kept = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
           expect(await harness.filesystem.exists(`${savedHome}/simlock.avd/config.ini`)).toBe(true);

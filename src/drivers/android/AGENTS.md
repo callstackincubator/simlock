@@ -47,7 +47,7 @@ Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no sc
 3. Reap = its command line (`ProcessSupervisor.commandLine`) must show `adb` or `adb.exe`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. An unreadable one keeps the record.
 4. `dispose` reaps it, unless `adb devices` still lists an emulator: then it leaves the server and its record for the next daemon to adopt, because an emulator whose server is gone starts an adb `fork-server` on the port, which the next start refuses as `occupied`. Emulators are spawned unref'd and outlive the daemon.
 
-Provision — `provision`: every device is a copy of a seed.
+Provision — `provision`: every device is a copy of a seed, or of the ready baseline source named by `options.source` (a lease naming a baseline): then steps 1–3 are skipped and step 4 copies that source's folder.
 
 1. Profile from the `resolveSpec` cache, else `DeviceProfileRegistry.resolve`. Image: installed, fitting, at the spec's API level. Order: host-ABI `google_apis` → host ABI → `google_apis` → any. With an image tag: that tag only, host ABI first.
 2. Seed for `<model>|<system image package>`: a `ready` row recomputed on each provision (`emulator -version`, installed images). Stale (`system image … is not installed` / `changed from revision …`, `emulator changed from … to …`, `android.emulator launch settings changed`) → destroyed and made again; the reason is stored by `listSources` and clears when things match. One make per kind at a time (lock); a `making` row of an earlier process, or older than 900 s, is swept (its emulator stopped by its path) at the next listing or make of that kind.

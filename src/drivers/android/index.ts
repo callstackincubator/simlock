@@ -1423,8 +1423,12 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async provision(
+    spec: VirtualSpec,
+    options: { readonly source?: string } = {},
+  ): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
+    if (options.source !== undefined) return await this.#provisionFromSource(options.source);
     const profile = await this.#profileFor(spec.model);
     const image = await this.#requireImage(profile, spec.osVersion, spec.imageTag);
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
@@ -1462,6 +1466,39 @@ export class AndroidDriver implements Driver {
       port: undefined,
     });
 
+    return { address: "", deviceId, driverData };
+  }
+
+  /**
+   * why: ADR 0061 §4: a lease naming a baseline starts from a copy of that baseline's source, which
+   * holds the saved disk and its boot snapshot; the kind's seed is not touched, and the spec was
+   * already checked against the baseline by the coordinator.
+   */
+  async #provisionFromSource(sourceId: string): Promise<DriverDevice> {
+    const row = this.#sources.readyRows().find((candidate) => candidate.sourceId === sourceId);
+    if (row === undefined) {
+      throw new DriverCrashError(`Android keeps no ready source ${sourceId}`);
+    }
+    const deviceId = `simlock_${this.#idGenerator.generate()}`;
+    const avdHome = join(this.#deviceRoot, deviceId);
+    await this.#copyAvd(
+      row.folder,
+      avdHome,
+      `copying Android source ${sourceId} to ${basename(avdHome)} failed`,
+    );
+    const driverData: AndroidDriverData = {
+      avdHome,
+      avdName: SEED_AVD_NAME,
+      configHash: row.configHash,
+      imageIdentity: row.imageIdentity,
+      port: 0,
+      serial: "",
+    };
+    this.#devices.set(this.#avdFolder(driverData), {
+      handle: undefined,
+      imageIdentity: row.imageIdentity,
+      port: undefined,
+    });
     return { address: "", deviceId, driverData };
   }
 
