@@ -1693,6 +1693,27 @@ describe("Dispatcher: baseline.list", () => {
   });
 });
 
+describe("Dispatcher: baseline.list without a driver", () => {
+  it("lists a baseline whose platform has no driver as stale, without storing the reason or recording an event", async () => {
+    const { dispatcher, eventBus } = await buildDispatcher({
+      seedState: ({ database }) => {
+        database
+          .prepare(
+            "INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id) VALUES ('droid', 1, 'android', 'Pixel 9', '36', 'full', '2026-11-02T13:40:00.000Z', 'src-droid')",
+          )
+          .run();
+      },
+    });
+    const agent = session({ role: "agent" });
+
+    const listed = await dispatcher.dispatch("baseline.list", {}, agent);
+    expect(listed.baselines).toMatchObject([
+      { name: "droid", staleReason: "the android driver is not available on this worker" },
+    ]);
+    expect(eventBus.replay().filter((envelope) => envelope.event === "baseline.stale")).toEqual([]);
+  });
+});
+
 /** why: #1207 writes a device's baseline at provision; until then a test writes the registry rows a remove reads. */
 function seedBaselineRows(state: StateDatabase): void {
   const { database } = state;
