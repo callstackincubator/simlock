@@ -17,6 +17,7 @@ import {
   WebSocketRefusedError,
 } from "../../ports/index.js";
 import { commandArgs, UsageError } from "../args.js";
+import { escapeControl } from "../escape.js";
 import { selectOnlyLease } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
@@ -150,8 +151,16 @@ function relayConnections(
     writes: Promise<void>;
     window: number;
     wake: (() => void) | undefined;
+    sentEnd: boolean;
+    receivedEnd: boolean;
   }
   const streams = new Map<number, Relayed>();
+  // why: a connection is dropped only when both directions have ended; one half alone leaves the other still carrying data.
+  const finishIfDone = (conn: number, relayed: Relayed): void => {
+    if (!relayed.sentEnd || !relayed.receivedEnd || streams.get(conn) !== relayed) return;
+    streams.delete(conn);
+    relayed.stream.close();
+  };
   const pump = async (conn: number, relayed: Relayed): Promise<void> => {
     const reader = relayed.stream.readable.getReader();
     for (;;) {
@@ -171,7 +180,10 @@ function relayConnections(
         at += size;
       }
     }
-    if (streams.get(conn) === relayed) socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+    if (streams.get(conn) !== relayed) return;
+    socket.send(encodeTunnelFrame(TUNNEL_TAG.end, conn));
+    relayed.sentEnd = true;
+    finishIfDone(conn, relayed);
   };
   // why: a write the caller's port refused (it ended the connection) resets that one connection and leaves the tunnel and its other connections up.
   const failed = (conn: number, relayed: Relayed): void => {
@@ -188,6 +200,8 @@ function relayConnections(
   const adopt = (conn: number, stream: TcpStream): void => {
     const relayed: Relayed = {
       stream,
+      receivedEnd: false,
+      sentEnd: false,
       wake: undefined,
       window: TUNNEL_WINDOW_BYTES,
       writes: Promise.resolve(),
@@ -224,7 +238,11 @@ function relayConnections(
       connection.wake?.();
     } else if (frame.tag === TUNNEL_TAG.end) {
       connection.writes = connection.writes
-        .then(() => connection.stream.end())
+        .then(() => {
+          connection.stream.end();
+          connection.receivedEnd = true;
+          finishIfDone(frame.conn, connection);
+        })
         .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
       connection.stream.close();
@@ -481,7 +499,7 @@ function serve(
             kind === "reverse"
               ? `reverse device:${String(devicePort)} -> localhost:${String(callerPort)}`
               : `forward localhost:${String(callerPort)} -> device:${String(devicePort)}`;
-          environment.stdout.write(`${route} (lease ${leaseId})\n`);
+          environment.stdout.write(`${route} (lease ${escapeControl(leaseId)})\n`);
         }
         return;
       }

@@ -2,6 +2,7 @@
 // stays machine-readable while an operator at a terminal still sees what to do.
 import type { DoctorReport } from "../../admin/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, UsageError, writeResult } from "../args.js";
 import type { CommandContext } from "../tree.js";
 
@@ -54,7 +55,9 @@ function writeDriverAdvisoryWarnings(
 ): void {
   for (const finding of report.findings) {
     if (finding.kind !== "driver-advisory") continue;
-    environment.stderr.write(`Warning [${finding.platform}] ${finding.code}: ${finding.message}\n`);
+    environment.stderr.write(
+      `Warning [${esc(finding.platform)}] ${esc(finding.code)}: ${esc(finding.message)}\n`,
+    );
   }
 }
 
@@ -65,7 +68,7 @@ function writeUnavailableDrivers(
   for (const finding of report.findings) {
     if (finding.kind !== "driver-unavailable") continue;
     environment.stderr.write(
-      `Unavailable [${finding.platform}] ${finding.reason}: ${finding.detail}\n`,
+      `Unavailable [${esc(finding.platform)}] ${esc(finding.reason)}: ${esc(finding.detail)}\n`,
     );
   }
 }
@@ -77,7 +80,7 @@ function writeMissingPrerequisites(
   for (const finding of report.findings) {
     if (finding.kind !== "prerequisite-missing") continue;
     environment.stderr.write(
-      `Missing [${finding.platform}] ${finding.prerequisite}: ${finding.message} ${finding.remedy}\n`,
+      `Missing [${esc(finding.platform)}] ${esc(finding.prerequisite)}: ${esc(finding.message)} ${esc(finding.remedy)}\n`,
     );
   }
 }
@@ -89,7 +92,7 @@ function writeBrokenService(
   for (const finding of report.findings) {
     if (finding.kind !== "service-broken") continue;
     environment.stderr.write(
-      `Service broken: ${finding.name} (${finding.manager}) names missing ${finding.missing.join(", ")}. ${finding.remedy}\n`,
+      `Service broken: ${esc(finding.name)} (${esc(finding.manager)}) names missing ${esc(finding.missing.join(", "))}. ${esc(finding.remedy)}\n`,
     );
   }
 }
@@ -101,7 +104,7 @@ function writeUnreachableWarmTargets(
   for (const finding of report.findings) {
     if (finding.kind !== "warm-pool-target-unreachable") continue;
     environment.stderr.write(
-      `${finding.kind}  ${finding.target}: ${finding.message}; ${finding.remedy}\n`,
+      `${finding.kind}  ${esc(finding.target)}: ${esc(finding.message)}; ${esc(finding.remedy)}\n`,
     );
   }
 }
@@ -110,11 +113,11 @@ function writeModuleUnavailable(
   environment: CommandContext["environment"],
   report: DoctorReport,
 ): void {
-  const oneLine = (text: string): string => text.replace(/\s+/g, " ").slice(0, 500);
+  const oneLine = (text: string): string => esc(text.replace(/\s+/g, " ").slice(0, 500));
   for (const finding of report.findings) {
     if (finding.kind !== "module-unavailable") continue;
     environment.stderr.write(
-      `${finding.module}  fail  ${oneLine(finding.message)}; ${oneLine(finding.remedy)}\n`,
+      `${esc(finding.module)}  fail  ${oneLine(finding.message)}; ${oneLine(finding.remedy)}\n`,
     );
   }
 }

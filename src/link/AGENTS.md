@@ -37,7 +37,7 @@ accepts channels, `daemon/relay.ts` uses them), gateway (`gateway/service.ts` wr
    opened, already accepted, or ended. Not accepted in 30 s → reset `not-accepted`.
 5. **Bytes** — `writable` bytes leave as `DATA` of at most 64 KiB (bulk lane).
    Each side may send 4 MiB before any `CREDIT`; past that, only what the peer granted.
-6. **Credit** — the reader grants `CREDIT` as its user reads off `readable`.
+6. **Credit** — the reader grants `CREDIT` as its user reads off `readable`. Received `DATA` the reader has not asked for yet is packed into chunks of up to 64 KiB, so many tiny fragments are read as a few chunks. The sender counts a `CREDIT` against bytes handed to the transport, not bytes still queued; more than 4 MiB past that resets the channel.
    `credit` and `whenCredit()` let a writer skip data instead of waiting.
 7. **End** — closing `writable` sends `END` for that direction. Cancelling
    `readable` sends `STOP`; the peer's writer errors `stopped` and answers `END`.

@@ -206,6 +206,9 @@ export interface ConnectOptions {
    * option (programmatic client)". Only meaningful via `connectSimlockAdmin` -- the base
    * `connectSimlock` does not accept one, by design (ADR §10: "the split is by import path"). */
   readonly credential?: string;
+  /** why: the longest unfinished line the wire keeps before it closes the connection; a peer
+   * with a smaller largest reply than the local socket's (the gateway's worker uplink) sets its own. */
+  readonly maxLineChars?: number;
 }
 
 /** The full agent-visible method surface (ADR §3's operation matrix, `agent` rows) plus the
@@ -379,7 +382,7 @@ export async function connectSimlockClient(
   admin: boolean,
 ): Promise<SimlockClient | SimlockAdminClient> {
   const connection = await resolveConnection(options);
-  const wire = new SimlockWire(connection);
+  const wire = new SimlockWire(connection, options.maxLineChars);
   let hello: Awaited<ReturnType<SimlockWire["hello"]>>;
   try {
     hello = await wire.hello({
@@ -591,8 +594,8 @@ class SimlockClientImpl {
 
     if (signal?.aborted === true) throw cancelledError();
 
-    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then(
-      (grant) => grant as LeaseGrant,
+    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then((grant) =>
+      this.#parseOutput("lease.request", grant),
     );
 
     if (signal === undefined) return requestPromise;

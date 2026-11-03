@@ -50,6 +50,7 @@ import {
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -363,10 +364,13 @@ export class GatewayDispatcher {
         waiting: [],
       })),
       leases: this.#ownedFleetLeases(principal),
-      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester decides.
+      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester on that row's platform decides.
       waiting: (answer.waiting ?? []).filter(
         (request) =>
-          this.options.coordinator.pendingRequestOwner(request.requesterId) === principal,
+          this.options.coordinator.pendingRequestOwner(
+            request.requesterId,
+            request.spec.platform,
+          ) === principal,
       ),
     });
   };
@@ -695,7 +699,7 @@ export class GatewayDispatcher {
         // count through a gateway (ADR 0009 §3).
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
-        requesterId: input.requesterId ?? session.principal,
+        requesterId: input.requesterId ?? principalAsRequester(session.principal),
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
         ...(session.onRequestAdmitted === undefined
           ? {}

@@ -1,3 +1,4 @@
+import type { Clock, TimerHandle } from "../ports/index.js";
 import type { CapturedStream } from "./feed.js";
 import type { StreamCaller } from "./caller.js";
 import { noSuchStream, StreamRefusalError } from "./refusal.js";
@@ -29,6 +30,8 @@ export interface StreamLink {
 
 export interface StreamServiceOptions {
   readonly link: StreamLink;
+  // why: the clock an `expiresAt` deadline runs on; a door with none cannot end a stream at a time.
+  readonly clock?: Clock;
   readonly logger?: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -68,6 +71,7 @@ export async function handleStreamRequest(
   request: Request,
   caller: StreamCaller,
   target: StreamTarget | undefined,
+  expiresAt?: number,
 ): Promise<Response> {
   if (target === undefined) return refusalResponse(noSuchStream());
   if (request.method !== "GET") {
@@ -104,7 +108,51 @@ export async function handleStreamRequest(
     ...targetFields(target),
     width: stream.meta.width,
   });
-  return streamResponse(stream);
+  return streamResponse(
+    options.clock === undefined || expiresAt === undefined
+      ? stream
+      : endingAt(stream, options.clock, expiresAt),
+  );
+}
+
+// why: a stream opened by an identity that expires (a sign-in proxy's) ends then, as the event streams do,
+// so a person whose access was removed does not keep watching. The delay is capped at what a timer takes;
+// a far deadline ends the stream at the cap and the viewer reconnects.
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+function endingAt(stream: CapturedStream, clock: Clock, expiresAt: number): CapturedStream {
+  const reader = stream.body.getReader();
+  let timer: TimerHandle | undefined;
+  const stop = () => {
+    if (timer !== undefined) clock.cancel(timer);
+    timer = undefined;
+  };
+  const body = new ReadableStream<Uint8Array>({
+    cancel: async (reason) => {
+      stop();
+      await reader.cancel(reason).catch(() => undefined);
+    },
+    async pull(controller) {
+      try {
+        const step = await reader.read();
+        if (step.done) {
+          stop();
+          controller.close();
+        } else controller.enqueue(step.value);
+      } catch (error) {
+        stop();
+        controller.error(error);
+      }
+    },
+    start(controller) {
+      timer = clock.setTimer(Math.min(Math.max(0, expiresAt - clock.now()), MAX_TIMER_MS), () => {
+        timer = undefined;
+        void reader.cancel().catch(() => undefined);
+        controller.close();
+      });
+    },
+  });
+  return { ...stream, body };
 }
 
 export function streamResponse(stream: CapturedStream): Response {

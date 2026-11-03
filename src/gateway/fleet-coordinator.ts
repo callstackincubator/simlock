@@ -1112,6 +1112,14 @@ export class FleetLeaseCoordinator {
           detached = true;
         },
       );
+      // why: the grant crossed a wire; a worker must not be able to crash the gateway with an answer without a lease, so it fails this attempt like any other worker failure.
+      if (typeof (grant as Partial<LeaseGrant> | null)?.lease?.id !== "string") {
+        throw new DispatchError(
+          "INTERNAL",
+          `Worker ${workerId} answered lease.request with a malformed grant`,
+          { workerId },
+        );
+      }
     } catch (error: unknown) {
       // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
       // queued ... the request waits" (§11) -- `announced` is exactly the "work has begun"

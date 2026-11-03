@@ -1,6 +1,7 @@
 import { parseOrientation } from "../../contract/index.js";
 import { commandArgs, requiredPositional, UsageError } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl } from "../escape.js";
 import { resolveRemoteLeaseId } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
 
@@ -30,7 +31,9 @@ async function run(
       parsed.orientation,
       requesterId === undefined ? undefined : { requesterId },
     );
-    environment.stdout.write(`Rotated lease ${rotated.leaseId} to ${rotated.orientation}\n`);
+    environment.stdout.write(
+      `Rotated lease ${escapeControl(rotated.leaseId)} to ${escapeControl(rotated.orientation)}\n`,
+    );
     return 0;
   } finally {
     await client.close();

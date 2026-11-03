@@ -1,5 +1,6 @@
 import { asDaemonRefusal, UsageError } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl, escapeControlLines } from "../escape.js";
 import { stopRunningDaemon } from "../daemon-service.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
 import { consoleLines, formatStatus, serviceLine, type ServiceReport } from "../format.js";
@@ -69,7 +70,9 @@ async function daemonStatus(context: CommandContext, json: boolean): Promise<num
           error: { code: refusal.code, message: refusal.message },
         });
       } else {
-        write(`Daemon handshake refused: ${refusal.code}: ${refusal.message}\n`);
+        write(
+          `Daemon handshake refused: ${escapeControl(refusal.code)}: ${escapeControl(refusal.message)}\n`,
+        );
       }
       return 1;
     }
@@ -212,7 +215,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
   if (command === "logs") {
     if (environment.readLogFile === undefined) throw new Error("Daemon log reader is unavailable");
     const lines = (await environment.readLogFile()).trimEnd().split("\n");
-    const output = lines.slice(-100).join("\n");
+    const output = escapeControlLines(lines.slice(-100).join("\n"));
     if (values.json) writeResult((value) => environment.stdout.write(value), { logs: output });
     else environment.stdout.write(`${output}\n`);
     return 0;

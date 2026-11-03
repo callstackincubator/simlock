@@ -1,12 +1,18 @@
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  holdLoopbackPort,
+  REPO_ROOT,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+} from "./helpers/index.js";
 
 async function waitForReadyDevice(env: TestEnv, model: string): Promise<string> {
   let driverDeviceId = "";
@@ -161,19 +167,13 @@ describe("daemon lifecycle & recovery", () => {
     }
     expect(await runDaemonEntry(env, [])).toBe(1);
 
-    const holder = createServer();
-    const port = await new Promise<number>((resolve) => {
-      holder.listen(0, "127.0.0.1", () => {
-        const address = holder.address();
-        resolve(typeof address === "object" && address !== null ? address.port : 0);
-      });
-    });
+    const held = await holdLoopbackPort();
     try {
-      const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+      const set = await env.cli(["--gateway", "config", "set", "http.port", String(held.port)]);
       expect(set.code, set.stderr).toBe(0);
       expect(await runDaemonEntry(env, ["--gateway"])).toBe(1);
     } finally {
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      await held.release();
     }
   }, 60_000);
 

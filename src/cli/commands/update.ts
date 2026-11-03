@@ -2,6 +2,7 @@ import type { SimlockAdminClient } from "../../admin/index.js";
 import { isSimlockError, updateRequestedVersionSchema } from "../../contract/index.js";
 import { commandArgs, UsageError, writeResult } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl } from "../escape.js";
 import { waitForTermination } from "../termination.js";
 import type { CommandContext } from "../tree.js";
 
@@ -23,13 +24,14 @@ function plural(count: number): string {
 }
 
 function upToDateMessage(answer: Answer, version: string | undefined): string {
-  if (version !== undefined) return `simlock ${answer.version} is already running`;
-  if (answer.resolved === answer.version) return `simlock ${answer.version} is already the latest`;
-  return `simlock ${answer.version} is newer than the latest (${answer.resolved}). Use --version to install another version.`;
+  if (version !== undefined) return `simlock ${escapeControl(answer.version)} is already running`;
+  if (answer.resolved === answer.version)
+    return `simlock ${escapeControl(answer.version)} is already the latest`;
+  return `simlock ${escapeControl(answer.version)} is newer than the latest (${escapeControl(String(answer.resolved))}). Use --version to install another version.`;
 }
 
 function progressLine(update: UpdateState, first: boolean): string {
-  if (update.stage === "installing") return `Installing simlock@${update.to}`;
+  if (update.stage === "installing") return `Installing simlock@${escapeControl(update.to)}`;
   if (update.stage === "restarting") return "Restarting the daemon";
   const base = `Waiting for ${plural(update.leases)} to end.`;
   return first ? `${base} Ctrl-C stops following; simlock update --force stops waiting.` : base;
@@ -57,7 +59,9 @@ class Follower {
 
   async follow(first: Answer): Promise<Followed> {
     if (first.update !== null)
-      this.say(`Updating simlock ${first.update.from} → ${first.update.to}`);
+      this.say(
+        `Updating simlock ${escapeControl(first.update.from)} → ${escapeControl(first.update.to)}`,
+      );
     let current: Answer | undefined = first;
     while (current?.update != null) {
       this.#show(current.update);
@@ -190,11 +194,11 @@ function finish(
   } else if (failed) {
     say(
       failure.stage === "installing"
-        ? `Update failed (installing): ${failure.message}\nsimlock ${failure.from} is still running and takes leases again.`
-        : `Update failed (restarting): ${failure.message}. Rolled back to ${failure.from}.`,
+        ? `Update failed (installing): ${escapeControl(failure.message)}\nsimlock ${escapeControl(failure.from)} is still running and takes leases again.`
+        : `Update failed (restarting): ${escapeControl(failure.message)}. Rolled back to ${escapeControl(failure.from)}.`,
     );
   } else {
-    say(`simlock ${answer.version} is running`);
+    say(`simlock ${escapeControl(answer.version)} is running`);
   }
   return failed ? 1 : 0;
 }

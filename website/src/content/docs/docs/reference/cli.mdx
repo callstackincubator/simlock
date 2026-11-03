@@ -107,7 +107,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--os <version or range>` | An exact OS version (`18.4`, `35`), or a range such as `>=18 <26` or `18 - 26`. A range never downloads. | The newest runtime installed for the platform |
 | `--mode <slim or full>` | The device mode. `full` is guaranteed; `slim` is best effort and falls back to `full`. | The serving worker's default mode (`full` unless configured) |
 | `--image-tag <tag>` | Android only: the system image type, such as `google_apis_playstore`. Never downloads. | Simlock picks an installed image |
-| `--agent-id <id>` | The requester identity for this lease. Must not be empty. | See [Requester identity](#requester-identity) |
+| `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag` or `--allow-download`. | Off: simulators and emulators only |
@@ -731,7 +731,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | --- | --- | --- |
 | `SIMLOCK_HOME` | The folder Simlock keeps everything in. The worker uses it directly; a gateway uses its `gateway` subfolder. A path so long that the daemon's socket path would pass the system limit fails with `USAGE` (exit 2). | `~/.simlock` |
 | `SIMLOCK_ADMIN_TOKEN` | An admin credential: an operator token or the daemon's `admin.token` secret. Used when `--token` is not given. | Unset: the CLI reads `admin.token` |
-| `SIMLOCK_AGENT_ID` | The requester identity. When set, it wins over the session variables below. | Unset |
+| `SIMLOCK_AGENT_ID` | The requester identity: printable, no control characters, at most 256 characters. When set, it wins over the session variables below. | Unset |
 | `SIMLOCK_URL` | The worker or gateway `simlock tunnel` calls, when `--url` is not given; the same rules as `--url`. | Unset |
 | `SIMLOCK_TOKEN` | The bearer token `simlock tunnel` sends, when `--token` is not given. | Unset |
 | `CLAUDE_CODE_SESSION_ID` | Set by Claude Code. Gives the identity `claude-code:<id>`. | — |
@@ -749,7 +749,7 @@ Simlock limits leases per requester (one by default, or per platform when the op
 5. `PI_SESSION_ID`, as `pi:<id>`, when set and not empty.
 6. An ID made from the process ID, different for every command.
 
-Under Claude Code, Codex and pi, every `simlock` command in one session is the same requester with no setup. `simlock mcp` resolves the same way, falling back to `mcp:<pid>`. Codex does not pass `CODEX_SESSION_ID` to an MCP server, and pi sets `PI_SESSION_ID` only for its `bash` and `powershell` tools, so under Codex and pi the MCP server and the CLI are two requesters and can hold two leases. Elsewhere, set a different `SIMLOCK_AGENT_ID` for each agent session; a single value shared by several agents makes them one requester with one lease.
+A requester identity holds no control characters and is at most 256 characters; a request with any other is refused with `BAD_REQUEST`. Under Claude Code, Codex and pi, every `simlock` command in one session is the same requester with no setup. `simlock mcp` resolves the same way, falling back to `mcp:<pid>`. Codex does not pass `CODEX_SESSION_ID` to an MCP server, and pi sets `PI_SESSION_ID` only for its `bash` and `powershell` tools, so under Codex and pi the MCP server and the CLI are two requesters and can hold two leases. Elsewhere, set a different `SIMLOCK_AGENT_ID` for each agent session; a single value shared by several agents makes them one requester with one lease.
 
 ### Read by a daemon the CLI starts
 
