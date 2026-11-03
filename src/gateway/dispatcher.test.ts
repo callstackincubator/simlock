@@ -1946,6 +1946,53 @@ describe("GatewayDispatcher", () => {
     });
   });
 
+  describe("a request naming a baseline held by a starting worker (#1208)", () => {
+    it("keeps the starting worker's last baselines for routing, so the request waits instead of failing, and shows none in its view", async () => {
+      const { directory, dispatcher, workers } = harness();
+      directory.add("wrk_a", new ScriptedWorkerClient());
+      workers.connected("wrk_a", undefined, "0.3.0");
+      workers.refresh("wrk_a", {
+        baselines: [
+          {
+            mode: "full",
+            model: "Pixel 9",
+            name: "checkout",
+            osVersion: "36",
+            platform: "android",
+            savedAt: "2026-11-02T13:10:00Z",
+            version: 1,
+          },
+        ],
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([
+          {
+            modelClasses: { "Pixel 9": "phone" } as const,
+            models: ["Pixel 9"],
+            platform: "android",
+            runtimes: ["36"],
+          },
+        ]).platforms,
+        devices: [],
+        health: "running",
+        leases: [],
+        queueDepth: 0,
+      });
+      workers.refresh("wrk_a", { health: "starting" });
+
+      void dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", platform: "android" },
+        session({ role: "agent" }),
+      );
+
+      await vi.waitFor(async () => {
+        const status = await dispatcher.dispatch("status.get", {}, session());
+        expect(status.waiting).toHaveLength(1);
+      });
+      expect(workers.view("wrk_a")).not.toHaveProperty("baselines");
+    });
+  });
+
   describe("lease lifecycle and device.exec (#118)", () => {
     it("forwards lease.request through the fleet coordinator and answers UNKNOWN_LEASE for renew/release/exec against an id it never issued", async () => {
       const { dispatcher } = harness();
