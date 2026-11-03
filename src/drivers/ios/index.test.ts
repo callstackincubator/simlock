@@ -1384,6 +1384,88 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls).toEqual([]);
   });
 
+  describe("saveSource", () => {
+    const cloneUdid = "00000000-0000-0000-0000-0000000000bb";
+    const baselineName = "simlock-baseline-device-1";
+    const sourcesSet = `${deviceRoot}/sources`;
+    const device = {
+      address: driverData.udid,
+      deviceId: driverData.udid,
+      driverData,
+      physical: false,
+    } as const;
+    const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSet);
+
+    it("keeps a shut-down copy of the device in the sources set as a ready baseline source with its disabled.plist, and a failing clone keeps no row", async () => {
+      const database = await memorySourceDatabase();
+      const rowsAtShutdown: unknown[] = [];
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(overridesFolder(driverData.udid));
+      await filesystem.writeFileAtomic(
+        overridesPath(driverData.udid),
+        overridesPlist({ "a.b": true }),
+      );
+      await filesystem.mkdirp(`${sourcesSet}/${cloneUdid}/data`);
+      await filesystem.writeFileAtomic(`${sourcesSet}/${cloneUdid}/data/state`, "12345");
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: simctl("shutdown", driverData.udid),
+          onSpawn: () => {
+            rowsAtShutdown.push(
+              ...database.prepare("SELECT kind, state, udid FROM ios_source_data").all(),
+            );
+          },
+        },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+      await expect(driver.saveSource(device)).resolves.toEqual({
+        sizeBytes: 5,
+        sourceId: "device-1",
+      });
+
+      expect(rowsAtShutdown, "the source's row is making before the device shuts down").toEqual([
+        { kind: "baseline", state: "making", udid: null },
+      ]);
+      expect(runner.calls).toEqual([
+        { ...listInvocation, options: { timeoutMs: 30_000 } },
+        { ...simctl("shutdown", driverData.udid), options: { timeoutMs: 30_000 } },
+        { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+      ]);
+      expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
+        overridesPlist({ "a.b": true }),
+      );
+      await expect(driver.listSources()).resolves.toEqual([
+        {
+          id: "device-1",
+          kind: "baseline",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          sizeBytes: 5,
+        },
+      ]);
+
+      const failingRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        {
+          match: cloneInvocation,
+          result: { code: 1, stderr: "No space left on device", stdout: "" },
+        },
+      ]);
+      const failing = await createDriver(failingRunner, new FakeClock(), filesystem, database);
+      await expect(failing.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("No space left on device"),
+      });
+      expect(database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([
+        { source_id: "device-1" },
+      ]);
+    });
+  });
+
   it.each([
     {
       name: "copies the seed's disabled.plist to the new simulator",
