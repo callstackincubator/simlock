@@ -232,22 +232,25 @@ describe("AndroidDriver", () => {
       hostAbi = "arm64-v8a",
     ) {
       const filesystem = await androidFilesystem({ images });
+      await writeSeedFiles(filesystem, defaultSeedHome);
+      const making = makingTheSeed();
+      making[1] = processResult(binaries.avdmanager, [
+        "create",
+        "avd",
+        "-n",
+        "simlock",
+        "-k",
+        /.+/,
+        "-d",
+        "pixel_5",
+      ]);
       const runner = new ScriptedProcessRunner([
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, [
-          "create",
-          "avd",
-          "-n",
-          "simlock_one",
-          "-k",
-          /.+/,
-          "-d",
-          "pixel_5",
-        ]),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ...making,
+        ...copyBootExpectations({ copyHome: `${avdDirectory}/simlock_one` }),
+        markWriteExpectation("emulator-5586", "device-3"),
       ]);
-      const driver = await createDriver(filesystem, runner, { hostAbi, ids: ["one"] });
+      const driver = await createDriver(filesystem, runner, { hostAbi, ids: ["one", "two"] });
       return { driver, filesystem, runner };
     }
 
@@ -497,35 +500,9 @@ describe("AndroidDriver", () => {
 
       const device = await driver.makeReady(await driver.provision(spec));
 
-      expect(device.driverData).toMatchObject({ avdName: "simlock_one", port: 5588 });
+      expect(device.driverData).toMatchObject({ avdName: "simlock", port: 5588 });
     },
   );
-
-  it("cold boots without loading or automatically saving snapshots", async () => {
-    const harness = await provisionedHarness();
-
-    await expect(harness.driver.makeReady(harness.device)).resolves.toMatchObject({
-      address: "emulator-5586",
-      deviceId: "simlock_one",
-    });
-    expect(harness.runner.calls).toContainEqual({
-      args: [
-        "-avd",
-        "simlock_one",
-        "-port",
-        "5586",
-        "-no-snapshot-save",
-        "-grpc",
-        "8586",
-        "-grpc-use-token",
-        "-crash-report-mode",
-        "never",
-        "-no-snapshot-load",
-      ],
-      command: binaries.emulator,
-      options: emulatorOptions,
-    });
-  });
 
   // why: The gRPC port follows the reserved console port, so two parallel leases never share one.
   it("puts the gRPC endpoint at the reserved console port plus 3000", async () => {
@@ -535,9 +512,9 @@ describe("AndroidDriver", () => {
     const hostRunner = host.runner();
     const runner: ProcessRunner = {
       ...hostRunner,
-      spawn: (command, args) => {
+      spawn: (command, args, options) => {
         launches.push(args);
-        return hostRunner.spawn(command, args);
+        return hostRunner.spawn(command, args, options);
       },
     };
     const driver = await createDriver(filesystem, runner, {
@@ -559,7 +536,7 @@ describe("AndroidDriver", () => {
     );
   });
 
-  it("starts the cold boot and the restart from the baseline with -crash-report-mode never and a crash database under the Simlock root, so a stale crash dump asks no one and the user's shared database is never read", async () => {
+  it("starts the seed's boots and the copy's boot with -crash-report-mode never and a crash database under the Simlock root, so a stale crash dump asks no one and the user's shared database is never read", async () => {
     const filesystem = await androidFilesystem();
     const host = new EmulatorHost(filesystem);
     const launches: (readonly string[])[] = [];
@@ -590,6 +567,7 @@ describe("AndroidDriver", () => {
     expect(crashDatabases).toEqual([
       `${avdDirectory}/emu-crash.db`,
       `${avdDirectory}/emu-crash.db`,
+      `${avdDirectory}/emu-crash.db`,
     ]);
     const crashReportMode = (args: readonly string[]) => {
       const flag = args.indexOf("-crash-report-mode");
@@ -599,7 +577,8 @@ describe("AndroidDriver", () => {
       launches.map((args) => ({ boot: args.at(-1), crashReportMode: crashReportMode(args) })),
     ).toEqual([
       { boot: "-no-snapshot-load", crashReportMode: "never" },
-      { boot: "simlock_clean_baseline", crashReportMode: "never" },
+      { boot: "-no-snapshot-load", crashReportMode: "never" },
+      { boot: "simlock_boot", crashReportMode: "never" },
     ]);
   });
 
@@ -640,7 +619,7 @@ describe("AndroidDriver", () => {
   it("leaves no timer armed once each shutdown has seen its emulator exit", async () => {
     const harness = await provisionedHarness({
       afterwards: [
-        avdPathExpectation("emulator-5586"),
+        copyPathExpectation("emulator-5586"),
         processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       ],
     });
@@ -661,7 +640,7 @@ describe("AndroidDriver", () => {
   it("kills an emulator that has not exited within the readiness timeout of a shutdown", async () => {
     const harness = await provisionedHarness({
       afterwards: [
-        avdPathExpectation("emulator-5586"),
+        copyPathExpectation("emulator-5586"),
         processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       ],
       readinessTimeoutMs: 2_000,
@@ -689,7 +668,7 @@ describe("AndroidDriver", () => {
   it("leaves no timer armed when waiting for the emulator to exit fails", async () => {
     const harness = await provisionedHarness({
       afterwards: [
-        avdPathExpectation("emulator-5586"),
+        copyPathExpectation("emulator-5586"),
         processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       ],
     });
@@ -726,14 +705,9 @@ describe("AndroidDriver", () => {
       };
     });
 
+    const polledBefore = bootPolls(harness.runner);
     const ready = harness.driver.makeReady(harness.device);
-    await vi.waitFor(() =>
-      expect(harness.runner.calls).toContainEqual({
-        args: ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-        command: binaries.adb,
-        options: scopedOptions,
-      }),
-    );
+    await vi.waitFor(() => expect(bootPolls(harness.runner)).toBeGreaterThan(polledBefore));
     harness.clock.advance(2_000);
 
     await expect(ready).rejects.toMatchObject({ name: "BootTimeoutError" });
@@ -742,15 +716,10 @@ describe("AndroidDriver", () => {
 
   it("retries adb while the emulator is starting", async () => {
     const harness = await provisionedHarness({ initialAdbFailures: 1 });
+    const polledBefore = bootPolls(harness.runner);
     const ready = harness.driver.makeReady(harness.device);
 
-    await vi.waitFor(() =>
-      expect(harness.runner.calls).toContainEqual({
-        args: ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-        command: binaries.adb,
-        options: scopedOptions,
-      }),
-    );
+    await vi.waitFor(() => expect(bootPolls(harness.runner)).toBeGreaterThan(polledBefore));
     harness.clock.advance(2_000);
 
     await expect(ready).resolves.toMatchObject({ address: "emulator-5586" });
@@ -764,10 +733,12 @@ describe("AndroidDriver", () => {
         { code: 1, stderr: "", stdout: "package:/system/framework/framework-res.apk\n" },
       ],
     });
+    const pmCallsBefore = harness.runner.calls.filter((call) => call.args.includes("pm")).length;
     const ready = harness.driver.makeReady(harness.device);
     const settled = vi.fn();
     void ready.then(settled, settled);
-    const pmCalls = () => harness.runner.calls.filter((call) => call.args.includes("pm")).length;
+    const pmCalls = () =>
+      harness.runner.calls.filter((call) => call.args.includes("pm")).length - pmCallsBefore;
 
     for (const asked of [1, 2, 3]) {
       await vi.waitFor(() => expect(pmCalls()).toBe(asked));
@@ -785,45 +756,16 @@ describe("AndroidDriver", () => {
       gpu: "auto",
       headless: false,
     };
-    const emulatorLaunches = (runner: ScriptedProcessRunner) =>
-      runner.calls
-        .filter((call) => call.command === binaries.emulator && call.args.includes("-avd"))
-        .map((call) => call.args);
-
     it("launches with the same arguments as before these options existed under the default config", async () => {
       for (const emulator of [undefined, defaults]) {
         const harness = await provisionedHarness(emulator === undefined ? {} : { emulator });
 
         await harness.driver.makeReady(harness.device);
 
-        expect(emulatorLaunches(harness.runner)).toEqual([
-          [
-            "-avd",
-            "simlock_one",
-            "-port",
-            "5586",
-            "-no-snapshot-save",
-            "-grpc",
-            "8586",
-            "-grpc-use-token",
-            "-crash-report-mode",
-            "never",
-            "-no-snapshot-load",
-          ],
-          [
-            "-avd",
-            "simlock_one",
-            "-port",
-            "5586",
-            "-no-snapshot-save",
-            "-grpc",
-            "8586",
-            "-grpc-use-token",
-            "-crash-report-mode",
-            "never",
-            "-snapshot",
-            "simlock_clean_baseline",
-          ],
+        expect(emulatorLaunchArgs(harness.runner)).toEqual([
+          [...seedLaunch, "-no-snapshot-load"],
+          [...seedLaunch, "-no-snapshot-load"],
+          [...seedLaunch, "-snapshot", "simlock_boot"],
         ]);
       }
     });
@@ -837,22 +779,10 @@ describe("AndroidDriver", () => {
 
       await harness.driver.makeReady(harness.device);
 
-      const launches = emulatorLaunches(harness.runner);
-      expect(launches).toHaveLength(2);
+      const launches = emulatorLaunchArgs(harness.runner);
+      expect(launches).toHaveLength(3);
       for (const args of launches) {
-        expect(args.slice(0, 10 + flags.length)).toEqual([
-          "-avd",
-          "simlock_one",
-          "-port",
-          "5586",
-          "-no-snapshot-save",
-          "-grpc",
-          "8586",
-          "-grpc-use-token",
-          "-crash-report-mode",
-          "never",
-          ...flags,
-        ]);
+        expect(args.slice(0, 10 + flags.length)).toEqual([...seedLaunch, ...flags]);
       }
     });
 
@@ -862,17 +792,8 @@ describe("AndroidDriver", () => {
         emulatorFlags: ["-gpu", "swiftshader_indirect"],
       });
       await harness.driver.makeReady(harness.device);
-      expect(emulatorLaunches(harness.runner)[0]).toEqual([
-        "-avd",
-        "simlock_one",
-        "-port",
-        "5586",
-        "-no-snapshot-save",
-        "-grpc",
-        "8586",
-        "-grpc-use-token",
-        "-crash-report-mode",
-        "never",
+      expect(emulatorLaunchArgs(harness.runner)[0]).toEqual([
+        ...seedLaunch,
         "-gpu",
         "swiftshader_indirect",
         "-no-snapshot-load",
@@ -880,42 +801,21 @@ describe("AndroidDriver", () => {
 
       const auto = await provisionedHarness({ emulator: { ...defaults, gpu: "auto" } });
       await auto.driver.makeReady(auto.device);
-      for (const args of emulatorLaunches(auto.runner)) {
+      for (const args of emulatorLaunchArgs(auto.runner)) {
         expect(args).not.toContain("-gpu");
       }
     });
   });
 
-  it("deletes only the provisioned simlock AVD, and stops nothing for one that never booted", async () => {
-    const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
-    const runner = new ScriptedProcessRunner([
-      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-      processResult(binaries.avdmanager, [
-        "create",
-        "avd",
-        "-n",
-        "simlock_delete-me",
-        "-k",
-        /.+/,
-        "-d",
-        "pixel_5",
-      ]),
-      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_delete-me"]),
-    ]);
-    const driver: Driver = await createDriver(filesystem, runner, { ids: ["delete-me"] });
-    const spec = await driver.resolveSpec({
-      model: "Pixel 5",
-      osVersion: "34",
-      platform: "android",
-    });
-    const device = await driver.provision(spec);
+  it("deletes only the copy's folder, keeps the seed it came from, and stops nothing for a copy that never booted", async () => {
+    const harness = await provisionedHarness();
+    const callsBefore = harness.runner.calls.length;
 
-    await expect(driver.destroy({ ...device, physical: false })).resolves.toBeUndefined();
-    expect(runner.calls.at(-1)).toMatchObject({
-      args: ["delete", "avd", "-n", "simlock_delete-me"],
-      command: binaries.avdmanager,
-    });
+    await expect(harness.driver.destroy(harness.device)).resolves.toBeUndefined();
+
+    expect(harness.runner.calls.slice(callsBefore)).toEqual([]);
+    expect(await harness.filesystem.exists(harness.copyHome)).toBe(false);
+    expect(await harness.filesystem.exists(`${harness.seedHome}/simlock.avd`)).toBe(true);
   });
 
   it("reports conservative cold-boot estimates through the Driver contract", async () => {
@@ -1566,10 +1466,12 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("answers uninstall for the reclaim strategy of a physical device, and snapshot for an emulator's", async () => {
+  it("answers uninstall for the reclaim strategy of a physical device, and refuses one for an emulator, which is never reclaimed", async () => {
     const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
 
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("snapshot");
+    expect(() => driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toThrow(
+      "virtual devices are not reclaimed",
+    );
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "standard" })).toBe("uninstall");
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "full" })).toBe("uninstall");
   });
@@ -1626,143 +1528,62 @@ describe("AndroidDriver", () => {
   });
 
   it("rewrites the mark on makeReady's early-return branch without duplicating the config.ini line", async () => {
-    const filesystem = await androidFilesystem({ config: "hw.ramSize=2048\n" });
-    const clock = new FakeClock();
-    const runner = new ScriptedProcessRunner([
-      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-      processResult(binaries.avdmanager, [
-        "create",
-        "avd",
-        "-n",
-        "simlock_one",
-        "-k",
-        /.+/,
-        "-d",
-        "pixel_5",
-      ]),
-      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
-      markWriteExpectation("emulator-5586", "device-2"),
-      // why: Second makeReady call: `state.handle` is still set from the first call, so this takes
-      // the early-return branch -- it must still wait for readiness and rewrite the mark.
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-        "1\n",
-      ),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
-        "",
-      ),
-      avdPathExpectation("emulator-5586"),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", "pm", "path", "android"],
-        "package:/system/framework/framework-res.apk\n",
-      ),
-      markWriteExpectation("emulator-5586", "device-3"),
-    ]);
-    const driver = await createDriver(filesystem, runner, { clock, ids: ["one"] });
-    const spec = await driver.resolveSpec({
-      model: "Pixel 5",
-      osVersion: "34",
-      platform: "android",
+    const harness = await provisionedHarness({
+      afterwards: [
+        // why: Second makeReady call: `state.handle` is still set from the first call, so this takes
+        // the early-return branch -- it must still wait for readiness and rewrite the mark.
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
+          "1\n",
+        ),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
+          "",
+        ),
+        copyPathExpectation("emulator-5586"),
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5586", "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
+        markWriteExpectation("emulator-5586", "device-4"),
+      ],
     });
-    const device = await driver.provision(spec);
 
-    await driver.makeReady(device);
-    await driver.makeReady(device);
+    await harness.driver.makeReady(harness.device);
+    await harness.driver.makeReady(harness.device);
 
-    const config = await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
+    const config = await harness.filesystem.readFile(`${harness.copyHome}/simlock.avd/config.ini`);
     expect(config.split(/\r?\n/).filter((line) => line.startsWith("simlock.mark="))).toEqual([
-      "simlock.mark=device-3",
+      "simlock.mark=device-4",
     ]);
     expect(config).toContain("hw.ramSize=2048");
   });
 
   it("rethrows a non-missing-file config.ini read error from the mark write instead of clobbering it as empty", async () => {
-    const configPath = `${avdDirectory}/simlock_one.avd/config.ini`;
-    const originalConfig = "hw.ramSize=2048\n";
+    const configPath = `${avdDirectory}/simlock_one/simlock.avd/config.ini`;
     const permissionError = Object.assign(new Error("EACCES: permission denied"), {
       code: "EACCES",
     });
     const failureFilesystem = new ReadFailureFilesystem(configPath, permissionError);
-    const filesystem = await androidFilesystem({ config: originalConfig }, failureFilesystem);
-    const runner = new ScriptedProcessRunner([
-      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-      processResult(binaries.avdmanager, [
-        "create",
-        "avd",
-        "-n",
-        "simlock_one",
-        "-k",
-        /.+/,
-        "-d",
-        "pixel_5",
-      ]),
-      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      ...baselineBuildExpectations({ launchArgs: ["-no-snapshot-load"] }),
-      markWriteExpectation("emulator-5554", "device-2"),
-    ]);
-    const driver = await createDriver(filesystem, runner, { ids: ["one"] });
-    const spec = await driver.resolveSpec({
-      model: "Pixel 5",
-      osVersion: "34",
-      platform: "android",
-    });
-    const device = await driver.provision(spec);
+    const harness = await provisionedHarness({ filesystem: failureFilesystem });
 
-    await expect(driver.makeReady(device)).rejects.toBe(permissionError);
+    await expect(harness.driver.makeReady(harness.device)).rejects.toBe(permissionError);
 
     failureFilesystem.armed = false;
-    await expect(filesystem.readFile(configPath)).resolves.toBe(originalConfig);
+    await expect(harness.filesystem.readFile(configPath)).resolves.toBe("hw.ramSize=2048\n");
   });
 
   it("does not change the config hash when simlock.mark is present in config.ini", async () => {
-    const withoutMark = await androidFilesystem({ config: "hw.ramSize=2048\n" });
-    const withMark = await androidFilesystem({
+    const withoutMark = await provisionedHarness({ config: "hw.ramSize=2048\n" });
+    const withMark = await provisionedHarness({
       config: "hw.ramSize=2048\nsimlock.mark=some-token\n",
     });
-    const buildExpectations = (): ScriptedProcessExpectation[] => [
-      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-      processResult(binaries.avdmanager, [
-        "create",
-        "avd",
-        "-n",
-        "simlock_one",
-        "-k",
-        /.+/,
-        "-d",
-        "pixel_5",
-      ]),
-      processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ];
-    const driverA = await createDriver(
-      withoutMark,
-      new ScriptedProcessRunner(buildExpectations()),
-      {
-        ids: ["one"],
-      },
-    );
-    const driverB = await createDriver(withMark, new ScriptedProcessRunner(buildExpectations()), {
-      ids: ["one"],
-    });
-    const spec = {
-      physical: false,
-      model: "Pixel 5",
-      osVersion: "34",
-      platform: "android",
-    } as const;
-    await driverA.resolveSpec(spec);
-    await driverB.resolveSpec(spec);
 
-    const deviceA = await driverA.provision(spec);
-    const deviceB = await driverB.provision(spec);
-
-    expect((deviceA.driverData as { configHash: string }).configHash).toBe(
-      (deviceB.driverData as { configHash: string }).configHash,
+    expect((withoutMark.device.driverData as { configHash: string }).configHash).toBe(
+      (withMark.device.driverData as { configHash: string }).configHash,
     );
   });
 
@@ -5158,6 +4979,15 @@ const seedEmulatorLine = [
   "never",
 ];
 
+/** why: the arguments of every emulator start, in order. */
+function emulatorLaunchArgs(runner: ScriptedProcessRunner): (readonly string[])[] {
+  return runner.calls
+    .filter((call) => call.command === binaries.emulator && call.args.includes("-avd"))
+    .map((call) => call.args);
+}
+
+const seedLaunch = ["-avd", "simlock", ...seedEmulatorLine];
+
 function bootingAt(
   folder: string,
   launch: readonly string[],
@@ -5303,7 +5133,7 @@ function copyBootExpectations(options: {
   const expectations: ScriptedProcessExpectation[] = [
     processResult(binaries.adb, ["devices"], "List of devices attached\n"),
     {
-      hangs: bootCompleted.trim() !== "1",
+      hangs: true,
       match: {
         args: [
           "-avd",
@@ -5354,6 +5184,7 @@ async function provisionedHarness(
     readonly bootCompleted?: string;
     readonly config?: string;
     readonly emulator?: AndroidEmulatorLaunchOptions;
+    readonly filesystem?: MemoryFilesystem;
     readonly emulatorFlags?: readonly string[];
     readonly ids?: readonly string[];
     readonly initialAdbFailures?: number;
@@ -5363,7 +5194,7 @@ async function provisionedHarness(
     readonly afterwards?: readonly ScriptedProcessExpectation[];
   } = {},
 ) {
-  const filesystem = await androidFilesystem();
+  const filesystem = await androidFilesystem({}, options.filesystem);
   const ids = options.ids ?? ["one", "two"];
   const seedHome = `${avdDirectory}/sources/seed_${ids[1] ?? "two"}`;
   const copyHome = `${avdDirectory}/simlock_${ids[0] ?? "one"}`;
@@ -7179,150 +7010,6 @@ async function androidFilesystem(
   return filesystem;
 }
 
-function baselineBuildExpectations(options: {
-  readonly bootCompleted?: string | undefined;
-  readonly emulatorFlags?: readonly string[] | undefined;
-  readonly initialAdbFailures?: number | undefined;
-  readonly launchArgs: readonly string[];
-  readonly unsettledPmAnswers?: readonly ProcessResult[] | undefined;
-}): ScriptedProcessExpectation[] {
-  const bootCompleted = options.bootCompleted ?? "1\n";
-  const emulatorFlags = options.emulatorFlags ?? [];
-  const expectations: ScriptedProcessExpectation[] = [
-    processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    {
-      hangs: bootCompleted.trim() !== "1",
-      match: {
-        args: [
-          "-avd",
-          "simlock_one",
-          "-port",
-          "5586",
-          "-no-snapshot-save",
-          "-grpc",
-          "8586",
-          "-grpc-use-token",
-          "-crash-report-mode",
-          "never",
-          ...emulatorFlags,
-          ...options.launchArgs,
-        ],
-        command: binaries.emulator,
-      },
-    },
-  ];
-  for (let failure = 0; failure < (options.initialAdbFailures ?? 0); failure += 1) {
-    expectations.push({
-      match: {
-        args: ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-        command: binaries.adb,
-      },
-      result: { code: 1, stderr: "connection refused", stdout: "" },
-    });
-  }
-  expectations.push(
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-      bootCompleted,
-    ),
-  );
-  if (bootCompleted.trim() !== "1") {
-    return expectations;
-  }
-
-  for (const answer of options.unsettledPmAnswers ?? []) {
-    expectations.push(
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
-        "",
-      ),
-      avdPathExpectation("emulator-5586"),
-      {
-        match: {
-          args: ["-s", "emulator-5586", "shell", "pm", "path", "android"],
-          command: binaries.adb,
-        },
-        result: answer,
-      },
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-        "1\n",
-      ),
-    );
-  }
-  expectations.push(
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
-      "",
-    ),
-    avdPathExpectation("emulator-5586"),
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
-      "package:/system/framework/framework-res.apk\n",
-    ),
-    processResult(binaries.adb, [
-      "-s",
-      "emulator-5586",
-      "emu",
-      "avd",
-      "snapshot",
-      "save",
-      "simlock_clean_baseline",
-    ]),
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "emu", "avd", "snapshot", "list"],
-      "simlock_clean_baseline\n",
-    ),
-    processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-    avdPathExpectation("emulator-5586"),
-    processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
-    {
-      hangs: true,
-      match: {
-        args: [
-          "-avd",
-          "simlock_one",
-          "-port",
-          "5586",
-          "-no-snapshot-save",
-          "-grpc",
-          "8586",
-          "-grpc-use-token",
-          "-crash-report-mode",
-          "never",
-          ...emulatorFlags,
-          "-snapshot",
-          "simlock_clean_baseline",
-        ],
-        command: binaries.emulator,
-      },
-    },
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-      "1\n",
-    ),
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "getprop", "init.svc.bootanim"],
-      "",
-    ),
-    avdPathExpectation("emulator-5586"),
-    processResult(
-      binaries.adb,
-      ["-s", "emulator-5586", "shell", "pm", "path", "android"],
-      "package:/system/framework/framework-res.apk\n",
-    ),
-  );
-  return expectations;
-}
-
 /**
  * why: A `ScriptedProcessRunner` that also mirrors what real `sdkmanager` does on disk: a
  * successful (`code: 0`, no unaccepted-license text) `--install <package>` call creates the
@@ -7578,6 +7265,20 @@ function processResult(command: string, args: readonly (string | RegExp)[], stdo
     match: { args, command },
     result: { code: 0, stderr: "", stdout },
   };
+}
+
+/** why: what a running copy answers to `emu avd path`: the AVD inside its own folder. */
+function copyPathExpectation(serial: string, folder = "simlock_one"): ScriptedProcessExpectation {
+  return processResult(
+    binaries.adb,
+    ["-s", serial, "emu", "avd", "path"],
+    `${avdDirectory}/${folder}/simlock.avd\r\nOK\r\n`,
+  );
+}
+
+/** why: how many times the emulator has been asked whether it finished booting. */
+function bootPolls(runner: ScriptedProcessRunner): number {
+  return runner.calls.filter((call) => call.args.at(-1) === "sys.boot_completed").length;
 }
 
 function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedProcessExpectation {
