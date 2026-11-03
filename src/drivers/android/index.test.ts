@@ -2698,7 +2698,6 @@ describe("AndroidDriver", () => {
   });
 });
 
-// why: stands in for adb's server: it answers the host protocol with the bytes a test scripts, and says nothing when there are none.
 /**
  * why: Honours `timeoutMs` the way `NodeProcessRunner` does -- the child is killed once it
  * passes -- but on the driver's fake clock, so a deadline given to `run` is visible to a test
@@ -2758,6 +2757,7 @@ class EmulatorExitingRunner extends ScriptedProcessRunner {
   }
 }
 
+// why: stands in for adb's server: it answers the host protocol with the bytes a test scripts, and says nothing when there are none.
 class RepliesTcpStreamConnector extends FakeTcpStreamConnector {
   constructor(private readonly replies: string) {
     super();
