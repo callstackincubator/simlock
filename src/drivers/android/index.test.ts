@@ -6982,10 +6982,13 @@ describe("AndroidDriver image fit", () => {
       ] satisfies ScriptedProcessExpectation[];
     }
 
-    function makingTheSeed(): ScriptedProcessExpectation[] {
+    function makingTheSeed(
+      home = seedHome,
+      emulatorVersion = "Android emulator version 36.1.9",
+    ): ScriptedProcessExpectation[] {
       const serial = "emulator-5586";
       return [
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.emulator, ["-version"], emulatorVersion),
         processResult(binaries.avdmanager, [
           "create",
           "avd",
@@ -6997,10 +7000,10 @@ describe("AndroidDriver image fit", () => {
           "pixel_5",
         ]),
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-        ...bootingAt(seedHome, ["-no-snapshot-load"], false),
+        ...bootingAt(home, ["-no-snapshot-load"], false),
         processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
         processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
-        ...bootingAt(seedHome, ["-no-snapshot-load"], false),
+        ...bootingAt(home, ["-no-snapshot-load"], false),
         processResult(binaries.adb, [
           "-s",
           serial,
@@ -7018,7 +7021,7 @@ describe("AndroidDriver image fit", () => {
         processResult(
           binaries.adb,
           ["-s", serial, "emu", "avd", "path"],
-          `${seedHome}/simlock.avd\r\nOK\r\n`,
+          `${home}/simlock.avd\r\nOK\r\n`,
         ),
         processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
       ];
@@ -7032,18 +7035,15 @@ describe("AndroidDriver image fit", () => {
       } = {},
     ) {
       const filesystem = await androidFilesystem();
-      await filesystem.mkdirp(`${seedHome}/simlock.avd`);
-      await filesystem.writeFileAtomic(`${seedHome}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
-      await filesystem.writeFileAtomic(
-        `${seedHome}/simlock.ini`,
-        `avd.ini.encoding=UTF-8\npath=${seedHome}/simlock.avd\ntarget=android-34\n`,
-      );
+      await writeSeedFiles(filesystem, seedHome);
+      const database = await memoryAndroidSourceDatabase();
       const runner = new ScriptedProcessRunner([
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         ...expectations,
       ]);
       const driver = await createDriver(filesystem, runner, {
         ...options,
+        database,
         ids: ["one", "two", "three"],
       });
       const spec = await driver.resolveSpec({
@@ -7051,7 +7051,34 @@ describe("AndroidDriver image fit", () => {
         osVersion: "34",
         platform: "android",
       });
-      return { driver, filesystem, runner, spec };
+      return { database, driver, filesystem, runner, spec };
+    }
+
+    async function writeSeedFiles(filesystem: MemoryFilesystem, home: string): Promise<void> {
+      await filesystem.mkdirp(`${home}/simlock.avd`);
+      await filesystem.writeFileAtomic(`${home}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
+      await filesystem.writeFileAtomic(
+        `${home}/simlock.ini`,
+        `avd.ini.encoding=UTF-8\npath=${home}/simlock.avd\ntarget=android-34\n`,
+      );
+    }
+
+    /** why: the daemon after a restart: a new driver over the same device folders and the same source table. */
+    async function reopened(
+      harness: Awaited<ReturnType<typeof seedHarness>>,
+      expectations: readonly ScriptedProcessExpectation[],
+      options: { readonly emulator?: AndroidEmulatorLaunchOptions } = {},
+    ) {
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        ...expectations,
+      ]);
+      const driver = await createDriver(harness.filesystem, runner, {
+        ...options,
+        database: harness.database,
+        ids: ["four", "five", "six"],
+      });
+      return { driver, runner };
     }
 
     it("leases a plain Android device from a copy of the kind's seed, made first when there is none, booted from the boot snapshot", async () => {
@@ -7123,6 +7150,81 @@ describe("AndroidDriver image fit", () => {
         { deviceId: "simlock_one", kind: "snapshot-cold-boot", readyAfterMs: 13_000 },
       ]);
       expect(harness.runner.calls.flatMap((call) => call.args)).not.toContain("-wipe-data");
+    });
+
+    it("tells why a seed is stale and clears the reason when the image and emulator match again", async () => {
+      const imagePath = `${sdk}/system-images/android-34/google_apis/arm64-v8a`;
+      const packageName = "system-images;android-34;google_apis;arm64-v8a";
+      const revision = (number: string) => `Pkg.Revision=${number}\n`;
+      const original = "Android emulator version 36.1.9";
+      const cases = [
+        {
+          change: async (filesystem: MemoryFilesystem) =>
+            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("2")),
+          emulatorVersion: original,
+          mend: async (filesystem: MemoryFilesystem) =>
+            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1")),
+          reason: `system image ${packageName} changed from revision 1 to 2`,
+        },
+        {
+          change: async (filesystem: MemoryFilesystem) => filesystem.rm(imagePath),
+          emulatorVersion: original,
+          mend: async (filesystem: MemoryFilesystem) =>
+            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1")),
+          reason: `system image ${packageName} is not installed`,
+        },
+        {
+          emulatorVersion: "Android emulator version 36.2.0",
+          reason: `emulator changed from ${original} to Android emulator version 36.2.0`,
+        },
+        {
+          emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: true },
+          emulatorVersion: original,
+          reason: "android.emulator launch settings changed",
+        },
+      ] as const;
+
+      for (const stale of cases) {
+        const harness = await seedHarness(makingTheSeed());
+        await harness.filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1"));
+        await harness.driver.provision(harness.spec);
+        if ("change" in stale) await stale.change(harness.filesystem);
+
+        const changed = await reopened(
+          harness,
+          [processResult(binaries.emulator, ["-version"], stale.emulatorVersion)],
+          "emulator" in stale ? { emulator: stale.emulator } : {},
+        );
+        await expect(changed.driver.listSources()).resolves.toMatchObject([
+          { id: "seed_two", staleReason: stale.reason },
+        ]);
+
+        if ("mend" in stale) await stale.mend(harness.filesystem);
+        const mended = await reopened(harness, [
+          processResult(binaries.emulator, ["-version"], original),
+        ]);
+        const [source] = await mended.driver.listSources();
+        expect(source).toMatchObject({ id: "seed_two" });
+        expect(source).not.toHaveProperty("staleReason");
+      }
+    });
+
+    it("destroys a stale seed and makes it again at the next provision", async () => {
+      const harness = await seedHarness(makingTheSeed());
+      await harness.driver.provision(harness.spec);
+      const newHome = `${sources}/seed_five`;
+      await writeSeedFiles(harness.filesystem, newHome);
+      const newer = "Android emulator version 36.2.0";
+      const later = await reopened(harness, [
+        processResult(binaries.emulator, ["-version"], newer),
+        ...makingTheSeed(newHome, newer),
+      ]);
+
+      await later.driver.provision(harness.spec);
+
+      expect(await harness.filesystem.exists(seedHome)).toBe(false);
+      expect(later.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
+      await expect(later.driver.listSources()).resolves.toMatchObject([{ id: "seed_five" }]);
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
@@ -7246,6 +7348,8 @@ async function createDriver(
     /** why: `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
     readonly avdHome?: string;
     readonly clock?: FakeClock;
+    /** why: a second driver over the same table is the daemon after a restart. */
+    readonly database?: Awaited<ReturnType<typeof memoryAndroidSourceDatabase>>;
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
     readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
     readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -7271,7 +7375,7 @@ async function createDriver(
   return AndroidDriver.create({
     ...onlyProvided(options),
     clock: options.clock ?? new FakeClock(),
-    database: await memoryAndroidSourceDatabase(),
+    database: options.database ?? (await memoryAndroidSourceDatabase()),
     driverConfig,
     env: {
       ANDROID_HOME: sdk,
