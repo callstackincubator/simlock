@@ -1472,7 +1472,7 @@ async function discoverIosDriver(
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
   if (diagnostic.kind === "snapshot-cold-boot") {
     logger.warn("Android snapshot boot fell back to a cold boot", {
-      avdName: diagnostic.avdName,
+      deviceId: diagnostic.deviceId,
       readyAfterMs: diagnostic.readyAfterMs,
     });
     return;

@@ -6940,8 +6940,20 @@ describe("AndroidDriver image fit", () => {
       "never",
     ];
 
-    function bootingAt(folder: string, launch: readonly string[], hangs: boolean) {
+    function bootingAt(
+      folder: string,
+      launch: readonly string[],
+      hangs: boolean,
+      notReadyPolls = 0,
+    ) {
       const serial = "emulator-5586";
+      const notReady = Array.from({ length: notReadyPolls }, () =>
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "0\n",
+        ),
+      );
       return [
         {
           hangs,
@@ -6950,6 +6962,7 @@ describe("AndroidDriver image fit", () => {
             command: binaries.emulator,
           },
         },
+        ...notReady,
         processResult(
           binaries.adb,
           ["-s", serial, "shell", "getprop", "sys.boot_completed"],
@@ -7011,7 +7024,13 @@ describe("AndroidDriver image fit", () => {
       ];
     }
 
-    async function seedHarness(expectations: readonly ScriptedProcessExpectation[]) {
+    async function seedHarness(
+      expectations: readonly ScriptedProcessExpectation[],
+      options: {
+        readonly clock?: FakeClock;
+        readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
+      } = {},
+    ) {
       const filesystem = await androidFilesystem();
       await filesystem.mkdirp(`${seedHome}/simlock.avd`);
       await filesystem.writeFileAtomic(`${seedHome}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
@@ -7023,7 +7042,10 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
         ...expectations,
       ]);
-      const driver = await createDriver(filesystem, runner, { ids: ["one", "two", "three"] });
+      const driver = await createDriver(filesystem, runner, {
+        ...options,
+        ids: ["one", "two", "three"],
+      });
       const spec = await driver.resolveSpec({
         model: "Pixel 5",
         osVersion: "34",
@@ -7072,6 +7094,35 @@ describe("AndroidDriver image fit", () => {
       ]);
       expect(launches.flatMap((call) => call.args)).not.toContain("-wipe-data");
       expect(ready.address).toBe("emulator-5586");
+    });
+
+    it("reports a copy whose boot snapshot does not load by its device id, and never wipes it", async () => {
+      const clock = new FakeClock();
+      const diagnostics: AndroidDriverDiagnostic[] = [];
+      const harness = await seedHarness(
+        [
+          ...makingTheSeed(),
+          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+          ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true, 1),
+          markWriteExpectation("emulator-5586", "three"),
+        ],
+        { clock, onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      const device = await harness.driver.provision(harness.spec);
+
+      const ready = harness.driver.makeReady(device);
+      await vi.waitFor(() =>
+        expect(
+          harness.runner.calls.filter((call) => call.args.includes("sys.boot_completed")),
+        ).toHaveLength(3),
+      );
+      clock.advance(13_000);
+      await ready;
+
+      expect(diagnostics).toEqual([
+        { deviceId: "simlock_one", kind: "snapshot-cold-boot", readyAfterMs: 13_000 },
+      ]);
+      expect(harness.runner.calls.flatMap((call) => call.args)).not.toContain("-wipe-data");
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {

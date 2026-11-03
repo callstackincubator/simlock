@@ -233,7 +233,11 @@ export interface AndroidDriverOptions {
 }
 
 export type AndroidDriverDiagnostic =
-  | { readonly avdName: string; readonly kind: "snapshot-cold-boot"; readonly readyAfterMs: number }
+  | {
+      readonly deviceId: string;
+      readonly kind: "snapshot-cold-boot";
+      readonly readyAfterMs: number;
+    }
   | DeviceProfileSourceDiagnostic;
 
 export class SdkMissingError extends Error {
@@ -2330,7 +2334,11 @@ export class AndroidDriver implements Driver {
 
     const readyAfterMs = this.#clock.now() - startedAt;
     if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {
-      this.#onDiagnostic?.({ avdName: data.avdName, kind: "snapshot-cold-boot", readyAfterMs });
+      this.#onDiagnostic?.({
+        deviceId: deviceIdOf(data),
+        kind: "snapshot-cold-boot",
+        readyAfterMs,
+      });
     }
   }
 

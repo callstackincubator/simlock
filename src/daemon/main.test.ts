@@ -2508,18 +2508,18 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     }
   });
 
-  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+  it("logs a warning, with the device id and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
     const sink = new MemoryLogSink();
 
     logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
-      avdName: "simlock_one",
+      deviceId: "simlock_one",
       kind: "snapshot-cold-boot",
       readyAfterMs: 30_000,
     });
 
     expect(sink.records).toEqual([
       expect.objectContaining({
-        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        fields: { deviceId: "simlock_one", readyAfterMs: 30_000 },
         level: "warn",
       }),
     ]);
