@@ -95,6 +95,7 @@ Lease a device. The command waits for a device, prints the grant, then stays run
 ```text
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
+              [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -108,10 +109,11 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--os <version or range>` | An exact OS version (`18.4`, `35`), or a range such as `>=18 <26` or `18 - 26`. A range never downloads. | The newest runtime installed for the platform |
 | `--mode <slim or full>` | The device mode. `full` is guaranteed; `slim` is best effort and falls back to `full`. | The serving worker's default mode (`full` unless configured) |
 | `--image-tag <tag>` | Android only: the system image type, such as `google_apis_playstore`. Never downloads. | Simlock picks an installed image |
+| `--baseline <name>` | Start from a saved baseline: the device is a new copy of it, with the operator's apps, files and settings. The `SIMLOCK_BASELINE` environment variable sets it when the flag is absent; an empty value sends nothing. Cannot be combined with `--class` or `--physical`. See [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline). | None: a plain device |
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
-| `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag` or `--allow-download`. | Off: simulators and emulators only |
+| `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag`, `--baseline` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
 | `--detach` | Print the grant and exit. Nothing renews or releases the lease after that. | Off |
 | `--ttl <duration>` | How long the lease lives without a renew. More than `lease.maxTtlMs` (4h by default) is a `BAD_REQUEST`. | `lease.defaultTtlMs` (15m by default) |

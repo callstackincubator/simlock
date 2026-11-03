@@ -438,6 +438,7 @@ export function buildCliEnvironment(
       },
     },
     ...tcpPorts(ports),
+    ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),
     writeConfigFile: async (contents) => {
