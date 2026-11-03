@@ -417,6 +417,41 @@ describe("createWorkerStream", () => {
     expect(clock.pendingTimerCount).toBe(1);
     await left.body!.cancel();
     expect(clock.pendingTimerCount).toBe(0);
+
+    // why: the same holds when the viewer cancels with its first frame already buffered (no read is
+    // pending to finish the stream) and when the capture's body fails mid-stream.
+    const bodies = {
+      "a viewer that cancels with a frame buffered": () =>
+        new ReadableStream<Uint8Array>({
+          start: (controller) => controller.enqueue(new Uint8Array([1])),
+        }),
+      "a body that errors": () =>
+        new ReadableStream<Uint8Array>({
+          pull: (controller) => controller.error(new Error("capture failed")),
+        }),
+    };
+    for (const [label, body] of Object.entries(bodies)) {
+      const ended = createGatewayStream({
+        clock,
+        fleet: {
+          knowsWorker: () => true,
+          relay: async () => new Response(body(), { headers: STREAM_HEADERS }),
+          requesterPrefix: "gw:inst:",
+        },
+        logger: new NoopLogger(),
+      });
+      const opened = await ended.mount.handle(deviceRequest("w1", "dev_9"), {
+        ...OPERATOR,
+        expiresAt: clock.now() + 60_000,
+      });
+      expect(clock.pendingTimerCount, label).toBe(1);
+      await settledWithin(Promise.resolve());
+      if (label === "a body that errors") {
+        await expect(opened.body!.getReader().read()).rejects.toThrow("capture failed");
+      } else await opened.body!.cancel();
+      expect(clock.pendingTimerCount, label).toBe(0);
+      expect(() => clock.advance(60_000), label).not.toThrow();
+    }
   });
 
   it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {
