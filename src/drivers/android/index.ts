@@ -135,7 +135,7 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
-// why: Saving the clean baseline writes the whole guest RAM and disk to the host, far slower than
+// why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
@@ -510,10 +510,8 @@ export const REFUSED_ADB_SEQUENCES: readonly {
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "avd", "stop"] },
   {
     // why: Not drift, which is why it needs saying: the emulator keeps running and nothing looks
-    // wrong. What is gone is the clean baseline `reclaimStrategy` restores from, so every
-    // later reclaim of this device silently degrades from a snapshot load to a full wipe.
-    reason:
-      "it destroys the clean-boot snapshot Simlock restores from, turning every later reclaim of this device into a full wipe.",
+    // wrong. What is gone is the boot snapshot the device was started from.
+    reason: "it deletes the boot snapshot Simlock starts this device from.",
     sequence: ["emu", "avd", "snapshot", "delete"],
   },
 ];
@@ -1421,14 +1419,9 @@ export class AndroidDriver implements Driver {
   /**
    * why: Returns the device with its address re-read: see `Driver.makeReady` for why it is read here.
    *
-   * `options.purpose === "recover"` boots and nothing else. The clean-baseline check below can
-   * decide to wipe the device (a baseline hash that no longer matches: an emulator upgrade, a
-   * config.ini change, or a changed `android.emulator.headless`/`gpu`) or to capture a fresh
-   * baseline from whatever is on the device -- and either would run against a device that is
-   * still leased, whose data is the agent's. So a recovery boot skips the baseline logic
-   * entirely: a cold boot from disk, never a snapshot load and never a wipe. Whatever the
-   * baseline check would have decided is decided instead by the next `reclaim`, once the
-   * lease is over.
+   * `options.purpose === "recover"` boots and nothing else: a cold boot from disk, never a
+   * snapshot load and never a wipe, since the device is still leased and its data is the
+   * agent's.
    */
   async makeReady(
     device: DriverDevice,
@@ -1546,7 +1539,6 @@ export class AndroidDriver implements Driver {
       if (state.port !== undefined) {
         this.#portAllocator.release(state.port);
       }
-      await this.deviceTcp?.release({ ...device, physical: false as const });
       await this.deviceTcp?.release({ ...device, physical: false as const });
     });
   }
@@ -2288,9 +2280,9 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * why: What a clean baseline snapshot depends on. A mismatch against the hash stored with the
-   * baseline rebuilds it on the next boot rather than loading a snapshot the emulator would
-   * refuse, which would degrade every later reclaim to a full wipe.
+   * why: What a seed's boot snapshot depends on. A mismatch against the hash stored with the seed
+   * makes it stale, so it is made again rather than copied into devices whose snapshot the
+   * emulator would refuse.
    */
   async #currentConfigHash(
     folder: string,
