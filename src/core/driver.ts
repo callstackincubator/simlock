@@ -32,6 +32,8 @@ export interface ExactDeviceRequest {
 }
 
 export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+  /** why: the name of the baseline the request wants a copy of; the coordinator checks it against the baseline and resolves the spec from it. */
+  readonly baseline?: string;
   readonly model?: string;
   readonly class?: DeviceClass;
   readonly physical?: boolean;

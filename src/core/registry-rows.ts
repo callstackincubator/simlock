@@ -251,7 +251,7 @@ function physicalColumns(device: DeviceRecord): SqliteValue[] {
 
 function baselineColumns(device: DeviceRecord): SqliteValue[] {
   if (device.physical) return [null, null];
-  return [device.baseline?.name ?? null, device.baseline?.version ?? null];
+  return [device.spec.baseline?.name ?? null, device.spec.baseline?.version ?? null];
 }
 
 function deviceValues(device: DeviceRecord): SqliteValue[] {
@@ -495,9 +495,9 @@ function deviceFromRow(
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
     mode: reader.oneOf("mode", DEVICE_MODES),
-    ...baselineOf(reader),
     physical: false,
     spec: {
+      ...baselineOf(reader),
       ...present("imageTag", reader.optText("image_tag")),
       ...present("mode", reader.optOneOf("spec_mode", ["slim"] as const)),
       model,

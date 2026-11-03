@@ -343,7 +343,7 @@ export class BaselineService {
   #claimIdleDevices(name: string): { claim: DeviceOperationClaim; device: VirtualDevice }[] {
     const { leases, virtualDevices } = this.options.registry.snapshot;
     const made = virtualDevices.filter(
-      (device) => device.baseline?.name === name && device.state !== "deleted",
+      (device) => device.spec.baseline?.name === name && device.state !== "deleted",
     );
     for (const device of made) {
       const lease = leases.find((candidate) => candidate.deviceId === device.id);

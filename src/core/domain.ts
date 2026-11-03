@@ -45,6 +45,12 @@ export interface VirtualSpec {
    * carries it and compares it in `sameSpec`, and never reads what it means.
    */
   readonly imageTag?: string;
+  /**
+   * why: the baseline version this device was copied from (ADR 0061 §5): part of spec identity, so
+   * a plain request never gets a copy and a request for a baseline never gets another's. Absent on
+   * a device not made from a baseline.
+   */
+  readonly baseline?: { readonly name: string; readonly version: number };
 }
 
 /** The kinds of device an admin can enrol (ADR 0022 §1). */
@@ -250,8 +256,6 @@ export interface VirtualDevice extends DeviceRecordFields {
   readonly mode: DeviceMode;
   /** why: a record written before this field existed loads as `reusable`. */
   readonly leaseIdentity?: LeaseIdentity;
-  /** why: the baseline version this device was copied from; #1207 writes it, a baseline remove reads it to find the devices made from it. */
-  readonly baseline?: { readonly name: string; readonly version: number };
 }
 
 /** why: `mode` and `leaseIdentity` are declared `undefined` so code that reads them compiles for both types. */

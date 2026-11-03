@@ -150,6 +150,7 @@ const deviceSpecSchema = z.object({
   model: z.string(),
   osVersion: z.string(),
   imageTag: imageTagSchema.optional(),
+  baseline: z.object({ name: baselineNameSchema, version: z.number().int().min(1) }).optional(),
 });
 
 const QUARANTINE_MESSAGE_MAX = 300;
@@ -369,6 +370,7 @@ const requestedDeviceSchema = z.object({
   osVersion: z.string().optional(),
   mode: deviceModeSchema.optional(),
   imageTag: imageTagSchema.optional(),
+  baseline: baselineNameSchema.optional(),
   physical: z.literal(true).optional(),
 });
 

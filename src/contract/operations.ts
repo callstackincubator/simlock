@@ -159,6 +159,7 @@ const leaseRequestBaseSchema = z
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
     imageTag: imageTagSchema.optional(),
+    baseline: baselineNameSchema.optional(),
     physical: z.boolean().optional(),
     requesterId: requesterIdSchema.optional(),
     allowDownload: z.boolean().optional(),
@@ -297,6 +298,7 @@ export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) 
     ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
     ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
+    ...(input.baseline === undefined ? {} : { baseline: input.baseline }),
     ...(input.physical === true ? { physical: true as const } : {}),
   };
 }

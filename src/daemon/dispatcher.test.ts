@@ -3041,6 +3041,50 @@ describe("Dispatcher: image tags", () => {
   });
 });
 
+describe("Dispatcher: lease.request naming a baseline", () => {
+  it("gives a copy of the baseline, and the grant and lease.granted carry its name and version", async () => {
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher({
+      driverOptions: { knownModels: ["iPhone 17 Pro"] },
+    });
+    const first = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const held = registry.snapshot.virtualDevices.find((device) => device.id === first.device.id);
+    driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/login.txt", "signed in");
+    await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: first.lease.id, name: "checkout" },
+      session({ role: "admin" }),
+    );
+
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { baseline: "checkout", platform: "ios" },
+      session(),
+    );
+
+    expect(grant.device.spec).toEqual({
+      baseline: { name: "checkout", version: 1 },
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      physical: false,
+      platform: "ios",
+    });
+    expect(grant.device.id).not.toBe(first.device.id);
+    const copy = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+    expect(driver.deviceFile(copy?.driverDeviceId ?? "", "data/login.txt")).toBe("signed in");
+    expect(
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "lease.granted")
+        .map((envelope) => envelope.payload)
+        .at(-1),
+    ).toMatchObject({ baseline: { name: "checkout", version: 1 }, deviceId: grant.device.id });
+  });
+});
+
 describe("Dispatcher: the download policy clamp applies regardless of caller", () => {
   it("starts no install for allowDownload:true when downloads.policy is 'never'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "never" });

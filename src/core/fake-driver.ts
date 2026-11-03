@@ -448,6 +448,11 @@ export class FakeDriver implements Driver {
     this.#deviceFiles.set(deviceId, files);
   }
 
+  /** why: a test hook that reads a file off a device, so a copy made from a source can be shown to carry the source's files. */
+  deviceFile(deviceId: string, path: string): string | undefined {
+    return this.#deviceFiles.get(deviceId)?.get(path);
+  }
+
   /** why: what a saved source holds, for a test to compare with what the device held. */
   sourceFiles(sourceId: string): ReadonlyMap<string, string> | undefined {
     return this.#sourceFiles.get(sourceId);
