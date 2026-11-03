@@ -6,6 +6,7 @@ import { ActivityScreen } from "../screens/activity";
 import { LeasesScreen } from "../screens/leases";
 import { OverviewScreen } from "../screens/overview";
 import { UsageScreen } from "../screens/usage";
+import { BaselinesScreen } from "../screens/baselines";
 import { QueueScreen } from "../screens/queue";
 import { FleetScreen } from "../screens/fleet";
 
@@ -25,6 +26,13 @@ export const ROUTES: readonly Route[] = [
   { Screen: FleetScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
   { Screen: LeasesScreen, group: "Operate", icon: "leases", label: "Leases", path: "/leases" },
   { Screen: QueueScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
+  {
+    Screen: BaselinesScreen,
+    group: "Operate",
+    icon: "baselines",
+    label: "Baselines",
+    path: "/baselines",
+  },
   {
     Screen: ActivityScreen,
     group: "Observe",

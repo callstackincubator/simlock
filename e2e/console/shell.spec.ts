@@ -165,6 +165,7 @@ test.describe("the shell", () => {
       "Fleet /fleet",
       "Leases /leases",
       "Queue /queue",
+      "Baselines /baselines",
       "Activity /activity",
       "Usage /usage",
     ]);

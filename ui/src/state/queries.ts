@@ -38,6 +38,7 @@ interface Times {
 }
 
 const TIMES: Readonly<Record<string, Times>> = {
+  baselines: { freshMs: FRESH_MS, pollMs: 15_000 },
   inbox: { freshMs: FRESH_MS, pollMs: 10_000 },
   lease: { freshMs: FRESH_MS, pollMs: 10_000 },
   "lease-requests": { freshMs: FRESH_MS, pollMs: 5_000 },

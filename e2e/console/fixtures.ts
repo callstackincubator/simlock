@@ -752,12 +752,13 @@ export const NAV = [
   { label: "Fleet", path: "/fleet" },
   { label: "Leases", path: "/leases" },
   { label: "Queue", path: "/queue" },
+  { label: "Baselines", path: "/baselines" },
   { label: "Activity", path: "/activity" },
   { label: "Usage", path: "/usage" },
 ] as const;
 
 export const NAV_GROUPS = [
-  { label: "Operate", links: ["Fleet", "Leases", "Queue"] },
+  { label: "Operate", links: ["Fleet", "Leases", "Queue", "Baselines"] },
   { label: "Observe", links: ["Activity", "Usage"] },
 ] as const;
 
