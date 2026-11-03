@@ -72,6 +72,11 @@ export interface Filesystem {
    */
   mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
+  /**
+   * why: `to` must not exist; it becomes a copy of the folder `from` with file modification times kept.
+   * `timeoutMs` bounds the copy where the adapter runs a child process for it.
+   */
+  copyTree(from: string, to: string, options: { readonly timeoutMs: number }): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   rm(path: string): Promise<void>;
   stat(path: string): Promise<FileStat>;
@@ -124,6 +129,12 @@ export class NodeFilesystem implements Filesystem {
   async copyFile(from: string, to: string): Promise<void> {
     await copyFile(from, to);
   }
+
+  async copyTree(
+    _from: string,
+    _to: string,
+    _options: { readonly timeoutMs: number },
+  ): Promise<void> {}
 
   async readFileFrom(path: string, offset: number): Promise<string> {
     const handle = await open(path, "r");
@@ -344,6 +355,12 @@ export class MemoryFilesystem implements Filesystem {
   async copyFile(from: string, to: string): Promise<void> {
     await this.writeFileAtomic(to, await this.readFile(from));
   }
+
+  async copyTree(
+    _from: string,
+    _to: string,
+    _options: { readonly timeoutMs: number },
+  ): Promise<void> {}
 
   async readFileFrom(path: string, offset: number): Promise<string> {
     return Buffer.from(await this.readFile(path), "utf8")

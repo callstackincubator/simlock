@@ -44,6 +44,7 @@ import {
 } from "./index.js";
 import type { DeviceProfileSource } from "./device-profile-source.js";
 import { LIBRARY_PROFILES, type LibraryDeviceProfile } from "./profiles/index.js";
+import { memoryAndroidSourceDatabase } from "./testing.js";
 
 const sdk = "/android-sdk";
 const home = "/home/simlock";
@@ -138,6 +139,7 @@ describe("AndroidDriver", () => {
     await recordRunningAdbServer(filesystem);
     const driver = await AndroidDriver.create({
       clock: new FakeClock(),
+      database: await memoryAndroidSourceDatabase(),
       driverConfig: {},
       env: {
         ANDROID_HOME: sdk,
@@ -158,6 +160,7 @@ describe("AndroidDriver", () => {
     await expect(
       AndroidDriver.create({
         clock: new FakeClock(),
+        database: await memoryAndroidSourceDatabase(),
         driverConfig: {},
         env: {},
         filesystem: new MemoryFilesystem(),
@@ -2977,6 +2980,7 @@ describe("AndroidDriver", () => {
       await recordRunningAdbServer(filesystem, adbServerPort);
       const driver = await AndroidDriver.create({
         clock: new FakeClock(),
+        database: await memoryAndroidSourceDatabase(),
         deviceProfileSources: [maliciousSource],
         driverConfig: {},
         env: { ANDROID_HOME: sdk },
@@ -4306,6 +4310,7 @@ describe("AndroidDriver.create", () => {
 
     const refusal = await AndroidDriver.create({
       clock: new FakeClock(),
+      database: await memoryAndroidSourceDatabase(),
       driverConfig: {},
       env: { ANDROID_HOME: sdk },
       filesystem,
@@ -4722,6 +4727,7 @@ describe("AndroidDriver.create", () => {
     await recordRunningAdbServer(filesystem);
     const driver = await AndroidDriver.create({
       clock: new FakeClock(),
+      database: await memoryAndroidSourceDatabase(),
       driverConfig: {},
       env: { ANDROID_HOME: sdk },
       filesystem,
@@ -5975,6 +5981,7 @@ live(
   async () => {
     const driver = await AndroidDriver.create({
       clock: new SystemClock(),
+      database: await memoryAndroidSourceDatabase(),
       driverConfig: {},
       env: process.env,
       filesystem: new NodeFilesystem(),
@@ -6918,6 +6925,156 @@ describe("AndroidDriver image fit", () => {
     });
   });
 
+  describe("seeds and copies", () => {
+    const sources = `${avdDirectory}/sources`;
+    const copyHome = `${avdDirectory}/simlock_one`;
+    const seedHome = `${sources}/seed_two`;
+    const emulatorLine = [
+      "-port",
+      "5586",
+      "-no-snapshot-save",
+      "-grpc",
+      "8586",
+      "-grpc-use-token",
+      "-crash-report-mode",
+      "never",
+    ];
+
+    function bootingAt(folder: string, launch: readonly string[], hangs: boolean) {
+      const serial = "emulator-5586";
+      return [
+        {
+          hangs,
+          match: {
+            args: ["-avd", "simlock", ...emulatorLine, ...launch],
+            command: binaries.emulator,
+          },
+        },
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "1\n",
+        ),
+        processResult(binaries.adb, ["-s", serial, "shell", "getprop", "init.svc.bootanim"], ""),
+        processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "path"],
+          `${folder}/simlock.avd\r\nOK\r\n`,
+        ),
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
+      ] satisfies ScriptedProcessExpectation[];
+    }
+
+    function makingTheSeed(): ScriptedProcessExpectation[] {
+      const serial = "emulator-5586";
+      return [
+        processResult(binaries.avdmanager, [
+          "create",
+          "avd",
+          "-n",
+          "simlock",
+          "-k",
+          "system-images;android-34;google_apis;arm64-v8a",
+          "-d",
+          "pixel_5",
+        ]),
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ...bootingAt(seedHome, ["-no-snapshot-load"], false),
+        processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
+        processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+        ...bootingAt(seedHome, ["-no-snapshot-load"], false),
+        processResult(binaries.adb, [
+          "-s",
+          serial,
+          "emu",
+          "avd",
+          "snapshot",
+          "save",
+          "simlock_boot",
+        ]),
+        processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "snapshot", "list"],
+          "simlock_boot\n",
+        ),
+        processResult(
+          binaries.adb,
+          ["-s", serial, "emu", "avd", "path"],
+          `${seedHome}/simlock.avd\r\nOK\r\n`,
+        ),
+        processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+      ];
+    }
+
+    async function seedHarness(expectations: readonly ScriptedProcessExpectation[]) {
+      const filesystem = await androidFilesystem();
+      await filesystem.mkdirp(`${seedHome}/simlock.avd`);
+      await filesystem.writeFileAtomic(`${seedHome}/simlock.avd/config.ini`, "hw.ramSize=2048\n");
+      await filesystem.writeFileAtomic(
+        `${seedHome}/simlock.ini`,
+        `avd.ini.encoding=UTF-8\npath=${seedHome}/simlock.avd\ntarget=android-34\n`,
+      );
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        ...expectations,
+      ]);
+      const driver = await createDriver(filesystem, runner, { ids: ["one", "two", "three"] });
+      const spec = await driver.resolveSpec({
+        model: "Pixel 5",
+        osVersion: "34",
+        platform: "android",
+      });
+      return { driver, filesystem, runner, spec };
+    }
+
+    it("leases a plain Android device from a copy of the kind's seed, made first when there is none, booted from the boot snapshot", async () => {
+      const harness = await seedHarness([
+        ...makingTheSeed(),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
+        markWriteExpectation("emulator-5586", "device-3"),
+      ]);
+
+      const device = await harness.driver.provision(harness.spec);
+      const ready = await harness.driver.makeReady(device);
+
+      const create = harness.runner.calls.find((call) => call.args[0] === "create");
+      expect(create?.options.env).toMatchObject({ ANDROID_AVD_HOME: seedHome });
+      expect(device).toMatchObject({
+        deviceId: "simlock_one",
+        driverData: { avdHome: copyHome, avdName: "simlock" },
+      });
+      await expect(harness.filesystem.readFile(`${copyHome}/simlock.avd/config.ini`)).resolves.toBe(
+        "hw.ramSize=2048\nsimlock.mark=device-3\n",
+      );
+      await expect(harness.filesystem.readFile(`${copyHome}/simlock.ini`)).resolves.toBe(
+        `avd.ini.encoding=UTF-8\npath=${copyHome}/simlock.avd\ntarget=android-34\n`,
+      );
+      await expect(harness.driver.listSources()).resolves.toMatchObject([
+        {
+          id: "seed_two",
+          imageTag: "google_apis",
+          kind: "seed",
+          model: "Pixel 5",
+          osVersion: "34",
+        },
+      ]);
+      const launches = harness.runner.calls.filter((call) => call.command === binaries.emulator);
+      expect(launches.map((call) => call.options.env?.["ANDROID_AVD_HOME"])).toEqual([
+        seedHome,
+        seedHome,
+        copyHome,
+      ]);
+      expect(launches.flatMap((call) => call.args)).not.toContain("-wipe-data");
+      expect(ready.address).toBe("emulator-5586");
+    });
+  });
+
   describe("an image tag whose image misfits", () => {
     it("fails RUNTIME_MISSING, not downloadable, and starts no sdkmanager", async () => {
       const { refusal, runner } = await fitHarness(HOST_IMAGES);
@@ -6986,6 +7143,7 @@ async function createDriver(
   return AndroidDriver.create({
     ...onlyProvided(options),
     clock: options.clock ?? new FakeClock(),
+    database: await memoryAndroidSourceDatabase(),
     driverConfig,
     env: {
       ANDROID_HOME: sdk,

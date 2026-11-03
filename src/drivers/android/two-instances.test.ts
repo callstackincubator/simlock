@@ -12,6 +12,7 @@ import {
   type TcpProbe,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
+import { memoryAndroidSourceDatabase } from "./testing.js";
 
 // Two Simlock instances on one machine, set up the way CLI.md and CONFIGURATION.md say to:
 // a distinct `SIMLOCK_HOME` each, and a distinct `drivers.android.adbServerPort` each.
@@ -141,6 +142,7 @@ class Machine {
     let nextId = 0;
     return AndroidDriver.create({
       clock: new FakeClock(),
+      database: await memoryAndroidSourceDatabase(),
       driverConfig: { adbServerPort: instance.adbServerPort },
       env: { ANDROID_HOME: sdk },
       filesystem: this.filesystem,

@@ -58,6 +58,7 @@ import {
   type ProcessResult,
   type ProcessRunner,
   type ProcessSupervisor,
+  type SqliteDatabase,
   type TcpListenerFactory,
   type TcpProbe,
   type TcpStreamConnector,
@@ -193,6 +194,7 @@ export interface AndroidDriverOptions {
    */
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
   readonly env: Readonly<Record<string, string | undefined>>;

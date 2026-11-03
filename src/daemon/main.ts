@@ -1495,6 +1495,7 @@ async function discoverAndroidDriver(
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
+      database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       emulator: options.androidEmulator,
       env: process.env,

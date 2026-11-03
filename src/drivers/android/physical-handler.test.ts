@@ -23,6 +23,7 @@ import {
   type StreamingProcessHandle,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
+import { memoryAndroidSourceDatabase } from "./testing.js";
 import { AndroidPhysicalHandler } from "./physical-handler.js";
 import type { ScreenTarget } from "./screen/index.js";
 
@@ -298,6 +299,7 @@ async function world(
   );
   const driver = await AndroidDriver.create({
     clock: new FakeClock(),
+    database: await memoryAndroidSourceDatabase(),
     driverConfig: {},
     env: { ANDROID_HOME: sdk, ...options.env },
     filesystem,
