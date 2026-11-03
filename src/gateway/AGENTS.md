@@ -66,9 +66,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
    `noWait: true`, `allowDownload: false`, `fleetRequestId`, the worker's own model name.
    Bounded by `gateway.leaseRequestTimeoutMs`. First progress push → `request.dispatched`.
 6. Answers before any progress: `NO_CAPACITY` → remember refusal, refresh view, re-queue
-   (`noWait`: one more walk). `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING`,
-   `UNKNOWN_BASELINE`, `BASELINE_MISMATCH`, `BASELINE_STALE`
-   → exclude that worker for this request, refresh its catalog and baselines, walk again. `PROVISION_FAILED` →
+   (`noWait`: one more walk). `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING`, `UNKNOWN_BASELINE`, `BASELINE_MISMATCH`, `BASELINE_STALE` → exclude that worker for this request, refresh its catalog and baselines, walk again. `PROVISION_FAILED` →
    a refusal; every worker that could take it failed so (one that is full, busy, not ready or unhealthy could, later) → reject
    with the last. After a progress push it is relayed as a failure after progress. Anything else,
    or a failure after progress → `lease.rejected` `worker-failed`. `DAEMON_UPDATING` is handled as `NO_CAPACITY` (the worker began an update the view did not show yet).
@@ -142,10 +140,8 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
   ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
   `WORKER_UNREACHABLE`; the lease stands until TTL. A re-request may name it or get a second lease.
-- **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew,
-  release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
-- **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`;
-  the request waits elsewhere. `worker drain` leaves it to the owner.
+- **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew, release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
+- **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`; the request waits elsewhere. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`, so the usage projection's shared fleet clock can move forward; amending the ADR is the maintainer's call.
 - **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
