@@ -190,6 +190,7 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
   };
 }

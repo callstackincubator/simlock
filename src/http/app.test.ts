@@ -787,6 +787,7 @@ describe("POST /v1/lease-requests", () => {
     ],
     ["an image tag with a space", { imageTag: "google apis" }],
     ["an image tag over 64 characters", { imageTag: "a".repeat(65) }],
+    ["a baseline name with a capital letter", { baseline: "Checkout" }],
     ["a device over 256 characters", { device: "d".repeat(257) }, "device"],
   ])(
     "400s a body carrying %s as BAD_REQUEST before ever dispatching",
@@ -810,6 +811,7 @@ describe("POST /v1/lease-requests", () => {
   it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
     ["imageTag", { imageTag: "google_apis_playstore" }],
     ["mode", { mode: "slim" }],
+    ["baseline", { baseline: "checkout" }],
     ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
     ["physical true", { physical: true }],
     [

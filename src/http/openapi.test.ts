@@ -103,10 +103,13 @@ describe("buildOpenApiDocument", () => {
     ]);
     expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
     expect(
-      Object.fromEntries(["409", "422", "503"].map((status) => [status, errorCodes(post, status)])),
+      Object.fromEntries(
+        ["404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
+      ),
     ).toEqual({
+      "404": ["UNKNOWN_BASELINE"],
       "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
-      "422": ["UNKNOWN_MODEL"],
+      "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
     expect(Object.keys(replySchema(release, "202").properties ?? {})).toEqual([
