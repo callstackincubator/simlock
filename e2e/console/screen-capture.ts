@@ -59,7 +59,12 @@ process.stdin.on("end", () => {
   process.exit(0);
 });
 process.stdin.resume();
-process.stdout.on("error", () => process.exit(0));
+// why: the real tool treats a failed stdout write as a normal stop, and a viewer leaving can destroy
+// stdout before stdin ends, so this stop has to log "closed" as well.
+process.stdout.on("error", () => {
+  appendFileSync(LOG, "closed\\n");
+  process.exit(0);
+});
 `,
   );
   await chmod(path, 0o755);
