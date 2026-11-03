@@ -208,7 +208,8 @@ function defineSuite(target: Target): void {
     const released = await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
     expect(released.code, released.stderr).toBe(0);
     await waitForFree(env);
-  }, 300_000);
+    // why: longer than the cleanup (up to 100 s), the release (60 s) and waitForFree's own DEVICE_READY_MS together, so a device that never turns ready fails on waitForFree's label, which names what it last saw, instead of on a bare hook timeout.
+  }, DEVICE_READY_MS + 180_000);
 
   it(
     "an agent opens a device, installs the Appduct fixture app as an upload, opens it by its bundle id, takes a snapshot that shows tab-status, clicks tab-status, saves a PNG screenshot and closes; within 240 s the device is free",
