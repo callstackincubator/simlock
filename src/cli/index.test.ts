@@ -6565,6 +6565,39 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "google_apis_playstore",
       lease: ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
       flagArgs: ["--image-tag", "google_apis_playstore"],
+      envOverride: {},
+    },
+    {
+      flag: "--baseline",
+      field: "baseline",
+      value: "checkout",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: ["--baseline", "checkout"],
+      envOverride: {},
+    },
+    {
+      flag: "SIMLOCK_BASELINE",
+      field: "baseline",
+      value: "checkout",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: [],
+      envOverride: { baselineFromEnv: "checkout" },
+    },
+    {
+      flag: "--baseline over SIMLOCK_BASELINE",
+      field: "baseline",
+      value: "other",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: ["--baseline", "other"],
+      envOverride: { baselineFromEnv: "checkout" },
+    },
+    {
+      flag: "an empty SIMLOCK_BASELINE",
+      field: "baseline",
+      value: undefined,
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: [],
+      envOverride: { baselineFromEnv: "" },
     },
     {
       flag: "--physical",
@@ -6572,10 +6605,11 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: true,
       lease: ["lease", "--platform", "ios", "--detach"],
       flagArgs: ["--physical"],
+      envOverride: {},
     },
   ])(
     "maps $flag onto the contract's $field input field, and sends none without it",
-    async ({ field, value, lease, flagArgs }) => {
+    async ({ field, value, lease, flagArgs, envOverride }) => {
       const inputs: Record<string, unknown>[] = [];
       const client = fakeClient({
         requestLease: (input) => {
@@ -6618,7 +6652,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 
       await runCli(
         [...lease, ...flagArgs],
-        outputCapture().environmentWith({ connectAdmin: async () => client }),
+        outputCapture().environmentWith({ connectAdmin: async () => client, ...envOverride }),
       );
       await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 
