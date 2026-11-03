@@ -353,6 +353,47 @@ describe("warm-hit", () => {
   });
 });
 
+describe("warm-hit with a baseline", () => {
+  const entry = {
+    mode: "full" as const,
+    model: "iPhone 17",
+    name: "smoke",
+    osVersion: "26.0",
+    platform: "ios" as const,
+    savedAt: "2026-11-02T13:10:00Z",
+    version: 2,
+  };
+  const copyOf = (version: number): NonNullable<WorkerView["devices"]>[number] => {
+    const device = deviceFixture("dev_1", "ready");
+    return { ...device, spec: { ...device.spec, baseline: { name: "smoke", version } } };
+  };
+  const worker = (devices: NonNullable<WorkerView["devices"]>): WorkerView => ({
+    baselines: [entry],
+    capacity: statusFixture().capacity,
+    catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+      .platforms,
+    connection: "connected",
+    devices,
+    drained: false,
+    id: "wrk_a",
+    lastSeenAt: 1,
+    leases: [],
+  });
+
+  it.each([
+    ["a ready copy of the current version, for the baseline", [copyOf(2)], "smoke", 1],
+    ["a ready copy of an older version, for the baseline", [copyOf(1)], "smoke", 0],
+    ["a ready copy of the baseline, for a plain request", [copyOf(2)], undefined, 0],
+  ] as const)("counts only %s as a warm hit", (_label, devices, baseline, score) => {
+    const request = {
+      platform: "ios" as const,
+      ...(baseline === undefined ? {} : { baseline }),
+    };
+
+    expect(warmHit.score(worker([...devices]), request)).toBe(score);
+  });
+});
+
 describe("warm-hit's zero reason", () => {
   const worker: WorkerView = {
     capacity: statusFixture().capacity,
