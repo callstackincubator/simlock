@@ -6,6 +6,7 @@ import {
   satisfies,
 } from "../../contract/index.js";
 import {
+  baselineMismatch,
   findCatalogModel,
   modelClass,
   pairedRuntimes,
@@ -34,6 +35,14 @@ export function baselineEntry(
 ): BaselineListed | undefined {
   if (request.baseline === undefined) return undefined;
   return worker.baselines?.find((entry) => entry.name === request.baseline);
+}
+
+/** why: the one gateway call of the core's `baselineMismatch`: whether the worker's copy of the named baseline differs from the request, over the worker's own catalog for the model rule. */
+export function baselineMismatchOf(worker: WorkerView, request: RoutableRequest) {
+  const entry = baselineEntry(worker, request);
+  if (entry === undefined) return undefined;
+  const catalog = worker.catalog?.find((listed) => listed.platform === request.platform);
+  return baselineMismatch(entry, request, catalog ?? { modelAliases: {}, models: [] });
 }
 
 /**

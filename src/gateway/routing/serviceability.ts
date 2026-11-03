@@ -4,11 +4,12 @@
  * it and acts on the answer, and the stages never see a request this table has rejected.
  */
 import type { Platform } from "../../contract/index.js";
-import { baselineMismatch, type DeviceClass, noPhysicalMatch } from "../../core/index.js";
+import { type DeviceClass, noPhysicalMatch } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 import {
   baselineEntry,
+  baselineMismatchOf,
   hasPlatform,
   listsModel,
   matchRequest,
@@ -105,13 +106,6 @@ function baselineHolders(request: RoutableRequest, views: readonly WorkerView[])
     };
   }
   return { kind: "holders", views: fresh };
-}
-
-function baselineMismatchOf(worker: WorkerView, request: RoutableRequest) {
-  const entry = baselineEntry(worker, request);
-  if (entry === undefined) return undefined;
-  const catalog = worker.catalog?.find((listed) => listed.platform === request.platform);
-  return baselineMismatch(entry, request, catalog ?? { modelAliases: {}, models: [] });
 }
 
 function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): Assessment {

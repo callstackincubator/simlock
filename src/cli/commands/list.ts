@@ -68,6 +68,8 @@ const GATEWAY_REASON_TEXT: Readonly<
   disconnected: () => "Not connected",
   drained: () => "Drained",
   incompatible: () => "Protocol mismatch",
+  "baseline-mismatch": () => "Baseline is for another device",
+  "baseline-stale": () => "Baseline is stale",
   "no-baseline": () => "Does not hold the baseline",
   "no-driver": (platform) => `No ${platform === "ios" ? "iOS" : "Android"} support`,
   "no-free-physical": () => WAITING_REASON_TEXT["no-free-physical"](""),

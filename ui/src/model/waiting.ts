@@ -88,6 +88,8 @@ const WORKER_WHY_TEXT: Readonly<
   disconnected: () => "Not connected",
   drained: () => "Drained",
   incompatible: () => "Protocol mismatch",
+  "baseline-mismatch": () => "Baseline is for another device",
+  "baseline-stale": () => "Baseline is stale",
   "no-baseline": () => "Does not hold the baseline",
   "no-driver": (platform) => `No ${platform} support`,
   "no-free-physical": () => WHY_TEXT["no-free-physical"](""),
