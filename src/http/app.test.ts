@@ -725,7 +725,7 @@ describe("POST /v1/lease-requests", () => {
     "400s a body carrying %s as BAD_REQUEST before ever dispatching",
     async (_label, extra, named) => {
       const { app, dispatcher } = buildHarness();
-      // Raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
+      // why: raced against a dispatch, so a body that is wrongly accepted fails here on the assertion
       // below rather than by waiting for a 201 that only comes once the request is queued.
       const response = await Promise.race([
         postLeaseRequest(app, { ...defaultBody, ...extra }),
