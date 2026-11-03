@@ -583,7 +583,7 @@ describe("/v1/baselines", () => {
     version: 1,
   };
 
-  it("POST dispatches baseline.save with the body, GET baseline.list and DELETE baseline.remove with the path's name, each as the caller's role, and answers the result as JSON", async () => {
+  it("POST dispatches baseline.save with the body, GET baseline.list and DELETE baseline.remove with the path's name and the workerId query, each as the caller's role, and answers the result as JSON", async () => {
     const { app, dispatcher } = buildHarness();
     const seen: { input: unknown; operation: string; role: string }[] = [];
     const answers = {
@@ -608,6 +608,14 @@ describe("/v1/baselines", () => {
       headers: operatorAuth,
       method: "DELETE",
     });
+    const onWorker = await app.request("/v1/baselines/checkout?workerId=wrk_a", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    const longWorker = await app.request(`/v1/baselines/checkout?workerId=${"w".repeat(129)}`, {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
     const agentSave = await app.request("/v1/baselines", {
       body: JSON.stringify({ leaseId: "L2", name: "mine" }),
       headers: { ...agentAuth, "content-type": "application/json" },
@@ -619,9 +627,14 @@ describe("/v1/baselines", () => {
       method: "POST",
     });
 
-    expect([saved.status, listed.status, removed.status, agentSave.status]).toEqual([
-      200, 200, 200, 200,
-    ]);
+    expect([
+      saved.status,
+      listed.status,
+      removed.status,
+      onWorker.status,
+      agentSave.status,
+    ]).toEqual([200, 200, 200, 200, 200]);
+    expect(longWorker.status).toBe(400);
     expect(await saved.json()).toEqual(answers["baseline.save"]);
     expect(await listed.json()).toEqual(answers["baseline.list"]);
     expect(await removed.json()).toEqual(answers["baseline.remove"]);
@@ -634,6 +647,11 @@ describe("/v1/baselines", () => {
       },
       { input: {}, operation: "baseline.list", role: "agent" },
       { input: { name: "checkout" }, operation: "baseline.remove", role: "admin" },
+      {
+        input: { name: "checkout", workerId: "wrk_a" },
+        operation: "baseline.remove",
+        role: "admin",
+      },
       { input: { leaseId: "L2", name: "mine" }, operation: "baseline.save", role: "agent" },
     ]);
   });
