@@ -1,7 +1,8 @@
 import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
-import { assertVirtual } from "./domain.js";
+import { assertVirtual, type Platform } from "./domain.js";
+import type { Driver } from "./driver.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { ReleasedLease } from "./registry.js";
 
@@ -19,6 +20,7 @@ export interface BaselineSaveResult {
 
 export interface BaselineServiceOptions {
   readonly clock: Clock;
+  readonly drivers: { get(platform: Platform): Pick<Driver, "destroySource"> };
   readonly leaseSave: () => {
     releaseToSave<Result>(
       leaseId: string,
@@ -48,7 +50,24 @@ export class BaselineService {
         if (entry === undefined) throw new Error("A saved baseline was not recorded");
         return entry;
       });
+    await this.#dropOlderVersions(baseline.name, baseline.version);
     return { baseline, leaseId: request.leaseId };
+  }
+
+  /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */
+  async #dropOlderVersions(name: string, version: number): Promise<void> {
+    const { database } = this.options.state;
+    const older = database
+      .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? AND version < ?")
+      .all(name, version);
+    for (const row of older) {
+      await this.options.drivers
+        .get(String(row.platform) as Platform)
+        .destroySource(String(row.source_id));
+      database
+        .prepare("DELETE FROM baselines WHERE name = ? AND version = ?")
+        .run(name, Number(row.version));
+    }
   }
 
   #insert(

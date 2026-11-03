@@ -243,6 +243,7 @@ export function createCore(options: CoreOptions): Core {
   });
   const baselines = new BaselineService({
     clock: options.clock,
+    drivers,
     leaseSave: () => port("leaseSave"),
     reclaim,
     state: options.state,
