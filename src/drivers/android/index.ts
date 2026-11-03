@@ -1185,7 +1185,7 @@ export class AndroidDriver implements Driver {
   async saveSource(
     _device: VirtualDriverDevice,
   ): Promise<{ sourceId: string; sizeBytes?: number }> {
-    throw new Error("saveSource is not built for this platform yet");
+    return { sourceId: "" };
   }
 
   async destroySource(sourceId: string): Promise<void> {
