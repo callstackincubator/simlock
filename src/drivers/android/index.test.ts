@@ -7498,8 +7498,12 @@ describe("AndroidDriver image fit", () => {
       const imagePath = `${sdk}/system-images/android-34/google_apis/arm64-v8a`;
       const uninstall = processResult(binaries.sdkmanager, ["--uninstall", packageName]);
       const noEmulators = processResult(binaries.adb, ["devices"], "List of devices attached\n");
-      const remove = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
+      const remove = async (
+        harness: Awaited<ReturnType<typeof seedHarness>>,
+        failingFolder?: string,
+      ) => {
         await harness.driver.provision(harness.spec);
+        if (failingFolder !== undefined) harness.filesystem.defineFailure(failingFolder, "EACCES");
         const [target] = await harness.driver.listComponents();
         // why: the scripted runner only answers; real sdkmanager also deletes the image's folder.
         const spawn = harness.runner.spawn.bind(harness.runner);
@@ -7523,8 +7527,7 @@ describe("AndroidDriver image fit", () => {
         noEmulators,
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ]);
-      stuck.filesystem.defineFailure(seedHome, "EACCES");
-      await remove(stuck);
+      await remove(stuck, seedHome);
       await expect(stuck.driver.listSources()).resolves.toMatchObject([
         { id: "seed_two", staleReason: `system image ${packageName} is not installed` },
       ]);

@@ -1934,10 +1934,28 @@ export class AndroidDriver implements Driver {
       platform: this.platform,
       receipt,
       remove: async ({ image }) => {
-        await this.#uninstall(systemImagePackage(image.apiLevel, image.tag, image.abi), options);
+        const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
+        await this.#uninstall(packageName, options);
+        await this.#destroySeedsOf(packageName);
         return {};
       },
     });
+  }
+
+  /**
+   * why: A seed made from a removed image would be remade at the next provision anyway; destroying it
+   * now frees its disk. A seed that cannot be destroyed stays: its stale reason says the image is
+   * gone, so `doctor` lists it and `nuke` deletes it, and the removal itself still succeeds.
+   */
+  async #destroySeedsOf(packageName: string): Promise<void> {
+    for (const row of this.#sources.readyRows()) {
+      if (row.kind !== "seed" || !row.specKey.endsWith(`|${packageName}`)) continue;
+      try {
+        await this.#removeSource(row.sourceId, row.folder, row.avdName);
+      } catch {
+        // why: left for doctor and nuke, see above.
+      }
+    }
   }
 
   async #uninstall(packageName: string, options: { readonly signal: AbortSignal }): Promise<void> {
