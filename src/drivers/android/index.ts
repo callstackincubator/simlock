@@ -1182,6 +1182,12 @@ export class AndroidDriver implements Driver {
     this.#sources.remove(row.sourceId);
   }
 
+  async saveSource(
+    _device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number }> {
+    throw new Error("saveSource is not built for this platform yet");
+  }
+
   async destroySource(sourceId: string): Promise<void> {
     const row = this.#sources.findRow(sourceId);
     if (row !== undefined) {

@@ -89,6 +89,41 @@ export const imageTagSchema = z
   .max(IMAGE_TAG_MAX)
   .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
 
+/** why: a baseline's name is its handle on the command line and in a path-like URL, so it is lowercase and starts with a letter or digit. */
+export const baselineNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[a-z0-9][a-z0-9._-]*$/,
+    "baseline name may contain only a-z, 0-9, '.', '_' and '-', and must start with a letter or digit",
+  );
+
+// oxlint-disable-next-line no-control-regex -- refusing control characters is the whole point.
+const NO_CONTROL_CHARACTERS = /^[^\u0000-\u001f\u007f]*$/;
+
+export const baselineNoteSchema = z
+  .string()
+  .max(200)
+  .regex(NO_CONTROL_CHARACTERS, "baseline note may not contain control characters");
+
+/** why: one baseline as `baseline.save` and `baseline.list` answer it; `sizeBytes` is absent when the source's size could not be counted. */
+export const baselineEntrySchema = z.object({
+  name: baselineNameSchema,
+  version: z.number().int().min(1),
+  platform: platformSchema,
+  model: z.string().max(64),
+  osVersion: z.string().max(64),
+  mode: z.enum(["slim", "full"]),
+  imageTag: imageTagSchema.optional(),
+  note: baselineNoteSchema.optional(),
+  sizeBytes: z.number().int().min(0).optional(),
+  savedAt: z.string().max(64),
+  staleReason: z.string().max(300).optional(),
+});
+
+export type BaselineEntry = z.infer<typeof baselineEntrySchema>;
+
 const deviceSpecSchema = z.object({
   physical: z.boolean(),
   platform: platformSchema,

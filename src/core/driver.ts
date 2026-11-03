@@ -280,6 +280,13 @@ export interface Driver {
   listSources(): Promise<readonly DriverSource[]>;
   destroySource(sourceId: string): Promise<void>;
   /**
+   * why: keeps a copy of a device as a baseline source (ADR 0061 §4). The driver writes the
+   * source's row, kind `baseline`, state `making`, before any folder or simulator exists, shuts the
+   * device down cleanly itself, makes the copy in its own sources area and sets the row `ready`.
+   * `sizeBytes` is absent when it could not be counted.
+   */
+  saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }>;
+  /**
    * why: Boots the device and returns it with a freshly read `address`. Never trust the address a
    * caller passed in or one captured at `provision` -- an Android console port is assigned per
    * boot, so a device coming back from `shutdown` (or a driver restart) can land on a different

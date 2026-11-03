@@ -13,6 +13,7 @@ import {
   type HostFacts,
   NoDriverError,
   type Nuke,
+  type BaselineService,
   type WarmKindForgetter,
   redactConfig,
   UnknownPassthroughToolError,
@@ -162,6 +163,7 @@ export interface DaemonServerEngineOptions {
   readonly enrollment?: DispatcherOptions["enrollment"];
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
+  readonly baselines?: Pick<BaselineService, "save">;
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
@@ -315,6 +317,7 @@ function buildDispatcher(
     ...(options.enrollment === undefined ? {} : { enrollment: options.enrollment }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
     ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
+    ...(options.baselines === undefined ? {} : { baselines: options.baselines }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
@@ -1165,6 +1168,12 @@ export class DaemonServer {
       case "warm.forget":
         return this.#dispatcher.dispatch(
           "warm.forget",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "baseline.save":
+        return this.#dispatcher.dispatch(
+          "baseline.save",
           frame.payload ?? {},
           this.#session(connection),
         );

@@ -451,6 +451,12 @@ export class OutOfProcessFakeDriver implements Driver {
 
   async destroySource(_sourceId: string): Promise<void> {}
 
+  async saveSource(
+    _device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number }> {
+    throw new Error("saveSource is not built for the e2e fake driver yet");
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", [spec]);
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;

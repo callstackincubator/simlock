@@ -30,6 +30,7 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  type BaselineService,
   type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
@@ -145,6 +146,8 @@ export interface DispatcherOptions {
   readonly nuke?: Nuke;
   /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
   readonly warmKinds?: WarmKindForgetter;
+  /** why: the baselines' one way in; optional so tests that never save need none. */
+  readonly baselines?: Pick<BaselineService, "save">;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
@@ -276,6 +279,7 @@ export class Dispatcher {
       "cleanup.run": this.#cleanupRun,
       "nuke.run": this.#nukeRun,
       "warm.forget": this.#warmForget,
+      "baseline.save": this.#baselineSave,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -843,6 +847,17 @@ export class Dispatcher {
         ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
       })),
     };
+  };
+
+  #baselineSave: Handler<"baseline.save"> = async (input, session) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    return this.options.baselines.save({
+      leaseId: input.leaseId,
+      name: input.name,
+      ...(input.note === undefined ? {} : { note: input.note }),
+      requesterId: session.principal,
+    });
   };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));

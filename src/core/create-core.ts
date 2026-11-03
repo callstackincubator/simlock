@@ -35,6 +35,7 @@ import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
+import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 interface CoreOptions {
@@ -101,6 +102,7 @@ export interface Core {
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
   readonly warmKinds: WarmKindForgetter;
+  readonly baselines: BaselineService;
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
@@ -343,6 +345,7 @@ export function createCore(options: CoreOptions): Core {
     capacityReader,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
+    baselines: new BaselineService(),
     catalog: drivers,
     claims,
     claimReader: claims,

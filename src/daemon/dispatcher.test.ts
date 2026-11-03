@@ -362,6 +362,7 @@ async function buildDispatcher(
       : { capabilitySources: overrides.capabilitySources }),
     capacity: engine,
     warmPool: engine,
+    baselines: engine.core.baselines,
     deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
@@ -1409,6 +1410,46 @@ describe("Dispatcher: lease.release of a virtual device", () => {
       ]);
     },
   );
+});
+
+describe("Dispatcher: baseline.save", () => {
+  it("ends the held lease, saves its device as version 1 of the named baseline with the files it held, and deletes the device", async () => {
+    const { clock, dispatcher, driver, registry } = await buildDispatcher();
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+    driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/login.txt", "signed in");
+
+    const saved = await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: grant.lease.id, name: "checkout", note: "app 4.2" },
+      session({ role: "admin" }),
+    );
+
+    expect(saved).toEqual({
+      baseline: {
+        mode: "full",
+        model: "iPhone 17 Pro",
+        name: "checkout",
+        note: "app 4.2",
+        osVersion: "26.5",
+        platform: "ios",
+        savedAt: new Date(clock.now()).toISOString(),
+        sizeBytes: "signed in".length,
+        version: 1,
+      },
+      leaseId: grant.lease.id,
+    });
+    expect(registry.snapshot.leases).toEqual([]);
+    expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["deleted"]);
+    const [source] = await driver.listSources();
+    expect(driver.sourceFiles(source?.id ?? "")).toEqual(
+      new Map([["data/login.txt", "signed in"]]),
+    );
+  });
 });
 
 describe("Dispatcher: lease.release-all", () => {

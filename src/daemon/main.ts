@@ -39,6 +39,7 @@ import {
   Registry,
   registryOwner,
   warmPoolOwner,
+  baselinesOwner,
   Nuke,
   SerializedDecision,
   stableError,
@@ -364,6 +365,7 @@ async function composeDaemon(
         : [
             registryOwner,
             warmPoolOwner,
+            baselinesOwner,
             tokensOwner,
             iosSourceDataOwner,
             androidSourceDataOwner,
@@ -758,6 +760,7 @@ async function composeDaemon(
     nuke,
     registry,
     warmKinds: core.warmKinds,
+    baselines: core.baselines,
     stalls: { claims: core.claimReader, drivers },
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,

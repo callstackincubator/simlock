@@ -28,6 +28,9 @@ import {
   hostFactsSchema,
   historyStatusSchema,
   hostLoadSchema,
+  baselineEntrySchema,
+  baselineNameSchema,
+  baselineNoteSchema,
   imageTagSchema,
   leaseGrantSchema,
   leaseRecordSchema,
@@ -614,6 +617,21 @@ export const warmForget = defineOperation({
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineSave = defineOperation({
+  name: "baseline.save",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      leaseId: z.string().min(1).max(256),
+      name: baselineNameSchema,
+      note: baselineNoteSchema.optional(),
+    })
+    .strict(),
+  output: z.object({ baseline: baselineEntrySchema, leaseId: z.string().max(256) }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -1120,6 +1138,7 @@ export const OPERATIONS = {
   "cleanup.run": cleanupRun,
   "nuke.run": nukeRun,
   "warm.forget": warmForget,
+  "baseline.save": baselineSave,
   "config.get": configGet,
   "daemon.stop": daemonStop,
   "daemon.update": daemonUpdate,

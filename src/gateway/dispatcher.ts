@@ -251,6 +251,7 @@ export class GatewayDispatcher {
       "nuke.run": unsupportedByDesign("nuke.run"),
       "cleanup.run": unsupportedByDesign("cleanup.run"),
       "warm.forget": unsupportedByDesign("warm.forget"),
+      "baseline.save": unsupportedByDesign("baseline.save"),
       "doctor.run": unsupportedByDesign("doctor.run"),
       "driver.passthrough": unsupportedByDesign("driver.passthrough"),
       "component.install": unsupportedByDesign(
