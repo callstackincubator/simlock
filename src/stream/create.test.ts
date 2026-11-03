@@ -364,6 +364,37 @@ describe("createWorkerStream", () => {
     }
   });
 
+  it("ends a screen stream the gateway relays for a proxy identity at that identity's expiresAt", async () => {
+    const clock = new FakeClock();
+    let relayCancelled = false;
+    const gateway = createGatewayStream({
+      clock,
+      fleet: {
+        knowsWorker: () => true,
+        relay: async () => {
+          const body = new ReadableStream<Uint8Array>({
+            cancel: () => {
+              relayCancelled = true;
+            },
+          });
+          return new Response(body, { headers: STREAM_HEADERS });
+        },
+        requesterPrefix: "gw:inst:",
+      },
+      logger: new NoopLogger(),
+    });
+    const served = await gateway.mount.handle(deviceRequest("w1", "dev_9"), {
+      ...OPERATOR,
+      expiresAt: clock.now() + 60_000,
+    });
+    const next = served.body!.getReader().read();
+    clock.advance(59_999);
+    expect(await settledWithin(next)).toBe("pending");
+    clock.advance(1);
+    expect(await settledWithin(next)).toEqual({ done: true, value: undefined });
+    expect(relayCancelled).toBe(true);
+  });
+
   it("follows its device: a lease granted leaves the stream running, a lease ended or a device that stops running ends the capture, and one that comes while the capture opens refuses with 409", async () => {
     {
       const { feeds, registry, stream } = worker();
