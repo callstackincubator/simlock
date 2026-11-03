@@ -7237,6 +7237,7 @@ function bootPolls(runner: ScriptedProcessRunner): number {
   return runner.calls.filter((call) => call.args.at(-1) === "sys.boot_completed").length;
 }
 
+/** why: what a running AVD made before copies answers to `emu avd path`: `<root>/<name>.avd`. */
 function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedProcessExpectation {
   return processResult(
     binaries.adb,
@@ -7245,7 +7246,7 @@ function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedPr
   );
 }
 
-// why: a reclaim that passed its ownership probe removes the device's rules before it loads the snapshot: every reverse rule, then a look at the forwards (none here).
+// why: the erasable mark a boot writes into the running device.
 function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
   return processResult(binaries.adb, [
     "-s",
