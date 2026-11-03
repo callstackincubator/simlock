@@ -1194,6 +1194,7 @@ describe("operation input/output round trips", () => {
       { ...base, leaseId: "x".repeat(257) },
       { ...base, requesterId: "" },
       { ...base, requesterId: "y".repeat(257) },
+      { ...base, requesterId: "a\u001b[2Jb" },
       { ...base, orientation: "upside_down" },
       { ...base, angle: 90 },
     ]) {

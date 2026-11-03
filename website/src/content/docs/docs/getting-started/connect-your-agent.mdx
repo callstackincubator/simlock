@@ -36,7 +36,7 @@ Without it, every `simlock` command gets a new identity from its own process ID,
 Do not put a fixed `SIMLOCK_AGENT_ID` in a shared shell profile or a shared MCP config. Every session would then be the same requester: the second session to ask for a device is refused with `REQUESTER_ALREADY_LEASED` while the first holds one.
 </Aside>
 
-`SIMLOCK_AGENT_ID` wins over the session ID when both are set. `simlock lease --agent-id <id>` wins over both, for that one command.
+An identity may hold no control characters and be at most 256 characters; Simlock refuses a longer or unprintable one with `BAD_REQUEST`. `SIMLOCK_AGENT_ID` wins over the session ID when both are set. `simlock lease --agent-id <id>` wins over both, for that one command.
 
 ## Install the skill
 

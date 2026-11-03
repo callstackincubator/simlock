@@ -8,6 +8,7 @@ import {
   leaseIdSchema,
   OPERATIONS,
   refuseModelWithClass,
+  requesterIdSchema,
   waitingRequestSchema,
   WARM_POOL_NAME_MAX,
 } from "../contract/index.js";
@@ -136,10 +137,7 @@ const execBodySchema = z
       .string()
       .nullish()
       .transform((value) => value ?? undefined),
-    requesterId: z
-      .string()
-      .nullish()
-      .transform((value) => value ?? undefined),
+    requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
 

@@ -594,8 +594,8 @@ class SimlockClientImpl {
 
     if (signal?.aborted === true) throw cancelledError();
 
-    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then(
-      (grant) => grant as LeaseGrant,
+    const requestPromise = this.#callRaw("lease.request", parsed, { onProgress }).then((grant) =>
+      this.#parseOutput("lease.request", grant),
     );
 
     if (signal === undefined) return requestPromise;

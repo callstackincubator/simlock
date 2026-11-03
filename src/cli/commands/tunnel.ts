@@ -17,6 +17,7 @@ import {
   WebSocketRefusedError,
 } from "../../ports/index.js";
 import { commandArgs, UsageError } from "../args.js";
+import { escapeControl } from "../escape.js";
 import { selectOnlyLease } from "../remote-lease.js";
 import type { CommandContext } from "../tree.js";
 import type { CliEnvironment } from "../types.js";
@@ -481,7 +482,7 @@ function serve(
             kind === "reverse"
               ? `reverse device:${String(devicePort)} -> localhost:${String(callerPort)}`
               : `forward localhost:${String(callerPort)} -> device:${String(devicePort)}`;
-          environment.stdout.write(`${route} (lease ${leaseId})\n`);
+          environment.stdout.write(`${route} (lease ${escapeControl(leaseId)})\n`);
         }
         return;
       }
