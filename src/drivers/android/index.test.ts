@@ -2315,6 +2315,57 @@ describe("AndroidDriver", () => {
     expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
   });
 
+  it("listManaged settles after the timeout when one serial's mark read never answers, reports that serial unreadable, and still finds another serial in the same pass", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_two.avd`);
+    const clock = new FakeClock();
+    const runner = new ClockDeadlineRunner(
+      [
+        processResult(
+          binaries.adb,
+          ["devices"],
+          "List of devices attached\nemulator-5586\tdevice\nemulator-5588\tdevice\n",
+        ),
+        {
+          hangs: true,
+          match: {
+            args: ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+            command: binaries.adb,
+          },
+        },
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5588", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+          "simlock_two\n",
+        ),
+        avdPathExpectation("emulator-5588", "simlock_two"),
+      ],
+      clock,
+    );
+    const driver = await createDriver(filesystem, runner, { clock });
+
+    let settled: Awaited<ReturnType<typeof driver.listManaged>> | undefined;
+    void driver.listManaged().then((reality) => {
+      settled = reality;
+    });
+    for (let step = 0; step < 20 && settled === undefined; step += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(1_000);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(
+      settled?.devices.map((device) => ({ deviceId: device.deviceId, runState: device.runState })),
+    ).toEqual(
+      expect.arrayContaining([
+        { deviceId: "simlock_two", runState: "running" },
+        { deviceId: "simlock_one", runState: "transitioning" },
+      ]),
+    );
+    expect(settled?.processes).toEqual([expect.objectContaining({ deviceId: "simlock_two" })]);
+  });
+
   it("answers virtualLeaseEnvironment with simlock's adb port, and leaseEnvironment for a virtual device equals it", async () => {
     const driver = await createDriver(await androidFilesystem(), new ScriptedProcessRunner([]));
 
