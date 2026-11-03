@@ -3259,6 +3259,159 @@ describe("Dispatcher: a baseline lease is released", () => {
   );
 });
 
+describe("Dispatcher: an operator replaces a baseline", () => {
+  const model = "iPhone 17 Pro";
+  const oneDevice = {
+    config: {
+      limits: {
+        android: { maxDevices: 1, maxRunning: 1 },
+        ios: { maxDevices: 1, maxRunning: 1 },
+        maxRunning: 3,
+      },
+      ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+    },
+    strategy: "resource",
+  } as const;
+
+  it.each([
+    { label: "a lease is running", case: "running" },
+    { label: "no lease is running", case: "idle" },
+    { label: "a request is waiting", case: "waiting" },
+    { label: "a copy is being made", case: "making" },
+  ] as const)(
+    "running leases keep their device, the next lease gets the new version, a waiting request too, idle old-version devices are destroyed, and the old version goes with its last device ($label)",
+    async ({ case: scenario }) => {
+      const clock = new FakeClock(1_000);
+      const { dispatcher, driver, eventBus, registry, state } = await buildDispatcher({
+        ...(scenario === "waiting" ? { capacity: oneDevice } : {}),
+        clock,
+        driverOptions: {
+          knownModels: [model],
+          ...(scenario === "making" ? { latencyMs: { provision: 5_000 } } : {}),
+        },
+      });
+      const admin = session({ role: "admin" });
+      const settle = async <Result>(pending: Promise<Result>): Promise<Result> => {
+        let done = false;
+        void pending.then(
+          () => (done = true),
+          () => (done = true),
+        );
+        while (!done) {
+          clock.advance(5_000);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return pending;
+      };
+      const lease = (input: Record<string, unknown>) =>
+        settle(
+          dispatcher.dispatch("lease.request", { platform: "ios", ...input } as never, session()),
+        );
+      const driverIdOf = (deviceId: string): string =>
+        registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.driverDeviceId ??
+        "";
+      const stateOf = (deviceId: string): string | undefined =>
+        registry.snapshot.virtualDevices.find((device) => device.id === deviceId)?.state;
+      const versions = (): number[] =>
+        state.database
+          .prepare("SELECT version FROM baselines WHERE name = 'checkout' ORDER BY version")
+          .all()
+          .map((row) => Number(row.version));
+      const saveFrom = async (requesterId: string, marker: string): Promise<void> => {
+        const held = await lease({ model, requesterId });
+        driver.writeDeviceFile(driverIdOf(held.device.id), "data/version.txt", marker);
+        await dispatcher.dispatch(
+          "baseline.save",
+          { leaseId: held.lease.id, name: "checkout" },
+          admin,
+        );
+      };
+      const removed = () =>
+        eventBus
+          .replay()
+          .filter((envelope) => envelope.event === "baseline.removed")
+          .map((envelope) => envelope.payload);
+      const fileOf = (deviceId: string) =>
+        driver.deviceFile(driverIdOf(deviceId), "data/version.txt");
+
+      await saveFrom("operator", "one");
+      expect(versions()).toEqual([1]);
+      const running =
+        scenario === "running"
+          ? await lease({ baseline: "checkout", requesterId: "agent-1" })
+          : undefined;
+      let idle: { readonly id: string } | undefined;
+      if (scenario === "idle") {
+        const [source] = await driver.listSources();
+        const spec = {
+          baseline: { name: "checkout", version: 1 },
+          model,
+          osVersion: "26.5",
+          physical: false,
+          platform: "ios",
+        } as const;
+        const driverDevice = await driver.provision(spec, { source: source?.id ?? "" });
+        const booted = await driver.makeReady(driverDevice, { mode: "full", purpose: "prepare" });
+        const registered = await registry.registerDevice({
+          driverData: driverDevice.driverData,
+          driverDeviceId: driverDevice.deviceId,
+          provisionDuration: 0,
+          spec,
+        });
+        idle = await registry.transitionDevice(
+          registered.id,
+          "ready",
+          { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
+          booted.mode === undefined ? undefined : { mode: booted.mode },
+        );
+      }
+      const operator = await lease({ model, requesterId: "operator" });
+      const waiting =
+        scenario === "waiting" || scenario === "making"
+          ? settle(
+              dispatcher.dispatch(
+                "lease.request",
+                { baseline: "checkout", platform: "ios", requesterId: "agent-2" },
+                session(),
+              ),
+            )
+          : undefined;
+      for (let turn = 0; waiting !== undefined && turn < 10; turn += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      driver.writeDeviceFile(driverIdOf(operator.device.id), "data/version.txt", "two");
+
+      await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: operator.lease.id, name: "checkout" },
+        admin,
+      );
+
+      if (running !== undefined) {
+        expect(stateOf(running.device.id)).toBe("leased");
+        expect(versions()).toEqual([1, 2]);
+        expect(removed()).toEqual([]);
+      }
+      if (idle !== undefined) expect(stateOf(idle.id)).toBe("deleted");
+      const next =
+        waiting === undefined
+          ? await lease({ baseline: "checkout", requesterId: "agent-3" })
+          : await waiting;
+      expect(next.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
+      expect(fileOf(next.device.id)).toBe("two");
+      if (running !== undefined) {
+        await dispatcher.dispatch("lease.release", { leaseId: running.lease.id }, session());
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(versions()).toEqual([2]);
+      expect(removed()).toEqual([
+        expect.objectContaining({ name: "checkout", reason: "replaced", version: 1 }),
+      ]);
+      expect(await driver.listSources()).toHaveLength(1);
+    },
+  );
+});
+
 describe("Dispatcher: the download policy clamp applies regardless of caller", () => {
   it("starts no install for allowDownload:true when downloads.policy is 'never'", async () => {
     const { dispatcher, driver } = await buildDispatcher({ downloadsPolicy: "never" });
