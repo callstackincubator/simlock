@@ -6156,6 +6156,7 @@ describe("AndroidDriver image fit", () => {
           stage.list,
           stage.probe,
           stage.kill,
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
         ];
       };
       const leasing = (hangs: boolean) => [
@@ -6163,10 +6164,15 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], hangs),
         markWriteExpectation(serial, "three"),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
       ];
+      const probe = processResult(
+        binaries.adb,
+        ["-s", serial, "emu", "avd", "path"],
+        `${copyHome}/simlock.avd\r\nOK\r\n`,
+      );
       const savingSteps = [
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        probe,
         adbShell("sync"),
         processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
       ];
@@ -6249,7 +6255,15 @@ describe("AndroidDriver image fit", () => {
         await vi.waitFor(() =>
           expect(stuck.runner.calls.some((call) => call.args.includes("kill"))).toBe(true),
         );
-        clock.advance(60_000);
+        let stuckDone = false;
+        void stuckSaving.then(
+          () => (stuckDone = true),
+          () => (stuckDone = true),
+        );
+        await vi.waitFor(() => {
+          clock.advance(60_000);
+          expect(stuckDone).toBe(true);
+        });
         await expect(stuckSaving).resolves.toMatchObject({ sourceId: "baseline_four" });
         await kept(stuck);
         expect(sent(stuck).slice(sent(stuck).indexOf("shell reboot -p"))).toEqual(
@@ -6264,7 +6278,6 @@ describe("AndroidDriver image fit", () => {
         const adopted = await reopened(
           restarted,
           [
-            processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
             ...savingSteps,
             processResult(
               binaries.adb,
