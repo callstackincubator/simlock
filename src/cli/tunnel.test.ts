@@ -529,7 +529,7 @@ async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<v
   page.peer.receive(open(5, 5173));
   await vi.waitFor(() => expect(page.cli.tcpStreams.connections).toHaveLength(4));
   const broken = page.cli.tcpStreams.connections[3]?.peer;
-  if (broken === undefined) throw new Error("no third connection");
+  if (broken === undefined) throw new Error("no fourth connection");
   broken.writeFailure = new Error("write EPIPE");
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.data, 5, new Uint8Array(10)));
   page.peer.receive(encodeTunnelFrame(TUNNEL_TAG.end, 5));
