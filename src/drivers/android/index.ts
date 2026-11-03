@@ -540,6 +540,28 @@ type AndroidTargetFor = (
   device: VirtualDriverDevice | PhysicalDriverDevice,
 ) => Promise<ScreenTarget>;
 
+/** why: a device carries no spec, so a saved source's model, API level, image tag and package come from its AVD's config: `hw.device.name` names the model and `image.sysdir.1` the image. */
+function savedKindOf(config: string):
+  | {
+      readonly imageTag: string;
+      readonly model: string;
+      readonly osVersion: string;
+      readonly packageName: string;
+    }
+  | undefined {
+  const image = /^image\.sysdir\.1=system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?\s*$/m.exec(
+    config,
+  );
+  const [, osVersion, imageTag, abi] = image ?? [];
+  if (osVersion === undefined || imageTag === undefined || abi === undefined) return undefined;
+  return {
+    imageTag,
+    model: /^hw\.device\.name=(.+?)\s*$/m.exec(config)?.[1] ?? "unknown",
+    osVersion,
+    packageName: systemImagePackage(osVersion, imageTag, abi),
+  };
+}
+
 export class AndroidDriver implements Driver {
   readonly platform = "android" as const;
   readonly defaultModels = ANDROID_DEFAULT_MODELS;
@@ -1257,22 +1279,13 @@ export class AndroidDriver implements Driver {
       );
     }
     const config = await this.#filesystem.readFile(`${this.#avdFolder(data)}/config.ini`);
-    const image =
-      /^image\.sysdir\.1=system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?\s*$/m.exec(config);
-    if (image?.[1] === undefined || image[2] === undefined || image[3] === undefined) {
+    const kind = savedKindOf(config);
+    if (kind === undefined) {
       throw new DriverCrashError(
         `Android device ${deviceId} cannot be saved: its AVD names no system image`,
       );
     }
-    const model = /^hw\.device\.name=(.+?)\s*$/m.exec(config)?.[1] ?? "unknown";
-    return {
-      avdHome: data.avdHome,
-      imageIdentity,
-      imageTag: image[2],
-      model,
-      osVersion: image[1],
-      packageName: systemImagePackage(image[1], image[2], image[3]),
-    };
+    return { ...kind, avdHome: data.avdHome, imageIdentity };
   }
 
   /**

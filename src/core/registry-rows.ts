@@ -249,6 +249,11 @@ function physicalColumns(device: DeviceRecord): SqliteValue[] {
   return [device.reclaimingSince ?? null, device.absentReason ?? null];
 }
 
+function baselineColumns(device: DeviceRecord): SqliteValue[] {
+  if (device.physical) return [null, null];
+  return [device.baseline?.name ?? null, device.baseline?.version ?? null];
+}
+
 function deviceValues(device: DeviceRecord): SqliteValue[] {
   return [
     device.id,
@@ -267,8 +272,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     ...causeColumns(device.quarantineCause),
     device.address ?? null,
     ...physicalColumns(device),
-    device.physical ? null : (device.baseline?.name ?? null),
-    device.physical ? null : (device.baseline?.version ?? null),
+    ...baselineColumns(device),
   ];
 }
 

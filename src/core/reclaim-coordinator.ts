@@ -258,6 +258,7 @@ export class ReclaimCoordinator {
    * device and shuts it down itself. `afterSave` commits the baseline before the device is
    * destroyed, so a destroy that fails leaves a saved baseline and a quarantined device, never the reverse.
    */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   async retireSaved(
     released: { readonly device: VirtualDevice; readonly lease: LeaseRecord },
     afterSave: (saved: SavedSource) => Promise<void>,

@@ -112,6 +112,7 @@ export class BaselineService {
     return result;
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
     return this.#serial(() => this.#save(request));
   }
@@ -154,6 +155,7 @@ export class BaselineService {
   }
 
   /** why: the newest version of each name, by name; the size is the source's, read from its driver. */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   async list(): Promise<readonly BaselineEntry[]> {
     await this.checkStale();
     const rows = this.options.state.database
@@ -193,6 +195,7 @@ export class BaselineService {
    * names one: a source a row names carries its name and version, a ready one no row names is an
    * orphan for `doctor --purge-orphans` to delete.
    */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   nameSources(sources: readonly DriverSource[]): readonly NamedSource[] {
     const names = new Map(
       this.options.state.database
@@ -252,6 +255,7 @@ export class BaselineService {
   }
 
   /** why: removes every version of a name, oldest first; the row goes only after its source is destroyed, so a failed destroy leaves the row for the next try. */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
   remove(request: {
     readonly name: string;
     readonly requesterId: string;
