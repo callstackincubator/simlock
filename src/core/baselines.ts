@@ -4,6 +4,7 @@ import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
 import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
 import type { Driver, DriverSource } from "./driver.js";
+import { NoDriverError } from "./driver-catalog.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
 import type { Registry, ReleasedLease } from "./registry.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
@@ -162,21 +163,27 @@ export class BaselineService {
          ORDER BY name`,
       )
       .all();
-    const sources = await this.#readSources(rows);
+    const { sources, unavailable } = await this.#readSources(rows);
     return rows.map((row): BaselineEntry => {
       const sizeBytes = sources.get(String(row.source_id))?.sizeBytes;
+      const platform = String(row.platform) as Platform;
+      const staleReason = unavailable.has(platform)
+        ? `the ${platform} driver is not available on this worker`
+        : row.stale_reason === null
+          ? undefined
+          : String(row.stale_reason);
       return {
         mode: String(row.mode) as BaselineEntry["mode"],
         model: String(row.model),
         name: String(row.name),
         osVersion: String(row.os_version),
-        platform: String(row.platform) as Platform,
+        platform,
         savedAt: String(row.saved_at),
         version: Number(row.version),
         ...(row.image_tag === null ? {} : { imageTag: String(row.image_tag) }),
         ...(row.note === null ? {} : { note: String(row.note) }),
         ...(sizeBytes === undefined ? {} : { sizeBytes }),
-        ...(row.stale_reason === null ? {} : { staleReason: String(row.stale_reason) }),
+        ...(staleReason === undefined ? {} : { staleReason }),
       };
     });
   }
@@ -207,7 +214,7 @@ export class BaselineService {
     const rows = database
       .prepare("SELECT name, version, platform, source_id, stale_reason FROM baselines")
       .all();
-    const sources = await this.#readSources(rows);
+    const { sources } = await this.#readSources(rows);
     for (const row of rows) {
       const source = sources.get(String(row.source_id));
       if (source === undefined) continue;
@@ -224,16 +231,24 @@ export class BaselineService {
     }
   }
 
-  async #readSources(
-    rows: readonly Record<string, unknown>[],
-  ): Promise<ReadonlyMap<string, DriverSource>> {
+  /** why: a platform with no driver on this worker cannot be read, which is not the same as its sources being gone. */
+  async #readSources(rows: readonly Record<string, unknown>[]): Promise<{
+    readonly sources: ReadonlyMap<string, DriverSource>;
+    readonly unavailable: ReadonlySet<Platform>;
+  }> {
     const sources = new Map<string, DriverSource>();
+    const unavailable = new Set<Platform>();
     for (const platform of new Set(rows.map((row) => String(row.platform) as Platform))) {
-      for (const source of await this.options.drivers.get(platform).listSources()) {
-        sources.set(source.id, source);
+      try {
+        for (const source of await this.options.drivers.get(platform).listSources()) {
+          sources.set(source.id, source);
+        }
+      } catch (error: unknown) {
+        if (!(error instanceof NoDriverError)) throw error;
+        unavailable.add(platform);
       }
     }
-    return sources;
+    return { sources, unavailable };
   }
 
   /** why: removes every version of a name, oldest first; the row goes only after its source is destroyed, so a failed destroy leaves the row for the next try. */
