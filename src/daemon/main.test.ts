@@ -4448,6 +4448,22 @@ describe("startDaemon state.db", () => {
     expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
   });
 
+  it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {
+    const worker = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    const gateway = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    temporaryDirectories.push(worker, gateway);
+    await start({ dataDirectory: worker });
+    await start({ dataDirectory: gateway, role: "gateway" });
+    const owners = async (directory: string) =>
+      (await queryState(directory, "SELECT owner FROM schema_versions"))
+        .map((row) => row["owner"])
+        .filter((owner) => owner === "ios-source-data" || owner === "android-source-data")
+        .sort();
+
+    expect(await owners(worker)).toEqual(["android-source-data", "ios-source-data"]);
+    expect(await owners(gateway)).toEqual([]);
+  });
+
   it("a second startDaemon on a folder whose daemon runs leaves state.db's schema_versions and bytes unchanged", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-live-state-"));
     temporaryDirectories.push(directory);

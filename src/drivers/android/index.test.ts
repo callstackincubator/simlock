@@ -6690,6 +6690,15 @@ describe("AndroidDriver image fit", () => {
       expect(await outside.filesystem.exists("/elsewhere/simlock_two")).toBe(true);
       expect(await outside.filesystem.exists(`${avdDirectory}/simlock_two`)).toBe(true);
 
+      const malformed = await harness([]);
+      await expect(
+        malformed.driver.destroy({
+          ...own,
+          driverData: { ...own.driverData, avdHome: 5 },
+        }),
+      ).rejects.toThrow("Android device simlock_one has invalid driver data");
+      expect(await malformed.filesystem.exists(copyHome)).toBe(true);
+
       const old = await harness([
         processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
