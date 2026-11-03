@@ -5299,7 +5299,10 @@ describe("CLI: baselines through a gateway (#1208)", () => {
           },
           connectAdmin: async () =>
             fakeClient({
-              listBaselines: () => Promise.resolve({ baselines: [smoke] }),
+              listBaselines: () =>
+                Promise.resolve({
+                  baselines: [{ ...smoke, version: 3, workerId: "wrk_b" }, smoke],
+                }),
               removeBaseline: (input) => {
                 sent.push(input);
                 return Promise.resolve({ deletedDevices: [], name: input.name, versions: [1] });

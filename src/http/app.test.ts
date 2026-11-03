@@ -616,6 +616,10 @@ describe("/v1/baselines", () => {
       headers: operatorAuth,
       method: "DELETE",
     });
+    const emptyWorker = await app.request("/v1/baselines/checkout?workerId=", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
     const agentSave = await app.request("/v1/baselines", {
       body: JSON.stringify({ leaseId: "L2", name: "mine" }),
       headers: { ...agentAuth, "content-type": "application/json" },
@@ -634,7 +638,7 @@ describe("/v1/baselines", () => {
       onWorker.status,
       agentSave.status,
     ]).toEqual([200, 200, 200, 200, 200]);
-    expect(longWorker.status).toBe(400);
+    expect([longWorker.status, emptyWorker.status]).toEqual([400, 400]);
     expect(await saved.json()).toEqual(answers["baseline.save"]);
     expect(await listed.json()).toEqual(answers["baseline.list"]);
     expect(await removed.json()).toEqual(answers["baseline.remove"]);

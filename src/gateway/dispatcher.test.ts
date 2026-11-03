@@ -158,6 +158,8 @@ const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0", tools: [] }
 class FakeDirectory implements WorkerDirectory {
   readonly clients = new Map<string, ScriptedWorkerClient>();
   readonly refreshCalls: string[] = [];
+  /** why: the workers whose refresh asked for the catalog, baselines and config read as well. */
+  readonly catalogRefreshCalls: string[] = [];
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -169,7 +171,10 @@ class FakeDirectory implements WorkerDirectory {
     return {
       client: () => client.asClient(),
       reachable: true,
-      refresh: async () => void this.refreshCalls.push(workerId),
+      refresh: async (options) => {
+        this.refreshCalls.push(workerId);
+        if (options?.includeCatalog === true) this.catalogRefreshCalls.push(workerId);
+      },
       workerId,
     };
   }
@@ -1769,19 +1774,19 @@ describe("GatewayDispatcher", () => {
         },
       ],
       [
-        "every holder differs from the request",
-        { wrk_a: [checkout], wrk_b: [checkout] },
-        { baseline: "checkout", osVersion: "35", platform: "android" },
+        "every holder differs from the request: the first holder's message",
+        { wrk_a: [checkout], wrk_b: [{ ...checkout, osVersion: "35" }] },
+        { baseline: "checkout", osVersion: "34", platform: "android" },
         {
           rejected: {
             code: "BASELINE_MISMATCH",
-            message: "baseline checkout is Android 36, the request asks for 35",
+            message: "baseline checkout is Android 36, the request asks for 34",
           },
         },
       ],
       [
-        "every holder is stale",
-        { wrk_a: [stale(smoke)], wrk_b: [stale(smoke)] },
+        "every holder is stale: the first holder's reason",
+        { wrk_a: [stale(smoke)], wrk_b: [{ ...smoke, staleReason: "image is gone" }] },
         { baseline: "smoke", platform: "ios" },
         {
           rejected: {
@@ -1814,6 +1819,18 @@ describe("GatewayDispatcher", () => {
         },
         ["wrk_a"],
       ],
+      [
+        "the only fresh holder is disconnected and the other holder is stale",
+        { wrk_a: [checkout], wrk_b: [stale(checkout)] },
+        { baseline: "checkout", platform: "android" },
+        {
+          rejected: {
+            code: "NO_CAPACITY",
+            message: "No worker in the fleet can currently serve this request",
+          },
+        },
+        ["wrk_a"],
+      ],
     ];
 
     it.each(cases)(
@@ -1825,14 +1842,20 @@ describe("GatewayDispatcher", () => {
           client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
         }
 
+        // why: a rejection must come at once, so the request does not opt out of waiting and the answer is read after the queue is flushed; a request that waited instead would have none.
         const answer = dispatcher.dispatch(
           "lease.request",
-          { ...ask, noWait: true } as never,
+          ("rejected" in outcome ? ask : { ...ask, noWait: true }) as never,
           session({ role: "agent" }),
         );
 
         if ("rejected" in outcome) {
-          await expect(answer).rejects.toMatchObject(outcome.rejected);
+          let settled: unknown;
+          void answer.catch((error: unknown) => {
+            settled = error;
+          });
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(settled).toMatchObject(outcome.rejected);
           for (const client of Object.values(clients)) {
             expect(client.lastRequestLeaseInput).toBeUndefined();
           }
@@ -1850,35 +1873,50 @@ describe("GatewayDispatcher", () => {
       },
     );
 
-    it("leaves out a holder that answers UNKNOWN_BASELINE, asks the next holder, and ends with that answer when none is left", async () => {
-      const refusal = () =>
-        new SimlockError("UNKNOWN_BASELINE", "domain", 'no baseline named "checkout"', {
-          name: "checkout",
+    it.each([
+      ["UNKNOWN_BASELINE", "no-baseline"],
+      ["BASELINE_MISMATCH", "baseline-mismatch"],
+      ["BASELINE_STALE", "baseline-stale"],
+    ] as const)(
+      "leaves out a holder that answers %s, asks the next holder, ends with that answer when none is left, and names %s for it while the request waits",
+      async (code, reason) => {
+        const refusal = () =>
+          new SimlockError(code, "domain", `${code} from the worker`, {} as never);
+        const ask = { baseline: "checkout", noWait: true, platform: "android" } as const;
+        const next = fleet({ wrk_a: [checkout], wrk_b: [checkout] });
+        next.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
+        next.clients["wrk_b"]?.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+        const grant = await next.dispatcher.dispatch(
+          "lease.request",
+          ask,
+          session({ role: "agent" }),
+        );
+
+        expect(grant.lease.id).toMatch(/^wrk_b\./);
+        expect(next.directory.catalogRefreshCalls).toContain("wrk_a");
+
+        const alone = fleet({ wrk_a: [checkout] });
+        alone.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
+
+        await expect(
+          alone.dispatcher.dispatch("lease.request", ask, session({ role: "agent" })),
+        ).rejects.toMatchObject({ code, message: `${code} from the worker` });
+
+        const busy = fleet({ wrk_a: [checkout], wrk_b: [checkout] });
+        busy.workers.refresh("wrk_b", { queueDepth: 1 });
+        busy.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
+        void busy.dispatcher.dispatch(
+          "lease.request",
+          { baseline: "checkout", platform: "android" },
+          session({ role: "agent" }),
+        );
+        await vi.waitFor(async () => {
+          const status = await busy.dispatcher.dispatch("status.get", {}, session());
+          expect(status.waiting?.[0]?.workers).toContainEqual({ reason, workerId: "wrk_a" });
         });
-      const ask = { baseline: "checkout", noWait: true, platform: "android" } as const;
-      const next = fleet({ wrk_a: [checkout], wrk_b: [checkout] });
-      next.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
-      next.clients["wrk_b"]?.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
-
-      const grant = await next.dispatcher.dispatch(
-        "lease.request",
-        ask,
-        session({ role: "agent" }),
-      );
-
-      expect(grant.lease.id).toMatch(/^wrk_b\./);
-      expect(next.directory.refreshCalls).toContain("wrk_a");
-
-      const alone = fleet({ wrk_a: [checkout] });
-      alone.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
-
-      await expect(
-        alone.dispatcher.dispatch("lease.request", ask, session({ role: "agent" })),
-      ).rejects.toMatchObject({
-        code: "UNKNOWN_BASELINE",
-        message: 'no baseline named "checkout"',
-      });
-    });
+      },
+    );
   });
 
   describe("a request naming a baseline that waits (#1208)", () => {
@@ -2042,7 +2080,7 @@ describe("GatewayDispatcher", () => {
       expect(clients["wrk_b"]?.savedBaselines).toEqual([]);
       expect(saved).toMatchObject({ baseline: { name: "checkout" }, leaseId: "wrk_a.L7" });
       expect(leaseIndex.resolve("wrk_a.L7")).toBeUndefined();
-      expect(directory.refreshCalls).toContain("wrk_a");
+      expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
     });
 
     it("lists every worker's baselines, each with its workerId, in worker id order, a disconnected worker's last ones too", async () => {
@@ -2072,7 +2110,7 @@ describe("GatewayDispatcher", () => {
         dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_a" }, session()),
       ).resolves.toMatchObject({ name: "smoke" });
       expect(clients["wrk_a"]?.removedBaselines).toEqual([{ name: "smoke" }]);
-      expect(directory.refreshCalls).toContain("wrk_a");
+      expect(directory.catalogRefreshCalls).toEqual(["wrk_a"]);
 
       await expect(
         dispatcher.dispatch("baseline.remove", { name: "smoke", workerId: "wrk_x" }, session()),

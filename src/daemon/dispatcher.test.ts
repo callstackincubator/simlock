@@ -1943,7 +1943,7 @@ describe("Dispatcher: baselines beside a gateway's worker view", () => {
     const { baselines } = await dispatcher.dispatch("baseline.list", {}, admin);
     const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
 
-    expect(baselines).toHaveLength(1);
+    expect(baselines.map((baseline) => baseline.name)).toEqual(["login"]);
     expect(workers[0]?.baselines).toEqual(baselines);
   });
 
