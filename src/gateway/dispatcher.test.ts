@@ -1858,6 +1858,36 @@ describe("GatewayDispatcher", () => {
         }
       },
     );
+
+    it("leaves out a holder that answers UNKNOWN_BASELINE, asks the next holder, and ends with that answer when none is left", async () => {
+      const refusal = () =>
+        new SimlockError("UNKNOWN_BASELINE", "domain", 'no baseline named "checkout"', {
+          name: "checkout",
+        });
+      const ask = { baseline: "checkout", noWait: true, platform: "android" } as const;
+      const next = fleet({ wrk_a: [checkout], wrk_b: [checkout] });
+      next.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
+      next.clients["wrk_b"]?.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+
+      const grant = await next.dispatcher.dispatch(
+        "lease.request",
+        ask,
+        session({ role: "agent" }),
+      );
+
+      expect(grant.lease.id).toMatch(/^wrk_b\./);
+      expect(next.directory.refreshCalls).toContain("wrk_a");
+
+      const alone = fleet({ wrk_a: [checkout] });
+      alone.clients["wrk_a"]?.requestLeaseQueue.push({ error: refusal(), kind: "error" });
+
+      await expect(
+        alone.dispatcher.dispatch("lease.request", ask, session({ role: "agent" })),
+      ).rejects.toMatchObject({
+        code: "UNKNOWN_BASELINE",
+        message: 'no baseline named "checkout"',
+      });
+    });
   });
 
   describe("a request naming a baseline that waits (#1208)", () => {
