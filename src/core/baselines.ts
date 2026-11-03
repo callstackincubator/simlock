@@ -1,10 +1,13 @@
 import type { BaselineEntry } from "../contract/index.js";
 import type { Clock } from "../ports/index.js";
 import type { StateDatabase } from "../state/index.js";
-import { assertVirtual, type Platform } from "./domain.js";
+import { assertVirtual, type Platform, type VirtualDevice } from "./domain.js";
 import type { Driver, DriverSource } from "./driver.js";
 import type { ReclaimCoordinator, SavedSource } from "./reclaim-coordinator.js";
-import type { ReleasedLease } from "./registry.js";
+import type { Registry, ReleasedLease } from "./registry.js";
+import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
+import type { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
+import type { SerializedDecision } from "./serialized-decision.js";
 
 export interface BaselineSaveRequest {
   readonly leaseId: string;
@@ -38,6 +41,17 @@ export class UnknownBaselineError extends Error {
   }
 }
 
+/** why: a remove would delete a device a lease holds, which no operation may do. */
+export class BaselineInUseError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly leaseId: string,
+  ) {
+    super(`baseline ${baselineName} is in use by lease ${leaseId}`);
+    this.name = "BaselineInUseError";
+  }
+}
+
 export interface BaselineRemoveResult {
   readonly name: string;
   readonly versions: readonly number[];
@@ -53,7 +67,11 @@ export interface BaselineServiceOptions {
       save: (released: ReleasedLease) => Promise<Result>,
     ): Promise<Result>;
   };
+  readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
+  readonly decisions: SerializedDecision;
+  readonly lifecycle: Pick<ManagedDeviceLifecycle, "dispose">;
   readonly reclaim: Pick<ReclaimCoordinator, "retireSaved">;
+  readonly registry: { readonly snapshot: Pick<Registry["snapshot"], "leases" | "virtualDevices"> };
   readonly state: StateDatabase;
 }
 
@@ -154,6 +172,17 @@ export class BaselineService {
       .prepare("SELECT version, platform, source_id FROM baselines WHERE name = ? ORDER BY version")
       .all(request.name);
     if (rows.length === 0) throw new UnknownBaselineError(request.name);
+    const claimed = await this.options.decisions.run(() => this.#claimIdleDevices(request.name));
+    const deletedDevices: string[] = [];
+    for (const { claim, device } of claimed) {
+      const deleted = await this.options.lifecycle.dispose(
+        device,
+        "baseline-remove",
+        "cleanup",
+        claim,
+      );
+      if (deleted !== undefined) deletedDevices.push(device.id);
+    }
     for (const row of rows) {
       await this.options.drivers
         .get(String(row.platform) as Platform)
@@ -163,10 +192,32 @@ export class BaselineService {
         .run(request.name, Number(row.version));
     }
     return {
-      deletedDevices: [],
+      deletedDevices,
       name: request.name,
       versions: rows.map((row) => Number(row.version)),
     };
+  }
+
+  /** why: the in-use check and the claim on each idle device run in one decision-gate section, so a lease cannot be granted on a device in between. */
+  #claimIdleDevices(name: string): { claim: DeviceOperationClaim; device: VirtualDevice }[] {
+    const { leases, virtualDevices } = this.options.registry.snapshot;
+    const made = virtualDevices.filter(
+      (device) => device.baseline?.name === name && device.state !== "deleted",
+    );
+    for (const device of made) {
+      const lease = leases.find((candidate) => candidate.deviceId === device.id);
+      if (lease !== undefined) throw new BaselineInUseError(name, lease.id);
+    }
+    const claimed: { claim: DeviceOperationClaim; device: VirtualDevice }[] = [];
+    for (const device of made) {
+      const claim = this.options.claims.tryClaim(device.id, "cleanup");
+      if (claim === undefined) {
+        for (const held of claimed) held.claim.release();
+        throw new Error(`Device ${device.id} made from baseline ${name} is busy`);
+      }
+      claimed.push({ claim, device });
+    }
+    return claimed;
   }
 
   /** why: a replace drops the old version at once, since no device carries one (#1207 keeps a version while devices of it remain). */

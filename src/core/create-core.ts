@@ -242,10 +242,14 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const baselines = new BaselineService({
+    claims,
     clock: options.clock,
+    decisions,
     drivers,
     leaseSave: () => port("leaseSave"),
+    lifecycle: deviceLifecycle,
     reclaim,
+    registry,
     state: options.state,
   });
   const enrollment = new PhysicalEnrollment({

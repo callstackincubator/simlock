@@ -30,6 +30,7 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  BaselineInUseError,
   BaselineSaveFailedError,
   UnknownBaselineError,
   type BaselineService,
@@ -904,6 +905,12 @@ export class Dispatcher {
         versions: [...removed.versions],
       };
     } catch (error: unknown) {
+      if (error instanceof BaselineInUseError) {
+        throw new DispatchError("BASELINE_IN_USE", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
       if (error instanceof UnknownBaselineError) {
         throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
       }
