@@ -782,10 +782,52 @@ export class IosSimctlDriver implements Driver {
     ];
   }
 
-  async saveSource(
-    _device: VirtualDriverDevice,
-  ): Promise<{ sourceId: string; sizeBytes?: number }> {
-    return { sourceId: "" };
+  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
+    const data = iosDriverData(device);
+    const catalog = await this.#loadCatalog();
+    const runtime = catalog.runtimes.find((entry) => entry.identifier === data.runtimeId);
+    const deviceType = catalog.deviceTypes.find((entry) => entry.identifier === data.deviceTypeId);
+    if (runtime === undefined || deviceType === undefined) {
+      throw new DriverCrashError(
+        `device ${data.udid} was made with a runtime or device type that is gone`,
+      );
+    }
+    const sourceId = this.#idGenerator.generate();
+    this.#sources.insertMaking({
+      createdAt: this.#clock.now(),
+      deviceTypeId: data.deviceTypeId,
+      kind: "baseline",
+      maker: this.#maker(),
+      model: deviceType.name,
+      osVersion: runtime.version,
+      runtimeBuild: runtime.build,
+      runtimeId: data.runtimeId,
+      setPath: this.#sourcesSet,
+      sourceId,
+      specKey: `baseline-${sourceId}`,
+    });
+    let cloneUdid: string | undefined;
+    try {
+      await this.#ensureSourcesSet();
+      await this.#shutdown(data.udid);
+      const cloned = await this.#simctl(
+        ["clone", data.udid, `simlock-baseline-${sourceId}`, this.#sourcesSet],
+        COMMAND_TIMEOUT_MS,
+      );
+      cloneUdid = cloned.stdout.trim();
+      if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
+      this.#sources.setUdid(sourceId, cloneUdid);
+      await this.#copyOverrides(data.udid, cloneUdid);
+      const sizeBytes = await this.#sizeOf(cloneUdid);
+      this.#sources.markReady(sourceId, sizeBytes);
+      return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+    } catch (error: unknown) {
+      if (cloneUdid !== undefined && cloneUdid !== "") {
+        await this.#deleteSeedSimulator(cloneUdid).catch(() => undefined);
+      }
+      this.#sources.deleteRow(sourceId);
+      throw error;
+    }
   }
 
   async destroySource(sourceId: string): Promise<void> {

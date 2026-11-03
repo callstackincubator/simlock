@@ -1419,6 +1419,7 @@ describe("IosSimctlDriver", () => {
           },
         },
         { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       ]);
       const driver = await createDriver(runner, new FakeClock(), filesystem, database);
 
@@ -1456,13 +1457,12 @@ describe("IosSimctlDriver", () => {
           result: { code: 1, stderr: "No space left on device", stdout: "" },
         },
       ]);
-      const failing = await createDriver(failingRunner, new FakeClock(), filesystem, database);
+      const emptyDatabase = await memorySourceDatabase();
+      const failing = await createDriver(failingRunner, new FakeClock(), filesystem, emptyDatabase);
       await expect(failing.saveSource(device)).rejects.toMatchObject({
         message: expect.stringContaining("No space left on device"),
       });
-      expect(database.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([
-        { source_id: "device-1" },
-      ]);
+      expect(emptyDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
     });
   });
 
