@@ -35,7 +35,8 @@ gateway's accept carries `abandon` (`modules/relay-channel.ts`), which the route
 3. Client messages go through `parseClientMessage` (core): bad JSON, an unknown tag, a position outside 0..1,
    a `0x07` orientation other than serve-sim's four names and anything over 64 KiB are dropped, the socket
    stays; the device input decides what a valid `0x07` does. `0x10` is answered `0x90 {ok:false}`.
-4. Ends: the last socket leaves → the device input closes once; `onFailed` → every socket 1013; the
+4. Ends: once the device input is released (last socket gone, lease end, drain, failure) no message from any of
+   its sockets reaches it, nor is answered, even while a socket's close handshake is still open. The last socket leaves → the device input closes once; `onFailed` → every socket 1013; the
    `beforeDeviceReclaim` hook → every socket 4001 with the lease-end reason; `beforeDrain` → every socket 1001.
 5. Gateway bridge (`modules/relay-channel.ts`): client frames (≤ 64 KiB) → channel; channel → client except `0xF0`.
    `0xF1 {code, reason}` closes the client (1001 from a stopping worker is reported as 1011). A channel that
