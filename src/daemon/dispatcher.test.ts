@@ -3082,6 +3082,18 @@ describe("Dispatcher: lease.request naming a baseline", () => {
         .map((envelope) => envelope.payload)
         .at(-1),
     ).toMatchObject({ baseline: { name: "checkout", version: 1 }, deviceId: grant.device.id });
+
+    let leaseId = grant.lease.id;
+    for (const matching of [{ model: "iphone 17 pro" }, { osVersion: ">=26" }]) {
+      await dispatcher.dispatch("lease.release", { leaseId }, session());
+      const again = await dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", platform: "ios", ...matching },
+        session(),
+      );
+      expect(again.device.spec.baseline).toEqual({ name: "checkout", version: 1 });
+      leaseId = again.lease.id;
+    }
   });
 });
 
