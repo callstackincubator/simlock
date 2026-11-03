@@ -1271,6 +1271,8 @@ export class AndroidDriver implements Driver {
     const folder = join(this.#deviceRoot, SOURCES_DIRECTORY, sourceId);
     const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
     const imageIdentity = `${image.path}@${image.version}`;
+    const seedDeviceId =
+      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
     const emulatorVersion = await this.#emulatorVersion();
     this.#sources.insertMaking({
       avdName: SEED_AVD_NAME,
@@ -1288,8 +1290,6 @@ export class AndroidDriver implements Driver {
     this.#making.add(sourceId);
     try {
       await this.#filesystem.mkdirp(folder, { mode: 0o700 });
-      const seedDeviceId =
-        profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
       await this.#runOrThrow(
         this.#sdk.avdmanager,
         ["create", "avd", "-n", SEED_AVD_NAME, "-k", packageName, "-d", seedDeviceId],
