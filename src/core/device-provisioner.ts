@@ -139,10 +139,7 @@ export class DeviceProvisioner {
           error: stableError(destroyError),
         });
       }
-      throw new BootTimeoutError(
-        device.id,
-        error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
-      );
+      throw BootTimeoutError.from(device.id, error);
     } finally {
       options.reservation.release();
     }

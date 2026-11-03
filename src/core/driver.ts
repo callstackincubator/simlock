@@ -603,6 +603,14 @@ export class BootTimeoutError extends Error {
     );
     this.name = "BootTimeoutError";
   }
+
+  /** why: a timeout stays a plain timeout; any other failure carries the driver's own message. */
+  static from(deviceId: string, error: unknown): BootTimeoutError {
+    return new BootTimeoutError(
+      deviceId,
+      error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
+    );
+  }
 }
 
 export class DriverCrashError extends Error {

@@ -86,11 +86,18 @@ async function missingAndroidPrerequisites(
     const jdk = await missingJdk(options.processRunner, tools.sdkmanager);
     if (jdk !== undefined) missing.push(jdk);
   }
-  if (!missing.some((found) => found.prerequisite === "android-emulator")) {
-    const outdated = await outdatedEmulator(options.processRunner, emulator);
-    if (outdated !== undefined) missing.push(outdated);
-  }
+  missing.push(...(await outdatedEmulatorIfInstalled(options.processRunner, emulator, missing)));
   return missing;
+}
+
+async function outdatedEmulatorIfInstalled(
+  processRunner: ProcessRunner,
+  emulator: string,
+  missing: readonly MissingPrerequisite[],
+): Promise<MissingPrerequisite[]> {
+  if (missing.some((found) => found.prerequisite === "android-emulator")) return [];
+  const outdated = await outdatedEmulator(processRunner, emulator);
+  return outdated === undefined ? [] : [outdated];
 }
 
 async function outdatedEmulator(

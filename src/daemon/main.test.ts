@@ -2391,6 +2391,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       processRunner,
     });
     const android = drivers.find((driver) => driver.platform === "android");
+    // why: the emulator's log is written into the AVD's folder.
+    await filesystem.mkdirp(join(SIMLOCK_HOME, "devices", "android", "simlock_one.avd"));
     await expect(
       android?.makeReady(
         {
