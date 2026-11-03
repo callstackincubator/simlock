@@ -95,9 +95,22 @@ export interface BaselineServiceOptions {
  * `baselines` table holds the name, version and spec, and the driver holds the source itself.
  */
 export class BaselineService {
+  #queue: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly options: BaselineServiceOptions) {}
 
-  async save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+  /** why: one save or remove runs at a time per worker, in arrival order, so a second save of a name becomes the next version and a remove sees the rows a save left. */
+  #serial<Result>(run: () => Promise<Result>): Promise<Result> {
+    const result = this.#queue.then(run, run);
+    this.#queue = result.catch(() => undefined);
+    return result;
+  }
+
+  save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
+    return this.#serial(() => this.#save(request));
+  }
+
+  async #save(request: BaselineSaveRequest): Promise<BaselineSaveResult> {
     const baseline = await this.options
       .leaseSave()
       .releaseToSave(request.leaseId, async (released) => {
@@ -199,7 +212,14 @@ export class BaselineService {
   }
 
   /** why: removes every version of a name, oldest first; the row goes only after its source is destroyed, so a failed destroy leaves the row for the next try. */
-  async remove(request: {
+  remove(request: {
+    readonly name: string;
+    readonly requesterId: string;
+  }): Promise<BaselineRemoveResult> {
+    return this.#serial(() => this.#remove(request));
+  }
+
+  async #remove(request: {
     readonly name: string;
     readonly requesterId: string;
   }): Promise<BaselineRemoveResult> {
