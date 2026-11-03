@@ -1752,6 +1752,7 @@ describe("GatewayDispatcher", () => {
       Record<string, readonly BaselineEntry[]>,
       Record<string, unknown>,
       { readonly grantedBy: string } | { readonly rejected: Rejected },
+      string[]?,
     ][] = [
       [
         "one worker holds it, another has none",
@@ -1810,12 +1811,25 @@ describe("GatewayDispatcher", () => {
           },
         },
       ],
+      [
+        "the only holder is disconnected",
+        { wrk_a: [checkout], wrk_b: [] },
+        { baseline: "checkout", platform: "android" },
+        {
+          rejected: {
+            code: "NO_CAPACITY",
+            message: "No worker in the fleet can currently serve this request",
+          },
+        },
+        ["wrk_a"],
+      ],
     ];
 
     it.each(cases)(
       "sends a request naming a baseline only to a worker that holds it, fresh: %s",
-      async (_label, baselines, ask, outcome) => {
-        const { clients, dispatcher } = fleet(baselines);
+      async (_label, baselines, ask, outcome, disconnected = []) => {
+        const { clients, dispatcher, workers } = fleet(baselines);
+        for (const workerId of disconnected) workers.disconnected(workerId);
         for (const client of Object.values(clients)) {
           client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
         }
@@ -1844,6 +1858,62 @@ describe("GatewayDispatcher", () => {
         }
       },
     );
+  });
+
+  describe("a request naming a baseline that waits (#1208)", () => {
+    it("waits while its only holder is busy, and status.get names why each other worker is passed over", async () => {
+      const entry: BaselineEntry = {
+        mode: "full",
+        model: "Pixel 9",
+        name: "checkout",
+        osVersion: "36",
+        platform: "android",
+        savedAt: "2026-11-02T13:10:00Z",
+        version: 2,
+      };
+      const held: Record<string, { baselines: BaselineEntry[]; queueDepth: number }> = {
+        wrk_a: { baselines: [entry], queueDepth: 1 },
+        wrk_b: { baselines: [], queueDepth: 0 },
+        wrk_c: { baselines: [{ ...entry, staleReason: "image is gone" }], queueDepth: 0 },
+        wrk_d: { baselines: [{ ...entry, mode: "slim" }], queueDepth: 0 },
+      };
+      const { directory, dispatcher, workers } = harness();
+      for (const [workerId, view] of Object.entries(held)) {
+        directory.add(workerId, new ScriptedWorkerClient());
+        workers.connected(workerId, undefined, "0.3.0");
+        workers.refresh(workerId, {
+          ...view,
+          capacity: statusFixture().capacity,
+          catalog: catalogFixture([
+            {
+              modelClasses: { "Pixel 9": "phone" } as const,
+              models: ["Pixel 9"],
+              platform: "android",
+              runtimes: ["36"],
+            },
+          ]).platforms,
+          devices: [],
+          downloads: { policy: "on-request" },
+          health: "running",
+          leases: [],
+        });
+      }
+
+      void dispatcher.dispatch(
+        "lease.request",
+        { baseline: "checkout", mode: "full", platform: "android" },
+        session({ role: "agent" }),
+      );
+      await vi.waitFor(async () => {
+        const status = await dispatcher.dispatch("status.get", {}, session());
+        expect(status.waiting?.[0]?.workers).toEqual([
+          { reason: "busy", workerId: "wrk_a" },
+          { reason: "no-baseline", workerId: "wrk_b" },
+          { reason: "baseline-stale", workerId: "wrk_c" },
+          { reason: "baseline-mismatch", workerId: "wrk_d" },
+        ]);
+      });
+    });
   });
 
   describe("lease lifecycle and device.exec (#118)", () => {
