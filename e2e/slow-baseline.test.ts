@@ -57,8 +57,9 @@ describe.skipIf(process.platform !== "darwin")(
         };
         const deviceSet = grant.environment.SIMLOCK_IOS_DEVICE_SET as string;
         const udid = grant.device.driverDeviceId;
-        const marker = join(deviceSet, udid, "data", "tmp", "simlock-baseline.txt");
-        await mkdir(join(deviceSet, udid, "data", "tmp"), { recursive: true });
+        // why: CoreSimulator empties `data/tmp` when a simulator shuts down, so the marker sits in `data/Documents`, which a shutdown keeps.
+        const marker = join(deviceSet, udid, "data", "Documents", "simlock-baseline.txt");
+        await mkdir(join(deviceSet, udid, "data", "Documents"), { recursive: true });
         await writeFile(marker, "prepared");
 
         const saved = await env.cli(["baseline", "save", "slow-ios", "--lease", grant.lease.id], {
@@ -86,7 +87,7 @@ describe.skipIf(process.platform !== "darwin")(
         const simctlList = await env.cli(["simctl", "list", "devices"]);
         expect(simctlList.stdout).not.toContain(source?.udid ?? "no source");
         expect(
-          await readdir(join(sourcesSet as string, source?.udid ?? "", "data", "tmp")),
+          await readdir(join(sourcesSet as string, source?.udid ?? "", "data", "Documents")),
         ).toContain("simlock-baseline.txt");
 
         // why: a lease naming the baseline starts from a copy that holds the saved file, and the copy's own changes are gone for the next one.
@@ -119,7 +120,7 @@ describe.skipIf(process.platform !== "darwin")(
               copied.environment.SIMLOCK_IOS_DEVICE_SET as string,
               copied.device.driverDeviceId,
               "data",
-              "tmp",
+              "Documents",
             ),
             leaseId: copied.lease.id,
           };
