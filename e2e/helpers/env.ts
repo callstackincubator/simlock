@@ -478,7 +478,9 @@ interface PidDiscoveryResult {
 
 /**
  * why: a failed run's daemon logs are the evidence of why it failed, and teardown deletes the
- * home they live in. A failed copy is swallowed so it never hides teardown's own error.
+ * home they live in. A failed copy is swallowed so it never hides teardown's own error. A copy
+ * already kept is never replaced: a teardown that runs again (the file's afterAll after a suite's
+ * failed one) finds only what was written into the home after the first, often an empty log.
  */
 async function keepDaemonLogs(dataDirectory: string, home: string): Promise<void> {
   const logDirectory = process.env.SIMLOCK_E2E_LOG_DIR;
@@ -487,7 +489,9 @@ async function keepDaemonLogs(dataDirectory: string, home: string): Promise<void
     const target = join(logDirectory, basename(home));
     await mkdir(target, { recursive: true });
     for (const name of await readdir(dataDirectory)) {
-      if (name.startsWith("daemon.log")) await cp(join(dataDirectory, name), join(target, name));
+      if (name.startsWith("daemon.log")) {
+        await cp(join(dataDirectory, name), join(target, name), { force: false });
+      }
     }
   } catch {
     // why: see above; the copy is best effort.
