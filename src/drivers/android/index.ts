@@ -1644,6 +1644,9 @@ export class AndroidDriver implements Driver {
   ): Promise<ObservedDevice> {
     const base = observedAndroidDevice(
       entry.deviceId,
+      entry.avdName,
+      // why: a copy's destroy needs its folder; without it the device would be taken for one made before copies.
+      entry.avdName === SEED_AVD_NAME ? join(this.#deviceRoot, entry.deviceId) : undefined,
       runningByDeviceId,
       unattributableTransitionalSerial,
     );
@@ -2954,15 +2957,18 @@ function serialFor(port: number): string {
 }
 
 function observedAndroidDevice(
+  deviceId: string,
   avdName: string,
-  runningByAvdName: ReadonlySet<string>,
+  avdHome: string | undefined,
+  runningByDeviceId: ReadonlySet<string>,
   unattributableTransitionalSerial: boolean,
 ): ObservedDevice {
   return {
     // why: Reconnaissance only: an observed device is never granted, so it carries no usable address.
     address: "",
-    deviceId: avdName,
+    deviceId,
     driverData: {
+      ...(avdHome === undefined ? {} : { avdHome }),
       avdName,
       configHash: "recovered",
       imageIdentity: "",
@@ -2972,7 +2978,7 @@ function observedAndroidDevice(
     // why: Conservative: an emulator serial we can't attribute (transitional adb state) might
     // belong to any AVD that otherwise looks stopped, so treat all of them as transitioning
     // for this tick rather than risk a false-positive foreign-state-change finding.
-    runState: runningByAvdName.has(avdName)
+    runState: runningByDeviceId.has(deviceId)
       ? "running"
       : unattributableTransitionalSerial
         ? "transitioning"
