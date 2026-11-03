@@ -519,6 +519,7 @@ simlock nuke [--delete-devices] [--yes]
 | --- | --- | --- |
 | `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
+| `--worker <id>` | The worker to remove it from. Required on a gateway, which answers `BAD_REQUEST` and removes nothing without it; a worker refuses it. | — |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
@@ -598,7 +599,7 @@ Save a prepared simulator or emulator as a named baseline, list the baselines on
 ```text
 simlock baseline save <name> --lease <id> [--note <text>]
 simlock baseline list [--json]
-simlock baseline remove <name> [--yes]
+simlock baseline remove <name> [--yes] [--worker <id>]
 ```
 
 ### simlock baseline save
@@ -616,7 +617,7 @@ $ simlock baseline save checkout --lease L1 --note "app 4.2, test user"
 Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease L1 ended.
 ```
 
-The size is the copy's bytes on disk, in GB (10^9 bytes) with one decimal, or MB below 1 GB; it is left out when it could not be counted. A lease on a physical device is refused with `BAD_REQUEST`, an unknown lease with `UNKNOWN_LEASE`. When the copy cannot be made the lease has still ended and the answer is `BASELINE_SAVE_FAILED`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+The size is the copy's bytes on disk, in GB (10^9 bytes) with one decimal, or MB below 1 GB; it is left out when it could not be counted. A lease on a physical device is refused with `BAD_REQUEST`, an unknown lease with `UNKNOWN_LEASE`. When the copy cannot be made the lease has still ended and the answer is `BASELINE_SAVE_FAILED`. On a gateway the lease's worker saves it.
 
 ### simlock baseline list
 
@@ -634,7 +635,7 @@ login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11
   stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
 ```
 
-A baseline is stale when the runtime, system image or emulator it was made with changed after the save; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.`
+A baseline is stale when the runtime, system image or emulator it was made with changed after the save; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.` On a gateway it lists every worker's baselines with the worker's id in a `WORKER` column first, and prints `No baselines on any worker.` for none.
 
 ### simlock baseline remove
 
@@ -651,7 +652,7 @@ Remove baseline login v1? [y/N] y
 Removed baseline login v1.
 ```
 
-When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. With `--worker wrk_a` the prompt and the line end in ` from wrk_a`.
 
 ## simlock device
 
