@@ -132,6 +132,8 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+const MARK_READ_TIMEOUT_MS = 5_000;
+const ERASABLE_MARK_READ_BYTES = 4096;
 // why: Saving the clean baseline writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
@@ -1489,12 +1491,15 @@ export class AndroidDriver implements Driver {
       // mark file would fail the whole invocation -- and a missing mark file is exactly
       // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
       // mark an observation rather than a crash.
-      const output = await this.#adbShellOrUndefined([
-        "-s",
-        candidate,
-        "shell",
-        `getprop ro.boot.qemu.avd_name; cat ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
-      ]);
+      const output = await this.#adbShellOrUndefined(
+        [
+          "-s",
+          candidate,
+          "shell",
+          `getprop ro.boot.qemu.avd_name; head -c ${String(ERASABLE_MARK_READ_BYTES)} ${ERASABLE_MARK_PATH} 2>/dev/null || true`,
+        ],
+        MARK_READ_TIMEOUT_MS,
+      );
       // why: An emulator can die between `adb devices` and this call. Losing the whole
       // reality view over one dead serial would strand every other device, so treat it
       // like a transitional serial: unattributable this tick, nothing concluded.
@@ -1533,9 +1538,16 @@ export class AndroidDriver implements Driver {
     return { erasableMarkByAvdName, processes, runningByAvdName, unreadableSerial };
   }
 
-  async #adbShellOrUndefined(args: readonly string[]): Promise<ProcessResult | undefined> {
+  async #adbShellOrUndefined(
+    args: readonly string[],
+    timeoutMs?: number,
+  ): Promise<ProcessResult | undefined> {
     try {
-      return await this.#runOrThrow(this.#sdk.adb, args);
+      return await this.#runOrThrow(
+        this.#sdk.adb,
+        args,
+        timeoutMs === undefined ? {} : { timeoutMs },
+      );
     } catch {
       return undefined;
     }

@@ -2294,7 +2294,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         "simlock_running\n",
       ),
@@ -2313,6 +2313,88 @@ describe("AndroidDriver", () => {
       { deviceId: "simlock_stopped", runState: "stopped" },
     ]);
     expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
+  });
+
+  it("listManaged settles after the timeout when one serial's mark read never answers, reports that serial unreadable, and still finds another serial in the same pass", async () => {
+    const filesystem = await androidFilesystem();
+    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_two.avd`);
+    const clock = new FakeClock();
+    const runner = new ClockDeadlineRunner(
+      [
+        processResult(
+          binaries.adb,
+          ["devices"],
+          "List of devices attached\nemulator-5586\tdevice\nemulator-5588\tdevice\n",
+        ),
+        {
+          hangs: true,
+          match: {
+            args: ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+            command: binaries.adb,
+          },
+        },
+        processResult(
+          binaries.adb,
+          ["-s", "emulator-5588", "shell", /getprop ro\.boot\.qemu\.avd_name/],
+          "simlock_two\n",
+        ),
+        avdPathExpectation("emulator-5588", "simlock_two"),
+      ],
+      clock,
+    );
+    const driver = await createDriver(filesystem, runner, { clock });
+
+    let settled: Awaited<ReturnType<typeof driver.listManaged>> | undefined;
+    void driver.listManaged().then((reality) => {
+      settled = reality;
+    });
+    for (let step = 0; step < 20 && settled === undefined; step += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+      clock.advance(1_000);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(
+      settled?.devices.map((device) => ({ deviceId: device.deviceId, runState: device.runState })),
+    ).toEqual(
+      expect.arrayContaining([
+        { deviceId: "simlock_two", runState: "running" },
+        { deviceId: "simlock_one", runState: "transitioning" },
+      ]),
+    );
+    expect(settled?.processes).toEqual([expect.objectContaining({ deviceId: "simlock_two" })]);
+  });
+
+  it("reads the erasable mark with head -c 4096, and a mark cut at that cap is read as no mark", async () => {
+    const filesystem = await androidFilesystem({
+      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
+    });
+    const cutAtCap = `{"token":"tok-123","pad":"${"x".repeat(5000)}"}`.slice(0, 4096);
+    const runner = new ScriptedProcessRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
+      processResult(
+        binaries.adb,
+        [
+          "-s",
+          "emulator-5586",
+          "shell",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+        ],
+        `simlock_one\n${cutAtCap}`,
+      ),
+      avdPathExpectation("emulator-5586"),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
+    expect(device?.mark).toEqual({
+      durable: "tok-123",
+      erasable: undefined,
+      erasableReadable: true,
+    });
   });
 
   it("answers virtualLeaseEnvironment with simlock's adb port, and leaseEnvironment for a virtual device equals it", async () => {
@@ -2560,7 +2642,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         'simlock_one\n{"token":"tok-123"}',
       ),
@@ -2590,7 +2672,7 @@ describe("AndroidDriver", () => {
           "-s",
           "emulator-5586",
           "shell",
-          "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
         ],
         "simlock_one\n",
       ),
@@ -2620,7 +2702,7 @@ describe("AndroidDriver", () => {
             "-s",
             "emulator-5586",
             "shell",
-            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true",
+            "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
           ],
           command: binaries.adb,
         },
@@ -5213,7 +5295,7 @@ describe("AndroidDriver console ports across a restart", () => {
           command === binaries.adb &&
           args[2] === "shell" &&
           args[3] ===
-            "getprop ro.boot.qemu.avd_name; cat /data/local/tmp/simlock-mark.json 2>/dev/null || true"
+            "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true"
         ) {
           return ok(`${host.avdAnswering(args[1]) ?? ""}\n`);
         }
