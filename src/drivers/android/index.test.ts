@@ -2876,6 +2876,45 @@ describe("AndroidDriver deviceTcp", () => {
   });
 });
 
+describe("AndroidDriver tunnels of a destroyed device", () => {
+  it("closes the loopback listeners held for a virtual device's tunnels when the device is destroyed", async () => {
+    const listeners = new FakeTcpListenerFactory();
+    const harness = await provisionedHarness({
+      afterwards: [
+        processResult(binaries.adb, [
+          "-P",
+          "5038",
+          "-s",
+          "emulator-5586",
+          "reverse",
+          "--no-rebind",
+          "tcp:5173",
+          "tcp:47000",
+        ]),
+        copyPathExpectation("emulator-5586"),
+        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
+      ],
+      tcpListener: listeners,
+    });
+    const ready = await harness.driver.makeReady(harness.device);
+    await harness.driver.deviceTcp?.reverse(
+      { ...ready, physical: false },
+      5173,
+      new AbortController().signal,
+    );
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([false]);
+    const launch = harness.runner.calls.findLastIndex(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+
+    const destroying = harness.driver.destroy(ready);
+    harness.runner.handles[launch]?.kill("SIGTERM");
+    await destroying;
+
+    expect(listeners.listeners.map((listener) => listener.closed)).toEqual([true]);
+  });
+});
+
 describe("AndroidDriver screen capture", () => {
   const serverPath = "/simlock/vendor/scrcpy-server-v5.0.1";
   const running = {
@@ -5074,6 +5113,7 @@ async function provisionedHarness(
     readonly emulatorFlags?: readonly string[];
     readonly ids?: readonly string[];
     readonly initialAdbFailures?: number;
+    readonly tcpListener?: FakeTcpListenerFactory;
     readonly unsettledPmAnswers?: readonly ProcessResult[];
     readonly readinessTimeoutMs?: number;
     readonly firstMarkToken?: string;
@@ -5101,6 +5141,7 @@ async function provisionedHarness(
     clock,
     ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ids,
+    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
     ...(options.readinessTimeoutMs === undefined
       ? {}
       : { readinessTimeoutMs: options.readinessTimeoutMs }),
