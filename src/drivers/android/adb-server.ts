@@ -157,6 +157,16 @@ export class AdbServerSupervisor {
     await this.#reap(record);
   }
 
+  /**
+   * why: ends this daemon's hold on the server without ending the server, the way a daemon that
+   * died leaves it: the record stays on disk, so the next daemon adopts it. A server reaped
+   * under a running emulator is replaced within seconds by a `fork-server` the emulator starts
+   * on the same port, which the next start cannot tell from a stranger's (`occupied`).
+   */
+  leave(): void {
+    this.#record = undefined;
+  }
+
   #requireUsablePort(): void {
     const { port } = this.#options;
 

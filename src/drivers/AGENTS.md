@@ -17,7 +17,7 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
 | `findComponent`, `installComponent`, `listComponents`, `removeComponent` | Runtimes / system images. Only core's `ComponentInstaller` installs or removes                                                                               |
 | `inspectPhysical`, `listPresentPhysical`                                 | Enrollment read and presence of physical devices                                                                                                             |
 | `leaseEnvironment`, `virtualLeaseEnvironment`, `passthrough`             | What a holder needs to reach its device                                                                                                                      |
-| `dispose`                                                                | Daemon stop. Android reaps its adb server here                                                                                                               |
+| `dispose`                                                                | Daemon stop. Android reaps its adb server here, unless an emulator is still attached                                                                         |
 | `screenCapture` (optional)                                               | A device's screen as core's frame envelope (`core/screen.ts`); absent = cannot stream                                                                        |
 
 ## Rules both drivers keep

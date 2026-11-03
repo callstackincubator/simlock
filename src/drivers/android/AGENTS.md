@@ -45,7 +45,7 @@ Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no sc
 1. Port listening + live record → adopt. Listening, no record → `occupied`.
 2. Record alive, port silent → reap. Then spawn, write the record, wait for the port → else `start-failed`.
 3. Reap = its command line (`ProcessSupervisor.commandLine`) must show `adb` or `adb.exe`, `-P <port>`, `nodaemon`; SIGTERM, then SIGKILL. An unreadable one keeps the record.
-4. `dispose` reaps it. Emulators are spawned unref'd and outlive the daemon.
+4. `dispose` reaps it, unless `adb devices` still lists an emulator: then it leaves the server and its record for the next daemon to adopt, because an emulator whose server is gone starts an adb `fork-server` on the port, which the next start refuses as `occupied`. Emulators are spawned unref'd and outlive the daemon.
 
 Provision — `provision`: every device is a copy of a seed.
 

@@ -992,7 +992,29 @@ export class AndroidDriver implements Driver {
    * shutdown that skipped this would leave both a server and a daemon that cannot exit.
    */
   async dispose(): Promise<void> {
+    if (await this.#emulatorAttached()) {
+      this.#adbServer.leave();
+      return;
+    }
     await this.#adbServer.stop();
+  }
+
+  /**
+   * why: an emulator that outlives the daemon starts its own adb `fork-server` on this port
+   * once the server is gone, and the next daemon refuses that one as `occupied`; so the server
+   * stays while an emulator is attached and the next daemon adopts it. An unreadable list
+   * counts as none: the server is reaped as it always was.
+   */
+  async #emulatorAttached(): Promise<boolean> {
+    try {
+      const result = await this.#processRunner.run(this.#sdk.adb, ["devices"], {
+        env: this.#env(),
+        timeoutMs: ADB_DEVICES_TIMEOUT_MS,
+      });
+      return result.code === 0 && portsFromAdbDevices(result.stdout).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
