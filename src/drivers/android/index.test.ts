@@ -7493,6 +7493,43 @@ describe("AndroidDriver image fit", () => {
       await failed;
     });
 
+    it("destroys the seeds made from a system image when it is removed, and a seed it cannot destroy stays listed as stale", async () => {
+      const packageName = "system-images;android-34;google_apis;arm64-v8a";
+      const imagePath = `${sdk}/system-images/android-34/google_apis/arm64-v8a`;
+      const uninstall = processResult(binaries.sdkmanager, ["--uninstall", packageName]);
+      const noEmulators = processResult(binaries.adb, ["devices"], "List of devices attached\n");
+      const remove = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
+        await harness.driver.provision(harness.spec);
+        const [target] = await harness.driver.listComponents();
+        // why: the scripted runner only answers; real sdkmanager also deletes the image's folder.
+        const spawn = harness.runner.spawn.bind(harness.runner);
+        vi.spyOn(harness.runner, "spawn").mockImplementation((command, args, options) => {
+          if (args[0] === "--uninstall") void harness.filesystem.rm(imagePath);
+          return spawn(command, args, options);
+        });
+        await harness.driver.removeComponent(target?.receipt ?? {}, {
+          signal: new AbortController().signal,
+        });
+      };
+
+      const destroyed = await seedHarness([...makingTheSeed(), uninstall, noEmulators]);
+      await remove(destroyed);
+      expect(await destroyed.filesystem.exists(seedHome)).toBe(false);
+      await expect(destroyed.driver.listSources()).resolves.toEqual([]);
+
+      const stuck = await seedHarness([
+        ...makingTheSeed(),
+        uninstall,
+        noEmulators,
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+      ]);
+      stuck.filesystem.defineFailure(seedHome, "EACCES");
+      await remove(stuck);
+      await expect(stuck.driver.listSources()).resolves.toMatchObject([
+        { id: "seed_two", staleReason: `system image ${packageName} is not installed` },
+      ]);
+    });
+
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, a failed check or delete throws and keeps it", async () => {
       const serial = "emulator-5586";
       const attached = `List of devices attached\n${serial}\tdevice\n`;
