@@ -588,8 +588,9 @@ async function waitForDaemonSocketRemoval(
 ): Promise<unknown> {
   if (discovery.pids.length === 0 && discovery.error === undefined) return undefined;
   try {
+    // why: `daemon stop` answers when the stop starts; the daemon first settles the boot of the pool's next device and shuts idle devices down, which takes 15 s on a real simulator.
     await waitFor(() => !existsSync(socketPath), {
-      timeout: 5_000,
+      timeout: 60_000,
       label: "daemon socket removed during teardown",
     });
     return undefined;
