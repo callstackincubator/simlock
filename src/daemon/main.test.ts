@@ -2426,6 +2426,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         "-no-window",
         "-gpu",
         "host",
+        "-wipe-data",
         "-no-snapshot-load",
       ],
     ]);
