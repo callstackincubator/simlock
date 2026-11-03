@@ -4904,6 +4904,53 @@ describe("AndroidDriver ownership", () => {
     ]);
   });
 
+  it("tells two running copies of one seed apart by each one's own AVD folder, still attributes an old-layout AVD, and lists no seed folder nor attributes its emulator", async () => {
+    const filesystem = await androidFilesystem();
+    for (const folder of [
+      `${avdDirectory}/simlock_a/simlock.avd`,
+      `${avdDirectory}/simlock_b/simlock.avd`,
+      `${avdDirectory}/simlock_old.avd`,
+      `${avdDirectory}/sources/seed_x/simlock.avd`,
+    ]) {
+      await filesystem.mkdirp(folder);
+    }
+    const running = [
+      ["emulator-5554", "simlock", `${avdDirectory}/simlock_b/simlock.avd`],
+      ["emulator-5556", "simlock", `${avdDirectory}/simlock_a/simlock.avd`],
+      ["emulator-5558", "simlock_old", `${avdDirectory}/simlock_old.avd`],
+      ["emulator-5560", "simlock", `${avdDirectory}/sources/seed_x/simlock.avd`],
+    ] as const;
+    const runner = new ScriptedProcessRunner([
+      processResult(
+        binaries.adb,
+        ["devices"],
+        `List of devices attached\n${running.map(([serial]) => `${serial}\tdevice`).join("\n")}\n`,
+      ),
+      ...running.flatMap(([serial, name, path]) => [
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", /getprop ro\.boot\.qemu\.avd_name/],
+          `${name}\n`,
+        ),
+        processResult(binaries.adb, ["-s", serial, "emu", "avd", "path"], `${path}\r\nOK\r\n`),
+      ]),
+    ]);
+    const driver = await createDriver(filesystem, runner);
+
+    const reality = await driver.listManaged();
+
+    expect(reality.devices.map((device) => [device.deviceId, device.runState]).sort()).toEqual([
+      ["simlock_a", "running"],
+      ["simlock_b", "running"],
+      ["simlock_old", "running"],
+    ]);
+    expect(reality.processes.map((process) => [process.deviceId, process.address]).sort()).toEqual([
+      ["simlock_a", "emulator-5556"],
+      ["simlock_b", "emulator-5554"],
+      ["simlock_old", "emulator-5558"],
+    ]);
+  });
+
   it("ignores a running emulator whose AVD does not live in its root", async () => {
     const filesystem = await androidFilesystem();
     await filesystem.mkdirp(`${avdDirectory}/simlock_mine.avd`);
