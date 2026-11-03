@@ -118,6 +118,9 @@ const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
   NO_DRIVER: "no-driver",
   RUNTIME_MISSING: "runtime-missing",
   UNKNOWN_MODEL: "unknown-model",
+  UNKNOWN_BASELINE: "no-baseline",
+  BASELINE_MISMATCH: "baseline-mismatch",
+  BASELINE_STALE: "baseline-stale",
 };
 
 // why: the filters that hold a worker back only for now (it is full, busy, not ready or unhealthy), so it could take the request later; any other reason (drained, disconnected, a missing driver, runtime, model or capability) means it will not take it by waiting.
@@ -137,6 +140,9 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "RUNTIME_MISSING",
   "NO_DRIVER",
   "CAPABILITY_MISSING",
+  "UNKNOWN_BASELINE",
+  "BASELINE_MISMATCH",
+  "BASELINE_STALE",
 ]);
 
 export interface FleetExecInput {
