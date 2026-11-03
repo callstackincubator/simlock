@@ -128,7 +128,7 @@ describe("Nuke", () => {
 
     clock.advance(20);
     await release;
-    await expect(nuke).resolves.toEqual({ releasedLeaseIds: [] });
+    await expect(nuke).resolves.toEqual({ releasedLeaseIds: [], removedBaselines: [] });
     expect(registry.snapshot.devices).toMatchObject([{ id: grant.device.id, state: "deleted" }]);
 
     clock.advance(100);

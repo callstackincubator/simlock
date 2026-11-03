@@ -229,6 +229,35 @@ export class BaselineService {
     };
   }
 
+  /**
+   * why: nuke's removal of every baseline: the rows go first, then the sources, so a source that
+   * will not delete is an orphan `doctor` lists and not a baseline that points at nothing. Every
+   * source is tried; the first failure is thrown after the rest.
+   */
+  async removeAll(): Promise<readonly string[]> {
+    const rows = this.options.state.database
+      .prepare("SELECT name, version, platform, source_id FROM baselines ORDER BY name, version")
+      .all();
+    this.options.state.database.prepare("DELETE FROM baselines").run();
+    let failure: unknown;
+    for (const row of rows) {
+      this.options.eventBus.emit(
+        "baseline.removed",
+        { name: String(row.name), reason: "nuke", version: Number(row.version) },
+        "baselines",
+      );
+      try {
+        await this.options.drivers
+          .get(String(row.platform) as Platform)
+          .destroySource(String(row.source_id));
+      } catch (error: unknown) {
+        failure ??= error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+    return [...new Set(rows.map((row) => String(row.name)))];
+  }
+
   /** why: the in-use check and the claim on each idle device run in one decision-gate section, so a lease cannot be granted on a device in between. */
   #claimIdleDevices(name: string): { claim: DeviceOperationClaim; device: VirtualDevice }[] {
     const { leases, virtualDevices } = this.options.registry.snapshot;

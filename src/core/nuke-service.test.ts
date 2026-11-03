@@ -69,6 +69,7 @@ function createHarness(
         calls.push("maintenance:end");
       },
     },
+    baselines: { removeAll: async () => [] },
     devices: lifecycle,
     drivers,
     leases: {
@@ -132,6 +133,7 @@ describe("NukeService", () => {
 
     await expect(harness.service.nuke(true)).resolves.toEqual({
       releasedLeaseIds: ["lse_1", "lse_2"],
+      removedBaselines: [],
     });
 
     expect((await driver.listSources()).map((source) => source.id)).toEqual(["seed-stuck"]);
@@ -142,6 +144,7 @@ describe("NukeService", () => {
 
     await expect(harness.service.nuke(false)).resolves.toEqual({
       releasedLeaseIds: ["lse_1", "lse_2"],
+      removedBaselines: [],
     });
 
     expect(harness.calls).toEqual([
@@ -288,6 +291,7 @@ describe("NukeService", () => {
           harness.calls.push("maintenance:end");
         },
       },
+      baselines: { removeAll: async () => [] },
       devices: harness.lifecycle,
       drivers: [],
       leases: {
@@ -312,7 +316,10 @@ describe("NukeService", () => {
     });
 
     await expect(harness.service.nuke(false)).rejects.toThrow("release failed");
-    await expect(harness.service.nuke(false)).resolves.toEqual({ releasedLeaseIds: [] });
+    await expect(harness.service.nuke(false)).resolves.toEqual({
+      releasedLeaseIds: [],
+      removedBaselines: [],
+    });
     expect(harness.calls).toEqual([
       "maintenance:begin",
       "release-maintenance:begin",
@@ -354,6 +361,7 @@ describe("NukeService", () => {
         async beginMaintenance() {},
         async endMaintenance() {},
       },
+      baselines: { removeAll: async () => [] },
       devices: lifecycle,
       drivers: [],
       leases: {
@@ -424,7 +432,10 @@ describe("NukeService", () => {
       payload: { deviceId: healthyShutdown.id, initiator: "test" },
     });
 
-    await expect(service.nuke(true)).resolves.toEqual({ releasedLeaseIds: [] });
+    await expect(service.nuke(true)).resolves.toEqual({
+      releasedLeaseIds: [],
+      removedBaselines: [],
+    });
 
     const stateOf = (deviceId: string) =>
       registry.snapshot.devices.find((candidate) => candidate.id === deviceId)?.state;
@@ -456,6 +467,7 @@ describe("NukeService", () => {
     };
     const service = new NukeService({
       acquisition: { async beginMaintenance() {}, async endMaintenance() {} },
+      baselines: { removeAll: async () => [] },
       devices: harness.lifecycle,
       drivers: [],
       leases: {

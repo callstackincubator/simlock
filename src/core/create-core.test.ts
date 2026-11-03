@@ -196,7 +196,7 @@ describe("createCore", () => {
 
     const result = await core.nuke.nuke(false);
 
-    expect(result).toEqual({ releasedLeaseIds: ["lse_1"] });
+    expect(result).toEqual({ releasedLeaseIds: ["lse_1"], removedBaselines: [] });
     expect(order).toEqual([
       "acquisition.begin",
       "leases.begin",

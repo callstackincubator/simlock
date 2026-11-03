@@ -22,7 +22,9 @@ export class Nuke {
     const before = this.options.registry.snapshot.devices
       .filter((device) => device.state !== "deleted")
       .map((device) => device.id);
-    const { releasedLeaseIds } = await this.options.executor.nuke(options.deleteDevices);
+    const { releasedLeaseIds, removedBaselines } = await this.options.executor.nuke(
+      options.deleteDevices,
+    );
     const deleted = new Set(
       this.options.registry.snapshot.devices
         .filter((device) => device.state === "deleted")
@@ -31,7 +33,7 @@ export class Nuke {
     return {
       deletedDevices: before.filter((deviceId) => deleted.has(deviceId)),
       releasedLeaseIds,
-      removedBaselines: [],
+      removedBaselines,
     };
   }
 }

@@ -1013,6 +1013,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(report).toEqual({
       deletedDevices: [grant.device.id],
       releasedLeaseIds: [grant.lease.id],
+      removedBaselines: [],
     });
   });
 

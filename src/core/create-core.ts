@@ -304,6 +304,7 @@ export function createCore(options: CoreOptions): Core {
       },
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
     },
+    baselines: { removeAll: () => baselines.removeAll() },
     devices: deviceLifecycle,
     drivers: options.drivers,
     leases: leaseMaintenance.leases,
