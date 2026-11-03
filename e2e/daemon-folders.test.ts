@@ -1,12 +1,18 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  holdLoopbackPort,
+  REPO_ROOT,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+} from "./helpers/index.js";
 
 // why: an env's teardown stops only the worker's socket, so a test stops a gateway it started in its own `finally`.
 
@@ -149,13 +155,8 @@ describe("daemon folders (ADR 0034)", () => {
 
   it("a gateway that fails to start logs the reason to <root>/gateway/daemon.log, not <root>/daemon.log", async () => {
     const env = await withDaemon({ mode: "auto" });
-    const holder = createServer();
-    const port = await new Promise<number>((resolve) => {
-      holder.listen(0, "127.0.0.1", () => {
-        const address = holder.address();
-        resolve(typeof address === "object" && address !== null ? address.port : 0);
-      });
-    });
+    const holder = await holdLoopbackPort();
+    const port = holder.port;
 
     try {
       const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
@@ -173,7 +174,7 @@ describe("daemon folders (ADR 0034)", () => {
       expect(existsSync(join(env.home, "daemon.log"))).toBe(false);
     } finally {
       await stopGateway(env);
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      await holder.release();
     }
   });
 
