@@ -5199,6 +5199,81 @@ describe("CLI: baseline list", () => {
   });
 });
 
+describe("CLI: baseline remove", () => {
+  const login = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "login",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 10, 1, 9, 12).toISOString(),
+    version: 1,
+  } as const;
+
+  async function runRemove(
+    argv: string[],
+    options: { confirm?: ((question: string) => Promise<boolean>) | undefined; deleted?: string[] },
+  ) {
+    const output = outputCapture();
+    const removed: unknown[] = [];
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        confirm: options.confirm,
+        connectAdmin: async () =>
+          fakeClient({
+            listBaselines: () => Promise.resolve({ baselines: [login] }),
+            removeBaseline: (input) => {
+              removed.push(input);
+              return Promise.resolve({
+                deletedDevices: options.deleted ?? [],
+                name: input.name,
+                versions: [1],
+              });
+            },
+          }),
+      }),
+    );
+    return { code, removed, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline remove asks Remove baseline <name> v<n>? first, removes with --yes or an answered yes and prints how many idle devices it deleted, and refuses with USAGE when there is no terminal or the answer is no", async () => {
+    const questions: string[] = [];
+    const asked = await runRemove(["baseline", "remove", "login"], {
+      confirm: async (question) => {
+        questions.push(question);
+        return true;
+      },
+    });
+    expect([asked.code, asked.stdout, asked.removed, questions]).toEqual([
+      0,
+      "Removed baseline login v1.\n",
+      [{ name: "login" }],
+      ["Remove baseline login v1? [y/N] "],
+    ]);
+
+    const yes = await runRemove(["baseline", "remove", "login", "--yes"], {
+      confirm: async () => {
+        throw new Error("--yes must not ask");
+      },
+      deleted: ["dev_1"],
+    });
+    expect(yes.stdout).toBe("Removed baseline login v1. Deleted 1 idle device made from it.\n");
+    const many = await runRemove(["baseline", "remove", "login", "--yes"], {
+      deleted: ["dev_1", "dev_2"],
+    });
+    expect(many.stdout).toBe("Removed baseline login v1. Deleted 2 idle devices made from it.\n");
+
+    for (const confirm of [undefined, async () => false]) {
+      const refused = await runRemove(["baseline", "remove", "login"], { confirm });
+      expect([refused.code, refused.removed, refused.stdout]).toEqual([2, [], ""]);
+      expect(JSON.parse(refused.stderr)).toEqual({
+        error: { code: "USAGE", message: "baseline remove requires confirmation or --yes" },
+      });
+    }
+  });
+});
+
 describe("CLI: warm forget", () => {
   const USAGE =
     "Usage: simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]\n";
