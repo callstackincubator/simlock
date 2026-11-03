@@ -1929,6 +1929,18 @@ describe("GatewayDispatcher", () => {
       directory.add("wrk_1", client);
       workers.connected("wrk_1", undefined, "0.3.0");
       workers.refresh("wrk_1", {
+        baselines: [
+          {
+            imageTag: "google_apis_playstore",
+            mode: "full",
+            model: "Pixel 8",
+            name: "checkout",
+            osVersion: "34",
+            platform: "android",
+            savedAt: "2026-11-02T13:10:00Z",
+            version: 1,
+          },
+        ],
         capacity: statusFixture().capacity,
         health: "running",
         queueDepth: 0,

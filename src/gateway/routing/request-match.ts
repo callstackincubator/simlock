@@ -20,8 +20,39 @@ import type { RoutableRequest } from "./pipeline.js";
 
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
   if (request.physical === true) return undefined;
-  const catalog = catalogOf(worker, request);
-  return catalog === undefined ? undefined : servingModel(catalog, request);
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
+  return catalog === undefined ? undefined : servingModel(catalog, narrowed);
+}
+
+type BaselineListed = NonNullable<WorkerView["baselines"]>[number];
+
+/** why: the one read of a worker's baseline by the name a request gives; `undefined` for a request naming none or a worker without it. */
+export function baselineEntry(
+  worker: WorkerView,
+  request: RoutableRequest,
+): BaselineListed | undefined {
+  if (request.baseline === undefined) return undefined;
+  return worker.baselines?.find((entry) => entry.name === request.baseline);
+}
+
+/**
+ * why: ADR 0061 §5: a request naming a baseline takes the baseline's model, exact OS, mode and
+ * image tag, so it is read as that request on a worker that holds the baseline; the class is
+ * dropped because the model is named. A request naming none, or a worker without the baseline,
+ * leaves the request as it is.
+ */
+export function withBaseline(worker: WorkerView, request: RoutableRequest): RoutableRequest {
+  const entry = baselineEntry(worker, request);
+  if (entry === undefined) return request;
+  const { class: _class, imageTag: _imageTag, ...rest } = request;
+  return {
+    ...rest,
+    mode: entry.mode,
+    model: entry.model,
+    osVersion: entry.osVersion,
+    ...(entry.imageTag === undefined ? {} : { imageTag: entry.imageTag }),
+  };
 }
 
 /** The first model of the entry that could serve the request: a pairing in the OS constraint. */
@@ -41,9 +72,10 @@ export function deviceFit(
   request: RoutableRequest,
 ): ((spec: FittableSpec) => boolean) | undefined {
   if (request.physical === true) return undefined;
-  const catalog = catalogOf(worker, request);
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
   if (catalog === undefined) return undefined;
-  const model = servingModel(catalog, request);
+  const model = servingModel(catalog, narrowed);
   if (model === undefined) return undefined;
   const requirement: DeviceRequirement = {
     imageTag: request.imageTag,

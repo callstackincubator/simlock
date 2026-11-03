@@ -421,6 +421,7 @@ const gatewayWaitingReasonSchema = z.enum([
   "no-driver",
   "unknown-model",
   "runtime-missing",
+  "no-baseline",
   "capability-missing",
   "full",
   "no-free-physical",

@@ -1601,6 +1601,7 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
+    ...(waiter.request.baseline === undefined ? {} : { baseline: waiter.request.baseline }),
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),

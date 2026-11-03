@@ -10,6 +10,7 @@ export interface RoutableRequest {
   readonly imageTag?: string;
   readonly mode?: "slim" | "full";
   readonly physical?: boolean;
+  readonly baseline?: string;
   readonly requires?: readonly string[];
 }
 
@@ -30,6 +31,7 @@ export type WorkerReasonCode =
   | "no-driver"
   | "unknown-model"
   | "runtime-missing"
+  | "no-baseline"
   | "capability-missing"
   | "full"
   | "no-free-physical"
