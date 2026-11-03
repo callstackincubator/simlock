@@ -480,17 +480,22 @@ function callerSuppliedScopeFlag(args: readonly string[]): string | undefined {
 
 export const REFUSED_ADB_SEQUENCES: readonly {
   readonly sequence: readonly string[];
+  /** why: The words that may follow the sequence; any other (or none) is refused. Absent: the sequence alone is refused. */
+  readonly allowedNext?: readonly string[];
   readonly reason: string;
 }[] = [
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "kill"] },
   { reason: STOPS_A_RUNNING_DEVICE, sequence: ["emu", "avd", "stop"] },
   {
     // why: Not drift, which is why it needs saying: the emulator keeps running and nothing looks
-    // wrong. What is gone is the clean baseline `reclaimStrategy` restores from, so every
-    // later reclaim of this device silently degrades from a snapshot load to a full wipe.
+    // wrong. Any console snapshot subcommand (save, push, pull, delete and its `del` alias, load,
+    // remap, or one a later emulator adds) can replace or remove the clean baseline `reclaimStrategy`
+    // restores from, so every later reclaim of this device silently degrades from a snapshot load to
+    // a full wipe. Only `list` is safe, so the rule is an allowlist of one and not a list of verbs.
+    allowedNext: ["list"],
     reason:
-      "it destroys the clean-boot snapshot Simlock restores from, turning every later reclaim of this device into a full wipe.",
-    sequence: ["emu", "avd", "snapshot", "delete"],
+      "it can replace or destroy the clean-boot snapshot Simlock restores later leases of this device from.",
+    sequence: ["emu", "avd", "snapshot"],
   },
 ];
 
@@ -517,8 +522,41 @@ function isBareShell(args: readonly string[]): boolean {
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
-function containsSequence(args: readonly string[], sequence: readonly string[]): boolean {
-  return args.some((_, index) => sequence.every((token, offset) => args[index + offset] === token));
+/**
+ * why: `adb emu` joins its operands with spaces into one emulator console line, so the words the
+ * console sees are the operands split on whitespace, not the argv tokens. Matching is
+ * case-insensitive (refusing too much is harmless here) and only looks at the operands after the
+ * `emu` subcommand: an `adb shell` argument is a device shell command, never a console line.
+ */
+function containsSequence(
+  args: readonly string[],
+  sequence: readonly string[],
+  allowedNext?: readonly string[],
+): boolean {
+  const walked = walkGlobals(args);
+  if (walked.kind !== "subcommand" || args[walked.index] !== "emu") return false;
+  const words = args
+    .slice(walked.index + 1)
+    .flatMap((argument) => argument.toLowerCase().split(/\s+/))
+    .filter((word) => word !== "");
+  const consoleWords = sequence.slice(1);
+  return words.some((_, index) => {
+    if (!consoleWords.every((token, offset) => words[index + offset] === token)) return false;
+    if (allowedNext === undefined) return true;
+    const next = words[index + consoleWords.length];
+    return next === undefined || !allowedNext.includes(next);
+  });
+}
+
+// why: The refusal text for the first REFUSED_ADB_SEQUENCES entry the arguments contain, or undefined when none is.
+function refusedSequenceMessage(args: readonly string[]): string | undefined {
+  const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
+    containsSequence(args, candidate.sequence, candidate.allowedNext),
+  );
+  if (refused === undefined) return undefined;
+  const qualifier =
+    refused.allowedNext === undefined ? "" : ` (anything but ${refused.allowedNext.join(", ")})`;
+  return `Refusing \`simlock adb ${refused.sequence.join(" ")}${qualifier}\`: ${refused.reason} ${RECLAIM_INSTEAD}`;
 }
 
 type AndroidTargetFor = (
@@ -893,15 +931,8 @@ export class AndroidDriver implements Driver {
         `Refusing \`simlock adb ${REFUSED_ADB_SUBCOMMAND}\`: it would detach other leased emulators, which adb treats as connections it can drop. Use \`simlock release\` to give a device back, or \`simlock cleanup\` to reclaim idle ones.`,
       );
     }
-    const refused = REFUSED_ADB_SEQUENCES.find((candidate) =>
-      containsSequence(args, candidate.sequence),
-    );
-    if (refused !== undefined) {
-      throw new PassthroughRefusedError(
-        "adb",
-        `Refusing \`simlock adb ${refused.sequence.join(" ")}\`: ${refused.reason} ${RECLAIM_INSTEAD}`,
-      );
-    }
+    const refusedSequence = refusedSequenceMessage(args);
+    if (refusedSequence !== undefined) throw new PassthroughRefusedError("adb", refusedSequence);
 
     const scopeFlag = callerSuppliedScopeFlag(args);
     if (scopeFlag !== undefined) {

@@ -4617,16 +4617,46 @@ describe("AndroidDriver.create", () => {
     },
   );
 
-  it("refuses to delete the snapshot every later reclaim restores from", async () => {
+  it("refuses every emu avd snapshot subcommand except list, since later reclaims restore from the clean one", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
-    await expect(
-      passthroughOf(driver, ["emu", "avd", "snapshot", "delete", "default_boot"]),
-    ).rejects.toThrow(PassthroughRefusedError);
-    await expect(
-      passthroughOf(driver, ["emu", "avd", "snapshot", "delete", "default_boot"]),
-    ).rejects.toThrow(/full wipe/);
+    for (const [args, reason] of [
+      [["emu", "avd", "snapshot", "delete", "default_boot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "del", "default_boot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "save", "simlock_clean_baseline"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "save", "my_snapshot"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "push", "x", "/tmp/x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "pull", "x", "/tmp/x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "remap", "1"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "load", "x"], /replace or destroy/],
+      [["emu", "avd", "snapshot", "frobnicate"], /replace or destroy/],
+      [["emu", "avd", "snapshot"], /replace or destroy/],
+      [["emu", "avd snapshot"], /replace or destroy/],
+      [["-s", "emulator-5586", "emu", "avd", "snapshot", "save", "x"], /replace or destroy/],
+      // why: adb joins the `emu` operands with spaces, so one argument may carry several words.
+      [["emu", "avd snapshot save x"], /replace or destroy/],
+      [["emu", "avd", "snapshot save x"], /replace or destroy/],
+      [["emu", "avd snapshot push x y"], /replace or destroy/],
+      [["emu", "AVD", "Snapshot", "Save", "x"], /replace or destroy/],
+      [["emu", "AVD", "Snapshot", "DEL", "x"], /replace or destroy/],
+      [["emu", "avd snapshot list\navd snapshot save x"], /replace or destroy/],
+      [["emu", "kill"], /simlock cleanup/],
+      [["emu", "avd stop"], /simlock release/],
+    ] as const) {
+      const label = `adb ${args.join(" ")}`;
+      await expect(passthroughOf(driver, [...args]), label).rejects.toThrow(
+        PassthroughRefusedError,
+      );
+      await expect(passthroughOf(driver, [...args]), label).rejects.toThrow(reason);
+    }
+
+    const listed = await passthroughOf(driver, ["emu", "avd", "snapshot", "list"]);
+    expect(listed.args.slice(-4)).toEqual(["emu", "avd", "snapshot", "list"]);
+
+    // why: only console operands after `emu` are matched; a device shell argument is not one.
+    const shelled = await passthroughOf(driver, ["shell", "echo", "emu kill"]);
+    expect(shelled.args.slice(-3)).toEqual(["shell", "echo", "emu kill"]);
   });
 
   it("refuses an emu kill pair even behind the -s serial that targets a device", async () => {
