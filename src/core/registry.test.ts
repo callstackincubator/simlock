@@ -174,6 +174,67 @@ describe("Registry", () => {
     ]);
   });
 
+  it("a state.db at registry version 2 migrates to 3, keeps its requests, and then stores a request's baseline", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
+    try {
+      const clock = new FakeClock(1_000);
+      const deviceData = new Map<Platform, DeviceDataTable>([
+        ["android", fakeDeviceDataTable],
+        ["ios", fakeDeviceDataTable],
+      ]);
+      const openState = (owner: typeof registryOwner) =>
+        openStateDatabase({
+          dataDirectory: directory,
+          filesystem: new NodeFilesystem(),
+          logger: new NoopLogger(),
+          oldFiles: [],
+          owners: [owner, fakeDeviceDataTable],
+          sqlite: new NodeSqliteOpener(),
+          upgradeStep: "remove it.",
+        });
+      const loadRegistry = (state: StateDatabase) =>
+        Registry.load({
+          clock,
+          deviceData,
+          eventBus: new EventBus(clock),
+          idGenerator: { generate: () => "id" },
+          state,
+        });
+      const old = await openState({
+        ...registryOwner,
+        migrations: registryOwner.migrations.slice(0, 2),
+        version: 2,
+      });
+      old.database
+        .prepare(
+          "INSERT INTO lease_requests (id, requester_id, owner_id, platform, model, created_at, state) VALUES ('req_old', 'agent', 'agent', 'ios', 'iPhone 16', 5, 'open')",
+        )
+        .run();
+      old.close();
+
+      const migrated = await openState(registryOwner);
+      const registry = await loadRegistry(migrated);
+      expect(registry.leaseRequests().map((record) => [record.id, record.request])).toEqual([
+        ["req_old", { model: "iPhone 16", platform: "ios" }],
+      ]);
+      await registry.createLeaseRequest({
+        id: "req_new",
+        ownerId: "agent",
+        request: { baseline: "checkout", platform: "ios" },
+        requesterId: "agent",
+      });
+      migrated.close();
+
+      const reopened = await loadRegistry(await openState(registryOwner));
+      expect(reopened.leaseRequests().map((record) => record.request.baseline)).toEqual([
+        undefined,
+        "checkout",
+      ]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("a registry restarted on the same state.db returns every record as committed, optional fields set and absent", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-registry-"));
     try {

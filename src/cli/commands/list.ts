@@ -115,10 +115,12 @@ function formatWaitingRequests(
       const device = [
         spec.platform,
         spec.physical === true ? "physical" : undefined,
-        spec.model ?? `class ${String(requestedClass(spec))}`,
+        spec.model ??
+          (spec.baseline === undefined ? `class ${String(requestedClass(spec))}` : undefined),
         spec.osVersion,
         spec.mode === undefined ? undefined : `mode ${spec.mode}`,
         spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+        spec.baseline === undefined ? undefined : `baseline ${spec.baseline}`,
       ]
         .filter((part) => part !== undefined)
         .join(" ");

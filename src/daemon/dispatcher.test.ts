@@ -2420,7 +2420,7 @@ describe("Dispatcher: nuke.run", () => {
 });
 
 describe("Dispatcher: warm.forget", () => {
-  it("hands the match to the warm pool and answers each kind it forgot with its mode, full when unset, and its image tag; an agent is FORBIDDEN and nothing is forgotten", async () => {
+  it("hands the match to the warm pool and answers each kind it forgot with its mode, full when unset, its image tag and its baseline; an agent is FORBIDDEN and nothing is forgotten", async () => {
     const matches: unknown[] = [];
     const { dispatcher } = await buildDispatcher({
       warmKinds: {
@@ -2433,6 +2433,13 @@ describe("Dispatcher: warm.forget", () => {
               mode: "slim",
               model: "Pixel",
               osVersion: "35",
+              physical: false,
+              platform: "android",
+            },
+            {
+              baseline: { name: "checkout", version: 3 },
+              model: "Pixel",
+              osVersion: "36",
               physical: false,
               platform: "android",
             },
@@ -2464,6 +2471,13 @@ describe("Dispatcher: warm.forget", () => {
           mode: "slim",
           model: "Pixel",
           osVersion: "35",
+          platform: "android",
+        },
+        {
+          baseline: "checkout",
+          mode: "full",
+          model: "Pixel",
+          osVersion: "36",
           platform: "android",
         },
       ],

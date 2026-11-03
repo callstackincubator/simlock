@@ -869,6 +869,7 @@ export class Dispatcher {
         osVersion: spec.osVersion,
         mode: spec.mode ?? "full",
         ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+        ...(spec.baseline === undefined ? {} : { baseline: spec.baseline.name }),
       })),
     };
   };

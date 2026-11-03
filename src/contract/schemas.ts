@@ -556,6 +556,7 @@ const warmPoolTargetSchema = z.object({
   osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
   mode: z.enum(["slim", "full"]),
   imageTag: imageTagSchema.optional(),
+  baseline: baselineNameSchema.optional(),
   origin: z.enum(["configured", "learned"]),
   count: z.number().int().nonnegative(),
   ready: z.number().int().nonnegative(),

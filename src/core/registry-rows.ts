@@ -196,6 +196,7 @@ const REQUEST_COLUMNS = [
   "os_version",
   "mode",
   "image_tag",
+  "baseline",
   "class",
   "physical",
   "created_at",
@@ -341,6 +342,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       request.osVersion ?? null,
       request.mode ?? null,
       request.imageTag ?? null,
+      request.baseline ?? null,
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -617,6 +619,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("osVersion", reader.optText("os_version")),
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
+    ...present("baseline", reader.optText("baseline")),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };

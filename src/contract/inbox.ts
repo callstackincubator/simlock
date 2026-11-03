@@ -54,6 +54,7 @@ export function describeRequestedDevice(spec: WaitingRequest["spec"]): string {
     spec.osVersion === undefined ? undefined : `runtime ${spec.osVersion}`,
     spec.mode === undefined ? undefined : `mode ${spec.mode}`,
     spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+    spec.baseline === undefined ? undefined : `baseline ${spec.baseline}`,
   ]
     .filter((part) => part !== undefined)
     .join(", ");

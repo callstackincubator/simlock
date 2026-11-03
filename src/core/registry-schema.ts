@@ -120,8 +120,12 @@ ALTER TABLE devices ADD COLUMN baseline_name TEXT;
 ALTER TABLE devices ADD COLUMN baseline_version INTEGER;
 `;
 
+const REGISTRY_V3 = `
+ALTER TABLE lease_requests ADD COLUMN baseline TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2],
+  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3],
   name: "registry",
-  version: 2,
+  version: 3,
 };

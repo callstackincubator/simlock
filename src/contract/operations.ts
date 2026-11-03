@@ -626,6 +626,7 @@ const warmKindSchema = z.object({
   osVersion: z.string().max(WARM_POOL_NAME_MAX),
   mode: z.enum(["slim", "full"]),
   imageTag: imageTagSchema.optional(),
+  baseline: baselineNameSchema.optional(),
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.

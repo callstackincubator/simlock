@@ -286,6 +286,7 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const warmPool = new WarmPool({
+    baselines,
     acquisition: {
       kick: notifyAvailability,
       get maintenanceActive() {

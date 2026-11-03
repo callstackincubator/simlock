@@ -5282,7 +5282,12 @@ describe("CLI: warm forget", () => {
     "Usage: simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]\n";
   const pixel = { model: "Pixel", mode: "full", osVersion: "36", platform: "android" } as const;
 
-  async function runWarm(argv: string[], forgotten: (typeof pixel)[] = [pixel]) {
+  const checkoutKind = { ...pixel, baseline: "checkout" } as const;
+
+  async function runWarm(
+    argv: string[],
+    forgotten: (typeof pixel | typeof checkoutKind)[] = [pixel],
+  ) {
     const output = outputCapture();
     const inputs: unknown[] = [];
     let connected = false;
@@ -5327,6 +5332,9 @@ describe("CLI: warm forget", () => {
         platform: "android",
       },
     ]);
+
+    const named = await runWarm(["warm", "forget", "android", "Pixel"], [checkoutKind]);
+    expect(named.stdout).toContain("Forgot android Pixel 36 (full, baseline checkout).\n");
 
     const none = await runWarm(["warm", "forget", "ios", "iPhone 16"], []);
     expect([none.code, none.stdout]).toEqual([
@@ -5501,6 +5509,17 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           platform: "android" as const,
           ready: 1,
         },
+        {
+          baseline: "checkout",
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          origin: "learned" as const,
+          osVersion: "26.0",
+          platform: "ios" as const,
+          ready: 1,
+        },
       ],
     };
     const statusWith = (block: StatusGetOutput["warmPool"]) =>
@@ -5518,7 +5537,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         "warm pool: enabled, reserve ios 1 android 0\n" +
           "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 1  booting 1\n" +
           "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: runtime-missing\n" +
-          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n",
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n" +
+          "  iPhone 17 / 26.0 / full / baseline checkout   learned   wanted 1  ready 1  booting 0\n",
       );
     });
 
@@ -6133,6 +6153,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           spec,
           state: "leased",
         },
+        {
+          physical: false,
+          id: "dev_copy",
+          mode: "full",
+          servesDefaultMode: true,
+          spec: { ...spec, baseline: { name: "checkout", version: 2 } },
+          state: "leased",
+        },
       ],
     };
     const environment = output.environmentWith({
@@ -6144,6 +6172,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Device dev_slim: ready, mode slim, serves default mode: no\n");
     expect(output.stdout).toContain(
       "Device dev_full: leased, mode full, serves default mode: yes\n",
+    );
+    expect(output.stdout).toContain(
+      "Device dev_copy: leased, mode full, serves default mode: yes, baseline checkout v2\n",
     );
   });
 
@@ -9274,6 +9305,14 @@ describe("simlock list --requests", () => {
             stage: "queued",
             workerId: "wrk_2",
           },
+          {
+            createdAt: -1_000,
+            id: "req_4",
+            queuePosition: 3,
+            requesterId: "baseline-agent",
+            spec: { baseline: "checkout", platform: "ios" },
+            stage: "queued",
+          },
         ];
       },
     });
@@ -9286,7 +9325,8 @@ describe("simlock list --requests", () => {
     expect(output.stdout).toBe(
       "Request req_1: agent-b, android Pixel 8 image tag google_apis, starting, waiting 12s\n" +
         "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
-        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
+        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n" +
+        "Request req_4: baseline-agent, ios baseline checkout, queued at 3, waiting 1s\n",
     );
   });
 

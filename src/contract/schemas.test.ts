@@ -353,7 +353,7 @@ describe("statusDeviceSchema's device projection", () => {
     expect(deviceRecordSchema.parse(device).spec).not.toHaveProperty("mode");
   });
 
-  it("shows a device spec's image tag in a grant, a status device, and a list.get record", () => {
+  it("shows a device spec's image tag and baseline in a grant, a status device, and a list.get record", () => {
     const device = {
       ...fullCoreShapedDevice(),
       spec: {
@@ -362,9 +362,22 @@ describe("statusDeviceSchema's device projection", () => {
         model: "Pixel 8",
         osVersion: "34",
         imageTag: "google_apis_playstore",
+        baseline: { name: "checkout", version: 2 },
       },
     };
 
+    expect(grantedDeviceSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
+    expect(statusDeviceSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
+    expect(deviceRecordSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
     expect(grantedDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(statusDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(deviceRecordSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
@@ -598,17 +611,23 @@ describe("fitPlatformCatalog", () => {
 });
 
 describe("leaseRequestRecordSchema", () => {
-  it("keeps the image tag a stored request named", () => {
+  it("keeps the image tag and baseline a stored request named", () => {
     const record = leaseRequestRecordSchema.parse({
       createdAt: 0,
       id: "req_1",
       ownerId: "agent",
-      request: { imageTag: "google_apis", model: "Pixel 8", platform: "android" },
+      request: {
+        baseline: "checkout",
+        imageTag: "google_apis",
+        model: "Pixel 8",
+        platform: "android",
+      },
       requesterId: "agent",
       state: "open",
     });
 
     expect(record.request.imageTag).toBe("google_apis");
+    expect(record.request.baseline).toBe("checkout");
   });
 
   it.each([
