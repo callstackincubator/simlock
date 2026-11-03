@@ -1785,6 +1785,7 @@ describe("Dispatcher: baseline.remove", () => {
       details: { name: "nothere" },
       message: 'no baseline named "nothere" on this worker',
     });
+    expect(await refused("Checkout", admin)).toMatchObject({ code: "BAD_REQUEST" });
     expect(await refused("busy", admin)).toMatchObject({
       code: "BASELINE_IN_USE",
       details: { leaseId: "lse_busy", name: "busy" },
