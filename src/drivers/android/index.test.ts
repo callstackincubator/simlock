@@ -1846,122 +1846,46 @@ describe("AndroidDriver", () => {
 
   describe("device-profile sources", () => {
     it("resolves a devices.xml-only model and applies its properties to config.ini", async () => {
-      const filesystem = await androidFilesystem();
-      await writeDevicesXml(filesystem, customDeviceXml("Custom A", 4096));
-      // why: `avdmanager create avd` is scripted (not a real process), so it never creates the AVD
-      // directory the way it would for real -- seed it here the same way, since applying
-      // hardware properties to config.ini right after create relies on that directory existing.
-      await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, [
-          "create",
-          "avd",
-          "-n",
-          "simlock_one",
-          "-k",
-          /.+/,
-          "-d",
-          "pixel_5",
-        ]),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-      ]);
-      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const harness = await libraryHarness({ devicesXml: customDeviceXml("Custom A", 4096) });
 
-      const spec = await driver.resolveSpec({
-        model: "Custom A",
-        osVersion: "34",
-        platform: "android",
-      });
+      const spec = await harness.resolve("Custom A");
       expect(spec).toEqual({
         physical: false,
         model: "Custom A",
-        osVersion: "34",
+        osVersion: "35",
         platform: "android",
       });
 
-      const device = await driver.provision(spec);
+      const device = await harness.driver.provision(spec);
 
-      const config = await filesystem.readFile(`${avdDirectory}/simlock_one.avd/config.ini`);
+      const config = await harness.filesystem.readFile(harness.configPath);
       expect(config).toContain("hw.device.name=Custom A");
       expect(config).toContain("hw.ramSize=4096");
       // why: The avdmanager `-d` seed uses a built-in device only to skip the interactive prompt --
       // it must never leak into the resolved spec or the applied hardware properties.
       expect(config).not.toContain("pixel_5");
-      expect(device.driverData).toMatchObject({ avdName: "simlock_one" });
+      expect(device.driverData).toMatchObject({ avdName: "simlock" });
     });
 
     it("captures differing hardware properties in the config hash, proving they land before it is computed", async () => {
-      const buildHarness = async (ramMiB: number) => {
-        const filesystem = await androidFilesystem();
-        await writeDevicesXml(filesystem, customDeviceXml("Custom A", ramMiB));
-        await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
-        const runner = new ScriptedProcessRunner([
-          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-          processResult(binaries.avdmanager, [
-            "create",
-            "avd",
-            "-n",
-            "simlock_one",
-            "-k",
-            /.+/,
-            "-d",
-            "pixel_5",
-          ]),
-          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-        ]);
-        const driver = await createDriver(filesystem, runner, { ids: ["one"] });
-        const spec = await driver.resolveSpec({
-          model: "Custom A",
-          osVersion: "34",
-          platform: "android",
-        });
-        return driver.provision(spec);
+      const hashWith = async (ramMiB: number) => {
+        const harness = await libraryHarness({ devicesXml: customDeviceXml("Custom A", ramMiB) });
+        const device = await harness.provision("Custom A");
+        return (device.driverData as { configHash: string }).configHash;
       };
 
-      const lowRam = await buildHarness(2048);
-      const highRam = await buildHarness(4096);
-
-      expect((lowRam.driverData as { configHash: string }).configHash).not.toBe(
-        (highRam.driverData as { configHash: string }).configHash,
-      );
+      expect(await hashWith(2048)).not.toBe(await hashWith(4096));
     });
 
     it("shadows a devices.xml profile with a built-in one of the same name and never applies properties", async () => {
-      const filesystem = await androidFilesystem();
       // why: same name as the built-in fixture's "Pixel 5" -- the built-in source is registered
       // first, so it must win and the devices.xml properties must never be touched.
-      await writeDevicesXml(filesystem, customDeviceXml("Pixel 5", 4096));
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, [
-          "create",
-          "avd",
-          "-n",
-          "simlock_one",
-          "-k",
-          /.+/,
-          "-d",
-          "pixel_5",
-        ]),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-      ]);
-      const driver = await createDriver(filesystem, runner, { ids: ["one"] });
+      const harness = await libraryHarness({ devicesXml: customDeviceXml("Pixel 5", 4096) });
+      const seeded = await harness.filesystem.readFile(harness.configPath);
 
-      const spec = await driver.resolveSpec({
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      });
-      await driver.provision(spec);
+      await harness.provision("Pixel 5");
 
-      // why: no properties were merged into config.ini -- it was never even written.
-      await expect(filesystem.exists(`${avdDirectory}/simlock_one.avd/config.ini`)).resolves.toBe(
-        false,
-      );
+      await expect(harness.filesystem.readFile(harness.configPath)).resolves.toBe(seeded);
     });
 
     it("rejects a hardware-property value with an embedded line break, defense in depth beyond the devices.xml parser", async () => {
@@ -1972,20 +1896,6 @@ describe("AndroidDriver", () => {
       // exercises `#mergeConfigIniLines`'s own independent guard by going around the parser with
       // a custom source, standing in for `<d:manufacturer>Google\ndisk.dataPartition.path=/evil
       // </d:manufacturer>`.
-      const filesystem = await androidFilesystem();
-      const runner = new ScriptedProcessRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.avdmanager, [
-          "create",
-          "avd",
-          "-n",
-          "simlock_one",
-          "-k",
-          /.+/,
-          "-d",
-          "pixel_5",
-        ]),
-      ]);
       const maliciousSource = {
         async profiles() {
           return [
@@ -2001,39 +1911,12 @@ describe("AndroidDriver", () => {
           ];
         },
       };
-      await recordRunningAdbServer(filesystem, adbServerPort);
-      const driver = await AndroidDriver.create({
-        clock: new FakeClock(),
-        database: await memoryAndroidSourceDatabase(),
-        deviceProfileSources: [maliciousSource],
-        driverConfig: {},
-        env: { ANDROID_HOME: sdk },
-        filesystem,
-        homeDirectory: home,
-        hostAbi: "arm64-v8a",
-        idGenerator: { generate: () => "one" },
-        instanceId,
-        processRunner: runner,
-        // why: Adopt the recorded server `recordRunningAdbServer` just wrote, exactly as the
-        // shared `createDriver` helper does: this test is about hardware properties, and
-        // starting a real supervised server is not part of what it exercises. `simlockHome`
-        // has to be the real one too -- under `home` the AVD root would not be
-        // `avdDirectory`, and the assertion below would pass without proving anything.
-        processSupervisor: new FakeProcessSupervisor([adbServerPid]),
-        simlockHome,
-        tcpProbe: new FakeTcpProbe([adbServerPort]),
-      });
+      const harness = await libraryHarness({ sources: [maliciousSource] });
 
-      const spec = await driver.resolveSpec({
-        model: "Evil Phone",
-        osVersion: "34",
-        platform: "android",
-      });
+      await expect(harness.provision("Evil Phone")).rejects.toThrow(/line break/);
 
-      await expect(driver.provision(spec)).rejects.toThrow(/line break/);
-      await expect(filesystem.exists(`${avdDirectory}/simlock_one.avd/config.ini`)).resolves.toBe(
-        false,
-      );
+      // why: a failed seed make removes its folder, so none of the rejected value stays on disk.
+      await expect(harness.filesystem.exists(harness.configPath)).resolves.toBe(false);
     });
 
     it("surfaces malformed devices.xml as a diagnostic and falls through to UnknownModelError, never throwing from the parse itself", async () => {
@@ -2338,43 +2221,36 @@ describe("AndroidDriver", () => {
     });
 
     it("refuses NUL in a `simlock.mark` value, through the one shared check", async () => {
+      const markedConfig = (harness: Awaited<ReturnType<typeof provisionedHarness>>) =>
+        harness.filesystem.readFile(`${harness.copyHome}/simlock.avd/config.ini`);
       const accepted = await provisionedHarness({
         firstMarkToken: "tok-en",
-        ids: ["one", "tok-en"],
+        ids: ["one", "two", "tok-en"],
       });
       await accepted.driver.makeReady(accepted.device);
-      const acceptedConfig = await accepted.filesystem.readFile(
-        `${avdDirectory}/simlock_one.avd/config.ini`,
-      );
-      expect(acceptedConfig).toContain("simlock.mark=tok-en");
+      expect(await markedConfig(accepted)).toContain("simlock.mark=tok-en");
 
       const refused = await provisionedHarness({
         firstMarkToken: "tok\u0000en",
-        ids: ["one", "tok\u0000en"],
+        ids: ["one", "two", "tok\u0000en"],
       });
 
       await expect(refused.driver.makeReady(refused.device)).rejects.toThrow(/Refusing to merge/);
-      const refusedConfig = await refused.filesystem.readFile(
-        `${avdDirectory}/simlock_one.avd/config.ini`,
-      );
-      expect(refusedConfig).not.toContain("simlock.mark=");
+      expect(await markedConfig(refused)).not.toContain("simlock.mark=");
     });
 
-    it("rethrows and deletes nothing when a write after `avdmanager create avd` fails", async () => {
+    it("rethrows and runs no `avdmanager delete` when a write after `avdmanager create avd` fails", async () => {
       const filesystem = new WriteFailureFilesystem(
-        `${avdDirectory}/simlock_one.avd/config.ini`,
+        `${avdDirectory}/sources/seed_two/simlock.avd/config.ini`,
         new Error("disk full"),
       );
       const harness = await libraryHarness({ filesystem, listing: pixelDevices });
-      const seeded = await filesystem.readFile(harness.configPath);
       filesystem.armed = true;
 
       await expect(harness.provision("Pixel 9")).rejects.toThrow("disk full");
 
-      filesystem.armed = false;
       expect(harness.createCalls()).toHaveLength(1);
       expect(harness.runner.calls.some((call) => call.args.includes("delete"))).toBe(false);
-      await expect(filesystem.readFile(harness.configPath)).resolves.toBe(seeded);
     });
 
     it("seeds `avdmanager create avd` with the first profile `avdmanager list device` prints, also when it lists `pixel_9`", async () => {
