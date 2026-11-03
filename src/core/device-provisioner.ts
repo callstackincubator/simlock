@@ -80,6 +80,33 @@ export class DeviceProvisioner {
     return release;
   }
 
+  /** why: the claim ends in the section that commits the record, so the device is counted by one of the two at every moment; the boot claim begins in that same section. */
+  async #register(
+    driverDevice: DriverDevice,
+    spec: VirtualSpec,
+    startedAt: number,
+    options: ProvisionDeviceOptions,
+    releaseClaim: () => void,
+  ): Promise<{ device: VirtualDevice; bootClaim: DeviceOperationClaim | undefined }> {
+    return this.options.decisions.run(async () => {
+      try {
+        const device = await this.options.registry.registerDevice({
+          driverData: driverDevice.driverData,
+          driverDeviceId: driverDevice.deviceId,
+          provisionDuration: this.options.clock.now() - startedAt,
+          spec,
+        });
+        const bootClaim =
+          options.claim === undefined
+            ? undefined
+            : this.options.claims.tryClaim(device.id, options.claim.kind, options.claim.owner);
+        return { bootClaim, device };
+      } finally {
+        releaseClaim();
+      }
+    });
+  }
+
   async provision(
     requested: VirtualSpec,
     options: ProvisionDeviceOptions,
@@ -114,36 +141,17 @@ export class DeviceProvisioner {
       throw error;
     }
 
-    let device: VirtualDevice;
-    let bootClaim: DeviceOperationClaim | undefined;
+    let registered: { device: VirtualDevice; bootClaim: DeviceOperationClaim | undefined };
     try {
-      // The claim ends in the section that commits the record, so the device is counted by one
-      // of the two at every moment; the boot claim begins in that same section.
-      device = await this.options.decisions.run(async () => {
-        try {
-          const registered = await this.options.registry.registerDevice({
-            driverData: driverDevice.driverData,
-            driverDeviceId: driverDevice.deviceId,
-            provisionDuration: this.options.clock.now() - startedAt,
-            spec,
-          });
-          if (options.claim !== undefined) {
-            bootClaim = this.options.claims.tryClaim(
-              registered.id,
-              options.claim.kind,
-              options.claim.owner,
-            );
-          }
-          return registered;
-        } finally {
-          releaseClaim();
-          made.hold();
-        }
+      registered = await this.#register(driverDevice, spec, startedAt, options, () => {
+        releaseClaim();
+        made.hold();
       });
     } catch (error: unknown) {
       options.reservation.release();
       throw error;
     }
+    const { bootClaim, device } = registered;
 
     try {
       options.onProgress?.({
