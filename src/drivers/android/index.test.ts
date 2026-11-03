@@ -817,6 +817,23 @@ describe("AndroidDriver", () => {
     });
   });
 
+  it("sends the emulator's output to <avd folder>/emulator.log, mode 0600, truncated at each start", async () => {
+    const harness = await provisionedHarness();
+    const logPath = `${avdDirectory}/simlock_one.avd/emulator.log`;
+    await harness.filesystem.writeFileAtomic(logPath, "left by an earlier start\n", {
+      mode: 0o644,
+    });
+
+    await harness.driver.makeReady(harness.device);
+
+    const launch = harness.runner.calls.find(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    expect(launch?.options.stdio).toEqual({ file: logPath });
+    await expect(harness.filesystem.readFile(logPath)).resolves.toBe("");
+    expect((await harness.filesystem.lstat(logPath)).mode & 0o777).toBe(0o600);
+  });
+
   it("retries adb while the emulator is starting", async () => {
     const harness = await provisionedHarness({ initialAdbFailures: 1 });
     const ready = harness.driver.makeReady(harness.device);
