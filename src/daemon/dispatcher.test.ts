@@ -1485,6 +1485,39 @@ describe("Dispatcher: baseline.save versions", () => {
   });
 });
 
+describe("Dispatcher: baseline.save failure", () => {
+  it("answers BASELINE_SAVE_FAILED when the driver cannot save, with the lease ended, the device quarantined and no baseline recorded", async () => {
+    const { dispatcher, driver, registry } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const request = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+    const grant = await dispatcher.dispatch("lease.request", request, session());
+    driver.failOn("saveSource", 1, new Error("disk full"));
+
+    const error = await dispatcher
+      .dispatch("baseline.save", { leaseId: grant.lease.id, name: "checkout" }, admin)
+      .then(
+        () => undefined,
+        (rejected: unknown) => rejected,
+      );
+
+    expect(error).toMatchObject({
+      code: "BASELINE_SAVE_FAILED",
+      details: { leaseId: grant.lease.id, name: "checkout" },
+      message: `baseline checkout was not saved: disk full. Lease ${grant.lease.id} has ended.`,
+    });
+    expect(registry.snapshot.leases).toEqual([]);
+    expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["quarantined"]);
+    expect(await driver.listSources()).toEqual([]);
+    const next = await dispatcher.dispatch("lease.request", request, session());
+    const saved = await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: next.lease.id, name: "checkout" },
+      admin,
+    );
+    expect(saved.baseline.version).toBe(1);
+  });
+});
+
 describe("Dispatcher: baseline.save refusals", () => {
   it("refuses a bad name or note, a non-admin, an unknown lease and a physical lease, and ends no lease", async () => {
     const { dispatcher, driver, engine, registry } = await buildDispatcher({
