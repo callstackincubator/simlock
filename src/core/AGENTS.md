@@ -133,16 +133,17 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 ## Rules
 
 - Only `Registry` writes the `registry` tables, inside `SerializedDecision.run`. Events after the commit.
-- Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in. - Nothing in core acts on a leased device, except `recoverLeased`, under the lease.
-- Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out. - A physical device is never destroyed and never counted against capacity.
+- Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in.
+- Nothing in core acts on a leased device, except `recoverLeased`, under the lease.
+- Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out.
+- A physical device is never destroyed and never counted against capacity.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
 - Warm pool and startup never install. Instance id is never regenerated. Core imports no leasing or driver (dependency-cruiser `core-not-leasing`, `core-not-drivers`).
 
 ## Known gaps
 
 - **A rollback keeps a stale quarantine cause.** An older daemon keeps `quarantineCause` unknown; re-entry under it shows the old one.
-- **One download at a time per platform.** A second missing runtime waits, spending its own
-  `downloads.timeoutMs`. A bounded model with no `--os` asks Xcode for a bare major; pass `--os`.
+- **One download at a time per platform.** A second missing runtime waits, spending its own `downloads.timeoutMs`. A bounded model with no `--os` asks Xcode for a bare major; pass `--os`.
 - **`component remove` sees only this instance.** One worker per user, so this matters for test roots and a second OS user. Another instance's devices, never-used default-set
   simulators and foreign devices made after the driver's count are not counted.
 - **An older Simlock cannot end a physical lease.** It skips `physicalDevices`; `beginRelease` throws `UnknownDeviceError`. Release physical leases before a rollback.

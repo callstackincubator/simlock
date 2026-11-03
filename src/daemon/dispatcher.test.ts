@@ -1907,6 +1907,7 @@ function seedBaselineRows(state: StateDatabase): void {
   }
   for (const [id, fakeId, deviceState, baseline] of [
     ["dev_idle", "fake-ios-1", "shutdown", "checkout"],
+    ["dev_idle_b", "fake-ios-4", "shutdown", "checkout"],
     ["dev_leased", "fake-ios-2", "leased", "busy"],
     ["dev_quarantined", "fake-ios-3", "quarantined", "login"],
   ] as const) {
@@ -1937,8 +1938,7 @@ describe("Dispatcher: baseline.remove", () => {
       physical: false,
       platform: "ios",
     } as const;
-    await driver.provision(spec);
-    await driver.provision(spec);
+    for (let count = 0; count < 4; count += 1) await driver.provision(spec);
     driver.setSources(
       ["login", "checkout", "busy"].map((name) => ({
         id: `src-${name}`,
@@ -1978,6 +1978,18 @@ describe("Dispatcher: baseline.remove", () => {
       versions: [1],
     });
     expect(engine.claimReader.isClaimed("dev_quarantined")).toBe(false);
+    // why: the first idle device's destroy throws; the second must still be disposed and no cleanup claim left held.
+    driver.failOn("destroy", 1, new Error("destroy failed"));
+    await expect(
+      dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin),
+    ).rejects.toThrow("destroy failed");
+    expect(engine.claimReader.isClaimed("dev_idle")).toBe(false);
+    expect(engine.claimReader.isClaimed("dev_idle_b")).toBe(false);
+    expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toContainEqual([
+      "dev_idle_b",
+      "deleted",
+    ]);
+    expect(await listed()).toEqual(["busy", "checkout"]);
     expect(await dispatcher.dispatch("baseline.remove", { name: "checkout" }, admin)).toEqual({
       deletedDevices: ["dev_idle"],
       name: "checkout",
@@ -1988,6 +2000,7 @@ describe("Dispatcher: baseline.remove", () => {
     expect((await driver.listSources()).map((source) => source.id)).toEqual(["src-busy"]);
     expect(registry.snapshot.devices.map((device) => [device.id, device.state])).toEqual([
       ["dev_idle", "deleted"],
+      ["dev_idle_b", "deleted"],
       ["dev_leased", "leased"],
       ["dev_quarantined", "quarantined"],
     ]);
