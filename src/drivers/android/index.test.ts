@@ -766,6 +766,56 @@ describe("AndroidDriver", () => {
     expect(kills).toContain("SIGKILL");
   });
 
+  it("fails the boot as soon as the emulator exits, naming the emulator's own error line", async () => {
+    const harness = await provisionedHarness({ bootCompleted: "0\n" });
+    // why: Emulator 36.1.9's real output for a flag it does not know (#1199); it then exits 1.
+    const output = [
+      "INFO         | Android emulator version 36.1.9.0 (build_id 13823996) (CL:N/A)",
+      "unknown option: -crash-report-mode",
+      "please use -help for a list of valid options",
+    ];
+    const originalSpawn = harness.runner.spawn.bind(harness.runner);
+    vi.spyOn(harness.runner, "spawn").mockImplementation((command, args, options) => {
+      const handle = originalSpawn(command, args, options);
+      if (command !== binaries.emulator || !args.includes("-avd")) return handle;
+      handle.kill("SIGKILL");
+      // why: whichever way the driver keeps the emulator's output (a log file or a pipe), it gets these lines.
+      const written =
+        typeof options?.stdio === "object"
+          ? harness.filesystem.writeFileAtomic(options.stdio.file, `${output.join("\n")}\n`)
+          : Promise.resolve();
+      async function* lines(): AsyncGenerator<string> {
+        yield* output;
+      }
+      return {
+        pid: handle.pid,
+        stderr: lines(),
+        stdout: lines(),
+        kill: () => undefined,
+        unref: () => undefined,
+        wait: async () => {
+          await written;
+          return { code: 1, stderr: "", stdout: `${output.join("\n")}\n` };
+        },
+      };
+    });
+    const armedBefore = harness.clock.pendingTimerCount;
+
+    let outcome: unknown;
+    harness.driver.makeReady(harness.device).then(
+      () => (outcome = "ready"),
+      (error: unknown) => (outcome = error),
+    );
+    // why: the clock never moves, so a driver that is still waiting for adb has armed its poll timer.
+    await vi.waitFor(() =>
+      expect(outcome !== undefined || harness.clock.pendingTimerCount > armedBefore).toBe(true),
+    );
+
+    expect(outcome, "still waiting for the boot after the emulator exited").toMatchObject({
+      message: expect.stringContaining("unknown option: -crash-report-mode"),
+    });
+  });
+
   it("retries adb while the emulator is starting", async () => {
     const harness = await provisionedHarness({ initialAdbFailures: 1 });
     const ready = harness.driver.makeReady(harness.device);
