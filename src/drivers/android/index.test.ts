@@ -4535,16 +4535,25 @@ describe("AndroidDriver.create", () => {
     },
   );
 
-  it("refuses to delete the snapshot every later reclaim restores from", async () => {
+  it("refuses to delete or save a snapshot, since later reclaims restore from the clean one, and still passes snapshot list", async () => {
     const filesystem = await androidFilesystem();
     const driver = await createDriver(filesystem, new ScriptedProcessRunner([]));
 
-    await expect(
-      passthroughOf(driver, ["emu", "avd", "snapshot", "delete", "default_boot"]),
-    ).rejects.toThrow(PassthroughRefusedError);
-    await expect(
-      passthroughOf(driver, ["emu", "avd", "snapshot", "delete", "default_boot"]),
-    ).rejects.toThrow(/full wipe/);
+    for (const [args, reason] of [
+      [["emu", "avd", "snapshot", "delete", "default_boot"], /full wipe/],
+      [["emu", "avd", "snapshot", "save", "simlock_clean_baseline"], /replace the clean-boot/],
+      [["emu", "avd", "snapshot", "save", "my_snapshot"], /replace the clean-boot/],
+      [["-s", "emulator-5586", "emu", "avd", "snapshot", "save", "x"], /replace the clean-boot/],
+    ] as const) {
+      const label = `adb ${args.join(" ")}`;
+      await expect(passthroughOf(driver, [...args]), label).rejects.toThrow(
+        PassthroughRefusedError,
+      );
+      await expect(passthroughOf(driver, [...args]), label).rejects.toThrow(reason);
+    }
+
+    const listed = await passthroughOf(driver, ["emu", "avd", "snapshot", "list"]);
+    expect(listed.args.slice(-4)).toEqual(["emu", "avd", "snapshot", "list"]);
   });
 
   it("refuses an emu kill pair even behind the -s serial that targets a device", async () => {
