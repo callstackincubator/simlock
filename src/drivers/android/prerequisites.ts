@@ -24,11 +24,6 @@ interface AndroidPrerequisitesOptions {
   readonly processRunner: ProcessRunner;
 }
 
-/**
- * What the Android driver needs and Simlock never installs: an SDK with `cmdline-tools`,
- * `emulator` and `platform-tools`, and a JDK `sdkmanager` can run on. Looks where driver
- * discovery looks, through the same functions, and starts no process but `sdkmanager --version`.
- */
 export function androidPrerequisites(options: AndroidPrerequisitesOptions): PrerequisiteCheck {
   return {
     check: () => missingAndroidPrerequisites(options),

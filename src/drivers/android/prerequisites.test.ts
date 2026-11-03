@@ -78,7 +78,7 @@ function check(filesystem: MemoryFilesystem, runner: ScriptedProcessRunner) {
 }
 
 describe("androidPrerequisites", () => {
-  it("reports nothing missing for a complete SDK whose sdkmanager runs, starting only `sdkmanager --version`, bounded at 30 seconds", async () => {
+  it("reports nothing missing for a complete SDK whose sdkmanager runs, starting only `sdkmanager --version` and `emulator -help`, bounded at 30 seconds", async () => {
     const runner = new ScriptedProcessRunner([SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING]);
 
     await expect(check(await sdkFilesystem(), runner).check()).resolves.toEqual([]);
