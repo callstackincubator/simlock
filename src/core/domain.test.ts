@@ -641,6 +641,16 @@ describe("baselineMismatch", () => {
       { imageTag: "x", osVersion: "1", platform: "android" },
       { field: "osVersion", message: "baseline checkout is Android 35, the request asks for 1" },
     ],
+    [
+      "an OS and a mode wrong: the OS first",
+      { mode: "slim", osVersion: "1", platform: "android" },
+      { field: "osVersion", message: "baseline checkout is Android 35, the request asks for 1" },
+    ],
+    [
+      "a mode and an image tag wrong: the mode first",
+      { imageTag: "x", mode: "slim", platform: "android" },
+      { field: "mode", message: "baseline checkout is full, the request asks for slim" },
+    ],
   ] as const)("names the first field a request differs in: %s", (_label, request, expected) => {
     expect(baselineMismatch(facts, request, catalog)).toEqual(expected);
   });

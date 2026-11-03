@@ -207,7 +207,7 @@ export class BaselineService {
       try {
         await this.options.lifecycle.dispose(device, "baseline-replaced", "cleanup", claim);
       } catch {
-        // why: a device that will not delete goes to quarantine as any failed destroy does, and the save itself has succeeded.
+        // why: a device that will not delete stays shut down with its record, so its version stays too, and the save itself has succeeded.
       } finally {
         claim.release();
       }

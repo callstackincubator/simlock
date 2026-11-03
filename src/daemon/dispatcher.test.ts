@@ -3212,6 +3212,8 @@ describe("Dispatcher: lease.request naming a baseline that cannot serve it", () 
       { ...named, osVersion: "25.0" },
       { ...named, mode: "slim" },
       { ...named, imageTag: "google_apis" },
+      { ...named, mode: "slim", osVersion: "25.0" },
+      { ...named, imageTag: "google_apis", mode: "slim" },
     ]) {
       failures.push(await failure(input));
     }
@@ -3226,6 +3228,8 @@ describe("Dispatcher: lease.request naming a baseline that cannot serve it", () 
       mismatch("osVersion", "baseline checkout is iOS 26.5, the request asks for 25.0"),
       mismatch("mode", "baseline checkout is full, the request asks for slim"),
       mismatch("imageTag", "baseline checkout is image tag none, the request asks for google_apis"),
+      mismatch("osVersion", "baseline checkout is iOS 26.5, the request asks for 25.0"),
+      mismatch("mode", "baseline checkout is full, the request asks for slim"),
     ]);
 
     const [source] = await driver.listSources();
@@ -3465,22 +3469,38 @@ describe("Dispatcher: an operator replaces a baseline", () => {
   it.each([
     { label: "a lease is running", case: "running", oldCopies: 1 },
     { label: "no lease is running", case: "idle", oldCopies: 1 },
+    { label: "an idle copy's delete fails", case: "idle", oldCopies: 1, failDelete: true },
+    {
+      label: "the running lease's delete fails at its release",
+      case: "running",
+      oldCopies: 1,
+      failDelete: true,
+    },
     { label: "a request is waiting", case: "waiting", oldCopies: 0 },
     { label: "a copy is being made", case: "making", oldCopies: 1 },
   ] as const)(
     "running leases keep their device, the next lease gets the new version, a waiting request too, idle old-version devices are destroyed, a copy of the old version finished after the save is deleted and never granted, and the old version goes with its last device ($label)",
-    async ({ case: scenario, oldCopies }) => {
+    async ({ case: scenario, oldCopies, ...rest }) => {
+      const failDelete = "failDelete" in rest;
       const harness = await buildReplaceHarness(scenario);
       const { idle, operator, running, waiting } = await arrangeReplace(harness, scenario);
       harness.writeFile(operator.device.id, "two");
+      // why: the first save in the arrangement and this lease's own save destroy a device before the idle copy.
+      if (failDelete) harness.driver.failOn("destroy", 3, new Error("destroy failed"));
 
       await harness.saveCheckout(operator.lease.id, 100);
+      if (failDelete) {
+        // why: the save succeeds though the idle old copy would not delete; the copy stays shut down and keeps version 1.
+        if (idle !== undefined) expect(harness.stateOf(idle.id)).toBe("shutdown");
+        expect(harness.versions()).toEqual([1, 2]);
+        expect(harness.removed()).toEqual([]);
+      }
       if (running !== undefined) {
         expect(harness.stateOf(running.device.id)).toBe("leased");
         expect(harness.versions()).toEqual([1, 2]);
         expect(harness.removed()).toEqual([]);
       }
-      if (idle !== undefined) expect(harness.stateOf(idle.id)).toBe("deleted");
+      if (idle !== undefined && !failDelete) expect(harness.stateOf(idle.id)).toBe("deleted");
       const next = await (waiting === undefined
         ? harness.lease({ baseline: "checkout", requesterId: "agent-3" })
         : harness.settle(waiting));
@@ -3495,6 +3515,21 @@ describe("Dispatcher: an operator replaces a baseline", () => {
         );
       }
       await new Promise((resolve) => setImmediate(resolve));
+      if (failDelete && idle !== undefined) {
+        expect(harness.versions()).toEqual([1, 2]);
+        expect(harness.removed()).toEqual([]);
+        return;
+      }
+      if (failDelete && running !== undefined) {
+        // why: the last device of version 1 leaves through the quarantine's delete retry, and that drops the version.
+        expect(harness.stateOf(running.device.id)).toBe("quarantined");
+        expect(harness.versions()).toEqual([1, 2]);
+        harness.clock.advance(60 * 60_000);
+        for (let turn = 0; turn < 10; turn += 1) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(harness.stateOf(running.device.id)).toBe("deleted");
+      }
       expect(harness.versions()).toEqual([2]);
       expect(harness.removed()).toEqual([
         expect.objectContaining({ name: "checkout", reason: "replaced", version: 1 }),
