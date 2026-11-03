@@ -45,12 +45,9 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 1. `src/daemon/main.ts` builds `Registry.load`, one `SerializedDecision`, one `ComponentInstaller`,
    `createCore`, then `CleanupReaper`, `Nuke`, `HostFactsReader`. `createCore` builds the rest.
 2. `createLeasing` builds `corePorts`; the daemon calls `core.connect`. A port used before that
-   throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor),
-   `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue);
-   `physicalDeviceReady` is optional, a no-op before `connect`.
+   throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor), `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue); `physicalDeviceReady` is optional, a no-op before `connect`.
 3. Lock: `SerializedDecision.run`, shared by core, leasing and the installer. No driver I/O inside.
-4. Claims: one per device, memory only. Kinds: `boot`, `eviction`, `cleanup`, `nuke`, `recovery`,
-   `reclaim`, `enrollment`, `grant`; optional `owner`.
+4. Claims: one per device, memory only. Kinds: `boot`, `eviction`, `cleanup`, `nuke`, `recovery`, `reclaim`, `enrollment`, `grant`; optional `owner`.
 5. Every verb: claim + revalidate (lock) → driver (no lock) → revalidate + commit (lock) → release.
 6. Commit: one `state.db` transaction that writes the rows whose record changed (and a device's device-data row) → memory → `onCommit` → event; a throw rolls back and leaves memory as it was. A transition
    without the one event its edge calls for throws `RegistryEventError`.
@@ -112,16 +109,11 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
     `component.installed`. `effectiveAllowDownload`: `never` refuses, `always` grants, `on-request`
     follows the caller. Remove: own it → no users → platform idle (`dryRun` stops) → mark (lock):
     `claimProvision` throws `ComponentBeingRemovedError` → `removeComponent` → delete record.
-12. **Baselines** — `BaselineService` (`core.baselines`), ADR 0061 §4. `save`: queued behind any save
-    or remove, then leasing's `releaseToSave` (the `leaseSave` port) ends the lease and
-    `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim; the
-    `baselines` row, `baseline.saved`, then `destroy`. A driver failure quarantines the device
-    (`shutdown-failed`) and answers `BASELINE_SAVE_FAILED`. A replace drops older versions at once.
-    `remove` refuses a baseline a lease uses (`BaselineInUseError`), claims and disposes its idle
-    devices, then deletes sources and rows. `checkStale` runs before `list` and `doctor`, and after
-    `component.removed`; a platform with no driver lists as stale without a stored reason.
-    `nameSources` gives `doctor` a source's baseline name and version, and marks a baseline source no
-    row names `orphan`. `removeAll` (nuke `--delete-devices`) deletes rows first, then sources.
+12. **Baselines** — `BaselineService` (`core.baselines`), ADR 0061 §4. `save` queues behind any save or remove, then leasing's
+    `releaseToSave` ends the lease and `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim: row,
+    `baseline.saved`, `destroy`; a driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`. A replace drops older versions at once. `remove` refuses a
+    baseline a lease uses (`BaselineInUseError`), disposes its idle devices, then deletes sources and rows. `checkStale` runs before
+    `list` and `doctor` and after `component.removed`. `nameSources` marks a baseline source no row names `orphan`. `removeAll` (nuke) deletes rows first.
 
 ## State and timers
 
@@ -141,10 +133,8 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 ## Rules
 
 - Only `Registry` writes the `registry` tables, inside `SerializedDecision.run`. Events after the commit.
-- Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in.
-- Nothing in core acts on a leased device, except `recoverLeased`, under the lease.
-- Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out.
-- A physical device is never destroyed and never counted against capacity.
+- Destroy only what the registry holds. One exception: `doctor --purge-orphans`, opt-in. - Nothing in core acts on a leased device, except `recoverLeased`, under the lease.
+- Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out. - A physical device is never destroyed and never counted against capacity.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
 - Warm pool and startup never install. Instance id is never regenerated. Core imports no leasing or driver (dependency-cruiser `core-not-leasing`, `core-not-drivers`).
 
