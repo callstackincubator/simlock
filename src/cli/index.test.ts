@@ -5139,6 +5139,9 @@ describe("CLI: baseline save", () => {
     const missing = await runSave(["baseline", "save", "checkout"]);
     expect([missing.code, missing.connected, missing.stdout]).toEqual([2, false, ""]);
     expect(JSON.parse(missing.stderr)).toMatchObject({ error: { code: "USAGE" } });
+
+    const twoNames = await runSave(["baseline", "save", "checkout", "other", "--lease", "L1"]);
+    expect([twoNames.code, twoNames.connected, twoNames.inputs]).toEqual([2, false, []]);
   });
 });
 

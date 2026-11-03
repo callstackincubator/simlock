@@ -1526,7 +1526,7 @@ describe("Dispatcher: lease.release of a virtual device", () => {
 
 describe("Dispatcher: baseline.save", () => {
   it("ends the held lease, saves its device as version 1 of the named baseline with the files it held, and deletes the device", async () => {
-    const { clock, dispatcher, driver, registry } = await buildDispatcher();
+    const { clock, dispatcher, driver, eventBus, registry } = await buildDispatcher();
     const grant = await dispatcher.dispatch(
       "lease.request",
       { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
@@ -1561,6 +1561,12 @@ describe("Dispatcher: baseline.save", () => {
     expect(driver.sourceFiles(source?.id ?? "")).toEqual(
       new Map([["data/login.txt", "signed in"]]),
     );
+    expect(
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "lease.released")
+        .map((envelope) => envelope.payload),
+    ).toMatchObject([{ leaseId: grant.lease.id, reason: "explicit" }]);
   });
 });
 
@@ -1640,9 +1646,64 @@ describe("Dispatcher: baseline.save and baseline.remove queue", () => {
   });
 });
 
+describe("Dispatcher: baseline.save and nuke", () => {
+  it("makes nuke wait for a save in flight and remove its baseline, and answers a save queued behind nuke's maintenance with an unknown lease since nuke ended its lease", async () => {
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      driverOptions: { latencyMs: { saveSource: 1_000 } },
+      includeNuke: true,
+    });
+    const admin = session({ role: "admin" });
+    const lease = async (who: string): Promise<string> =>
+      (
+        await dispatcher.dispatch(
+          "lease.request",
+          { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+          session({ principal: who }),
+        )
+      ).lease.id;
+    const [held, queued] = [await lease("tok_a"), await lease("tok_b")];
+    const outcome = (promise: Promise<unknown>): { settled: boolean } => {
+      const state = { settled: false };
+      void promise.then(
+        () => (state.settled = true),
+        () => (state.settled = true),
+      );
+      return state;
+    };
+    const saving = dispatcher.dispatch("baseline.save", { leaseId: held, name: "first" }, admin);
+    const savingState = outcome(saving);
+    await vi.waitFor(() => {
+      expect(registry.snapshot.devices.map((device) => device.state)).toContain("reclaiming");
+    });
+
+    const nuking = dispatcher.dispatch("nuke.run", { deleteDevices: true }, admin);
+    const nukeState = outcome(nuking);
+    const blocked = dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: queued, name: "second" },
+      admin,
+    );
+    const blockedError = blocked.then(
+      () => undefined,
+      (rejected: unknown) => rejected,
+    );
+    await vi.waitFor(() => {
+      clock.advance(1_000);
+      expect(savingState.settled).toBe(true);
+    });
+    const [nuked, refusal] = await Promise.all([nuking, blockedError]);
+
+    expect(nukeState.settled).toBe(true);
+    expect(nuked).toMatchObject({ releasedLeaseIds: [queued], removedBaselines: ["first"] });
+    expect(refusal).toMatchObject({ leaseId: queued, name: "UnknownLeaseError" });
+    expect(await dispatcher.dispatch("baseline.list", {}, admin)).toEqual({ baselines: [] });
+    expect(registry.snapshot.leases).toEqual([]);
+  });
+});
+
 describe("Dispatcher: baseline.save failure", () => {
   it("answers BASELINE_SAVE_FAILED when the driver cannot save, with the lease ended, the device quarantined and no baseline recorded", async () => {
-    const { dispatcher, driver, registry } = await buildDispatcher();
+    const { dispatcher, driver, eventBus, registry } = await buildDispatcher();
     const admin = session({ role: "admin" });
     const request = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
     const grant = await dispatcher.dispatch("lease.request", request, session());
@@ -1663,6 +1724,12 @@ describe("Dispatcher: baseline.save failure", () => {
     expect(registry.snapshot.leases).toEqual([]);
     expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["quarantined"]);
     expect(await driver.listSources()).toEqual([]);
+    expect(
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === "device.quarantined")
+        .map((envelope) => envelope.payload),
+    ).toMatchObject([{ kind: "shutdown-failed" }]);
     const next = await dispatcher.dispatch("lease.request", request, session());
     const saved = await dispatcher.dispatch(
       "baseline.save",
