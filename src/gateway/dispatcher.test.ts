@@ -1887,7 +1887,7 @@ describe("GatewayDispatcher", () => {
       expect(client.lastRequestLeaseInput).toMatchObject({ imageTag: "google_apis_playstore" });
     });
 
-    it("forwards a lease.request's leaseId to the worker, and answers the grant under that ID with no worker in front of it", async () => {
+    it("forwards a lease.request's leaseId and label to the worker, and answers the grant under that ID with no worker in front of it", async () => {
       const { directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_1", client);
@@ -1909,11 +1909,20 @@ describe("GatewayDispatcher", () => {
 
       const grant = await dispatcher.dispatch(
         "lease.request",
-        { leaseId: "ad-7f3a", model: "iPhone 17", noWait: true, platform: "ios" },
+        {
+          label: "feature-x",
+          leaseId: "ad-7f3a",
+          model: "iPhone 17",
+          noWait: true,
+          platform: "ios",
+        },
         session({ role: "agent" }),
       );
 
-      expect(client.lastRequestLeaseInput).toMatchObject({ leaseId: "ad-7f3a" });
+      expect(client.lastRequestLeaseInput).toMatchObject({
+        label: "feature-x",
+        leaseId: "ad-7f3a",
+      });
       expect(grant.lease).toMatchObject({ id: "ad-7f3a", idChosenByRequester: true });
     });
 

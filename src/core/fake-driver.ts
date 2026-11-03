@@ -60,7 +60,8 @@ export type FakeDriverOperation =
   | "removeComponent"
   | "revalidateRoot"
   | "findLegacy"
-  | "destroyLegacy";
+  | "destroyLegacy"
+  | "applyLabel";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -418,7 +419,11 @@ export class FakeDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly label?: string;
+    },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
@@ -601,6 +606,10 @@ export class FakeDriver implements Driver {
 
   leaseEnvironment(_device: DriverDevice): Readonly<Record<string, string>> {
     return this.#leaseEnvironment;
+  }
+
+  async applyLabel(device: DriverDevice, label: string | undefined): Promise<void> {
+    await this.#beforeCall("applyLabel", device, label);
   }
 
   async passthrough(

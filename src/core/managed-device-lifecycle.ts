@@ -71,8 +71,9 @@ export class ManagedDeviceLifecycle {
   async bootForLease(
     target: VirtualDevice,
     claim: DeviceOperationClaim,
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "shutdown", claim);
+    return this.#makeReadyForLease(target, "shutdown", claim, label);
   }
 
   /**
@@ -95,8 +96,9 @@ export class ManagedDeviceLifecycle {
   async readyProvisionedForLease(
     target: VirtualDevice,
     claim?: DeviceOperationClaim,
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning", claim);
+    return this.#makeReadyForLease(target, "provisioning", claim, label);
   }
 
   async shutdown(
@@ -231,6 +233,7 @@ export class ManagedDeviceLifecycle {
     target: VirtualDevice,
     expectedState: "provisioning" | "shutdown",
     existingClaim?: DeviceOperationClaim,
+    label?: string,
   ): Promise<ReadyDeviceHandoff | undefined> {
     const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
     if (claimed === undefined) return undefined;
@@ -242,6 +245,7 @@ export class ManagedDeviceLifecycle {
         .makeReady(toDriverDevice(claimed.device), {
           mode: specMode(claimed.device.spec),
           purpose: "prepare",
+          ...(label === undefined ? {} : { label }),
         });
     } catch (error: unknown) {
       await this.#release(claimed);

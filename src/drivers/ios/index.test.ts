@@ -923,6 +923,71 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
+  it("names the simulator with the lease's label before a prepare boot, and never on a recover boot", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("rename", driverData.udid, "feature-x") },
+      { match: simctl("boot", driverData.udid) },
+      { match: simctl("bootstatus", driverData.udid, "-b") },
+      { match: simctl("listapps", driverData.udid) },
+      { match: simctl("boot", driverData.udid) },
+      { match: simctl("bootstatus", driverData.udid, "-b") },
+      { match: simctl("listapps", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner);
+    const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
+
+    await driver.makeReady(device, { ...prepareFull, label: "feature-x" });
+    await driver.makeReady(device, { label: "feature-x", mode: "full", purpose: "recover" });
+
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("rename", driverData.udid, "feature-x"),
+      simctlArgs("boot", driverData.udid),
+      simctlArgs("bootstatus", driverData.udid, "-b"),
+      simctlArgs("listapps", driverData.udid),
+      simctlArgs("boot", driverData.udid),
+      simctlArgs("bootstatus", driverData.udid, "-b"),
+      simctlArgs("listapps", driverData.udid),
+    ]);
+  });
+
+  it("boots a labelled simulator when its rename fails", async () => {
+    const runner = new ScriptedProcessRunner([
+      {
+        match: simctl("rename", driverData.udid, "feature-x"),
+        result: { code: 1, stderr: "rename failed", stdout: "" },
+      },
+      { match: simctl("boot", driverData.udid) },
+      { match: simctl("bootstatus", driverData.udid, "-b") },
+      { match: simctl("listapps", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner);
+    const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
+
+    await expect(
+      driver.makeReady(device, { ...prepareFull, label: "feature-x" }),
+    ).resolves.toMatchObject({ deviceId: driverData.udid });
+    expect(runner.calls.map((call) => call.args)).toContainEqual(
+      simctlArgs("bootstatus", driverData.udid, "-b"),
+    );
+  });
+
+  it("names a booted simulator with a label, and back to its own name without one", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("rename", driverData.udid, "feature-x") },
+      { match: simctl("rename", driverData.udid, driverData.name) },
+    ]);
+    const driver = await createDriver(runner);
+    const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
+
+    await driver.applyLabel(device, "feature-x");
+    await driver.applyLabel(device, undefined);
+
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("rename", driverData.udid, "feature-x"),
+      simctlArgs("rename", driverData.udid, driverData.name),
+    ]);
+  });
+
   it.each([false, true])(
     "keeps makeReady pending until an installer probe succeeds after a failure (hung: %s)",
     async (hangs) => {
@@ -1069,6 +1134,7 @@ describe("IosSimctlDriver", () => {
         },
       },
       { match: simctl("erase", driverData.udid) },
+      { match: simctl("rename", driverData.udid, driverData.name) },
     ]);
     const filesystem = new MemoryFilesystem();
     const driver = await createDriver(runner, new FakeClock(), filesystem);
@@ -1083,7 +1149,30 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.map((call) => call.args)).toEqual([
       simctlArgs("shutdown", driverData.udid),
       simctlArgs("erase", driverData.udid),
+      simctlArgs("rename", driverData.udid, driverData.name),
     ]);
+  });
+
+  it("completes a reclaim and writes the mark when the rename back fails", async () => {
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("shutdown", driverData.udid) },
+      { match: simctl("erase", driverData.udid) },
+      {
+        match: simctl("rename", driverData.udid, driverData.name),
+        result: { code: 1, stderr: "rename failed", stdout: "" },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    const driver = await createTokenDriver(runner, filesystem);
+    await plantManagedDevice(filesystem);
+
+    await expect(
+      driver.reclaim(
+        { address: driverData.udid, deviceId: driverData.udid, driverData },
+        { clean: "full" },
+      ),
+    ).resolves.toEqual({ state: "shutdown", strategy: "erase" });
+    expect(await readToken(filesystem, erasableMarkPath)).toEqual(expect.any(String));
   });
 
   it("writes a fresh, different token on reclaim than the one written on provision", async () => {
@@ -1098,6 +1187,7 @@ describe("IosSimctlDriver", () => {
       },
       { match: simctl("shutdown", driverData.udid) },
       { match: simctl("erase", driverData.udid) },
+      { match: simctl("rename", driverData.udid, driverData.name) },
     ]);
     const filesystem = new MemoryFilesystem();
     const driver = await createTokenDriver(runner, filesystem);
@@ -1443,6 +1533,7 @@ describe("IosSimctlDriver", () => {
     const runner = new ScriptedProcessRunner([
       { match: simctl("shutdown", driverData.udid) },
       { match: simctl("erase", driverData.udid) },
+      { match: simctl("rename", driverData.udid, driverData.name) },
     ]);
     const driver = await createDriver(runner, new FakeClock(), filesystem);
     await plantManagedDevice(filesystem);
@@ -1457,6 +1548,7 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.map((call) => call.args)).toEqual([
       simctlArgs("shutdown", driverData.udid),
       simctlArgs("erase", driverData.udid),
+      simctlArgs("rename", driverData.udid, driverData.name),
     ]);
     expect(await filesystem.exists(erasableMarkPath)).toBe(true);
     expect(await filesystem.exists(durableMarkPath)).toBe(true);
@@ -1467,6 +1559,7 @@ describe("IosSimctlDriver", () => {
     const runner = new ScriptedProcessRunner([
       { match: simctl("shutdown", driverData.udid) },
       { match: simctl("erase", driverData.udid) },
+      { match: simctl("rename", driverData.udid, driverData.name) },
     ]);
     const driver = await createDriver(runner, new FakeClock(), filesystem);
     // why: The device directory exists, its data container does not, and `writeFileAtomic`
@@ -1482,6 +1575,7 @@ describe("IosSimctlDriver", () => {
     expect(runner.calls.map((call) => call.args)).toEqual([
       simctlArgs("shutdown", driverData.udid),
       simctlArgs("erase", driverData.udid),
+      simctlArgs("rename", driverData.udid, driverData.name),
     ]);
 
     // why: A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
@@ -4442,6 +4536,7 @@ describe("IosSimctlDriver device set", () => {
         { args: ["listapps", driverData.udid], scoped: true },
         { args: ["shutdown", driverData.udid], scoped: true },
         { args: ["erase", driverData.udid], scoped: true },
+        { args: ["rename", driverData.udid, driverData.name], scoped: true },
         { args: ["shutdown", driverData.udid], scoped: true },
         { args: ["delete", driverData.udid], scoped: true },
         { args: ["list", "-j", "devices"], scoped: true, stdout: emptyDevices },
@@ -4687,6 +4782,7 @@ describe("IosSimctlDriver device set", () => {
         [created[1] ?? [], `${driverData.udid}\n`],
         [argv("shutdown", driverData.udid)],
         [argv("erase", driverData.udid)],
+        [argv("rename", driverData.udid, driverData.name)],
       ]);
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
       await driver.provision(spec);

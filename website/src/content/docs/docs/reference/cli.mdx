@@ -94,7 +94,7 @@ Lease a device. The command waits for a device, prints the grant, then stays run
 ```text
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
-              [--timeout <duration>] [--lease-id <id>] [--physical]
+              [--timeout <duration>] [--lease-id <id>] [--label <text>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
 ```
@@ -110,6 +110,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |
 | `--timeout <duration>` | How long to wait in the queue before failing with `QUEUE_TIMEOUT` (exit 10). | No limit: waits until a device is free |
 | `--lease-id <id>` | The ID the lease gets, in place of a generated one. 1 to 64 letters, digits, `-` and `_`, starting with a letter or digit. | A generated ID |
+| `--label <text>` | iOS only: the simulator's name while you hold it. Simulator.app shows it as the window title when simlock uses Xcode's device set (`drivers.ios.deviceSet: "default"`). A simulator that was already running takes the name at once, but a window it already has open keeps its old title. 1 to 64 characters, no control characters. An Android emulator ignores it: its window title is its AVD name. | The simulator's own name |
 | `--physical` | Lease an enrolled physical device. Cannot be combined with `--mode`, `--image-tag` or `--allow-download`. | Off: simulators and emulators only |
 | `--no-wait` | Fail with `NO_CAPACITY` (exit 11) instead of waiting in the queue. | Off |
 | `--detach` | Print the grant and exit. Nothing renews or releases the lease after that. | Off |

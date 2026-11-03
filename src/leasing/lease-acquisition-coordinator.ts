@@ -119,7 +119,7 @@ export interface LeaseAcquisitionRegistry {
   };
 }
 
-export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive">;
+export type AcquisitionClaims = Pick<DeviceOperationClaims, "isActive" | "tryClaim">;
 export type AcquisitionQuarantine = Pick<Core["quarantine"], "enterFromStalledTransition">;
 export type AcquisitionDecision = Pick<SerializedDecision, "run">;
 export type AcquisitionDrivers = Pick<DriverCatalog, "get">;
@@ -183,6 +183,14 @@ interface AcquisitionWaiter extends Waiter {
 
 type GrantingPlanKind = "grant-ready" | "grant-physical" | "boot-shutdown" | "provision";
 
+type HandoffKind = Exclude<GrantingPlanKind, "grant-physical">;
+
+const GRANT_FAILURE: Readonly<Record<HandoffKind, string>> = {
+  "boot-shutdown": "granting a booted device failed",
+  "grant-ready": "granting a ready device failed",
+  provision: "granting a provisioned device failed",
+};
+
 const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
   "boot-shutdown": "booted",
   "grant-physical": "warm",
@@ -190,10 +198,17 @@ const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"][
   provision: "provisioned",
 };
 
-type OperationPlan = Exclude<
-  AcquisitionPlan,
-  { readonly kind: "grant-ready" | "grant-physical" | "wait" | "no-capacity" }
->;
+type OperationPlan =
+  | Exclude<
+      AcquisitionPlan,
+      { readonly kind: "grant-ready" | "grant-physical" | "wait" | "no-capacity" }
+    >
+  // why: a labelled ready grant renames the device first, and that driver I/O runs outside the lock under a claim.
+  | {
+      readonly kind: "label-ready";
+      readonly claim: DeviceOperationClaim;
+      readonly device: VirtualDevice;
+    };
 
 class PhysicalUnknownModelError extends UnknownModelError {
   constructor(request: PhysicalRequest) {
@@ -891,6 +906,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
       return;
     }
+    if (action.kind === "label-ready") {
+      await this.#applyLabel(waiter, action.device, waiter.options.label);
+      await this.#grantHandoff(waiter, action, "grant-ready");
+      return;
+    }
     if (action.kind === "evict-running") {
       await this.#evictRunning(waiter, action.device, action.claim, action.reason);
       return;
@@ -908,6 +928,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       handoff = await this.options.provisioner.provision(spec, {
         claim: { kind: "boot", owner: waiter.id },
+        ...(waiter.options.label === undefined ? {} : { label: waiter.options.label }),
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -961,27 +982,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
-    if (plan.kind === "grant-ready") {
-      waiter.timing = grantReadyTiming(
-        this.options.drivers.get(plan.device.spec.platform),
-        plan.device.spec,
-      );
-      // why: the queue's own rule is that a timeout firing mid-attempt does not reject
-      // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
-      // this mark the waiter is still `queued` while the lease is written, so a timeout that
-      // falls due in that window rejects the caller over a lease that is being stored.
-      if (!this.options.queue.markProcessing(waiter)) return undefined;
-      try {
-        await this.#grant(waiter, plan.device, plan.kind);
-        // why: the next request in line may already have a ready device waiting for it, and no
-        // other event will wake it.
-        this.#wakeQueue();
-      } catch (error: unknown) {
-        this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
-        this.#defer(waiter, "waiting-for-device");
-      }
-      return undefined;
-    }
+    if (plan.kind === "grant-ready") return this.#decideReady(waiter, plan.device);
     const operation = operationPlan(plan);
     if (operation === undefined) {
       this.#defer(waiter, blockedReason(plan));
@@ -996,6 +997,32 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return undefined;
     }
     return operation;
+  }
+
+  async #decideReady(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+  ): Promise<OperationPlan | undefined> {
+    waiter.timing = grantReadyTiming(this.options.drivers.get(device.spec.platform), device.spec);
+    // why: the queue's own rule is that a timeout firing mid-attempt does not reject
+    // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
+    // this mark the waiter is still `queued` while the lease is written, so a timeout that
+    // falls due in that window rejects the caller over a lease that is being stored.
+    if (!this.options.queue.markProcessing(waiter)) return undefined;
+    if (waiter.options.label !== undefined && !device.physical) {
+      const claim = this.options.claims.tryClaim(device.id, "grant", waiter.id);
+      if (claim !== undefined) return { claim, device, kind: "label-ready" };
+    }
+    try {
+      await this.#grant(waiter, device, "grant-ready");
+      // why: the next request in line may already have a ready device waiting for it, and no
+      // other event will wake it.
+      this.#wakeQueue();
+    } catch (error: unknown) {
+      this.#logFailure("granting a ready device failed", waiter, device, "grant", error);
+      this.#defer(waiter, "waiting-for-device");
+    }
+    return undefined;
   }
 
   #nextPlan(waiter: AcquisitionWaiter): AcquisitionPlan | undefined {
@@ -1041,6 +1068,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         : { fleetRequestId: waiter.options.fleetRequestId }),
     });
     this.options.queue.resolve(waiter, granted);
+  }
+
+  /** why: the label is display-only, so a rename that fails is logged and never costs the lease. */
+  async #applyLabel(
+    waiter: AcquisitionWaiter,
+    device: DeviceRecord,
+    label: string | undefined,
+  ): Promise<void> {
+    try {
+      await this.options.drivers
+        .get(device.spec.platform)
+        .applyLabel?.(toDriverDevice(device), label);
+    } catch (error: unknown) {
+      this.#logFailure("labelling a device failed", waiter, device, "label", error);
+    }
   }
 
   async #evictRunning(
@@ -1141,7 +1183,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         stage: "booting",
         etaMs: waiter.timing.estimatedBootMs,
       });
-      const ready = await this.options.lifecycle.bootForLease(device, claim);
+      const ready = await this.options.lifecycle.bootForLease(device, claim, waiter.options.label);
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
       handoff = ready;
     } catch (error: unknown) {
@@ -1244,33 +1286,43 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   async #grantHandoff(
     waiter: AcquisitionWaiter,
     handoff: ReadyDeviceHandoff,
-    kind: GrantingPlanKind,
+    kind: HandoffKind,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
+    let granted = false;
+    let failed = false;
+    const release = (): void => {
+      capacityReservation?.release();
+      handoff.claim.release();
+    };
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
         await this.#grant(waiter, handoff.device, kind);
+        granted = true;
       } catch (error: unknown) {
         // why: a grant that failed to store leaves no lease behind (`#commit` mutates memory
         // only after the file write), so the waiter is re-queued for a fresh grant like every
         // sibling step; without this catch the error dies in `#track` and the waiter is never
         // planned again -- no timer, no wake, and its request stays open for the process.
-        this.#logFailure(
-          kind === "provision"
-            ? "granting a provisioned device failed"
-            : "granting a booted device failed",
-          waiter,
-          handoff.device,
-          "grant",
-          error,
-        );
-        this.#defer(waiter, "waiting-for-device");
+        this.#logFailure(GRANT_FAILURE[kind], waiter, handoff.device, "grant", error);
+        failed = true;
+        if (waiter.options.label === undefined) this.#defer(waiter, "waiting-for-device");
       } finally {
-        capacityReservation?.release();
-        handoff.claim.release();
+        if (granted || waiter.options.label === undefined) release();
       }
     });
+    // why: the device was named for this waiter and must not keep that name for the next one; the
+    // rename runs outside the lock like all driver I/O, and the claim it keeps stops anyone taking
+    // the device meanwhile.
+    if (!granted && waiter.options.label !== undefined) {
+      await this.#applyLabel(waiter, handoff.device, undefined);
+      await this.options.decisions.run(async () => {
+        release();
+        // why: planned again only once its device is free, so it does not start a second one meanwhile.
+        if (failed) this.#defer(waiter, "waiting-for-device");
+      });
+    }
     this.#wakeQueue();
   }
 

@@ -57,6 +57,11 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    waiter with `ProvisionFailedError` (the driver's message; `PROVISION_FAILED`), a probe
    included, and wakes the queue.
 4. **Perform** (no lock) — provision, boot or evict through core, then plan again.
+   A provision or boot passes the request's `label` to `driver.makeReady` (only the iOS
+   driver uses it). A labelled ready grant claims the device (`grant`) and gets the label
+   through `driver.applyLabel` before its lease is stored; a booted or renamed device whose
+   waiter is not granted is named back the same way, its claim held until then. Both renames
+   run outside the lock. A failed rename is logged and never fails the lease.
    A boot failure destroys the device and rejects `boot-timeout`; a destroy
    that fails hands the device to core's quarantine through a port leasing
    declares, and the waiter's slot is freed either way.

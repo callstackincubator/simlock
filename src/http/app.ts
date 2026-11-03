@@ -175,6 +175,7 @@ function leaseRequestNameFields(body: z.infer<typeof leaseRequestBodySchema>) {
   return {
     ...(body.owner === undefined ? {} : { owner: body.owner }),
     ...(body.leaseId === undefined ? {} : { leaseId: body.leaseId }),
+    ...(body.label === undefined ? {} : { label: body.label }),
   };
 }
 

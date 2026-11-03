@@ -54,10 +54,18 @@ Boot — `makeReady`:
    what was written. A label not as written → `full`; a readback that fails → `slim`; both
    → `onSlimSkipped` (logged only). Every label as written, and the write ok → `slim`, `onSlimmed` →
    `device.slimmed`.
-4. `purpose: "recover"`: boot only, no write, no readback.
+4. `prepare` with a `label`: `simctl rename <udid> <label>` before step 1, so Simulator.app
+   titles the window with it.
+5. `purpose: "recover"`: boot only, no write, no readback, no rename.
 
-Reclaim — `reclaim` ignores the clean level: shut down → `simctl erase` → write mark →
+Reclaim — `reclaim` ignores the clean level: shut down → `simctl erase` → `simctl rename` back to
+the stored `name` → write mark →
 `shutdown` / `erase`. The erase keeps the overrides file, so the next `prepare` finds it as wanted.
+
+Label — `applyLabel`: `simctl rename <udid>` to the label, or back to the stored `name` without
+one (5 s timeout, since the grant waits on it). Reclaim's rename back is logged when it fails
+and never fails the reclaim. A booted simulator takes the new name at once, but
+a window Simulator.app already has open keeps its old title.
 Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`.
 `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
