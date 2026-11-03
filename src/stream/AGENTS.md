@@ -67,7 +67,13 @@ fleet → 404 `UNKNOWN_WORKER`; else relays `GET /stream/devices/<device>` (the 
 body is read to 16 KiB; its code and message are forwarded only if the code matches
 `^[A-Z][A-Z0-9_]{0,63}$`, else the code becomes `STREAM_UNAVAILABLE`. The worker's 4xx or 5xx
 status is kept either way; a 2xx without a picture → 502. Headers go through `checkedMeta`.
-The body is relayed unread; the gateway's relay bounds it by inactivity, not by a deadline.
+The body is relayed unread; the gateway's relay bounds it by inactivity, and by the caller's `expiresAt` (below).
+
+Deadline (ADR 0033 §6): a stream opened through the mount or the lease route by an identity with `expiresAt` (a
+sign-in proxy's) ends at that time, on the host that checked the identity: `service.ts` wraps the body in a timer on
+the injected clock (capped at 2^31-1 ms, like the event streams), cancelled when the stream ends first, and cancels the
+capture or the relay. A token or the local socket has no `expiresAt` and is unbounded. The relay door sets none: the
+gateway has already bounded the stream. The console opens the stream again after an end with no reason.
 
 Capability `stream`: `available`, with no reason, when any driver can capture (a platform that
 cannot says why in its 503); `unavailable` when none can, with each platform's reason.
