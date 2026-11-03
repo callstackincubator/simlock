@@ -49,14 +49,18 @@ const LAUNCH_FLAGS = [
   "-crash-report-mode",
 ] as const;
 
-function emulatorHelp(listed: readonly string[]): ScriptedProcessExpectation {
+function emulatorHelp(
+  listed: readonly string[],
+  stream: "stdout" | "stderr" = "stdout",
+): ScriptedProcessExpectation {
   const lines = listed.map((flag) => `    ${flag} <value>      what ${flag} does`);
+  const usage = `Android Emulator usage: emulator [options]\n${lines.join("\n")}\n`;
   return {
     match: { args: ["-help"], command: emulator },
     result: {
       code: 0,
-      stderr: "",
-      stdout: `Android Emulator usage: emulator [options]\n${lines.join("\n")}\n`,
+      stderr: stream === "stderr" ? usage : "",
+      stdout: stream === "stdout" ? usage : "",
     },
   };
 }
@@ -83,6 +87,7 @@ describe("androidPrerequisites", () => {
       [emulator, "-help"],
     ]);
     expect(runner.calls[0]?.options.timeoutMs).toBe(30_000);
+    expect(runner.calls[1]?.options.timeoutMs).toBe(30_000);
   });
 
   it.each([
@@ -116,7 +121,7 @@ describe("androidPrerequisites", () => {
     ).check();
     const complete = await check(
       await sdkFilesystem(),
-      new ScriptedProcessRunner([SDKMANAGER_RUNS, EMULATOR_ACCEPTS_EVERYTHING]),
+      new ScriptedProcessRunner([SDKMANAGER_RUNS, emulatorHelp(LAUNCH_FLAGS, "stderr")]),
     ).check();
 
     expect(lacking).toEqual([
