@@ -112,6 +112,13 @@ describe("buildOpenApiDocument", () => {
       "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
+    const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties
+      ?.lease as {
+      properties?: object;
+    };
+    expect(Object.keys(leaseShape.properties ?? {})).toEqual(
+      expect.arrayContaining(["imageTag", "baseline"]),
+    );
     expect(Object.keys(replySchema(release, "202").properties ?? {})).toEqual([
       "device",
       "released",

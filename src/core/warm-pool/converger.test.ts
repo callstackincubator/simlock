@@ -2557,7 +2557,7 @@ describe("warm pool learned kinds", () => {
       ).toEqual([{ deviceId: "d1", reason: "displaced" }]);
     });
 
-    it("lists a learned kind in figures() with its origin, count, image tag, baseline and short, a merged kind once with the larger count, and drops a forgotten kind or a removed baseline on the next pass", async () => {
+    it("lists a learned kind in figures() with its origin, count, image tag, baseline and short, a merged kind once with the larger count, and drops a forgotten kind or a removed or stale baseline on the next pass", async () => {
       const pixel = { ...device("d2", "ready", 0, "android").spec, imageTag: "google_apis" };
       const state = await openMemoryState([warmPoolOwner]);
       const learned = new LearnedKinds(state);
@@ -2651,6 +2651,21 @@ describe("warm pool learned kinds", () => {
       await removed.pool.pass();
       expect(
         removed.pool.figures().targets.filter((target) => target.baseline !== undefined),
+      ).toEqual([]);
+      const staleState = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(staleState).learn(checkout, "checkout-0", now - 4 * minute);
+      const stale = harness([], {
+        baselines: { checkout: { staleReason: "runtime is not installed", version: 4 } },
+        catalog: async () => [iosListing],
+        limit: 0,
+        state: staleState,
+        targets: [phone],
+      });
+      await stale.pool.pass();
+      await stale.pool.settle();
+      await stale.pool.pass();
+      expect(
+        stale.pool.figures().targets.filter((target) => target.baseline !== undefined),
       ).toEqual([]);
       const off = harness([], { enabled: false, state, targets: [phone] });
       expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([

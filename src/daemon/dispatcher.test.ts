@@ -3056,8 +3056,19 @@ describe("Dispatcher: image tags", () => {
 });
 
 describe("Dispatcher: lease.request naming a baseline", () => {
-  it("gives a copy of the baseline, and the grant and lease.granted carry its name and version", async () => {
+  it("gives a copy of the baseline, and the grant, lease.granted and device.provisioned carry its name and version, and lease.requested, lease.rejected and lease.declined the name the request gave", async () => {
     const { dispatcher, driver, eventBus, registry } = await buildDispatcher({
+      capacity: {
+        config: {
+          limits: {
+            android: { maxDevices: 1, maxRunning: 1 },
+            ios: { maxDevices: 1, maxRunning: 1 },
+            maxRunning: 3,
+          },
+          ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+        },
+        strategy: "resource",
+      },
       driverOptions: { knownModels: ["iPhone 17 Pro"] },
     });
     const first = await dispatcher.dispatch(
@@ -3096,6 +3107,38 @@ describe("Dispatcher: lease.request naming a baseline", () => {
         .map((envelope) => envelope.payload)
         .at(-1),
     ).toMatchObject({ baseline: { name: "checkout", version: 1 }, deviceId: grant.device.id });
+
+    const full = { baseline: "checkout", noWait: true, platform: "ios" } as const;
+    await expect(
+      dispatcher.dispatch("lease.request", { ...full, requesterId: "agent-2" }, session()),
+    ).rejects.toMatchObject({
+      code: "NO_CAPACITY",
+    });
+    await expect(
+      dispatcher.dispatch(
+        "lease.request",
+        { ...full, fleetRequestId: "req_gw1" },
+        session({ isGatewayUplink: true, principal: "tok_gateway", role: "admin" }),
+      ),
+    ).rejects.toMatchObject({ code: "NO_CAPACITY" });
+    const specOf = (event: string, field: "requestSpec" | "spec") =>
+      eventBus
+        .replay()
+        .filter((envelope) => envelope.event === event)
+        .map((envelope) => (envelope.payload as Record<string, { baseline?: unknown }>)[field])
+        .map((spec) => spec?.baseline)
+        .filter((baseline) => baseline !== undefined);
+    expect({
+      declined: specOf("lease.declined", "requestSpec"),
+      provisioned: specOf("device.provisioned", "spec"),
+      rejected: specOf("lease.rejected", "requestSpec"),
+      requested: specOf("lease.requested", "requestSpec"),
+    }).toEqual({
+      declined: ["checkout"],
+      provisioned: [{ name: "checkout", version: 1 }],
+      rejected: ["checkout"],
+      requested: ["checkout", "checkout", "checkout"],
+    });
 
     let leaseId = grant.lease.id;
     for (const matching of [{ model: "iphone 17 pro" }, { osVersion: ">=26" }]) {
@@ -3328,7 +3371,7 @@ async function buildReplaceHarness(scenario: ReplaceScenario) {
       ...(scenario === "making" ? { latencyMs: { provision: 5_000 } } : {}),
     },
   });
-  const { dispatcher, driver, eventBus, registry, state } = built;
+  const { dispatcher, driver, engine, eventBus, registry, state } = built;
   const settle = async <Result>(pending: Promise<Result>, step = 5_000): Promise<Result> => {
     let done = false;
     void pending.then(
@@ -3355,8 +3398,10 @@ async function buildReplaceHarness(scenario: ReplaceScenario) {
       step,
     );
   return {
+    clock,
     dispatcher,
     driver,
+    engine,
     fileOf: (deviceId: string) => driver.deviceFile(driverIdOf(deviceId), "data/version.txt"),
     lease,
     registry,
@@ -3457,6 +3502,55 @@ describe("Dispatcher: an operator replaces a baseline", () => {
       expect(await harness.driver.listSources()).toHaveLength(1);
     },
   );
+});
+
+describe("Dispatcher: two copies of one baseline version are made at once", () => {
+  it("keeps the old version after a replace until the second copy is registered, though the first copy is gone", async () => {
+    const harness = await buildReplaceHarness("making");
+    const flush = async (): Promise<void> => {
+      for (let turn = 0; turn < 10; turn += 1)
+        await new Promise((resolve) => setImmediate(resolve));
+    };
+    await harness.saveFrom("operator", "one");
+    const operator = await harness.lease({ model: replaceModel, requesterId: "operator" });
+    harness.writeFile(operator.device.id, "two");
+    // why: a warm pool pass makes copies without a request, so two can be in flight for one version.
+    const copy = () =>
+      harness.engine.core.provisioner.provision(
+        {
+          baseline: { name: "checkout", version: 1 },
+          model: replaceModel,
+          osVersion: "26.5",
+          physical: false,
+          platform: "ios",
+        },
+        { reservation: { release: () => undefined } },
+      );
+
+    const first = copy();
+    await flush();
+    harness.clock.advance(2_000);
+    const second = copy();
+    await flush();
+    await harness.saveCheckout(operator.lease.id, 100);
+    expect(harness.versions()).toEqual([1, 2]);
+
+    harness.clock.advance(2_900);
+    const firstCopy = await first;
+    const lifecycle = harness.engine.core.deviceLifecycle;
+    firstCopy.claim.release();
+    const stopped = await lifecycle.shutdown(firstCopy.device, "lease-engine", "cleanup");
+    await lifecycle.destroy(stopped as NonNullable<typeof stopped>, "lease-engine", "cleanup");
+    await flush();
+    expect(harness.stateOf(firstCopy.device.id)).toBe("deleted");
+    expect(harness.versions()).toEqual([1, 2]);
+    expect(harness.removed()).toEqual([]);
+
+    harness.clock.advance(2_000);
+    const secondCopy = await second;
+    expect(harness.stateOf(secondCopy.device.id)).toBe("ready");
+    expect(harness.versions()).toEqual([1, 2]);
+  });
 });
 
 describe("Dispatcher: the download policy clamp applies regardless of caller", () => {
