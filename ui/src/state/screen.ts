@@ -144,7 +144,7 @@ export function refusalOf(error: unknown): string {
   return error.message;
 }
 
-interface CaptureSinks {
+export interface CaptureSinks {
   readonly canvas: RefObject<HTMLCanvasElement | null>;
   readonly conflict: (message: string) => void;
   readonly live: () => void;
@@ -155,7 +155,7 @@ interface CaptureSinks {
 
 // why: a stream that ended because this pane asked it to says nothing — the operator pressed Stop,
 // and telling them the stream they stopped has stopped is noise.
-async function capture(
+export async function capture(
   api: ReturnType<typeof useApi>,
   workerId: string,
   deviceId: string,
