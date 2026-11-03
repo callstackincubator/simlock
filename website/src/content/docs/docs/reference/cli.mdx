@@ -444,10 +444,10 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--fix` | Apply the safe corrections to the records. Needs the admin role. Never installs a prerequisite. | Off: report only |
-| `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record. Needs the admin role. Asks for confirmation. | Off |
+| `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record, or a saved baseline's copy that no baseline names. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
 
-The report also lists the worker's seeds in `sources`: for each, `platform`, `kind` (`seed`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when the seed no longer matches the catalog. A seed is the simulator Simlock clones to make each iOS simulator a lease gets; it takes disk but is never leased. A seed simulator with no record shows with `orphan: true`; it is not a finding, and only `--purge-orphans` deletes it.
+The report also lists the worker's sources in `sources`: for each, `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when the source no longer matches the catalog or runtime. A baseline source also has `baselineName` and `baselineVersion`. A seed is the simulator Simlock clones to make each iOS simulator a lease gets; it takes disk but is never leased. A seed with no record, or a baseline source no baseline names, shows with `orphan: true`; it is not a finding, and only `--purge-orphans` deletes it.
 
 On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
@@ -506,7 +506,7 @@ simlock 0.4.0 is running
 Emergency reset: release every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
 
 <Aside type="danger">
-`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A seed with no record (an orphan source) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
+`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
 </Aside>
 
 ```text
