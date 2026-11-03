@@ -3654,4 +3654,33 @@ describe("LeaseAcquisitionCoordinator: a request naming a baseline", () => {
     expect(granted.device.id).toBe(idleV2.id);
     expect(granted.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
   });
+
+  it("ends a request whose baseline was removed while it waited as UnknownBaselineError at once, without a retry", async () => {
+    const harness = await createHarness({
+      baselines: {
+        current: () => ({
+          mode: "full" as const,
+          model: request.model,
+          name: "checkout",
+          osVersion: request.osVersion,
+          platform: request.platform,
+          sourceId: "source-1",
+          version: 1,
+        }),
+      },
+      maxDevices: 1,
+    });
+
+    const outcome = await harness.coordinator
+      .request(
+        { baseline: "checkout", platform: "ios" },
+        { ownerId: "agent", requesterId: "agent" },
+      )
+      .then(
+        () => "granted",
+        (error: unknown) => (error as Error).name,
+      );
+
+    expect(outcome).toBe("UnknownBaselineError");
+  });
 });

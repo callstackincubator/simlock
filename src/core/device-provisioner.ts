@@ -25,7 +25,6 @@ export interface DeviceProvisionerRegistry {
 }
 
 export interface DeviceProvisionerOptions {
-  /** why: a function, so the provisioner can be built before the store it reads. */
   readonly baselines: () => {
     current(name: string): CurrentBaseline | undefined;
     hold(name: string, version: number): () => void;

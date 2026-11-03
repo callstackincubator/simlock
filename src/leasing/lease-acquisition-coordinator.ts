@@ -964,9 +964,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      // The spec resolved to a component being removed (ADR 0010 §8): no device was created,
-      // and none will be on it, so the request ends as `RUNTIME_MISSING` rather than retrying.
-      if (error instanceof ComponentBeingRemovedError) {
+      // why: a component being removed (ADR 0010 §8) or a baseline removed since the request resolved it will not come back, so no device is created and the request ends as `RUNTIME_MISSING` or `UNKNOWN_BASELINE` rather than retrying.
+      if (error instanceof ComponentBeingRemovedError || error instanceof UnknownBaselineError) {
         await this.options.decisions.run(async () => {
           if (waiter.state !== "rejected") this.#reject(waiter, error, "unresolvable-spec");
         });
