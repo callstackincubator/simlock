@@ -3,7 +3,10 @@
 - **Status:** Proposed
 - **Date:** 2026-11-04
 - **Issue:** [#1259](https://github.com/callstackincubator/simlock/issues/1259) (request [#1251](https://github.com/callstackincubator/simlock/issues/1251))
-- **Supersedes:** nothing.
+- **Supersedes:** nothing. Narrows testing rule 6 (§2): a part of a
+  decomposed module is a surface its own tests drive, and moving a test to
+  the part that owns its behaviour is allowed in a change that keeps
+  behaviour.
 
 ## Context
 
@@ -44,7 +47,9 @@ root and a set of parts.
   exposes a small interface. It takes its collaborators in an options
   object, as the existing parts do. A part never calls the root.
 - **No loops.** The parts form a graph with no cycle. A helper two parts
-  both need goes into a leaf part both call.
+  both need goes into a leaf part both call. Fallow's
+  `circular-dependencies` rule (default `error`) already fails CI on an
+  import loop between files.
 - **Files, not folders, by default.** A part is a file beside the root.
   A part becomes a folder with its own `index.ts` only when more than one
   file serves that one responsibility.
@@ -72,6 +77,12 @@ the whole module: wiring, and behaviours that cross parts. Each test file
 then follows its code file. A helper that more than one test file uses
 lives once in the module's `testing.ts` or a `test-<name>.ts` beside the
 tests, never copied.
+
+This narrows testing rule 6 in two places. A part's test file tests an
+internal file for a third reason, "a part of a decomposed module", named
+in its `why:` above the first `describe`. And a decomposition that keeps
+behaviour may move a test to the part's interface: the claim and its
+cases stay, only the seam moves down.
 
 ### 3. Size limits, kept by a unit test
 
