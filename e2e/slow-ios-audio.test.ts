@@ -22,7 +22,7 @@ interface CatalogPlatform {
   readonly modelRuntimes: Readonly<Record<string, readonly string[]>>;
 }
 
-/** why: the simulator writes its volume here a few seconds after the command, and keeps it after shutdown (#1118). */
+/** why: the simulator writes its volume here up to two minutes after the boot on a busy Mac, and keeps it after shutdown (#1118). */
 async function simVolume(grant: LeaseGrant): Promise<string | undefined> {
   const plist = join(
     grant.deviceSet,
@@ -47,7 +47,7 @@ async function expectSilent(grant: LeaseGrant): Promise<void> {
     {
       interval: 1_000,
       label: () => `sim_volume was ${last ?? "unreadable"}`,
-      timeout: 30_000,
+      timeout: 120_000,
     },
   );
 }
