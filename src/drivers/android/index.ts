@@ -415,18 +415,7 @@ export class AndroidDriver implements Driver {
     const targetFor = this.#screenTargetFor(options, deviceTarget);
     this.screenCapture = this.#screenCaptureFor(options, targetFor);
     this.input = this.#inputFor(options, targetFor);
-    this.deviceTcp =
-      options.tcpListener === undefined
-        ? undefined
-        : createAndroidDeviceTcp({
-            clock: options.clock,
-            listeners: options.tcpListener,
-            target: deviceTarget,
-            isOwn: (device) => this.#ownership.deviceIsOwn(device),
-            runAdb: (device, args, timeoutMs) =>
-              this.#passthroughRules.runAdbOn(device, args, timeoutMs),
-            warn: (message, detail) => options.logger?.warn(message, detail),
-          });
+    this.deviceTcp = this.#deviceTcpFor(options, deviceTarget);
     // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
     // had configured then, or the SDK's own default. Used only by `findLegacy` /
     // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
@@ -465,6 +454,21 @@ export class AndroidDriver implements Driver {
     deviceTarget: AndroidTargetFor | undefined,
   ): AndroidTargetFor | undefined {
     return options.scrcpyServerPath === undefined ? undefined : deviceTarget;
+  }
+
+  #deviceTcpFor(
+    options: AndroidDriverOptions,
+    target: AndroidTargetFor | undefined,
+  ): AndroidDeviceTcp | undefined {
+    if (options.tcpListener === undefined) return undefined;
+    return createAndroidDeviceTcp({
+      clock: options.clock,
+      listeners: options.tcpListener,
+      target,
+      isOwn: (device) => this.#ownership.deviceIsOwn(device),
+      runAdb: (device, args, timeoutMs) => this.#passthroughRules.runAdbOn(device, args, timeoutMs),
+      warn: (message, detail) => options.logger?.warn(message, detail),
+    });
   }
 
   #deviceTargetFor(
