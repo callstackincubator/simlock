@@ -1488,29 +1488,18 @@ export class AndroidDriver implements Driver {
    * refused when that emulator does not exit in time, never done under a live process.
    */
   async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
-    const expected = this.#adbTools.avdFolder(data);
     const { settledSerials } = await this.#adbTools.scanSerials();
-    const serials: string[] = [];
-    for (const serial of settledSerials) {
-      let answered: string | undefined;
-      try {
-        answered = await this.#ownership.avdPathOf(serial);
-      } catch {
-        answered = undefined;
-      }
-      if (answered === undefined || answered === "") {
-        throw new DriverCrashError(
-          `Refusing to delete ${deviceIdOf(data)}: could not tell which AVD the emulator on ${serial} runs`,
-        );
-      }
-      if (await this.#ownership.isOwnPath(answered, expected)) serials.push(serial);
-    }
+    const serials = await this.#ownership.serialsRunningAvd(data, settledSerials);
     for (const serial of serials) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
         env: this.#adbTools.env(),
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
       });
     }
+    await this.#waitForEmulatorsToExit(data, serials);
+  }
+
+  async #waitForEmulatorsToExit(data: AndroidDriverData, serials: string[]): Promise<void> {
     const startedAt = this.#clock.now();
     let remaining = serials;
     while (remaining.length > 0) {
