@@ -169,6 +169,17 @@ describe.skipIf(process.platform !== "darwin")(
           "a Simlock simulator must be invisible in the machine's default device set",
         ).toBe(false);
 
+        // why: a copy of the seed keeps no LaunchServices database naming the seed's folder, so a system app's data lives under the lease's own UDID.
+        const safariData = await env.cli([
+          "simctl",
+          "get_app_container",
+          udid,
+          "com.apple.mobilesafari",
+          "data",
+        ]);
+        expect(safariData.code, `get_app_container failed: ${safariData.stderr}`).toBe(0);
+        expect(safariData.stdout.trim()).toContain(`/${udid}/`);
+
         // Provenance: both marks exist with the same token. `doctor` is the
         // documented way to observe this -- a foreign-provenance-change finding
         // for this device would mean the marks disagree or are missing.

@@ -908,16 +908,11 @@ export class IosSimctlDriver implements Driver {
 
     try {
       await this.#writeMark(udid);
-      // why: only a source can hold installed apps; a seed holds none (ADR 0061 §3).
-      if (options?.source !== undefined) {
-        await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
-      }
+      await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
     } catch (error: unknown) {
-      // why: In Xcode's set an unmarked simulator is nobody's, so one left here would never
-      // be listed, reclaimed or deleted by Simlock again.
-      if (this.#rootOptions === undefined) {
-        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
-      }
+      // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
+      // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
+      await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
       throw error;
     }
     await this.#copyOverrides(seed.udid, udid);
@@ -1080,10 +1075,10 @@ export class IosSimctlDriver implements Driver {
   }
 
   /**
-   * why: `simctl clone` keeps the LaunchServices database, which records each installed app by
-   * its absolute path under the original device's folder; a copy then launches the original's
-   * bundle, or fails once that folder is gone. Dropped before the clone's first boot,
-   * LaunchServices rebuilds it from the clone's own container folders (ADR 0061 §3).
+   * why: `simctl clone` keeps the LaunchServices database, which records each app (system apps
+   * included) by its absolute path under the original device's folder; a copy then uses the
+   * original's data, or fails once that folder is gone. Dropped from every clone before its first
+   * boot, LaunchServices rebuilds it from the clone's own container folders (ADR 0061 §3).
    */
   async #dropLaunchServicesDatabase(setPath: string, udid: string): Promise<void> {
     const folder = join(setPath, udid, "data", "var", "db", "lsd");

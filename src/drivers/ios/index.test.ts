@@ -947,6 +947,27 @@ describe("IosSimctlDriver", () => {
     expect(clones()).toBe(2);
   });
 
+  it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
+    const filesystem = new FaultyFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    filesystem.failing = "rm";
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+      { match: simctl("delete", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).rejects.toThrow("disk full");
+
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone", "delete"]);
+  });
+
   it.each([
     { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
     { name: "an unknown source is refused", id: "nope", cloned: false },
@@ -1558,9 +1579,9 @@ describe("IosSimctlDriver", () => {
     await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: driverData.udid });
 
     expect(
-      (await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`)).length,
-      "a copy of a seed keeps its LaunchServices database",
-    ).toBe(2);
+      await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
+      "a copy of a seed loses the LaunchServices database that names the seed's folder",
+    ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     const copied = failing === undefined && seedHas;
     expect(await filesystem.exists(overridesPath(driverData.udid))).toBe(copied);
     if (copied) {
