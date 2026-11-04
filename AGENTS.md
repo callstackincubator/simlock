@@ -11,14 +11,14 @@ a role must obey on every run sits a link further away. The rules under
 a brief names the rules its mode opens before acting, and the rest are the
 reference a finding cites.
 
-| Role                            | Reads on every run                                                                                                                                    |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Orchestrator (`deliver`)        | its skill; [delivery.md](docs/internal/agent-rules/delivery.md) rules 1, 2, 3, 9, 14, 15, 16                                                          |
-| Implementer (build, audit, fix) | `implementer.md` (its checklist is inline); the mode brief, pasted into its prompt; the rules the brief names; the manual of every module on its path |
-| Reviewer (coordinator)          | `reviewer.md`; [REVIEW.md](docs/internal/REVIEW.md), pasted into its prompt                                                                           |
-| Spec, code and claims lenses    | the brief and `calibration.md`, pasted into the prompt from the pinned inputs                                                                         |
-| Spec writer (`spec-session`)    | its skill; [templates/](docs/internal/templates/); `spec-checker.md`                                                                                  |
-| Everyone touching `src/`        | the `AGENTS.md` of every module directory on the path; a change that makes a manual false fixes it                                                    |
+| Role                            | Reads on every run                                                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Orchestrator (`deliver`)        | its skill; [delivery.md](docs/internal/agent-rules/delivery.md) rules 1, 2, 3, 9, 14, 15, 16                                                                        |
+| Implementer (build, audit, fix) | `implementer.md` (its checklist is inline); the mode brief, pasted into its prompt; the rules the brief names; the manual of every module on its path               |
+| Reviewer (coordinator)          | `reviewer.md`; [REVIEW.md](docs/internal/REVIEW.md), pasted into its prompt                                                                                         |
+| Spec, code and claims lenses    | the brief and `calibration.md`, pasted into the prompt from the pinned inputs                                                                                       |
+| Spec writer (`spec-session`)    | its skill; [templates/](docs/internal/templates/); `spec-checker.md`                                                                                                |
+| Everyone touching `src/`        | the `AGENTS.md` of every module directory on the path (a hook sends each one the first time a call names a file there); a change that makes a manual false fixes it |
 
 Commands come from [toolchain.md](docs/internal/agent-rules/toolchain.md).
 Accepted ADRs under [docs/internal/adr/](docs/internal/adr/) bind; one
