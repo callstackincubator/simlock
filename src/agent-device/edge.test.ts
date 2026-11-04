@@ -751,7 +751,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
@@ -759,6 +759,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
           clock,
           defaultModels: { phone: ["iPhone 16"] },
           knownModels: ["iPhone 16"],
+          mode: "slim",
           modelClasses: { "iPhone 16": "phone" },
           platform: "ios",
         }),
@@ -767,14 +768,28 @@ describe("the agent-device front, through the whole worker daemon", () => {
       maxRunning: 8,
     });
     const cases = [
-      [1, { osVersion: ">=18 <27" }, { model: "iPhone 16", osVersion: "26.0", physical: false }],
-      [2, {}, { model: "iPhone 16", osVersion: "27.0", physical: false }],
+      [
+        1,
+        { osVersion: ">=18 <27" },
+        { deviceMode: "slim", model: "iPhone 16", osVersion: "26.0", physical: false },
+      ],
+      [2, {}, { deviceMode: "slim", model: "iPhone 16", osVersion: "27.0", physical: false }],
       [
         3,
         { imageTag: "google_apis_playstore", platform: "android" },
-        { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34", physical: false },
+        {
+          deviceMode: "full",
+          imageTag: "google_apis_playstore",
+          model: "Pixel 8",
+          osVersion: "34",
+          physical: false,
+        },
       ],
-      [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35", physical: false }],
+      [
+        4,
+        { platform: "android" },
+        { deviceMode: "full", model: "Pixel 8", osVersion: "35", physical: false },
+      ],
     ] as const;
 
     for (const [n, extra, device] of cases) {
@@ -879,6 +894,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
         },
         ok: true,
       });
+      expect(answer.result).not.toHaveProperty("data.lease.device.deviceMode");
       expect(await requestedSpecs(rig, hex(1))).toMatchObject([{ ...asked, physical: true }]);
       expect(rig.phone.rpcRequests("agent_device.lease.allocate")).toMatchObject([
         { params: { leaseId: hex(1), ...address } },
