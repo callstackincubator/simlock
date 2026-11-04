@@ -6767,33 +6767,101 @@ describe("AndroidDriver image fit", () => {
       ]);
     });
 
-    it("boots a recovered copy cold from its disk on its recorded port: no snapshot is loaded and nothing is wiped", async () => {
+    it("boots a recovered copy cold from its disk on its recorded port: no snapshot is loaded and nothing is wiped, a second makeReady does not boot again and destroy stops it", async () => {
       const harness = await seedHarness([
         ...bootingAt(copyHome, ["-no-snapshot-load"], true),
         markWriteExpectation("emulator-5586", "one"),
+        ...bootingAt(copyHome, [], true).slice(1),
+        markWriteExpectation("emulator-5586", "two"),
+        copyPathExpectation("emulator-5586"),
+        processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       ]);
       await writeSeedFiles(harness.filesystem, copyHome);
 
-      await harness.driver.makeReady(
-        {
-          address: "emulator-5586",
-          deviceId: "simlock_one",
-          driverData: {
-            avdHome: copyHome,
-            avdName: "simlock",
-            configHash: "hash",
-            port: 5586,
-            serial: "emulator-5586",
-          },
+      const recovered = {
+        address: "emulator-5586",
+        deviceId: "simlock_one",
+        driverData: {
+          avdHome: copyHome,
+          avdName: "simlock",
+          configHash: "hash",
+          port: 5586,
+          serial: "emulator-5586",
         },
-        { purpose: "recover" },
-      );
+      };
+      await harness.driver.makeReady(recovered, { purpose: "recover" });
 
       const launch = harness.runner.calls.find((call) => call.args.includes("-avd"));
       expect(launch?.args).toContain("-no-snapshot-load");
       expect(launch?.args).not.toContain("-snapshot");
       expect(launch?.args).not.toContain("-wipe-data");
       expect(launch?.options.env).toMatchObject({ ANDROID_AVD_HOME: copyHome });
+
+      await harness.driver.makeReady(recovered);
+      await harness.driver.destroy(recovered);
+      expect(emulatorLaunchArgs(harness.runner)).toHaveLength(1);
+      expect(
+        harness.runner.calls.some((call) => call.args.slice(-2).join(" ") === "emu kill"),
+        "destroy stops the emulator the recover boot started",
+      ).toBe(true);
+    });
+
+    it("boots a device made before copies once with a wipe: a second makeReady does not boot again and destroy stops it and deletes it through avdmanager", async () => {
+      const serial = "emulator-5586";
+      const polls = (name: string) => [
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+          "1\n",
+        ),
+        processResult(binaries.adb, ["-s", serial, "shell", "getprop", "init.svc.bootanim"], ""),
+        avdPathExpectation(serial, name),
+        processResult(
+          binaries.adb,
+          ["-s", serial, "shell", "pm", "path", "android"],
+          "package:/system/framework/framework-res.apk\n",
+        ),
+      ];
+      const harness = await seedHarness([
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        {
+          hangs: true,
+          match: {
+            args: ["-avd", "simlock_old", ...seedEmulatorLine, "-wipe-data", "-no-snapshot-load"],
+            command: binaries.emulator,
+          },
+        },
+        ...polls("simlock_old"),
+        markWriteExpectation(serial, "one"),
+        ...polls("simlock_old"),
+        markWriteExpectation(serial, "two"),
+        avdPathExpectation(serial, "simlock_old"),
+        processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+        processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
+      ]);
+      await harness.filesystem.mkdirp(`${avdDirectory}/simlock_old.avd`);
+      await harness.filesystem.writeFileAtomic(
+        `${avdDirectory}/simlock_old.avd/config.ini`,
+        "hw.ramSize=2048\n",
+      );
+      const legacy = {
+        address: "",
+        deviceId: "simlock_old",
+        driverData: { avdName: "simlock_old", configHash: "hash", port: 0, serial: "" },
+      };
+
+      await harness.driver.makeReady(legacy);
+      expect(emulatorLaunchArgs(harness.runner)[0]).toEqual(
+        expect.arrayContaining(["-wipe-data", "-no-snapshot-load"]),
+      );
+      await harness.driver.makeReady(legacy);
+      await harness.driver.destroy(legacy);
+
+      expect(emulatorLaunchArgs(harness.runner), "the wipe boot happens once").toHaveLength(1);
+      expect(
+        harness.runner.calls.some((call) => call.args.slice(-2).join(" ") === "emu kill"),
+        "destroy stops the emulator the wipe boot started",
+      ).toBe(true);
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, an unreadable check or a failing delete throws and keeps it, and a folder outside the root is never deleted", async () => {
