@@ -236,6 +236,20 @@ test("four screens wrap at narrow widths and each links to its existing device S
   await expect(page.getByRole("heading", { name: "Screens", exact: true })).toBeVisible();
   await expect.poll(() => active(page)).toEqual(["four", "one", "three", "two"]);
   await expect(page.locator("canvas")).toHaveCount(4);
+  for (const [id, model] of [
+    ["four", "Pixel 9"],
+    ["one", "iPhone 16"],
+    ["three", "iPhone 16"],
+    ["two", "iPhone 16"],
+  ]) {
+    await expect(
+      page.getByRole("region", {
+        name: `Screen: Synthetic worker (synthetic), ${model} (${id})`,
+        exact: true,
+      }),
+    ).toBeVisible();
+  }
+
   await expect(page.getByRole("link", { name: "Open device Screen" }).first()).toHaveAttribute(
     "href",
     "/fleet/synthetic/four?drawer=screen",

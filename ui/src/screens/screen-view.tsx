@@ -5,12 +5,16 @@ import { useId } from "react";
 import { Facts, InfoPopover, Refusal, Status } from "../ds";
 import type { Screen } from "../state/screen";
 
-export function ScreenView(props: { readonly screen: Screen }) {
-  const { screen } = props;
+export function ScreenView(props: { readonly screen: Screen; readonly label?: string }) {
+  const { screen, label } = props;
   const { live, note, readout, waiting } = screen;
   const title = useId();
   return (
-    <section className="screen-panel" aria-labelledby={title}>
+    <section
+      className="screen-panel"
+      aria-label={label}
+      aria-labelledby={label === undefined ? title : undefined}
+    >
       <header className="screen-head">
         <h3 id={title} className="lease-card-title">
           Screen

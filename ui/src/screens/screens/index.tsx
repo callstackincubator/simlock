@@ -61,7 +61,10 @@ function Tile({ tile, connected }: { readonly tile: ScreenTile; readonly connect
 function Picture({ tile }: { readonly tile: ScreenTile }) {
   const shown = useDeviceScreen(tile.workerId, tile.deviceId, tile.state, tile.offer);
   return shown.kind === "picture" ? (
-    <ScreenView screen={shown.screen} />
+    <ScreenView
+      screen={shown.screen}
+      label={`Screen: ${tile.worker} (${tile.workerId}), ${tile.label} (${tile.deviceId})`}
+    />
   ) : (
     <ScreenNotice text={shown.text} />
   );
