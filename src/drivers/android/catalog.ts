@@ -61,7 +61,6 @@ export interface CatalogOptions extends ProfileSourceInputs {
 
 /** why: the part of AndroidDriver (ADR 0063) that owns the profile registry, the resolved-profile cache `resolveSpec` writes and the kept `avdmanager list device` answer. */
 export class Catalog {
-  readonly defaultModels = ANDROID_DEFAULT_MODELS;
   readonly #avdmanager: string;
   readonly #avdmanagerDevices: AvdmanagerDeviceList;
   readonly #deviceProfiles: DeviceProfileRegistry;
