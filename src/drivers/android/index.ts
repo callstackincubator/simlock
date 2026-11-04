@@ -5,7 +5,6 @@ import {
   type EnsureOwnedRootOptions,
   type LegacyDevice,
   OwnedRootError,
-  type DeviceClass,
   type DeviceSpec,
   type DriverAdvisory,
   type VirtualSpec,
@@ -16,7 +15,6 @@ import {
   type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
-  type DriverCatalogImage,
   type DriverComponent,
   type DriverDevice,
   type DriverSource,
@@ -63,6 +61,7 @@ import {
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
 import { ADB_DEVICES_TIMEOUT_MS, AdbTools, SEED_AVD_NAME } from "./adb-tools.js";
+import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import {
   ConsolePorts,
@@ -84,25 +83,15 @@ import { OWNERSHIP_PROBE_TIMEOUT_MS, Ownership } from "./ownership.js";
 import { ANDROID_PASSTHROUGH_TOOLS, PassthroughRules } from "./passthrough-rules.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
-  AvdmanagerDeviceList,
-  BuiltinDeviceProfileSource,
-  hiddenUserProfiles,
-  DeviceProfileRegistry,
-  UserDeviceProfileSource,
   type DeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
-import { fits } from "./image-fit.js";
 import {
   ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
-  AndroidImageTagMissingError,
-  compareApiLevels,
-  installedApiLevels,
   SystemImages,
   systemImagePackage,
 } from "./system-images.js";
-import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { createAndroidDeviceInput } from "./input/index.js";
 import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
@@ -207,19 +196,6 @@ interface SeedRecord {
   readonly sourceId: string;
 }
 
-/**
- * why: ADR 0015 §4: the models Simlock tries for each class on Android when the operator names none
- * first, newest first. Medium Tablet is Android's only `tablet`; Android has no `vision` list.
- */
-const ANDROID_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly string[]>>> = {
-  auto: ["Automotive (1080p landscape)", "Automotive (1024p landscape)"],
-  desktop: ["Medium Desktop", "Large Desktop"],
-  phone: ["Pixel 9", "Pixel 8", "Pixel 7", "Pixel 6", "Medium Phone"],
-  tablet: ["Medium Tablet"],
-  tv: ["Television (1080p)", "Television (4K)"],
-  watch: ["Wear OS Large Round", "Wear OS Small Round"],
-};
-
 type AndroidTargetFor = (
   device: VirtualDriverDevice | PhysicalDriverDevice,
 ) => Promise<ScreenTarget>;
@@ -253,13 +229,11 @@ export class AndroidDriver implements Driver {
   readonly #adbServerPort: number;
   readonly #adbTools: AdbTools;
   readonly #avdConfigPart: AvdConfig;
+  readonly #catalog: Catalog;
   readonly #ownership: Ownership;
   readonly #passthroughRules: PassthroughRules;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
-  readonly #avdmanagerDevices: AvdmanagerDeviceList;
   readonly #clock: Clock;
-  readonly #deviceProfiles: DeviceProfileRegistry;
-  readonly #profileSources: ReturnType<typeof defaultDeviceProfileSources> | undefined;
   readonly #devices = new Map<string, DeviceState>();
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
@@ -270,7 +244,6 @@ export class AndroidDriver implements Driver {
   readonly #consolePorts: ConsolePorts;
   readonly #processRunner: ProcessRunner;
   readonly #physical: AndroidPhysicalHandler;
-  readonly #resolvedProfiles = new Map<string, DeviceProfile>();
   readonly #emulator: Emulator;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
@@ -372,24 +345,18 @@ export class AndroidDriver implements Driver {
       allocator: portAllocatorFor(options.processRunner, sdk.adb),
       tcpProbe: options.tcpProbe,
     });
-    // why: scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
-    this.#avdmanagerDevices = new AvdmanagerDeviceList({
+    this.#catalog = new Catalog({
       avdmanager: sdk.avdmanager,
-      devicesXmlPath: userDevicesXmlPath(options),
-      env: () => this.#adbTools.env(),
+      avdmanagerEnv: () => this.#adbTools.env(),
+      deviceProfileSources: options.deviceProfileSources,
+      env: options.env,
       filesystem: options.filesystem,
+      homeDirectory: options.homeDirectory,
+      onDiagnostic: this.#onDiagnostic,
       processRunner: options.processRunner,
       sdkRoot: sdk.root,
+      systemImages: this.#systemImages,
     });
-    const defaults =
-      options.deviceProfileSources === undefined
-        ? defaultDeviceProfileSources(options, this.#avdmanagerDevices, this.#onDiagnostic)
-        : undefined;
-    this.#profileSources = defaults;
-    this.#deviceProfiles = new DeviceProfileRegistry(
-      options.deviceProfileSources ??
-        (defaults === undefined ? [] : [defaults.library, defaults.builtin, defaults.user]),
-    );
   }
 
   #emulatorFor(
@@ -688,28 +655,7 @@ export class AndroidDriver implements Driver {
       throw new Error(`Android driver cannot resolve ${request.platform} requests`);
     }
 
-    const profile = await this.#deviceProfiles.resolve(request.model);
-    const images = await this.#systemImages.installedImages();
-    if (request.imageTag !== undefined) {
-      const apiLevel = this.#taggedApiLevel(profile, images, request.imageTag, request.osVersion);
-      this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
-      return {
-        imageTag: request.imageTag,
-        model: profile.name,
-        osVersion: apiLevel,
-        physical: false,
-        platform: this.platform,
-      };
-    }
-
-    const levels = fittingApiLevels(profile, images);
-    const apiLevel = request.osVersion ?? levels.at(-1);
-    if (apiLevel === undefined || !levels.includes(apiLevel)) {
-      throw this.#systemImages.noFittingImage(profile, images, request.osVersion);
-    }
-
-    this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
-    return { model: profile.name, osVersion: apiLevel, physical: false, platform: this.platform };
+    return this.#catalog.resolveSpec(request);
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
@@ -1004,7 +950,7 @@ export class AndroidDriver implements Driver {
   ): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
     if (options.source !== undefined) return await this.#provisionFromSource(options.source);
-    const profile = await this.#profileFor(spec.model);
+    const profile = await this.#catalog.profileFor(spec.model);
     const image = await this.#systemImages.requireImage(profile, spec.osVersion, spec.imageTag);
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
     // folder. Nothing reads it back as evidence of anything -- ownership comes from the root.
@@ -1105,7 +1051,9 @@ export class AndroidDriver implements Driver {
     const avdFolder = join(folder, `${SEED_AVD_NAME}.avd`);
     const imageIdentity = `${image.path}@${image.version}`;
     const seedDeviceId =
-      profile.kind === "builtin" ? profile.avdmanagerId : await this.#defaultAvdmanagerDeviceId();
+      profile.kind === "builtin"
+        ? profile.avdmanagerId
+        : await this.#catalog.defaultAvdmanagerDeviceId();
     const emulatorVersion = await this.#adbTools.emulatorVersion();
     this.#sources.insertMaking({
       avdName: SEED_AVD_NAME,
@@ -1413,11 +1361,7 @@ export class AndroidDriver implements Driver {
 
   async advisories(): Promise<readonly DriverAdvisory[]> {
     const physical = await this.#physical.advisories();
-    if (this.#profileSources === undefined) return physical;
-    const hidden = await hiddenUserProfiles(
-      this.#profileSources.library,
-      this.#profileSources.user,
-    );
+    const hidden = await this.#catalog.hiddenProfiles();
     return [
       ...physical,
       ...hidden.map(({ libraryName, userName }) => ({
@@ -1586,29 +1530,7 @@ export class AndroidDriver implements Driver {
   }
 
   async listCatalog(): Promise<DriverCatalogEntry> {
-    const [{ catalog, modelProfiles }, images] = await Promise.all([
-      this.#deviceProfiles.catalogWithProfiles(),
-      this.#systemImages.installedImages(),
-    ]);
-    const { customModels, modelAliases, modelClasses, models } = catalog;
-    const runtimes = installedApiLevels(images);
-    return {
-      ...(customModels.length === 0 ? {} : { customModels: [...customModels] }),
-      defaultRuntime: runtimes.at(-1),
-      images: images
-        .map((image) => ({ abi: image.abi, runtime: image.apiLevel, tag: image.tag }))
-        .sort(compareCatalogImages),
-      modelAliases,
-      modelClasses,
-      modelRuntimes: Object.fromEntries(
-        models.map((model) => {
-          const profile = modelProfiles.get(model);
-          return [model, profile === undefined ? [] : fittingApiLevels(profile, images)];
-        }),
-      ),
-      models: [...models],
-      runtimes,
-    };
+    return this.#catalog.listCatalog();
   }
 
   estimate(
@@ -1647,22 +1569,6 @@ export class AndroidDriver implements Driver {
           (spec.imageTag === undefined || row.imageTag === spec.imageTag) &&
           row.staleReason === undefined,
       );
-  }
-
-  async #profileFor(model: string): Promise<DeviceProfile> {
-    return (
-      this.#resolvedProfiles.get(model.toLocaleLowerCase()) ?? this.#deviceProfiles.resolve(model)
-    );
-  }
-
-  async #defaultAvdmanagerDeviceId(): Promise<string> {
-    const [first] = await this.#avdmanagerDevices.read();
-    if (first === undefined) {
-      throw new DriverCrashError(
-        `${this.#sdk.avdmanager} list device reported no built-in device profiles`,
-      );
-    }
-    return first.id;
   }
 
   async toolVersions(): Promise<readonly DriverToolVersion[]> {
@@ -1718,27 +1624,6 @@ export class AndroidDriver implements Driver {
         // why: left for doctor and nuke, see above.
       }
     }
-  }
-
-  #taggedApiLevel(
-    profile: DeviceProfile,
-    images: readonly SystemImage[],
-    imageTag: string,
-    requested: string | undefined,
-  ): string {
-    const tagged = images.filter(
-      (image) =>
-        image.tag === imageTag && (requested === undefined || image.apiLevel === requested),
-    );
-    if (tagged.length === 0) {
-      throw new AndroidImageTagMissingError(requested ?? "default", imageTag);
-    }
-    const levels = fittingApiLevels(profile, tagged);
-    const apiLevel = requested ?? levels.at(-1);
-    if (apiLevel === undefined || !levels.includes(apiLevel)) {
-      throw this.#systemImages.noFittingImage(profile, images, requested, imageTag);
-    }
-    return apiLevel;
   }
 
   #stateFor(data: AndroidDriverData): DeviceState {
@@ -1844,18 +1729,6 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
   throw new SdkMissingError(location.searched);
 }
 
-function fittingApiLevels(profile: DeviceProfile, images: readonly SystemImage[]): string[] {
-  return installedApiLevels(images.filter((image) => fits(profile, image)));
-}
-
-function compareCatalogImages(left: DriverCatalogImage, right: DriverCatalogImage): number {
-  return (
-    compareApiLevels(left.runtime, right.runtime) ||
-    left.tag.localeCompare(right.tag) ||
-    left.abi.localeCompare(right.abi)
-  );
-}
-
 function observedAndroidDevice(
   deviceId: string,
   avdName: string,
@@ -1924,38 +1797,6 @@ function seedLaunchInputs(
 
 export function hostAbiFor(architecture: string): string {
   return architecture === "arm64" ? "arm64-v8a" : "x86_64";
-}
-
-/**
- * why: `devices.xml` is found the way `avdmanager` finds it: `ANDROID_USER_HOME`, else
- * `ANDROID_PREFS_ROOT/.android`, else `ANDROID_SDK_HOME/.android`, else `~/.android`. Not
- * `ANDROID_AVD_HOME`, which only relocates created AVDs.
- */
-function userDevicesXmlPath(options: AndroidDriverOptions): string {
-  const { ANDROID_PREFS_ROOT, ANDROID_SDK_HOME, ANDROID_USER_HOME } = options.env;
-  return ANDROID_USER_HOME !== undefined
-    ? `${ANDROID_USER_HOME}/devices.xml`
-    : `${ANDROID_PREFS_ROOT ?? ANDROID_SDK_HOME ?? options.homeDirectory}/.android/devices.xml`;
-}
-
-function defaultDeviceProfileSources(
-  options: AndroidDriverOptions,
-  avdmanagerDevices: AvdmanagerDeviceList,
-  onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined,
-): {
-  readonly library: DeviceProfileSource;
-  readonly builtin: DeviceProfileSource;
-  readonly user: DeviceProfileSource;
-} {
-  return {
-    library: new LibraryDeviceProfileSource(),
-    builtin: new BuiltinDeviceProfileSource(avdmanagerDevices),
-    user: new UserDeviceProfileSource(
-      userDevicesXmlPath(options),
-      options.filesystem,
-      onDiagnostic,
-    ),
-  };
 }
 
 // why: an emulator's capture target -- the same `adb -s <serial> …` with this driver's scoped env

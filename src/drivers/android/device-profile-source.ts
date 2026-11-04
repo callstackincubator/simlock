@@ -223,7 +223,7 @@ function matchProfile(
   );
 }
 
-interface HiddenUserProfile {
+export interface HiddenUserProfile {
   readonly userName: string;
   readonly libraryName: string;
 }
