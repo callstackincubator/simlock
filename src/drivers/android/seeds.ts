@@ -77,7 +77,7 @@ export interface SeedsOptions {
   readonly adbTools: AdbTools;
   readonly avdConfig: AvdConfig;
   readonly avdmanager: string;
-  readonly catalog: Pick<Catalog, "defaultAvdmanagerDeviceId" | "profileFor">;
+  readonly catalog: Catalog;
   readonly clock: Clock;
   readonly consolePorts: ConsolePorts;
   readonly database: SqliteDatabase;
@@ -97,7 +97,7 @@ export class Seeds {
   readonly #adbTools: AdbTools;
   readonly #avdConfig: AvdConfig;
   readonly #avdmanager: string;
-  readonly #catalog: Pick<Catalog, "defaultAvdmanagerDeviceId" | "profileFor">;
+  readonly #catalog: Catalog;
   readonly #clock: Clock;
   readonly #consolePorts: ConsolePorts;
   readonly #deviceRoot: string;

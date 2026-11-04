@@ -301,7 +301,7 @@ export class EmulatorExitingRunner extends ScriptedProcessRunner {
   }
 }
 
-export const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
+const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
 
 /** why: the calls of making and booting a seed, shared by the seed tests and the harness every driver test starts from. */
 export const seedEmulatorLine = [
@@ -488,7 +488,7 @@ export function makingASeedFrom(
  * why: the boot of a copy, as the driver asks the emulator for it: `adb devices` for the port,
  * the launch, then the readiness polls. `launch` is `-snapshot simlock_boot` for a prepare boot.
  */
-export function copyBootExpectations(options: {
+function copyBootExpectations(options: {
   readonly bootCompleted?: string | undefined;
   readonly copyHome: string;
   readonly emulatorFlags?: readonly string[] | undefined;
@@ -552,7 +552,7 @@ export function copyBootExpectations(options: {
   return expectations;
 }
 
-export class ListingRunner extends EmulatorExitingRunner {
+class ListingRunner extends EmulatorExitingRunner {
   constructor(
     private readonly listing: string,
     expectations: readonly ScriptedProcessExpectation[],
@@ -648,7 +648,7 @@ export async function fitHarness(
   return { createdPackage, driver, filesystem, refusal, resolve, runner };
 }
 
-export const SEED_LINES = [
+const SEED_LINES = [
   "avd.ini.encoding=UTF-8",
   "hw.cpu.arch=arm64",
   "hw.ramSize=1G",
@@ -937,7 +937,7 @@ export async function createDriver(
  * declares them optional under `exactOptionalPropertyTypes`, so an absent one must be absent
  * rather than `undefined`. Split out of `createDriver` so that the list can keep growing
  * without the helper itself turning into a pile of conditionals. */
-export function onlyProvided(options: {
+function onlyProvided(options: {
   readonly acceptAndroidLicenses?: boolean;
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
   readonly emulator?: AndroidEmulatorLaunchOptions;
@@ -1140,7 +1140,7 @@ export class RecordingRunner implements ProcessRunner {
   }
 }
 
-export const ADB_ANSWERS = new Map([
+const ADB_ANSWERS = new Map([
   ["shell getprop sys.boot_completed", "1\n"],
   ["shell getprop init.svc.bootanim", "stopped\n"],
   ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
