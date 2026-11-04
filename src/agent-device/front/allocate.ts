@@ -44,7 +44,6 @@ const CLASS_OF_TARGET: Record<string, "phone" | "tv" | "desktop"> = {
 };
 
 const present = (value: unknown): boolean => value !== undefined && value !== null;
-const MODES: readonly unknown[] = ["slim", "full"];
 
 interface Plan {
   readonly leaseId: string;
@@ -85,9 +84,6 @@ function notPlain(params: Record<string, unknown>): boolean {
 
 function deviceRefusal(fields: ReturnType<typeof leaseCallFields>): FrontReply | undefined {
   if (!present(fields.platform)) return refusal("refused: name --platform ios or android");
-  if (present(fields.deviceMode) && !MODES.includes(fields.deviceMode)) {
-    return refusal("refused: deviceMode must be slim or full");
-  }
   return undefined;
 }
 

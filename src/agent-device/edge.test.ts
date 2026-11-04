@@ -751,24 +751,27 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it('allocate with `deviceMode` "full" or "slim" makes a lease request whose `mode` is it and an allocate the agent-device daemon receives without it; a `deviceMode` that is neither is refused with `refused: deviceMode must be slim or full` and no lease', async () => {
+  it('allocate with `deviceMode` "full" or "slim" makes a lease request whose `mode` is it and an allocate the agent-device daemon receives without it; `deviceMode: null` is absent; any other `deviceMode` answers `refused by simlock:` with simlock\'s `BAD_REQUEST` message and no lease', async () => {
     const rig = await setUp({ maxRunning: 8 });
 
     await granted(rig, 1, { deviceMode: "full" });
     await granted(rig, 2, { deviceMode: "slim" });
+    await granted(rig, 3, { deviceMode: null });
     for (const deviceMode of ["fast", 1]) {
-      await refused(
-        rig,
-        () => allocate(rig, 3, { deviceMode }),
-        "refused: deviceMode must be slim or full",
-      );
+      const expected = await simlockMessage(rig, {
+        leaseId: hex(9),
+        mode: deviceMode,
+        platform: "ios",
+      });
+      await refused(rig, () => allocate(rig, 4, { deviceMode }), `refused by simlock: ${expected}`);
     }
 
     expect(await requestedSpecs(rig, hex(1))).toEqual([{ mode: "full", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(2))).toEqual([{ mode: "slim", platform: "ios" }]);
+    expect(await requestedSpecs(rig, hex(3))).toEqual([{ platform: "ios" }]);
     expect(receivedAllocate(rig, 1)).not.toHaveProperty("deviceMode");
     expect(receivedAllocate(rig, 2)).not.toHaveProperty("deviceMode");
-    expect(await listed(rig)).toEqual([hex(1), hex(2)]);
+    expect(await listed(rig)).toEqual([hex(1), hex(2), hex(3)]);
   });
 
   it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
