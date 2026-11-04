@@ -71,6 +71,8 @@ const COMMAND_TIMEOUT_MS = 30_000;
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
+// why: a labelled grant waits on its rename, so a hung simctl must not hold the request for long.
+const LABEL_TIMEOUT_MS = 5_000;
 const INSTALLER_POLL_MS = 1_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
@@ -760,9 +762,16 @@ export class IosSimctlDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly label?: string;
+    },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
+    if (options.purpose === "prepare" && options.label !== undefined) {
+      await this.#rename(data.udid, options.label, LABEL_TIMEOUT_MS);
+    }
     const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
     const write =
       plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
@@ -941,9 +950,16 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
+    await this.#rename(data.udid, data.name, COMMAND_TIMEOUT_MS);
     await this.#writeMark(data.udid);
 
     return { state: "shutdown", strategy: "erase" };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- called through the Driver port by leasing.
+  async applyLabel(device: DriverDevice, label: string | undefined): Promise<void> {
+    const data = iosDriverData(device);
+    await this.#simctl(["rename", data.udid, label ?? data.name], LABEL_TIMEOUT_MS);
   }
 
   reclaimStrategy(
@@ -962,6 +978,16 @@ export class IosSimctlDriver implements Driver {
     await this.#shutdown(data.udid);
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
     await this.#removeOverrides(data.udid);
+  }
+
+  // why: the name is display-only, so a rename that fails must not fail a boot or a reclaim and
+  // cost the simulator.
+  async #rename(udid: string, name: string, timeoutMs: number): Promise<void> {
+    try {
+      await this.#simctl(["rename", udid, name], timeoutMs);
+    } catch (error: unknown) {
+      this.#logger?.warn(`could not rename ${udid} to ${name}: ${errorMessage(error)}`);
+    }
   }
 
   // why: simctl delete leaves the folder behind; a failed removal must not fail a destroy that

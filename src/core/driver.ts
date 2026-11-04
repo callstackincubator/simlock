@@ -272,6 +272,8 @@ export interface Driver {
     options: {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
+      /** why: a `prepare` boot names the device with the lease's label where its platform can (iOS); a `recover` boot changes nothing (safety rule 2). */
+      readonly label?: string;
     },
   ): Promise<DriverDevice>;
   reclaim(
@@ -320,6 +322,8 @@ export interface Driver {
   destroyLegacy?(device: VirtualDriverDevice): Promise<void>;
   advisories?(): Promise<readonly DriverAdvisory[]>;
   toolVersions?(): Promise<readonly DriverToolVersion[]>;
+  /** why: names a booted device for its lease, or back to its own name without a label; only a platform that can rename one has it (iOS). */
+  applyLabel?(device: DriverDevice, label: string | undefined): Promise<void>;
 }
 
 export interface LegacyDevice {

@@ -941,6 +941,23 @@ describe("POST /v1/lease-requests", () => {
   });
 });
 
+describe("POST /v1/lease-requests label", () => {
+  it("passes a label onto the dispatch input as sent, and no label key when the body names none", async () => {
+    const { app, dispatcher } = buildHarness();
+    const withLabel = postLeaseRequest(app, { ...defaultBody, label: "feature-x" });
+    const call = await waitForDispatch(dispatcher, "lease.request");
+    expect(call.input).toMatchObject({ label: "feature-x" });
+    call.resolve(makeGrant({ lease: { id: "lse_1" } }));
+    await withLabel;
+
+    const withoutLabel = postLeaseRequest(app, defaultBody, otherAgentAuth);
+    const second = await waitForDispatch(dispatcher, "lease.request", 1);
+    expect(second.input).not.toHaveProperty("label");
+    second.resolve(makeGrant({ lease: { id: "lse_2" } }));
+    await withoutLabel;
+  });
+});
+
 describe("POST /v1/lease-requests leaseId", () => {
   it("passes a caller-chosen leaseId onto the dispatch input as sent, and no leaseId key when the body names none", async () => {
     const { app, dispatcher } = buildHarness();

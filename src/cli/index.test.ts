@@ -6741,6 +6741,27 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(output.stderr).toContain('"code":"LEASE_ID_TAKEN"');
   });
 
+  it("the CLI --label flag sends label, and an omitted flag sends none", async () => {
+    const output = outputCapture();
+    const requested: unknown[] = [];
+    const environment = output.environmentWith({
+      clock: new FakeClock(0),
+      connectAdmin: async () =>
+        fakeClient({
+          requestLease: (input) => {
+            requested.push("label" in input ? input.label : "absent");
+            return Promise.resolve(detachedGrant);
+          },
+        }),
+    });
+    const lease = ["lease", "--platform", "android", "--detach"];
+
+    await runCli([...lease, "--label", "feature-x"], environment);
+    await runCli(lease, environment);
+
+    expect(requested).toEqual(["feature-x", "absent"]);
+  });
+
   it.each(["SIGINT", "SIGTERM"] as const)(
     "releases explicitly on %s (ADR 0004 §2's catchable signals)",
     async (signal) => {
@@ -9353,7 +9374,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>] [--label <text>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );

@@ -31,6 +31,7 @@ import {
   hostLoadSchema,
   imageTagSchema,
   leaseGrantSchema,
+  leaseLabelSchema,
   leaseRecordSchema,
   nukeReportSchema,
   passthroughCommandSchema,
@@ -166,6 +167,7 @@ const leaseRequestBaseSchema = z
     owner: z.string().optional(),
     idempotencyKey: z.string().min(1).max(200).optional(),
     leaseId: leaseIdSchema.optional(),
+    label: leaseLabelSchema.optional(),
     fleetRequestId: z.string().min(1).max(200).optional(),
     requires: z
       .array(capabilityNameSchema)

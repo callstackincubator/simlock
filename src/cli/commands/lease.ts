@@ -50,6 +50,7 @@ async function runLease(
     "export-env": { type: "boolean" },
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
+    label: { type: "string" },
     "lease-id": { type: "string" },
     mode: { type: "string" },
     "no-wait": { type: "boolean" },
@@ -63,7 +64,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
+        "                     [--timeout <duration>] [--lease-id <id>] [--label <text>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
     );
@@ -184,6 +185,7 @@ async function runLease(
         ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
         ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
         ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
+        ...(typeof values.label === "string" ? { label: values.label } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),
       },

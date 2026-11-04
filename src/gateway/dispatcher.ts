@@ -706,6 +706,7 @@ export class GatewayDispatcher {
           : { onAdmitted: session.onRequestAdmitted }),
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.leaseId === undefined ? {} : { leaseId: input.leaseId }),
+        ...(input.label === undefined ? {} : { label: input.label }),
         ...(input.requires === undefined ? {} : { requires: input.requires }),
         ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         // why: Always explicit past this point (§15): a request that named none is filled in here,

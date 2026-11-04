@@ -328,6 +328,30 @@ describe("lease.request osVersion", () => {
   );
 });
 
+describe("lease.request label", () => {
+  const parse = (label: unknown) =>
+    OPERATIONS["lease.request"].input.safeParse({ label, platform: "android" });
+
+  it.each([
+    ["a branch name", "feature/login"],
+    ["spaces and characters outside ASCII", "Zé's phone"],
+    ["64 characters", "a".repeat(64)],
+  ])("accepts %s", (_label, label) => {
+    expect(parse(label).success).toBe(true);
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["65 characters", "a".repeat(65)],
+    ["a line break", "feature-x\nhw.keyboard=yes"],
+    ["a NUL", "feature\u0000x"],
+    ["a line separator", "feature\u2028x"],
+    ["a number", 7],
+  ])("refuses %s", (_label, label) => {
+    expect(parse(label).success).toBe(false);
+  });
+});
+
 describe("lease.request leaseId", () => {
   const parse = (leaseId: unknown) =>
     OPERATIONS["lease.request"].input.safeParse({ leaseId, model: "iPhone 17", platform: "ios" });

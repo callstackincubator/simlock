@@ -7,6 +7,7 @@ import {
   type ComponentInstaller,
   type Config,
   type DeviceSpec,
+  type DriverDevice,
   type DriverEstimate,
   DriverCrashError,
   type VirtualSpec,
@@ -3955,6 +3956,125 @@ describe("createLeasing a lease ID chosen by the requester", () => {
     await expect(after.engine.request(request, asking("agent-3", "myid"))).resolves.toMatchObject({
       lease: { id: "myid" },
     });
+  });
+});
+
+describe("createLeasing a lease's label", () => {
+  const bootLabels = (driver: FakeDriver) =>
+    driver.calls
+      .filter((call) => call.operation === "makeReady")
+      .map((call) => (call.arguments[1] as { readonly label?: string }).label);
+  const appliedLabels = (driver: FakeDriver) =>
+    driver.calls.filter((call) => call.operation === "applyLabel").map((call) => call.arguments[1]);
+  // why: a rename takes a decision first, which would wait forever if the rename held the decision lock.
+  const renameObservingHarness = async () => {
+    const leasesAtRename: number[] = [];
+    class RenameObserver extends FakeDriver {
+      override async applyLabel(device: DriverDevice, label: string | undefined): Promise<void> {
+        await harness.engine.cancelPending("nobody");
+        leasesAtRename.push(harness.registry.snapshot.leases.length);
+        await super.applyLabel(device, label);
+      }
+    }
+    const harness = await createHarness({
+      driver: new RenameObserver({
+        availableOsVersions: ["26.5"],
+        clock: new FakeClock(1_000),
+        platform: "ios",
+      }),
+    });
+    return { harness, leasesAtRename };
+  };
+
+  it("boots a new device with the request's label", async () => {
+    const harness = await createHarness();
+
+    await harness.engine.request(request, {
+      label: "feature-x",
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+    });
+
+    expect(bootLabels(harness.driver)).toEqual(["feature-x"]);
+  });
+
+  it("boots a shut-down device with the request's label", async () => {
+    const harness = await createHarness({ idleShutdownAfterMs: 0 });
+    const first = await harness.engine.request(request, {
+      ownerId: "first",
+      requesterId: "first",
+    });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    const [device] = harness.registry.snapshot.devices;
+    if (device === undefined) throw new Error("Expected the first lease's device");
+    await harness.registry.transitionDevice(device.id, "shutdown", {
+      event: "device.shutdown",
+      payload: { deviceId: device.id, initiator: "test" },
+    });
+
+    await harness.engine.request(request, {
+      label: "feature-y",
+      ownerId: "second",
+      requesterId: "second",
+    });
+
+    expect(bootLabels(harness.driver)).toEqual([undefined, "feature-y"]);
+  });
+
+  it("names a ready device granted as it is with the request's label, before its lease and outside the lock", async () => {
+    const { harness, leasesAtRename } = await renameObservingHarness();
+    const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+
+    const second = await harness.engine.request(request, {
+      label: "feature-z",
+      ownerId: "second",
+      requesterId: "second",
+    });
+
+    expect(second.device.id).toBe(first.device.id);
+    expect(bootLabels(harness.driver)).toEqual([undefined]);
+    expect(appliedLabels(harness.driver)).toEqual(["feature-z"]);
+    expect(leasesAtRename).toEqual([0]);
+  });
+
+  it("grants a labelled ready device when its rename fails", async () => {
+    const harness = await createHarness();
+    const first = await harness.engine.request(request, { ownerId: "first", requesterId: "first" });
+    await harness.engine.release(first.lease.id, "explicit");
+    await harness.engine.settle();
+    harness.driver.failOn("applyLabel", 1, new Error("rename failed"));
+
+    await expect(
+      harness.engine.request(request, {
+        label: "feature-z",
+        ownerId: "second",
+        requesterId: "second",
+      }),
+    ).resolves.toMatchObject({ device: { id: first.device.id } });
+  });
+
+  it("names a booted device back, outside the lock, when its labelled request ends during the boot", async () => {
+    const { harness, leasesAtRename } = await renameObservingHarness();
+    harness.driver.hangMakeReady();
+    const pending = harness.engine.request(request, {
+      label: "feature-x",
+      ownerId: "agent-1",
+      requesterId: "agent-1",
+    });
+    void pending.catch(() => undefined);
+    await flush();
+
+    const nuked = harness.engine.nuke(false);
+    harness.driver.releaseMakeReady();
+    await nuked;
+    await harness.engine.settle();
+
+    expect(harness.registry.snapshot.leases).toEqual([]);
+    expect(appliedLabels(harness.driver)).toEqual([undefined]);
+    expect(leasesAtRename).toEqual([0]);
   });
 });
 

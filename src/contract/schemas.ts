@@ -89,6 +89,19 @@ export const imageTagSchema = z
   .max(IMAGE_TAG_MAX)
   .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
 
+/**
+ * A lease's label, the name of the simulator it boots.
+ * why: a driver passes it to `simctl rename`, so a line break or NUL never reaches one (safety rule 10).
+ */
+export const leaseLabelSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(
+    (label) => !/[\p{Cc}\u2028\u2029]/u.test(label),
+    "label must not contain control characters",
+  );
+
 const REQUESTER_ID_MAX = 256;
 const GATEWAY_PREFIX = /^gw:[^:]{0,100}:/;
 

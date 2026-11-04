@@ -555,6 +555,23 @@ describe("Dispatcher: parsing", () => {
     ]);
   });
 
+  it("boots the device of a lease.request with its label", async () => {
+    const { dispatcher, driver } = await buildDispatcher();
+
+    await dispatcher.dispatch(
+      "lease.request",
+      { label: "feature-x", model: "iPhone 17 Pro", platform: "ios" },
+      session(),
+    );
+
+    expect(driver.calls.find((call) => call.operation === "makeReady")?.arguments[1]).toMatchObject(
+      {
+        label: "feature-x",
+        purpose: "prepare",
+      },
+    );
+  });
+
   it("grants lease.request's leaseId as the lease ID, and answers an ID that is in use with LEASE_ID_TAKEN carrying it in details", async () => {
     const { dispatcher } = await buildDispatcher();
     const input = { leaseId: "ad-7f3a", model: "iPhone 17 Pro", platform: "ios" } as const;
