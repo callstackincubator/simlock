@@ -687,7 +687,7 @@ export class AndroidDriver implements Driver {
       ports.push(consolePort);
     }
 
-    // why: `#register` swallows its own failures, so one unreachable port cannot end the sweep.
+    // why: `Emulator#register` swallows its own failures, so one unreachable port cannot end the sweep.
     await Promise.all(ports.map((consolePort) => this.#emulator.register(consolePort)));
   }
 
