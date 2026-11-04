@@ -168,6 +168,8 @@ const DEVICE_COLUMNS = [
   "address",
   "reclaiming_since",
   "absent_reason",
+  "baseline_name",
+  "baseline_version",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -194,6 +196,7 @@ const REQUEST_COLUMNS = [
   "os_version",
   "mode",
   "image_tag",
+  "baseline",
   "class",
   "physical",
   "created_at",
@@ -247,6 +250,11 @@ function physicalColumns(device: DeviceRecord): SqliteValue[] {
   return [device.reclaimingSince ?? null, device.absentReason ?? null];
 }
 
+function baselineColumns(device: DeviceRecord): SqliteValue[] {
+  if (device.physical) return [null, null];
+  return [device.spec.baseline?.name ?? null, device.spec.baseline?.version ?? null];
+}
+
 function deviceValues(device: DeviceRecord): SqliteValue[] {
   return [
     device.id,
@@ -265,6 +273,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     ...causeColumns(device.quarantineCause),
     device.address ?? null,
     ...physicalColumns(device),
+    ...baselineColumns(device),
   ];
 }
 
@@ -333,6 +342,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       request.osVersion ?? null,
       request.mode ?? null,
       request.imageTag ?? null,
+      request.baseline ?? null,
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -489,6 +499,7 @@ function deviceFromRow(
     mode: reader.oneOf("mode", DEVICE_MODES),
     physical: false,
     spec: {
+      ...baselineOf(reader),
       ...present("imageTag", reader.optText("image_tag")),
       ...present("mode", reader.optOneOf("spec_mode", ["slim"] as const)),
       model,
@@ -499,6 +510,12 @@ function deviceFromRow(
     state: reader.oneOf("state", VIRTUAL_STATES),
   };
   return virtual;
+}
+
+function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {
+  const name = reader.optText("baseline_name");
+  const version = reader.optInt("baseline_version");
+  return name === undefined || version === undefined ? {} : { baseline: { name, version } };
 }
 
 function quarantineCause(reader: RowReader): QuarantineCause | undefined {
@@ -602,6 +619,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("osVersion", reader.optText("os_version")),
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
+    ...present("baseline", reader.optText("baseline")),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };

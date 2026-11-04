@@ -8,6 +8,9 @@ import type { LearnedKind } from "./learned.js";
 const CATALOG_READ_LIMIT_MS = 30_000;
 
 interface CatalogCheckOptions {
+  readonly baselines: {
+    current(name: string): { readonly staleReason?: string } | undefined;
+  };
   readonly catalog: Pick<DriverCatalog, "listCatalog">;
   readonly clock: Clock;
   readonly hasDriver: (platform: Platform) => boolean;
@@ -39,7 +42,11 @@ export class CatalogCheck {
   /** why: the kinds whose platform has no driver, or that the latest answer for it does not list. */
   gone(kinds: readonly LearnedKind[]): LearnedKind[] {
     return kinds.filter((kind) => {
-      const { platform } = kind.spec;
+      const { baseline, platform } = kind.spec;
+      if (baseline !== undefined) {
+        const current = this.options.baselines.current(baseline.name);
+        if (current === undefined || current.staleReason !== undefined) return true;
+      }
       if (!this.options.hasDriver(platform)) return true;
       const answer = this.#answers.get(platform);
       return answer !== undefined && !lists(answer, kind.spec);

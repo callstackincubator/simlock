@@ -19,6 +19,7 @@ import type { EventBus, EventName } from "../bus/index.js";
 import {
   grantedDeviceSchema,
   isSimlockError,
+  WORKER_VIEW_BASELINE_EVENTS,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_UPDATE_EVENTS,
   workerViewFields,
@@ -414,13 +415,15 @@ export class WorkerLink {
     receivedAt: number,
     includeCatalog: boolean,
   ): Promise<void> {
-    const [devices, catalog, config] = await this.#withTimeout(
+    const [devices, catalog, config, baselines] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
         // Read on the same pass as the catalog: neither changes with a lease or a device, so
         // the per-event refresh stays at the two calls that do.
         includeCatalog ? client.getConfig() : undefined,
+        // why: a baseline changes with a save, a remove or a stale mark, not with a lease, so it is read with the catalog.
+        includeCatalog ? client.listBaselines() : undefined,
       ]),
       "view refresh",
     );
@@ -444,6 +447,7 @@ export class WorkerLink {
         status,
         ...(catalog === undefined ? {} : { catalog }),
         ...(config === undefined ? {} : { config }),
+        ...(baselines === undefined ? {} : { baselines }),
       }),
       grantedDevices: grantedDevices(devices),
       version: client.daemonVersion,
@@ -588,7 +592,9 @@ export class WorkerLink {
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
       void this.refresh({
-        includeCatalog: (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event),
+        includeCatalog:
+          (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event) ||
+          (WORKER_VIEW_BASELINE_EVENTS as readonly string[]).includes(envelope.event),
       });
   }
 }
@@ -625,6 +631,7 @@ function changesCapacityOrLeases(event: string): boolean {
     event.startsWith("lease.") ||
     event.startsWith("device.") ||
     INSTALL_EVENTS.has(event) ||
+    (WORKER_VIEW_BASELINE_EVENTS as readonly string[]).includes(event) ||
     (WORKER_VIEW_UPDATE_EVENTS as readonly string[]).includes(event)
   );
 }

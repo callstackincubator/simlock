@@ -1,0 +1,104 @@
+---
+title: Baselines
+description: Prepare a simulator or emulator once, save it under a name, and let agents lease copies of it instead of a factory-fresh device.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A baseline is a simulator or emulator you set up once and saved under a name, for example `checkout`, with your app installed and a test user signed in. An agent that leases with `--baseline checkout` gets its own copy of that device, so it can start testing without installing or signing in first (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
+
+Before you start:
+
+- Saving and removing a baseline needs the admin role. Any session can list baselines; an agent session that tries to save or remove gets `FORBIDDEN`.
+- Only simulators and emulators can be saved. A lease on a physical device is refused with `BAD_REQUEST`.
+- A baseline lives on the worker that saved it. Through a gateway, see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway).
+
+## Save a baseline
+
+1. Lease the device you want to prepare. `--detach` keeps the lease after the command exits, so you can work on the device in other commands:
+
+   ```sh
+   simlock lease --platform android --device "Pixel 9" --detach
+   ```
+
+   Note the lease id (`lease.id`) and the device's serial or UDID (`device.address`) in the grant.
+
+2. Prepare the device: install the app, sign in, change the settings your tests need. See [Install and launch an app](/simlock/docs/using-devices/working-with-a-device#install-and-launch-an-app).
+
+   ```sh
+   simlock adb -s emulator-5556 install app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+3. Save it under a name:
+
+   <Aside type="caution">
+   Saving ends the lease and deletes the device you prepared. Only the saved copy is left. Finish preparing it first.
+   </Aside>
+
+   ```sh
+   simlock baseline save checkout --lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 --note "app 4.2, test user"
+   ```
+
+   ```text
+   Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 ended.
+   ```
+
+Simlock shuts the device down cleanly before copying it, so everything you prepared is in the baseline.
+
+The name is 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, and starts with a letter or digit. The note is optional: one line, up to 200 characters. A bad name or note is refused before anything happens to the lease.
+
+<Aside type="caution">
+Every copy holds what you saved, including a signed-in account. Do not save credentials you would not give to every agent that leases the baseline.
+</Aside>
+
+## Update a baseline
+
+Prepare a new device and save it under the same name. This makes the next version, for example `checkout v2`.
+
+- Agents already using a v1 copy keep it until their lease ends.
+- The next lease that names `checkout` gets v2, including a lease that was already waiting.
+- Idle v1 copies are deleted, and v1 itself is deleted once its last copy is gone. You cannot go back to an older version.
+
+## See which baselines a worker has
+
+```sh
+simlock baseline list
+```
+
+```text
+NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE
+checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40
+login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11-01 09:12  signed in
+  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
+```
+
+A baseline is stale when the iOS runtime, Android system image or emulator it was saved with has changed or been removed. The reason is on the line under it. A lease that names a stale baseline fails with `BASELINE_STALE`. Install that runtime or image again and the baseline works again; or save a new version from a device on the runtime you have now.
+
+## Remove a baseline
+
+```sh
+simlock baseline remove login
+```
+
+```text
+Remove baseline login v1? [y/N] y
+Removed baseline login v1.
+```
+
+This deletes every version of `login` and the idle copies made from it. If an agent is still using a copy, Simlock refuses with `BASELINE_IN_USE` and names the lease; remove it after that lease ends. Pass `--yes` to skip the question, for example in a script.
+
+`simlock nuke --delete-devices` removes every baseline on the worker.
+
+## When something goes wrong
+
+| What you see | What it means | What to do |
+| --- | --- | --- |
+| `BASELINE_SAVE_FAILED` | The lease has ended, but Simlock could not copy the device. The message says why. No baseline was saved, and the device is kept aside for `simlock doctor`. | Lease a new device, prepare it again and save again. |
+| `UNKNOWN_BASELINE` | No baseline on this worker has that name. | Check the name with `simlock baseline list`. |
+| `BASELINE_STALE` | The runtime or image the baseline needs is gone. | Install it again, or save a new version. |
+| `BASELINE_IN_USE` | `remove` was refused because a lease uses a copy. | Wait for that lease to end, then remove. |
+| `FORBIDDEN` | The session does not have the admin role. | Run the command as an admin. |
+
+`simlock doctor` lists each baseline's files on disk under `sources`. Files that belong to no baseline are reported as orphans; only `simlock doctor --purge-orphans` deletes them.
+
+See the [CLI reference](/simlock/docs/reference/cli#simlock-baseline) for every flag, and [Events](/simlock/docs/reference/events) for `baseline.saved`, `baseline.removed` and `baseline.stale`.

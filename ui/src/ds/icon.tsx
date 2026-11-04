@@ -3,6 +3,7 @@ const PATHS = {
   workers: "M2 3h12v4H2zM2 9h12v4H2zM5 5h.01M5 11h.01",
   leases: "M10 2a4 4 0 1 1-3.5 6L2 12.5V14h2v-1.5h1.5V11h1.5l1-1",
   waiting: "M2 4h12M2 8h9M2 12h6",
+  baselines: "M3 2.5h10v11H3zM6 6h4M6 9h4M6 12h2",
   inbox: "M2 9l2-6h8l2 6v4H2zM2 9h4l1 2h2l1-2h4",
   events: "M1.5 8h3l2-5 3 10 2-5h3",
   usage: "M2 14V2M2 14h12M5 11V8M8 11V5M11 11V7",

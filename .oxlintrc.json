@@ -27,6 +27,7 @@
                   "MaxPerRequester",
                   "SerializedDecision",
                   "UsageReader",
+                  "baselineMismatch",
                   "createUsageReader",
                   "findCatalogModel",
                   "fits",

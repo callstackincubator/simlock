@@ -32,9 +32,9 @@ interface WorkerView {
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
 
-/** why: The fake driver's script once its reclaim fails, so a released device is quarantined. */
-const FAILING_RECLAIM = {
-  ios: { ...IOS, failures: { reclaim: { message: "erase failed", type: "generic" as const } } },
+/** why: The fake driver's script once its destroy fails, so a released device is quarantined. */
+const FAILING_DESTROY = {
+  ios: { ...IOS, failures: { destroy: { message: "delete failed", type: "generic" as const } } },
 };
 
 /**
@@ -89,10 +89,10 @@ async function lease(daemon: RunningDaemon, agent: string): Promise<{ id: string
   return (granted.json as { lease: { id: string } }).lease;
 }
 
-/** why: Leases a device, then releases it with a driver whose reclaim fails: it is quarantined. */
+/** why: Leases a device, then releases it with a driver whose destroy fails: it is quarantined. */
 async function quarantineOne(daemon: RunningDaemon): Promise<void> {
   const held = await lease(daemon, "console-e2e-quarantine");
-  await daemon.writeDriverScript(FAILING_RECLAIM);
+  await daemon.writeDriverScript(FAILING_DESTROY);
   const released = await daemon.cli(["release", held.id]);
   expect(released.code, released.stderr).toBe(0);
   await untilTheDaemonSays(daemon, (views) =>
@@ -111,7 +111,7 @@ async function strandProvisioning(
   beforeStart: () => Promise<void> = async () => {},
 ): Promise<void> {
   await daemon.writeDriverScript({
-    ios: { ...FAILING_RECLAIM.ios, latencyMs: { makeReady: 120_000 } },
+    ios: { ...FAILING_DESTROY.ios, latencyMs: { makeReady: 120_000 } },
   });
   daemon.cliBackground([
     "lease",
@@ -528,7 +528,7 @@ test.describe("the Inbox view", () => {
       expect(stalled?.id).toBeTruthy();
 
       await item(page, "quarantined", `iPhone 16 on ${name}`).click();
-      await expect(facts(page)).toContainText(/Cause\s*Purge failed: Error: erase failed/);
+      await expect(facts(page)).toContainText(/Cause\s*Delete failed: Error: delete failed/);
       await closeDrawer(page);
 
       await item(page, "over RAM budget", name).click();

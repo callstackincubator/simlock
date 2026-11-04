@@ -353,7 +353,7 @@ describe("statusDeviceSchema's device projection", () => {
     expect(deviceRecordSchema.parse(device).spec).not.toHaveProperty("mode");
   });
 
-  it("shows a device spec's image tag in a grant, a status device, and a list.get record", () => {
+  it("shows a device spec's image tag and baseline in a grant, a status device, and a list.get record, and refuses a baseline version below 1 or a name the name rule refuses", () => {
     const device = {
       ...fullCoreShapedDevice(),
       spec: {
@@ -362,12 +362,33 @@ describe("statusDeviceSchema's device projection", () => {
         model: "Pixel 8",
         osVersion: "34",
         imageTag: "google_apis_playstore",
+        baseline: { name: "checkout", version: 2 },
       },
     };
 
+    expect(grantedDeviceSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
+    expect(statusDeviceSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
+    expect(deviceRecordSchema.parse(device).spec.baseline).toEqual({
+      name: "checkout",
+      version: 2,
+    });
     expect(grantedDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(statusDeviceSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
     expect(deviceRecordSchema.parse(device).spec.imageTag).toBe("google_apis_playstore");
+    for (const baseline of [
+      { name: "checkout", version: 0 },
+      { name: "Not A Name", version: 1 },
+    ]) {
+      expect(
+        grantedDeviceSchema.safeParse({ ...device, spec: { ...device.spec, baseline } }).success,
+      ).toBe(false);
+    }
   });
 
   it("rejects a list.get device record without a mode, or with a mode other than slim or full", () => {
@@ -598,17 +619,23 @@ describe("fitPlatformCatalog", () => {
 });
 
 describe("leaseRequestRecordSchema", () => {
-  it("keeps the image tag a stored request named", () => {
+  it("keeps the image tag and baseline a stored request named", () => {
     const record = leaseRequestRecordSchema.parse({
       createdAt: 0,
       id: "req_1",
       ownerId: "agent",
-      request: { imageTag: "google_apis", model: "Pixel 8", platform: "android" },
+      request: {
+        baseline: "checkout",
+        imageTag: "google_apis",
+        model: "Pixel 8",
+        platform: "android",
+      },
       requesterId: "agent",
       state: "open",
     });
 
     expect(record.request.imageTag).toBe("google_apis");
+    expect(record.request.baseline).toBe("checkout");
   });
 
   it.each([
@@ -680,11 +707,12 @@ describe("doctorReportSchema's module-unavailable finding", () => {
     remedy: "install agent-device 0.21.28 or later",
   };
   const parses = (candidate: unknown) =>
-    doctorReportSchema.safeParse({ findings: [candidate] }).success;
+    doctorReportSchema.safeParse({ findings: [candidate], sources: [] }).success;
 
   it("parses a module-unavailable finding, and refuses one without module, without message or without remedy", () => {
-    expect(doctorReportSchema.parse({ findings: [finding] })).toStrictEqual({
+    expect(doctorReportSchema.parse({ findings: [finding], sources: [] })).toStrictEqual({
       findings: [finding],
+      sources: [],
     });
 
     const { module: _module, ...withoutModule } = finding;
@@ -706,6 +734,34 @@ describe("doctorReportSchema's module-unavailable finding", () => {
     const { module: _module, ...rest } = finding;
     expect(parses({ ...rest, kind: "agent-device-unavailable" })).toBe(false);
     expect(parses({ ...finding, kind: "agent-device-unavailable" })).toBe(false);
+  });
+});
+
+describe("doctorReportSchema's sources", () => {
+  const source = { platform: "ios", kind: "seed", model: "iPhone 17", osVersion: "27.0" };
+  const parses = (candidate: unknown) =>
+    doctorReportSchema.safeParse({ findings: [], sources: [candidate] }).success;
+
+  it("parses a source with its optional fields, and refuses an unknown kind, a size that is negative or not whole, an over-long staleReason, model or osVersion, and an orphan that is not true", () => {
+    expect(
+      doctorReportSchema.parse({
+        findings: [],
+        sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+      }),
+    ).toStrictEqual({
+      findings: [],
+      sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+    });
+    expect(parses({ ...source, orphan: true })).toBe(true);
+    expect(parses({ ...source, kind: "copy" })).toBe(false);
+    expect(parses({ ...source, sizeBytes: -1 })).toBe(false);
+    expect(parses({ ...source, sizeBytes: 1.5 })).toBe(false);
+    expect(parses({ ...source, staleReason: "x".repeat(301) })).toBe(false);
+    expect(parses({ ...source, model: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, osVersion: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, imageTag: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, orphan: false })).toBe(false);
+    expect(doctorReportSchema.safeParse({ findings: [] }).success).toBe(false);
   });
 });
 
@@ -926,6 +982,38 @@ describe("the worker view's load", () => {
   });
 });
 
+describe("the worker view's baselines", () => {
+  const view = {
+    connection: "connected" as const,
+    drained: false,
+    id: "wrk_1",
+    lastSeenAt: 1,
+  };
+  const entry = {
+    mode: "full" as const,
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "36",
+    platform: "android" as const,
+    savedAt: "2026-11-02T13:10:00Z",
+    version: 2,
+  };
+
+  it("the worker view schema takes 1000 baselines and refuses 1001, and an entry's workerId of 1 to 128 characters and refuses an empty or 129-character one", () => {
+    const parse = (baselines: unknown[]) => workerViewSchema.parse({ ...view, baselines });
+
+    expect(parse([])).toEqual({ ...view, baselines: [] });
+    expect(parse(Array.from({ length: 1000 }, () => entry))).toHaveProperty("baselines.999");
+    expect(() => parse(Array.from({ length: 1001 }, () => entry))).toThrow();
+    expect(parse([{ ...entry, workerId: "x".repeat(128) }])).toHaveProperty(
+      "baselines.0.workerId",
+      "x".repeat(128),
+    );
+    expect(() => parse([{ ...entry, workerId: "" }])).toThrow();
+    expect(() => parse([{ ...entry, workerId: "x".repeat(129) }])).toThrow();
+  });
+});
+
 describe("waitingRequestSchema's reason", () => {
   const reasons = [
     "behind-earlier-request",
@@ -1038,6 +1126,7 @@ describe("opaque fields stay optional on the wire", () => {
       findings: [
         { kind: "orphan-device", platform: "ios", device: { deviceId: "SIM-1", address: "a" } },
       ],
+      sources: [],
     };
     const envelope = { id: "evt_1", seq: 1, timestamp: 1, event: "x", module: "m" };
     expect(deviceRecordSchema.safeParse(record).success).toBe(true);
@@ -1064,15 +1153,17 @@ describe("statusWarmPoolSchema", () => {
   });
   const { origin: _origin, ...withoutOrigin } = entry;
 
-  it("accepts origin configured and learned, an optional imageTag, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, and 321 entries", () => {
+  it("accepts origin configured and learned, an optional imageTag, an optional baseline, and 320 entries, and refuses an entry without origin or with another word, a tag imageTagSchema refuses, a baseline name the name rule refuses, and 321 entries", () => {
     const cases: readonly { name: string; targets: readonly unknown[]; accepted: boolean }[] = [
       { accepted: true, name: "learned", targets: [entry] },
       { accepted: true, name: "configured", targets: [{ ...entry, origin: "configured" }] },
       { accepted: true, name: "a tag", targets: [{ ...entry, imageTag: "google_apis_playstore" }] },
       { accepted: true, name: "320 entries", targets: Array.from({ length: 320 }, () => entry) },
+      { accepted: true, name: "a baseline", targets: [{ ...entry, baseline: "checkout" }] },
       { accepted: false, name: "no origin", targets: [withoutOrigin] },
       { accepted: false, name: "another word", targets: [{ ...entry, origin: "remembered" }] },
       { accepted: false, name: "a bad tag", targets: [{ ...entry, imageTag: "no spaces" }] },
+      { accepted: false, name: "a bad baseline", targets: [{ ...entry, baseline: "Not A Name" }] },
       { accepted: false, name: "321 entries", targets: Array.from({ length: 321 }, () => entry) },
     ];
 
@@ -1085,5 +1176,8 @@ describe("statusWarmPoolSchema", () => {
     expect(
       statusWarmPoolSchema.parse(block([{ ...entry, imageTag: "google_apis" }])).targets[0],
     ).toMatchObject({ imageTag: "google_apis", origin: "learned" });
+    expect(
+      statusWarmPoolSchema.parse(block([{ ...entry, baseline: "checkout" }])).targets[0],
+    ).toMatchObject({ baseline: "checkout", origin: "learned" });
   });
 });

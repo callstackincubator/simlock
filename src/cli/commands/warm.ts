@@ -62,6 +62,7 @@ interface Kind {
   readonly osVersion?: string | undefined;
   readonly mode?: string | undefined;
   readonly imageTag?: string | undefined;
+  readonly baseline?: string | undefined;
 }
 
 function describe(forgotten: WarmForgetOutput["forgotten"], asked: Kind): string {
@@ -76,7 +77,11 @@ function named(kind: Kind): string {
   const words = [kind.platform, kind.model, kind.osVersion]
     .filter((word) => word !== undefined)
     .map(escapeControl);
-  const details = [kind.mode, kind.imageTag]
+  const details = [
+    kind.mode,
+    kind.imageTag,
+    kind.baseline === undefined ? undefined : `baseline ${kind.baseline}`,
+  ]
     .filter((detail) => detail !== undefined)
     .map(escapeControl);
   return details.length === 0 ? words.join(" ") : `${words.join(" ")} (${details.join(", ")})`;

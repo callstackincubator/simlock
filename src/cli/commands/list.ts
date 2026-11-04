@@ -68,6 +68,9 @@ const GATEWAY_REASON_TEXT: Readonly<
   disconnected: () => "Not connected",
   drained: () => "Drained",
   incompatible: () => "Protocol mismatch",
+  "baseline-mismatch": () => "Baseline is for another device",
+  "baseline-stale": () => "Baseline is stale",
+  "no-baseline": () => "Does not hold the baseline",
   "no-driver": (platform) => `No ${platform === "ios" ? "iOS" : "Android"} support`,
   "no-free-physical": () => WAITING_REASON_TEXT["no-free-physical"](""),
   "not-chosen": () => "Not chosen this time",
@@ -103,6 +106,22 @@ function workerReasonLines(
   });
 }
 
+// why: a request naming a baseline names no model or class, so it gets no class word.
+function requestedDeviceText(spec: WaitingRequestEntry["spec"]): string {
+  return [
+    spec.platform,
+    spec.physical === true ? "physical" : undefined,
+    spec.model ??
+      (spec.baseline === undefined ? `class ${String(requestedClass(spec))}` : undefined),
+    spec.osVersion,
+    spec.mode === undefined ? undefined : `mode ${spec.mode}`,
+    spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+    spec.baseline === undefined ? undefined : `baseline ${spec.baseline}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" ");
+}
+
 function formatWaitingRequests(
   requests: readonly WaitingRequestEntry[],
   now: number,
@@ -111,17 +130,7 @@ function formatWaitingRequests(
   if (requests.length === 0) return "No requests are waiting.";
   return requests
     .map((request) => {
-      const { spec } = request;
-      const device = [
-        spec.platform,
-        spec.physical === true ? "physical" : undefined,
-        spec.model ?? `class ${String(requestedClass(spec))}`,
-        spec.osVersion,
-        spec.mode === undefined ? undefined : `mode ${spec.mode}`,
-        spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
-      ]
-        .filter((part) => part !== undefined)
-        .join(" ");
+      const device = requestedDeviceText(request.spec);
       const where = request.workerId === undefined ? "" : ` on ${esc(request.workerId)}`;
       const stage =
         request.queuePosition === undefined

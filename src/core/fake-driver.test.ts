@@ -132,14 +132,15 @@ describe("FakeDriver", () => {
     expect(driver.estimate({ clean: "full", operation: "reclaim" }, physical)).toBe(90_000);
   });
 
-  it("answers uninstall for the reclaim strategy of a physical device, and what it was given for a virtual one", () => {
-    const driver = new FakeDriver({
-      clock: new FakeClock(),
-      platform: "ios",
-      reclaimStrategy: "erase",
-    });
+  it("answers uninstall for the reclaim strategy of a physical device, and throws virtual devices are not reclaimed for a virtual one", async () => {
+    const driver = new FakeDriver({ clock: new FakeClock(), platform: "ios" });
 
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("erase");
+    expect(() => driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toThrow(
+      "virtual devices are not reclaimed",
+    );
+    await expect(driver.reclaim(VIRTUAL_DEVICE, { clean: "standard" })).rejects.toThrow(
+      "virtual devices are not reclaimed",
+    );
     const physical: PhysicalDriverDevice = {
       address: "",
       deviceId: "udid",

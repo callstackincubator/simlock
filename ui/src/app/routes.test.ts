@@ -9,6 +9,7 @@ describe("the console's routes", () => {
     expect(routeFor("/fleet/wrk_1")?.label).toBe("Fleet");
     expect(routeFor("/activity/e1")?.label).toBe("Activity");
     expect(routeFor("/usage")?.label).toBe("Usage");
+    expect(routeFor("/baselines")).toMatchObject({ label: "Baselines", group: "Operate" });
     expect(routeFor("/screens")).toMatchObject({ label: "Screens", group: "Observe" });
   });
 
@@ -24,6 +25,7 @@ describe("the console's routes", () => {
       "/fleet",
       "/leases",
       "/queue",
+      "/baselines",
       "/screens",
       "/activity",
       "/usage",

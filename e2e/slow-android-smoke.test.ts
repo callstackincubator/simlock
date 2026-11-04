@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -112,7 +112,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a shut-down emulator reports erasableReadable:false with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const env = await withDaemon({
@@ -167,9 +167,9 @@ describe.skipIf(!hasAndroidSdk)(
             environment: Record<string, string>;
             lease: { id: string };
           };
-          // On Android the driver's device id is the AVD name (the driver refuses a record
-          // where they differ), so this is the name to look for on disk and in avdmanager.
+          // why: the driver device id names the device's own folder, `<root>/<id>/simlock.avd`; every copy's AVD is called `simlock`.
           const avdName = grant.device.driverDeviceId;
+          const avdFolder = join(env.home, "devices", "android", avdName);
 
           // Without this, a holder's `adb` talks to the shared server, which by design
           // cannot see a Simlock emulator at all (ADR 0001, decision 7).
@@ -211,35 +211,33 @@ describe.skipIf(!hasAndroidSdk)(
           // Ownership is root membership, not a name: the AVD must be inside the root this
           // env's Simlock owns, and must not be in the user's own AVD home at all.
           expect(
-            existsSync(join(env.home, "devices", "android", `${avdName}.avd`)),
+            existsSync(join(avdFolder, "simlock.avd")),
             "expected the AVD to live inside Simlock's own device root",
           ).toBe(true);
           const avdNames = await avdManagerList();
           expect(
-            avdNames.includes(avdName),
+            avdNames.includes("simlock") || avdNames.includes(avdName),
             "a Simlock AVD must not appear in the user's own AVD home",
           ).toBe(false);
 
           const release = await env.cli(["release", grant.lease.id]);
           expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
-          // Force the idle-shutdown rule (see flow 9) rather than waiting on the slow
-          // periodic tick, so the emulator process actually stops.
+          // why: a released emulator is deleted, never wiped and kept: its state, its AVD folder and its avdmanager entry all go.
           await waitFor(
             async () => {
-              await env.cli(["cleanup"]);
               const rows = (await env.cli(["list", "--devices"])).json as {
                 driverDeviceId: string;
                 state: string;
               }[];
-              return rows.some((row) => row.driverDeviceId === avdName && row.state === "shutdown");
+              return rows.some((row) => row.driverDeviceId === avdName && row.state === "deleted");
             },
-            { timeout: 60_000, interval: 500, label: "device demoted to shutdown" },
+            { timeout: 120_000, interval: 500, label: "device deleted after release" },
           );
+          expect(existsSync(avdFolder), "the released emulator's folder is gone").toBe(false);
+          expect((await avdManagerList()).includes(avdName)).toBe(false);
 
-          // With the emulator process stopped, the on-device erasable mark is
-          // unreachable -- `doctor` must not crash on that, must not report it as an
-          // erase (unreadable is not the same as absent), and `list` must render fine.
+          // why: `doctor` must not crash on a deleted device nor report it as drift.
           const doctorReport = await env.cli(["doctor"]);
           expect(doctorReport.code).toBe(0);
           const findings = (
@@ -251,12 +249,14 @@ describe.skipIf(!hasAndroidSdk)(
           }[];
           const registryId = devices.find((device) => device.driverDeviceId === avdName)?.id;
           expect(
-            findings.some(
-              (finding) =>
-                finding.kind === "foreign-provenance-change" && finding.deviceId === registryId,
-            ),
-            "a stopped emulator's unreadable mark must not be reported as a foreign-provenance-change",
-          ).toBe(false);
+            findings.filter((finding) => finding.deviceId === registryId),
+            "a deleted emulator must produce no finding",
+          ).toEqual([]);
+
+          const seeds = (
+            doctorReport.json as { sources: { kind: string; platform: string }[] }
+          ).sources.filter((source) => source.platform === "android" && source.kind === "seed");
+          expect(seeds, "doctor lists the Android seed the lease was copied from").toHaveLength(1);
 
           const list = await env.cli(["list", "--devices"]);
           expect(list.code).toBe(0);
@@ -281,6 +281,96 @@ describe.skipIf(!hasAndroidSdk)(
           if (createdRoot !== undefined) {
             await rm(createdRoot, { recursive: true, force: true });
           }
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
+        }
+      },
+    );
+    it(
+      "two plain leases of Pixel 9 at once are copies of one seed, a file written on one is absent from the next lease, and a released copy's folder is gone",
+      { timeout: 900_000 },
+      async () => {
+        const env = await withDaemon({
+          driver: "real",
+          configOverrides: { idle: { shutdownAfterMs: 300 }, warmPool: { learn: false } },
+        });
+        try {
+          const root = join(env.home, "devices", "android");
+          const lease = async (agent: string) => {
+            const granted = await env.cli(
+              [
+                "lease",
+                "--platform",
+                "android",
+                "--device",
+                "Pixel 9",
+                "--agent-id",
+                agent,
+                "--detach",
+              ],
+              { timeout: DEVICE_READY_MS },
+            );
+            expect(granted.code, `lease failed: ${granted.stderr}`).toBe(0);
+            return granted.json as {
+              device: { address?: string; driverDeviceId: string };
+              lease: { id: string };
+            };
+          };
+          // why: a worker's `simlock adb` has no lease to aim at (`--lease` is a gateway's), and its adb server lists every emulator, so each call names the lease's own serial.
+          const adbOn = (grant: { device: { address?: string } }, ...args: string[]) =>
+            env.cli(["adb", "-s", grant.device.address ?? "", ...args]);
+
+          const [first, second] = await Promise.all([lease("seed-one"), lease("seed-two")]);
+
+          expect(
+            (await readdir(join(root, "sources"))).filter((entry) => entry.startsWith("seed_")),
+            "one seed serves both leases",
+          ).toHaveLength(1);
+          for (const grant of [first, second]) {
+            expect(existsSync(join(root, grant.device.driverDeviceId, "simlock.avd"))).toBe(true);
+          }
+          const touched = await adbOn(first, "shell", "touch", "/data/local/tmp/t2");
+          expect(touched.code, touched.stderr).toBe(0);
+
+          for (const grant of [first, second]) {
+            const release = await env.cli(["release", grant.lease.id]);
+            expect(release.code, `release failed: ${release.stderr}`).toBe(0);
+          }
+          await waitFor(
+            async () =>
+              ![first, second].some((grant) => existsSync(join(root, grant.device.driverDeviceId))),
+            { timeout: 120_000, interval: 500, label: "released copies' folders deleted" },
+          );
+
+          const third = await lease("seed-three");
+          expect([first, second].map((grant) => grant.device.driverDeviceId)).not.toContain(
+            third.device.driverDeviceId,
+          );
+          const listed = await adbOn(third, "shell", "ls", "/data/local/tmp/t2");
+          expect(listed.code, "the file written on the first lease is not on a later one").not.toBe(
+            0,
+          );
+
+          expect(await readFile(env.logPath, "utf8")).not.toContain(
+            "Android snapshot boot fell back to a cold boot",
+          );
+          await env.cli(["release", third.lease.id]);
+          await waitFor(async () => !existsSync(join(root, third.device.driverDeviceId)), {
+            timeout: 120_000,
+            interval: 500,
+            label: "third copy's folder deleted",
+          });
+          const doctorReport = await env.cli(["doctor"]);
+          expect(doctorReport.code, doctorReport.stderr).toBe(0);
+          const seeds = (
+            doctorReport.json as {
+              sources: { kind: string; platform: string; sizeBytes?: number }[];
+            }
+          ).sources.filter((source) => source.platform === "android" && source.kind === "seed");
+          expect(seeds, "doctor lists one Android seed").toHaveLength(1);
+          expect(seeds[0]?.sizeBytes ?? 0).toBeGreaterThan(0);
+        } finally {
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);

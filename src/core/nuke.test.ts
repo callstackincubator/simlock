@@ -76,7 +76,7 @@ describe("Nuke", () => {
     );
   });
 
-  it("waits for a blocked reclaim before deleting the registry-owned device", async () => {
+  it("waits for a blocked release shutdown before deleting the registry-owned device", async () => {
     const clock = new FakeClock(1_000);
     const eventBus = new EventBus(clock);
     const registry = await loadTestRegistry({
@@ -87,7 +87,7 @@ describe("Nuke", () => {
     const driver = new FakeDriver({
       availableOsVersions: ["1"],
       clock,
-      latencyMs: { reclaim: 20 },
+      latencyMs: { shutdown: 20 },
       platform: "ios",
     });
     const engine = createTestEngine({
@@ -128,7 +128,7 @@ describe("Nuke", () => {
 
     clock.advance(20);
     await release;
-    await expect(nuke).resolves.toEqual({ releasedLeaseIds: [] });
+    await expect(nuke).resolves.toEqual({ releasedLeaseIds: [], removedBaselines: [] });
     expect(registry.snapshot.devices).toMatchObject([{ id: grant.device.id, state: "deleted" }]);
 
     clock.advance(100);

@@ -4,6 +4,7 @@ import type { CapacityReservation } from "./capacity/index.js";
 import type { ComponentInstaller } from "./component-installer.js";
 import type { DeviceOperationClaim, DeviceOperationClaims } from "./device-operation-claims.js";
 import type { LeaseProgress, VirtualDevice, VirtualSpec } from "./domain.js";
+import { UnknownBaselineError, type CurrentBaseline } from "./baselines.js";
 import { BootTimeoutError, type DriverDevice } from "./driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle, type ReadyDeviceHandoff } from "./managed-device-lifecycle.js";
@@ -24,6 +25,10 @@ export interface DeviceProvisionerRegistry {
 }
 
 export interface DeviceProvisionerOptions {
+  readonly baselines: () => {
+    current(name: string): CurrentBaseline | undefined;
+    hold(name: string, version: number): () => void;
+  };
   readonly catalog: DriverCatalog;
   readonly claims: Pick<DeviceOperationClaims, "tryClaim">;
   readonly clock: Clock;
@@ -56,19 +61,70 @@ export class DeviceProvisioner {
     this.#logger = options.logger?.child("device-provisioner") ?? new NoopLogger();
   }
 
-  async provision(spec: VirtualSpec, options: ProvisionDeviceOptions): Promise<ReadyDeviceHandoff> {
-    const driver = this.options.catalog.get(spec.platform);
+  /** why: the claim, and for a baseline copy the version and source, are taken in one gate section, so the copy is of the version current at that moment and a replace keeps its source until the copy has a record. */
+  #claim(
+    requested: VirtualSpec,
+    made: { spec: VirtualSpec; source?: string; hold: () => void },
+  ): () => void {
+    const release = this.options.components.claimProvision(requested);
+    if (requested.baseline === undefined) return release;
+    const current = this.options.baselines().current(requested.baseline.name);
+    if (current === undefined) {
+      release();
+      throw new UnknownBaselineError(requested.baseline.name);
+    }
+    made.spec = { ...requested, baseline: { name: current.name, version: current.version } };
+    made.source = current.sourceId;
+    made.hold = this.options.baselines().hold(current.name, current.version);
+    return release;
+  }
+
+  /** why: the claim ends in the section that commits the record, so the device is counted by one of the two at every moment; the boot claim begins in that same section. */
+  async #register(
+    driverDevice: DriverDevice,
+    spec: VirtualSpec,
+    startedAt: number,
+    options: ProvisionDeviceOptions,
+    releaseClaim: () => void,
+  ): Promise<{ device: VirtualDevice; bootClaim: DeviceOperationClaim | undefined }> {
+    return this.options.decisions.run(async () => {
+      try {
+        const device = await this.options.registry.registerDevice({
+          driverData: driverDevice.driverData,
+          driverDeviceId: driverDevice.deviceId,
+          provisionDuration: this.options.clock.now() - startedAt,
+          spec,
+        });
+        const bootClaim =
+          options.claim === undefined
+            ? undefined
+            : this.options.claims.tryClaim(device.id, options.claim.kind, options.claim.owner);
+        return { bootClaim, device };
+      } finally {
+        releaseClaim();
+      }
+    });
+  }
+
+  async provision(
+    requested: VirtualSpec,
+    options: ProvisionDeviceOptions,
+  ): Promise<ReadyDeviceHandoff> {
+    const driver = this.options.catalog.get(requested.platform);
+    const made: { spec: VirtualSpec; source?: string; hold: () => void } = {
+      hold: () => undefined,
+      spec: requested,
+    };
     // Claimed inside the gate, so a removal's own count in the gate sees this device before the
     // driver creates it, or this claim sees the removal's mark and refuses.
     let releaseClaim: () => void;
     try {
-      releaseClaim = await this.options.decisions.run(() =>
-        this.options.components.claimProvision(spec),
-      );
+      releaseClaim = await this.options.decisions.run(() => this.#claim(requested, made));
     } catch (error: unknown) {
       options.reservation.release();
       throw error;
     }
+    const { spec, source } = made;
     const startedAt = this.options.clock.now();
     let driverDevice: DriverDevice;
     try {
@@ -76,48 +132,42 @@ export class DeviceProvisioner {
         stage: "provisioning",
         etaMs: driver.estimate({ operation: "provision" }, spec),
       });
-      driverDevice = await driver.provision(spec);
+      driverDevice = await driver.provision(spec, source === undefined ? undefined : { source });
     } catch (error: unknown) {
       releaseClaim();
+      made.hold();
       options.reservation.release();
       throw error;
     }
 
-    let device: VirtualDevice;
-    let bootClaim: DeviceOperationClaim | undefined;
+    let registered: { device: VirtualDevice; bootClaim: DeviceOperationClaim | undefined };
     try {
-      // The claim ends in the section that commits the record, so the device is counted by one
-      // of the two at every moment; the boot claim begins in that same section.
-      device = await this.options.decisions.run(async () => {
-        try {
-          const registered = await this.options.registry.registerDevice({
-            driverData: driverDevice.driverData,
-            driverDeviceId: driverDevice.deviceId,
-            provisionDuration: this.options.clock.now() - startedAt,
-            spec,
-          });
-          if (options.claim !== undefined) {
-            bootClaim = this.options.claims.tryClaim(
-              registered.id,
-              options.claim.kind,
-              options.claim.owner,
-            );
-          }
-          return registered;
-        } finally {
-          releaseClaim();
-        }
+      registered = await this.#register(driverDevice, spec, startedAt, options, () => {
+        releaseClaim();
+        made.hold();
       });
     } catch (error: unknown) {
       options.reservation.release();
       throw error;
     }
+    const { bootClaim, device } = registered;
+    return this.#makeReady(
+      device,
+      bootClaim,
+      () => driver.estimate({ operation: "boot" }, spec),
+      options,
+    );
+  }
 
+  /** why: a registered device that cannot be made ready is destroyed and the caller sees `BootTimeoutError`; the reservation ends on every path. */
+  async #makeReady(
+    device: VirtualDevice,
+    bootClaim: DeviceOperationClaim | undefined,
+    bootEstimate: () => number,
+    options: ProvisionDeviceOptions,
+  ): Promise<ReadyDeviceHandoff> {
     try {
-      options.onProgress?.({
-        stage: "booting",
-        etaMs: driver.estimate({ operation: "boot" }, spec),
-      });
+      options.onProgress?.({ stage: "booting", etaMs: bootEstimate() });
       const ready = await this.options.lifecycle.readyProvisionedForLease(device, bootClaim);
       if (ready === undefined)
         throw new Error(`Registered device could not be made ready: ${device.id}`);

@@ -106,6 +106,7 @@ describe("the routes createHttpApp registers", () => {
   it("CORE_ROUTE_SEGMENTS names the core first segments and uplink", () => {
     expect([...CORE_ROUTE_SEGMENTS].sort()).toEqual(
       [
+        "baselines",
         "catalog",
         "components",
         "devices",

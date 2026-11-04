@@ -101,6 +101,21 @@ Without it, Simlock uses the `google_apis` image for the machine's CPU when it i
 
 A tagged lease never downloads. If no image with that tag is installed for the API level, or the image does not fit the model, it fails with `RUNTIME_MISSING` (exit 12). On iOS `--image-tag` is a `BAD_REQUEST` (exit 2).
 
+## Start from a baseline
+
+An operator can save a prepared simulator or emulator as a baseline: the apps, files and settings it holds, such as an installed build or a signed-in test account. `--baseline` gives you a new copy of it.
+
+```sh
+simlock lease --platform android --baseline checkout
+SIMLOCK_BASELINE=checkout simlock lease --platform android
+```
+
+The flag wins over `SIMLOCK_BASELINE`, and an empty `SIMLOCK_BASELINE` sends nothing. The copy is made from the newest version of the baseline, so a version saved while you wait is the one you get. When the lease ends the copy is deleted, and the next lease gets a new copy with none of your changes.
+
+The baseline already decides the platform, model, OS, mode and image tag. You may still name them; a value that differs fails at once with `BASELINE_MISMATCH` (exit 2), and `--device` and `--os` follow the rules above, so `--device "pixel 9"` and `--os ">=35"` match a Pixel 9 baseline on Android 36. A name no baseline has fails with `UNKNOWN_BASELINE`, and a baseline whose runtime or image was removed fails with `BASELINE_STALE` (exit 12). `--baseline` cannot be combined with `--class` or `--physical`.
+
+Copies share what the baseline holds, including a saved signed-in account. Do not save a baseline with credentials you would not give every agent that names it. A plain lease never gets a copy of a baseline. `simlock status` shows a device's baseline and version.
+
 ## When the runtime is not installed
 
 If the OS version you ask for is not installed, the lease fails with `RUNTIME_MISSING` (exit 12) and says how to get it:

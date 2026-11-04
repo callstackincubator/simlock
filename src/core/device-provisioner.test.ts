@@ -13,9 +13,10 @@ import {
 } from "../ports/index.js";
 import { sourceFilesRecursive, srcDir, stripComments } from "../test-support/imports.js";
 import { type CapacityReservation } from "./capacity/index.js";
+import { UnknownBaselineError, type CurrentBaseline } from "./index.js";
 import { ComponentBeingRemovedError, ComponentInstaller } from "./component-installer.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
-import { DeviceProvisioner } from "./device-provisioner.js";
+import { DeviceProvisioner, type DeviceProvisionerOptions } from "./device-provisioner.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { DriverCrashError, BootTimeoutError, DiskSpaceGuard } from "./driver.js";
 import { FakeDriver } from "./fake-driver.js";
@@ -36,6 +37,7 @@ async function createHarness(
     readonly provision?: number;
   },
   logger?: Logger,
+  baselines?: DeviceProvisionerOptions["baselines"],
 ) {
   const clock = new FakeClock(1_000);
   const eventBus = new EventBus(clock);
@@ -71,6 +73,7 @@ async function createHarness(
     timeoutMs: 1_200_000,
   });
   const provisioner = new DeviceProvisioner({
+    baselines: baselines ?? (() => ({ current: () => undefined, hold: () => () => undefined })),
     catalog: new DriverCatalog([driver]),
     claims,
     clock,
@@ -93,6 +96,7 @@ async function createHarness(
   };
 }
 
+// why: the claim, the hold and the registration are taken in the decision gate in an order no surface above the provisioner can force.
 describe("DeviceProvisioner", () => {
   it("records provision and boot durations from the injected clock", async () => {
     const harness = await createHarness({ makeReady: 7, provision: 11 });
@@ -329,6 +333,7 @@ describe("DeviceProvisioner", () => {
     const reserved = reservation();
     const registrationError = new Error("state persistence failed");
     const provisioner = new DeviceProvisioner({
+      baselines: () => ({ current: () => undefined, hold: () => () => undefined }),
       catalog: new DriverCatalog([harness.driver]),
       claims: harness.claims,
       clock: harness.clock,
@@ -482,5 +487,105 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
     await expect(harness.components.remove(removal)).resolves.toMatchObject({
       outcome: "removed",
     });
+  });
+});
+
+describe("DeviceProvisioner copying a baseline", () => {
+  /** why: the baselines port is a fake whose current version a test moves and whose holds it counts. */
+  async function withBaseline(latencyMs?: { readonly provision?: number }) {
+    let current: CurrentBaseline | undefined;
+    const held = { count: 0 };
+    const harness = await createHarness(latencyMs, undefined, () => ({
+      current: () => current,
+      hold: () => {
+        held.count += 1;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          held.count -= 1;
+        };
+      },
+    }));
+    await harness.components.install({ component: "26.5", platform: "ios" });
+    const saved = async (version: number): Promise<CurrentBaseline> => {
+      const providing = harness.driver.provision(spec);
+      await vi.waitFor(() => expect(provisionCalls(harness).length).toBeGreaterThan(0));
+      harness.clock.advance(50);
+      const driverDevice = await providing;
+      harness.driver.writeDeviceFile(driverDevice.deviceId, "data/version.txt", `v${version}`);
+      const { sourceId } = await harness.driver.saveSource({ ...driverDevice, physical: false });
+      return {
+        mode: "full",
+        model: spec.model,
+        name: "checkout",
+        osVersion: spec.osVersion,
+        platform: "ios",
+        sourceId,
+        version,
+      };
+    };
+    return {
+      ...harness,
+      held,
+      saved,
+      setCurrent: (next: CurrentBaseline | undefined) => void (current = next),
+    };
+  }
+
+  const requested = { ...spec, baseline: { name: "checkout", version: 1 } };
+  const provisionCalls = (harness: { readonly driver: FakeDriver }) =>
+    harness.driver.calls.filter((call) => call.operation === "provision");
+
+  it("copies the version current at its claim, keeps its source until the device has a record however many copies are made at once, and ends its claim and hold on every failure", async () => {
+    const harness = await withBaseline({ provision: 50 });
+    const newest = await harness.saved(2);
+    harness.setCurrent(newest);
+    const callsBefore = provisionCalls(harness).length;
+    expect(callsBefore).toBe(1);
+
+    const first = harness.provisioner.provision(requested, { reservation: reservation() });
+    await vi.waitFor(() => expect(provisionCalls(harness)).toHaveLength(callsBefore + 1));
+    harness.clock.advance(20);
+    const second = harness.provisioner.provision(requested, { reservation: reservation() });
+    await vi.waitFor(() => expect(provisionCalls(harness)).toHaveLength(callsBefore + 2));
+    expect(harness.held.count).toBe(2);
+
+    harness.clock.advance(30);
+    await first;
+    expect(harness.held.count).toBe(1);
+    harness.clock.advance(20);
+    await second;
+    expect(harness.held.count).toBe(0);
+    expect(
+      harness.registry.snapshot.devices.map((device) => [
+        device.spec.baseline,
+        harness.driver.deviceFile(device.driverDeviceId, "data/version.txt"),
+      ]),
+    ).toEqual([
+      [{ name: "checkout", version: 2 }, "v2"],
+      [{ name: "checkout", version: 2 }, "v2"],
+    ]);
+
+    harness.driver.failOn("provision", callsBefore + 3, new DriverCrashError("clone failed"));
+    const failing = reservation();
+    const failure = expect(
+      harness.provisioner.provision(requested, { reservation: failing }),
+    ).rejects.toThrow("clone failed");
+    await vi.waitFor(() => expect(provisionCalls(harness)).toHaveLength(callsBefore + 3));
+    harness.clock.advance(50);
+    await failure;
+    expect(harness.held.count).toBe(0);
+    expect(failing.releaseCount()).toBe(1);
+
+    harness.setCurrent(undefined);
+    const unknown = reservation();
+    await expect(
+      harness.provisioner.provision(requested, { reservation: unknown }),
+    ).rejects.toThrow(UnknownBaselineError);
+    expect(unknown.releaseCount()).toBe(1);
+    expect(provisionCalls(harness)).toHaveLength(callsBefore + 3);
+    const listed = await harness.components.list("ios");
+    expect(listed.find((component) => component.version === "26.5")).toMatchObject({ devices: 2 });
   });
 });

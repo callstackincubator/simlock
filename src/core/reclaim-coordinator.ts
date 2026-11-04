@@ -19,6 +19,13 @@ import type { ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { stableError } from "./stable-error.js";
 
+export interface SavedSource {
+  readonly sourceId: string;
+  readonly sizeBytes?: number;
+  /** why: the image tag the saved device really carries, which a request that named none leaves out. */
+  readonly imageTag?: string;
+}
+
 export interface ReclaimDriverCatalog {
   get(platform: Platform): Driver;
 }
@@ -96,10 +103,7 @@ export class ReclaimCoordinator {
   reclaim(released: ReleasedLease): Promise<void> {
     // A physical device is never retired: it has no spent state, so only its purge applies.
     if (released.device.physical) return this.#purge(released.device, released.lease.id);
-    if (!mayBeGranted(released.device)) {
-      return this.#retireSpent({ device: released.device, lease: released.lease });
-    }
-    return this.#purge(released.device, released.lease.id);
+    return this.#retireSpent({ device: released.device, lease: released.lease });
   }
 
   async #purge(device: DeviceRecord, leaseId?: string): Promise<void> {
@@ -137,7 +141,7 @@ export class ReclaimCoordinator {
     this.options.notifyAvailability();
   }
 
-  /** The wipe starts in the background under a claim and this returns once it has started: an erase runs tens of seconds, and startup waits for none. */
+  /** why: the reclaim starts in the background under a claim and this returns once it has started: a shutdown and delete run tens of seconds, and startup waits for none. */
   async recoverInterrupted(deviceId: string): Promise<boolean> {
     const device = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.virtualDevices.find(
@@ -236,7 +240,7 @@ export class ReclaimCoordinator {
   ): Promise<void> {
     const wipe = this.#purge(device, leaseId)
       .catch((error: unknown) => {
-        this.options.logger?.error("deferred wipe failed", {
+        this.options.logger?.error("deferred reclaim failed", {
           deviceId: device.id,
           error: error instanceof Error ? error.message : String(error),
           leaseId,
@@ -249,6 +253,53 @@ export class ReclaimCoordinator {
     this.#backgroundWipes.add(wipe);
     void wipe.finally(() => this.#backgroundWipes.delete(wipe));
     return wipe;
+  }
+
+  /**
+   * why: the spent path with `saveSource` in place of `shutdown`: the driver keeps a copy of the
+   * device and shuts it down itself. `afterSave` commits the baseline before the device is
+   * destroyed, so a destroy that fails leaves a saved baseline and a quarantined device, never the reverse.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through a `Pick` of the class, or a port type, that the dispatcher, doctor and core wiring hold.
+  async retireSaved(
+    released: { readonly device: VirtualDevice; readonly lease: LeaseRecord },
+    afterSave: (saved: SavedSource) => Promise<void>,
+  ): Promise<SavedSource> {
+    const { device, lease } = released;
+    const driver = this.options.drivers.get(device.spec.platform);
+    const startedAt = this.options.clock.now();
+    let saved: SavedSource;
+    try {
+      saved = await driver.saveSource(toDriverDevice(device));
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(
+        device.id,
+        lease.id,
+        startedAt,
+        "delete",
+        "shutdown-failed",
+        error,
+      );
+      throw error;
+    }
+    const shutdown = await this.options.decisions.run(async () =>
+      assertVirtual(await this.options.registry.completeReclaimWithoutPurge(device.id)),
+    );
+    this.options.notifyAvailability();
+    await afterSave(saved);
+    try {
+      await this.#deleteSpent(shutdown, "baseline-save");
+    } catch (error: unknown) {
+      await this.#recoverPurgeFailure(
+        device.id,
+        lease.id,
+        startedAt,
+        "delete",
+        "delete-failed",
+        error,
+      );
+    }
+    return saved;
   }
 
   async deleteSpent(deviceId: string): Promise<boolean> {
@@ -300,13 +351,13 @@ export class ReclaimCoordinator {
   }
 
   /** Destroys a spent device and commits `shutdown -> deleted`, if it is still that device. */
-  async #deleteSpent(device: VirtualDevice): Promise<boolean> {
+  async #deleteSpent(device: VirtualDevice, initiator = "lease-end"): Promise<boolean> {
     await this.options.drivers.get(device.spec.platform).destroy(toDriverDevice(device));
     const deleted = await this.options.decisions.run(async () => {
       if (this.#unleasedDevice(device.id, "shutdown") === undefined) return false;
       await this.options.registry.transitionDevice(device.id, "deleted", {
         event: "device.deleted",
-        payload: { deviceId: device.id, initiator: "lease-end" },
+        payload: { deviceId: device.id, initiator },
       });
       return true;
     });

@@ -87,6 +87,120 @@ describe("Doctor", () => {
     expect(eventBus.replay().at(-1)).toMatchObject({ event: "doctor.reconciled" });
   });
 
+  it("lists each driver's sources, a size only when it was counted and a stale reason when there is one, and a source is no finding", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    const androidDriver = new FakeDriver({ clock, platform: "android" });
+    androidDriver.setSources([
+      { id: "a1", kind: "seed", model: "Pixel 9", osVersion: "35", sizeBytes: 2 },
+    ]);
+    driver.setSources([
+      { id: "s1", kind: "seed", model: "iPhone 17", osVersion: "27.0", sizeBytes: 4_000_000_000 },
+      { id: "s2", kind: "seed", model: "iPad", osVersion: "27.0" },
+      {
+        id: "s3",
+        kind: "seed",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        sizeBytes: 1,
+        staleReason: "its runtime was removed",
+      },
+    ]);
+
+    const report = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver, androidDriver],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings).toEqual([]);
+    expect(report.sources).toEqual([
+      {
+        kind: "seed",
+        model: "iPhone 17",
+        osVersion: "27.0",
+        platform: "ios",
+        sizeBytes: 4_000_000_000,
+      },
+      { kind: "seed", model: "iPad", osVersion: "27.0", platform: "ios" },
+      {
+        kind: "seed",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+        sizeBytes: 1,
+        staleReason: "its runtime was removed",
+      },
+      { kind: "seed", model: "Pixel 9", osVersion: "35", platform: "android", sizeBytes: 2 },
+    ]);
+  });
+
+  it("lists no sources for a driver whose listSources fails, still returns the report, and keeps the sources of the drivers that answer", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const failing = new FakeDriver({ clock, platform: "ios" });
+    failing.failOn("listSources", 1, new Error("simctl is gone"));
+    failing.setSources([{ id: "x", kind: "seed", model: "Hidden", osVersion: "1" }]);
+    const ios = new FakeDriver({ clock, platform: "ios" });
+    ios.setSources([{ id: "i1", kind: "seed", model: "iPhone 17", osVersion: "27.0" }]);
+    const android = new FakeDriver({ clock, platform: "android" });
+    android.setSources([{ id: "a1", kind: "seed", model: "Pixel 9", osVersion: "35" }]);
+
+    const report = await new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [failing, ios, android],
+      eventBus,
+      registry,
+    }).reconcile();
+
+    expect(report.findings).toEqual([]);
+    expect(report.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+      { kind: "seed", model: "Pixel 9", osVersion: "35", platform: "android" },
+    ]);
+  });
+
+  it("lists an orphan source and destroys it only when it purges orphans", async () => {
+    const clock = new FakeClock(10_000);
+    const eventBus = new EventBus(clock);
+    const registry = await loadTestRegistry({ clock, eventBus, idGenerator: sequence() });
+    const driver = new FakeDriver({ clock, platform: "ios" });
+    driver.setSources([
+      { id: "s1", kind: "seed", model: "iPhone 17", osVersion: "27.0" },
+      { id: "o1", kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
+    ]);
+    const doctor = new Doctor({
+      decisions: new SerializedDecision(),
+      clock,
+      config: config(),
+      drivers: [driver],
+      eventBus,
+      registry,
+    });
+
+    const listed = await doctor.reconcile();
+    expect(listed.findings).toEqual([]);
+    expect(listed.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+      { kind: "seed", model: "unknown", orphan: true, osVersion: "unknown", platform: "ios" },
+    ]);
+    expect(await driver.listSources()).toHaveLength(2);
+
+    const purged = await doctor.reconcile({ purgeOrphans: true });
+    expect(purged.sources).toEqual([
+      { kind: "seed", model: "iPhone 17", osVersion: "27.0", platform: "ios" },
+    ]);
+    expect((await driver.listSources()).map((source) => source.id)).toEqual(["s1"]);
+  });
+
   it("reports but does not correct a leased-state device with no lease record", async () => {
     const clock = new FakeClock(10_000);
     const eventBus = new EventBus(clock);
@@ -1248,7 +1362,7 @@ describe("Doctor", () => {
     });
     await registry.beginRelease(lease.id);
     await registry.enterQuarantine(device.id, 10_100, { kind: "purge-failed" });
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+    const driver = new FakeDriver({ clock, platform: "ios" });
     const listed = {
       devices: [
         {
@@ -1265,10 +1379,10 @@ describe("Doctor", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const original = driver.reclaim.bind(driver);
-    vi.spyOn(driver, "reclaim").mockImplementation(async (target, options) => {
+    const original = driver.destroy.bind(driver);
+    vi.spyOn(driver, "destroy").mockImplementation(async (target) => {
       await gate;
-      return original(target, options);
+      return original(target);
     });
     const claims = new DeviceOperationClaims();
     const quarantine = new QuarantineCoordinator({
@@ -1800,7 +1914,11 @@ describe("Doctor", () => {
           platform: "ios",
         },
       ]);
-      expect(driver.calls.map((call) => call.operation)).toEqual(["listManaged"]);
+      expect(
+        driver.calls
+          .map((call) => call.operation)
+          .filter((operation) => operation !== "listSources"),
+      ).toEqual(["listManaged"]);
     });
 
     it("excludes driver-advisory findings from the doctor.reconciled event's driftFindings", async () => {
@@ -1990,7 +2108,11 @@ describe("Doctor", () => {
 
       expect(prerequisiteFindings(fixed)).toEqual(prerequisiteFindings(plain));
       expect(prerequisiteFindings(fixed)).toHaveLength(1);
-      expect(android.calls.map((call) => call.operation)).toEqual(["listManaged", "listManaged"]);
+      expect(
+        android.calls
+          .map((call) => call.operation)
+          .filter((operation) => operation !== "listSources"),
+      ).toEqual(["listManaged", "listManaged"]);
       expect(check.runs).toBe(2);
     });
 
@@ -2174,11 +2296,9 @@ describe("Doctor with a platform it cannot observe", () => {
       purgeOrphans: true,
     });
 
-    expect(driver.calls.map((call) => call.operation)).toEqual([
-      "listManaged",
-      "revalidateRoot",
-      "destroy",
-    ]);
+    expect(
+      driver.calls.map((call) => call.operation).filter((operation) => operation !== "listSources"),
+    ).toEqual(["listManaged", "revalidateRoot", "destroy"]);
   });
 
   it("destroys nothing at all when a root can no longer be proven", async () => {

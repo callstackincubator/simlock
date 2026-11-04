@@ -31,6 +31,13 @@ export const WORKER_VIEW_REFRESH_INTERVAL_MS = 30_000;
  */
 export const WORKER_VIEW_CATALOG_EVENTS = ["component.installed"] as const;
 
+// why: the events after which a gateway reads a worker's baselines again at once (ADR 0061 §6): they change what `baseline.list` answers.
+export const WORKER_VIEW_BASELINE_EVENTS = [
+  "baseline.saved",
+  "baseline.removed",
+  "baseline.stale",
+] as const;
+
 // why: a worker's `update` and `lastUpdateFailure` change on these two events (ADR 0042 §11), so a gateway reads its status again at once.
 export const WORKER_VIEW_UPDATE_EVENTS = ["daemon.update-started", "daemon.update-failed"] as const;
 
@@ -44,6 +51,7 @@ export interface WorkerReads {
   readonly status: Output<"status.get">;
   readonly devices?: Output<"list.get">;
   readonly catalog?: Output<"catalog.get">;
+  readonly baselines?: Output<"baseline.list">;
   readonly config?: Output<"config.get">;
   readonly receivedAt: number;
 }
@@ -52,6 +60,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
   Partial<
     Pick<
       WorkerView,
+      | "baselines"
       | "capabilities"
       | "capacity"
       | "catalog"
@@ -75,7 +84,7 @@ export type WorkerViewReport = Pick<WorkerView, "health" | "host"> &
 const viewDevicesSchema = z.array(statusDeviceSchema);
 
 export function workerViewFields(reads: WorkerReads): WorkerViewReport {
-  const { catalog, config, devices, receivedAt, status } = reads;
+  const { baselines, catalog, config, devices, receivedAt, status } = reads;
   // why: a worker's ageMs is a claim; it is already capped at a day, and readAt never goes below 0.
   const load =
     status.load === undefined
@@ -107,6 +116,7 @@ export function workerViewFields(reads: WorkerReads): WorkerViewReport {
       : { physicalQueueDepth: status.physicalQueueDepth }),
     ...(devices === undefined ? {} : { devices: viewDevicesSchema.parse(devices) }),
     ...(catalog === undefined ? {} : { catalog: catalog.platforms }),
+    ...(baselines === undefined ? {} : { baselines: baselines.baselines }),
     ...(config === undefined
       ? {}
       : {

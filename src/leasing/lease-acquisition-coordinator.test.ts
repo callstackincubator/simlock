@@ -31,6 +31,7 @@ import {
   type VirtualSpec,
   type Platform,
   specMode,
+  type BaselineService,
   type CatalogReader,
   ManagedDeviceLifecycle,
   type Registry,
@@ -143,6 +144,8 @@ function config(maxDevices = 1, maxRunning = 1): Config {
 // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
+    /** why: stands in for the baselines a request names, when a test scripts the versions. */
+    readonly baselines?: Pick<BaselineService, "current">;
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
     readonly components?: Pick<ComponentInstaller, "install">;
     readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
@@ -210,6 +213,7 @@ async function createHarness(
       registry,
     });
   const provisioner = new DeviceProvisioner({
+    baselines: () => ({ current: () => undefined, hold: () => () => undefined }),
     catalog,
     claims,
     clock,
@@ -267,6 +271,7 @@ async function createHarness(
       timeoutMs: 1_200_000,
     });
   coordinator = new LeaseAcquisitionCoordinator({
+    baselines: options.baselines ?? { current: () => undefined },
     catalog: options.catalogReader ?? catalog,
     claims,
     components,
@@ -962,32 +967,19 @@ describe("LeaseAcquisitionCoordinator", () => {
     }).toEqual({ queueDepth: 0, secondGranted: true, sameDevice: false });
   });
 
-  it("grants a request queued behind a request whose shut-down device failed to boot and then to be destroyed, when another shut-down device and a running slot are free, with no release", async () => {
-    const harness = await createHarness({ maxDevices: 2, maxRunning: 2 });
-    const held = await Promise.all([
-      harness.coordinator.request(request, { ownerId: "x", requesterId: "x" }),
-      harness.coordinator.request(request, { ownerId: "y", requesterId: "y" }),
-    ]);
+  it("grants a request queued behind a request whose shut-down device failed to boot, when another shut-down device and a running slot are free, with no release", async () => {
+    const harness = await createHarness({ maxDevices: 3, maxRunning: 2 });
+    // why: a released virtual device is destroyed, so the shut-down devices are seeded, and a
+    // leased device holds one running slot: the head's boot takes the other, so the request
+    // behind it queues until that boot fails and gives the slot back.
+    await harness.coordinator.request(request, { ownerId: "x", requesterId: "x" });
+    const shutdown = [await seedShutdown(harness), await seedShutdown(harness)];
+    // why: makeready calls 1 to 3 readied the leased device and the seeded ones; call 4 is the head's boot.
+    harness.driver.failOn("makeReady", 4, new DriverCrashError("simulator never booted"));
     const failing = harness.coordinator.request(request, { ownerId: "a", requesterId: "a" });
     void failing.catch(() => undefined);
     const second = harness.coordinator.request(request, { ownerId: "b", requesterId: "b" });
     const secondState = promiseState(second);
-    await settle();
-    expect(harness.coordinator.queueDepth).toBe(2);
-    // Makeready calls 1 and 2 readied the held devices; call 3 is the head's boot. Its device
-    // then fails to be destroyed, so it stays claimed and its running slot stays reserved.
-    harness.driver.failOn("makeReady", 3, new DriverCrashError("simulator never booted"));
-    harness.driver.failOn("destroy", 1, new DriverCrashError("simulator would not die"));
-    // Both devices come back shut down without the release path, so only the kick below wakes
-    // the queue; its head is the request that fails.
-    for (const grant of held) {
-      await harness.registry.beginRelease(grant.lease.id);
-      await harness.registry.transitionDevice(grant.device.id, "shutdown", {
-        event: "device.reclaimed",
-        payload: { deviceId: grant.device.id, duration: 0, strategy: "wipe" },
-      });
-    }
-    harness.coordinator.kick();
     await settle();
     await expect(failing).rejects.toMatchObject({ name: "BootTimeoutError" });
     const failedDeviceId = (
@@ -995,9 +987,7 @@ describe("LeaseAcquisitionCoordinator", () => {
         | { readonly deviceId: string }
         | undefined
     )?.deviceId;
-    const otherDevice = held
-      .map((grant) => grant.device)
-      .find((device) => device.driverDeviceId !== failedDeviceId);
+    const otherDevice = shutdown.find((device) => device.driverDeviceId !== failedDeviceId);
 
     expect({ queueDepth: harness.coordinator.queueDepth, second: secondState.state }).toEqual({
       queueDepth: 0,
@@ -1290,10 +1280,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     });
 
     await harness.registry.beginRelease(held.lease.id);
-    await harness.registry.transitionDevice(held.device.id, "ready", {
-      event: "device.reclaimed",
-      payload: { deviceId: held.device.id, duration: 0, strategy: "wipe" },
-    });
+    await harness.registry.completeReclaimWithoutPurge(held.device.id);
     harness.coordinator.kick();
     await settle();
 
@@ -1313,14 +1300,13 @@ describe("LeaseAcquisitionCoordinator", () => {
         ["waiter", "granted"],
       ],
       deadlineFellDueDuringTheGrantWrite: true,
-      deviceStates: ["leased"],
+      deviceStates: ["deleted", "leased"],
       leaseRequesters: ["waiter"],
       outcome: "fulfilled",
     });
-    await expect(waiting).resolves.toMatchObject({
-      device: { id: held.device.id },
-      lease: { requesterId: "waiter" },
-    });
+    const granted = await waiting;
+    expect(granted).toMatchObject({ lease: { requesterId: "waiter" } });
+    expect(granted.device.id).not.toBe(held.device.id);
   });
 
   it.each(["ready", "booted", "provisioned"] as const)(
@@ -3636,5 +3622,65 @@ describe("LeaseAcquisitionCoordinator: levels a model no longer pairs with", () 
     );
 
     expect(granted.device.id).toBe(idle.id);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: a request naming a baseline", () => {
+  it("plans against the version current at its decision, so a save between the resolve and the plan grants an idle device of the new version", async () => {
+    const current = (version: number) => ({
+      mode: "full" as const,
+      model: request.model,
+      name: "checkout",
+      osVersion: request.osVersion,
+      platform: request.platform,
+      sourceId: `source-${version}`,
+      version,
+    });
+    const reads = [current(1)];
+    const harness = await createHarness({
+      baselines: { current: () => reads.shift() ?? current(2) },
+      maxDevices: 2,
+    });
+    const idleV2 = await seedReady(harness, {
+      ...request,
+      baseline: { name: "checkout", version: 2 },
+    });
+
+    const granted = await harness.coordinator.request(
+      { baseline: "checkout", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.id).toBe(idleV2.id);
+    expect(granted.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
+  });
+
+  it("ends a request whose baseline was removed while it waited as UnknownBaselineError at once, without a retry", async () => {
+    const harness = await createHarness({
+      baselines: {
+        current: () => ({
+          mode: "full" as const,
+          model: request.model,
+          name: "checkout",
+          osVersion: request.osVersion,
+          platform: request.platform,
+          sourceId: "source-1",
+          version: 1,
+        }),
+      },
+      maxDevices: 1,
+    });
+
+    const outcome = await harness.coordinator
+      .request(
+        { baseline: "checkout", platform: "ios" },
+        { ownerId: "agent", requesterId: "agent" },
+      )
+      .then(
+        () => "granted",
+        (error: unknown) => (error as Error).name,
+      );
+
+    expect(outcome).toBe("UnknownBaselineError");
   });
 });

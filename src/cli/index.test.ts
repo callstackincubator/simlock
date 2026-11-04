@@ -303,6 +303,7 @@ describe("CLI: exit codes", () => {
           remedy: "Install it.",
         },
       ],
+      sources: [],
     };
     const wrongOwner: DoctorReport = {
       findings: [
@@ -313,10 +314,11 @@ describe("CLI: exit codes", () => {
           detail: "The device set belongs to another user.",
         },
       ],
+      sources: [],
     };
     const cases: readonly (readonly [DoctorReport, string, string, NodeJS.Platform?])[] = [
-      [{ findings: [] }, "ios ok, android ok", ""],
-      [{ findings: [] }, "android ok", "", "linux"],
+      [{ findings: [], sources: [] }, "ios ok, android ok", ""],
+      [{ findings: [], sources: [] }, "android ok", "", "linux"],
       [
         wrongOwner,
         "ios unavailable: wrong-owner, android ok",
@@ -366,8 +368,8 @@ describe("CLI: exit codes", () => {
       remedy: "Install it.",
     } as const;
     const cases: readonly (readonly [DoctorReport, string])[] = [
-      [{ findings: [] }, "ios ok, android ok"],
-      [{ findings: [missingSdk] }, "ios ok, android missing: android-sdk"],
+      [{ findings: [], sources: [] }, "ios ok, android ok"],
+      [{ findings: [missingSdk], sources: [] }, "ios ok, android missing: android-sdk"],
     ];
     for (const [report, summary] of cases) {
       const output = outputCapture();
@@ -2806,7 +2808,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -2840,7 +2842,8 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       runCli(
         ["doctor"],
         output.environmentWith({
-          connectAdmin: async () => fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+          connectAdmin: async () =>
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2851,7 +2854,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         "Run `sdkmanager --install emulator`.",
       "Missing [ios] xcode: Xcode is not installed. Run `xcode-select`.",
     ]);
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor prints a service-broken finding to stderr, naming each missing path, and keeps the finding in the JSON report", async () => {
@@ -2883,7 +2886,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
           ["doctor"],
           output.environmentWith({
             connectAdmin: async () =>
-              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+              fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
           }),
         ),
       ).resolves.toBe(0);
@@ -2891,7 +2894,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(output.stderr.split("\n").filter((line) => line.startsWith("Service broken"))).toEqual(
         [testCase.line],
       );
-      expect(JSON.parse(output.stdout)).toEqual({ findings });
+      expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
     }
   });
 
@@ -2911,7 +2914,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2937,7 +2940,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -2945,7 +2948,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
     expect(output.stderr.split("\n")).toContain(
       "Unavailable [ios] invalid-device-set: Refusing the ios device set: bad. Restart the daemon.",
     );
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor writes agent-device  fail  <message>; <remedy> on stderr for a module-unavailable finding, one line of at most 500 characters per part, after the advisory, prerequisite and warm-pool lines, prints the report on stdout unchanged, and exits 0", async () => {
@@ -2985,7 +2988,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
         ["doctor"],
         output.environmentWith({
           connectAdmin: async () =>
-            fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+            fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
         }),
       ),
     ).resolves.toBe(0);
@@ -3001,7 +3004,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeLessThan(index);
       expect(lines.findIndex((line) => line.startsWith(earlier))).toBeGreaterThan(-1);
     }
-    expect(JSON.parse(output.stdout)).toEqual({ findings });
+    expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
   });
 
   it("simlock doctor writes <module>  fail  … for a finding of another module", async () => {
@@ -3019,7 +3022,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
       ["doctor"],
       output.environmentWith({
         connectAdmin: async () =>
-          fakeClient({ runDoctor: () => Promise.resolve({ findings } as never) }),
+          fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] } as never) }),
       }),
     );
 
@@ -3039,7 +3042,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -3099,7 +3102,7 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
             fakeClient({
               runDoctor: (input) => {
                 seen.push(input);
-                return Promise.resolve({ findings: [] });
+                return Promise.resolve({ findings: [], sources: [] });
               },
             }),
         }),
@@ -5060,12 +5063,354 @@ describe("CLI: alerts test (ADR 0035 §1)", () => {
   });
 });
 
+describe("CLI: baseline save", () => {
+  const saved = (overrides: Record<string, unknown> = {}) => ({
+    baseline: {
+      mode: "full",
+      model: "Pixel 9",
+      name: "checkout",
+      osVersion: "36",
+      platform: "android",
+      savedAt: "2026-11-02T13:40:00.000Z",
+      version: 1,
+      ...overrides,
+    },
+    leaseId: "L1",
+  });
+
+  async function runSave(argv: string[], answer = saved()) {
+    const output = outputCapture();
+    const inputs: unknown[] = [];
+    let connected = false;
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () => {
+          connected = true;
+          return fakeClient({
+            saveBaseline: (input) => {
+              inputs.push(input);
+              return Promise.resolve(answer as never);
+            },
+          });
+        },
+      }),
+    );
+    return { code, connected, inputs, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline save sends the name, lease and note and prints the baseline's version, spec and size with the lease it ended, and refuses a missing --lease as USAGE", async () => {
+    const android = await runSave(
+      ["baseline", "save", "checkout", "--lease", "L1", "--note", "app 4.2, test user"],
+      saved({ imageTag: "google_apis", sizeBytes: 4_800_000_000 }),
+    );
+    expect([android.code, android.stdout, android.inputs]).toEqual([
+      0,
+      "Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease L1 ended.\n",
+      [{ leaseId: "L1", name: "checkout", note: "app 4.2, test user" }],
+    ]);
+
+    const ios = await runSave(
+      ["baseline", "save", "login", "--lease", "L5"],
+      saved({
+        mode: "slim",
+        model: "iPhone 17",
+        name: "login",
+        osVersion: "27.0",
+        platform: "ios",
+        sizeBytes: 3_100_000_000,
+      }),
+    );
+    expect(ios.stdout).toBe(
+      "Saved baseline login v1: ios iPhone 17, iOS 27.0, slim, 3.1 GB. Lease L1 ended.\n",
+    );
+    expect(ios.inputs).toEqual([{ leaseId: "L5", name: "login" }]);
+
+    const small = await runSave(
+      ["baseline", "save", "tiny", "--lease", "L1"],
+      saved({ sizeBytes: 250_000_000 }),
+    );
+    expect(small.stdout).toContain("full, 250.0 MB. Lease L1 ended.");
+    const uncounted = await runSave(["baseline", "save", "tiny", "--lease", "L1"], saved());
+    expect(uncounted.stdout).toBe(
+      "Saved baseline checkout v1: android Pixel 9, Android 36, full. Lease L1 ended.\n",
+    );
+
+    const missing = await runSave(["baseline", "save", "checkout"]);
+    expect([missing.code, missing.connected, missing.stdout]).toEqual([2, false, ""]);
+    expect(JSON.parse(missing.stderr)).toMatchObject({ error: { code: "USAGE" } });
+
+    const twoNames = await runSave(["baseline", "save", "checkout", "other", "--lease", "L1"]);
+    expect([twoNames.code, twoNames.connected, twoNames.inputs]).toEqual([2, false, []]);
+  });
+});
+
+describe("CLI: baseline list", () => {
+  const checkout = {
+    imageTag: "google_apis",
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "36",
+    platform: "android",
+    savedAt: new Date(2026, 10, 2, 13, 40).toISOString(),
+    sizeBytes: 4_900_000_000,
+    version: 2,
+  } as const;
+  const login = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "login",
+    note: "signed in",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 10, 1, 9, 12).toISOString(),
+    staleReason: "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+    version: 1,
+  } as const;
+
+  async function runList(argv: string[], baselines: readonly (typeof checkout | typeof login)[]) {
+    const output = outputCapture();
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        connectAdmin: async () =>
+          fakeClient({ listBaselines: () => Promise.resolve({ baselines: [...baselines] }) }),
+      }),
+    );
+    return { code, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline list prints a table of each baseline with a - for an uncounted size and its stale reason under the row, --json the baselines, and says when there are none", async () => {
+    const table = await runList(["baseline", "list"], [checkout, login]);
+    expect([table.code, table.stdout]).toEqual([
+      0,
+      [
+        "NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE",
+        "checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40",
+        "login     1        ios       iPhone 17  27.0  slim  -            -       2026-11-01 09:12  signed in",
+        "  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+        "",
+      ].join("\n"),
+    ]);
+
+    const json = await runList(["baseline", "list", "--json"], [checkout, login]);
+    expect([json.code, JSON.parse(json.stdout)]).toEqual([0, { baselines: [checkout, login] }]);
+
+    const none = await runList(["baseline", "list"], []);
+    expect([none.code, none.stdout]).toEqual([0, "No baselines on this worker.\n"]);
+  });
+});
+
+describe("CLI: baselines through a gateway (#1208)", () => {
+  const GATEWAY = {
+    daemonHome: { dataDirectory: "/simlock/gateway", gatewayPresent: true, role: "gateway" },
+  } as const;
+  const checkout = {
+    imageTag: "google_apis",
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    note: "app 4.2, test user",
+    osVersion: "36",
+    platform: "android",
+    savedAt: new Date(2026, 10, 2, 13, 10).toISOString(),
+    sizeBytes: 4_800_000_000,
+    version: 2,
+    workerId: "wrk_a",
+  } as const;
+  const smoke = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "smoke",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 9, 30, 9, 2).toISOString(),
+    staleReason: "runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+    version: 1,
+    workerId: "wrk_a",
+  } as const;
+
+  it("simlock worker list prints a worker's Baselines line, its image tag in brackets and a stale one marked, none for a worker without any, and no line for one that has not read them", async () => {
+    const output = outputCapture();
+    const worker = { connection: "connected", drained: false, lastSeenAt: 1 } as const;
+    await runCli(
+      ["worker", "list"],
+      output.environmentWith({
+        clock: new FakeClock(1_000),
+        connectAdmin: async () =>
+          fakeClient({
+            listWorkers: () =>
+              Promise.resolve({
+                workers: [
+                  { ...worker, baselines: [checkout, smoke], id: "wrk_a" },
+                  { ...worker, baselines: [], id: "wrk_b" },
+                  { ...worker, health: "starting", id: "wrk_c" },
+                ],
+              } as never),
+          }),
+      }),
+    );
+
+    expect(output.stdout.split("\n").filter((line) => /^\s+Baselines:/.test(line))).toEqual([
+      "  Baselines: checkout v2: android Pixel 9, Android 36 (google_apis), full; smoke v1: ios iPhone 17, iOS 27.0, slim, stale",
+      "  Baselines: none",
+    ]);
+  });
+
+  it("simlock --gateway baseline list puts the worker first in each row, and says when no worker holds a baseline", async () => {
+    const run = async (baselines: readonly (typeof checkout | typeof smoke)[]) => {
+      const output = outputCapture();
+      await runCli(
+        ["--gateway", "baseline", "list"],
+        output.environmentWith({
+          ...GATEWAY,
+          connectAdmin: async () =>
+            fakeClient({ listBaselines: () => Promise.resolve({ baselines: [...baselines] }) }),
+        }),
+      );
+      return output.stdout;
+    };
+
+    expect(await run([checkout, smoke])).toBe(
+      [
+        "WORKER  NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE",
+        "wrk_a   checkout  2        android   Pixel 9    36    full  google_apis  4.8 GB  2026-11-02 13:10  app 4.2, test user",
+        "wrk_a   smoke     1        ios       iPhone 17  27.0  slim  -            -       2026-10-30 09:02",
+        "  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed",
+        "",
+      ].join("\n"),
+    );
+    expect(await run([])).toBe("No baselines on any worker.\n");
+  });
+
+  it("simlock --gateway baseline remove --worker sends the worker, asks and prints ending in from <worker id>, and without --worker asks nothing and sends the remove", async () => {
+    const run = async (argv: string[]) => {
+      const output = outputCapture();
+      const sent: unknown[] = [];
+      const questions: string[] = [];
+      await runCli(
+        ["--gateway", ...argv],
+        output.environmentWith({
+          ...GATEWAY,
+          confirm: async (question) => {
+            questions.push(question);
+            return true;
+          },
+          connectAdmin: async () =>
+            fakeClient({
+              listBaselines: () =>
+                Promise.resolve({
+                  baselines: [{ ...smoke, version: 3, workerId: "wrk_b" }, smoke],
+                }),
+              removeBaseline: (input) => {
+                sent.push(input);
+                return Promise.resolve({ deletedDevices: [], name: input.name, versions: [1] });
+              },
+            }),
+        }),
+      );
+      return { questions, sent, stdout: output.stdout };
+    };
+
+    expect(await run(["baseline", "remove", "smoke", "--worker", "wrk_a"])).toEqual({
+      questions: ["Remove baseline smoke v1 from wrk_a? [y/N] "],
+      sent: [{ name: "smoke", workerId: "wrk_a" }],
+      stdout: "Removed baseline smoke v1 from wrk_a.\n",
+    });
+    expect(await run(["baseline", "remove", "smoke"])).toMatchObject({
+      questions: [],
+      sent: [{ name: "smoke" }],
+    });
+  });
+});
+
+describe("CLI: baseline remove", () => {
+  const login = {
+    mode: "slim",
+    model: "iPhone 17",
+    name: "login",
+    osVersion: "27.0",
+    platform: "ios",
+    savedAt: new Date(2026, 10, 1, 9, 12).toISOString(),
+    version: 1,
+  } as const;
+
+  async function runRemove(
+    argv: string[],
+    options: { confirm?: ((question: string) => Promise<boolean>) | undefined; deleted?: string[] },
+  ) {
+    const output = outputCapture();
+    const removed: unknown[] = [];
+    const code = await runCli(
+      argv,
+      output.environmentWith({
+        confirm: options.confirm,
+        connectAdmin: async () =>
+          fakeClient({
+            listBaselines: () => Promise.resolve({ baselines: [login] }),
+            removeBaseline: (input) => {
+              removed.push(input);
+              return Promise.resolve({
+                deletedDevices: options.deleted ?? [],
+                name: input.name,
+                versions: [1],
+              });
+            },
+          }),
+      }),
+    );
+    return { code, removed, stderr: output.stderr, stdout: output.stdout };
+  }
+
+  it("simlock baseline remove asks Remove baseline <name> v<n>? first, removes with --yes or an answered yes and prints how many idle devices it deleted, and refuses with USAGE when there is no terminal or the answer is no", async () => {
+    const questions: string[] = [];
+    const asked = await runRemove(["baseline", "remove", "login"], {
+      confirm: async (question) => {
+        questions.push(question);
+        return true;
+      },
+    });
+    expect([asked.code, asked.stdout, asked.removed, questions]).toEqual([
+      0,
+      "Removed baseline login v1.\n",
+      [{ name: "login" }],
+      ["Remove baseline login v1? [y/N] "],
+    ]);
+
+    const yes = await runRemove(["baseline", "remove", "login", "--yes"], {
+      confirm: async () => {
+        throw new Error("--yes must not ask");
+      },
+      deleted: ["dev_1"],
+    });
+    expect(yes.stdout).toBe("Removed baseline login v1. Deleted 1 idle device made from it.\n");
+    const many = await runRemove(["baseline", "remove", "login", "--yes"], {
+      deleted: ["dev_1", "dev_2"],
+    });
+    expect(many.stdout).toBe("Removed baseline login v1. Deleted 2 idle devices made from it.\n");
+
+    for (const confirm of [undefined, async () => false]) {
+      const refused = await runRemove(["baseline", "remove", "login"], { confirm });
+      expect([refused.code, refused.removed, refused.stdout]).toEqual([2, [], ""]);
+      expect(JSON.parse(refused.stderr.trim().split("\n").at(-1) ?? "")).toEqual({
+        error: { code: "USAGE", message: "baseline remove requires confirmation or --yes" },
+      });
+    }
+  });
+});
+
 describe("CLI: warm forget", () => {
   const USAGE =
     "Usage: simlock warm forget <ios|android> <model> [<os>] [--mode <slim|full>] [--image-tag <tag>] [--json]\n";
   const pixel = { model: "Pixel", mode: "full", osVersion: "36", platform: "android" } as const;
 
-  async function runWarm(argv: string[], forgotten: (typeof pixel)[] = [pixel]) {
+  const checkoutKind = { ...pixel, baseline: "checkout" } as const;
+
+  async function runWarm(
+    argv: string[],
+    forgotten: (typeof pixel | typeof checkoutKind)[] = [pixel],
+  ) {
     const output = outputCapture();
     const inputs: unknown[] = [];
     let connected = false;
@@ -5110,6 +5455,9 @@ describe("CLI: warm forget", () => {
         platform: "android",
       },
     ]);
+
+    const named = await runWarm(["warm", "forget", "android", "Pixel"], [checkoutKind]);
+    expect(named.stdout).toContain("Forgot android Pixel 36 (full, baseline checkout).\n");
 
     const none = await runWarm(["warm", "forget", "ios", "iPhone 16"], []);
     expect([none.code, none.stdout]).toEqual([
@@ -5284,6 +5632,17 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           platform: "android" as const,
           ready: 1,
         },
+        {
+          baseline: "checkout",
+          booting: 0,
+          count: 1,
+          mode: "full" as const,
+          model: "iPhone 17",
+          origin: "learned" as const,
+          osVersion: "26.0",
+          platform: "ios" as const,
+          ready: 1,
+        },
       ],
     };
     const statusWith = (block: StatusGetOutput["warmPool"]) =>
@@ -5301,7 +5660,8 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         "warm pool: enabled, reserve ios 1 android 0\n" +
           "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 1  booting 1\n" +
           "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: runtime-missing\n" +
-          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n",
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 1  booting 0\n" +
+          "  iPhone 17 / 26.0 / full / baseline checkout   learned   wanted 1  ready 1  booting 0\n",
       );
     });
 
@@ -5475,7 +5835,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           ["doctor"],
           output.environmentWith({
             connectAdmin: async () =>
-              fakeClient({ runDoctor: () => Promise.resolve({ findings }) }),
+              fakeClient({ runDoctor: () => Promise.resolve({ findings, sources: [] }) }),
           }),
         ),
       ).resolves.toBe(0);
@@ -5489,7 +5849,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
         "warm-pool-target-unreachable  all targets: the targets want 4 running devices, and the running limit leaves room for 3; lower the counts of the warmPool.targets, or raise the running limit",
       ]);
       expect(output.stderr).not.toContain("undefined");
-      expect(JSON.parse(output.stdout)).toEqual({ findings });
+      expect(JSON.parse(output.stdout)).toEqual({ findings, sources: [] });
     });
   });
 
@@ -5916,6 +6276,14 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
           spec,
           state: "leased",
         },
+        {
+          physical: false,
+          id: "dev_copy",
+          mode: "full",
+          servesDefaultMode: true,
+          spec: { ...spec, baseline: { name: "checkout", version: 2 } },
+          state: "leased",
+        },
       ],
     };
     const environment = output.environmentWith({
@@ -5927,6 +6295,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(output.stdout).toContain("Device dev_slim: ready, mode slim, serves default mode: no\n");
     expect(output.stdout).toContain(
       "Device dev_full: leased, mode full, serves default mode: yes\n",
+    );
+    expect(output.stdout).toContain(
+      "Device dev_copy: leased, mode full, serves default mode: yes, baseline checkout v2\n",
     );
   });
 
@@ -6341,6 +6712,14 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
     expect(capturedInput?.noWait).toBe(true);
   });
 
+  // why: the real environment builder reads `SIMLOCK_BASELINE`, so the rows below prove the variable, not a hand-set field.
+  const fromEnv = (value: string): Partial<CliEnvironment> => {
+    const { baselineFromEnv } = buildCliEnvironment(realCliEnvironmentPorts(), {
+      SIMLOCK_BASELINE: value,
+    });
+    return baselineFromEnv === undefined ? {} : { baselineFromEnv };
+  };
+
   it.each([
     {
       flag: "--image-tag",
@@ -6348,6 +6727,39 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: "google_apis_playstore",
       lease: ["lease", "--platform", "android", "--device", "Pixel 8", "--detach"],
       flagArgs: ["--image-tag", "google_apis_playstore"],
+      envOverride: () => ({}),
+    },
+    {
+      flag: "--baseline",
+      field: "baseline",
+      value: "checkout",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: ["--baseline", "checkout"],
+      envOverride: () => ({}),
+    },
+    {
+      flag: "SIMLOCK_BASELINE",
+      field: "baseline",
+      value: "checkout",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: [],
+      envOverride: () => fromEnv("checkout"),
+    },
+    {
+      flag: "--baseline over SIMLOCK_BASELINE",
+      field: "baseline",
+      value: "other",
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: ["--baseline", "other"],
+      envOverride: () => fromEnv("checkout"),
+    },
+    {
+      flag: "an empty SIMLOCK_BASELINE",
+      field: "baseline",
+      value: undefined,
+      lease: ["lease", "--platform", "android", "--detach"],
+      flagArgs: [],
+      envOverride: () => fromEnv(""),
     },
     {
       flag: "--physical",
@@ -6355,10 +6767,11 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: true,
       lease: ["lease", "--platform", "ios", "--detach"],
       flagArgs: ["--physical"],
+      envOverride: () => ({}),
     },
   ])(
     "maps $flag onto the contract's $field input field, and sends none without it",
-    async ({ field, value, lease, flagArgs }) => {
+    async ({ field, value, lease, flagArgs, envOverride }) => {
       const inputs: Record<string, unknown>[] = [];
       const client = fakeClient({
         requestLease: (input) => {
@@ -6401,7 +6814,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
 
       await runCli(
         [...lease, ...flagArgs],
-        outputCapture().environmentWith({ connectAdmin: async () => client }),
+        outputCapture().environmentWith({ connectAdmin: async () => client, ...envOverride() }),
       );
       await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 
@@ -8350,7 +8763,7 @@ async function statusLines(daemon: Partial<StatusGetOutput["daemon"]>) {
 
 function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminClient {
   const emptyCatalog: CatalogGetOutput = { platforms: [] };
-  const emptyDoctor: DoctorReport = { findings: [] };
+  const emptyDoctor: DoctorReport = { findings: [], sources: [] };
   const emptyLeaseList: LeaseListOutput = { leases: [] };
   const emptyListGet: ListGetOutput = [];
   const emptyTokenList: TokenListOutput = { tokens: [] };
@@ -8412,8 +8825,12 @@ function fakeClient(overrides: Partial<SimlockAdminClient> = {}): SimlockAdminCl
     releaseAllLeases: () => Promise.resolve({ leaseIds: [] }),
     list: () => Promise.resolve(emptyListGet),
     runCleanup: () => Promise.resolve([]),
-    runNuke: () => Promise.resolve({ deletedDevices: [], releasedLeaseIds: [] }),
+    runNuke: () =>
+      Promise.resolve({ deletedDevices: [], releasedLeaseIds: [], removedBaselines: [] }),
     forgetWarmKind: () => Promise.resolve({ forgotten: [] }),
+    saveBaseline: () => Promise.reject(new Error("saveBaseline was not expected")),
+    listBaselines: () => Promise.resolve({ baselines: [] }),
+    removeBaseline: () => Promise.reject(new Error("removeBaseline was not expected")),
     getConfig: () => Promise.resolve({} as SimlockConfig),
     stopDaemon: () => Promise.resolve({ stopping: true }),
     updateDaemon: () =>
@@ -9019,6 +9436,14 @@ describe("simlock list --requests", () => {
             stage: "queued",
             workerId: "wrk_2",
           },
+          {
+            createdAt: -1_000,
+            id: "req_4",
+            queuePosition: 3,
+            requesterId: "baseline-agent",
+            spec: { baseline: "checkout", platform: "ios" },
+            stage: "queued",
+          },
         ];
       },
     });
@@ -9031,7 +9456,8 @@ describe("simlock list --requests", () => {
     expect(output.stdout).toBe(
       "Request req_1: agent-b, android Pixel 8 image tag google_apis, starting, waiting 12s\n" +
         "Request req_2: local-agent on wrk_1, ios iPhone 16 18.4, queued at 2, waiting 3s\n" +
-        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n",
+        "Request req_3: skewed-agent on wrk_2, ios iPhone 16, queued at 1, waiting 0s\n" +
+        "Request req_4: baseline-agent, ios baseline checkout, queued at 3, waiting 1s\n",
     );
   });
 
@@ -9184,6 +9610,9 @@ describe("simlock list --requests", () => {
       ["full", "android", "platform-running-limit", "full: running limit for Android"],
       ["no-free-physical", "ios", undefined, "every matching device is leased or absent"],
       ["not-chosen", "ios", undefined, "not chosen this time"],
+      ["no-baseline", "ios", undefined, "does not hold the baseline"],
+      ["baseline-stale", "ios", undefined, "baseline is stale"],
+      ["baseline-mismatch", "ios", undefined, "baseline is for another device"],
     ] as const)(
       "prints %s on %s with capacity reason %s as '  wrk_a: %s'",
       async (reason, platform, capacityReason, text) => {
@@ -9353,6 +9782,7 @@ describe("simlock lease: a request names a model, a class, or nothing", () => {
     expect(output.stdout).toBe(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",

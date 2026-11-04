@@ -99,6 +99,34 @@ export class LeaseReleaseCoordinator
     await this.#runNormal(() => this.#release(leaseId, reason, { reclaim: "background" }));
   }
 
+  /**
+   * why: ends the lease like an explicit release, but runs `save` in the reclaim's place, under the
+   * same claim, as a normal release workflow: nuke's maintenance waits for it and no other
+   * workflow picks the device. The caller sees the save's own outcome.
+   */
+  async releaseToSave<Result>(
+    leaseId: string,
+    save: (released: ReleasedLease) => Promise<Result>,
+  ): Promise<Result> {
+    return this.#runNormal(async () => {
+      const released = await this.options.decisions.run(() =>
+        this.options.lifecycle.beginRelease(
+          leaseId,
+          "explicit",
+          this.#hasParticipants ? { deferReclaim: true } : {},
+        ),
+      );
+      const claim = this.options.claims.tryClaim(released.device.id, "reclaim");
+      try {
+        await this.#callParticipants(released, "explicit", true)?.done;
+        return await save(released);
+      } finally {
+        claim?.release();
+        this.options.notifyAvailability();
+      }
+    });
+  }
+
   async releaseAll(reason: "explicit" | "killed"): Promise<readonly string[]> {
     return this.#runNormal(() => this.#releaseAll(reason, "background"));
   }
@@ -123,11 +151,11 @@ export class LeaseReleaseCoordinator
   }
 
   /**
-   * Ends a lease at daemon start, because its device is not running. An ordinary release in every
+   * why: ends a lease at daemon start, because its device is not running. An ordinary release in every
    * way but the device: `reclaim` starts the usual background reclaim, `wait` starts none and
    * takes no claim (a driver that just failed or hung on its listing would likely hang the
    * reclaim too, and a hung reclaim holds its claim with no end), and `missing` removes the lease
-   * and marks the device missing in one write, with nothing to wipe.
+   * and marks the device missing in one write, with nothing to delete.
    */
   async endAtStartup(leaseId: string, ending: StartupEnding): Promise<void> {
     await this.#runNormal(async () => {
@@ -197,7 +225,7 @@ export class LeaseReleaseCoordinator
     });
   }
 
-  /** why: a graceful stop waits only for wipes; the participants' wait is cut short and later endings do not wait. */
+  /** why: a graceful stop waits only for reclaims; the participants' wait is cut short and later endings do not wait. */
   async settleBackgroundReclaims(): Promise<void> {
     this.#stopping = true;
     this.#cutShortWaits();
@@ -263,7 +291,7 @@ export class LeaseReleaseCoordinator
         const current = this.options.registry.snapshot.leases.find((lease) => lease.id === leaseId);
         if (current?.ttlDeadline !== expectedDeadline) return undefined;
       }
-      // `none` is a wipe put off, not one given up: the device records it, so a later start
+      // why: `none` is a reclaim put off, not one given up: the device records it, so a later start
       // that can read its platform runs the full reclaim (ADR 0019 §2).
       return this.options.lifecycle.beginRelease(
         leaseId,

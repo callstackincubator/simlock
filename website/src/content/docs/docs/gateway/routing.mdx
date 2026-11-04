@@ -12,12 +12,13 @@ The gateway only considers a worker that:
 - is connected, not drained, and has finished reporting its devices and catalog;
 - has every optional capability the request needs (for example, a lease asked for through the agent-device integration needs workers with that integration turned on);
 - offers the model or device class asked for, with a matching OS version already installed;
+- for a request that names a baseline, holds a fresh copy of that baseline that fits the request (see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway));
 - is healthy;
 - has no requests waiting in its own queue, for example from agents on that machine (this does not apply to physical devices).
 
 Among those, it prefers, in this order:
 
-1. **A warm device.** A worker with a booted, unleased device that matches the request, including its slim or full mode, wins at once. The agent gets that device without waiting for a boot.
+1. **A warm device.** A worker with a booted, unleased device that matches the request, including its slim or full mode, wins at once. For a request that names a baseline, only a copy of the baseline's current version counts; a plain request never counts a baseline copy. The agent gets that device without waiting for a boot.
 2. **Room to boot one.** Otherwise the worker must have a free running slot, or a warm device it can shut down to make room. Workers under their RAM budget come first, then the worker with the most free device slots.
 
 When two workers are equal, the gateway picks the one whose id sorts first.
@@ -53,6 +54,9 @@ The gateway does not queue a request that no worker could serve. It fails at onc
 | `UNKNOWN_MODEL` | 12 | 422 | No worker offers that model or device class, or, for a physical device, no worker has one enrolled. | Check the name with `simlock --gateway catalog`. |
 | `RUNTIME_MISSING` | 12 | 422 | Workers offer the model, but none has a matching OS version installed. The gateway never downloads one. | Install it on the workers. See [Managing workers](/simlock/docs/gateway/managing-workers#install-runtimes-and-images-on-workers). |
 | `CAPABILITY_MISSING` | 12 | 422 | No worker that could serve the request has the optional capability it needs turned on. | Turn the capability on for a worker. |
+| `UNKNOWN_BASELINE` | 12 | 404 | The request names a baseline that no worker holds. | List the baselines with `simlock --gateway baseline list`. |
+| `BASELINE_MISMATCH` | 2 | 422 | Every worker that holds the baseline has a copy that differs from a platform, model, OS, mode or image tag the request names. The message is the first worker's, in worker id order. | Drop the field, or change it to the baseline's own value. |
+| `BASELINE_STALE` | 12 | 422 | Every copy that fits the request is stale, for example its runtime is no longer installed. The message gives the first worker's reason. | Fix what the reason names, or save the baseline again. |
 
 This check runs again while a request waits. If the last worker that could serve a queued request disconnects or is drained, even for a moment, the request fails with `NO_CAPACITY` instead of waiting for it to come back.
 

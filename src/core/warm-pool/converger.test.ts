@@ -58,12 +58,13 @@ function device(
 ): VirtualDevice {
   return {
     physical: false,
-    createdAt: 1,
+    // why: a virtual device that ended a lease is never granted again, so the fixture is a never-leased device whose createdAt orders it by recency.
+    createdAt: now - endedAgo,
     driverData: {},
     driverDeviceId: `driver-${id}`,
     id,
-    lastLeaseEndedAt: now - endedAgo,
     mode: "full",
+    readyAt: now,
     spec:
       platform === "ios"
         ? { model: "iPhone 15", osVersion: "26.0", physical: false, platform }
@@ -73,8 +74,7 @@ function device(
 }
 
 function neverLeased(id: string, platform: "ios" | "android"): VirtualDevice {
-  const { lastLeaseEndedAt: _dropped, ...rest } = device(id, "ready", 5_000, platform);
-  return { ...rest, readyAt: now - 11 * minute };
+  return { ...device(id, "ready", 5_000, platform), readyAt: now - 11 * minute };
 }
 
 function leaseOn(deviceId: string): LeaseRecord {
@@ -132,6 +132,10 @@ function harness(
     state?: StateDatabase;
     /** why: called with the id of each device the budget is asked to admit a boot of, while a pass proposes. */
     onAdmit?: (deviceId: string) => void;
+    /** why: the current version of each baseline by name; a baseline not listed is removed. */
+    baselines?: Readonly<
+      Record<string, { readonly version: number; readonly staleReason?: string }>
+    >;
     /** why: what a platform's catalog read answers; by default a catalog that lists nothing. */
     catalog?: (platform?: Platform) => Promise<readonly PlatformCatalog[]>;
   } = {},
@@ -182,6 +186,7 @@ function harness(
     );
   };
   const poolOptions: WarmPoolOptions = {
+    baselines: { current: (name) => options.baselines?.[name] },
     acquisition: {
       kick,
       get maintenanceActive() {
@@ -2552,7 +2557,7 @@ describe("warm pool learned kinds", () => {
       ).toEqual([{ deviceId: "d1", reason: "displaced" }]);
     });
 
-    it("lists a learned kind in figures() with its origin, count, image tag and short, a merged kind once with the larger count, and drops a forgotten kind on the next pass", async () => {
+    it("lists a learned kind in figures() with its origin, count, image tag, baseline and short, a merged kind once with the larger count, and drops a forgotten kind or a removed or stale baseline on the next pass", async () => {
       const pixel = { ...device("d2", "ready", 0, "android").spec, imageTag: "google_apis" };
       const state = await openMemoryState([warmPoolOwner]);
       const learned = new LearnedKinds(state);
@@ -2560,6 +2565,11 @@ describe("warm pool learned kinds", () => {
       learned.learn(pixel, "pixel", now - 3 * minute);
       learned.learn(device("d1", "ready", 0).spec, "phone-0", now - 2 * minute);
       learned.learn(device("d1", "ready", 0).spec, "phone-1", now - 2 * minute);
+      const checkout = {
+        ...device("d1", "ready", 0).spec,
+        baseline: { name: "checkout", version: 1 },
+      };
+      learned.learn(checkout, "checkout-0", now - 4 * minute);
       const androidListing: PlatformCatalog = {
         ...iosListing,
         images: [{ abi: "arm64", runtime: "35", tag: "google_apis" }],
@@ -2572,10 +2582,12 @@ describe("warm pool learned kinds", () => {
         catalog: async () => [iosListing, androidListing],
         limit: 0,
         state,
+        baselines: { checkout: { version: 4 } },
         targets: [phone],
       });
       const summary = () =>
         rig.pool.figures().targets.map((target) => ({
+          baseline: target.baseline,
           count: target.count,
           imageTag: target.imageTag,
           model: target.model,
@@ -2596,17 +2608,65 @@ describe("warm pool learned kinds", () => {
           origin: "learned",
           short: "running-limit",
         },
+        {
+          baseline: "checkout",
+          count: 1,
+          model: "iPhone 15",
+          origin: "learned",
+          short: "running-limit",
+        },
       ]);
       const shortLogs = rig.sink.records.filter(
         (record) => record.message === "a warm pool target is short",
       );
       expect(shortLogs.map((record) => record.fields?.target)).toEqual(["ios iPhone 15 26.0"]);
 
+      const copies = harness([], {
+        baselines: { checkout: { version: 4 } },
+        catalog: async () => [iosListing],
+        state,
+        targets: [],
+      });
+      await copies.pool.pass();
+      await copies.pool.settle();
+      expect(
+        copies.provisionCalls
+          .map((call) => call.spec.baseline)
+          .filter((made) => made !== undefined),
+      ).toEqual([{ name: "checkout", version: 4 }]);
+
       learned.forget(ipad);
       await rig.pool.pass();
       await rig.pool.settle();
 
-      expect(summary().map((entry) => entry.model)).toEqual(["iPhone 15", "Pixel 8"]);
+      expect(summary().map((entry) => entry.model)).toEqual(["iPhone 15", "Pixel 8", "iPhone 15"]);
+      const removed = harness([], {
+        catalog: async () => [iosListing],
+        limit: 0,
+        state,
+        targets: [phone],
+      });
+      await removed.pool.pass();
+      await removed.pool.settle();
+      await removed.pool.pass();
+      expect(
+        removed.pool.figures().targets.filter((target) => target.baseline !== undefined),
+      ).toEqual([]);
+      const staleState = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(staleState).learn(checkout, "checkout-0", now - 4 * minute);
+      const stale = harness([], {
+        baselines: { checkout: { staleReason: "runtime is not installed", version: 4 } },
+        catalog: async () => [iosListing],
+        limit: 0,
+        state: staleState,
+        targets: [phone],
+      });
+      await stale.pool.pass();
+      await stale.pool.settle();
+      await stale.pool.pass();
+      expect(
+        stale.pool.figures().targets.filter((target) => target.baseline !== undefined),
+      ).toEqual([]);
       const off = harness([], { enabled: false, state, targets: [phone] });
       expect(off.pool.figures().targets.map((target) => [target.model, target.origin])).toEqual([
         ["iPhone 15", "configured"],

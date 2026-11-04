@@ -80,7 +80,8 @@ export async function seedPhysicalState(
             PHYSICAL_MODEL,
             PHYSICAL_OS,
             now - 2 * DAY_MS,
-            now - DAY_MS,
+            // why: shut down a minute ago, so the idle reaper (default one hour) leaves it for the test to act on.
+            now - 60_000,
           );
         database
           .prepare("INSERT INTO e2e_fake_device_data (device_id, fake_device_id) VALUES (?, ?)")
