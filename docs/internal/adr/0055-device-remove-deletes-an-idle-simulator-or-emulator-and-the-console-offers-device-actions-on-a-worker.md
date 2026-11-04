@@ -13,7 +13,7 @@
   0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) §3's
   action lists with one for devices.
 - **Depends on:** ADR 0012 (a single host is a fleet of one), ADR 0022,
-  ADR 0037, ADR 0050.
+  ADR 0037, ADR 0050, ADR 0061 (sources are not devices).
 
 ## Context
 
@@ -79,6 +79,13 @@ protocol rises by one.
 The warm pool is not asked. A device a target or a learned kind keeps is
 deleted like any other, and the pool's next pass makes a new one if the
 kind is still kept. Forgetting the kind stays `warm forget`'s (ADR 0050).
+
+A source is never a device (ADR 0061 §1): a seed or a baseline has no
+registry id, so `device remove` never finds one and answers 404
+`UNKNOWN_DEVICE` for its id. Under ADR 0061 every virtual device is a copy
+of a source, so deleting an idle one is a normal destroy and leaves its
+source in place; the next copy is made from that source. A baseline is
+removed by `simlock baseline remove`, never by `device remove`.
 
 ```mermaid
 sequenceDiagram
