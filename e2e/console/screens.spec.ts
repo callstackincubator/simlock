@@ -46,6 +46,7 @@ async function fixture(page: Page) {
     const active = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
     const counts = { opened: 0, closed: 0, max: 0, duplicates: 0 };
     let mode = "running";
+    let workerIds = ["synthetic"];
     let devices = ["one", "two", "three", "four"];
     const encoder = new TextEncoder();
     const packet = (tag: number, bytes: Uint8Array) => {
@@ -56,26 +57,24 @@ async function fixture(page: Page) {
       return frame;
     };
     const workers = () => ({
-      workers: [
-        {
-          id: "synthetic",
-          label: "Synthetic worker",
-          connection: mode === "disconnected" ? "disconnected" : "connected",
-          drained: false,
-          lastSeenAt: 0,
-          capabilities: mode === "disabled" ? [] : [{ name: "stream", state: "available" }],
-          devices: (mode === "empty" ? [] : devices).map((id, index) => ({
-            id,
-            state: index === 0 ? "leased" : "ready",
-            physical: false,
-            spec: {
-              platform: index === 3 ? "android" : "ios",
-              model: index === 3 ? "Pixel 9" : "iPhone 16",
-              osVersion: index === 3 ? "35" : "18.4",
-            },
-          })),
-        },
-      ],
+      workers: workerIds.map((id) => ({
+        id,
+        label: "Synthetic worker",
+        connection: mode === "disconnected" ? "disconnected" : "connected",
+        drained: false,
+        lastSeenAt: 0,
+        capabilities: mode === "disabled" ? [] : [{ name: "stream", state: "available" }],
+        devices: (mode === "empty" ? [] : devices).map((id, index) => ({
+          id,
+          state: index === 0 ? "leased" : "ready",
+          physical: false,
+          spec: {
+            platform: index === 3 ? "android" : "ios",
+            model: index === 3 ? "Pixel 9" : "iPhone 16",
+            osVersion: index === 3 ? "35" : "18.4",
+          },
+        })),
+      })),
     });
     let events: ReadableStreamDefaultController<Uint8Array>;
     const controls = {
@@ -111,6 +110,12 @@ async function fixture(page: Page) {
       },
       mode(value: string) {
         mode = value;
+        events.enqueue(encoder.encode("event: device.changed\ndata: {}\n\n"));
+      },
+      duplicateWorkers() {
+        workerIds = ["synthetic", "other"];
+        devices = ["one"];
+        mode = "disabled";
         events.enqueue(encoder.encode("event: device.changed\ndata: {}\n\n"));
       },
       unauthorized: false,
@@ -229,6 +234,7 @@ type Controls = {
   end(id: string): void;
   add(notify: boolean): void;
   remove(): void;
+  duplicateWorkers(): void;
   unauthorized: boolean;
 };
 async function active(page: Page) {
@@ -282,6 +288,19 @@ test("four screens wrap at narrow widths and each links to its existing device S
       () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
     ),
   ).toBe(0);
+  await page.evaluate(() =>
+    (window as unknown as { wallTest: Controls }).wallTest.duplicateWorkers(),
+  );
+  await expect(page.locator(".screens-tile")).toHaveCount(2);
+  for (const id of ["other", "synthetic"]) {
+    const link = page.getByRole("link", {
+      name: `Open device Screen: Synthetic worker (${id}), iPhone 16 (one)`,
+      exact: true,
+    });
+    expect(await link.count()).toBe(1);
+    await expect(link).toHaveText("Open device Screen");
+    await expect(link).toHaveAttribute("href", `/fleet/${id}/one?drawer=screen`);
+  }
 });
 
 test("visibility, removal, navigation and authentication loss close captures without multiplying streams; tile failures stay isolated", async ({

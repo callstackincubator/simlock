@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { documentVisibility } from "../data/live/browser";
-import { screensOf } from "../model/screens";
+import { screenNotice, screensOf, type ScreenTile } from "../model/screens";
 import type { WorkerList } from "../model/workers";
 import { useConnection, useRouteQuery } from "./live";
 import { loadView, mapView } from "./resource";
@@ -16,7 +16,12 @@ export function useScreens() {
   return { view, connected: connection.phase === "connected" };
 }
 
-export function useScreenVisibility() {
+export function useScreenTile(tile: ScreenTile, connected: boolean) {
+  const { target, active } = useScreenVisibility();
+  return { target, notice: screenNotice({ active, connected, offer: tile.offer }) };
+}
+
+function useScreenVisibility() {
   const hidden = useSyncExternalStore(
     documentVisibility.subscribe,
     documentVisibility.hidden,

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 
-import { screensOf } from "./screens";
+import { screenNotice, screensOf } from "./screens";
 import type { WorkerDevice, WorkerView } from "./workers";
 
 function worker(
@@ -48,4 +48,53 @@ it("shows only running devices, preserves cross-worker identities and stable ord
     offered: false,
     reason: "Streaming is off on Host a.",
   });
+});
+
+it("prioritizes daemon loss, unavailable offers and visibility before showing a picture", () => {
+  const cases = [
+    {
+      connected: false,
+      offer: { offered: false, reason: "Worker unavailable." },
+      active: true,
+      expected: "Disconnected from the daemon.",
+    },
+    {
+      connected: false,
+      offer: { offered: true },
+      active: false,
+      expected: "Disconnected from the daemon.",
+    },
+    {
+      connected: true,
+      offer: { offered: false, reason: "Worker unavailable." },
+      active: true,
+      expected: "Worker unavailable.",
+    },
+    {
+      connected: true,
+      offer: { offered: false, reason: "Worker unavailable." },
+      active: false,
+      expected: "Worker unavailable.",
+    },
+    {
+      connected: true,
+      offer: { offered: false },
+      active: true,
+      expected: "Streaming is unavailable.",
+    },
+    { connected: true, offer: { offered: false, reason: "" }, active: true, expected: "" },
+    {
+      connected: true,
+      offer: { offered: true, reason: "Ignored for an available offer." },
+      active: true,
+      expected: undefined,
+    },
+    {
+      connected: true,
+      offer: { offered: true },
+      active: false,
+      expected: "Paused while out of view.",
+    },
+  ];
+  for (const { expected, ...input } of cases) expect(screenNotice(input)).toBe(expected);
 });

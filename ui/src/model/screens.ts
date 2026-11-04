@@ -43,3 +43,13 @@ export function screensOf(workers: readonly WorkerView[]): ScreenTile[] {
     )
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
+
+export function screenNotice(input: {
+  readonly connected: boolean;
+  readonly offer: StreamOffer;
+  readonly active: boolean;
+}): string | undefined {
+  if (!input.connected) return "Disconnected from the daemon.";
+  if (!input.offer.offered) return input.offer.reason ?? "Streaming is unavailable.";
+  return input.active ? undefined : "Paused while out of view.";
+}
