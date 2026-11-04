@@ -485,8 +485,12 @@ export class AndroidDriver implements Driver {
       adbServer,
       adbServerPort,
     );
-    await driver.#deviceTable.reattachRunningEmulators();
+    await driver.#adoptRunningEmulators();
     return driver;
+  }
+
+  async #adoptRunningEmulators(): Promise<void> {
+    await this.#deviceTable.reattachRunningEmulators();
   }
 
   get sdkPath(): string {

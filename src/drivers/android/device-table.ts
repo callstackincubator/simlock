@@ -28,35 +28,38 @@ interface DeviceEntry {
 }
 
 export interface DeviceTableOptions {
-  readonly adbTools: Pick<
-    AdbTools,
-    "avdFolder" | "dataFor" | "runOrThrow" | "scanSerials" | "shellOrUndefined"
-  >;
-  readonly avdConfig: Pick<AvdConfig, "readDurableMark">;
+  readonly adbTools: AdbTools;
+  readonly avdConfig: AvdConfig;
   readonly avdmanager: string;
   readonly baseEnv: Readonly<Record<string, string | undefined>>;
   readonly deviceRoot: string;
   readonly filesystem: Filesystem;
   /** why: where an AVD Simlock made before it owned a root sits (ADR 0001, Migration). */
   readonly legacyAvdHome: string;
-  readonly ownership: Pick<Ownership, "avdPathOf" | "sameDirectory">;
+  readonly ownership: Ownership;
   /** why: announces one console port to Simlock's adb server; it swallows its own failures. */
   readonly register: (consolePort: number) => Promise<void>;
 }
 
 /** why: the part of AndroidDriver (ADR 0063) that owns the device states (keyed by AVD folder) and the per-device locks, and reports the devices the root holds. */
 export class DeviceTable {
+  readonly #adbTools: AdbTools;
+  readonly #avdConfig: AvdConfig;
   readonly #devices = new Map<string, DeviceState>();
   readonly #locks = new Map<string, Promise<void>>();
   readonly #options: DeviceTableOptions;
+  readonly #ownership: Ownership;
 
   constructor(options: DeviceTableOptions) {
+    this.#adbTools = options.adbTools;
+    this.#avdConfig = options.avdConfig;
     this.#options = options;
+    this.#ownership = options.ownership;
   }
 
   /** why: the state of a device this process never provisioned is restored empty and flagged, so `destroy` knows to look for an attached emulator. */
   get(data: AndroidDriverData): DeviceState {
-    const existing = this.#devices.get(this.#options.adbTools.avdFolder(data));
+    const existing = this.#devices.get(this.#adbTools.avdFolder(data));
     if (existing !== undefined) {
       return existing;
     }
@@ -66,16 +69,16 @@ export class DeviceTable {
       port: undefined,
       restored: true,
     };
-    this.#devices.set(this.#options.adbTools.avdFolder(data), restored);
+    this.#devices.set(this.#adbTools.avdFolder(data), restored);
     return restored;
   }
 
   set(data: AndroidDriverData, state: DeviceState): void {
-    this.#devices.set(this.#options.adbTools.avdFolder(data), state);
+    this.#devices.set(this.#adbTools.avdFolder(data), state);
   }
 
   delete(data: AndroidDriverData): void {
-    this.#devices.delete(this.#options.adbTools.avdFolder(data));
+    this.#devices.delete(this.#adbTools.avdFolder(data));
   }
 
   async withLock<T>(deviceId: string, operation: () => Promise<T>): Promise<T> {
@@ -136,14 +139,10 @@ export class DeviceTable {
    * environment omits Simlock's adb server: stopping devices on a server it does not own is off limits.
    */
   async destroyLegacy(device: DriverDevice): Promise<void> {
-    const { avdName } = this.#options.adbTools.dataFor(device);
-    await this.#options.adbTools.runOrThrow(
-      this.#options.avdmanager,
-      ["delete", "avd", "-n", avdName],
-      {
-        env: { ...this.#options.baseEnv, ANDROID_AVD_HOME: this.#options.legacyAvdHome },
-      },
-    );
+    const { avdName } = this.#adbTools.dataFor(device);
+    await this.#adbTools.runOrThrow(this.#options.avdmanager, ["delete", "avd", "-n", avdName], {
+      env: { ...this.#options.baseEnv, ANDROID_AVD_HOME: this.#options.legacyAvdHome },
+    });
   }
 
   /**
@@ -175,8 +174,7 @@ export class DeviceTable {
 
   async listManaged(): Promise<DriverReality> {
     const entries = await this.#listDeviceEntries();
-    const { settledSerials, unattributableTransitionalSerial } =
-      await this.#options.adbTools.scanSerials();
+    const { settledSerials, unattributableTransitionalSerial } = await this.#adbTools.scanSerials();
     const { processes, runningByDeviceId, erasableMarkByDeviceId, unreadableSerial } =
       await this.#resolveRunningAvds(settledSerials, entries);
     const unattributable = unattributableTransitionalSerial || unreadableSerial;
@@ -205,7 +203,7 @@ export class DeviceTable {
       unattributableTransitionalSerial,
     );
     const running = runningByDeviceId.has(entry.deviceId);
-    const durable = await this.#options.avdConfig.readDurableMark(entry.folder);
+    const durable = await this.#avdConfig.readDurableMark(entry.folder);
     const mark = buildObservedMark(durable, running, erasableMarkByDeviceId.get(entry.deviceId));
     return mark === undefined ? base : { ...base, mark };
   }
@@ -261,7 +259,7 @@ export class DeviceTable {
     // mark file would fail the whole invocation -- and a missing mark file is exactly
     // the foreign-erase case this feature exists to detect. `|| true` keeps an absent
     // mark an observation rather than a crash.
-    const output = await this.#options.adbTools.shellOrUndefined(
+    const output = await this.#adbTools.shellOrUndefined(
       [
         "-s",
         candidate,
@@ -277,14 +275,14 @@ export class DeviceTable {
     if (named.length === 0) return { kind: "foreign" };
     let answered: string;
     try {
-      answered = await this.#options.ownership.avdPathOf(candidate);
+      answered = await this.#ownership.avdPathOf(candidate);
     } catch {
       // why: A serial can disappear after its shell answered; keep the observation
       // inconclusive just as when it disappears before that shell call.
       return { kind: "unreadable" };
     }
     for (const entry of named) {
-      if (await this.#options.ownership.sameDirectory(answered, entry.folder)) {
+      if (await this.#ownership.sameDirectory(answered, entry.folder)) {
         return { kind: "own", markLines, owner: entry };
       }
     }
