@@ -161,6 +161,7 @@ const RECLAIM_INSTEAD =
 
 // why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
 const READBACK_TIMEOUT_MS = 120_000;
+const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
 const OVERRIDES_FILE_NAME = "disabled.plist";
 const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
 const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
@@ -818,6 +819,7 @@ export class IosSimctlDriver implements Driver {
       if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
       this.#sources.setUdid(sourceId, cloneUdid);
       await this.#copyOverrides(data.udid, cloneUdid);
+      await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
       const sizeBytes = await this.#sizeOf(cloneUdid);
       this.#sources.markReady(sourceId, sizeBytes);
       return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
@@ -906,6 +908,10 @@ export class IosSimctlDriver implements Driver {
 
     try {
       await this.#writeMark(udid);
+      // why: only a source can hold installed apps; a seed holds none (ADR 0061 §3).
+      if (options?.source !== undefined) {
+        await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
+      }
     } catch (error: unknown) {
       // why: In Xcode's set an unmarked simulator is nobody's, so one left here would never
       // be listed, reclaimed or deleted by Simlock again.
@@ -1070,6 +1076,20 @@ export class IosSimctlDriver implements Driver {
       this.#logger?.warn(
         `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
       );
+    }
+  }
+
+  /**
+   * why: `simctl clone` keeps the LaunchServices database, which records each installed app by
+   * its absolute path under the original device's folder; a copy then launches the original's
+   * bundle, or fails once that folder is gone. Dropped before the clone's first boot,
+   * LaunchServices rebuilds it from the clone's own container folders (ADR 0061 §3).
+   */
+  async #dropLaunchServicesDatabase(setPath: string, udid: string): Promise<void> {
+    const folder = join(setPath, udid, "data", "var", "db", "lsd");
+    if (!(await this.#filesystem.exists(folder))) return;
+    for (const entry of await this.#filesystem.readdir(folder)) {
+      if (LAUNCH_SERVICES_DATABASE.test(entry)) await this.#filesystem.rm(join(folder, entry));
     }
   }
 

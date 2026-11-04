@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { IOS } from "./helpers/agent-device-targets.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
@@ -40,7 +41,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "saves a leased iPhone as baseline version 1 with a size above 0, ends the lease, lists the source only in the sources set, and keeps the file written into the device's data folder",
+      "saves a leased iPhone as baseline version 1 with a size above 0, ends the lease, lists the source only in the sources set, keeps the file written into the device's data folder, and launches the installed app from its own folder on a copy",
       { timeout: 900_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -61,6 +62,12 @@ describe.skipIf(process.platform !== "darwin")(
         const marker = join(deviceSet, udid, "data", "Documents", "simlock-baseline.txt");
         await mkdir(join(deviceSet, udid, "data", "Documents"), { recursive: true });
         await writeFile(marker, "prepared");
+
+        // why: the app is installed and run before the save, so the copy has an installed app whose path the saved LaunchServices database names.
+        const installed = await env.cli(["simctl", "install", udid, IOS.app]);
+        expect(installed.code, `install failed: ${installed.stderr}`).toBe(0);
+        const started = await env.cli(["simctl", "launch", udid, IOS.bundleId]);
+        expect(started.code, `launch before the save failed: ${started.stderr}`).toBe(0);
 
         const saved = await env.cli(["baseline", "save", "slow-ios", "--lease", grant.lease.id], {
           timeout: 600_000,
@@ -91,7 +98,11 @@ describe.skipIf(process.platform !== "darwin")(
         ).toContain("simlock-baseline.txt");
 
         // why: a lease naming the baseline starts from a copy that holds the saved file, and the copy's own changes are gone for the next one.
-        const copyDirectory = async (): Promise<{ leaseId: string; directory: string }> => {
+        const copyDirectory = async (): Promise<{
+          leaseId: string;
+          directory: string;
+          udid: string;
+        }> => {
           const copy = await env.cli(
             [
               "lease",
@@ -123,10 +134,24 @@ describe.skipIf(process.platform !== "darwin")(
               "Documents",
             ),
             leaseId: copied.lease.id,
+            udid: copied.device.driverDeviceId,
           };
         };
         const first = await copyDirectory();
         expect(await readdir(first.directory)).toContain("simlock-baseline.txt");
+        // why: the copy must start the app from its own folder, not from the saved device's.
+        const container = await env.cli([
+          "simctl",
+          "get_app_container",
+          first.udid,
+          IOS.bundleId,
+          "app",
+        ]);
+        expect(container.code, `get_app_container failed: ${container.stderr}`).toBe(0);
+        expect(container.stdout).toContain(`/${first.udid}/`);
+        expect(container.stdout).not.toContain(`/${udid}/`);
+        const copyStarted = await env.cli(["simctl", "launch", first.udid, IOS.bundleId]);
+        expect(copyStarted.code, `launch on the copy failed: ${copyStarted.stderr}`).toBe(0);
         await writeFile(join(first.directory, "simlock-session.txt"), "left behind");
         const released = await env.cli(["release", first.leaseId]);
         expect(released.code, `release failed: ${released.stderr}`).toBe(0);
