@@ -450,6 +450,10 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("leasing", "lease-acquisition-coordinator.ts")]: 1,
       // The same, for a device the warm pool creates for a target.
       [join("core", "warm-pool", "converger.ts")]: 1,
+      // why: not a second creator: the Android driver's own `provision` hands the call to its seeds
+      // part, and its test helpers (never loaded in production) drive the driver to build fixtures.
+      [join("drivers", "android", "index.ts")]: 1,
+      [join("drivers", "android", "testing.ts")]: 2,
     });
   });
 
