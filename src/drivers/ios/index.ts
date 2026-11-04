@@ -1167,7 +1167,10 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #silence(udid: string, deviceId: string): Promise<void> {
+    // why: notifyd's state outlives a simulator, so a new boot may already read 0, and a set to 0 is then no change for the simulator to write; the 1 first makes the 0 one (#1238).
     const commands = [
+      ["-s", VOLUME_STATE_KEY, "1"],
+      ["-p", VOLUME_STATE_KEY],
       ["-s", VOLUME_STATE_KEY, "0"],
       ["-p", VOLUME_STATE_KEY],
     ];

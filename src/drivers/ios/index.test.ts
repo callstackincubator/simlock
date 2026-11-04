@@ -5753,7 +5753,10 @@ describe("IosSimctlDriver simulator audio", () => {
   const udid = driverData.udid;
   const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
 
+  // why: notifyd's state outlives a simulator, so a new boot may already read 0 and a set to 0 is then no change the simulator writes; the 1 first makes the 0 a change (hardware, #1238).
   const silence = [
+    simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "1"),
+    simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
     simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
     simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
   ];
@@ -5819,7 +5822,7 @@ describe("IosSimctlDriver simulator audio", () => {
             ? [{ ...silenceCall(0), hangs: true }]
             : c.volume !== undefined
               ? [silenceCall(0, c.volume)]
-              : [silenceCall(0), silenceCall(1)]),
+              : silence.map((_, index) => silenceCall(index))),
         ...(c.options.mode === "slim"
           ? [
               {
