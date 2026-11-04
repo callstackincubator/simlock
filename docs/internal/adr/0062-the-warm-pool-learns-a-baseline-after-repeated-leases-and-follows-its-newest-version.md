@@ -70,10 +70,10 @@ stateDiagram-v2
 
 ### 2. A baseline kind is one record per baseline, and its spec is the newest version's
 
-The record keys a baseline kind on its platform and baseline name only.
+The record keys a baseline kind on its baseline name only, as baselines are keyed.
 Leases of every version of one baseline count toward one N and one peak.
-At every pass the kind's model, OS version, mode, image tag and version
-are those of the baseline's newest version, so a version saved from
+At every pass the kind's platform, model, OS version, mode, image tag and
+version are those of the baseline's newest version, so a version saved from
 another model is warmed as that model at once. A plain kind keeps ADR
 0038 §1's key.
 
@@ -84,7 +84,7 @@ version.
 ### 3. The record gains its third schema version
 
 The pool's owner in `state.db` gains one schema version. It keys a
-baseline row on platform and name, and marks whether a baseline row is
+baseline row on its name, and marks whether a baseline row is
 learned. Rows of baseline kinds written before it are deleted with their
 lease rows: baselines have been in no release, and the next leases learn
 them again under §1. Plain rows and their lease rows are kept.
