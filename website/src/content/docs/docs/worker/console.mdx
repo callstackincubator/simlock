@@ -200,3 +200,9 @@ Select an event to see its whole payload and a link to the lease, worker, reques
 ## Usage
 
 **Usage** shows the figures for a range, the same numbers `simlock stats` gives: requests, grants, rejections, the wait and hold times, grants by source (warm, booted or provisioned), rejections by reason, device incidents, and the figures per platform and per requester. Pick **1 hour**, **6 hours**, **24 hours** or **7 days**. See [Monitoring](/simlock/docs/worker/monitoring).
+
+## Screens
+
+Select **Screens** under **Observe** to watch running devices side by side across workers. Each tile names its worker, device model, platform and runtime, and **Open device Screen** opens the existing device drawer. Devices that are ready or leased appear; a disconnected worker or disabled streaming explains why no picture is available.
+
+Only tiles in view capture a screen. Captures pause when you hide the browser tab or scroll a tile out of view, and stop when you leave Screens or sign out. Returning starts a new capture. An ended or failed stream clears its picture and shows its reason independently of the other tiles.

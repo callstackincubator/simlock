@@ -5,7 +5,7 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab or views its tile on **Screens**. A drawer capture stops when they leave the tab or close the drawer. Screens captures only visible tiles and pauses them when the browser tab is hidden. Leaving Screens or signing out stops its captures. A capture also stops when the device stops running.
 
 ## Before you start
 
@@ -147,3 +147,7 @@ A socket that answers no ping within 15 seconds is closed. A lease that is not t
 
 - Using the console: [Console](/simlock/docs/worker/console).
 - Every `capabilities.stream.*` key: [Configuration reference](/simlock/docs/reference/configuration).
+
+## Watch devices side by side
+
+Select **Screens** under **Observe** in the console to see ready and leased devices across workers. Each tile has its own stream state and an **Open device Screen** link. A failed or ended stream clears its picture while the other tiles keep playing. Scroll a tile out of view or hide the browser tab to pause its capture; returning starts a fresh capture. No devices are booted or leased by this view.

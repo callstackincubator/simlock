@@ -113,10 +113,11 @@ not (its highlight is an index it resets when the items change), so the listbox 
 | `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                                                                             |
 | `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                                                                            |
 | `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload                                                            |
+| `/screens`                   | Screens  | responsive grid of ready/leased devices across workers; visible tiles own captures, hidden/offscreen tiles pause, removal/navigation/logout unmounts them                                        |
 | `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                                                                    |
 
 The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
-Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
+Observe (Screens, Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
 Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it
 (`state/drawer.ts`: closing steps back when the drawer was opened from the list).
@@ -166,3 +167,5 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 
 - **The Events chart counts from the events held.** It reaches back one hour only; the Overview's
   figures come from `GET /v1/stats` for the range in `?range=`.
+
+The Screens page reads the shared workers query through `state/screens.ts` and derives stable worker/device tiles in `model/screens.ts`. `useScreenVisibility` gates each tile with document visibility and an IntersectionObserver. Each active tile mounts the existing `useDeviceScreen` hook; `screens/screen-view.tsx` presents the same stream in the grid and Fleet drawer. Disconnected workers or daemon connections show no retained picture.

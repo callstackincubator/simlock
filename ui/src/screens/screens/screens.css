@@ -1,0 +1,35 @@
+.screens-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.screens-tile {
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.screens-tile-head {
+  padding: var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.screens-tile-head h2 {
+  font-size: var(--text-md);
+  margin: 0 0 var(--space-2);
+}
+
+.screens-tile-head p {
+  margin: 0 0 var(--space-2);
+}
+
+.screens-tile .screen-panel {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.screens-placeholder .screen-head {
+  min-height: 40px;
+}

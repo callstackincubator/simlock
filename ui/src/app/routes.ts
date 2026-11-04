@@ -9,6 +9,8 @@ import { UsageScreen } from "../screens/usage";
 import { QueueScreen } from "../screens/queue";
 import { FleetScreen } from "../screens/fleet";
 
+import { ScreensScreen } from "../screens/screens";
+
 export type NavGroup = "Operate" | "Observe";
 
 export interface Route {
@@ -25,6 +27,13 @@ export const ROUTES: readonly Route[] = [
   { Screen: FleetScreen, group: "Operate", icon: "workers", label: "Fleet", path: "/fleet" },
   { Screen: LeasesScreen, group: "Operate", icon: "leases", label: "Leases", path: "/leases" },
   { Screen: QueueScreen, group: "Operate", icon: "waiting", label: "Queue", path: "/queue" },
+  {
+    Screen: ScreensScreen,
+    group: "Observe",
+    icon: "device",
+    label: "Screens",
+    path: "/screens",
+  },
   {
     Screen: ActivityScreen,
     group: "Observe",
