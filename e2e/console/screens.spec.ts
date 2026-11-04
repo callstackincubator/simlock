@@ -96,6 +96,15 @@ async function fixture(page: Page) {
       end(id: string) {
         active.get(id)?.enqueue(packet(7, encoder.encode(JSON.stringify({ reason: "explicit" }))));
       },
+      add(notify: boolean) {
+        devices.push("five");
+        if (notify)
+          events.enqueue(
+            encoder.encode(
+              `event: device.ready\ndata: ${JSON.stringify({ id: "evt_five", seq: 1, timestamp: Date.now(), event: "device.ready", payload: { deviceId: "five" } })}\n\n`,
+            ),
+          );
+      },
       remove() {
         devices = ["one"];
         events.enqueue(encoder.encode("event: device.deleted\ndata: {}\n\n"));
@@ -218,6 +227,7 @@ type Controls = {
   hidden(value: boolean): void;
   fail(id: string): void;
   end(id: string): void;
+  add(notify: boolean): void;
   remove(): void;
   unauthorized: boolean;
 };
@@ -369,4 +379,39 @@ test("signing out closes every visible capture", async ({ page }) => {
       return opened - closed;
     }),
   ).toBe(0);
+});
+
+test("adds a running device without page reload after an event, a poll, or returning to the tab", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await page.clock.install();
+  for (const source of ["event", "poll", "visible"] as const) {
+    await page.goto(`${origin}/screens`);
+    await expect(page.locator(".screens-tile")).toHaveCount(4);
+    await expect.poll(() => active(page)).toHaveLength(4);
+    if (source === "visible")
+      await page.evaluate(() =>
+        (window as unknown as { wallTest: Controls }).wallTest.hidden(true),
+      );
+    await page.evaluate(
+      (notify) => (window as unknown as { wallTest: Controls }).wallTest.add(notify),
+      source === "event",
+    );
+    if (source === "event") await page.clock.runFor(350);
+    if (source === "poll") await page.clock.runFor(15_001);
+    if (source === "visible")
+      await page.evaluate(() =>
+        (window as unknown as { wallTest: Controls }).wallTest.hidden(false),
+      );
+    await expect(page.locator(".screens-tile")).toHaveCount(5);
+    await expect(page.locator('a[href="/fleet/synthetic/five?drawer=screen"]')).toBeVisible();
+    await expect.poll(() => active(page)).toHaveLength(5);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
+      ),
+    ).toBe(0);
+  }
 });
