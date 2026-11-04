@@ -1067,11 +1067,19 @@ describe("Seeds", () => {
       ]);
       expect(await harness.filesystem.exists(orphanHome)).toBe(true);
 
+      const callsBefore = harness.runner.calls.length;
       await harness.seeds.destroySource("seed_orphan");
       await harness.seeds.destroySource("seed_two");
 
       expect(await harness.filesystem.exists(`${sources}/seed_two`)).toBe(false);
       expect(await harness.filesystem.exists(orphanHome)).toBe(false);
+      expect(
+        harness.runner.calls
+          .slice(callsBefore)
+          .filter((call) => call.args.includes("kill"))
+          .map((call) => call.args),
+        "the running emulator of the source is found by its path and stopped before its folder goes",
+      ).toEqual([["-s", serial, "emu", "kill"]]);
       await expect(harness.seeds.destroySource("seed_two")).rejects.toThrow(
         "Android keeps no source seed_two",
       );
