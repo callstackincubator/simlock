@@ -1852,6 +1852,17 @@ export class AndroidDriver implements Driver {
    * refused when that emulator does not exit in time, never done under a live process.
    */
   async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
+    const serials = await this.#serialsRunningAvd(data);
+    for (const serial of serials) {
+      await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
+        env: this.#adbTools.env(),
+        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
+      });
+    }
+    await this.#waitForEmulatorsToExit(data, serials);
+  }
+
+  async #serialsRunningAvd(data: AndroidDriverData): Promise<string[]> {
     const expected = this.#adbTools.avdFolder(data);
     const { settledSerials } = await this.#adbTools.scanSerials();
     const serials: string[] = [];
@@ -1869,12 +1880,10 @@ export class AndroidDriver implements Driver {
       }
       if (await this.#ownership.isOwnPath(answered, expected)) serials.push(serial);
     }
-    for (const serial of serials) {
-      await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
-        env: this.#adbTools.env(),
-        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
-      });
-    }
+    return serials;
+  }
+
+  async #waitForEmulatorsToExit(data: AndroidDriverData, serials: string[]): Promise<void> {
     const startedAt = this.#clock.now();
     let remaining = serials;
     while (remaining.length > 0) {
