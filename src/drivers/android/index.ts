@@ -1471,14 +1471,20 @@ export class AndroidDriver implements Driver {
 
   /**
    * why: ADR 0061 §4: a lease naming a baseline starts from a copy of that baseline's source, which
-   * holds the saved disk and its boot snapshot; the kind's seed is not touched, and the spec was
-   * already checked against the baseline by the coordinator.
+   * holds the saved disk and its boot snapshot; the kind's seed is not touched, the spec was
+   * already checked against the baseline by the coordinator, and a stale source is refused, never copied.
    */
   async #provisionFromSource(sourceId: string): Promise<DriverDevice> {
     const row = this.#sources.readyRows().find((candidate) => candidate.sourceId === sourceId);
     if (row === undefined) {
       throw new DriverCrashError(`Android keeps no ready source ${sourceId}`);
     }
+    const reason = await this.#staleReasonOf(
+      row,
+      await this.#installedImages(),
+      await this.#emulatorVersion(),
+    );
+    if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
     const deviceId = `simlock_${this.#idGenerator.generate()}`;
     const avdHome = join(this.#deviceRoot, deviceId);
     await this.#copyAvd(

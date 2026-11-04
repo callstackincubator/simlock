@@ -6434,11 +6434,16 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
       ];
 
-      it("provisions a device named after a baseline source as a copy of that source's folder, with no seed made and no tool run", async () => {
-        const harness = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
-          config,
-          ids: [...ids, "five"],
-        });
+      it("provisions a device named after a baseline source as a copy of that source's folder with no seed made and only the emulator's version read, and refuses a source whose system image is gone", async () => {
+        const version = () =>
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9");
+        const harness = await seedHarness(
+          [...leasing(true), ...savingSteps, ...sourceBoot(), version(), version()],
+          {
+            config,
+            ids: [...ids, "five", "six"],
+          },
+        );
         const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
         await harness.driver.saveSource({ ...ready, physical: false as const });
         await harness.filesystem.writeFileAtomic(`${savedHome}/simlock.avd/marker.txt`, "saved");
@@ -6450,7 +6455,15 @@ describe("AndroidDriver image fit", () => {
         await expect(
           harness.filesystem.readFile(`${avdDirectory}/simlock_five/simlock.avd/marker.txt`),
         ).resolves.toBe("saved");
-        expect(harness.runner.calls).toHaveLength(callsBefore);
+        expect(harness.runner.calls).toHaveLength(callsBefore + 1);
+
+        await harness.filesystem.rm(`${sdk}/system-images/android-34/google_apis/arm64-v8a`);
+        await expect(
+          harness.driver.provision(harness.spec, { source: "baseline_four" }),
+        ).rejects.toThrow(
+          "source baseline_four is stale: system image system-images;android-34;google_apis;arm64-v8a is not installed",
+        );
+        expect(await harness.filesystem.exists(`${avdDirectory}/simlock_six`)).toBe(false);
       });
 
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
