@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "../../src/ports/index.js";
@@ -83,4 +87,26 @@ describe("runSdkTool", () => {
       runSdkTool(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 200 }),
     ).rejects.toMatchObject({ killed: true });
   });
+
+  // why: avdmanager on Windows is a .bat under the SDK root, which may hold spaces; the slow tests reach it only through this helper.
+  it.runIf(process.platform === "win32")(
+    "runs a .bat under a path with spaces and hands it an argument with spaces intact",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock sdk "));
+      const printer = join(directory, "print-args.cjs");
+      const tool = join(directory, "avd manager.bat");
+      await writeFile(printer, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+      await writeFile(
+        tool,
+        ["@echo off", `"${process.execPath}" "${printer}" %*`, ""].join("\r\n"),
+      );
+      try {
+        const result = await runSdkTool(tool, ["list", "with space"]);
+
+        expect(JSON.parse(result.stdout)).toEqual(["list", "with space"]);
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
+    },
+  );
 });
