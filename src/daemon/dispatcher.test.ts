@@ -1571,6 +1571,51 @@ describe("Dispatcher: baseline.save", () => {
         .map((envelope) => envelope.payload),
     ).toMatchObject([{ leaseId: grant.lease.id, reason: "explicit" }]);
   });
+
+  it("records the image tag the saved device carries when its lease named none, so a lease naming that tag is granted and another tag is refused", async () => {
+    const { dispatcher } = await buildDispatcher({
+      driverOptions: {
+        availableOsVersions: ["34"],
+        defaultImageTag: "google_apis_playstore",
+        images: [
+          { abi: "arm64-v8a", runtime: "34", tag: "google_apis" },
+          { abi: "arm64-v8a", runtime: "34", tag: "google_apis_playstore" },
+        ],
+        platform: "android",
+      },
+    });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "Pixel 8", osVersion: "34", platform: "android" },
+      session(),
+    );
+    const admin = session({ role: "admin" });
+
+    const saved = await dispatcher.dispatch(
+      "baseline.save",
+      { leaseId: grant.lease.id, name: "android-test" },
+      admin,
+    );
+    const listed = await dispatcher.dispatch("baseline.list", {}, admin);
+    const named = { baseline: "android-test", platform: "android" };
+    const granted = await dispatcher.dispatch(
+      "lease.request",
+      { ...named, imageTag: "google_apis_playstore" },
+      session(),
+    );
+    await dispatcher.dispatch("lease.release", { leaseId: granted.lease.id }, session());
+    const refused = await dispatcher
+      .dispatch("lease.request", { ...named, imageTag: "google_apis" }, session())
+      .catch((caught: unknown) => caught);
+
+    expect(saved.baseline.imageTag).toBe("google_apis_playstore");
+    expect(listed.baselines.map((entry) => entry.imageTag)).toEqual(["google_apis_playstore"]);
+    expect(granted.device.spec.baseline).toEqual({ name: "android-test", version: 1 });
+    expect(refused).toMatchObject({
+      message:
+        "baseline android-test is image tag google_apis_playstore, the request asks for google_apis",
+    });
+  });
 });
 
 describe("Dispatcher: baseline.save versions", () => {

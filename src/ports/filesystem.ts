@@ -336,12 +336,25 @@ export class NodeFilesystem implements Filesystem {
     };
   }
 
+  /**
+   * why: a file listed a moment ago may be gone (simctl's atomic `device.plist.sb-*` write), and a
+   * size that fails on it leaves a saved source with no size; a vanished file counts for 0.
+   */
+  async #sizeOfFile(path: string): Promise<number> {
+    try {
+      return (await lstat(path)).size;
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+  }
+
   async directorySize(path: string): Promise<number> {
     let total = 0;
     for (const entry of await readdir(path, { withFileTypes: true })) {
       const child = join(path, entry.name);
       if (entry.isDirectory()) total += await this.directorySize(child);
-      else if (entry.isFile()) total += (await lstat(child)).size;
+      else if (entry.isFile()) total += await this.#sizeOfFile(child);
     }
     return total;
   }

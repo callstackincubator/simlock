@@ -947,6 +947,27 @@ describe("IosSimctlDriver", () => {
     expect(clones()).toBe(2);
   });
 
+  it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
+    const filesystem = new FaultyFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    filesystem.failing = "rm";
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+      { match: simctl("delete", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).rejects.toThrow("disk full");
+
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone", "delete"]);
+  });
+
   it.each([
     { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
     { name: "an unknown source is refused", id: "nope", cloned: false },
@@ -966,6 +987,7 @@ describe("IosSimctlDriver", () => {
       .run(oldUdid);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     const catalog = JSON.parse(listFixture) as {
       runtimes: { buildversion?: string; identifier: string }[];
     };
@@ -988,6 +1010,10 @@ describe("IosSimctlDriver", () => {
     if (cloned) {
       await expect(provisioned).resolves.toMatchObject({ deviceId: driverData.udid });
       expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+      expect(
+        await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
+        "the copy of a source loses the LaunchServices database that names the source's folder",
+      ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     } else {
       await expect(provisioned).rejects.toBeInstanceOf(DriverCrashError);
       expect(runner.calls.map((call) => call.args[3])).not.toContain("clone");
@@ -1408,6 +1434,7 @@ describe("IosSimctlDriver", () => {
       );
       await filesystem.mkdirp(`${sourcesSet}/${cloneUdid}/data`);
       await filesystem.writeFileAtomic(`${sourcesSet}/${cloneUdid}/data/state`, "12345");
+      await plantLaunchServices(filesystem, `${sourcesSet}/${cloneUdid}`);
       const runner = new ScriptedProcessRunner([
         { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
         {
@@ -1439,6 +1466,9 @@ describe("IosSimctlDriver", () => {
       expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
         overridesPlist({ "a.b": true }),
       );
+      expect(await launchServicesFiles(filesystem, `${sourcesSet}/${cloneUdid}`)).toEqual([
+        "com.apple.LaunchServices.unregisteredtypes-501.db",
+      ]);
       await expect(driver.listSources()).resolves.toEqual([
         {
           id: "device-1",
@@ -1521,6 +1551,7 @@ describe("IosSimctlDriver", () => {
       await filesystem.mkdirp(overridesFolder(seedUdid));
       await filesystem.writeFileAtomic(overridesPath(seedUdid), overridesPlist({ "a.b": true }));
     }
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
     filesystem.failing = failing;
     const runner = new ScriptedProcessRunner([
       { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
@@ -1547,6 +1578,10 @@ describe("IosSimctlDriver", () => {
 
     await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: driverData.udid });
 
+    expect(
+      await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
+      "a copy of a seed loses the LaunchServices database that names the seed's folder",
+    ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
     const copied = failing === undefined && seedHas;
     expect(await filesystem.exists(overridesPath(driverData.udid))).toBe(copied);
     if (copied) {
@@ -4845,6 +4880,24 @@ async function createSlimDriver(
 }
 
 const overridesRoot = "/private/var/tmp";
+
+/** why: a LaunchServices database file and a neighbour that must stay, in the device folder `device`. */
+async function plantLaunchServices(filesystem: MemoryFilesystem, device: string): Promise<void> {
+  const folder = `${device}/data/var/db/lsd`;
+  await filesystem.mkdirp(folder);
+  await filesystem.writeFileAtomic(`${folder}/com.apple.LaunchServices-33554481-v2.csstore`, "x");
+  await filesystem.writeFileAtomic(
+    `${folder}/com.apple.LaunchServices.unregisteredtypes-501.db`,
+    "",
+  );
+}
+
+async function launchServicesFiles(
+  filesystem: MemoryFilesystem,
+  device: string,
+): Promise<string[]> {
+  return (await filesystem.readdir(`${device}/data/var/db/lsd`)).sort();
+}
 
 function overridesFolder(udid: string): string {
   return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}`;

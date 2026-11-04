@@ -22,6 +22,8 @@ import { stableError } from "./stable-error.js";
 export interface SavedSource {
   readonly sourceId: string;
   readonly sizeBytes?: number;
+  /** why: the image tag the saved device really carries, which a request that named none leaves out. */
+  readonly imageTag?: string;
 }
 
 export interface ReclaimDriverCatalog {

@@ -1,4 +1,4 @@
-import { stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, stat, symlink, utimes, writeFile } from "node:fs/promises";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,12 @@ import {
   NodeFilesystem,
   ScriptedProcessRunner,
 } from "./index.js";
+
+// why: lets one test make a listed file vanish before it is sized; every other call goes to the real `lstat`.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, lstat: vi.fn(actual.lstat) };
+});
 
 // why: Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
 // one checkout, Stryker's runners in one sandbox) delete each other's files mid-test.
@@ -316,6 +322,28 @@ describe.each(implementations)("Filesystem ownership contract: $name", ({ create
 
     expect(resolved.endsWith("/devices/ios")).toBe(true);
     await expect(filesystem.realpath(resolved)).resolves.toBe(resolved);
+  });
+});
+
+describe("NodeFilesystem.directorySize", () => {
+  it("counts a file that vanishes between the listing and its stat as 0 bytes, and fails on any other error", async () => {
+    const filesystem = new NodeFilesystem();
+    const root = `${temporaryDirectory}/set`;
+    await filesystem.mkdirp(root);
+    await filesystem.writeFileAtomic(`${root}/device.plist`, "abcd");
+    await filesystem.writeFileAtomic(`${root}/device.plist.sb-1`, "xy");
+    const real = vi.mocked(lstat).getMockImplementation() as typeof lstat;
+    const failWith = (code: string) =>
+      vi.mocked(lstat).mockImplementation((async (path: string, ...rest: never[]) => {
+        if (path.endsWith(".sb-1")) throw Object.assign(new Error(code), { code });
+        return await real(path, ...rest);
+      }) as typeof lstat);
+
+    failWith("ENOENT");
+    await expect(filesystem.directorySize(root)).resolves.toBe(4);
+
+    failWith("EACCES");
+    await expect(filesystem.directorySize(root)).rejects.toMatchObject({ code: "EACCES" });
   });
 });
 

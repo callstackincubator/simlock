@@ -3883,36 +3883,54 @@ describe("AndroidDriver.create", () => {
     }
   });
 
-  it("stops the adb server it adopted when the daemon disposes of it", async () => {
-    const filesystem = await androidFilesystem();
-    const processSupervisor = new FakeProcessSupervisor([adbServerPid]);
-    processSupervisor.answerCommandLine(
-      adbServerPid,
-      `${binaries.adb} -P ${adbServerPort} nodaemon server`,
-    );
-    await recordRunningAdbServer(filesystem);
-    const driver = await AndroidDriver.create({
-      clock: new FakeClock(),
-      database: await memoryAndroidSourceDatabase(),
-      driverConfig: {},
-      env: { ANDROID_HOME: sdk },
-      filesystem,
-      homeDirectory: home,
-      hostAbi: "arm64-v8a",
-      instanceId,
-      processRunner: new EmulatorExitingRunner([]),
-      processSupervisor,
-      simlockHome,
-      tcpProbe: new FakeTcpProbe([adbServerPort]),
-    });
-    processSupervisor.markDead(adbServerPid);
+  it.each([
+    {
+      attached: "no emulator is attached",
+      devices: "List of devices attached\n",
+      signals: [{ pid: adbServerPid, signal: "SIGTERM" }],
+      recordKept: false,
+    },
+    {
+      // why: an emulator that outlives the daemon starts its own `fork-server` on the port once the server is gone, and the next daemon refuses that one as occupied.
+      attached: "an emulator is still attached",
+      devices: "List of devices attached\nemulator-5586\tdevice\n",
+      signals: [],
+      recordKept: true,
+    },
+  ])(
+    "when the daemon disposes of the adb server it adopted and $attached, the server gets $signals and the record is kept: $recordKept",
+    async ({ devices, recordKept, signals }) => {
+      const filesystem = await androidFilesystem();
+      const processSupervisor = new FakeProcessSupervisor([adbServerPid]);
+      processSupervisor.answerCommandLine(
+        adbServerPid,
+        `${binaries.adb} -P ${adbServerPort} nodaemon server`,
+      );
+      await recordRunningAdbServer(filesystem);
+      const runner = new EmulatorExitingRunner([processResult(binaries.adb, ["devices"], devices)]);
+      const driver = await AndroidDriver.create({
+        clock: new FakeClock(),
+        database: await memoryAndroidSourceDatabase(),
+        driverConfig: {},
+        env: { ANDROID_HOME: sdk },
+        filesystem,
+        homeDirectory: home,
+        hostAbi: "arm64-v8a",
+        instanceId,
+        processRunner: runner,
+        processSupervisor,
+        simlockHome,
+        tcpProbe: new FakeTcpProbe([adbServerPort]),
+      });
+      processSupervisor.markDead(adbServerPid);
 
-    await driver.dispose();
+      await driver.dispose();
 
-    // why: By pid, because `ADB_REJECT_KILL_SERVER=1` means `adb kill-server` refuses Simlock too.
-    expect(processSupervisor.signals).toEqual([{ pid: adbServerPid, signal: "SIGTERM" }]);
-    await expect(filesystem.exists(adbRecordPath)).resolves.toBe(false);
-  });
+      // why: By pid, because `ADB_REJECT_KILL_SERVER=1` means `adb kill-server` refuses Simlock too.
+      expect(processSupervisor.signals).toEqual(signals);
+      await expect(filesystem.exists(adbRecordPath)).resolves.toBe(recordKept);
+    },
+  );
 });
 
 describe("AndroidDriver ownership", () => {
@@ -6416,6 +6434,38 @@ describe("AndroidDriver image fit", () => {
         processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
       ];
 
+      it("provisions a device named after a baseline source as a copy of that source's folder with no seed made and only the emulator's version read, and refuses a source whose system image is gone", async () => {
+        const version = () =>
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9");
+        const harness = await seedHarness(
+          [...leasing(true), ...savingSteps, ...sourceBoot(), version(), version()],
+          {
+            config,
+            ids: [...ids, "five", "six"],
+          },
+        );
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+        await harness.driver.saveSource({ ...ready, physical: false as const });
+        await harness.filesystem.writeFileAtomic(`${savedHome}/simlock.avd/marker.txt`, "saved");
+        const callsBefore = harness.runner.calls.length;
+
+        const copy = await harness.driver.provision(harness.spec, { source: "baseline_four" });
+
+        expect(copy.deviceId).toBe("simlock_five");
+        await expect(
+          harness.filesystem.readFile(`${avdDirectory}/simlock_five/simlock.avd/marker.txt`),
+        ).resolves.toBe("saved");
+        expect(harness.runner.calls).toHaveLength(callsBefore + 1);
+
+        await harness.filesystem.rm(`${sdk}/system-images/android-34/google_apis/arm64-v8a`);
+        await expect(
+          harness.driver.provision(harness.spec, { source: "baseline_four" }),
+        ).rejects.toThrow(
+          "source baseline_four is stale: system image system-images;android-34;google_apis;arm64-v8a is not installed",
+        );
+        expect(await harness.filesystem.exists(`${avdDirectory}/simlock_six`)).toBe(false);
+      });
+
       it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
         const kept = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
           expect(await harness.filesystem.exists(`${savedHome}/simlock.avd/config.ini`)).toBe(true);
@@ -6456,7 +6506,11 @@ describe("AndroidDriver image fit", () => {
           ...poweredReady,
           physical: false as const,
         });
-        expect(poweredSaved).toEqual({ sizeBytes: 121, sourceId: "baseline_four" });
+        expect(poweredSaved).toEqual({
+          imageTag: "google_apis",
+          sizeBytes: 121,
+          sourceId: "baseline_four",
+        });
         await kept(powered);
         expect(sent(powered)).toEqual(
           expect.arrayContaining([

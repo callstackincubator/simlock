@@ -992,7 +992,29 @@ export class AndroidDriver implements Driver {
    * shutdown that skipped this would leave both a server and a daemon that cannot exit.
    */
   async dispose(): Promise<void> {
+    if (await this.#emulatorAttached()) {
+      this.#adbServer.leave();
+      return;
+    }
     await this.#adbServer.stop();
+  }
+
+  /**
+   * why: an emulator that outlives the daemon starts its own adb `fork-server` on this port
+   * once the server is gone, and the next daemon refuses that one as `occupied`; so the server
+   * stays while an emulator is attached and the next daemon adopts it. An unreadable list
+   * counts as none: the server is reaped as it always was.
+   */
+  async #emulatorAttached(): Promise<boolean> {
+    try {
+      const result = await this.#processRunner.run(this.#sdk.adb, ["devices"], {
+        env: this.#env(),
+        timeoutMs: ADB_DEVICES_TIMEOUT_MS,
+      });
+      return result.code === 0 && portsFromAdbDevices(result.stdout).length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1246,7 +1268,9 @@ export class AndroidDriver implements Driver {
    * sources area and booted once cold to save the boot snapshot every copy starts from. The row is
    * written `making` before any folder exists, so a crash leaves a row that names the folder to clean.
    */
-  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
+  async saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number; imageTag?: string }> {
     const data = this.#dataFor(device);
     return this.#withDeviceLock(this.#avdFolder(data), async () => {
       const state = this.#stateFor(data);
@@ -1291,7 +1315,11 @@ export class AndroidDriver implements Driver {
         );
         const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
         this.#sources.markReady(sourceId, configHash, sizeBytes);
-        return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+        return {
+          imageTag: kind.imageTag,
+          sourceId,
+          ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        };
       } catch (error: unknown) {
         await this.#filesystem.rm(folder);
         this.#sources.remove(sourceId);
@@ -1401,8 +1429,12 @@ export class AndroidDriver implements Driver {
     );
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async provision(
+    spec: VirtualSpec,
+    options: { readonly source?: string } = {},
+  ): Promise<DriverDevice> {
     this.#assertAndroidSpec(spec);
+    if (options.source !== undefined) return await this.#provisionFromSource(options.source);
     const profile = await this.#profileFor(spec.model);
     const image = await this.#requireImage(profile, spec.osVersion, spec.imageTag);
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
@@ -1440,6 +1472,45 @@ export class AndroidDriver implements Driver {
       port: undefined,
     });
 
+    return { address: "", deviceId, driverData };
+  }
+
+  /**
+   * why: ADR 0061 §4: a lease naming a baseline starts from a copy of that baseline's source, which
+   * holds the saved disk and its boot snapshot; the kind's seed is not touched, the spec was
+   * already checked against the baseline by the coordinator, and a stale source is refused, never copied.
+   */
+  async #provisionFromSource(sourceId: string): Promise<DriverDevice> {
+    const row = this.#sources.readyRows().find((candidate) => candidate.sourceId === sourceId);
+    if (row === undefined) {
+      throw new DriverCrashError(`Android keeps no ready source ${sourceId}`);
+    }
+    const reason = await this.#staleReasonOf(
+      row,
+      await this.#installedImages(),
+      await this.#emulatorVersion(),
+    );
+    if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
+    const deviceId = `simlock_${this.#idGenerator.generate()}`;
+    const avdHome = join(this.#deviceRoot, deviceId);
+    await this.#copyAvd(
+      row.folder,
+      avdHome,
+      `copying Android source ${sourceId} to ${basename(avdHome)} failed`,
+    );
+    const driverData: AndroidDriverData = {
+      avdHome,
+      avdName: SEED_AVD_NAME,
+      configHash: row.configHash,
+      imageIdentity: row.imageIdentity,
+      port: 0,
+      serial: "",
+    };
+    this.#devices.set(this.#avdFolder(driverData), {
+      handle: undefined,
+      imageIdentity: row.imageIdentity,
+      port: undefined,
+    });
     return { address: "", deviceId, driverData };
   }
 

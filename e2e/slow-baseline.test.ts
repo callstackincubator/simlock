@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { IOS } from "./helpers/agent-device-targets.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
@@ -40,7 +41,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "saves a leased iPhone as baseline version 1 with a size above 0, ends the lease, lists the source only in the sources set, and keeps the file written into the device's data folder",
+      "saves a leased iPhone as baseline version 1 with a size above 0, ends the lease, lists the source only in the sources set, keeps the file written into the device's data folder, and launches the installed app from its own folder on a copy",
       { timeout: 900_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -57,9 +58,16 @@ describe.skipIf(process.platform !== "darwin")(
         };
         const deviceSet = grant.environment.SIMLOCK_IOS_DEVICE_SET as string;
         const udid = grant.device.driverDeviceId;
-        const marker = join(deviceSet, udid, "data", "tmp", "simlock-baseline.txt");
-        await mkdir(join(deviceSet, udid, "data", "tmp"), { recursive: true });
+        // why: CoreSimulator empties `data/tmp` when a simulator shuts down, so the marker sits in `data/Documents`, which a shutdown keeps.
+        const marker = join(deviceSet, udid, "data", "Documents", "simlock-baseline.txt");
+        await mkdir(join(deviceSet, udid, "data", "Documents"), { recursive: true });
         await writeFile(marker, "prepared");
+
+        // why: the app is installed and run before the save, so the copy has an installed app whose path the saved LaunchServices database names.
+        const installed = await env.cli(["simctl", "install", udid, IOS.app]);
+        expect(installed.code, `install failed: ${installed.stderr}`).toBe(0);
+        const started = await env.cli(["simctl", "launch", udid, IOS.bundleId]);
+        expect(started.code, `launch before the save failed: ${started.stderr}`).toBe(0);
 
         const saved = await env.cli(["baseline", "save", "slow-ios", "--lease", grant.lease.id], {
           timeout: 600_000,
@@ -75,7 +83,10 @@ describe.skipIf(process.platform !== "darwin")(
         const sourcesSets = [join(deviceSet, "sources"), join(env.home, "devices", "ios-sources")];
         const sourcesSet = sourcesSets.find((candidate) => existsSync(candidate));
         expect(sourcesSet, "no sources set exists after a save").toBeDefined();
-        const inSources = await setDevices(sourcesSet as string);
+        // why: the sources set also holds the seed the next device is copied from; the baseline's clone is the one named `simlock-baseline-<id>`.
+        const inSources = (await setDevices(sourcesSet as string)).filter((device) =>
+          device.name.startsWith("simlock-baseline-"),
+        );
         expect(inSources).toHaveLength(1);
         const source = inSources[0];
         const inDeviceSet = await setDevices(iosDeviceSet(env.home));
@@ -83,11 +94,15 @@ describe.skipIf(process.platform !== "darwin")(
         const simctlList = await env.cli(["simctl", "list", "devices"]);
         expect(simctlList.stdout).not.toContain(source?.udid ?? "no source");
         expect(
-          await readdir(join(sourcesSet as string, source?.udid ?? "", "data", "tmp")),
+          await readdir(join(sourcesSet as string, source?.udid ?? "", "data", "Documents")),
         ).toContain("simlock-baseline.txt");
 
         // why: a lease naming the baseline starts from a copy that holds the saved file, and the copy's own changes are gone for the next one.
-        const copyDirectory = async (): Promise<{ leaseId: string; directory: string }> => {
+        const copyDirectory = async (): Promise<{
+          leaseId: string;
+          directory: string;
+          udid: string;
+        }> => {
           const copy = await env.cli(
             [
               "lease",
@@ -116,13 +131,27 @@ describe.skipIf(process.platform !== "darwin")(
               copied.environment.SIMLOCK_IOS_DEVICE_SET as string,
               copied.device.driverDeviceId,
               "data",
-              "tmp",
+              "Documents",
             ),
             leaseId: copied.lease.id,
+            udid: copied.device.driverDeviceId,
           };
         };
         const first = await copyDirectory();
         expect(await readdir(first.directory)).toContain("simlock-baseline.txt");
+        // why: the copy must start the app from its own folder, not from the saved device's.
+        const container = await env.cli([
+          "simctl",
+          "get_app_container",
+          first.udid,
+          IOS.bundleId,
+          "app",
+        ]);
+        expect(container.code, `get_app_container failed: ${container.stderr}`).toBe(0);
+        expect(container.stdout).toContain(`/${first.udid}/`);
+        expect(container.stdout).not.toContain(`/${udid}/`);
+        const copyStarted = await env.cli(["simctl", "launch", first.udid, IOS.bundleId]);
+        expect(copyStarted.code, `launch on the copy failed: ${copyStarted.stderr}`).toBe(0);
         await writeFile(join(first.directory, "simlock-session.txt"), "left behind");
         const released = await env.cli(["release", first.leaseId]);
         expect(released.code, `release failed: ${released.stderr}`).toBe(0);
@@ -144,107 +173,118 @@ describe.skipIf(!hasAndroidSdk)(
       { timeout: 900_000 },
       async () => {
         const env = await withDaemon({ driver: "real" });
-        const lease = await env.cli(
-          ["lease", "--platform", "android", "--agent-id", "baseline-android", "--detach"],
-          { timeout: DEVICE_READY_MS },
-        );
-        expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
-        const grant = lease.json as { lease: { id: string } };
-        const written = await env.cli([
-          "adb",
-          "shell",
-          "settings",
-          "put",
-          "global",
-          "simlock_baseline",
-          "1",
-        ]);
-        expect(written.code, `settings put failed: ${written.stderr}`).toBe(0);
-        const file = await env.cli([
-          "adb",
-          "shell",
-          "echo saved > /data/local/tmp/simlock-baseline.txt",
-        ]);
-        expect(file.code, `writing the file failed: ${file.stderr}`).toBe(0);
-
-        const saved = await env.cli(
-          ["baseline", "save", "slow-android", "--lease", grant.lease.id],
-          { timeout: 900_000 },
-        );
-        expect(saved.code, `baseline save failed: ${saved.stderr}`).toBe(0);
-
-        await expectLeaseEnded(env, grant.lease.id);
-        const [listed] = await baselines(env);
-        expect(listed).toMatchObject({ name: "slow-android", version: 1 });
-        const sources = join(env.home, "devices", "android", "sources");
-        const folders = await readdir(sources);
-        const snapshots = folders.map((folder) =>
-          join(sources, folder, "simlock.avd", "snapshots", "simlock_boot"),
-        );
-        expect(
-          snapshots.some((snapshot) => existsSync(snapshot)),
-          "the source holds no snapshots/simlock_boot folder",
-        ).toBe(true);
-
-        // why: a lease naming the baseline starts from a copy that holds the saved setting and file, and the copy's own changes are gone for the next one.
-        const copyLease = async (): Promise<string> => {
-          const copy = await env.cli(
-            [
-              "lease",
-              "--platform",
-              "android",
-              "--baseline",
-              "slow-android",
-              "--agent-id",
-              "baseline-android",
-              "--detach",
-            ],
+        try {
+          const lease = await env.cli(
+            ["lease", "--platform", "android", "--agent-id", "baseline-android", "--detach"],
             { timeout: DEVICE_READY_MS },
           );
-          expect(copy.code, `lease naming the baseline failed: ${copy.stderr}`).toBe(0);
-          return (copy.json as { lease: { id: string } }).lease.id;
-        };
-        const setting = async (): Promise<string> => {
-          const read = await env.cli([
-            "adb",
+          expect(lease.code, `lease failed: ${lease.stderr}`).toBe(0);
+          const grant = lease.json as { device: { address: string }; lease: { id: string } };
+          // why: a worker's `simlock adb` has no lease to aim at, and its adb server also lists the pool's spare emulator, so each call names the lease's serial.
+          const adbOn = (address: string, ...args: string[]) =>
+            env.cli(["adb", "-s", address, ...args]);
+          const written = await adbOn(
+            grant.device.address,
             "shell",
             "settings",
-            "get",
+            "put",
             "global",
             "simlock_baseline",
-          ]);
-          return read.stdout.trim();
-        };
-        // why: a missing file prints nothing to stdout, so the read answers an empty string for it.
-        const fileText = async (name: string): Promise<string> => {
-          const read = await env.cli(["adb", "shell", `cat /data/local/tmp/${name} 2>/dev/null`]);
-          return read.stdout.trim();
-        };
-        const copyId = await copyLease();
-        expect(await setting()).toBe("1");
-        expect(await fileText("simlock-baseline.txt")).toBe("saved");
-        const changed = await env.cli([
-          "adb",
-          "shell",
-          "settings",
-          "put",
-          "global",
-          "simlock_baseline",
-          "2",
-        ]);
-        expect(changed.code, `settings put failed: ${changed.stderr}`).toBe(0);
-        const left = await env.cli([
-          "adb",
-          "shell",
-          "echo left > /data/local/tmp/simlock-session.txt",
-        ]);
-        expect(left.code, `writing the file failed: ${left.stderr}`).toBe(0);
-        const released = await env.cli(["release", copyId]);
-        expect(released.code, `release failed: ${released.stderr}`).toBe(0);
-        await copyLease();
-        expect(await setting()).toBe("1");
-        expect(await fileText("simlock-baseline.txt")).toBe("saved");
-        expect(await fileText("simlock-session.txt")).toBe("");
+            "1",
+          );
+          expect(written.code, `settings put failed: ${written.stderr}`).toBe(0);
+          const file = await adbOn(
+            grant.device.address,
+            "shell",
+            "echo saved > /data/local/tmp/simlock-baseline.txt",
+          );
+          expect(file.code, `writing the file failed: ${file.stderr}`).toBe(0);
+
+          const saved = await env.cli(
+            ["baseline", "save", "slow-android", "--lease", grant.lease.id],
+            { timeout: 900_000 },
+          );
+          expect(saved.code, `baseline save failed: ${saved.stderr}`).toBe(0);
+
+          await expectLeaseEnded(env, grant.lease.id);
+          const [listed] = await baselines(env);
+          expect(listed).toMatchObject({ name: "slow-android", version: 1 });
+          const sources = join(env.home, "devices", "android", "sources");
+          const folders = await readdir(sources);
+          const snapshots = folders.map((folder) =>
+            join(sources, folder, "simlock.avd", "snapshots", "simlock_boot"),
+          );
+          expect(
+            snapshots.some((snapshot) => existsSync(snapshot)),
+            "the source holds no snapshots/simlock_boot folder",
+          ).toBe(true);
+
+          // why: a lease naming the baseline starts from a copy that holds the saved setting and file, and the copy's own changes are gone for the next one.
+          const copyLease = async (): Promise<{ address: string; id: string }> => {
+            const copy = await env.cli(
+              [
+                "lease",
+                "--platform",
+                "android",
+                "--baseline",
+                "slow-android",
+                "--agent-id",
+                "baseline-android",
+                "--detach",
+              ],
+              { timeout: DEVICE_READY_MS },
+            );
+            expect(copy.code, `lease naming the baseline failed: ${copy.stderr}`).toBe(0);
+            const copied = copy.json as { device: { address: string }; lease: { id: string } };
+            return { address: copied.device.address, id: copied.lease.id };
+          };
+          const setting = async (address: string): Promise<string> => {
+            const read = await adbOn(
+              address,
+              "shell",
+              "settings",
+              "get",
+              "global",
+              "simlock_baseline",
+            );
+            return read.stdout.trim();
+          };
+          // why: a missing file prints nothing to stdout, so the read answers an empty string for it.
+          const fileText = async (address: string, name: string): Promise<string> => {
+            const read = await adbOn(address, "shell", `cat /data/local/tmp/${name} 2>/dev/null`);
+            return read.stdout.trim();
+          };
+          const copyId = await copyLease();
+          expect(await setting(copyId.address)).toBe("1");
+          expect(await fileText(copyId.address, "simlock-baseline.txt")).toBe("saved");
+          const changed = await adbOn(
+            copyId.address,
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "simlock_baseline",
+            "2",
+          );
+          expect(changed.code, `settings put failed: ${changed.stderr}`).toBe(0);
+          const left = await adbOn(
+            copyId.address,
+            "shell",
+            "echo left > /data/local/tmp/simlock-session.txt",
+          );
+          expect(left.code, `writing the file failed: ${left.stderr}`).toBe(0);
+          const released = await env.cli(["release", copyId.id]);
+          expect(released.code, `release failed: ${released.stderr}`).toBe(0);
+          const second = await copyLease();
+          expect(await setting(second.address)).toBe("1");
+          expect(await fileText(second.address, "simlock-baseline.txt")).toBe("saved");
+          expect(await fileText(second.address, "simlock-session.txt")).toBe("");
+        } finally {
+          // why: the pool boots a spare emulator once a lease ends; teardown removes the home but kills no emulator, so one left running would join the next test's adb server.
+          await env
+            .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
+            .catch(() => undefined);
+        }
       },
     );
   },

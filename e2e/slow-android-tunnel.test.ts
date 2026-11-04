@@ -608,11 +608,18 @@ describe.skipIf(!hasAndroidSdk)(
                   .filter((line) => line.startsWith(`${lease.serial} `))
                   .join("\n"),
               };
-              return devices.code === 0 && forward.code === 0;
+              // why: adb lists a killed emulator as `offline` for a few seconds, so the read ends when it is gone, not when adb first answers.
+              return (
+                devices.code === 0 &&
+                forward.code === 0 &&
+                left.devices === "" &&
+                left.forward === ""
+              );
             },
             {
               interval: 2_000,
-              label: "the worker's adb server answering after the emulator was deleted",
+              label: () =>
+                `the worker's adb server listing nothing of the lease's serial; last read ${JSON.stringify(left)}`,
               timeout: 120_000,
             },
           );
