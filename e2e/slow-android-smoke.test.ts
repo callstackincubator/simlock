@@ -51,6 +51,58 @@ function firstMissingAncestor(path: string): string | undefined {
   return missing;
 }
 
+interface CrashDump {
+  readonly completedDir: string;
+  readonly createdRoot: string | undefined;
+  readonly id: string;
+  readonly planted: string;
+}
+
+/** why: the planted dump needs crashpad's database xattrs, which only macOS's `xattr` writes; elsewhere there is no dump and the rest of the smoke test still runs. */
+async function crashDumpTarget(sdk: AndroidSdkPaths): Promise<CrashDump | undefined> {
+  if (process.platform !== "darwin") return undefined;
+  const completedDir = await sharedCrashCompletedDir(sdk);
+  const id = randomUUID();
+  return {
+    completedDir,
+    createdRoot: firstMissingAncestor(completedDir),
+    id,
+    planted: join(completedDir, `${id}.dmp`),
+  };
+}
+
+/** why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted. */
+async function plantCrashDump(dump: CrashDump | undefined): Promise<void> {
+  if (dump === undefined) return;
+  await mkdir(dump.completedDir, { recursive: true });
+  await writeFile(dump.planted, "simlock slow-lane crash dump marker");
+  await execFileAsync("xattr", [
+    "-w",
+    "org.chromium.crashpad.database.uuid",
+    dump.id,
+    dump.planted,
+  ]);
+  await execFileAsync("xattr", [
+    "-w",
+    "org.chromium.crashpad.database.creation_time",
+    String(Math.floor(Date.now() / 1000)),
+    dump.planted,
+  ]);
+}
+
+/** why: with no dump planted there is nothing the lease could have deleted. */
+function crashDumpKept(dump: CrashDump | undefined): boolean {
+  return dump === undefined || existsSync(dump.planted);
+}
+
+async function removeCrashDump(dump: CrashDump | undefined): Promise<void> {
+  if (dump === undefined) return;
+  await rm(dump.planted, { force: true });
+  if (dump.createdRoot !== undefined) {
+    await rm(dump.createdRoot, { recursive: true, force: true });
+  }
+}
+
 async function avdManagerList(sdk: AndroidSdkPaths): Promise<string[]> {
   const { stdout } = await runSdkTool(sdk.avdmanager, ["list", "avd"]).catch(() => ({
     stdout: "",
@@ -112,32 +164,9 @@ describe.skipIf(ANDROID_SDK === undefined)(
         if (adbServerPort === undefined) {
           throw new Error("the real-SDK lane must allocate its own adb server port");
         }
-        // why: the planted dump needs crashpad's database xattrs, which only macOS's `xattr` writes; elsewhere the rest of the smoke test still runs.
-        const completedDir =
-          process.platform === "darwin" ? await sharedCrashCompletedDir(sdk) : undefined;
-        // why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted.
-        const dumpId = randomUUID();
-        const planted =
-          completedDir === undefined ? undefined : join(completedDir, `${dumpId}.dmp`);
-        const createdRoot =
-          completedDir === undefined ? undefined : firstMissingAncestor(completedDir);
+        const crashDump = await crashDumpTarget(sdk);
         try {
-          if (completedDir !== undefined && planted !== undefined) {
-            await mkdir(completedDir, { recursive: true });
-            await writeFile(planted, "simlock slow-lane crash dump marker");
-            await execFileAsync("xattr", [
-              "-w",
-              "org.chromium.crashpad.database.uuid",
-              dumpId,
-              planted,
-            ]);
-            await execFileAsync("xattr", [
-              "-w",
-              "org.chromium.crashpad.database.creation_time",
-              String(Math.floor(Date.now() / 1000)),
-              planted,
-            ]);
-          }
+          await plantCrashDump(crashDump);
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
           checkCatalog(sdk, catalog.json as AndroidCatalogOutput);
@@ -183,12 +212,10 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(density.stdout).toContain("Physical density: 420");
 
           // why: the lease is up, so no dialog blocked the boot, and the launch must have left the user's shared crash database alone.
-          if (planted !== undefined) {
-            expect(
-              existsSync(planted),
-              "the lease deleted a dump in the user's shared crash db",
-            ).toBe(true);
-          }
+          expect(
+            crashDumpKept(crashDump),
+            "the lease deleted a dump in the user's shared crash db",
+          ).toBe(true);
 
           const refused = await env.cli(["adb", "kill-server"]);
           expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
@@ -277,12 +304,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
             label: "daemon stop left the worker lock behind",
           });
         } finally {
-          if (planted !== undefined) {
-            await rm(planted, { force: true });
-          }
-          if (createdRoot !== undefined) {
-            await rm(createdRoot, { recursive: true, force: true });
-          }
+          await removeCrashDump(crashDump);
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);
