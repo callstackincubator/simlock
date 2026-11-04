@@ -124,7 +124,7 @@ describe("stale-refs.sh", () => {
     expect(output).not.toContain("lease.granted");
   });
 
-  it("lists every line that still holds a word the spec retires, in any case, as a whole word", () => {
+  it("lists every line that still holds a word the spec retires, in any case, as a whole word, from an LF or CRLF body", () => {
     const dir = repo(
       {
         "src/core/reclaim.ts": "export function reclaim() {}\n",
@@ -151,6 +151,13 @@ describe("stale-refs.sh", () => {
     ]);
     expect(output).not.toContain("scope word");
     expect(sweep(dir)).not.toContain("word wiped");
+
+    writeFileSync(join(dir, "crlf.md"), "### Retired words\r\n\r\n- `wiped`: deleted now\r\n");
+    const crlf = execFileSync("sh", [SCRIPT, "base", "HEAD", "crlf.md"], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    expect(hitsUnder(crlf, "word wiped (retired by the spec)")).toHaveLength(2);
   });
 
   it("prints nothing when nothing the branch removed is still named", () => {

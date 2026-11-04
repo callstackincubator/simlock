@@ -112,10 +112,10 @@ fi
 
 # why: a word the branch keeps but whose meaning it changed is in no diff line the searches above read.
 if [ $# -gt 0 ]; then
-  awk '
+  cat "$@" | tr -d '\r' | awk '
     /^#+[ \t]/ { inside = ($0 ~ /^#+[ \t]+Retired words[ \t]*$/); next }
     inside && /^[ \t]*[-*][ \t]/ && match($0, /`[^`]+`/) { print substr($0, RSTART + 1, RLENGTH - 2) }
-  ' "$@" | tr -d '\r' | sort -u >"$tmp/retired"
+  ' | sort -u >"$tmp/retired"
   while IFS= read -r word; do
     search . -n -i -w -F -e "$word" >"$tmp/word-hits"
     [ -s "$tmp/word-hits" ] || continue
