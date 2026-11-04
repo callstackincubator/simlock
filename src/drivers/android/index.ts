@@ -1,5 +1,5 @@
 import { otherDeviceRefusal } from "../other-device-refusal.js";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
   ensureOwnedRoot,
@@ -76,6 +76,7 @@ import {
 } from "./adb-tools.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import type { AndroidDriverData } from "./data.js";
+import { OWNERSHIP_PROBE_TIMEOUT_MS, Ownership } from "./ownership.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
   AvdmanagerDeviceList,
@@ -119,7 +120,6 @@ const PORT_MIN = 5586;
 // (8586-8682 for Simlock's 5586-5682).
 const GRPC_PORT_OFFSET = 3000;
 const PORT_POLL_INTERVAL_MS = 2_000;
-const AVD_PATH_TIMEOUT_MS = 5_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
@@ -137,7 +137,6 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const EMULATOR_LOG_TAIL_BYTES = 8_192;
 const EMULATOR_LOG_TAIL_LINES = 10;
-const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
 const MARK_READ_TIMEOUT_MS = 5_000;
 const ERASABLE_MARK_READ_BYTES = 4096;
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
@@ -610,6 +609,7 @@ export class AndroidDriver implements Driver {
   readonly #adbServer: AdbServerSupervisor;
   readonly #adbServerPort: number;
   readonly #adbTools: AdbTools;
+  readonly #ownership: Ownership;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
   readonly #acceptAndroidLicenses: boolean;
   readonly #avdmanagerDevices: AvdmanagerDeviceList;
@@ -663,6 +663,11 @@ export class AndroidDriver implements Driver {
       emulator: sdk.emulator,
       processRunner: options.processRunner,
     });
+    this.#ownership = new Ownership({
+      adb: sdk.adb,
+      adbTools: this.#adbTools,
+      filesystem: options.filesystem,
+    });
     this.#baseEnv = options.env;
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
@@ -699,7 +704,7 @@ export class AndroidDriver implements Driver {
             clock: options.clock,
             listeners: options.tcpListener,
             target: deviceTarget,
-            isOwn: (device) => this.#deviceIsOwn(device),
+            isOwn: (device) => this.#ownership.deviceIsOwn(device),
             runAdb: (device, args, timeoutMs) => this.#runAdbOn(device, args, timeoutMs),
             warn: (message, detail) => options.logger?.warn(message, detail),
           });
@@ -1355,7 +1360,7 @@ export class AndroidDriver implements Driver {
     state: DeviceState,
     deviceId: string,
   ): Promise<void> {
-    if (!(await this.#serialIsOwn(data))) {
+    if (!(await this.#ownership.serialIsOwn(data))) {
       throw new DriverCrashError(
         `Android device ${deviceId} cannot be saved: ${data.serial} is not its emulator`,
       );
@@ -1370,7 +1375,7 @@ export class AndroidDriver implements Driver {
       );
     }
     if (!(await this.#exitedWithin(data, state, SEED_POWER_OFF_TIMEOUT_MS))) {
-      if (!(await this.#serialIsOwn(data))) {
+      if (!(await this.#ownership.serialIsOwn(data))) {
         throw new DriverCrashError(
           `Android device ${deviceId} did not power off and ${data.serial} is no longer its emulator`,
         );
@@ -1645,7 +1650,7 @@ export class AndroidDriver implements Driver {
       state.handle = undefined;
       return;
     }
-    if (await this.#serialIsOwn(seed)) {
+    if (await this.#ownership.serialIsOwn(seed)) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", seed.serial, "emu", "kill"], {
         env: this.#adbTools.env(),
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
@@ -1797,11 +1802,6 @@ export class AndroidDriver implements Driver {
     throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
-  async #deviceIsOwn(device: VirtualDriverDevice): Promise<boolean> {
-    const data = this.#adbTools.dataFor(device);
-    return data.serial !== "" && (await this.#serialIsOwn(data));
-  }
-
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
@@ -1856,13 +1856,18 @@ export class AndroidDriver implements Driver {
     const { settledSerials } = await this.#adbTools.scanSerials();
     const serials: string[] = [];
     for (const serial of settledSerials) {
-      const answered = await this.#answeredAvdPathOf(serial);
+      let answered: string | undefined;
+      try {
+        answered = await this.#ownership.avdPathOf(serial);
+      } catch {
+        answered = undefined;
+      }
       if (answered === undefined || answered === "") {
         throw new DriverCrashError(
           `Refusing to delete ${deviceIdOf(data)}: could not tell which AVD the emulator on ${serial} runs`,
         );
       }
-      if (await this.#isOwnAvdPath(answered, expected)) serials.push(serial);
+      if (await this.#ownership.isOwnPath(answered, expected)) serials.push(serial);
     }
     for (const serial of serials) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
@@ -1882,20 +1887,6 @@ export class AndroidDriver implements Driver {
         );
       }
       await this.#adbTools.delay(PORT_POLL_INTERVAL_MS);
-    }
-  }
-
-  /** why: Bounded like the ownership gate; undefined means the emulator did not say. */
-  async #answeredAvdPathOf(serial: string): Promise<string | undefined> {
-    try {
-      const answer = await this.#processRunner.run(
-        this.#sdk.adb,
-        ["-s", serial, "emu", "avd", "path"],
-        { env: this.#adbTools.env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
-      );
-      return answer.code === 0 ? answeredAvdPath(answer.stdout) : undefined;
-    } catch {
-      return undefined;
     }
   }
 
@@ -2025,14 +2016,14 @@ export class AndroidDriver implements Driver {
     if (named.length === 0) return { kind: "foreign" };
     let answered: string;
     try {
-      answered = await this.#readAvdPath(candidate);
+      answered = await this.#ownership.avdPathOf(candidate);
     } catch {
       // why: A serial can disappear after its shell answered; keep the observation
       // inconclusive just as when it disappears before that shell call.
       return { kind: "unreadable" };
     }
     for (const entry of named) {
-      if (await this.#sameDirectory(answered, entry.folder)) {
+      if (await this.#ownership.sameDirectory(answered, entry.folder)) {
         return { kind: "own", markLines, owner: entry };
       }
     }
@@ -2764,89 +2755,13 @@ export class AndroidDriver implements Driver {
     ]);
     const stopped = bootAnimation.stdout.trim();
     if (stopped !== "" && stopped !== "stopped") return false;
-    await this.#confirmAvdAnswers(data);
+    await this.#ownership.confirmAvdAnswers(data);
     const answer = await this.#processRunner.run(
       this.#sdk.adb,
       ["-s", data.serial, "shell", "pm", "path", "android"],
       { env: this.#adbTools.env() },
     );
     return answer.code === 0 && answer.stdout.includes("package:");
-  }
-
-  /**
-   * why: Proves the emulator that answered the readiness wait on `data.serial` runs this device's
-   * AVD, by the AVD directory it reports: only this device's own directory in the device root
-   * will do -- not a sibling's, and never a name (safety rule 8). An emulator whose console
-   * port is already held exits without answering, so the one that answers is whoever holds
-   * the port -- another device, another Simlock instance, the user's own emulator. Refusing
-   * here, before a mark or a snapshot save touches it, is what keeps a port collision from
-   * readying a device at another device's address; `#serialIsOwn` then keeps the
-   * shutdown and destroy that follow a failed boot from sending it `emu kill`, by asking the
-   * serial again each time. The reported
-   * path is compared whole, and through `realpath` when the two spellings differ (an ancestor
-   * symlink such as macOS's `/var` -> `/private/var`); anything unreadable fails closed.
-   */
-  async #confirmAvdAnswers(data: AndroidDriverData): Promise<void> {
-    const expected = this.#adbTools.avdFolder(data);
-    const answered = await this.#readAvdPath(data.serial);
-    if (await this.#isOwnAvdPath(answered, expected)) {
-      return;
-    }
-    throw new DriverCrashError(
-      `Refusing to ready ${data.avdName}: the emulator answering on ${data.serial} runs ${JSON.stringify(answered)}, not ${expected} -- another emulator holds its console port`,
-    );
-  }
-
-  async #readAvdPath(serial: string): Promise<string> {
-    const result = await this.#adbTools.runOrThrow(
-      this.#sdk.adb,
-      ["-s", serial, "emu", "avd", "path"],
-      {
-        timeoutMs: AVD_PATH_TIMEOUT_MS,
-      },
-    );
-    return answeredAvdPath(result.stdout);
-  }
-
-  /**
-   * why: The gate before any emulator mutation (`emu kill`): asks the emulator on the
-   * serial for its AVD path, bounded by a timeout, on every call -- the answer is never kept,
-   * because the serial can change hands between calls. An unreachable, timed-out or unreadable
-   * answer is "not ours" (fail closed), so nothing is sent.
-   */
-  async #serialIsOwn(data: AndroidDriverData): Promise<boolean> {
-    try {
-      const result = await this.#processRunner.run(
-        this.#sdk.adb,
-        ["-s", data.serial, "emu", "avd", "path"],
-        { env: this.#adbTools.env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS },
-      );
-      if (result.code !== 0) return false;
-      return await this.#isOwnAvdPath(
-        answeredAvdPath(result.stdout),
-        this.#adbTools.avdFolder(data),
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  async #isOwnAvdPath(answered: string, expected: string): Promise<boolean> {
-    return answered === expected || (await this.#sameDirectory(answered, expected));
-  }
-
-  async #sameDirectory(left: string, right: string): Promise<boolean> {
-    if (left === right) return true;
-    if (!isAbsolute(left)) return false;
-    try {
-      const [realLeft, realRight] = await Promise.all([
-        this.#filesystem.realpath(left),
-        this.#filesystem.realpath(right),
-      ]);
-      return realLeft === realRight;
-    } catch {
-      return false;
-    }
   }
 
   async #startEmulator(
@@ -2934,7 +2849,7 @@ export class AndroidDriver implements Driver {
   }
 
   async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    if (data.port > 0 && (await this.#serialIsOwn(data))) {
+    if (data.port > 0 && (await this.#ownership.serialIsOwn(data))) {
       await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
         env: this.#adbTools.env(),
         timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
@@ -3232,10 +3147,6 @@ function iniValues(contents: string, key: RegExp): string[] {
 
 function relativeImageDirectory(image: SystemImage): string {
   return `system-images/android-${image.apiLevel}/${image.tag}/${image.abi}`;
-}
-
-function answeredAvdPath(stdout: string): string {
-  return (stdout.split("\n")[0] ?? "").trim().replace(/(?<=.)\/+$/, "");
 }
 
 function observedAndroidDevice(
