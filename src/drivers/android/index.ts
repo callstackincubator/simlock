@@ -67,15 +67,17 @@ import {
 } from "../../ports/index.js";
 import { createAndroidDeviceTcp, type AndroidDeviceTcp } from "./device-tcp.js";
 import { AdbRegistrar } from "./adb-registrar.js";
-import {
-  ADB_DEVICES_TIMEOUT_MS,
-  AdbTools,
-  deviceIdOf,
-  SEED_AVD_NAME,
-  serialFor,
-} from "./adb-tools.js";
+import { ADB_DEVICES_TIMEOUT_MS, AdbTools, deviceIdOf, SEED_AVD_NAME } from "./adb-tools.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
-import type { AndroidDriverData } from "./data.js";
+import {
+  ConsolePorts,
+  GRPC_PORT_OFFSET,
+  PORT_MAX,
+  PORT_MIN,
+  portAllocatorFor,
+  portsFromAdbDevices,
+} from "./console-ports.js";
+import type { AndroidDriverData, DeviceState } from "./data.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, Ownership } from "./ownership.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
 import {
@@ -103,22 +105,6 @@ const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 // Under-quoting matters more than over-quoting: `Doctor` derives its stalled-transition
 // threshold from this number, so a low estimate flags healthy boots on a slower machine.
 const COLD_BOOT_ESTIMATE_MS = 70_000;
-// why: Console ports, even ones only, each paired with the odd adb port above it. The range
-// starts above the 5585 ceiling a default adb server scans, so the user's server and
-// Android Studio cannot see, drive, or kill a Simlock emulator (ADR 0001, decision 4).
-// It also repairs the old 5554-5682 range, which was broken at both ends: the bottom
-// competed for the user's own emulators, and everything above 5585 read as free to the
-// allocator below -- which derives occupancy from `adb devices` -- because no server could
-// report a device up there. Simlock's server can, and not because it scans: with the
-// scanner off, a transport exists for every port an emulator announced itself on or
-// `#reattachRunningEmulators` swept, which is exactly this range.
-const PORT_MAX = 5682;
-const PORT_MIN = 5586;
-// why: With `-port` set and no `-grpc`, the emulator opens no gRPC server and writes no
-// `avd/running/pid_*.ini`, so tools that drive it over gRPC cannot find it. The emulator's own
-// default, console port + 3000, keeps the endpoint per-console and so unique per lease
-// (8586-8682 for Simlock's 5586-5682).
-const GRPC_PORT_OFFSET = 3000;
 const PORT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // why: After this long without an answer from a serial, the emulator's own registration is
@@ -257,23 +243,6 @@ export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
       `\`sdkmanager --licenses\` manually.`;
     this.name = "AndroidLicenseNotAcceptedError";
   }
-}
-
-interface DeviceState {
-  handle: ProcessHandle | undefined;
-  imageIdentity: string;
-  /**
-   * why: The console port this process reserved for the device: taken at its first `prepare` boot
-   * here, kept across its stops so no other device is handed the port its record names while
-   * this process runs, and given back by `destroy`. Nothing persists it, so after a restart a
-   * device holds none until it boots again (#52). A recovery boot reserves nothing.
-   */
-  port: number | undefined;
-  /**
-   * why: Set for a device this process never provisioned: after a restart an emulator it never
-   * started may still run the AVD, so `destroy` looks for one.
-   */
-  restored?: boolean;
 }
 
 interface DeviceEntry {
@@ -538,8 +507,6 @@ function isBareShell(args: readonly string[]): boolean {
   );
 }
 
-const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
-
 /**
  * why: `adb emu` joins its operands with spaces into one emulator console line, so the words the
  * console sees are the operands split on whitespace, not the argv tokens. Matching is
@@ -626,7 +593,7 @@ export class AndroidDriver implements Driver {
   readonly #seedLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
-  readonly #portAllocator: PortAllocator;
+  readonly #consolePorts: ConsolePorts;
   readonly #processRunner: ProcessRunner;
   readonly #physical: AndroidPhysicalHandler;
   readonly #resolvedProfiles = new Map<string, DeviceProfile>();
@@ -637,7 +604,6 @@ export class AndroidDriver implements Driver {
   readonly #sources: AndroidSourceTable;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
-  readonly #tcpProbe: TcpProbe;
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
@@ -691,7 +657,6 @@ export class AndroidDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
     this.#sources = new AndroidSourceTable(options.database);
-    this.#tcpProbe = options.tcpProbe;
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     const deviceTarget = this.#deviceTargetFor(options, sdk.adb, adbServerPort);
     const targetFor = this.#screenTargetFor(options, deviceTarget);
@@ -715,7 +680,11 @@ export class AndroidDriver implements Driver {
     // read by `listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
     this.#legacyAvdHome =
       options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
-    this.#portAllocator = portAllocatorFor(options.processRunner, sdk.adb);
+    this.#consolePorts = new ConsolePorts({
+      adbTools: this.#adbTools,
+      allocator: portAllocatorFor(options.processRunner, sdk.adb),
+      tcpProbe: options.tcpProbe,
+    });
     // why: scoped like every other call: an unscoped `avdmanager` would read the user's `~/.android`.
     this.#avdmanagerDevices = new AvdmanagerDeviceList({
       avdmanager: sdk.avdmanager,
@@ -1391,7 +1360,7 @@ export class AndroidDriver implements Driver {
       }
     }
     state.handle = undefined;
-    if (state.port !== undefined) this.#portAllocator.release(state.port);
+    if (state.port !== undefined) this.#consolePorts.release(state.port);
     state.port = undefined;
   }
 
@@ -1592,7 +1561,7 @@ export class AndroidDriver implements Driver {
 
   async #bootSeedTwice(sourceId: string, seed: AndroidDriverData): Promise<void> {
     const state = this.#coldState(seed);
-    const booted = await this.#withReservedPort(seed, state);
+    const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
       await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
       await this.#adbTools.runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"], {
@@ -1609,19 +1578,19 @@ export class AndroidDriver implements Driver {
       await this.#bootToSnapshot(sourceId, booted, state);
     } finally {
       state.handle?.kill("SIGKILL");
-      if (state.port !== undefined) this.#portAllocator.release(state.port);
+      if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
   }
 
   /** why: a source that already powered off cleanly is booted once cold, its boot snapshot saved, and shut down; it is never booted again. */
   async #snapshotSource(sourceId: string, seed: AndroidDriverData): Promise<void> {
     const state = this.#coldState(seed);
-    const booted = await this.#withReservedPort(seed, state);
+    const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
       await this.#bootToSnapshot(sourceId, booted, state);
     } finally {
       state.handle?.kill("SIGKILL");
-      if (state.port !== undefined) this.#portAllocator.release(state.port);
+      if (state.port !== undefined) this.#consolePorts.release(state.port);
     }
   }
 
@@ -1734,7 +1703,7 @@ export class AndroidDriver implements Driver {
     return this.#withDeviceLock(this.#adbTools.avdFolder(data), async () => {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
-        const running = this.#onReservedPort(data, state);
+        const running = this.#consolePorts.onReservedPort(data, state);
         await this.#waitForReadiness(running, this.#clock.now());
         // why: The device was already running (or booting) under this driver instance, so its mark
         // can't have gone stale. Re-mark anyway: this is the
@@ -1751,35 +1720,18 @@ export class AndroidDriver implements Driver {
       }
 
       if (data.avdHome !== undefined) {
-        const copy = await this.#withReservedPort(data, state);
+        const copy = await this.#consolePorts.withReservedPort(data, state);
         await this.#startEmulator(copy, state, ["-snapshot", BOOT_SNAPSHOT], true);
         await this.#writeMark(copy);
         return { address: copy.serial, deviceId: device.deviceId, driverData: copy };
       }
 
       // why: a device made before copies has no boot snapshot: it boots once with a wipe and is destroyed at its release.
-      const booted = await this.#withReservedPort(data, state);
+      const booted = await this.#consolePorts.withReservedPort(data, state);
       await this.#startEmulator(booted, state, ["-wipe-data", "-no-snapshot-load"], false);
       await this.#writeMark(booted);
       return { address: booted.serial, deviceId: device.deviceId, driverData: booted };
     });
-  }
-
-  /**
-   * why: The device's data on the console port this process reserved for it, taking one on its
-   * first `prepare` boot here. The port its record names is never booted on as such: after a
-   * restart nothing reserves it, so another device may have been handed it since (#52).
-   */
-  async #withReservedPort(data: AndroidDriverData, state: DeviceState): Promise<AndroidDriverData> {
-    state.port ??= await this.#portAllocator.allocate(this.#adbTools.env(), this.#tcpProbe);
-    return this.#onReservedPort(data, state);
-  }
-
-  /** why: The reserved port is the truth; `data` is only what the registry last committed. */
-  #onReservedPort(data: AndroidDriverData, state: DeviceState): AndroidDriverData {
-    return state.port === undefined
-      ? data
-      : { ...data, port: state.port, serial: serialFor(state.port) };
   }
 
   // why: the loopback ports held for a phone's tunnels are freed after its reclaim, which removes no rule: only the ports no rule points to are freed. An emulator's are freed at its destroy.
@@ -1824,7 +1776,7 @@ export class AndroidDriver implements Driver {
       // why: After a restart a stopped device's recorded port may be another device's (#52), so a
       // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
       if (state.handle !== undefined) {
-        await this.#shutdown(this.#onReservedPort(data, state), state);
+        await this.#shutdown(this.#consolePorts.onReservedPort(data, state), state);
       } else if (state.restored === true) {
         await this.#stopUnownedEmulator(data);
       }
@@ -1840,7 +1792,7 @@ export class AndroidDriver implements Driver {
       }
       this.#devices.delete(this.#adbTools.avdFolder(data));
       if (state.port !== undefined) {
-        this.#portAllocator.release(state.port);
+        this.#consolePorts.release(state.port);
       }
       await this.deviceTcp?.release({ ...device, physical: false as const });
     });
@@ -2916,73 +2868,6 @@ export class AndroidDriver implements Driver {
   }
 }
 
-class PortAllocator {
-  readonly #reserved = new Set<number>();
-  #lock = Promise.resolve();
-
-  constructor(
-    private readonly adb: string,
-    private readonly processRunner: ProcessRunner,
-  ) {}
-
-  /**
-   * why: The scoped environment and the probe are passed per call rather than held, because one
-   * allocator is shared by every driver on a runner (see `portAllocatorFor`) while both
-   * belong to one driver instance -- a stored environment would go stale the moment a
-   * second driver appeared and would silently poll the wrong adb server.
-   *
-   * `adb devices` answers only for emulators announced to this instance's own server, so a
-   * port it leaves free is then probed: an emulator another Simlock instance started is in
-   * neither this process's reservations nor this server's list, but it holds its console
-   * port and the adb port above it on the machine, and an emulator told to take either
-   * exits at once. Each probe is one loopback connect, refused at once on a free port and
-   * bounded by the probe's own timeout otherwise; the walk stops at the first free port, so
-   * the wait is at most one probe pair per console port in the range.
-   *
-   * The probe sees only an emulator that is running now. A port handed out but not booted on
-   * -- by another instance, or by this one before a restart emptied `#reserved` -- still
-   * reads free here when its device sits between `provision` and `makeReady` or is shut
-   * down, and two devices can then reach the same port at boot.
-   */
-  async allocate(env: NodeJS.ProcessEnv, tcpProbe: TcpProbe): Promise<number> {
-    const previous = this.#lock;
-    let release!: () => void;
-    this.#lock = new Promise((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      const result = await this.processRunner.run(this.adb, ["devices"], { env });
-      if (result.code !== 0) {
-        throw new DriverCrashError(`adb devices failed: ${result.stderr || result.stdout}`);
-      }
-      const unavailable = new Set([...this.#reserved, ...portsFromAdbDevices(result.stdout)]);
-      for (let port = PORT_MIN; port <= PORT_MAX; port += 2) {
-        if (!unavailable.has(port) && !(await consolePortsInUse(tcpProbe, port))) {
-          this.#reserved.add(port);
-          return port;
-        }
-      }
-      throw new DriverCrashError("No Android emulator console ports are available");
-    } finally {
-      release();
-    }
-  }
-
-  release(port: number): void {
-    this.#reserved.delete(port);
-  }
-}
-
-async function consolePortsInUse(tcpProbe: TcpProbe, consolePort: number): Promise<boolean> {
-  const listening = await Promise.all([
-    tcpProbe.isListening(consolePort),
-    tcpProbe.isListening(consolePort + 1),
-    tcpProbe.isListening(consolePort + GRPC_PORT_OFFSET),
-  ]);
-  return listening.includes(true);
-}
-
 class SequentialIdGenerator implements IdGenerator {
   #next = 1;
 
@@ -3199,12 +3084,6 @@ function parseErasableMark(raw: string): string | undefined {
   }
 }
 
-function portsFromAdbDevices(output: string): number[] {
-  return [...output.matchAll(/^emulator-(\d+)\s+/gm)]
-    .map((match) => Number(match[1]))
-    .filter((port) => Number.isInteger(port));
-}
-
 function isSeedHardwareLine(line: string): boolean {
   return (
     (line.startsWith("hw.") && !line.startsWith("hw.cpu.arch=")) ||
@@ -3371,15 +3250,6 @@ function emulatorScreenTarget(
   };
 }
 
-function portAllocatorFor(processRunner: ProcessRunner, adb: string): PortAllocator {
-  const existing = allocationsByRunner.get(processRunner);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const allocator = new PortAllocator(adb, processRunner);
-  allocationsByRunner.set(processRunner, allocator);
-  return allocator;
-}
 export { androidDeviceDataTable } from "./device-data.js";
 export { androidSourceDataOwner } from "./source-data.js";
 export { androidPrerequisites } from "./prerequisites.js";
