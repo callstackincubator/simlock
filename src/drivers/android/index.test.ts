@@ -4194,6 +4194,16 @@ describe("AndroidDriver listComponents()", () => {
       expect(error).toBeInstanceOf(ComponentInUseError);
       expect(error).toMatchObject({ foreignDevices: 1 });
       expect(runner.calls).toEqual([]);
+
+      // why: An AVD home that is the driver's own root holds Simlock's AVDs, never the user's, so
+      // none of them is counted; this proves the driver hands its own device root to the part.
+      await userAvd(filesystem, "Pixel_8", "system-images/android-35/google_apis/arm64-v8a/", {
+        avdHome: avdDirectory,
+      });
+      const ownRoot = await createDriver(filesystem, new EmulatorExitingRunner([]), {
+        avdHome: avdDirectory,
+      });
+      expect((await ownRoot.listComponents())[0]?.foreignDevices).toBe(0);
     });
 
     it("refuses with ComponentNotOwnedError when no installed image has the receipt, and uninstalls nothing", async () => {
