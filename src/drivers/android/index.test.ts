@@ -2450,7 +2450,7 @@ describe("AndroidDriver", () => {
   });
 
   describe("component install", () => {
-    it("refuses an unaccepted licence with AndroidLicenseNotAcceptedError unless the config accepts them", async () => {
+    it("refuses an unaccepted licence with AndroidLicenseNotAcceptedError, and runs no sdkmanager --licenses, when the config does not accept them", async () => {
       const filesystem = await androidFilesystem();
       const runner = new EmulatorExitingRunner([
         {
