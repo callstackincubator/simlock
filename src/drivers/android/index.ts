@@ -31,7 +31,6 @@ import {
   type PresentPhysical,
   type DriverToolVersion,
   type InstalledComponent,
-  LicenseNotAcceptedError,
   type ObservedDevice,
   type ObservedMark,
   type PassthroughCommand,
@@ -102,12 +101,14 @@ import {
   type DeviceProfile,
 } from "./device-profile-source.js";
 import { fits, misfitReason } from "./image-fit.js";
+import { AndroidLicenseNotAcceptedError } from "./system-images.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { createAndroidDeviceInput } from "./input/index.js";
 import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
+export { AndroidLicenseNotAcceptedError } from "./system-images.js";
 export type { AndroidEmulatorLaunchOptions } from "./emulator.js";
 export {
   ANDROID_PASSTHROUGH_TOOLS,
@@ -199,17 +200,6 @@ export class SdkMissingError extends Error {
   constructor(readonly searchedPaths: readonly string[]) {
     super(`Android SDK missing or incomplete; searched: ${searchedPaths.join(", ")}`);
     this.name = "SdkMissingError";
-  }
-}
-
-export class AndroidLicenseNotAcceptedError extends LicenseNotAcceptedError {
-  constructor(readonly packageName: string) {
-    super("android", packageName);
-    this.message =
-      `sdkmanager refused to install ${packageName}: an Android SDK license is not accepted. ` +
-      `Set "downloads.acceptAndroidLicenses": true in config to accept automatically, or run ` +
-      `\`sdkmanager --licenses\` manually.`;
-    this.name = "AndroidLicenseNotAcceptedError";
   }
 }
 
