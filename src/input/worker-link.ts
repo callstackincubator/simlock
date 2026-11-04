@@ -1,13 +1,13 @@
-import type { DeviceRecord, LeaseRecord } from "../core/index.js";
-import type {
-  ModuleEndedLease,
-  ModuleInputs,
-  ModuleLeaseSocketHandler,
-  ModuleRelayTwoWayTarget,
+import { type DeviceRecord, type LeaseRecord, MAX_INPUT_MESSAGE_BYTES } from "../core/index.js";
+import {
+  channelSocket,
+  type ModuleEndedLease,
+  type ModuleInputs,
+  type ModuleLeaseSocketHandler,
+  type ModuleRelayTwoWayTarget,
+  unknownLease,
 } from "../modules/index.js";
 import type { Clock, LeaseSocket } from "../ports/index.js";
-import { channelSocket } from "./channel.js";
-import { unknownLease } from "./refusal.js";
 import { createInputSessions, type InputSessions } from "./sessions.js";
 
 export interface InputRegistry {
@@ -58,7 +58,7 @@ export function createWorkerInputLink(base: WorkerInputLinkOptions): {
     relayTwoWay: (_request, _tenant, leaseId, pipe) => {
       const lease = options.registry.snapshot.leases.find((entry) => entry.id === leaseId);
       if (lease === undefined) return Promise.resolve(unknownLease(leaseId ?? ""));
-      serve(options, lease, channelSocket(pipe, options.clock));
+      serve(options, lease, channelSocket(pipe, options.clock, MAX_INPUT_MESSAGE_BYTES + 1));
       return Promise.resolve(new Response(null, { status: 200 }));
     },
   };

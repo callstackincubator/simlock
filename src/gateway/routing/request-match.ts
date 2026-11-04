@@ -6,6 +6,7 @@ import {
   satisfies,
 } from "../../contract/index.js";
 import {
+  baselineMismatch,
   findCatalogModel,
   modelClass,
   pairedRuntimes,
@@ -20,8 +21,47 @@ import type { RoutableRequest } from "./pipeline.js";
 
 export function matchRequest(worker: WorkerView, request: RoutableRequest): string | undefined {
   if (request.physical === true) return undefined;
-  const catalog = catalogOf(worker, request);
-  return catalog === undefined ? undefined : servingModel(catalog, request);
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
+  return catalog === undefined ? undefined : servingModel(catalog, narrowed);
+}
+
+type BaselineListed = NonNullable<WorkerView["baselines"]>[number];
+
+/** why: the one read of a worker's baseline by the name a request gives; `undefined` for a request naming none or a worker without it. */
+export function baselineEntry(
+  worker: WorkerView,
+  request: RoutableRequest,
+): BaselineListed | undefined {
+  if (request.baseline === undefined) return undefined;
+  return worker.baselines?.find((entry) => entry.name === request.baseline);
+}
+
+/** why: the one gateway call of the core's `baselineMismatch`: whether the worker's copy of the named baseline differs from the request, over the worker's own catalog for the model rule. */
+export function baselineMismatchOf(worker: WorkerView, request: RoutableRequest) {
+  const entry = baselineEntry(worker, request);
+  if (entry === undefined) return undefined;
+  const catalog = worker.catalog?.find((listed) => listed.platform === request.platform);
+  return baselineMismatch(entry, request, catalog ?? { modelAliases: {}, models: [] });
+}
+
+/**
+ * why: ADR 0061 §5: a request naming a baseline takes the baseline's model, exact OS, mode and
+ * image tag, so it is read as that request on a worker that holds the baseline; the class is
+ * dropped because the model is named. A request naming none, or a worker without the baseline,
+ * leaves the request as it is.
+ */
+export function withBaseline(worker: WorkerView, request: RoutableRequest): RoutableRequest {
+  const entry = baselineEntry(worker, request);
+  if (entry === undefined) return request;
+  const { class: _class, imageTag: _imageTag, ...rest } = request;
+  return {
+    ...rest,
+    mode: entry.mode,
+    model: entry.model,
+    osVersion: entry.osVersion,
+    ...(entry.imageTag === undefined ? {} : { imageTag: entry.imageTag }),
+  };
 }
 
 /** The first model of the entry that could serve the request: a pairing in the OS constraint. */
@@ -41,18 +81,21 @@ export function deviceFit(
   request: RoutableRequest,
 ): ((spec: FittableSpec) => boolean) | undefined {
   if (request.physical === true) return undefined;
-  const catalog = catalogOf(worker, request);
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
   if (catalog === undefined) return undefined;
-  const model = servingModel(catalog, request);
+  const model = servingModel(catalog, narrowed);
   if (model === undefined) return undefined;
+  const entry = baselineEntry(worker, request);
   const requirement: DeviceRequirement = {
-    imageTag: request.imageTag,
-    osVersion: osRequirement(catalog, model, request),
-    platform: request.platform,
+    imageTag: narrowed.imageTag,
+    osVersion: osRequirement(catalog, model, narrowed),
+    platform: narrowed.platform,
     target:
-      request.model === undefined
-        ? { class: wantedClass(request), kind: "class" }
+      narrowed.model === undefined
+        ? { class: wantedClass(narrowed), kind: "class" }
         : { kind: "model", model },
+    ...(entry === undefined ? {} : { baseline: { name: entry.name, version: entry.version } }),
   };
   return (spec) => fits(requirement, spec, (listed) => modelClass(catalog, listed));
 }
@@ -148,8 +191,9 @@ export function hasPlatform(worker: WorkerView, request: RoutableRequest): boole
  * §4 tells a missing model from a missing runtime with it.
  */
 export function listsModel(worker: WorkerView, request: RoutableRequest): boolean {
-  const catalog = catalogOf(worker, request);
-  return catalog !== undefined && candidates(catalog, request).length > 0;
+  const narrowed = withBaseline(worker, request);
+  const catalog = catalogOf(worker, narrowed);
+  return catalog !== undefined && candidates(catalog, narrowed).length > 0;
 }
 
 type PlatformEntry = NonNullable<WorkerView["catalog"]>[number];

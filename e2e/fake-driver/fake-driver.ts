@@ -18,6 +18,7 @@ import {
   type DriverCatalogEntry,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   type DriverEstimate,
   type DriverReality,
   type DriverToolVersion,
@@ -234,6 +235,8 @@ export class OutOfProcessFakeDriver implements Driver {
   readonly #logPath: string | undefined;
   readonly #scriptPath: string | undefined;
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
+  readonly #specs = new Map<string, VirtualSpec>();
+  readonly #sources: DriverSource[] = [];
   #lastKnownEstimateMs: FakeDriverPlatformScript["estimateMs"];
   #lastKnownLeaseEnvironment: FakeDriverPlatformScript["leaseEnvironment"];
   #nextDeviceNumber = 1;
@@ -444,11 +447,38 @@ export class OutOfProcessFakeDriver implements Driver {
     };
   }
 
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [...this.#sources];
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    const index = this.#sources.findIndex((source) => source.id === sourceId);
+    if (index >= 0) this.#sources.splice(index, 1);
+  }
+
+  /** why: the console lane saves a baseline without a simulator: the source is a record of the device's spec, so the list and removal can be driven end to end. */
+  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
+    await this.#beforeCall("saveSource", [device]);
+    const spec = this.#specs.get(device.deviceId);
+    if (spec === undefined) throw new Error(`No spec recorded for ${device.deviceId}`);
+    this.#devices.set(device.deviceId, "shutdown");
+    const sourceId = `fake-source-${String(this.#sources.length + 1)}-${device.deviceId}`;
+    this.#sources.push({
+      id: sourceId,
+      kind: "baseline",
+      model: spec.model,
+      osVersion: spec.osVersion,
+      sizeBytes: 1_000_000,
+    });
+    return { sizeBytes: 1_000_000, sourceId };
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", [spec]);
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;
     this.#nextDeviceNumber += 1;
     this.#devices.set(deviceId, "provisioned");
+    this.#specs.set(deviceId, spec);
     return { address: defaultAddress(deviceId), deviceId, driverData: { fakeDeviceId: deviceId } };
   }
 
@@ -479,10 +509,7 @@ export class OutOfProcessFakeDriver implements Driver {
   }> {
     const script = await this.#beforeCall("reclaim", [device, options]);
     if (device.physical) return this.#reclaimPhysical(device, script);
-    const state = script.reclaimResult ?? "ready";
-    const strategy = script.reclaimStrategy ?? "erase";
-    this.#devices.set(device.deviceId, state);
-    return { state, strategy };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async #reclaimPhysical(
@@ -535,8 +562,9 @@ export class OutOfProcessFakeDriver implements Driver {
   reclaimStrategy(
     device: VirtualDriverDevice | PhysicalDriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "snapshot" | "wipe" | "uninstall" {
-    return device.physical ? "uninstall" : "erase";
+  ): "uninstall" {
+    if (device.physical) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: VirtualDriverDevice): Promise<void> {

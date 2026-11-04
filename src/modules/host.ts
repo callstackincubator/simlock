@@ -111,7 +111,7 @@ function targetsByName<T>(
 }
 
 // why: a module's lease route is `/v1/leases/:id/<name>`; these are the sub-routes the HTTP app registers itself, and a module may not take one.
-const CORE_LEASE_SUBROUTES: readonly string[] = ["exec", "renew"];
+const CORE_LEASE_SUBROUTES: readonly string[] = ["exec", "renew", "rotate"];
 
 type StopHook = "beforeDrain" | "beforeDriversDispose";
 

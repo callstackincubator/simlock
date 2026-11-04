@@ -10,9 +10,10 @@ when and assumptions; retain earlier evidence for unaffected claims.
 
 **Audit `git diff <merge-base> <head>`** as someone who has not seen the spec:
 
-- **Removed.** Run `.agents/scripts/stale-refs.sh <range-start> <head>`: it lists every line in
-  the repo that still names a path, declaration or quoted string the diff
-  removed. Then, for every name, behaviour, limit or guarantee the diff
+- **Removed.** Save the issue body (and its parent's) to files and run
+  `.agents/scripts/stale-refs.sh <range-start> <head> <issue file> [<parent file>]`: it lists
+  every line in the repo that still names a path, declaration or quoted string
+  the diff removed, or a word the spec's Retired words section names. Then, for every name, behaviour, limit or guarantee the diff
   removes, renames or narrows, search the repo (comments, docs, test titles,
   config, help text), directly or with bounded Haiku discovery following
   `docs/internal/EXPLORATION.md`, by
@@ -91,7 +92,8 @@ hits its 30-minute cap, which stalls the whole delivery.
    (`gh issue list --label flaky-test --search "<title>"`): list it under
    `flaky` and move on.
 2. Otherwise run that one file up to three times in a worktree of the base
-   commit (`git worktree add --detach <scratch>/base <merge-base>`), with the
+   commit (`.agents/scripts/worktree.sh --detach <merge-base> --prepare`
+   prints its path), with the
    one-file command from `toolchain.md` (testing rule 5). It fails there:
    open a `bug:new` issue labelled `flaky-test` naming the file, the title
    and the error line, list it, and move on. It never fails there: it is

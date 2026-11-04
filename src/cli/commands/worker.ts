@@ -8,6 +8,7 @@ import {
   withHelpHint,
   writeResult,
 } from "../args.js";
+import { escapeControl as esc } from "../escape.js";
 import { formatWorkers } from "../format.js";
 import type { CommandContext } from "../tree.js";
 
@@ -85,7 +86,7 @@ const FOLLOW_POLL_MS = 2_000;
 type WorkerView = Awaited<ReturnType<SimlockAdminClient["listWorkers"]>>["workers"][number];
 
 function workerName(view: WorkerView | undefined, workerId: string): string {
-  return view?.label === undefined ? workerId : `${view.label} (${workerId})`;
+  return esc(view?.label === undefined ? workerId : `${view.label} (${workerId})`);
 }
 
 // why: the follow ends on the worker's own view: its version is the target with no update running, or its last failure names the target.
@@ -96,10 +97,10 @@ function followOutcome(
 ): { readonly code: number; readonly text: string } | undefined {
   const failure = view?.lastUpdateFailure;
   if (failure?.to === to) {
-    return { code: 1, text: `Update failed (${failure.stage}): ${failure.message}` };
+    return { code: 1, text: `Update failed (${esc(failure.stage)}): ${esc(failure.message)}` };
   }
   if (view?.version === to && view.update == null) {
-    return { code: 0, text: `${name} is running ${to}` };
+    return { code: 0, text: `${name} is running ${esc(to)}` };
   }
   return undefined;
 }
@@ -150,7 +151,7 @@ async function runWorkerUpdate(
   const { from, to } = updateEnds(answer);
   if (values.detach === true) {
     environment.stdout.write(
-      `Updating ${name} ${from} → ${to}. Follow it with simlock worker list.\n`,
+      `Updating ${name} ${esc(from)} → ${esc(to)}. Follow it with simlock worker list.\n`,
     );
     return 0;
   }
@@ -163,11 +164,11 @@ function upToDateMessage(
   answer: { readonly version: string; readonly resolved?: string | null },
   requested: string | undefined,
 ): string {
-  if (requested !== undefined) return `${name} is already running ${answer.version}`;
+  if (requested !== undefined) return `${name} is already running ${esc(answer.version)}`;
   if (answer.resolved === answer.version) {
-    return `${name} is already on the latest (${answer.version})`;
+    return `${name} is already on the latest (${esc(answer.version)})`;
   }
-  return `${name} is newer than the latest (${answer.resolved}). Use --version to install another version.`;
+  return `${name} is newer than the latest (${esc(String(answer.resolved))}). Use --version to install another version.`;
 }
 
 async function follow(options: {

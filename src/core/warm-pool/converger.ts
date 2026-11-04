@@ -41,6 +41,10 @@ import { type LearnedKind, type LearnedKindMatch, LearnedKinds } from "./learned
 import { RetrySchedule } from "./retry.js";
 
 export interface WarmPoolOptions {
+  /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
+  readonly baselines: {
+    current(name: string): { readonly version: number; readonly staleReason?: string } | undefined;
+  };
   readonly acquisition: {
     kick(): void;
     /** An operator reset (`nuke`) holds acquisition closed: the pool leaves every device alone. */
@@ -157,6 +161,7 @@ export class WarmPool {
     this.#logger = options.logger?.child("warm-pool") ?? new NoopLogger();
     this.#learned = new LearnedKinds(options.state);
     this.#catalogCheck = new CatalogCheck({
+      baselines: options.baselines,
       catalog: options.catalog,
       clock: options.clock,
       hasDriver: options.hasDriver,
@@ -241,11 +246,24 @@ export class WarmPool {
     });
   }
 
+  /** why: a learned baseline kind stores only the name, so each pass gives its spec the version the baseline has now, and a copy of an older one matches no kind. */
+  #atCurrentVersion(kind: LearnedKind): LearnedKind {
+    const named = kind.spec.baseline;
+    const current = named === undefined ? undefined : this.options.baselines.current(named.name);
+    if (named === undefined || current === undefined) return kind;
+    return {
+      ...kind,
+      spec: { ...kind.spec, baseline: { name: named.name, version: current.version } },
+    };
+  }
+
   /** why: the learned kinds, or none when the record cannot be read; the failure is logged once per pass. */
   #learnedKinds(): LearnedKind[] {
     if (this.options.config.learn === false) return [];
     try {
-      return this.#learned.kinds(this.options.clock.now());
+      return this.#learned
+        .kinds(this.options.clock.now())
+        .map((kind) => this.#atCurrentVersion(kind));
     } catch (error: unknown) {
       if (!this.#readLogged) {
         this.#logger.warn("the warm pool's record could not be read", {
@@ -878,6 +896,7 @@ function figureOf(report: TargetReport): WarmTargetFigures {
     origin: report.origin,
     ready: report.ready,
     ...(report.spec?.imageTag === undefined ? {} : { imageTag: report.spec.imageTag }),
+    ...(report.spec?.baseline === undefined ? {} : { baseline: report.spec.baseline.name }),
     ...(report.short === undefined ? {} : { short: report.short }),
   };
 }
@@ -912,5 +931,6 @@ function kindFields(spec: VirtualSpec): Record<string, string> {
     platform: spec.platform,
     ...(spec.mode === undefined ? {} : { mode: spec.mode }),
     ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+    ...(spec.baseline === undefined ? {} : { baseline: spec.baseline.name }),
   };
 }

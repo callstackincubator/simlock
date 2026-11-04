@@ -162,6 +162,7 @@ describe("events mark keys stale", () => {
       "/v1/inbox",
       "/v1/stats?since=1h",
       "/v1/tokens",
+      "/v1/baselines",
     ] as const;
     // why: each row is an event, its payload, and exactly the routes it marks.
     const rows: readonly (readonly [string, Record<string, unknown>, readonly string[]])[] = [
@@ -183,6 +184,9 @@ describe("events mark keys stale", () => {
       ["capacity.changed", {}, ["/v1/workers", "/v1/inbox"]],
       ["component.installed", {}, ["/v1/workers", "/v1/inbox"]],
       ["daemon.update-started", {}, ["/v1/workers", "/v1/inbox"]],
+      ["baseline.saved", {}, ["/v1/baselines"]],
+      ["baseline.removed", {}, ["/v1/baselines"]],
+      ["baseline.stale", {}, ["/v1/baselines"]],
       ["disk.pressure-detected", {}, []],
       ["lease.something-new", {}, []],
     ];

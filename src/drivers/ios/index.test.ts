@@ -25,17 +25,21 @@ import {
   ScriptedProcessRunner,
   SystemClock,
   type Filesystem,
+  type Logger,
+  type ProcessResult,
+  type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
 import {
   IosSimctlDriver,
   iosRuntimeVersionFromId,
-  sanitizeSlimLabels,
+  SLIM_CATEGORIES,
   supportsPersistentSlim,
+  type SilenceFailedFact,
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
-import { labelsFor, resolveSlimCategories } from "./slim-labels.js";
+import { memorySourceDatabase, plantReadySeed, plantSource } from "./testing.js";
 
 const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
 const listDevicesFixture = readFileSync(
@@ -122,12 +126,6 @@ const driverData = {
   runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
   udid: "00000000-0000-0000-0000-000000000001",
 } as const;
-const createInvocation = simctl(
-  "create",
-  driverData.name,
-  driverData.deviceTypeId,
-  driverData.runtimeId,
-);
 const dataPath = `${deviceRoot}/${driverData.udid}/data`;
 const durableMarkPath = `${deviceRoot}/${driverData.udid}/simlock-mark.json`;
 const erasableMarkPath = `${dataPath}/simlock-mark.json`;
@@ -172,9 +170,37 @@ afterEach(() => {
     // `simctl` that reached the machine's default set is the leak this guards.
     if (call.command !== "xcrun" || call.args[0] !== "simctl") continue;
     if (UNSCOPED_LEGACY_CALLS.has(call.args.join(" "))) continue;
-    expect(call.args.slice(0, 3)).toEqual(["simctl", "--set", deviceRoot]);
+    expect(call.args.slice(0, 2)).toEqual(["simctl", "--set"]);
+    expect([deviceRoot, `${deviceRoot}/sources`]).toContain(call.args[2]);
   }
 });
+
+const seedUdid = "00000000-0000-0000-0000-0000000000aa";
+
+interface Catalog {
+  devicetypes: { identifier: string }[];
+  runtimes: { buildversion?: string; identifier: string }[];
+}
+
+/** why: A seed lives in the sources set, a sibling of the lease device set, and its calls are scoped to that. */
+function sourcesSimctl(...args: readonly string[]): {
+  readonly command: string;
+  readonly args: string[];
+} {
+  return { args: ["simctl", "--set", `${deviceRoot}/sources`, ...args], command: "xcrun" };
+}
+
+/** why: A database that already holds the seed of the kind `spec` names, so a test of the copy step starts at the clone. */
+async function seededDatabase(
+  seed: { readonly runtimeBuild?: string; readonly udid?: string } = {},
+): Promise<SqliteDatabase> {
+  return plantReadySeed(await memorySourceDatabase(), {
+    deviceTypeId: driverData.deviceTypeId,
+    runtimeId: driverData.runtimeId,
+    udid: seedUdid,
+    ...seed,
+  });
+}
 
 function simctl(...args: readonly string[]): { readonly command: string; readonly args: string[] } {
   return { args: simctlArgs(...args), command: "xcrun" };
@@ -189,13 +215,6 @@ function deviceListResponse(state: string): string {
     },
   });
 }
-
-const VIRTUAL_DEVICE = {
-  address: "",
-  deviceId: "device",
-  driverData: {},
-  physical: false,
-} as const;
 
 const PHYSICAL_DEVICE = {
   address: "00008110-001A2B3C4D5E",
@@ -783,6 +802,7 @@ describe("IosSimctlDriver", () => {
 
     it("states 8 GiB on the configured CoreSimulator volume as the footprint of one install", async () => {
       const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot: "/Users/agent/Library/Developer/CoreSimulator",
         driverConfig: { deviceRoot },
@@ -800,35 +820,784 @@ describe("IosSimctlDriver", () => {
     });
   });
 
-  it("provisions with the exact simctl argv and returns opaque iOS driver data", async () => {
+  it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
+    const copyUdid = "00000000-0000-0000-0000-000000000002";
+    const database = await memorySourceDatabase();
+    const rowsWhenCreated: unknown[] = [];
+    const seedCreate = sourcesSimctl(
+      "create",
+      "simlock-seed-device-1",
+      driverData.deviceTypeId,
+      driverData.runtimeId,
+    );
+    const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
     const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
       {
-        match: listInvocation,
-        result: { code: 0, stderr: "", stdout: listFixture },
+        match: seedCreate,
+        onSpawn: () => {
+          rowsWhenCreated.push(
+            ...database.prepare("SELECT state, udid FROM ios_source_data").all(),
+          );
+        },
+        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
       },
-      {
-        match: createInvocation,
-        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
-      },
+      { match: sourcesSimctl("boot", seedUdid) },
+      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+      { match: sourcesSimctl("listapps", seedUdid) },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
     ]);
-    const filesystem = new MemoryFilesystem();
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    const filesystem = new ModeRecordingFilesystem();
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
     await plantManagedDevice(filesystem);
-    await driver.resolveSpec({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
+    await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
 
     await expect(driver.provision(spec)).resolves.toEqual({
       address: driverData.udid,
       deviceId: driverData.udid,
       driverData,
     });
+    expect(
+      rowsWhenCreated,
+      "the seed's row is making, with no simulator yet, when create runs",
+    ).toEqual([{ state: "making", udid: null }]);
+    expect(
+      filesystem.mkdirpModes.get(`${deviceRoot}/sources`),
+      "under deviceSet simlock the sources set is asked for private to the user",
+    ).toBe(0o700);
     expect(runner.calls).toEqual([
       { ...listInvocation, options: { timeoutMs: 30_000 } },
-      { ...createInvocation, options: { timeoutMs: 30_000 } },
+      { ...seedCreate, options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
+      { ...cloneInvocation, options: { timeoutMs: 30_000 } },
     ]);
+
+    await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: copyUdid });
+    expect(runner.calls.slice(7)).toEqual([{ ...cloneInvocation, options: { timeoutMs: 30_000 } }]);
+  });
+
+  it("a clone that fails makes the provision throw and keeps the seed and its row", async () => {
+    const database = await seededDatabase();
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 1, stderr: "No space left on device", stdout: "" },
+      },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const error = await driver.provision(spec).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DriverCrashError);
+    expect((error as Error).message).toContain("No space left on device");
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone"]);
+    expect(database.prepare("SELECT udid, state FROM ios_source_data").all()).toEqual([
+      { state: "ready", udid: seedUdid },
+    ]);
+  });
+
+  it("two provisions at once make one seed, and the clones of one seed run one at a time", async () => {
+    const copyUdid = "00000000-0000-0000-0000-000000000002";
+    const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl(
+          "create",
+          "simlock-seed-device-1",
+          driverData.deviceTypeId,
+          driverData.runtimeId,
+        ),
+        result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+      },
+      { match: sourcesSimctl("boot", seedUdid) },
+      { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+      { match: sourcesSimctl("listapps", seedUdid) },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      { hangs: true, match: cloneInvocation },
+      { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
+    ]);
+    const filesystem = new MemoryFilesystem();
+    const clock = new FakeClock();
+    const driver = await createDriver(runner, clock, filesystem);
+    await plantManagedDevice(filesystem);
+    await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
+    const clones = (): number => runner.calls.filter((call) => call.args[3] === "clone").length;
+
+    const first = driver.provision(spec);
+    const second = driver.provision(spec);
+    const firstSettled = first.catch((caught: unknown) => caught);
+    await waitForCalls(runner, 8);
+
+    expect(runner.calls.filter((call) => call.args[3] === "create")).toHaveLength(1);
+    for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+    expect(clones()).toBe(1);
+
+    clock.advance(30_000);
+
+    expect(await firstSettled).toBeInstanceOf(DriverCrashError);
+    await expect(second).resolves.toMatchObject({ deviceId: copyUdid });
+    expect(clones()).toBe(2);
+  });
+
+  it("provision deletes the clone and throws when the LaunchServices database cannot be dropped", async () => {
+    const filesystem = new FaultyFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    filesystem.failing = "rm";
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+      { match: simctl("delete", driverData.udid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).rejects.toThrow("disk full");
+
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "clone", "delete"]);
+  });
+
+  it.each([
+    { name: "a named source is copied instead of the seed", id: "planted-named", cloned: true },
+    { name: "an unknown source is refused", id: "nope", cloned: false },
+    { name: "a stale source is refused", id: "planted-old", cloned: false },
+  ])("provision with a source: $name", async ({ id, cloned }) => {
+    const namedUdid = "00000000-0000-0000-0000-0000000000bb";
+    const oldUdid = "00000000-0000-0000-0000-0000000000cc";
+    const database = await seededDatabase();
+    const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
+    const planted = plantSource(database, { ...kind, kind: "baseline", udid: namedUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-named' WHERE udid = ?")
+      .run(namedUdid);
+    plantSource(planted, { ...kind, kind: "baseline", runtimeBuild: "23F77", udid: oldUdid });
+    database
+      .prepare("UPDATE ios_source_data SET source_id = 'planted-old' WHERE udid = ?")
+      .run(oldUdid);
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    const catalog = JSON.parse(listFixture) as {
+      runtimes: { buildversion?: string; identifier: string }[];
+    };
+    for (const runtime of catalog.runtimes) {
+      if (runtime.identifier === driverData.runtimeId) runtime.buildversion = "23F79";
+    }
+    const listed = JSON.stringify(catalog);
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listed } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listed } },
+      {
+        match: sourcesSimctl("clone", namedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const provisioned = driver.provision(spec, { source: id });
+
+    if (cloned) {
+      await expect(provisioned).resolves.toMatchObject({ deviceId: driverData.udid });
+      expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list", "clone"]);
+      expect(
+        await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
+        "the copy of a source loses the LaunchServices database that names the source's folder",
+      ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
+    } else {
+      await expect(provisioned).rejects.toBeInstanceOf(DriverCrashError);
+      expect(runner.calls.map((call) => call.args[3])).not.toContain("clone");
+    }
+  });
+
+  it.each([
+    { name: "300 s old is kept", now: 300_000, destroyed: false },
+    { name: "300.001 s old is destroyed", now: 300_001, destroyed: true },
+  ])(
+    "the next seed make of a kind destroys this process's own making row of that kind older than 300 s: a row $name",
+    async ({ now, destroyed }) => {
+      const stuckUdid = "00000000-0000-0000-0000-0000000000dd";
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        maker: "device-1",
+        runtimeId: driverData.runtimeId,
+        state: "making",
+        udid: stuckUdid,
+      });
+      const copyUdid = "00000000-0000-0000-0000-000000000002";
+      const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...(destroyed
+          ? [
+              { match: sourcesSimctl("shutdown", stuckUdid) },
+              { match: sourcesSimctl("delete", stuckUdid) },
+            ]
+          : []),
+        {
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+        },
+        { match: sourcesSimctl("boot", seedUdid) },
+        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+        { match: sourcesSimctl("listapps", seedUdid) },
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${copyUdid}\n` } },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(`${deviceRoot}/${copyUdid}/data`);
+      const driver = await createDriver(runner, new FakeClock(now), filesystem, database);
+
+      await driver.provision(spec);
+
+      expect(
+        runner.calls.filter((call) => call.args[4] === stuckUdid).map((call) => call.args[3]),
+      ).toEqual(destroyed ? ["shutdown", "delete"] : []);
+      expect(
+        database.prepare("SELECT udid FROM ios_source_data WHERE state = 'making'").all(),
+      ).toEqual(destroyed ? [] : [{ udid: stuckUdid }]);
+    },
+  );
+
+  it.each([
+    {
+      name: "simctl create fails",
+      message: "Invalid runtime",
+      script: [{ code: 1, op: "create" }],
+      tail: [],
+    },
+    {
+      name: "the seed's boot fails",
+      message: `seed ${seedUdid} did not boot: `,
+      script: [{ code: 1, op: "bootstatus" }],
+      tail: ["shutdown", "delete"],
+    },
+    {
+      name: "the seed's boot times out",
+      message: `seed ${seedUdid} did not boot: `,
+      script: [{ hangs: true, op: "bootstatus" }],
+      tail: ["shutdown", "shutdown", "delete"],
+    },
+    {
+      name: "the seed's shutdown fails",
+      message: "Unable to shutdown",
+      script: [{ code: 1, op: "shutdown" }],
+      tail: ["shutdown", "delete"],
+    },
+  ] as const)(
+    "a seed make that fails because $name leaves no seed and no row, and the provision throws a DriverCrashError, never a BootTimeoutError",
+    async ({ message, script, tail }) => {
+      const failing = script[0];
+      const steps = ["create", "boot", "bootstatus", "listapps", "shutdown"];
+      const upTo = steps.indexOf(failing.op);
+      const results = new Map<string, { code: number; stderr: string; stdout: string }>([
+        ["create", { code: 0, stderr: "", stdout: `${seedUdid}\n` }],
+      ]);
+      const database = await memorySourceDatabase();
+      const entries = steps.slice(0, upTo + 1).map((op) => {
+        const match = sourcesSimctl(
+          ...(op === "create"
+            ? ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId]
+            : op === "bootstatus"
+              ? [op, seedUdid, "-b"]
+              : [op, seedUdid]),
+        );
+        if (op !== failing.op)
+          return { match, ...(results.has(op) ? { result: results.get(op)! } : {}) };
+        return "hangs" in failing
+          ? { hangs: true, match }
+          : { match, result: { code: failing.code, stderr: message, stdout: "" } };
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        ...entries,
+        ...tail.map((op) => ({ match: sourcesSimctl(op, seedUdid) })),
+      ]);
+      const clock = new FakeClock();
+      const driver = await createDriver(runner, clock, undefined, database);
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      const provisioned = driver.provision(spec);
+      void provisioned.catch(() => undefined);
+      if ("hangs" in failing) {
+        await waitForCalls(runner, entries.length + 1);
+        clock.advance(120_000);
+      }
+      const error = await provisioned.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(DriverCrashError);
+      expect(error).not.toBeInstanceOf(BootTimeoutError);
+      expect((error as Error).message).toContain(message);
+      expect(runner.calls.map((call) => call.args[3])).toEqual([
+        "list",
+        ...steps.slice(0, upTo + 1),
+        ...tail,
+      ]);
+      expect(runner.calls.slice(1).map((call) => call.args[2])).toEqual(
+        runner.calls.slice(1).map(() => `${deviceRoot}/sources`),
+      );
+      expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({ n: 0 });
+    },
+  );
+
+  it.each([
+    { name: "its runtime changed build", seedBuild: "23F77", runtimeBuild: "23F79", remade: true },
+    { name: "its runtime is unchanged", seedBuild: "23F79", runtimeBuild: "23F79", remade: false },
+    { name: "it recorded no build", seedBuild: undefined, runtimeBuild: "23F79", remade: false },
+    {
+      name: "its runtime lists no build now",
+      seedBuild: "23F77",
+      runtimeBuild: undefined,
+      remade: false,
+    },
+  ])(
+    "makes the seed again before copying it only when it is stale: $name -> remade $remade",
+    async ({ seedBuild, runtimeBuild, remade }) => {
+      const staleUdid = "00000000-0000-0000-0000-0000000000bb";
+      const catalog = JSON.parse(listFixture) as {
+        runtimes: { buildversion?: string; identifier: string }[];
+      };
+      for (const entry of catalog.runtimes) {
+        if (entry.identifier === driverData.runtimeId && runtimeBuild !== undefined) {
+          entry.buildversion = runtimeBuild;
+        }
+      }
+      const planted = staleUdid;
+      const cloneOf = (udid: string) => sourcesSimctl("clone", udid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: JSON.stringify(catalog) } },
+        ...(remade
+          ? [
+              { match: sourcesSimctl("shutdown", staleUdid) },
+              { match: sourcesSimctl("delete", staleUdid) },
+              {
+                match: sourcesSimctl(
+                  "create",
+                  "simlock-seed-device-1",
+                  driverData.deviceTypeId,
+                  driverData.runtimeId,
+                ),
+                result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+              },
+              { match: sourcesSimctl("boot", seedUdid) },
+              { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+              { match: sourcesSimctl("listapps", seedUdid) },
+              { match: sourcesSimctl("shutdown", seedUdid) },
+            ]
+          : []),
+        {
+          match: cloneOf(remade ? seedUdid : staleUdid),
+          result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+        },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        filesystem,
+        await seededDatabase({
+          udid: planted,
+          ...(seedBuild === undefined ? {} : { runtimeBuild: seedBuild }),
+        }),
+      );
+      await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+      await driver.provision(spec);
+
+      expect(runner.calls.map((call) => call.args[3]).filter((verb) => verb !== "list")).toEqual(
+        remade
+          ? ["shutdown", "delete", "create", "boot", "bootstatus", "listapps", "shutdown", "clone"]
+          : ["clone"],
+      );
+    },
+  );
+
+  it.each([
+    { name: "healthy", edit: () => undefined, reason: undefined },
+    {
+      name: "its runtime is gone",
+      edit: (catalog: Catalog) => {
+        catalog.runtimes = catalog.runtimes.filter(
+          (entry) => entry.identifier !== driverData.runtimeId,
+        );
+      },
+      reason: `runtime ${driverData.runtimeId} is not installed`,
+    },
+    {
+      name: "its runtime changed build",
+      edit: (catalog: Catalog) => {
+        for (const entry of catalog.runtimes) {
+          if (entry.identifier === driverData.runtimeId) entry.buildversion = "23F79";
+        }
+      },
+      reason: `runtime ${driverData.runtimeId} changed from build 23F77 to 23F79`,
+    },
+    {
+      name: "its device type is gone",
+      edit: (catalog: Catalog) => {
+        catalog.devicetypes = catalog.devicetypes.filter(
+          (entry) => entry.identifier !== driverData.deviceTypeId,
+        );
+      },
+      reason: `device type ${driverData.deviceTypeId} is not available`,
+    },
+  ])(
+    "lists a ready seed as a source with its model, version and size, and its staleReason when $name, which clears once it is back",
+    async ({ edit, reason }) => {
+      const catalogOf = (change: (catalog: Catalog) => void) => {
+        const catalog = JSON.parse(listFixture) as Catalog;
+        for (const entry of catalog.runtimes) {
+          if (entry.identifier === driverData.runtimeId) entry.buildversion = "23F77";
+        }
+        change(catalog);
+        return JSON.stringify(catalog);
+      };
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: catalogOf(edit) } },
+        {
+          match: listInvocation,
+          result: { code: 0, stderr: "", stdout: catalogOf(() => undefined) },
+        },
+      ]);
+      const database = plantSource(await memorySourceDatabase(), {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeBuild: "23F77",
+        runtimeId: driverData.runtimeId,
+        sizeBytes: 1_073_741_824,
+        udid: seedUdid,
+      });
+      const driver = await createDriver(runner, new FakeClock(), undefined, database);
+
+      expect(await driver.listSources()).toMatchObject([
+        {
+          kind: "seed",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          sizeBytes: 1_073_741_824,
+          ...(reason === undefined ? {} : { staleReason: reason }),
+        },
+      ]);
+      expect((await driver.listSources())[0]).not.toHaveProperty("staleReason");
+      expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "list"]);
+    },
+  );
+
+  it("the first listSources of a process deletes another process's making rows and their simulators, keeps a row whose delete failed, and does not sweep again", async () => {
+    const [gone, stuck, ready] = [1, 2, 3].map(
+      (n) => `00000000-0000-0000-0000-0000000001${String(n)}0`,
+    ) as [string, string, string];
+    const database = await memorySourceDatabase();
+    const kind = { deviceTypeId: driverData.deviceTypeId, runtimeId: driverData.runtimeId };
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: gone });
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making" });
+    plantSource(database, { ...kind, maker: "earlier-process", state: "making", udid: stuck });
+    plantSource(database, { ...kind, udid: ready });
+    const runner = new ScriptedProcessRunner([
+      { match: sourcesSimctl("shutdown", gone) },
+      { match: sourcesSimctl("delete", gone) },
+      { match: sourcesSimctl("shutdown", stuck) },
+      { match: sourcesSimctl("delete", stuck), result: { code: 1, stderr: "busy", stdout: "" } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+    ]);
+    const logger = new RecordingLogger();
+    const driver = await createDriver(runner, new FakeClock(), undefined, database, logger);
+
+    expect(await driver.listSources()).toHaveLength(1);
+    await driver.listSources();
+
+    expect(runner.calls.map((call) => [call.args[3], call.args[4]])).toEqual([
+      ["shutdown", gone],
+      ["delete", gone],
+      ["shutdown", stuck],
+      ["delete", stuck],
+      ["list", "-j"],
+      ["list", "-j"],
+    ]);
+    expect(logger.warnings).toEqual([
+      expect.stringContaining(`could not remove leftover source ${stuck}:`),
+    ]);
+    expect(database.prepare("SELECT udid, state FROM ios_source_data ORDER BY udid").all()).toEqual(
+      [
+        { state: "making", udid: stuck },
+        { state: "ready", udid: ready },
+      ],
+    );
+  });
+
+  it("listSources reports a simulator in the sources set that no row names as an orphan source, and destroySource deletes it", async () => {
+    const orphanUdid = "00000000-0000-0000-0000-0000000000ee";
+    const filesystem = new MemoryFilesystem();
+    await plantManagedDevice(filesystem);
+    await filesystem.mkdirp(`${deviceRoot}/sources/${seedUdid}`);
+    await filesystem.mkdirp(`${deviceRoot}/sources/${orphanUdid}`);
+    const database = await seededDatabase();
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: sourcesSimctl("shutdown", orphanUdid) },
+      { match: sourcesSimctl("delete", orphanUdid) },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+    const sources = await driver.listSources();
+
+    expect(sources.filter((source) => source.orphan !== true)).toHaveLength(1);
+    expect(sources.filter((source) => source.orphan === true)).toEqual([
+      { id: orphanUdid, kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
+    ]);
+    await driver.destroySource(orphanUdid);
+    expect(runner.calls.slice(1).map((call) => [call.args[3], call.args[4]])).toEqual([
+      ["shutdown", orphanUdid],
+      ["delete", orphanUdid],
+    ]);
+    await expect(
+      driver.destroySource("00000000-0000-0000-0000-0000000000f0"),
+    ).rejects.toBeInstanceOf(DriverCrashError);
+  });
+
+  it.each([
+    { name: "deletes its simulator in the sources set and its row", deleteCode: 0, rows: 0 },
+    { name: "keeps the row and throws when the delete fails", deleteCode: 1, rows: 1 },
+  ])("destroySource $name", async ({ deleteCode, rows }) => {
+    const database = plantSource(await memorySourceDatabase(), {
+      deviceTypeId: driverData.deviceTypeId,
+      runtimeId: driverData.runtimeId,
+      udid: seedUdid,
+    });
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      { match: sourcesSimctl("shutdown", seedUdid) },
+      {
+        match: sourcesSimctl("delete", seedUdid),
+        result: { code: deleteCode, stderr: "busy", stdout: "" },
+      },
+    ]);
+    const driver = await createDriver(runner, new FakeClock(), undefined, database);
+    const [listed] = await driver.listSources();
+
+    const destroyed = driver.destroySource(listed?.id ?? "");
+
+    if (deleteCode === 0) await expect(destroyed).resolves.toBeUndefined();
+    else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
+    expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
+    expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
+      n: rows,
+    });
+  });
+
+  it("destroySource refuses an id that names no source, without running simctl", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(runner);
+
+    await expect(driver.destroySource("nope")).rejects.toBeInstanceOf(DriverCrashError);
+    expect(runner.calls).toEqual([]);
+  });
+
+  describe("saveSource", () => {
+    const cloneUdid = "00000000-0000-0000-0000-0000000000bb";
+    const baselineName = "simlock-baseline-device-1";
+    const sourcesSet = `${deviceRoot}/sources`;
+    const device = {
+      address: driverData.udid,
+      deviceId: driverData.udid,
+      driverData,
+      physical: false,
+    } as const;
+    const cloneInvocation = simctl("clone", driverData.udid, baselineName, sourcesSet);
+
+    it("keeps a shut-down copy of the device in the sources set as a ready baseline source with its disabled.plist, and a failing clone keeps no row", async () => {
+      const database = await memorySourceDatabase();
+      const rowsAtShutdown: unknown[] = [];
+      const filesystem = new MemoryFilesystem();
+      await plantManagedDevice(filesystem);
+      await filesystem.mkdirp(overridesFolder(driverData.udid));
+      await filesystem.writeFileAtomic(
+        overridesPath(driverData.udid),
+        overridesPlist({ "a.b": true }),
+      );
+      await filesystem.mkdirp(`${sourcesSet}/${cloneUdid}/data`);
+      await filesystem.writeFileAtomic(`${sourcesSet}/${cloneUdid}/data/state`, "12345");
+      await plantLaunchServices(filesystem, `${sourcesSet}/${cloneUdid}`);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: simctl("shutdown", driverData.udid),
+          onSpawn: () => {
+            rowsAtShutdown.push(
+              ...database.prepare("SELECT kind, state, udid FROM ios_source_data").all(),
+            );
+          },
+        },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      ]);
+      const driver = await createDriver(runner, new FakeClock(), filesystem, database);
+
+      await expect(driver.saveSource(device)).resolves.toEqual({
+        sizeBytes: 5,
+        sourceId: "device-1",
+      });
+
+      expect(rowsAtShutdown, "the source's row is making before the device shuts down").toEqual([
+        { kind: "baseline", state: "making", udid: null },
+      ]);
+      expect(runner.calls).toEqual([
+        { ...listInvocation, options: { timeoutMs: 30_000 } },
+        { ...simctl("shutdown", driverData.udid), options: { timeoutMs: 30_000 } },
+        { ...cloneInvocation, options: { timeoutMs: 30_000 } },
+      ]);
+      expect(await filesystem.readFile(overridesPath(cloneUdid))).toBe(
+        overridesPlist({ "a.b": true }),
+      );
+      expect(await launchServicesFiles(filesystem, `${sourcesSet}/${cloneUdid}`)).toEqual([
+        "com.apple.LaunchServices.unregisteredtypes-501.db",
+      ]);
+      await expect(driver.listSources()).resolves.toEqual([
+        {
+          id: "device-1",
+          kind: "baseline",
+          model: "iPhone 16",
+          osVersion: "26.5",
+          sizeBytes: 5,
+        },
+      ]);
+
+      const failingRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        {
+          match: cloneInvocation,
+          result: { code: 1, stderr: "No space left on device", stdout: "" },
+        },
+      ]);
+      const emptyDatabase = await memorySourceDatabase();
+      const failing = await createDriver(failingRunner, new FakeClock(), filesystem, emptyDatabase);
+      await expect(failing.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("No space left on device"),
+      });
+      expect(emptyDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+
+      const stuckRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: simctl("shutdown", driverData.udid),
+          result: { code: 1, stderr: "Unable to shut down device", stdout: "" },
+        },
+      ]);
+      const stuckDatabase = await memorySourceDatabase();
+      const stuck = await createDriver(stuckRunner, new FakeClock(), filesystem, stuckDatabase);
+      await expect(stuck.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("Unable to shut down device"),
+      });
+      expect(stuckRunner.calls.map((call) => call.args[1])).not.toContain("clone");
+      expect(stuckDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+
+      const lateRunner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        { match: simctl("shutdown", driverData.udid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${cloneUdid}\n` } },
+        { match: sourcesSimctl("shutdown", cloneUdid) },
+        { match: sourcesSimctl("delete", cloneUdid) },
+      ]);
+      const lateDatabase = await memorySourceDatabase();
+      lateDatabase.exec(
+        "CREATE TRIGGER refuse_update BEFORE UPDATE ON ios_source_data BEGIN SELECT RAISE(ABORT, 'source row locked'); END",
+      );
+      const late = await createDriver(lateRunner, new FakeClock(), filesystem, lateDatabase);
+      await expect(late.saveSource(device)).rejects.toMatchObject({
+        message: expect.stringContaining("source row locked"),
+      });
+      expect(
+        lateRunner.calls.slice(3).map((call) => call.args.at(-2)),
+        "the clone made before the failure is shut down and deleted from the sources set",
+      ).toEqual(["shutdown", "delete"]);
+      expect(lateDatabase.prepare("SELECT source_id FROM ios_source_data").all()).toEqual([]);
+    });
+  });
+
+  it.each([
+    {
+      name: "copies the seed's disabled.plist to the new simulator",
+      seedHas: true,
+      failing: undefined,
+    },
+    { name: "copies nothing when the seed has none", seedHas: false, failing: undefined },
+    {
+      name: "logs a warning and goes on when the copy fails",
+      seedHas: true,
+      failing: "copyFile" as const,
+    },
+  ])("a provision $name", async ({ seedHas, failing }) => {
+    const filesystem = new FaultyFilesystem();
+    await plantManagedDevice(filesystem);
+    if (seedHas) {
+      await filesystem.mkdirp(overridesFolder(seedUdid));
+      await filesystem.writeFileAtomic(overridesPath(seedUdid), overridesPlist({ "a.b": true }));
+    }
+    await plantLaunchServices(filesystem, `${deviceRoot}/${driverData.udid}`);
+    filesystem.failing = failing;
+    const runner = new ScriptedProcessRunner([
+      { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
+    ]);
+    const logger = new RecordingLogger();
+    const driver = await IosSimctlDriver.create({
+      database: await seededDatabase(),
+      clock: new FakeClock(),
+      driverConfig: { deviceRoot },
+      filesystem,
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      launchdOverridesRoot: overridesRoot,
+      logger,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+    });
+    scopedRunners.push(runner);
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
+
+    await expect(driver.provision(spec)).resolves.toMatchObject({ deviceId: driverData.udid });
+
+    expect(
+      await launchServicesFiles(filesystem, `${deviceRoot}/${driverData.udid}`),
+      "a copy of a seed loses the LaunchServices database that names the seed's folder",
+    ).toEqual(["com.apple.LaunchServices.unregisteredtypes-501.db"]);
+    const copied = failing === undefined && seedHas;
+    expect(await filesystem.exists(overridesPath(driverData.udid))).toBe(copied);
+    if (copied) {
+      expect(await filesystem.readFile(overridesPath(driverData.udid))).toBe(
+        overridesPlist({ "a.b": true }),
+      );
+    }
+    expect(logger.warnings).toEqual(
+      failing === undefined
+        ? []
+        : [
+            `could not copy the launchd overrides of seed ${seedUdid} to ${driverData.udid}: disk full`,
+          ],
+    );
   });
 
   it("keeps no copy of a slim spec's mode in driver data", async () => {
@@ -838,15 +1607,7 @@ describe("IosSimctlDriver", () => {
         result: { code: 0, stderr: "", stdout: listFixture },
       },
       {
-        match: {
-          command: "xcrun",
-          args: simctlArgs(
-            "create",
-            "simlock-device-1",
-            driverData.deviceTypeId,
-            driverData.runtimeId,
-          ),
-        },
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
         result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
       },
       {
@@ -856,7 +1617,7 @@ describe("IosSimctlDriver", () => {
     ]);
     const filesystem = new MemoryFilesystem();
     await plantManagedDevice(filesystem);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
     await driver.resolveSpec({
       model: "iPhone 16",
       osVersion: "26.5",
@@ -877,11 +1638,11 @@ describe("IosSimctlDriver", () => {
         result: { code: 0, stderr: "", stdout: listFixture },
       },
       {
-        match: createInvocation,
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
         result: { code: 1, stderr: "Invalid runtime", stdout: "" },
       },
     ]);
-    const driver = await createDriver(runner);
+    const driver = await createDriver(runner, new FakeClock(), undefined, await seededDatabase());
     await driver.resolveSpec({
       model: "iPhone 16",
       osVersion: "26.5",
@@ -1058,70 +1819,18 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("reclaims by tolerating an already-shutdown response, then erasing", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: simctl("shutdown", driverData.udid),
-        result: {
-          code: 149,
-          stderr: "Unable to shutdown device in current state: Shutdown",
-          stdout: "",
-        },
-      },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const filesystem = new MemoryFilesystem();
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
+  it("throws virtual devices are not reclaimed for a simulator, from reclaim and reclaimStrategy", async () => {
+    const runner = new ScriptedProcessRunner([]);
+    const driver = await createDriver(runner);
+    const simulator = { address: driverData.udid, deviceId: driverData.udid, driverData };
 
-    await expect(
-      driver.reclaim(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        { clean: "full" },
-      ),
-    ).resolves.toEqual({ state: "shutdown", strategy: "erase" });
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
-  });
-
-  it("writes a fresh, different token on reclaim than the one written on provision", async () => {
-    const runner = new ScriptedProcessRunner([
-      {
-        match: listInvocation,
-        result: { code: 0, stderr: "", stdout: listFixture },
-      },
-      {
-        match: createInvocation,
-        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
-      },
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const filesystem = new MemoryFilesystem();
-    const driver = await createTokenDriver(runner, filesystem);
-    await plantManagedDevice(filesystem);
-    await driver.resolveSpec({
-      model: "iPhone 16",
-      osVersion: "26.5",
-      platform: "ios",
-    });
-    await driver.provision(spec);
-
-    const provisionedDurable = await readToken(filesystem, durableMarkPath);
-    const provisionedErasable = await readToken(filesystem, erasableMarkPath);
-    expect(provisionedDurable).toBe(provisionedErasable);
-
-    await driver.reclaim(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      { clean: "full" },
+    await expect(driver.reclaim(simulator, { clean: "full" })).rejects.toThrow(
+      "virtual devices are not reclaimed",
     );
-
-    expect(await readToken(filesystem, durableMarkPath)).toBe(
-      await readToken(filesystem, erasableMarkPath),
+    expect(() => driver.reclaimStrategy(simulator, { clean: "standard" })).toThrow(
+      "virtual devices are not reclaimed",
     );
-    expect(await readToken(filesystem, durableMarkPath)).not.toBe(provisionedDurable);
+    expect(runner.calls).toEqual([]);
   });
 
   it("shuts down before deleting and uses benchmark estimates", async () => {
@@ -1145,14 +1854,77 @@ describe("IosSimctlDriver", () => {
     expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
   });
 
-  it("prices reclaim as the erase it always runs, at either clean level", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
+  it.each([
+    { name: "removal succeeds", method: "destroy" as const, failing: undefined, deleteCode: 0 },
+    {
+      name: "rm throws, which is logged and does not fail the destroy",
+      method: "destroy" as const,
+      failing: "rm" as const,
+      deleteCode: 0,
+    },
+    {
+      name: "simctl delete fails, so the folder is kept and the error thrown",
+      method: "destroy" as const,
+      failing: undefined,
+      deleteCode: 1,
+    },
+    {
+      name: "destroyLegacy removes it too",
+      method: "destroyLegacy" as const,
+      failing: undefined,
+      deleteCode: 0,
+    },
+  ])(
+    "removes the overrides folder of a destroyed simulator after simctl delete: $name",
+    async ({ method, failing, deleteCode }) => {
+      const udid = method === "destroy" ? driverData.udid : legacyUdid;
+      const args = (verb: string) =>
+        method === "destroy" ? simctlArgs(verb, udid) : ["simctl", verb, udid];
+      const runner = new ScriptedProcessRunner([
+        { match: { args: args("shutdown"), command: "xcrun" } },
+        {
+          match: { args: args("delete"), command: "xcrun" },
+          result: { code: deleteCode, stderr: "no", stdout: "" },
+        },
+      ]);
+      const filesystem = new FaultyFilesystem();
+      await filesystem.mkdirp(overridesFolder(udid));
+      await filesystem.writeFileAtomic(overridesPath(udid), "x");
+      await filesystem.mkdirp(overridesFolder("other-udid"));
+      filesystem.failing = failing;
+      const logger = new RecordingLogger();
+      scopedRunners.push(runner);
+      const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        driverConfig: { deviceRoot },
+        filesystem,
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        logger,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+      });
+      const device = { address: udid, deviceId: udid, driverData: { ...driverData, udid } };
 
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("erase");
-    expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "full" })).toBe("erase");
-    expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(34_000);
-    expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(34_000);
-  });
+      const destroyed = driver[method](device);
+
+      if (deleteCode === 0) {
+        await expect(destroyed).resolves.toBeUndefined();
+      } else {
+        await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
+      }
+      const removed = deleteCode === 0 && failing === undefined;
+      expect(await filesystem.exists(overridesFolder(udid))).toBe(!removed);
+      expect(await filesystem.exists(overridesFolder("other-udid"))).toBe(true);
+      expect(logger.warnings).toEqual(
+        failing === undefined
+          ? []
+          : [`could not remove the launchd overrides folder of ${udid}: disk full`],
+      );
+    },
+  );
 
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
     const driver = await createDriver(scriptedListRunner());
@@ -1367,51 +2139,27 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("derives mark paths from its own root without shelling out to locate a device", async () => {
-    const filesystem = new MemoryFilesystem();
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
-
-    await driver.reclaim(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      { clean: "full" },
-    );
-
-    // why: Owning the set means the data container's path is known, so `reclaim` -- which runs
-    // on every release -- never pays for the `simctl list` it used to need to find it.
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
-    expect(await filesystem.exists(erasableMarkPath)).toBe(true);
-    expect(await filesystem.exists(durableMarkPath)).toBe(true);
-  });
-
   it("leaves neither provenance mark when the erasable half cannot be written", async () => {
     const filesystem = new MemoryFilesystem();
     const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
+      {
+        match: listInvocation,
+        result: { code: 0, stderr: "", stdout: listFixture },
+      },
+      {
+        match: sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot),
+        result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` },
+      },
     ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
+    const driver = await createDriver(runner, new FakeClock(), filesystem, await seededDatabase());
     // why: The device directory exists, its data container does not, and `writeFileAtomic`
     // creates no parents -- the erasable write cannot land.
     await filesystem.mkdirp(`${deviceRoot}/${driverData.udid}`);
+    await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
 
-    await expect(
-      driver.reclaim(
-        { address: driverData.udid, deviceId: driverData.udid, driverData },
-        { clean: "full" },
-      ),
-    ).rejects.toThrow(`ENOENT: no such file or directory, open '${dataPath}'`);
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
+    await expect(driver.provision(spec)).rejects.toThrow(
+      `ENOENT: no such file or directory, open '${dataPath}'`,
+    );
 
     // why: A durable mark standing alone is exactly what `Doctor` reads as a foreign erase, so
     // a half-written pair would have `doctor` accusing the user of erasing the device
@@ -1501,6 +2249,7 @@ describe("IosSimctlDriver", () => {
     const filesystem = new MemoryFilesystem();
 
     const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: {},
       filesystem,
@@ -1540,6 +2289,7 @@ describe("IosSimctlDriver", () => {
 
   it("refuses the platform, not the daemon, when the configured device root is not a path", async () => {
     const failure = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: { deviceRoot: true },
       filesystem: new MemoryFilesystem(),
@@ -1880,6 +2630,7 @@ describe("IosSimctlDriver", () => {
     "runs a provision-to-destroy smoke test against simctl",
     async () => {
       const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new SystemClock(),
         driverConfig: {},
         filesystem: new NodeFilesystem(),
@@ -1894,7 +2645,6 @@ describe("IosSimctlDriver", () => {
         const liveSpec = await driver.resolveSpec({ model: "iPhone 17 Pro", platform: "ios" });
         device = await driver.provision(liveSpec);
         await driver.makeReady(device, prepareFull);
-        await driver.reclaim(device, { clean: "standard" });
       } finally {
         if (device !== undefined) {
           await driver.destroy(device);
@@ -1905,19 +2655,22 @@ describe("IosSimctlDriver", () => {
   );
 
   describe("slim mode", () => {
-    const widgetsLabels = [
-      "com.apple.PosterBoard",
-      "com.apple.chronod",
-      "com.apple.liveactivitiesd",
-    ];
-    const widgetsSignature = "v1:1ea7bd351e05525c";
-    const searchSignature = "v1:7587bb9b67a41b64";
+    const widgetsLabels = widgetsLabelList();
+    const widgetsSignature = "v1:0dd8c925463fb678";
     const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
-    const slim18_4 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" };
-    const slim9_0 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-9-0" };
-    const slim17_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-17-5" };
-    const slim26_0 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-0" };
-    const slimGarbageRuntime = { ...driverData, runtimeId: "not-a-runtime-id" };
+
+    const managedCount = Object.keys(wantedOverrides()).length;
+    const trueLabel = widgetsLabels[0] ?? "";
+    const falseLabel = "com.apple.siriactionsd";
+    // why: the label written first is not the first in sorted order, so naming the sorted first
+    // differs from naming the first one the readback check meets.
+    const firstWritten = Object.keys(wantedOverrides())[0] ?? "";
+    const firstSorted = Object.keys(wantedOverrides()).sort()[0] ?? "";
+    function flipped(labels: readonly string[]): Record<string, string> {
+      return Object.fromEntries(
+        labels.map((label) => [label, wantedOverrides()[label] === true ? "enabled" : "disabled"]),
+      );
+    }
 
     function slimOptions(bootTimeoutMs = 300_000) {
       return { bootTimeoutMs, categories: ["widgets"] } as const;
@@ -1938,6 +2691,14 @@ describe("IosSimctlDriver", () => {
       expect(iosRuntimeVersionFromId("garbage")).toBeUndefined();
     });
 
+    it("parses a device-specific runtime id (iOS-27-2-iPhone19-4) to the version it names (#1064)", () => {
+      // why: Xcode 27.2 installs `com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4` next to
+      // `...iOS-27-2`; the suffix after the version names a device family, not a version part.
+      expect(
+        iosRuntimeVersionFromId("com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4"),
+      ).toEqual([27, 2]);
+    });
+
     it("gates persistent slim on iOS 18.5+ without falling into string comparison", () => {
       // why: A naive string/lexicographic compare would put "9.0" ahead of "18.5" -- the gate must
       // compare the parsed integers instead.
@@ -1948,799 +2709,240 @@ describe("IosSimctlDriver", () => {
       expect(supportsPersistentSlim(undefined)).toBe(false);
     });
 
-    it("filters a label that could break out of the generated shell script", () => {
-      expect(
-        sanitizeSlimLabels(["com.apple.good", "system; rm -rf /", 'com.apple."quoted"']),
-      ).toEqual({
-        rejected: ["system; rm -rf /", 'com.apple."quoted"'],
-        safe: ["com.apple.good"],
-      });
-    });
-
-    it.each([false, true])(
-      "boots a slim-spec device on 18.5, applies the disable list, and reboots (slim by default: %s)",
-      async (slimByDefault) => {
-        const filesystem = new MemoryFilesystem();
+    it.each([
+      { name: "no file yet", existing: undefined, expected: wantedOverrides(), rewritten: true },
+      {
+        name: "an unknown category beside a known one, which is reported",
+        existing: undefined,
+        expected: wantedOverrides(),
+        rewritten: true,
+        configured: ["widgets", "nonsense"],
+        unknown: ["nonsense"],
+      },
+      {
+        name: "a file with the runtime's own entries, which are kept",
+        existing: { "com.apple.runtime.own": true, "com.example.other": false },
+        expected: {
+          ...wantedOverrides(),
+          "com.apple.runtime.own": true,
+          "com.example.other": false,
+        },
+        rewritten: true,
+      },
+      {
+        name: "a file already as wanted, which is not rewritten",
+        existing: wantedOverrides(),
+        expected: wantedOverrides(),
+        rewritten: false,
+      },
+      {
+        name: "a file slimmed under wider categories, whose dropped labels are now off the list",
+        existing: Object.fromEntries(
+          Object.entries(wantedOverrides()).map(([label]) => [
+            label,
+            !neverDisabled.includes(label),
+          ]),
+        ),
+        expected: wantedOverrides(),
+        rewritten: true,
+      },
+    ])(
+      "writes the launchd overrides before the one boot and grants slim after the readback: $name",
+      async ({ existing, expected, rewritten, configured, unknown }) => {
+        const filesystem = new FaultyFilesystem();
         await plantManagedDevice(filesystem);
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          {
-            match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-          },
-          { match: simctl("listapps", slim18_5.udid) },
-          {
-            match: {
-              args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-              command: "xcrun",
-            },
-          },
-          { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          {
-            match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-          },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
+        await plantOverrides(filesystem, existing);
+        const clock = new FakeClock();
+        const { runner, fileAtBoot } = runnerReadingFileAtBoot(filesystem, clock);
         const onSlimmed = vi.fn();
         const onSlimSkipped = vi.fn();
         const driver = await createSlimDriver(
           runner,
           filesystem,
-          slimOptions(),
+          { bootTimeoutMs: 300_000, categories: configured ?? ["widgets"] },
           onSlimmed,
           onSlimSkipped,
-          slimByDefault,
+          false,
+          clock,
         );
 
         const result = await driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
+          { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
           prepareSlim,
         );
 
         expect(result).toEqual({
           address: slim18_5.udid,
           deviceId: slim18_5.udid,
-          driverData: { ...slim18_5, slimSignature: widgetsSignature },
+          driverData: slim18_5,
           mode: "slim",
         });
+        expect(parseOverrides(fileAtBoot() ?? "")).toEqual(expected);
+        expect(filesystem.writes).toEqual(rewritten ? [overridesPath(slim18_5.udid)] : []);
+        expect(filesystem.modes).toEqual(rewritten ? { file: 0o644, folder: 0o700 } : {});
         expect(runner.calls.map((call) => call.args)).toEqual([
           simctlArgs("boot", slim18_5.udid),
           simctlArgs("bootstatus", slim18_5.udid, "-b"),
           simctlArgs("listapps", slim18_5.udid),
-          simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-          simctlArgs("shutdown", slim18_5.udid),
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
+          simctlArgs("spawn", slim18_5.udid, "launchctl", "print-disabled", "system"),
         ]);
         expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
-        expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
+        expect(runner.calls[3]?.options).toEqual({ timeoutMs: 120_000 });
         expect(onSlimmed).toHaveBeenCalledTimes(1);
         expect(onSlimmed).toHaveBeenCalledWith({
           address: slim18_5.udid,
           categories: ["widgets"],
           deviceId: slim18_5.udid,
-          durationMs: expect.any(Number),
-          labelCount: 3,
+          durationMs: 40_000,
+          labelCount: widgetsLabels.length,
           signature: widgetsSignature,
-          unknownLabels: [],
+          unknownLabels: unknown ?? [],
         });
         expect(onSlimSkipped).not.toHaveBeenCalled();
       },
     );
 
     it.each([
-      [
-        "exits non-zero",
-        { result: { code: 1, stderr: "unexpected shutdown failure", stdout: "" } },
-        false,
-      ],
-      // why: A `simctl shutdown` *timeout* (as opposed to a clean non-zero exit) is the case
-      // second-review finding #2 targets: the shutdown may have completed, may still be in
-      // flight, or may never have taken effect. Rather than guess from the exception, the driver
-      // always re-establishes a known-good running device afterward and reports the apply as
-      // uncertain.
-      ["times out", { hangs: true }, true],
-    ])(
-      "downgrades a post-apply shutdown that %s to an apply-failed skip instead of failing the lease, but always reboots first (finding #3 / second-review finding #2, issue #87)",
-      async (_failure, shutdownOutcome, hangs) => {
-        const filesystem = new MemoryFilesystem();
-        await plantManagedDevice(filesystem);
-        const clock = new FakeClock();
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-          {
-            match: {
-              args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-              command: "xcrun",
-            },
-          },
-          {
-            match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) },
-            ...shutdownOutcome,
-          },
-          // why: Always run after the shutdown call, whether or not it succeeded -- `boot` tolerates an
-          // already-booted device either way.
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
-        const onSlimmed = vi.fn();
-        const onSlimSkipped = vi.fn();
-        const driver = await IosSimctlDriver.create({
-          driverConfig: { deviceRoot },
-          instanceId,
-          simlockHome: "/home/.simlock",
-          clock,
-          filesystem,
-          idGenerator: { generate: () => "device-1" },
-          onSlimSkipped,
-          onSlimmed,
-          processRunner: runner,
-          slim: slimOptions(),
-        });
-
-        const ready = driver.makeReady(
-          { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-          prepareSlim,
-        );
-
-        if (hangs) {
-          await waitForCalls(runner, 5);
-          // why: 30 s is COMMAND_TIMEOUT_MS, the `#shutdown` call's own timeout.
-          clock.advance(30_000);
-        }
-
-        const result = await ready;
-
-        expect(result).toEqual({
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slim18_5,
-          mode: "slim",
-        });
-        expect(runner.calls.map((call) => call.args)).toEqual([
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-          simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-          simctlArgs("shutdown", slim18_5.udid),
-          simctlArgs("boot", slim18_5.udid),
-          simctlArgs("bootstatus", slim18_5.udid, "-b"),
-          simctlArgs("listapps", slim18_5.udid),
-        ]);
-        expect(onSlimmed).not.toHaveBeenCalled();
-        expect(onSlimSkipped).toHaveBeenCalledWith(
-          expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
-        );
-      },
-    );
-
-    it("propagates BootTimeoutError when the shutdown succeeds but the post-slim reboot times out (second-review finding #2, issue #87)", async () => {
-      // why: Unlike the shutdown-failure cases above, the device here genuinely is shut down and the
-      // reboot that should bring it back never completes -- this must still surface as a boot
-      // failure, exactly like any other boot timeout, not as a skip.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        {
-          hangs: true,
-          match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        onSlimmed,
-        processRunner: runner,
-        slim: slimOptions(),
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      await waitForCalls(runner, 7);
-      clock.advance(300_000); // slim.bootTimeoutMs -- the widened deadline applies to this reboot too
-
-      await expect(ready).rejects.toThrow(BootTimeoutError);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("still fails the lease when the shutdown succeeds but the second boot doesn't -- the device really is left shut down (finding #3, issue #87 review)", async () => {
-      // why: Unlike the shutdown-failure case above, the device here genuinely is no longer running
-      // once `#shutdown` succeeds -- returning it as "ready" from a skip path would be a lie.
-      // This must still raise like any other boot failure.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        {
-          match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) },
-          result: { code: 1, stderr: "current state: Shutting Down", stdout: "" },
-        },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
-
-      await expect(
-        driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
-          prepareSlim,
-        ),
-      ).rejects.toEqual(
-        expect.objectContaining({ message: expect.stringContaining("Shutting Down") }),
-      );
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("is idempotent: same signature and mark token skip the whole slim step (single boot)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
-      const slimmedData = {
-        ...slim18_5,
-        slimMarkToken: "tok-1",
-        slimSignature: widgetsSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      const result = await driver.makeReady(
-        {
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slimmedData,
-        },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slimmedData,
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-    });
-
-    it("re-slims when the mark token differs (device was erased since it was last slimmed)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-fresh" }));
-      const staleData = {
-        ...slim18_5,
-        slimMarkToken: "tok-stale",
-        slimSignature: widgetsSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: staleData },
-        prepareSlim,
-      );
-
-      expect(result.driverData).toEqual({
-        ...slim18_5,
-        slimMarkToken: "tok-fresh",
-        slimSignature: widgetsSignature,
-      });
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-    });
-
-    it("re-slims when the stored signature came from a different category selection", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ token: "tok-1" }));
-      const driftedData = {
-        ...slim18_5,
-        slimMarkToken: "tok-1",
-        slimSignature: searchSignature,
-      };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      await driver.makeReady(
-        {
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: driftedData,
-        },
-        prepareSlim,
-      );
-
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-      expect(onSlimmed).toHaveBeenCalledWith(
-        expect.objectContaining({ signature: widgetsSignature }),
-      );
-    });
-
-    it.each([
-      // why: 9.0 is the lexicographic trap: a string compare would put "9.0" ahead of "18.5".
-      ["runtime-too-old", "iOS 9.0", slim9_0],
-      ["runtime-too-old", "iOS 17.5", slim17_5],
-      ["runtime-too-old", "iOS 18.4", slim18_4],
-      ["unknown-runtime", "an unparseable runtimeId", slimGarbageRuntime],
-    ])(
-      "skips slim with reason %s on %s (single boot, no spawns)",
-      async (reason, _runtime, data) => {
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") } },
-          { match: simctl("listapps", data.udid) },
-        ]);
-        const onSlimSkipped = vi.fn();
-        const driver = await createSlimDriver(
-          runner,
-          new MemoryFilesystem(),
-          slimOptions(),
-          undefined,
-          onSlimSkipped,
-        );
-
-        const result = await driver.makeReady(
-          { address: data.udid, deviceId: data.udid, driverData: data },
-          prepareSlim,
-        );
-
-        expect(result).toEqual({
-          address: data.udid,
-          deviceId: data.udid,
-          driverData: data,
-          mode: "full",
-        });
-        expect(runner.calls).toHaveLength(3);
-        expect(onSlimSkipped).toHaveBeenCalledWith(
-          expect.objectContaining({ deviceId: data.udid, reason }),
-        );
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-      },
-    );
-
-    it("slims iOS 26.0 (version comparison must not be string-lexicographic)", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
-        { match: simctl("listapps", slim26_0.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim26_0.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim26_0.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim26_0.udid, "-b") } },
-        { match: simctl("listapps", slim26_0.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const driver = await createSlimDriver(runner, filesystem, slimOptions(), onSlimmed);
-
-      await driver.makeReady(
-        { address: slim26_0.udid, deviceId: slim26_0.udid, driverData: slim26_0 },
-        prepareSlim,
-      );
-
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-    });
-
-    it("commits a boot with individually-rejected launchd labels instead of retrying it forever (finding #2, issue #87 review; corrected by second-review finding #3)", async () => {
-      // why: CHANGED EXPECTATIONS (second adversarial review, finding #3): the previous version of
-      // this test treated an individual `simlock-slim-failed` line the same as a whole chunk
-      // failing to run, and asserted the marker was withheld. That conflated two very different
-      // failures: a label the in-simulator script itself rejects (renamed/removed daemon on this
-      // runtime) is PERMANENT -- retrying it on every future boot can never change the outcome,
-      // and would cost this device an extra apply+reboot on every single `makeReady`, forever.
-      // Only a whole chunk that never ran at all is transient and worth retrying. The fix splits
-      // the two into `rejectedLabels` (this case) and `unattemptedLabels` (a failed chunk, see
-      // the "4 chunks, one times out" test below); a rejected label alone no longer blocks the
-      // marker -- it now travels in `SlimmedFact.unknownLabels` instead, so a runtime with a
-      // permanently-unknown daemon converges to "slim, minus the labels it doesn't have" after
-      // one boot rather than re-running the whole label set on every boot.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-          result: {
-            code: 0,
-            stderr: "",
-            stdout:
-              "simlock-slim-failed com.apple.chronod\n" +
-              "simlock-slim-failed com.apple.liveactivitiesd\n",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
-
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: { ...slim18_5, slimSignature: widgetsSignature },
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-        simctlArgs("shutdown", slim18_5.udid),
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).toHaveBeenCalledTimes(1);
-      expect(onSlimmed).toHaveBeenCalledWith({
-        address: slim18_5.udid,
-        categories: ["widgets"],
-        deviceId: slim18_5.udid,
-        durationMs: expect.any(Number),
-        labelCount: 3,
-        signature: widgetsSignature,
-        unknownLabels: ["com.apple.chronod", "com.apple.liveactivitiesd"],
-      });
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
-
-    it("4 chunks, one times out: reboots, writes no marker, and a later boot re-applies (finding #2, issue #87 review; second-review finding #3)", async () => {
-      // why: The full, unfiltered label set (~170 labels, per the SLIM_CHUNK_SIZE=50 comment in
-      // index.ts) chunks into 4 `simctl spawn` calls. If the last one times out under load, the
-      // other 3 chunks still ran -- `#applySlimLabels` reports the whole apply as "applied"
-      // (`anyChunkSucceeded`), but with the timed-out chunk's labels folded into
-      // `unattemptedLabels` (unlike an individual `simlock-slim-failed` line, which is permanent
-      // and now lands in `rejectedLabels` instead -- see the "individually-rejected launchd
-      // labels" test above). A whole unattempted chunk is transient and must NOT be enough to
-      // write the idempotence marker: the device reboots (the labels that did apply are worth
-      // keeping), but comes back exactly as it went in, so the very next `makeReady` sees no
-      // stored `slimSignature` and re-applies the whole set again. CHANGED EXPECTATION
-      // (second-review finding #3): the outcome here is `"slim"`, not `"full"` -- the labels
-      // that did apply really are gone, so "full" would be a lie in the dangerous direction.
-      const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
-      const chunkSize = 50;
-      const chunks = [
-        allLabels.slice(0, chunkSize),
-        allLabels.slice(chunkSize, chunkSize * 2),
-        allLabels.slice(chunkSize * 2, chunkSize * 3),
-        allLabels.slice(chunkSize * 3),
-      ].filter((labelChunk) => labelChunk.length > 0);
-      expect(chunks).toHaveLength(4);
-      const lastChunk = chunks[3];
-      if (lastChunk === undefined) {
-        throw new Error("expected a 4th chunk");
-      }
-
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        ...chunks.slice(0, 3).map((labelChunk) => ({
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk)),
-            command: "xcrun",
-          },
-        })),
-        {
-          hangs: true,
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(lastChunk)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        onSlimmed,
-        processRunner: runner,
-        slim: { bootTimeoutMs: 300_000 },
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      await waitForCalls(runner, 7);
-      clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
-
-      const result = await ready;
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "slim",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[0] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[1] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(chunks[2] ?? [])),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(lastChunk)),
-        simctlArgs("shutdown", slim18_5.udid),
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
-      );
-    });
-
-    it("treats a total apply failure as a skip whose detail carries simctl's exit and stderr: single boot, no reboot, no marker, no event", async () => {
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-          // why: Real simctl stderr ends in a newline; the detail must not carry it.
-          result: { code: 1, stderr: "boom\n", stdout: "" },
-        },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
-
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
+      {
+        name: "a true label reads enabled",
+        readback: () => readbackWith({ [trueLabel]: "enabled" }),
         mode: "full",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-      ]);
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deviceId: slim18_5.udid,
-          detail: "all 1 chunk(s) failed to run; last: exit 1: boom",
-          reason: "apply-failed",
-        }),
-      );
-    });
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "a true label is missing",
+        readback: () => readbackWith({ [trueLabel]: undefined }),
+        mode: "full",
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "a false label reads disabled",
+        readback: () => readbackWith({ [falseLabel]: "disabled" }),
+        mode: "full",
+        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${falseLabel}`,
+      },
+      {
+        name: "two labels disagree, the first by sort order is named",
+        readback: () => readbackWith(flipped([firstWritten, firstSorted])),
+        mode: "full",
+        detail: `2 of ${managedCount} managed labels did not read back as written at boot; first: ${firstSorted}`,
+      },
+      {
+        name: "a true label reads true (older launchd)",
+        readback: () => readbackWith({ [trueLabel]: "true" }),
+        mode: "slim",
+        detail: undefined,
+      },
+      {
+        name: "a false label is missing",
+        readback: () => readbackWith({ [falseLabel]: undefined }),
+        mode: "slim",
+        detail: undefined,
+      },
+      {
+        name: "the readback exits non-zero",
+        readback: () => ({ code: 1, stderr: "launchctl: boom\n" }),
+        mode: "slim",
+        detail: "could not read back the launchd overrides: exit 1: launchctl: boom",
+      },
+      {
+        name: "the readback times out",
+        readback: () => "hangs" as const,
+        mode: "slim",
+        detail: "could not read back the launchd overrides: timed out after 120000ms",
+      },
+    ])(
+      "grants the mode the readback shows and tells why when it disagrees or fails: $name",
+      async ({ readback, mode, detail }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        const script = readback();
 
-    it("names the last failed chunk's cause when every chunk fails, a timeout included", async () => {
-      const allLabels = labelsFor(resolveSlimCategories(undefined).categories);
-      const chunks = [0, 1, 2, 3].map((index) => allLabels.slice(index * 50, (index + 1) * 50));
-      expect(allLabels.length).toBeGreaterThan(150);
-      const spawnArgs = (labelChunk: readonly string[]) =>
-        simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(labelChunk));
-
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const clock = new FakeClock();
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        // why: Three different exits before the timeout, so a detail that kept any but the last
-        // failure would name one of them instead.
-        ...["first", "second", "third"].map((stderr, index) => ({
-          match: { args: spawnArgs(chunks[index] ?? []), command: "xcrun" },
-          result: { code: 1, stderr, stdout: "" },
-        })),
-        { hangs: true, match: { args: spawnArgs(chunks[3] ?? []), command: "xcrun" } },
-      ]);
-      const onSlimSkipped = vi.fn();
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock,
-        filesystem,
-        idGenerator: { generate: () => "device-1" },
-        onSlimSkipped,
-        processRunner: runner,
-        slim: { bootTimeoutMs: 300_000 },
-      });
-
-      const ready = driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        prepareSlim,
-      );
-      await waitForCalls(runner, 7);
-      clock.advance(60_000); // SLIM_CHUNK_TIMEOUT_MS
-
-      expect((await ready).mode).toBe("full");
-      expect(onSlimSkipped).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail: "all 4 chunk(s) failed to run; last: timed out after 60000ms",
-          reason: "apply-failed",
-        }),
-      );
-    });
-
-    it.each([false, true])(
-      "boots a full-spec device on 18.5 once, with the normal deadline (slim by default: %s)",
-      async (slimByDefault) => {
-        const runner = new ScriptedProcessRunner([
-          { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-          { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-          { match: simctl("listapps", slim18_5.udid) },
-        ]);
-        const onSlimmed = vi.fn();
-        const onSlimSkipped = vi.fn();
-        const driver = await createSlimDriver(
-          runner,
-          new MemoryFilesystem(),
+        const { onSlimSkipped, onSlimmed, result } = await prepareSlimWith(
+          filesystem,
+          typeof script === "string" && script !== "hangs" ? { stdout: script } : script,
           slimOptions(),
-          onSlimmed,
-          onSlimSkipped,
-          slimByDefault,
         );
 
-        const result = await driver.makeReady(
-          {
-            address: slim18_5.udid,
-            deviceId: slim18_5.udid,
-            driverData: slim18_5,
-          },
-          prepareFull,
+        expect(result.mode).toBe(mode);
+        if (detail === undefined) {
+          expect(onSlimmed).toHaveBeenCalledTimes(1);
+          expect(onSlimSkipped).not.toHaveBeenCalled();
+        } else {
+          expect(onSlimmed).not.toHaveBeenCalled();
+          expect(onSlimSkipped.mock.calls).toEqual([
+            [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
+          ]);
+        }
+      },
+    );
+
+    it.each([
+      {
+        name: "writeFileAtomic throws and the readback is as wanted",
+        failing: "writeFileAtomic" as const,
+        existing: undefined,
+        readback: { stdout: readbackWith({}) },
+        mode: "slim",
+        detail: "could not write the launchd overrides file: disk full",
+      },
+      {
+        name: "mkdirp throws and the readback disagrees",
+        failing: "mkdirp" as const,
+        existing: undefined,
+        readback: { stdout: readbackWith({ [trueLabel]: "enabled" }) },
+        mode: "full",
+        detail: `could not write the launchd overrides file: disk full; 1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+      },
+      {
+        name: "the write throws and the readback fails",
+        failing: "writeFileAtomic" as const,
+        existing: undefined,
+        readback: { code: 1, stderr: "boom" },
+        mode: "slim",
+        detail:
+          "could not write the launchd overrides file: disk full; could not read back the launchd overrides: exit 1: boom",
+      },
+      {
+        name: "the existing file is not a plist dict, is left unchanged, and the readback decides",
+        failing: undefined,
+        existing: "not a plist",
+        readback: { stdout: readbackWith({}) },
+        mode: "slim",
+        detail:
+          "could not write the launchd overrides file: the existing file is not a property list dictionary",
+      },
+    ])(
+      "boots anyway when the overrides file cannot be written and says so: $name",
+      async ({ failing, existing, readback, mode, detail }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        if (existing !== undefined) {
+          await filesystem.mkdirp(overridesFolder(slim18_5.udid));
+          await filesystem.writeFileAtomic(overridesPath(slim18_5.udid), existing);
+        }
+        filesystem.failing = failing;
+
+        const { onSlimSkipped, onSlimmed, result, runner } = await prepareSlimWith(
+          filesystem,
+          readback,
+          slimOptions(),
         );
 
-        expect(result).toEqual({
-          address: slim18_5.udid,
-          deviceId: slim18_5.udid,
-          driverData: slim18_5,
-          mode: "full",
-        });
-        expect(runner.calls).toHaveLength(3);
-        expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
+        expect(result.mode).toBe(mode);
+        expect(runner.calls.map((call) => call.args[3])).toEqual([
+          "boot",
+          "bootstatus",
+          "listapps",
+          "spawn",
+        ]);
         expect(onSlimmed).not.toHaveBeenCalled();
-        expect(onSlimSkipped).not.toHaveBeenCalled();
+        expect(onSlimSkipped.mock.calls).toEqual([
+          [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
+        ]);
+        if (existing !== undefined) {
+          expect(await filesystem.readFile(overridesPath(slim18_5.udid))).toBe(existing);
+        }
       },
     );
 
@@ -2748,21 +2950,7 @@ describe("IosSimctlDriver", () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const stamped = { ...slim18_5, full: true };
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
-        { match: simctl("listapps", stamped.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", stamped.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("boot", stamped.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", stamped.udid, "-b") } },
-        { match: simctl("listapps", stamped.udid) },
-      ]);
+      const runner = new ScriptedProcessRunner(slimBootCalls(stamped.udid, wantedReadback()));
       const driver = await createSlimDriver(runner, filesystem, slimOptions());
 
       const result = await driver.makeReady(
@@ -2773,70 +2961,94 @@ describe("IosSimctlDriver", () => {
       expect(result.mode).toBe("slim");
     });
 
-    it("a purpose: 'recover' boot never applies slim, even on a device that would otherwise qualify (finding #1, issue #87 review)", async () => {
-      // why: `slim18_5` (a slim spec, an 18.5+ runtime) is exactly the shape of device
-      // "boots, applies the disable list, and reboots on a qualifying, not-yet-slimmed device"
-      // (above) slims -- the only difference here is `{ purpose: "recover" }`, standing in for
-      // `ManagedDeviceLifecycle.recoverLeased`'s call on a crashed, still-*leased* device. Safety
-      // rule 2's exception may only reboot; a slim pass here (a second, unannounced reboot plus
-      // a launchctl-disable pass) would be exactly the broader privilege the rule withholds. So
-      // this must produce a single ordinary boot: no `simctl list`, no `simctl spawn`, no second
-      // shutdown/boot, and no `device.slimmed` fact.
-      const filesystem = new MemoryFilesystem();
-      await plantManagedDevice(filesystem);
-      const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-      ]);
-      const onSlimmed = vi.fn();
-      const onSlimSkipped = vi.fn();
-      const driver = await createSlimDriver(
-        runner,
-        filesystem,
-        slimOptions(),
-        onSlimmed,
-        onSlimSkipped,
-      );
+    it.each([
+      {
+        name: "full mode",
+        runtimeId: slim18_5.runtimeId,
+        options: { mode: "full", purpose: "prepare" } as const,
+        categories: ["widgets"],
+        skipped: undefined,
+      },
+      {
+        name: "a purpose: 'recover' boot, which only reboots",
+        runtimeId: slim18_5.runtimeId,
+        options: { mode: "slim", purpose: "recover" } as const,
+        categories: ["widgets"],
+        skipped: undefined,
+      },
+      {
+        name: "runtime 18.4",
+        runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4",
+        options: prepareSlim,
+        categories: ["widgets"],
+        skipped: "runtime-too-old",
+      },
+      {
+        name: "a runtime id that does not parse",
+        runtimeId: "not-a-runtime-id",
+        options: prepareSlim,
+        categories: ["widgets"],
+        skipped: "unknown-runtime",
+      },
+      {
+        name: "configured categories none of which is known",
+        runtimeId: slim18_5.runtimeId,
+        options: prepareSlim,
+        categories: ["nonsense"],
+        skipped: "apply-failed",
+      },
+    ])(
+      "touches no overrides file and runs no readback for a device that must not be slimmed: $name",
+      async ({ runtimeId, options, categories, skipped }) => {
+        const filesystem = new FaultyFilesystem();
+        await plantManagedDevice(filesystem);
+        filesystem.writes.length = 0;
+        const data = { ...driverData, runtimeId };
+        const runner = new ScriptedProcessRunner([
+          { match: simctl("boot", data.udid) },
+          { match: simctl("bootstatus", data.udid, "-b") },
+          { match: simctl("listapps", data.udid) },
+        ]);
+        const onSlimmed = vi.fn();
+        const onSlimSkipped = vi.fn();
+        const driver = await createSlimDriver(
+          runner,
+          filesystem,
+          { bootTimeoutMs: 300_000, categories },
+          onSlimmed,
+          onSlimSkipped,
+        );
 
-      const result = await driver.makeReady(
-        { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-        { mode: "slim", purpose: "recover" },
-      );
+        const result = await driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
 
-      expect(result).toEqual({
-        address: slim18_5.udid,
-        deviceId: slim18_5.udid,
-        driverData: slim18_5,
-        mode: "full",
-      });
-      expect(runner.calls.map((call) => call.args)).toEqual([
-        simctlArgs("boot", slim18_5.udid),
-        simctlArgs("bootstatus", slim18_5.udid, "-b"),
-        simctlArgs("listapps", slim18_5.udid),
-      ]);
-      // why: The ordinary, un-widened boot deadline -- not `slim.bootTimeoutMs` -- since this boot
-      // never considers applying anything.
-      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 120_000 });
-      expect(onSlimmed).not.toHaveBeenCalled();
-      expect(onSlimSkipped).not.toHaveBeenCalled();
-    });
+        expect(result).toEqual({
+          address: data.udid,
+          deviceId: data.udid,
+          driverData: data,
+          mode: "full",
+        });
+        expect(runner.calls.map((call) => call.args)).toEqual([
+          simctlArgs("boot", data.udid),
+          simctlArgs("bootstatus", data.udid, "-b"),
+          simctlArgs("listapps", data.udid),
+        ]);
+        expect(filesystem.writes).toEqual([]);
+        expect(await filesystem.exists(overridesFolder(data.udid))).toBe(false);
+        expect(onSlimmed).not.toHaveBeenCalled();
+        expect(onSlimSkipped.mock.calls.map(([fact]) => (fact as SlimSkippedFact).reason)).toEqual(
+          skipped === undefined ? [] : [skipped],
+        );
+      },
+    );
 
-    it("times out the post-slim bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
+    it("times out the slim boot's bootstatus using slim.bootTimeoutMs, not the default 120s", async () => {
       const filesystem = new MemoryFilesystem();
       await plantManagedDevice(filesystem);
       const clock = new FakeClock();
       const runner = new ScriptedProcessRunner([
-        { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
-        { match: { command: "xcrun", args: simctlArgs("bootstatus", slim18_5.udid, "-b") } },
-        { match: simctl("listapps", slim18_5.udid) },
-        {
-          match: {
-            args: simctlArgs("spawn", slim18_5.udid, "/bin/sh", "-c", slimScript(widgetsLabels)),
-            command: "xcrun",
-          },
-        },
-        { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
         { match: { command: "xcrun", args: simctlArgs("boot", slim18_5.udid) } },
         {
           hangs: true,
@@ -2845,12 +3057,14 @@ describe("IosSimctlDriver", () => {
         { match: { command: "xcrun", args: simctlArgs("shutdown", slim18_5.udid) } },
       ]);
       const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         driverConfig: { deviceRoot },
         instanceId,
         simlockHome: "/home/.simlock",
         clock,
         filesystem,
         idGenerator: { generate: () => "device-1" },
+        launchdOverridesRoot: overridesRoot,
         processRunner: runner,
         slim: slimOptions(),
       });
@@ -2860,48 +3074,34 @@ describe("IosSimctlDriver", () => {
         prepareSlim,
       );
 
-      await waitForCalls(runner, 7);
+      await waitForCalls(runner, 2);
       const readyState = promiseState(ready);
 
-      // why: Just past the default 120s: a reboot timed against it would have given up by now.
+      // why: Just past the default 120s: a boot timed against it would have given up by now.
       clock.advance(120_001);
       await flushMicrotasks221();
       expect(readyState.state).toBe("pending");
 
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
-      expect(runner.calls[6]?.options).toEqual({ timeoutMs: 300_000 });
+      expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
-    it("estimates the boot cost with the slim reboot+apply budget for a slim spec", async () => {
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock: new FakeClock(),
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        processRunner: new ScriptedProcessRunner([]),
-        slim: slimOptions(),
-      });
+    it.each([
+      { name: "slim spec", spec: { ...spec, mode: "slim" } as const },
+      { name: "full spec", spec },
+    ])(
+      "quotes the cold-boot cost for a boot of a $name, since a slim boot is one boot",
+      async (c) => {
+        const driver = await createSlimDriver(
+          new ScriptedProcessRunner([]),
+          new MemoryFilesystem(),
+          slimOptions(),
+        );
 
-      expect(driver.estimate({ operation: "boot" }, { ...spec, mode: "slim" })).toBe(150_000);
-    });
-
-    it("quotes the plain cold-boot cost for a full spec, since a full spec never slims", async () => {
-      const driver = await IosSimctlDriver.create({
-        driverConfig: { deviceRoot },
-        instanceId,
-        simlockHome: "/home/.simlock",
-        clock: new FakeClock(),
-        filesystem: new MemoryFilesystem(),
-        idGenerator: { generate: () => "device-1" },
-        processRunner: new ScriptedProcessRunner([]),
-        slim: slimOptions(),
-      });
-
-      expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
-    });
+        expect(driver.estimate({ operation: "boot" }, c.spec)).toBe(60_000);
+      },
+    );
 
     describe("resolveSpec and the device mode", () => {
       const iphone16 = { model: "iPhone 16", platform: "ios" } as const;
@@ -3032,6 +3232,47 @@ describe("IosSimctlDriver", () => {
             message: expect.stringContaining("26.5"),
           },
         ]);
+      });
+
+      it("reports nothing for an iOS 27.2 device-specific runtime installed beside the general one (#1064)", async () => {
+        const devicetypes = (JSON.parse(listFixture) as { devicetypes: unknown }).devicetypes;
+        const deviceSpecificFixture = JSON.stringify({
+          devicetypes,
+          runtimes: [
+            {
+              buildversion: "24B91016s",
+              identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4",
+              isAvailable: true,
+              name: "iOS 27.2",
+              supportedDeviceTypes: [],
+              version: "27.2",
+            },
+            {
+              buildversion: "24B8117",
+              identifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+              isAvailable: true,
+              name: "iOS 27.2",
+              supportedDeviceTypes: [],
+              version: "27.2",
+            },
+          ],
+        });
+        const runner = new ScriptedProcessRunner([
+          {
+            match: listInvocation,
+            result: { code: 0, stderr: "", stdout: deviceSpecificFixture },
+          },
+        ]);
+        const driver = await createSlimDriver(
+          runner,
+          new MemoryFilesystem(),
+          slimOptions(),
+          undefined,
+          undefined,
+          true,
+        );
+
+        await expect(driver.advisories()).resolves.toEqual([]);
       });
 
       it("reports nothing when the default mode is full, even with a runtime below 18.5 installed", async () => {
@@ -3644,6 +3885,75 @@ describe("IosSimctlDriver listComponents()", () => {
         sizeBytes: 7_000_000_000,
       });
       expect(runner.calls[2]?.args).toEqual(deleteInvocation.args);
+    });
+
+    it("deletes the seeds made from the removed runtime before the runtime, logs one it cannot delete and goes on, and keeps the seeds of another runtime", async () => {
+      const [goneSeed, stuckSeed, keptSeed] = [1, 2, 3].map(
+        (n) => `00000000-0000-0000-0000-0000000002${String(n)}0`,
+      ) as [string, string, string];
+      const database = await memorySourceDatabase();
+      const removed = {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: target.runtime,
+      };
+      plantSource(database, { ...removed, udid: goneSeed });
+      plantSource(database, {
+        ...removed,
+        deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPad",
+        udid: stuckSeed,
+      });
+      plantSource(database, {
+        deviceTypeId: driverData.deviceTypeId,
+        runtimeId: other.runtime,
+        udid: keptSeed,
+      });
+      const runner = new ScriptedProcessRunner([
+        imagesListed([target, other]),
+        defaultSetListed({}),
+        { match: sourcesSimctl("shutdown", goneSeed) },
+        { match: sourcesSimctl("delete", goneSeed) },
+        { match: sourcesSimctl("shutdown", stuckSeed) },
+        {
+          match: sourcesSimctl("delete", stuckSeed),
+          result: { code: 1, stderr: "busy", stdout: "" },
+        },
+        deleted,
+        imagesListed([other]),
+        imagesListed([other]),
+        defaultSetListed({}),
+      ]);
+      const logger = new RecordingLogger();
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        await assetStore([]),
+        database,
+        logger,
+      );
+
+      await driver.removeComponent(receipt, { signal: signal() });
+
+      expect(runner.calls.map((call) => [call.args[3], call.args[4]])).toEqual(
+        expect.arrayContaining([
+          ["shutdown", goneSeed],
+          ["delete", goneSeed],
+          ["delete", stuckSeed],
+          ["runtime", "delete"],
+        ]),
+      );
+      expect(runner.calls.some((call) => call.args.includes(keptSeed))).toBe(false);
+      expect(
+        runner.calls.findIndex((call) => call.args[3] === "runtime" && call.args[4] === "delete"),
+      ).toBeGreaterThan(runner.calls.findIndex((call) => call.args[4] === stuckSeed));
+      expect(logger.warnings).toEqual([
+        expect.stringContaining(
+          `could not remove seed ${stuckSeed} of removed runtime ${target.runtime}:`,
+        ),
+      ]);
+      expect(database.prepare("SELECT udid FROM ios_source_data ORDER BY udid").all()).toEqual([
+        { udid: stuckSeed },
+        { udid: keptSeed },
+      ]);
     });
 
     it("reports residue naming Xcode's Settings -> Platforms when the build's download is still in the asset store", async () => {
@@ -4329,6 +4639,7 @@ describe("IosSimctlDriver screen capture commands", () => {
     await filesystem.writeFileAtomic("/dist/bin/simlock-device-capture", "");
     const launcher = new FakeBytePipeLauncher();
     const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driverConfig: configured === undefined ? {} : { deviceCaptureCommand: configured },
       filesystem,
@@ -4446,47 +4757,22 @@ function simctlPassthrough(driver: IosSimctlDriver, args: readonly string[]) {
   return driver.passthrough("simctl", undefined, args);
 }
 
-function createDriver(
+async function createDriver(
   runner: ScriptedProcessRunner,
   clock = new FakeClock(),
   filesystem: Filesystem = new MemoryFilesystem(),
+  database?: SqliteDatabase,
+  logger?: Logger,
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
+    database: database ?? (await memorySourceDatabase()),
     clock,
     driverConfig: { deviceRoot },
     filesystem,
     idGenerator: { generate: () => "device-1" },
     instanceId,
-    processRunner: runner,
-    simlockHome: "/home/.simlock",
-  });
-}
-
-/**
- * why: `#idGenerator.generate()` is called once while the root is being created, then names
- * the device, then mints a mark token per write -- so the second call must stay
- * "device-1" to match `driverData.name` while later ones vary, proving the reclaim token
- * differs from the provision token.
- */
-function createTokenDriver(
-  runner: ScriptedProcessRunner,
-  filesystem: Filesystem,
-): Promise<IosSimctlDriver> {
-  let calls = 0;
-  scopedRunners.push(runner);
-  return IosSimctlDriver.create({
-    clock: new FakeClock(),
-    driverConfig: { deviceRoot },
-    filesystem,
-    idGenerator: {
-      generate: () => {
-        calls += 1;
-        if (calls === 1) return "root-staging";
-        return calls === 2 ? "device-1" : `tok-${String(calls)}`;
-      },
-    },
-    instanceId,
+    ...(logger === undefined ? {} : { logger }),
     processRunner: runner,
     simlockHome: "/home/.simlock",
   });
@@ -4534,8 +4820,36 @@ async function plantManagedDevice(filesystem: Filesystem): Promise<void> {
   await filesystem.mkdirp(dataPath);
 }
 
-async function readToken(filesystem: Filesystem, path: string): Promise<string> {
-  return (JSON.parse(await filesystem.readFile(path)) as { readonly token: string }).token;
+/** why: the state a case starts from, with the writes and modes the planting made forgotten. */
+async function plantOverrides(
+  filesystem: FaultyFilesystem,
+  existing: Readonly<Record<string, boolean>> | undefined,
+): Promise<void> {
+  if (existing !== undefined) {
+    await filesystem.mkdirp(overridesFolder(driverData.udid));
+    await filesystem.writeFileAtomic(overridesPath(driverData.udid), overridesPlist(existing));
+  }
+  filesystem.writes.length = 0;
+  delete filesystem.modes.file;
+  delete filesystem.modes.folder;
+}
+
+/** why: the boot is where launchd reads the file, so the file is captured as the boot starts. */
+function runnerReadingFileAtBoot(filesystem: FaultyFilesystem, clock: FakeClock) {
+  let contents: string | undefined;
+  const calls = slimBootCalls(driverData.udid, wantedReadback());
+  const runner = new ScriptedProcessRunner([
+    {
+      ...calls[0]!,
+      onSpawn: async () => {
+        clock.advance(40_000);
+        const path = overridesPath(driverData.udid);
+        contents = (await filesystem.exists(path)) ? await filesystem.readFile(path) : undefined;
+      },
+    },
+    ...calls.slice(1),
+  ]);
+  return { fileAtBoot: () => contents, runner };
 }
 
 async function createSlimDriver(
@@ -4548,29 +4862,243 @@ async function createSlimDriver(
   onSlimmed?: (fact: SlimmedFact) => void,
   onSlimSkipped?: (fact: SlimSkippedFact) => void,
   slimByDefault = false,
+  clock = new FakeClock(),
 ): Promise<IosSimctlDriver> {
   return await IosSimctlDriver.create({
+    database: await memorySourceDatabase(),
     driverConfig: { deviceRoot },
     instanceId,
     simlockHome: "/home/.simlock",
-    clock: new FakeClock(),
+    clock,
     filesystem,
     idGenerator: { generate: () => "device-1" },
     ...(onSlimmed === undefined ? {} : { onSlimmed }),
     ...(onSlimSkipped === undefined ? {} : { onSlimSkipped }),
+    launchdOverridesRoot: overridesRoot,
     processRunner: runner,
     slim,
     slimByDefault,
   });
 }
 
-/** why: Mirrors `#applySlimLabels`'s generated script -- keeps test expectations in sync by construction. */
-function slimScript(labels: readonly string[]): string {
-  return (
-    `[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT"; ` +
-    `for l in ${labels.join(" ")}; do launchctl disable "system/$l" ` +
-    `>/dev/null 2>&1 || echo "simlock-slim-failed $l"; done`
+const overridesRoot = "/private/var/tmp";
+
+/** why: a LaunchServices database file and a neighbour that must stay, in the device folder `device`. */
+async function plantLaunchServices(filesystem: MemoryFilesystem, device: string): Promise<void> {
+  const folder = `${device}/data/var/db/lsd`;
+  await filesystem.mkdirp(folder);
+  await filesystem.writeFileAtomic(`${folder}/com.apple.LaunchServices-33554481-v2.csstore`, "x");
+  await filesystem.writeFileAtomic(
+    `${folder}/com.apple.LaunchServices.unregisteredtypes-501.db`,
+    "",
   );
+}
+
+async function launchServicesFiles(
+  filesystem: MemoryFilesystem,
+  device: string,
+): Promise<string[]> {
+  return (await filesystem.readdir(`${device}/data/var/db/lsd`)).sort();
+}
+
+function overridesFolder(udid: string): string {
+  return `${overridesRoot}/com.apple.CoreSimulator.SimDevice.${udid}`;
+}
+
+function overridesPath(udid: string): string {
+  return `${overridesFolder(udid)}/disabled.plist`;
+}
+
+function overridesPlist(entries: Readonly<Record<string, boolean>>): string {
+  const lines = Object.entries(entries).map(
+    ([label, off]) => `<key>${label}</key><${String(off)}/>`,
+  );
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>${lines.join("")}</dict></plist>\n`;
+}
+
+/** why: Records every `warn` message, so the destroy's log line is asserted on its text. */
+class RecordingLogger implements Logger {
+  readonly warnings: string[] = [];
+
+  debug(): void {}
+  info(): void {}
+  warn(message: string): void {
+    this.warnings.push(message);
+  }
+  error(): void {}
+  child(): Logger {
+    return this;
+  }
+}
+
+/** why: Records the mode each `mkdirp` was asked for, because `MemoryFilesystem` creates every directory owner-only by default and so cannot show a caller that left the mode out. */
+class ModeRecordingFilesystem extends MemoryFilesystem {
+  readonly mkdirpModes = new Map<string, number | undefined>();
+
+  override async mkdirp(
+    path: string,
+    options?: Parameters<MemoryFilesystem["mkdirp"]>[1],
+  ): Promise<void> {
+    this.mkdirpModes.set(path, options?.mode);
+    await super.mkdirp(path, options);
+  }
+}
+
+/** why: Records what is written and fails the one operation a test names, as a full or unwritable store would. */
+class FaultyFilesystem extends MemoryFilesystem {
+  readonly writes: string[] = [];
+  readonly modes: { folder?: number | undefined; file?: number | undefined } = {};
+  failing: "writeFileAtomic" | "mkdirp" | "rm" | "copyFile" | undefined;
+  failureMessage = "disk full";
+
+  override async writeFileAtomic(
+    path: string,
+    contents: string,
+    options?: Parameters<MemoryFilesystem["writeFileAtomic"]>[2],
+  ): Promise<void> {
+    if (this.failing === "writeFileAtomic" && path.endsWith("disabled.plist")) {
+      throw new Error(this.failureMessage);
+    }
+    await super.writeFileAtomic(path, contents, options);
+    this.writes.push(path);
+    if (path.endsWith("disabled.plist")) this.modes.file = options?.mode;
+  }
+
+  override async mkdirp(path: string, options?: Parameters<MemoryFilesystem["mkdirp"]>[1]) {
+    if (this.failing === "mkdirp" && path.includes("CoreSimulator.SimDevice")) {
+      throw new Error(this.failureMessage);
+    }
+    await super.mkdirp(path, options);
+    if (path.includes("CoreSimulator.SimDevice")) this.modes.folder = options?.mode;
+  }
+
+  override async copyFile(from: string, to: string): Promise<void> {
+    if (this.failing === "copyFile") throw new Error(this.failureMessage);
+    await super.copyFile(from, to);
+  }
+
+  override async rm(path: string): Promise<void> {
+    if (this.failing === "rm") throw new Error(this.failureMessage);
+    await super.rm(path);
+  }
+}
+
+// why: spelled out here, not imported: the labels simslim v0.13.0 never disables (ADR 0060 §1).
+const neverDisabled = ["com.apple.assistantd", "com.apple.gamed", "com.apple.sharingd"];
+
+/** why: What the driver must write for categories ["widgets"]: its labels on, every other managed label off. */
+function wantedOverrides(): Record<string, boolean> {
+  const wanted: Record<string, boolean> = {};
+  for (const category of SLIM_CATEGORIES) {
+    for (const label of category.labels) wanted[label] = false;
+  }
+  for (const label of neverDisabled) wanted[label] = false;
+  for (const label of widgetsLabelList()) {
+    if (!neverDisabled.includes(label)) wanted[label] = true;
+  }
+  return wanted;
+}
+
+function widgetsLabelList(): readonly string[] {
+  return SLIM_CATEGORIES.find((category) => category.name === "widgets")?.labels ?? [];
+}
+
+function parseOverrides(plist: string): Record<string, boolean> {
+  const entries: Record<string, boolean> = {};
+  for (const match of plist.matchAll(/<key>([^<]*)<\/key>\s*<(true|false)\/>/g)) {
+    entries[match[1] ?? ""] = match[2] === "true";
+  }
+  return entries;
+}
+
+/** why: `launchctl print-disabled system` as launchd prints it: one `"label" => state` line per entry. */
+function printDisabled(entries: Readonly<Record<string, string>>): string {
+  const lines = Object.entries(entries).map(([label, state]) => `\t"${label}" => ${state}`);
+  return ["disabled services = {", ...lines, "}", ""].join("\n");
+}
+
+/** why: The readback of a boot that honoured every label as written. */
+function wantedReadback(): string {
+  return printDisabled(
+    Object.fromEntries(
+      Object.entries(wantedOverrides()).map(([label, off]) => [
+        label,
+        off ? "disabled" : "enabled",
+      ]),
+    ),
+  );
+}
+
+/** why: The calls of one slim boot: the boot, its wait, the installer poll, then the readback. */
+function slimBootCalls(udid: string, readback: string) {
+  return [
+    { match: simctl("boot", udid) },
+    { match: simctl("bootstatus", udid, "-b") },
+    { match: simctl("listapps", udid) },
+    {
+      match: simctl("spawn", udid, "launchctl", "print-disabled", "system"),
+      result: { code: 0, stderr: "", stdout: readback },
+    },
+  ];
+}
+
+type ReadbackScript =
+  | { readonly stdout: string }
+  | { readonly code: number; readonly stderr: string }
+  | "hangs";
+
+/** why: One slim `prepare` of the 18.5 device, with the readback scripted; the 120 s limit runs on a fake clock. */
+async function prepareSlimWith(
+  filesystem: FaultyFilesystem,
+  readback: ReadbackScript,
+  slimOptions: { readonly categories?: readonly string[]; readonly bootTimeoutMs: number },
+) {
+  const udid = "00000000-0000-0000-0000-000000000001";
+  const runtimeId = "com.apple.CoreSimulator.SimRuntime.iOS-18-5";
+  const calls = slimBootCalls(udid, "");
+  const readbackCall =
+    readback === "hangs"
+      ? { hangs: true, match: calls[3]!.match }
+      : "stdout" in readback
+        ? { match: calls[3]!.match, result: { code: 0, stderr: "", stdout: readback.stdout } }
+        : {
+            match: calls[3]!.match,
+            result: { code: readback.code, stderr: readback.stderr, stdout: "" },
+          };
+  const runner = new ScriptedProcessRunner([...calls.slice(0, 3), readbackCall]);
+  const clock = new FakeClock();
+  const onSlimmed = vi.fn();
+  const onSlimSkipped = vi.fn();
+  const driver = await createSlimDriver(
+    runner,
+    filesystem,
+    slimOptions,
+    onSlimmed,
+    onSlimSkipped,
+    false,
+    clock,
+  );
+  const ready = driver.makeReady(
+    { address: udid, deviceId: udid, driverData: { ...driverData, runtimeId } },
+    prepareSlim,
+  );
+  if (readback === "hangs") {
+    await waitForCalls(runner, 4);
+    clock.advance(120_000);
+  }
+  return { onSlimSkipped, onSlimmed, result: await ready, runner };
+}
+
+/** why: The readback of a boot that honoured every label, with the given labels changed or dropped (`undefined`). */
+function readbackWith(changes: Readonly<Record<string, string | undefined>>): string {
+  const entries: Record<string, string> = Object.fromEntries(
+    Object.entries(wantedOverrides()).map(([label, off]) => [label, off ? "disabled" : "enabled"]),
+  );
+  for (const [label, state] of Object.entries(changes)) {
+    if (state === undefined) delete entries[label];
+    else entries[label] = state;
+  }
+  return printDisabled(entries);
 }
 
 function scriptedListRunner(): ScriptedProcessRunner {
@@ -4646,6 +5174,7 @@ describe("IosSimctlDriver device set", () => {
   interface Step {
     readonly args: readonly string[];
     readonly scoped: boolean;
+    readonly sources?: true;
     readonly stdout?: string;
   }
 
@@ -4654,24 +5183,39 @@ describe("IosSimctlDriver device set", () => {
   }
 
   it.each([
-    ["unset", {}, deviceRoot, true],
-    ["simlock", { deviceSet: "simlock" }, deviceRoot, true],
-    ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`, false],
+    ["unset", {}, deviceRoot, true, `${deviceRoot}/sources`],
+    ["simlock", { deviceSet: "simlock" }, deviceRoot, true, `${deviceRoot}/sources`],
+    [
+      "default",
+      { deviceSet: "default" },
+      `${coreSimulatorRoot}/Devices`,
+      false,
+      "/home/.simlock/devices/ios-sources",
+    ],
   ] as const)(
     "the driver given deviceSet %s runs every simctl call with or without --set",
-    async (_case, config, devicesDir, scoped) => {
+    async (_case, config, devicesDir, scoped, sourcesSet) => {
       const steps: Step[] = [
         { args: ["list", "-j", "devicetypes", "runtimes"], scoped: true, stdout: listFixture },
         {
-          args: ["create", driverData.name, driverData.deviceTypeId, driverData.runtimeId],
+          args: ["create", "simlock-seed-device-1", driverData.deviceTypeId, driverData.runtimeId],
           scoped: true,
+          sources: true,
+          stdout: `${seedUdid}\n`,
+        },
+        { args: ["boot", seedUdid], scoped: true, sources: true },
+        { args: ["bootstatus", seedUdid, "-b"], scoped: true, sources: true },
+        { args: ["listapps", seedUdid], scoped: true, sources: true },
+        { args: ["shutdown", seedUdid], scoped: true, sources: true },
+        {
+          args: ["clone", seedUdid, driverData.name, devicesDir],
+          scoped: true,
+          sources: true,
           stdout: `${driverData.udid}\n`,
         },
         { args: ["boot", driverData.udid], scoped: true },
         { args: ["bootstatus", driverData.udid, "-b"], scoped: true },
         { args: ["listapps", driverData.udid], scoped: true },
-        { args: ["shutdown", driverData.udid], scoped: true },
-        { args: ["erase", driverData.udid], scoped: true },
         { args: ["shutdown", driverData.udid], scoped: true },
         { args: ["delete", driverData.udid], scoped: true },
         { args: ["list", "-j", "devices"], scoped: true, stdout: emptyDevices },
@@ -4683,7 +5227,11 @@ describe("IosSimctlDriver device set", () => {
         { args: ["list", "-j", "devices"], scoped: false, stdout: emptyDevices },
       ];
       const argvOf = (step: Step): string[] =>
-        step.scoped && scoped ? simctlArgs(...step.args) : ["simctl", ...step.args];
+        step.sources === true
+          ? ["simctl", "--set", sourcesSet, ...step.args]
+          : step.scoped && scoped
+            ? simctlArgs(...step.args)
+            : ["simctl", ...step.args];
       const runner = new ScriptedProcessRunner(
         steps.map((step) => ({
           match: { args: argvOf(step), command: "xcrun" },
@@ -4696,6 +5244,7 @@ describe("IosSimctlDriver device set", () => {
       await plantDevice(filesystem, devicesDir);
       if (scoped) await plantManagedDevice(filesystem);
       const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: scoped ? { deviceRoot, ...config } : config,
@@ -4709,8 +5258,10 @@ describe("IosSimctlDriver device set", () => {
 
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
       await driver.provision(spec);
+      await expect(filesystem.exists(`${sourcesSet}/${OWNED_ROOT_MARKER_FILE}`)).resolves.toBe(
+        !scoped,
+      );
       await driver.makeReady(device, prepareFull);
-      await driver.reclaim(device, { clean: "standard" });
       await driver.destroy(device);
       await driver.listManaged();
       await driver.removeComponent(
@@ -4735,8 +5286,9 @@ describe("IosSimctlDriver device set", () => {
   ] as const)(
     "refuses iOS with invalid-device-set when deviceSet is %s",
     async (_case, config, root, detail) => {
-      const create = (driverConfig: Record<string, string | number | boolean>) =>
+      const create = async (driverConfig: Record<string, string | number | boolean>) =>
         IosSimctlDriver.create({
+          database: await memorySourceDatabase(),
           clock: new FakeClock(),
           coreSimulatorRoot,
           driverConfig,
@@ -4785,8 +5337,34 @@ describe("IosSimctlDriver device set", () => {
           await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
         },
         {
-          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${second}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
           path: ownRoot,
+          reason: "device-set-changed",
+        },
+      ],
+      [
+        "default with a seed in the sources set Simlock's own set held",
+        { deviceSet: "default" },
+        async (fs) => {
+          await fs.mkdirp(`${ownRoot}/sources/${third}`);
+          await fs.mkdirp(`${ownRoot}/${first}`);
+          await fs.writeFileAtomic(`${ownRoot}/${OWNED_ROOT_MARKER_FILE}`, "{}");
+        },
+        {
+          message: `Refusing the ios device set: Simlock's own set at ${ownRoot} still holds 2 simulator(s) (${first}, ${third}). Set drivers.ios.deviceSet back to simlock, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${ownRoot}/sources delete <udid>\`.`,
+          path: ownRoot,
+          reason: "device-set-changed",
+        },
+      ],
+      [
+        "simlock with a seed in the sources set deviceSet default used",
+        { deviceSet: "simlock" },
+        async (fs) => {
+          await fs.mkdirp(`${ownRoot}-sources/${second}`);
+        },
+        {
+          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`.`,
+          path: `${ownRoot}-sources`,
           reason: "device-set-changed",
         },
       ],
@@ -4850,6 +5428,7 @@ describe("IosSimctlDriver device set", () => {
       await plant(filesystem);
       const runner = new ScriptedProcessRunner([]);
       const failure = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: config,
@@ -4876,7 +5455,7 @@ describe("IosSimctlDriver device set", () => {
     ["simlock", { deviceRoot, deviceSet: "simlock" }, deviceRoot],
     ["default", { deviceSet: "default" }, `${coreSimulatorRoot}/Devices`],
   ] as const)(
-    "a new or reclaimed simulator's marks name this instance under deviceSet %s",
+    "a new simulator's marks name this instance under deviceSet %s",
     async (setting, config, devicesDir) => {
       const scoped = setting === "simlock";
       const argv = (...args: string[]) => (scoped ? simctlArgs(...args) : ["simctl", ...args]);
@@ -4895,6 +5474,7 @@ describe("IosSimctlDriver device set", () => {
         if (scoped) await plantManagedDevice(filesystem);
         else await filesystem.mkdirp(`${devicesDir}/${driverData.udid}/data`);
         const driver = await IosSimctlDriver.create({
+          database: await seededDatabase(),
           clock: new FakeClock(),
           coreSimulatorRoot,
           driverConfig: config,
@@ -4906,25 +5486,25 @@ describe("IosSimctlDriver device set", () => {
         });
         return { driver, filesystem, runner };
       };
-      const device = { address: driverData.udid, deviceId: driverData.udid, driverData };
       const created = [
         argv("list", "-j", "devicetypes", "runtimes"),
-        argv("create", driverData.name, driverData.deviceTypeId, driverData.runtimeId),
+        [
+          "simctl",
+          "--set",
+          scoped ? `${deviceRoot}/sources` : "/home/.simlock/devices/ios-sources",
+          "clone",
+          seedUdid,
+          driverData.name,
+          devicesDir,
+        ],
       ];
 
       const { driver, filesystem } = await driverFor([
         [created[0] ?? [], listFixture],
         [created[1] ?? [], `${driverData.udid}\n`],
-        [argv("shutdown", driverData.udid)],
-        [argv("erase", driverData.udid)],
       ]);
       await driver.resolveSpec({ model: "iPhone 16", osVersion: "26.5", platform: "ios" });
       await driver.provision(spec);
-      for (const path of marks) {
-        expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
-      }
-      for (const path of marks) await filesystem.rm(path);
-      await driver.reclaim(device, { clean: "standard" });
       for (const path of marks) {
         expect(JSON.parse(await filesystem.readFile(path)), path).toMatchObject({ instanceId });
       }
@@ -4995,6 +5575,7 @@ describe("IosSimctlDriver device set", () => {
       },
     ]);
     const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       coreSimulatorRoot,
       driverConfig: { deviceSet: "default" },
@@ -5043,6 +5624,7 @@ describe("IosSimctlDriver device set", () => {
         }
       }
       return IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: { deviceSet: "default" },
@@ -5092,6 +5674,7 @@ describe("IosSimctlDriver device set", () => {
       await filesystem.writeFileAtomic("/dist/bin/simlock-screen-capture", "");
       const launcher = new FakeBytePipeLauncher();
       const driver = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
         clock: new FakeClock(),
         coreSimulatorRoot,
         driverConfig: config,
@@ -5135,6 +5718,7 @@ describe("IosSimctlDriver device set", () => {
 
   it("simlock simctl under deviceSet default runs plain xcrun simctl and keeps its refusals", async () => {
     const driver = await IosSimctlDriver.create({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       coreSimulatorRoot,
       driverConfig: { deviceSet: "default" },
@@ -5162,4 +5746,128 @@ describe("IosSimctlDriver device set", () => {
       );
     }
   });
+});
+
+describe("IosSimctlDriver simulator audio", () => {
+  const volumeState = "com.apple.springboard.volumestate";
+  const udid = driverData.udid;
+  const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
+
+  const silence = [
+    simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
+    simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
+  ];
+  const bootCalls = [
+    simctlArgs("boot", udid),
+    simctlArgs("bootstatus", udid, "-b"),
+    simctlArgs("listapps", udid),
+  ];
+  const readbackCall = simctlArgs("spawn", udid, "launchctl", "print-disabled", "system");
+
+  it.each([
+    {
+      name: "prepare",
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "recover",
+      options: { mode: "full", purpose: "recover" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "a slim prepare, silenced before the readback",
+      data: slimData,
+      options: { mode: "slim", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence, readbackCall],
+    },
+    {
+      name: "the setting true",
+      audio: true,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: bootCalls,
+    },
+    {
+      name: "a volume command that fails",
+      volume: { code: 1, stderr: "boom", stdout: "" },
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "boom",
+    },
+    {
+      name: "a volume command that times out",
+      volume: "hangs" as const,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "timed out",
+    },
+  ])(
+    "sets a simulator's volume to 0 before handing it on when ios.simulator.audio is false: $name",
+    async (c) => {
+      const data = c.data ?? driverData;
+      const silenceCall = (index: number, result?: ProcessResult) => ({
+        match: { args: silence[index]!, command: "xcrun" },
+        ...(result === undefined ? {} : { result }),
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", udid) },
+        { match: simctl("bootstatus", udid, "-b") },
+        { match: simctl("listapps", udid) },
+        ...(c.audio === true
+          ? []
+          : c.volume === "hangs"
+            ? [{ ...silenceCall(0), hangs: true }]
+            : c.volume !== undefined
+              ? [silenceCall(0, c.volume)]
+              : [silenceCall(0), silenceCall(1)]),
+        ...(c.options.mode === "slim"
+          ? [
+              {
+                match: simctl("spawn", udid, "launchctl", "print-disabled", "system"),
+                result: { code: 0, stderr: "", stdout: wantedReadback() },
+              },
+            ]
+          : []),
+      ]);
+      scopedRunners.push(runner);
+      const clock = new FakeClock();
+      const failures: SilenceFailedFact[] = [];
+      const driver = await IosSimctlDriver.create({
+        clock,
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceRoot },
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        onSilenceFailed: (fact) => failures.push(fact),
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+        simulatorAudio: c.audio ?? false,
+        slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+      });
+
+      const ready = driver.makeReady(
+        { address: udid, deviceId: udid, driverData: data },
+        c.options,
+      );
+      if (c.volume === "hangs") {
+        const state = promiseState(ready);
+        await waitForCalls(runner, c.expected.length);
+        clock.advance(29_999);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+        clock.advance(1);
+        await flushMicrotasks221();
+        expect(state.state).toBe("fulfilled");
+      }
+      const device = await ready;
+
+      expect(device.address).toBe(udid);
+      expect(runner.calls.map((call) => call.args)).toEqual(c.expected);
+      expect(failures).toEqual(
+        c.failure === undefined ? [] : [{ deviceId: udid, detail: c.failure }],
+      );
+    },
+  );
 });

@@ -8,15 +8,15 @@ Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGE
 
 ## Files
 
-| File               | Role                                                                                                                                      |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                                    |
-| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                                  |
-| `learned.ts`       | `warmPoolOwner` (`state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased, their 24 h peak, `forgetMatching` |
-| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered                  |
-| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                                               |
-| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                                        |
-| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                                    |
+| File               | Role                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                                                                                                                                                                                                                                                  |
+| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                                                                                                                                                                                                                                                |
+| `learned.ts`       | `warmPoolOwner` (version 2; `state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased (a baseline kind keys on the baseline name beside the plain kind), their 24 h peak, `forgetMatching`; each pass gives a baseline kind the baseline's current version, and `CatalogCheck` drops one whose baseline is removed or stale |
+| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered                                                                                                                                                                                                                                |
+| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                                                                                                                                                                                                                                                             |
+| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                                                                                                                                                                                                                                                      |
+| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                                                                                                                                                                                                                                                  |
 
 ## How it works
 
@@ -126,7 +126,7 @@ pool's own `state.db` tables, kept across restarts and cleared by nuke.
 
 ## Known gaps
 
-- **A warm target under `lease.identity` `fresh` costs one create per lease.** Each grant spends a
+- **A warm target costs one create per lease.** Every virtual device serves one lease (ADR 0061 §2), so each grant spends a
   device; the pool creates and boots the next one off the lease path. It holds a slot and RAM while
   it waits; a burst larger than `count` pays the boot.
 - **A failing target retries forever.** 1, 2, 4 … minutes, at most 10 apart, no attempt limit; each

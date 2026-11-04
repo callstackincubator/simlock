@@ -94,27 +94,28 @@ Some commands would break a device behind Simlock's back or hit every agent at o
 
 | Tool | Refused | Why |
 | --- | --- | --- |
-| simctl | `create`, `erase`, `delete` | Simlock creates and wipes devices itself. |
+| simctl | `create`, `erase`, `delete` | Simlock creates and deletes devices itself. |
 | simctl | `shutdown all` | Stops every agent's device. `shutdown <udid>` of your own is allowed. |
 | simctl | `runtime delete` | Deletes a runtime other devices use. |
 | simctl | `--set` or `--profiles` before the subcommand | Simlock chooses the device set, under both settings. |
 | adb | `kill-server` | Disconnects every leased emulator. |
+| adb | `disconnect`, with or without an address | Drops the connection of other leases' emulators. `adb shell echo disconnect` still runs. |
 | adb | `emu kill`, `emu avd stop` | Stops a device Simlock thinks is running. |
-| adb | `emu avd snapshot delete` | Deletes the snapshot Simlock restores the device from. |
+| adb | `emu avd snapshot`, except `list` | Can replace or delete the boot snapshot Simlock starts the device from. |
 | adb | any global flag before the subcommand except `-s`, `-t`, `-d`, `-e` | `-P`, `-H`, `-L` and others would point adb at another server. |
 
 ```json
-{"error":{"code":"USAGE","message":"Refusing `simlock simctl erase`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead."}}
+{"error":{"code":"USAGE","message":"Refusing `simlock simctl erase`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead."}}
 ```
 
-To get a clean device, release the lease and request a new one: Simlock wipes a device every time a lease ends.
+To get a clean device, release the lease and request a new one: Simlock deletes a simulator or emulator every time a lease ends, and the next lease gets a new one.
 
 ## Rules for agents
 
 Tell your agent to follow these. Simlock's separation keeps devices apart from careless tools; it does not stop an agent that sets out to reach another device.
 
 - **Use only the device your lease names.** Name it by its UDID or serial in every command. Never use `booted` or an `adb` command with no `-s` when other agents may be running.
-- **Never erase, delete, create or shut down devices yourself.** Release the lease instead. Simlock wipes the device and gives the next agent a clean one.
+- **Never erase, delete, create or shut down devices yourself.** Release the lease instead. Simlock deletes the device and gives the next agent a new one.
 - **Never stop or restart the adb server, and never point `adb` or `simctl` at another server or device set.**
 - **Release the lease when you are done.** A lease nobody releases holds the device until its TTL runs out, and other agents wait in the queue.
 - **Do not rely on anything surviving a release.** Apps, files, settings and logs are wiped with the device.

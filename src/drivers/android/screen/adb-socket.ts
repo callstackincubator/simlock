@@ -55,7 +55,8 @@ interface DeviceSocketRequest {
   // Simlock's own for an emulator, port 5037 for a physical phone.
   readonly connect: (timeoutMs: number) => Promise<TcpStream>;
   readonly serial: string;
-  readonly socketName: string;
+  // why: the host-protocol service the socket is opened to: `localabstract:<name>` for a device socket, `tcp:<port>` for a device port.
+  readonly service: string;
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
 }
@@ -80,7 +81,7 @@ export async function openDeviceSocket(request: DeviceSocketRequest): Promise<De
       stream.close();
       return { kind: "no-transport", reason: transport };
     }
-    await stream.write(adbHostRequest(`localabstract:${request.socketName}`));
+    await stream.write(adbHostRequest(request.service));
     const socket = await readReply(reader);
     if (socket !== undefined) {
       stream.close();

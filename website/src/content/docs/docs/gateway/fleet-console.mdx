@@ -55,6 +55,10 @@ A disconnected worker stays in the list for 24 hours by default (`gateway.discon
 
 **Leases** lists the leases on every worker, both those made through the gateway and those agents on a worker machine took directly from it. The lease's **Worker** fact names and links the worker that holds it. A lease made through the gateway has an id made of the worker's id, a dot, and the worker's own lease id, unless the agent chose the id.
 
+## Baselines
+
+**Baselines** lists every worker's baselines. On a gateway it adds a **Worker** column that names the worker holding each one.
+
 ## Why a request waits
 
 On **Waiting**, a request's **Queue** says where it waits: `the gateway's queue` while the gateway looks for a worker. Under it, the console names each worker and why that worker did not take the request:

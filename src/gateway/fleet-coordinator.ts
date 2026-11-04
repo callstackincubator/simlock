@@ -43,7 +43,15 @@
  * `WORKER_UNREACHABLE` when a target is not reachable *right now*, and nothing more.
  */
 import type { EventBus, EventMap } from "../bus/index.js";
-import type { LeaseGrant, LeaseRecord, SimlockAdminClient } from "../admin/index.js";
+import type {
+  BaselineSaveInput,
+  BaselineSaveOutput,
+  LeaseGrant,
+  LeaseRecord,
+  RotateInput,
+  RotateOutput,
+  SimlockAdminClient,
+} from "../admin/index.js";
 import {
   isSimlockError,
   requestedClass,
@@ -112,6 +120,9 @@ const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
   NO_DRIVER: "no-driver",
   RUNTIME_MISSING: "runtime-missing",
   UNKNOWN_MODEL: "unknown-model",
+  UNKNOWN_BASELINE: "no-baseline",
+  BASELINE_MISMATCH: "baseline-mismatch",
+  BASELINE_STALE: "baseline-stale",
 };
 
 // why: the filters that hold a worker back only for now (it is full, busy, not ready or unhealthy), so it could take the request later; any other reason (drained, disconnected, a missing driver, runtime, model or capability) means it will not take it by waiting.
@@ -131,6 +142,9 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "RUNTIME_MISSING",
   "NO_DRIVER",
   "CAPABILITY_MISSING",
+  "UNKNOWN_BASELINE",
+  "BASELINE_MISMATCH",
+  "BASELINE_STALE",
 ]);
 
 export interface FleetExecInput {
@@ -138,6 +152,11 @@ export interface FleetExecInput {
   readonly tool: string;
   readonly args: readonly string[];
   readonly stdin?: string;
+}
+
+export interface FleetRotateInput {
+  readonly leaseId: string;
+  readonly orientation: RotateInput["orientation"];
 }
 
 export interface FleetLeaseCoordinatorOptions {
@@ -402,6 +421,33 @@ export class FleetLeaseCoordinator {
     return this.#projectRecord(record, entry);
   }
 
+  /**
+   * why: ADR 0061 §6: a save goes to the worker that holds the lease, by its own lease id; it ends the lease, so the index entry goes as after a release, and the answer waits for a view read with the worker's baselines, so a request after it sees the new copy.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  async saveBaseline(
+    gatewayLeaseId: string,
+    input: Pick<BaselineSaveInput, "name" | "note">,
+  ): Promise<BaselineSaveOutput> {
+    const entry = this.#requireEntry(gatewayLeaseId);
+    let saved: BaselineSaveOutput;
+    try {
+      saved = await this.#forwardToWorker(entry.workerId, (client) =>
+        client.saveBaseline({
+          leaseId: entry.workerLeaseId,
+          name: input.name,
+          ...(input.note === undefined ? {} : { note: input.note }),
+        }),
+      );
+    } catch (error: unknown) {
+      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
+      throw error;
+    }
+    this.options.leaseIndex.remove(gatewayLeaseId);
+    await this.options.directory.target(entry.workerId)?.refresh({ includeCatalog: true });
+    return { ...saved, leaseId: gatewayLeaseId };
+  }
+
   async release(gatewayLeaseId: string): Promise<void> {
     const entry = this.#requireEntry(gatewayLeaseId);
     try {
@@ -578,6 +624,41 @@ export class FleetLeaseCoordinator {
   }
 
   /**
+   * why: `device.rotate` forwarded to the worker that owns the lease, with the lease's own namespaced requester, bounded by `gateway.execTimeoutMs` like `exec`. A worker names the lease by its own id in any coded error; the caller holds the gateway's id, so the error names that instead.
+   */
+  async rotate(input: FleetRotateInput, _session: DispatchSession): Promise<RotateOutput> {
+    const entry = this.#requireEntry(input.leaseId);
+    const requesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
+    try {
+      const rotated = await this.#forwardToWorker(entry.workerId, (client) =>
+        this.#withExecTimeout(
+          client.rotate(entry.workerLeaseId, input.orientation, { requesterId }),
+          entry.workerId,
+          () => undefined,
+          "device.rotate",
+        ),
+      );
+      return { leaseId: input.leaseId, orientation: rotated.orientation };
+    } catch (error) {
+      throw this.#namedForCaller(error, entry);
+    }
+  }
+
+  #namedForCaller(error: unknown, entry: FleetLeaseEntry): unknown {
+    if (!(error instanceof DispatchError)) return error;
+    const details =
+      typeof error.details === "object" && error.details !== null ? error.details : undefined;
+    const names = (details as { leaseId?: unknown } | undefined)?.leaseId === entry.workerLeaseId;
+    const message = replaceWholeId(error.message, entry.workerLeaseId, entry.gatewayLeaseId);
+    if (!names && message === error.message) return error;
+    return new DispatchError(
+      error.code,
+      message,
+      names ? { ...details, leaseId: entry.gatewayLeaseId } : error.details,
+    );
+  }
+
+  /**
    * Races a forwarded `device.exec` against `gateway.execTimeoutMs` (ADR §19e). Before this,
    * `exec` awaited `client.exec` unbounded -- a worker that never answers at all (the case this
    * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
@@ -593,6 +674,7 @@ export class FleetLeaseCoordinator {
     promise: Promise<Value>,
     workerId: string,
     onTimeout: () => void,
+    operation = "device.exec",
   ): Promise<Value> {
     return this.#raceTimeout(
       promise,
@@ -600,7 +682,7 @@ export class FleetLeaseCoordinator {
       () =>
         new DispatchError(
           "EXEC_TIMEOUT",
-          `Worker ${workerId} did not answer device.exec within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
+          `Worker ${workerId} did not answer ${operation} within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
         ),
       onTimeout,
     );
@@ -1065,6 +1147,14 @@ export class FleetLeaseCoordinator {
           detached = true;
         },
       );
+      // why: the grant crossed a wire; a worker must not be able to crash the gateway with an answer without a lease, so it fails this attempt like any other worker failure.
+      if (typeof (grant as Partial<LeaseGrant> | null)?.lease?.id !== "string") {
+        throw new DispatchError(
+          "INTERNAL",
+          `Worker ${workerId} answered lease.request with a malformed grant`,
+          { workerId },
+        );
+      }
     } catch (error: unknown) {
       // P1 (round 2 review): "an *immediate* NO_CAPACITY is the only answer that leaves it
       // queued ... the request waits" (§11) -- `announced` is exactly the "work has begun"
@@ -1546,8 +1636,24 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
+    ...(waiter.request.baseline === undefined ? {} : { baseline: waiter.request.baseline }),
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
   };
+}
+
+// why: a lease id is replaced only as a whole token, so a short id inside a longer word or id is left alone.
+function replaceWholeId(text: string, id: string, replacement: string): string {
+  const isIdCharacter = (character: string | undefined): boolean =>
+    character !== undefined && /[\w-]/.test(character);
+  let result = "";
+  let from = 0;
+  for (let at = text.indexOf(id); at !== -1; at = text.indexOf(id, from)) {
+    const end = at + id.length;
+    const whole = !isIdCharacter(text[at - 1]) && !isIdCharacter(text[end]);
+    result += text.slice(from, at) + (whole ? replacement : id);
+    from = end;
+  }
+  return result + text.slice(from);
 }

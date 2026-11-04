@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 A worker limits two numbers per platform:
 
 - **Managed devices**: how many simulators or emulators may exist, booted or shut down.
-- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being wiped after a lease, or quarantined.
+- **Running devices**: how many may be booted at once. A device counts as running while it is ready, leased, being deleted after its lease, or quarantined.
 
 A capacity strategy sets these limits. The default, `resource`, sizes them from the machine's CPU and RAM. The `fixed` strategy uses a number you write down. Physical devices never count against either limit.
 
@@ -123,7 +123,7 @@ A slim iOS simulator has background services turned off that most agent work doe
 What to expect:
 
 - **Full is a promise, slim is best effort.** A `full` request never gets a slim device. A `slim` request on an iOS runtime older than 18.5, or for any Android device, gets a full device instead of failing. The lease reports the mode the device really has.
-- **Slim costs a second boot.** A slim simulator boots, has its services turned off, and boots again. Each boot may take up to `ios.slim.bootTimeoutMs` (10 minutes by default).
+- **Slim is checked after the boot.** A slim simulator has its services turned off before it boots, then boots once, and may take up to `ios.slim.bootTimeoutMs` (10 minutes by default). After the boot Simlock checks which services are off. If they do not match, the lease gets a full device and the worker log says why.
 - **Modes are kept apart.** Every worker makes both kinds, and a request only reuses an idle device of the mode it asked for.
 
 To fit more slim simulators in the RAM budget, give them a smaller size:
@@ -147,18 +147,18 @@ To fit more slim simulators in the RAM budget, give them a smaller size:
 }
 ```
 
-- A device counts at the full size until it has booted, because a slim device boots full first. Creating any device needs room for the full size.
+- A device counts at the full size until it has booted, because a device is only known to be slim once it has booted and been checked. Creating any device needs room for the full size.
 - After it boots, a device counts by the mode it has. A slim request that got a full device counts as full.
 - Booting a shut-down device, slim or full, needs room for its full size, since a shut-down device holds none. If there is none, it stays shut down and the request waits.
 - If you restart with larger sizes than the devices were created under, the budget can show `(over limit)`. Until enough RAM is free, no new device is created and no shut-down device boots if its full size does not fit.
 
 ## Keep devices booted: the warm pool
 
-The warm pool keeps idle devices booted, wiped and unleased, so a lease is granted without waiting for a boot. It is on by default.
+The warm pool keeps idle devices booted and unleased, so a lease is granted without waiting for a boot. It is on by default.
 
 It works from two lists:
 
-- **Kinds it learned.** Each time a device is leased, the pool records its kind (platform, model, OS version and mode). It then keeps as many of that kind booted as were leased at once at the busiest moment of the last 24 hours, at least one. It remembers up to 32 kinds per platform, dropping the oldest. The list survives a daemon restart.
+- **Kinds it learned.** Each time a device is leased, the pool records its kind (platform, model, OS version and mode, and the baseline when the lease named one). A baseline kind and a plain kind of the same model are two kinds; the pool keeps copies of the baseline's newest version. It then keeps as many of that kind booted as were leased at once at the busiest moment of the last 24 hours, at least one. It remembers up to 32 kinds per platform, dropping the oldest. The list survives a daemon restart.
 - **Targets you set.** `warmPool.targets` names kinds to keep booted ahead of any lease.
 
 ```json title="~/.simlock/config.json"
@@ -203,16 +203,17 @@ The pool stops keeping the kind's devices. The [cleanup rules](/simlock/docs/wor
 
 ### Read the warm pool in `simlock status`
 
-Each target and each learned kind gets a line under `warm pool`. The word after the name says where the line came from: `configured` for a `warmPool.targets` entry, `learned` for a kind the worker leased. A kind that is both is one `configured` line, wanted the larger of the two counts. An Android kind with an image tag shows the tag after the mode. A learned kind the pool forgets leaves the list on the next pass. With the warm pool off, nothing is learned and only the targets are listed; with `warmPool.learn: false`, only the targets are listed.
+Each target and each learned kind gets a line under `warm pool`. The word after the name says where the line came from: `configured` for a `warmPool.targets` entry, `learned` for a kind the worker leased. A kind that is both is one `configured` line, wanted the larger of the two counts. An Android kind with an image tag shows the tag after the mode, and a kind made from a baseline shows `baseline` and its name last. A learned kind the pool forgets leaves the list on the next pass. With the warm pool off, nothing is learned and only the targets are listed; with `warmPool.learn: false`, only the targets are listed.
 
 ```text
 warm pool: enabled, reserve ios 1 android 0
   iPhone 16 / 26.0 / full   configured   wanted 2  ready 1  booting 1
   iPhone 15 / 18.4 / full   learned   wanted 1  ready 1  booting 0
   Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 0  booting 0  short: running-limit
+  iPhone 16 / 26.0 / full / baseline checkout   learned   wanted 1  ready 1  booting 0
 ```
 
-`simlock status --json` carries the same in `warmPool.targets[]`: `origin` (`configured` or `learned`) and, when the kind names one, `imageTag`. `simlock doctor` and the `warm-pool.target-missed` event cover the configured targets only.
+`simlock status --json` carries the same in `warmPool.targets[]`: `origin` (`configured` or `learned`) and, when the kind names one, `imageTag` and `baseline` (the name). `simlock doctor` and the `warm-pool.target-missed` event cover the configured targets only.
 
 `short` says why the last pass could do nothing for a target:
 
@@ -231,12 +232,8 @@ warm pool: enabled, reserve ios 1 android 0
 
 A target that is filling, or waiting behind a queued lease request, shows no reason. `simlock doctor` also warns when targets add up to more devices than the running limit allows.
 
-## Reuse or replace devices: lease identity
+## One lease per device: lease identity
 
-By default a released device is wiped and kept for a later lease. Set `lease.identity.ios` to `fresh` to give every iOS lease a new simulator, deleted when the lease ends, so no simulator ever serves two leases.
+Every simulator and emulator serves one lease and is deleted when it ends, whatever `lease.identity` says. `lease.identity.ios` and `lease.identity.android` are still accepted and stored, but they no longer change anything.
 
-```sh
-simlock config set lease.identity.ios fresh
-```
-
-Under `fresh`, every lease pays for a create and a boot unless the warm pool has a device of that kind ready. Each device keeps the setting it was created with. `lease.identity.android` accepts `fresh` too, but it is designed for iOS.
+A new iOS simulator is a copy of a simulator Simlock booted once, the seed. Simlock makes one seed for each model and iOS version the first time a lease needs it, keeps it shut down in a device set of its own, and copies it for every lease, so a lease after the first of its kind waits for a short boot, not a factory first boot. `simlock doctor` lists the seeds with their size, and `simlock nuke --delete-devices` deletes them. Removing a runtime deletes the seeds made from it. Android emulators are created for each lease until Android seeds exist.

@@ -3,6 +3,16 @@ import type { Filesystem, ProcessRunner } from "../../ports/index.js";
 import { adbPath, emulatorPath, locateSdk, sdkToolBin } from "./sdk-paths.js";
 
 const SDKMANAGER_TIMEOUT_MS = 30_000;
+const EMULATOR_HELP_TIMEOUT_MS = 30_000;
+/** why: every flag `AndroidDriver` puts on each emulator launch; an emulator that does not list one exits at start (#1199). */
+const REQUIRED_EMULATOR_FLAGS = [
+  "-avd",
+  "-port",
+  "-no-snapshot-save",
+  "-grpc",
+  "-grpc-use-token",
+  "-crash-report-mode",
+] as const;
 const COMMAND_LINE_TOOLS_PAGE = "https://developer.android.com/studio#command-line-tools-only";
 
 interface AndroidPrerequisitesOptions {
@@ -14,11 +24,6 @@ interface AndroidPrerequisitesOptions {
   readonly processRunner: ProcessRunner;
 }
 
-/**
- * What the Android driver needs and Simlock never installs: an SDK with `cmdline-tools`,
- * `emulator` and `platform-tools`, and a JDK `sdkmanager` can run on. Looks where driver
- * discovery looks, through the same functions, and starts no process but `sdkmanager --version`.
- */
 export function androidPrerequisites(options: AndroidPrerequisitesOptions): PrerequisiteCheck {
   return {
     check: () => missingAndroidPrerequisites(options),
@@ -62,7 +67,8 @@ async function missingAndroidPrerequisites(
         `${root}/cmdline-tools/latest; sdkmanager cannot install itself.`,
     });
   }
-  if (!(await options.filesystem.exists(emulatorPath(root, platform)))) {
+  const emulator = emulatorPath(root, platform);
+  if (!(await options.filesystem.exists(emulator))) {
     missing.push({
       message: `The Android emulator package is not installed in ${root}.`,
       prerequisite: "android-emulator",
@@ -80,7 +86,38 @@ async function missingAndroidPrerequisites(
     const jdk = await missingJdk(options.processRunner, tools.sdkmanager);
     if (jdk !== undefined) missing.push(jdk);
   }
+  missing.push(...(await outdatedEmulatorIfInstalled(options.processRunner, emulator, missing)));
   return missing;
+}
+
+async function outdatedEmulatorIfInstalled(
+  processRunner: ProcessRunner,
+  emulator: string,
+  missing: readonly MissingPrerequisite[],
+): Promise<MissingPrerequisite[]> {
+  if (missing.some((found) => found.prerequisite === "android-emulator")) return [];
+  const outdated = await outdatedEmulator(processRunner, emulator);
+  return outdated === undefined ? [] : [outdated];
+}
+
+async function outdatedEmulator(
+  processRunner: ProcessRunner,
+  emulator: string,
+): Promise<MissingPrerequisite | undefined> {
+  const result = await processRunner.run(emulator, ["-help"], {
+    timeoutMs: EMULATOR_HELP_TIMEOUT_MS,
+  });
+  // why: some emulators print their usage to stderr.
+  const usage = `${result.stdout}\n${result.stderr}`;
+  const unsupported = REQUIRED_EMULATOR_FLAGS.filter(
+    (flag) => !new RegExp(`^\\s*${flag}(?:\\s|$)`, "m").test(usage),
+  );
+  if (unsupported.length === 0) return undefined;
+  return {
+    message: `The installed Android emulator does not accept ${unsupported.join(", ")}, which Simlock passes on every launch.`,
+    prerequisite: "android-emulator",
+    remedy: "Run `sdkmanager --install emulator`.",
+  };
 }
 
 /**

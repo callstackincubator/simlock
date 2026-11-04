@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -39,9 +39,12 @@ import {
   Registry,
   registryOwner,
   warmPoolOwner,
+  baselinesOwner,
   Nuke,
   SerializedDecision,
+  stableError,
   sweepWriteLeftovers,
+  toDriverDevice,
 } from "../core/index.js";
 import { createLeasing } from "../leasing/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
@@ -54,13 +57,16 @@ import {
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidDeviceDataTable,
+  androidSourceDataOwner,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
+  type SilenceFailedFact,
   type SlimmedFact,
   iosDeviceDataTable,
+  iosSourceDataOwner,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
@@ -103,6 +109,7 @@ import {
   type UpdaterLauncher,
   NodeBytePipeLauncher,
   NodeTcpProbe,
+  NodeTcpListenerFactory,
   NodeTcpStreamConnector,
   daemonDataDirectory,
   resolveDaemonSocketPath,
@@ -116,6 +123,10 @@ import {
   type TcpProbe,
   FetchWebhookPoster,
   type WebhookPoster,
+  defaultWorkerLockPath,
+  NodeWorkerLock,
+  type WorkerLockHandle,
+  type SqliteDatabase,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -135,6 +146,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
@@ -195,6 +207,8 @@ export interface StartDaemonOptions {
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
+  /** why: test-only, moves the worker lock (never decides whether it is taken). */
+  readonly workerLockPath?: string;
   /** why: test-only, replaces the poster a gateway's alerts send through. */
   readonly webhookPoster?: WebhookPoster;
 }
@@ -243,6 +257,7 @@ function updateOptionsFor(
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
   let opened: StateDatabase | undefined;
   let check: VersionCheck | undefined;
+  let workerLock: WorkerLockHandle | undefined;
   try {
     return await composeDaemon(
       options,
@@ -252,12 +267,17 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
       (started) => {
         check = started;
       },
+      (lock) => {
+        workerLock = lock;
+      },
     );
   } catch (error: unknown) {
     // why: the check's 24 h timer would keep a failed start's process alive and re-ask npm; a running daemon disposes it in `dispose`.
     check?.dispose();
     // why: a start that fails after `state.db` opened must not hold the file; a running daemon closes it in `dispose`.
     opened?.close();
+    // why: a start that fails after taking the worker lock must not leave a lock that blocks the next worker; a running daemon releases it in `dispose`.
+    await workerLock?.release().catch(() => undefined);
     throw error;
   }
 }
@@ -267,6 +287,7 @@ async function composeDaemon(
   options: StartDaemonOptions,
   onStateOpened: (state: StateDatabase) => void,
   onVersionCheck: (check: VersionCheck) => void,
+  onWorkerLock: (lock: WorkerLockHandle) => void,
 ): Promise<DaemonServer> {
   const version = options.version ?? readPackageVersion();
   const role = options.role ?? "worker";
@@ -342,7 +363,15 @@ async function composeDaemon(
     owners:
       role === "gateway"
         ? [tokensOwner, drainedWorkersOwner]
-        : [registryOwner, warmPoolOwner, tokensOwner, ...new Set(deviceDataTables.values())],
+        : [
+            registryOwner,
+            warmPoolOwner,
+            baselinesOwner,
+            tokensOwner,
+            iosSourceDataOwner,
+            androidSourceDataOwner,
+            ...new Set(deviceDataTables.values()),
+          ],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -414,11 +443,29 @@ async function composeDaemon(
     idGenerator,
     path: join(dataDirectory, "instance.json"),
   });
+  // why: only a worker whose drivers are discovered touches the machine's adb server, console ports and runtimes; substituted drivers touch none (ADR 0059 §1).
+  let workerLock: WorkerLockHandle | undefined;
+  if (options.drivers === undefined && process.env.SIMLOCK_DRIVERS_MODULE === undefined) {
+    workerLock = await new NodeWorkerLock({
+      filesystem,
+      path:
+        options.workerLockPath ??
+        defaultWorkerLockPath(process.platform, process.getuid?.() ?? 0, tmpdir()),
+      processSupervisor,
+      uid: process.platform === "win32" ? undefined : process.getuid?.(),
+    }).take({
+      folder: dataDirectory,
+      pid: process.pid,
+      startedAt: new Date(clock.now()).toISOString(),
+    });
+    onWorkerLock(workerLock);
+  }
   const { drivers, prerequisiteChecks, rejections } =
     options.drivers === undefined
       ? await discoverDrivers({
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
+          database: state.database,
           driversConfig: config.drivers,
           eventBus,
           filesystem,
@@ -430,6 +477,7 @@ async function composeDaemon(
           processRunner,
           processSupervisor,
           simlockHome: dataDirectory,
+          simulatorAudio: config.ios.simulator.audio,
           slim: config.ios.slim,
           slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
@@ -492,6 +540,9 @@ async function composeDaemon(
   // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
   let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
   const catalog = new DriverCatalog(drivers);
+  const leaseInputs = createLeaseInputs({
+    openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+  });
   const moduleHost = await createModuleHost({
     config,
     defaulted,
@@ -516,9 +567,14 @@ async function composeDaemon(
       processRunner,
       processSupervisor,
       registry,
-      inputs: {
-        openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
+      deviceTcp: {
+        connect: (platform, device, devicePort, signal) =>
+          catalog.connectDevicePort(platform, device, devicePort, signal),
+        supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
+        reverse: (platform, device, devicePort, signal) =>
+          catalog.reverseDevicePort(platform, device, devicePort, signal),
       },
+      inputs: leaseInputs,
       screens: catalog,
       tcpProbe,
     },
@@ -536,7 +592,7 @@ async function composeDaemon(
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [...moduleHost.leaseEndParticipants],
+    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
     logger,
     modelPreferences,
   });
@@ -588,6 +644,7 @@ async function composeDaemon(
   let resolveGatewayStarted: (() => void) | undefined;
   let rejectGatewayStarted: ((error: unknown) => void) | undefined;
   let socketClaimed = false;
+  let lockClaim: Promise<unknown> = Promise.resolve();
   const gatewayStarted: Promise<void> = config.http.enabled
     ? new Promise<void>((resolve, reject) => {
         resolveGatewayStarted = resolve;
@@ -612,6 +669,28 @@ async function composeDaemon(
       processSupervisor,
       ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
     });
+    // why: before any request is served, so a tunnel rule a stopped daemon left is gone before a lease uses its device; each driver proves a device its own first.
+    await Promise.all(
+      drivers.map(async (driver) => {
+        try {
+          await driver.deviceTcp?.sweep(
+            registry.snapshot.devices
+              .filter(
+                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
+              )
+              .map((device) => ({
+                device: toDriverDevice(device),
+                leased: device.state === "leased",
+              })),
+          );
+        } catch (error) {
+          logger.warn("A driver's start sweep of tunnel rules failed", {
+            error: stableError(error),
+            platform: driver.platform,
+          });
+        }
+      }),
+    );
     await leasing.settleRequests();
     const read = await core.readStartup();
     const steps = [
@@ -665,6 +744,7 @@ async function composeDaemon(
     logger: logger.child("server"),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     passthrough: core.catalog,
+    inputs: leaseInputs,
     processRunner,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,
@@ -682,6 +762,7 @@ async function composeDaemon(
     nuke,
     registry,
     warmKinds: core.warmKinds,
+    baselines: core.baselines,
     stalls: { claims: core.claimReader, drivers },
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
@@ -707,6 +788,8 @@ async function composeDaemon(
       stopping = true;
       await leasing.settle();
       await core.drain();
+      // why: after the reclaims settled, so a device that just came back ready is shut down too; before `dispose`, which stops adb.
+      await core.shutdownIdle();
     },
     // why: Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
     dispose: async () => {
@@ -726,6 +809,8 @@ async function composeDaemon(
           });
         }
       }
+      // why: ADR 0059: after the drivers are disposed, so no other worker sweeps while this one still acts on devices.
+      await workerLock?.release();
       await eventHistory.stop();
       state.close();
     },
@@ -758,6 +843,10 @@ async function composeDaemon(
     // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
     onSocketClaimed: () => {
       socketClaimed = true;
+      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).then(
+        () => undefined,
+        (error: unknown) => error ?? new Error("worker lock check failed"),
+      );
       startHistory(
         eventHistory,
         logger,
@@ -841,6 +930,11 @@ async function composeDaemon(
     if (!socketClaimed) resolveGatewayStarted?.();
   });
   const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
+  const lockFailure = await lockClaim;
+  if (lockFailure !== undefined) {
+    await daemon.stop().catch(() => undefined);
+    throw lockFailure;
+  }
   if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
     // why: The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
     // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
@@ -946,7 +1040,13 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
     views: gatewayService.workers,
   });
   const gatewayOwnerRoutedFacts = new GatewayOwnerRoutedFacts(eventBus, leaseIndex);
-  const gatewayRelay = new GatewayRelay({ clock, directory: gatewayService });
+  const gatewayRelay = new GatewayRelay({
+    clock,
+    directory: gatewayService,
+    ...(config.http.proxyAuth === undefined
+      ? {}
+      : { proxyAuthHeader: config.http.proxyAuth.header }),
+  });
   // why: a test reaches the gateway's relay through this callback.
   options.gatewayRelay?.(gatewayRelay);
   const moduleHost = await createModuleHost({
@@ -1198,6 +1298,7 @@ function errorMessage(error: unknown): string {
 export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
@@ -1221,6 +1322,7 @@ export interface DriverDiscoveryContext {
     readonly bootTimeoutMs: number;
   };
   readonly slimByDefault?: boolean;
+  readonly simulatorAudio?: boolean;
   readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
@@ -1333,11 +1435,13 @@ async function discoverIosDriver(
     const driver = await IosSimctlDriver.create({
       clock: options.clock,
       coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+      database: options.database,
       driverConfig: options.driversConfig["ios"] ?? {},
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: logger.child("ios"),
+      onSilenceFailed: logSilenceFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       screenCapture: {
         baseEnvironment: process.env,
@@ -1355,6 +1459,7 @@ async function discoverIosDriver(
       },
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
+      ...(options.simulatorAudio === undefined ? {} : { simulatorAudio: options.simulatorAudio }),
       ...(options.slim === undefined ? {} : { slim: options.slim }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
@@ -1378,10 +1483,19 @@ async function discoverIosDriver(
   }
 }
 
+export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => void {
+  return (fact) => {
+    logger.warn("Could not silence iOS simulator", {
+      deviceId: fact.deviceId,
+      detail: fact.detail,
+    });
+  };
+}
+
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
   if (diagnostic.kind === "snapshot-cold-boot") {
     logger.warn("Android snapshot boot fell back to a cold boot", {
-      avdName: diagnostic.avdName,
+      deviceId: diagnostic.deviceId,
       readyAfterMs: diagnostic.readyAfterMs,
     });
     return;
@@ -1406,6 +1520,7 @@ async function discoverAndroidDriver(
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
+      database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       emulator: options.androidEmulator,
       env: process.env,
@@ -1420,6 +1535,7 @@ async function discoverAndroidDriver(
       processSupervisor: options.processSupervisor,
       scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
       simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
       tcpProbe: options.tcpProbe,
       tcpStreamConnector: new NodeTcpStreamConnector(),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the

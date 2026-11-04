@@ -414,6 +414,50 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.5.0](https://github.com/callstackincubator/simlock/compare/v0.4.2...v0.5.0) (2026-11-01)
+
+### What's Changed
+
+- chore(release): format the 0.4.2 changelog entry so Format passes by @V3RON in https://github.com/callstackincubator/simlock/pull/1163
+- fix(release): collapse blank-line runs in the changelog notes by @V3RON in https://github.com/callstackincubator/simlock/pull/1165
+- feat(daemon): device.rotate rotates a leased iOS simulator by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1122
+- feat(cli): simlock rotate and MCP rotate_device by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1123
+- feat(agent-device): the front answers orientation on an iOS simulator through device.rotate by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1124
+- docs(adr): 0053 the daemon owns each lease's device input, and device.rotate uses it by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1106
+- fix(http): SSE streams write an opening comment at once by @V3RON in https://github.com/callstackincubator/simlock/pull/1170
+- fix(android): write the adb server's output to logs/adb-server.log by @V3RON in https://github.com/callstackincubator/simlock/pull/1171
+- fix(http): /v1 JSON answers carry Cache-Control: no-store by @V3RON in https://github.com/callstackincubator/simlock/pull/1173
+- docs(adr): 0058 through a gateway, simlock adb and simctl send stdin only with --stdin by @V3RON in https://github.com/callstackincubator/simlock/pull/1175
+- feat(cli)!: through a gateway, simlock adb and simctl send stdin only with --stdin by @V3RON in https://github.com/callstackincubator/simlock/pull/1178
+- fix(android): refuse simlock adb disconnect by @V3RON in https://github.com/callstackincubator/simlock/pull/1180
+- feat(tunnel): reverse a leased Android device's port over a lease WebSocket on a worker by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1121
+- feat(tunnel): the gateway relays the tunnel socket to the lease's worker by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1125
+- feat(tunnel): simlock tunnel reverses a leased device's port to the caller (#1114) by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1126
+- feat(tunnel): simlock tunnel forward reaches a leased device's port from the caller's machine by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1127
+- docs(adr): 0054 a lease holder tunnels device ports to its own machine by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1111
+- fix(android): start the emulator with -crash-report-mode never by @V3RON in https://github.com/callstackincubator/simlock/pull/1186
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.2...v0.5.0
+
+## [0.4.2](https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2) (2026-10-31)
+
+### What's Changed
+
+- fix(e2e): slow-ios-smoke comment names the real reason the simulator stays Booted by @V3RON in https://github.com/callstackincubator/simlock/pull/1136
+- fix(agents): pr-body-check ignores an indented line after a non-checklist line by @V3RON in https://github.com/callstackincubator/simlock/pull/1142
+- fix(ios): read the version from a device-specific runtime id by @V3RON in https://github.com/callstackincubator/simlock/pull/1141
+- fix(android): leave hw.device.hash2 out of the config hash by @V3RON in https://github.com/callstackincubator/simlock/pull/1147
+- fix(ports): survive a client reset during uplink authenticate by @V3RON in https://github.com/callstackincubator/simlock/pull/1140
+- fix(android): bound the clean-baseline snapshot load at 60 s by @V3RON in https://github.com/callstackincubator/simlock/pull/1149
+- fix(cli): report an invalid config.json as USAGE, exit 2 by @V3RON in https://github.com/callstackincubator/simlock/pull/1148
+- fix(daemon): daemon stop shuts down idle devices (#1056) by @V3RON in https://github.com/callstackincubator/simlock/pull/1150
+- fix(config): config.get redacts secrets unless showSecrets is asked by @V3RON in https://github.com/callstackincubator/simlock/pull/1157
+- fix(android): give emulator console snapshot save, snapshot list and emu kill a deadline by @V3RON in https://github.com/callstackincubator/simlock/pull/1159
+- fix(e2e): warmUp releases its warm-up leases when a later one fails by @V3RON in https://github.com/callstackincubator/simlock/pull/1160
+- fix(e2e): keep each daemon's log when teardown deletes its home by @V3RON in https://github.com/callstackincubator/simlock/pull/1161
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.4.1...v0.4.2
+
 ## [0.4.1](https://github.com/callstackincubator/simlock/compare/v0.4.0...v0.4.1) (2026-10-31)
 
 ### What's Changed

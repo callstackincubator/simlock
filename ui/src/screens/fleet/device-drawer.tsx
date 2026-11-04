@@ -99,6 +99,9 @@ function FactList({
             label: "State",
             value: <Status tone={device.status.tone}>{device.status.word}</Status>,
           },
+          ...(device.baseline === undefined
+            ? []
+            : [{ label: "Baseline", value: <span className="mono">{device.baseline}</span> }]),
           ...(device.holder === undefined ? [] : [{ label: "Holder", value: device.holder.name }]),
           ...(device.lease === undefined
             ? []

@@ -29,6 +29,7 @@ export interface EventMap {
     readonly fleetRequestId?: string;
     // why: events stored before this field existed lack it and a rebuild replays them, so the projector reads it as optional.
     readonly platform: "ios" | "android";
+    readonly baseline?: { readonly name: string; readonly version: number };
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
@@ -232,6 +233,29 @@ export interface EventMap {
     readonly residue?: string;
     readonly requesterId: string;
   };
+  "baseline.saved": {
+    readonly name: string;
+    readonly version: number;
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly mode: "slim" | "full";
+    readonly imageTag?: string;
+    readonly sizeBytes?: number;
+    readonly leaseId: string;
+    readonly requesterId: string;
+  };
+  "baseline.removed": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: "operator" | "nuke" | "replaced";
+    readonly requesterId?: string;
+  };
+  "baseline.stale": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: string;
+  };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };
   "daemon.update-failed": {
@@ -292,7 +316,7 @@ export interface EventMap {
    * `unauthenticated` (`401`) is a missing or unrecognized join token -- a revoked or mistyped
    * one lands here; `forbidden` (`403`) is a real token whose role is not `worker`; and
    * `worker-mismatch` (`403`) is a join token pinned to another worker id, or a worker id
-   * another token is pinned to.
+   * another token is pinned to, or an id outside `[A-Za-z0-9_-]{1,128}`.
    *
    * Version skew is deliberately *not* one of these: a worker whose `hello` finds no
    * overlapping protocol range authenticated fine, so it enters the registry as

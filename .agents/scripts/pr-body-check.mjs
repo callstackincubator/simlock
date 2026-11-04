@@ -278,7 +278,7 @@ function checklistItems() {
   for (const l of lines) {
     const item = /^\s*- \[([ xX])\] (.*)$/.exec(l);
     if (item !== null) checklist.push({ ticked: item[1] !== " ", text: item[2] });
-    else if (/^\s+\S/.test(l) && checklist.length > 0) checklist.at(-1).text += ` ${l.trim()}`;
+    else if (/^\s+\S/.test(l) && checklist.at(-1) != null) checklist.at(-1).text += ` ${l.trim()}`;
     else if (l.trim() === "" || !/^\s/.test(l)) checklist.push(null);
   }
   return checklist

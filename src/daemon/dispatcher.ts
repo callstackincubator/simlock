@@ -30,13 +30,23 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  BaselineInUseError,
+  BaselineMismatchError,
+  BaselineStaleError,
+  BaselineSaveFailedError,
+  UnknownBaselineError,
+  type BaselineService,
   type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
   type PassthroughResolver,
+  isUnavailableInput,
   createUsageReader,
   type UsageReader,
+  redactConfig,
 } from "../core/index.js";
+import type { ModuleInputs } from "../modules/index.js";
+import { rotationRefusal } from "./rotation-refusal.js";
 import {
   type DeviceModeReader,
   LeaseIdTakenError,
@@ -75,6 +85,7 @@ import type { TokenOperations } from "../auth/index.js";
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -141,8 +152,12 @@ export interface DispatcherOptions {
   readonly nuke?: Nuke;
   /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
   readonly warmKinds?: WarmKindForgetter;
+  /** why: the baselines' one way in; optional so tests that never save need none. */
+  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
+  /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
+  readonly inputs?: ModuleInputs;
   readonly processRunner?: ProcessRunner;
   /**
    * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
@@ -261,6 +276,7 @@ export class Dispatcher {
       "lease.get": this.#leaseGet,
       "driver.passthrough": this.#driverPassthrough,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": this.#relayRequest,
       "relay.cancel": this.#relayCancel,
       "doctor.run": this.#doctorRun,
@@ -269,6 +285,9 @@ export class Dispatcher {
       "cleanup.run": this.#cleanupRun,
       "nuke.run": this.#nukeRun,
       "warm.forget": this.#warmForget,
+      "baseline.save": this.#baselineSave,
+      "baseline.list": this.#baselineList,
+      "baseline.remove": this.#baselineRemove,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -458,7 +477,7 @@ export class Dispatcher {
   #leaseRequest: Handler<"lease.request"> = async (input, session) => {
     const request: DeviceRequest = requestedDevice(input);
     this.#requireTtlWithinCap(input.ttlMs);
-    const requesterId = input.requesterId ?? session.principal;
+    const requesterId = input.requesterId ?? principalAsRequester(session.principal);
     const requestedAllowDownload = input.allowDownload ?? false;
     const downloadsPolicy = this.options.config.downloads.policy;
     // why: `owner` is read only from the gateway's uplink, never from role alone: HTTP's `operator` token
@@ -510,6 +529,21 @@ export class Dispatcher {
     } catch (error: unknown) {
       if (error instanceof LeaseIdTakenError) {
         throw new DispatchError("LEASE_ID_TAKEN", error.message, { leaseId: error.leaseId });
+      }
+      if (error instanceof UnknownBaselineError) {
+        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+      }
+      if (error instanceof BaselineMismatchError) {
+        throw new DispatchError("BASELINE_MISMATCH", error.message, {
+          baseline: error.baselineName,
+          field: error.field,
+        });
+      }
+      if (error instanceof BaselineStaleError) {
+        throw new DispatchError("BASELINE_STALE", error.message, {
+          baseline: error.baselineName,
+          reason: error.reason,
+        });
       }
       if (error instanceof NoCapacityError) {
         const capacityReason = capacityReasonOf(error.reason);
@@ -580,14 +614,15 @@ export class Dispatcher {
     );
   }
 
-  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester decides.
+  // why: a waiting entry carries no owner, so the queue's recorded owner of its requester on that row's platform decides.
   #waitingFor(session: DispatchSession) {
     return this.options.queue
       .waitingRequests()
       .filter(
         (request) =>
           session.role === "admin" ||
-          this.options.queue.pendingRequestOwner(request.requesterId) === session.principal,
+          this.options.queue.pendingRequestOwner(request.requesterId, request.spec.platform) ===
+            session.principal,
       );
   }
 
@@ -636,6 +671,44 @@ export class Dispatcher {
   #relayCancel: Handler<"relay.cancel"> = (input, session) => {
     this.#relays(session).cancel(input.relayId);
     return {};
+  };
+
+  #leaseIsActive(leaseId: string): boolean {
+    return this.options.registry.snapshot.leases.some((candidate) => candidate.id === leaseId);
+  }
+
+  #deviceRotate: Handler<"device.rotate"> = async (input) => {
+    if (this.options.inputs === undefined) {
+      throw new DispatchError("INTERNAL", "Device input is unavailable");
+    }
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const record = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (record === undefined) throw new UnknownLeaseError(input.leaseId);
+    const refusal = rotationRefusal(input.leaseId, record.spec);
+    if (refusal !== undefined) throw refusal;
+    try {
+      const held = await this.options.inputs.leaseInput(
+        input.leaseId,
+        record.spec.platform,
+        toDriverDevice(record),
+      );
+      try {
+        if (isUnavailableInput(held.input)) throw new Error(held.input.unavailable);
+        if (!this.#leaseIsActive(input.leaseId)) throw new UnknownLeaseError(input.leaseId);
+        await held.input.send({ kind: "orientation", orientation: input.orientation });
+      } finally {
+        held.release();
+      }
+    } catch (error) {
+      if (error instanceof UnknownLeaseError) throw error;
+      throw inputUnavailable(input.leaseId, error);
+    }
+    return { leaseId: input.leaseId, orientation: input.orientation };
   };
 
   /**
@@ -796,8 +869,82 @@ export class Dispatcher {
         osVersion: spec.osVersion,
         mode: spec.mode ?? "full",
         ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+        ...(spec.baseline === undefined ? {} : { baseline: spec.baseline.name }),
       })),
     };
+  };
+
+  #baselineSave: Handler<"baseline.save"> = async (input, session) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const held = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (held?.physical === true) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `lease ${lease.id} is on a physical device; only a simulator or emulator can be saved as a baseline`,
+      );
+    }
+    try {
+      return await this.options.baselines.save({
+        leaseId: input.leaseId,
+        name: input.name,
+        ...(input.note === undefined ? {} : { note: input.note }),
+        requesterId: session.principal,
+      });
+    } catch (error: unknown) {
+      if (error instanceof BaselineSaveFailedError) {
+        throw new DispatchError("BASELINE_SAVE_FAILED", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
+      throw error;
+    }
+  };
+
+  #baselineList: Handler<"baseline.list"> = async () => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    return { baselines: [...(await this.options.baselines.list())] };
+  };
+
+  #baselineRemove: Handler<"baseline.remove"> = async (input, session) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    if (input.workerId !== undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        "workerId names a gateway's worker, and this daemon is not a gateway; remove without --worker",
+      );
+    }
+    try {
+      const removed = await this.options.baselines.remove({
+        name: input.name,
+        requesterId: session.principal,
+      });
+      return {
+        deletedDevices: [...removed.deletedDevices],
+        name: removed.name,
+        versions: [...removed.versions],
+      };
+    } catch (error: unknown) {
+      if (error instanceof BaselineInUseError) {
+        throw new DispatchError("BASELINE_IN_USE", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
+      if (error instanceof UnknownBaselineError) {
+        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+      }
+      throw error;
+    }
   };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
@@ -832,24 +979,29 @@ export class Dispatcher {
     return { subscribed: false };
   };
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
     let receivedAt = this.options.clock.now();
-    const [status, devices, catalog] = await Promise.all([
+    const [status, devices, catalog, baselines] = await Promise.all([
       Promise.resolve(this.#statusGet({}, session)).then((answer) => {
         receivedAt = this.options.clock.now();
         return answer;
       }),
       this.#listGet({ kind: "devices" }, session),
       this.#keptViewCatalog(session),
+      this.options.baselines === undefined ? undefined : this.#baselineList({}, session),
     ]);
     const label = this.options.config.gateway.label;
     return {
       workers: [
         {
           ...workerViewFields({
+            ...(baselines === undefined
+              ? {}
+              : { baselines: OPERATIONS["baseline.list"].output.parse(baselines) }),
             catalog: OPERATIONS["catalog.get"].output.parse(catalog),
             config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
             devices: OPERATIONS["list.get"].output.parse(devices),
@@ -1099,6 +1251,18 @@ function describeEnrollmentError(error: unknown): unknown {
     return new DispatchError("UNKNOWN_DEVICE", error.message, { id: error.id });
   }
   return error;
+}
+
+const INPUT_REASON_MAX = 200;
+
+function inputUnavailable(leaseId: string, error: unknown): DispatchError {
+  const text = error instanceof Error ? error.message : String(error);
+  const reason = text === "" ? "unknown error" : text.slice(0, INPUT_REASON_MAX);
+  return new DispatchError(
+    "INPUT_UNAVAILABLE",
+    `Lease ${leaseId}'s simulator cannot take input: ${reason}`,
+    { leaseId, reason },
+  );
 }
 
 function unsupportedOnWorker(

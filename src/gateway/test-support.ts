@@ -9,6 +9,10 @@
 import type { z } from "zod";
 
 import type {
+  BaselineRemoveInput,
+  BaselineRemoveOutput,
+  BaselineSaveInput,
+  BaselineSaveOutput,
   ComponentInstallInput,
   ComponentInstallOutput,
   DaemonUpdateInput,
@@ -24,12 +28,14 @@ import type {
   LeaseRequestInput,
   InstallComponentOptions,
   RequestLeaseOptions,
+  RotateInput,
+  RotateOutput,
   StatusGetOutput,
 } from "../admin/index.js";
 import type { GatewayWorkerClient } from "./worker-client.js";
 import { SimlockError } from "../admin/index.js";
 import { OPERATIONS, PROTOCOL_VERSION_RANGE } from "../contract/index.js";
-import type { platformCatalogSchema } from "../contract/index.js";
+import type { BaselineEntry, platformCatalogSchema } from "../contract/index.js";
 
 type CatalogOutput = z.infer<(typeof OPERATIONS)["catalog.get"]["output"]>;
 type PlatformCatalog = z.infer<typeof platformCatalogSchema>;
@@ -279,6 +285,11 @@ export class ScriptedWorkerClient {
   status: StatusGetOutput = statusFixture();
   devices: unknown[] = [];
   catalog: CatalogOutput = catalogFixture([]);
+  /** why: the inputs of the `baseline.save` and `baseline.remove` calls this worker answered. */
+  readonly savedBaselines: BaselineSaveInput[] = [];
+  readonly removedBaselines: BaselineRemoveInput[] = [];
+  /** why: what `baseline.list` answers; the view carries it for routing (ADR 0061 §6). */
+  baselines: BaselineEntry[] = [];
   /** What `config.get` reports; the view carries it for display (ADR 0009 §3). */
   downloadPolicy: DownloadPolicy = "on-request";
   /** What `config.get` reports for `downloads.timeoutMs` (ADR 0010 §7). */
@@ -497,6 +508,18 @@ export class ScriptedWorkerClient {
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async rotate(
+    leaseId: string,
+    orientation: RotateInput["orientation"],
+    options: { readonly requesterId?: string } = {},
+  ): Promise<RotateOutput> {
+    this.calls.push(`device.rotate:${options.requesterId ?? ""}`);
+    if (this.hangingCalls.has("device.rotate")) return new Promise<never>(() => {});
+    this.#throwIfFailing();
+    return { leaseId, orientation };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
   async installComponent(
     input: ComponentInstallInput,
     options: InstallComponentOptions = {},
@@ -512,6 +535,42 @@ export class ScriptedWorkerClient {
     if (this.hangingCalls.has("catalog.get")) return new Promise<never>(() => {});
     this.#throwIfFailing();
     return this.catalog;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async saveBaseline(input: BaselineSaveInput): Promise<BaselineSaveOutput> {
+    this.calls.push("baseline.save");
+    this.#throwIfFailing();
+    this.savedBaselines.push(input);
+    const baseline = this.baselines.find((entry) => entry.name === input.name);
+    return {
+      baseline: baseline ?? {
+        mode: "full",
+        model: "iPhone 17",
+        name: input.name,
+        osVersion: "26.0",
+        platform: "ios",
+        savedAt: "2026-11-02T13:10:00Z",
+        version: 1,
+      },
+      leaseId: input.leaseId,
+    };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async removeBaseline(input: BaselineRemoveInput): Promise<BaselineRemoveOutput> {
+    this.calls.push("baseline.remove");
+    this.#throwIfFailing();
+    this.removedBaselines.push(input);
+    return { deletedDevices: [], name: input.name, versions: [1] };
+  }
+
+  // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.
+  async listBaselines(): Promise<{ readonly baselines: BaselineEntry[] }> {
+    this.calls.push("baseline.list");
+    if (this.hangingCalls.has("baseline.list")) return new Promise<never>(() => {});
+    this.#throwIfFailing();
+    return { baselines: this.baselines };
   }
 
   // fallow-ignore-next-line unused-class-member -- reached through the GatewayWorkerClient that asClient() casts this double to.

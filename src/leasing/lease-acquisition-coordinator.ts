@@ -51,6 +51,12 @@ import {
   type DriverCatalog,
   type ModelPreferences,
   type CatalogReader,
+  type BaselineService,
+  type CurrentBaseline,
+  UnknownBaselineError,
+  BaselineMismatchError,
+  BaselineStaleError,
+  baselineMismatch,
   type AcquisitionMaintenance,
   type Core,
   type ManagedDeviceLifecycle,
@@ -143,7 +149,21 @@ export type AcquisitionQueue = Pick<
   | "resolve"
 >;
 
+/** why: the exact spec of a baseline's current version, which a request naming the baseline stands for. */
+function baselineSpec(current: CurrentBaseline): VirtualSpec {
+  return {
+    baseline: { name: current.name, version: current.version },
+    model: current.model,
+    osVersion: current.osVersion,
+    physical: false,
+    platform: current.platform,
+    ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+    ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+  };
+}
+
 export interface LeaseAcquisitionCoordinatorOptions {
+  readonly baselines: Pick<BaselineService, "current">;
   readonly catalog: Pick<CatalogReader, "listCatalog">;
   readonly claims: AcquisitionClaims;
   readonly components: Pick<ComponentInstaller, "install">;
@@ -212,6 +232,7 @@ const noTiming: LeaseTiming = {
 export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   readonly #activeWorkflows = new Set<Promise<void>>();
   readonly #driving = new WeakSet<AcquisitionWaiter>();
+  readonly #planAgain = new WeakSet<AcquisitionWaiter>();
   #admissionClosed = false;
   // why: apart from #admissionClosed, which also stops the warm pool; an update refuses leases and leaves the pool running.
   #updateHold = false;
@@ -508,6 +529,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
+    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline, request);
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     const range = requestedRange(request);
@@ -526,6 +548,27 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requirement: target.requirement ?? exactRequirement(spec),
       spec,
     };
+  }
+
+  /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
+  async #resolveBaseline(
+    name: string,
+    request: DeviceRequest,
+  ): Promise<{
+    readonly spec: VirtualSpec;
+    readonly requirement: DeviceRequirement;
+    readonly classOf: undefined;
+  }> {
+    const current = this.options.baselines.current(name);
+    if (current === undefined) throw new UnknownBaselineError(name);
+    const entry = (await this.options.catalog.listCatalog(current.platform))[0];
+    const mismatch = baselineMismatch(current, request, entry ?? { modelAliases: {}, models: [] });
+    if (mismatch !== undefined) {
+      throw new BaselineMismatchError(name, mismatch.field, mismatch.message);
+    }
+    if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
+    const spec = baselineSpec(current);
+    return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
 
   /**
@@ -768,6 +811,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.#perform(waiter, action);
     } finally {
       this.#driving.delete(waiter);
+      // why: the wake inside the drive that discarded a superseded copy found the waiter still driving, so nothing else would plan it again.
+      if (this.#planAgain.delete(waiter)) this.#wakeQueue();
     }
   }
 
@@ -919,9 +964,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      // The spec resolved to a component being removed (ADR 0010 §8): no device was created,
-      // and none will be on it, so the request ends as `RUNTIME_MISSING` rather than retrying.
-      if (error instanceof ComponentBeingRemovedError) {
+      // why: a component being removed (ADR 0010 §8) or a baseline removed since the request resolved it will not come back, so no device is created and the request ends as `RUNTIME_MISSING` or `UNKNOWN_BASELINE` rather than retrying.
+      if (error instanceof ComponentBeingRemovedError || error instanceof UnknownBaselineError) {
         await this.options.decisions.run(async () => {
           if (waiter.state !== "rejected") this.#reject(waiter, error, "unresolvable-spec");
         });
@@ -1003,6 +1047,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return undefined;
     }
     if (this.#refuseUnderHold(waiter)) return undefined;
+    this.#followBaseline(waiter);
     const head = this.options.queue.head;
     if (head !== undefined && head !== waiter) {
       const reason = "behind-earlier-request";
@@ -1016,6 +1061,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requirement: waiter.requirement,
       classOf: waiter.classOf,
     });
+  }
+
+  /** why: a save between two decisions makes the baseline's newest version the one a waiting request gets (ADR 0061 §5), so each decision plans against the version current at that moment. */
+  #followBaseline(waiter: AcquisitionWaiter): void {
+    const named = waiter.spec?.baseline;
+    if (named === undefined) return;
+    const current = this.options.baselines.current(named.name);
+    if (current === undefined || current.version === named.version) return;
+    waiter.spec = baselineSpec(current);
+    waiter.requirement = exactRequirement(waiter.spec);
   }
 
   async #grant(
@@ -1194,7 +1249,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.options.decisions.run(async () => {
         capacityReservation.release();
         if (waiter.state !== "rejected") {
-          this.#reject(waiter, new BootTimeoutError(device.id), "boot-timeout");
+          this.#reject(waiter, BootTimeoutError.from(device.id, error), "boot-timeout");
         }
       });
       this.#wakeQueue();
@@ -1247,9 +1302,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     kind: GrantingPlanKind,
     capacityReservation?: CapacityReservation,
   ): Promise<void> {
+    let superseded = false;
     await this.options.decisions.run(async () => {
       try {
         if (waiter.state === "rejected") return;
+        if (this.#isSuperseded(handoff.device)) {
+          superseded = true;
+          return;
+        }
         await this.#grant(waiter, handoff.device, kind);
       } catch (error: unknown) {
         // why: a grant that failed to store leaves no lease behind (`#commit` mutates memory
@@ -1271,7 +1331,32 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         handoff.claim.release();
       }
     });
+    if (superseded) await this.#discardSuperseded(waiter, handoff);
     this.#wakeQueue();
+  }
+
+  /** why: a copy of a version that a save replaced while it was being made is never granted. */
+  #isSuperseded(device: VirtualDevice): boolean {
+    const made = device.spec.baseline;
+    if (made === undefined) return false;
+    return this.options.baselines.current(made.name)?.version !== made.version;
+  }
+
+  /** why: the superseded copy is deleted outside the gate, and its waiter plans again against the newest version. */
+  async #discardSuperseded(waiter: AcquisitionWaiter, handoff: ReadyDeviceHandoff): Promise<void> {
+    try {
+      await this.options.lifecycle.dispose(handoff.device, "baseline-replaced", "cleanup");
+    } catch (error: unknown) {
+      this.#logFailure(
+        "deleting a copy of a replaced baseline failed",
+        waiter,
+        handoff.device,
+        "delete",
+        error,
+      );
+    }
+    await this.options.decisions.run(() => this.#defer(waiter, "waiting-for-device"));
+    this.#planAgain.add(waiter);
   }
 
   #enqueue(waiter: AcquisitionWaiter, reason: WaitingReason): void {

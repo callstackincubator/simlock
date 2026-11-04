@@ -16,7 +16,7 @@ export interface LeaseReconcilerOptions {
 }
 
 /**
- * ADR 0019 §2: checks every lease on disk against the startup read, and ends those whose device
+ * why: ADR 0019 §2 checks every lease on disk against the startup read, and ends those whose device
  * is not running. A device that is `running` keeps its lease, whatever its deadline: restoring
  * the expiry timers afterwards expires an overdue one through the ordinary path. Any other
  * reading ends the lease, as `lease.expired` when its deadline passed while no daemon ran and as
@@ -24,8 +24,8 @@ export interface LeaseReconcilerOptions {
  * says of it:
  *
  * - `stopped` or `transitioning` (booting, shutting down, or an Android emulator `adb` cannot
- *   attribute): wiped and returned to the pool by the ordinary reclaim;
- * - absent from a platform that could be read: marked missing in the same write, nothing to wipe;
+ *   attribute): deleted by the ordinary reclaim (a physical device is cleaned and returned to the pool);
+ * - absent from a platform that could be read: marked missing in the same write, nothing to delete;
  * - on a platform that could not be read: left `reclaiming` with no reclaim started, because "I
  *   could not look" is not "the device is gone" and a driver that just failed would likely hang
  *   the reclaim. A later start whose read succeeds recovers it.

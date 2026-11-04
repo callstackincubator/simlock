@@ -106,10 +106,12 @@ export async function waitForFree(env: SharedTestEnv): Promise<void> {
         listLeases(env),
         listRequests(env),
       ]);
-      observed = `devices ${devices.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
+      // why: a released device is deleted and its record stays listed as `deleted`; the pool's new device is the one that has to be ready.
+      const live = devices.filter((device) => device.state !== "deleted");
+      observed = `devices ${live.map((device) => device.state).join(",") || "none"}; leases ${String(leases.length)}; requests ${String(requests.length)}`;
       return (
-        devices.length > 0 &&
-        devices.every((device) => device.state === "ready") &&
+        live.length > 0 &&
+        live.every((device) => device.state === "ready") &&
         leases.length === 0 &&
         requests.length === 0
       );
@@ -146,22 +148,27 @@ export async function setLimits(
 
 export async function warmUp(daemon: SharedTestEnv, target: Target, count: number): Promise<void> {
   const ids: string[] = [];
-  for (let index = 1; index <= count; index += 1) {
-    const lease = await daemon.cli(
-      ["lease", "--detach", "--platform", target.platform, "--agent-id", `warmup-${index}`],
-      { timeout: 330_000 },
-    );
-    expect(lease.code, lease.stderr).toBe(0);
-    ids.push((lease.json as { lease: { id: string } }).lease.id);
-  }
-  for (const id of ids) {
-    const released = await daemon.cli(["release", id], { timeout: 60_000 });
-    expect(released.code, released.stderr).toBe(0);
+  // why: a failed warm-up lease must not leave the earlier ones held, or their emulators outlive the test.
+  try {
+    for (let index = 1; index <= count; index += 1) {
+      const lease = await daemon.cli(
+        ["lease", "--detach", "--platform", target.platform, "--agent-id", `warmup-${index}`],
+        { timeout: 330_000 },
+      );
+      expect(lease.code, lease.stderr).toBe(0);
+      ids.push((lease.json as { lease: { id: string } }).lease.id);
+    }
+  } finally {
+    for (const id of ids) {
+      const released = await daemon.cli(["release", id], { timeout: 60_000 });
+      expect(released.code, released.stderr).toBe(0);
+    }
   }
   let observed = "nothing read yet";
   await waitFor(
     async () => {
-      const devices = await listDevices(daemon);
+      // why: the warm-up leases' devices are deleted at their release; the pool learned the kind and makes `count` new ones.
+      const devices = (await listDevices(daemon)).filter((device) => device.state !== "deleted");
       observed = devices.map((device) => device.state).join(",") || "none";
       return devices.length >= count && devices.every((device) => device.state === "ready");
     },

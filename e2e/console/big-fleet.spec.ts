@@ -40,7 +40,7 @@ function isCounted(request: Request): boolean {
 }
 
 test.describe("big fleet", () => {
-  test("an idle console on a big fleet stays quiet: for each of the seven pages, in the 60 s after its first reads, at most 40 requests to /v1 other than the event stream", async ({
+  test("an idle console on a big fleet stays quiet: for each of the eight pages, in the 60 s after its first reads, at most 40 requests to /v1 other than the event stream", async ({
     gateway,
     page,
   }) => {

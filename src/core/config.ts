@@ -306,9 +306,9 @@ export interface Config {
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
     /**
-     * The lease-identity policy per platform (see `LeaseIdentity`), read by key for a new
-     * device's own platform when it is registered. Daemon configuration only: no lease request
-     * can change it, and a device keeps the value it was created under after this changes.
+     * why: The lease-identity policy per platform (see `LeaseIdentity`) no longer changes anything:
+     * every virtual device serves one lease and is deleted when it ends (ADR 0061 §2). It stays
+     * accepted and stored on each device record.
      */
     readonly identity: {
       readonly ios: LeaseIdentity;
@@ -374,8 +374,12 @@ export interface Config {
     readonly slim: {
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
       readonly categories?: readonly string[];
-      /** Boot deadline for a slim device (slim adds a second boot; CI runners are slow). */
+      /** why: a slim device gets its own boot deadline, because CI runners are slow. */
       readonly bootTimeoutMs: number;
+    };
+    readonly simulator: {
+      /** why: `false` sets each simulator's volume to 0 after every boot; the core only validates the boolean (the iOS driver reads it). */
+      readonly audio: boolean;
     };
   };
   /**
@@ -414,13 +418,11 @@ export interface Config {
     /** The gateway's uplink endpoint, `ws://host:port/v1/uplink` or `wss://...`. Worker-side. */
     readonly url?: string;
     /** why: A join token minted on the gateway with `simlock token create --role worker`.
-     * Worker-side. It is a secret, and it sits in the daemon's config file like any other
-     * value there: `config.get` is admin-role and returns the config as written, so this key
-     * is exactly as sensitive as `config.json`'s file permissions make it. `simlock config
-     * set` writes that file owner-only (0600) every time; a file written by hand, or before
+     * Worker-side. It is a secret, and it sits in the daemon's config file, which `simlock
+     * config set` writes owner-only (0600) every time; a file written by hand, or before
      * that, keeps whatever mode it has until the next `config set`. Everywhere else the
-     * config is written out -- the startup log line, `daemon.started` -- goes through
-     * `redactConfig`. */
+     * config is written out -- the startup log line, `daemon.started`, and `config.get`
+     * unless it is asked with `showSecrets: true` -- it goes through `redactConfig`. */
     readonly token?: string;
     /** Display-only name for this worker in the gateway's views (§3a, §13). Worker-side. */
     readonly label?: string;
@@ -479,7 +481,19 @@ export interface Config {
 export const REDACTED_VALUE = "[redacted]";
 
 // why: masked rather than deleted, so the copy keeps `Config`'s keys and a reader can tell "set" from "unset"; a copy, because the live config is what `config.get` answers and the uplink presents.
-export function redactConfig(config: Config): Config {
+export function redactConfig<
+  Shape extends {
+    readonly gateway: {
+      readonly token?: string | undefined;
+      readonly alerts: {
+        readonly destinations: readonly {
+          readonly url: string;
+          readonly secret?: string | undefined;
+        }[];
+      };
+    };
+  },
+>(config: Shape): Shape {
   const { token, alerts } = config.gateway;
   if (token === undefined && alerts.destinations.length === 0) return config;
   return {
@@ -496,7 +510,7 @@ export function redactConfig(config: Config): Config {
         })),
       },
     },
-  };
+  } as Shape;
 }
 
 /**
@@ -991,6 +1005,7 @@ function defaultConfig(
       slim: {
         bootTimeoutMs: 600_000,
       },
+      simulator: { audio: true },
     },
     android: {
       defaultModels: {},
@@ -1155,6 +1170,9 @@ export function configValidators(
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
+      }),
+      simulator: objectValidator({
+        audio: booleanValue,
       }),
     }),
     android: objectValidator({

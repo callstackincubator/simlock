@@ -527,8 +527,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   }
 
   /**
-   * Removes a lease and marks its device missing in one write, for a device a daemon start found
-   * gone from a platform it could read. There is nothing left to wipe, so no `reclaiming` state
+   * why: removes a lease and marks its device missing in one write, for a device a daemon start found
+   * gone from a platform it could read. There is nothing left to delete, so no `reclaiming` state
    * stands between: the lease and the device leave `leased` together. The device record is
    * written exactly as `markDeviceMissing` writes it.
    *
@@ -824,7 +824,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     const reclaiming = {
       ...this.#transitioned(withoutRecoveryMarkers as DeviceRecord, "reclaiming"),
       lastLeaseEndedAt: this.options.clock.now(),
-      // The wipe is not started now; a later start that can read the platform runs it.
+      // why: the reclaim is not started now; a later start that can read the platform runs it.
       ...(options.deferReclaim === true ? { deferredReclaimLeaseId: leaseId } : {}),
     };
     const devices = [...this.#devices];

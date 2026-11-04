@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
 import { connect, createServer, Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
   type OwnedRootError,
   REDACTED_VALUE,
   registryOwner,
+  baselinesOwner,
 } from "../core/index.js";
 import { agentDeviceModule } from "../agent-device/definition.js";
 import { agentDeviceModuleWith, FakeAgentDeviceHealth } from "../agent-device/testing.js";
@@ -66,6 +67,7 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   logAndroidDiagnostic,
+  logSilenceFailure,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -78,6 +80,7 @@ import {
 } from "./main.js";
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
+import { memorySourceDatabase } from "../drivers/ios/testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -523,7 +526,7 @@ async function freeLoopbackPort(): Promise<number> {
   return address.port;
 }
 describe("startDaemon", () => {
-  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get still returns it", async () => {
+  it("keeps gateway.token out of the daemon log, the events.replay answer, and history.db, while config.get returns it only as the redaction marker unless showSecrets is asked", async () => {
     const secret = "secret-join-token-170";
     const { daemon, directory, sink } = await start({
       configOverrides: { gateway: { token: secret, url: await unreachableGatewayUrl() } },
@@ -553,7 +556,13 @@ describe("startDaemon", () => {
       eventsReplay: JSON.stringify(replayed).includes(secret),
       historyDb: eventFile.includes(secret),
     }).toEqual({ daemonLog: false, eventsReplay: false, historyDb: false });
-    expect(config.gateway.token).toBe(secret);
+    const shown = (await daemon.dispatch("config.get", { showSecrets: true }, admin)) as {
+      readonly gateway: { readonly token?: string };
+    };
+    expect({ default: config.gateway.token, shown: shown.gateway.token }).toEqual({
+      default: "[redacted]",
+      shown: secret,
+    });
   });
 
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
@@ -1006,6 +1015,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(report).toEqual({
       deletedDevices: [grant.device.id],
       releasedLeaseIds: [grant.lease.id],
+      removedBaselines: [],
     });
   });
 
@@ -1138,6 +1148,55 @@ describe("startDaemon wires core and leasing together", () => {
 
     expect(names.indexOf("doctor.reconciled")).toBeGreaterThan(-1);
     expect(names.indexOf("doctor.reconciled")).toBeLessThan(names.indexOf("capacity.changed"));
+  });
+
+  it("marks a saved baseline whose runtime is gone as stale at start, before anything lists baselines", async () => {
+    const clock = new FakeClock(1_000);
+    const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
+    temporaryDirectories.push(directory);
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable, baselinesOwner],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    state.database
+      .prepare(
+        "INSERT INTO baselines (name, version, platform, model, os_version, mode, saved_at, source_id) VALUES ('login', 1, 'ios', 'iPhone 17 Pro', '26.5', 'full', '2026-11-02T13:40:00.000Z', 'src-login')",
+      )
+      .run();
+    state.close();
+    const reason = "runtime com.apple.CoreSimulator.SimRuntime.iOS-26-5 is not installed";
+    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    driver.setSources([
+      {
+        id: "src-login",
+        kind: "baseline",
+        model: "iPhone 17 Pro",
+        osVersion: "26.5",
+        staleReason: reason,
+      },
+    ]);
+
+    const daemon = await startDaemon({
+      clock,
+      configOverrides: STANDALONE_OFF,
+      dataDirectory: directory,
+      deviceDataTables: fakeDeviceDataTables,
+      drivers: [driver],
+      filesystem: new MemoryFilesystem(),
+      logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
+      version: "1.2.3",
+    });
+    runningDaemons.push(daemon);
+
+    const stale = await historyEventsWhen(directory, hasEvent("baseline.stale"));
+    expect(
+      stale.filter((event) => event.event === "baseline.stale").map((event) => event.payload),
+    ).toEqual([{ name: "login", reason, version: 1 }]);
   });
 
   it("settles the requests a restart left open before core's device steps announce the capacity figures", async () => {
@@ -1279,11 +1338,11 @@ describe("startDaemon wires core and leasing together", () => {
     const { daemon, driver, grant } = await leasedIos({
       availableOsVersions: ["26.5"],
       clock,
-      latencyMs: { reclaim: 600_000 },
+      latencyMs: { destroy: 600_000 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    await settleRealTime();
 
     clock.advance(300_000);
     const devices = (await daemon.dispatch("list.get", { kind: "devices" }, admin)) as readonly {
@@ -1292,7 +1351,7 @@ describe("startDaemon wires core and leasing together", () => {
       readonly stalled?: true;
     }[];
     expect(devices.map(({ id, state, stalled }) => ({ id, state, stalled }))).toEqual([
-      { id: grant.device.id, state: "reclaiming", stalled: undefined },
+      { id: grant.device.id, state: "shutdown", stalled: undefined },
     ]);
 
     let stopped = false;
@@ -1303,7 +1362,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(stopped).toBe(false);
     clock.advance(300_000);
     await stopping;
-    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
   it("cancels the expiry timer of an outstanding lease on shutdown, so nothing expires after it", async () => {
@@ -1326,7 +1385,7 @@ describe("startDaemon wires core and leasing together", () => {
   it("cancels the quarantine retry timer on shutdown, so no retry runs after it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const started = await start({ clock, drivers: [driver] });
     const grant = (await started.daemon.dispatch("lease.request", ios, agent)) as Grant;
     await started.daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
@@ -1335,10 +1394,10 @@ describe("startDaemon wires core and leasing together", () => {
     clock.advance(30_000);
     await settleRealTime();
 
-    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
-  describe("a device quarantined by a failed purge", () => {
+  describe("a device quarantined by a failed delete", () => {
     type CauseView = {
       readonly id: string;
       readonly quarantineCause?: { readonly kind: string; readonly message?: string };
@@ -1348,7 +1407,7 @@ describe("startDaemon wires core and leasing together", () => {
     async function quarantinedAfterFailedPurge() {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-      driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+      driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
       const { daemon } = await start({
         clock,
         configOverrides: { warmPool: { enabled: false } },
@@ -1370,7 +1429,7 @@ describe("startDaemon wires core and leasing together", () => {
         }
       ).devices;
 
-    it("shows quarantineCause purge-failed with the driver's error in status.get and list.get", async () => {
+    it("shows quarantineCause delete-failed with the driver's error in status.get and list.get", async () => {
       const daemon = await quarantinedAfterFailedPurge();
 
       const status = await devicesOf(daemon, admin);
@@ -1384,7 +1443,7 @@ describe("startDaemon wires core and leasing together", () => {
         expect(devices).toHaveLength(1);
         expect(devices[0]).toMatchObject({ state: "quarantined" });
         expect(devices[0]?.quarantineCause).toEqual({
-          kind: "purge-failed",
+          kind: "delete-failed",
           message: "DriverCrashError: purge exploded",
         });
       }
@@ -2141,7 +2200,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     ]);
     const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const daemon = await startDaemon({
       deviceDataTables: fakeDeviceDataTables,
       clock,
@@ -2179,10 +2238,10 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     };
 
     expect(await causeFor("slk_cause_operator")).toEqual({
-      kind: "purge-failed",
+      kind: "delete-failed",
       message: "DriverCrashError: purge exploded",
     });
-    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "purge-failed" });
+    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "delete-failed" });
   });
 });
 
@@ -2196,6 +2255,7 @@ describe("discoverDrivers", () => {
     const filesystem = new MemoryFilesystem();
 
     const { drivers } = await discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2385,6 +2445,8 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       processRunner,
     });
     const android = drivers.find((driver) => driver.platform === "android");
+    // why: the emulator's log is written into the AVD's folder.
+    await filesystem.mkdirp(join(SIMLOCK_HOME, "devices", "android", "simlock_one.avd"));
     await expect(
       android?.makeReady(
         {
@@ -2413,9 +2475,12 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         "-grpc",
         "8586",
         "-grpc-use-token",
+        "-crash-report-mode",
+        "never",
         "-no-window",
         "-gpu",
         "host",
+        "-wipe-data",
         "-no-snapshot-load",
       ],
     ]);
@@ -2498,19 +2563,36 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     }
   });
 
-  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+  it("logs a warning, with the device id and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
     const sink = new MemoryLogSink();
 
     logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
-      avdName: "simlock_one",
+      deviceId: "simlock_one",
       kind: "snapshot-cold-boot",
       readyAfterMs: 30_000,
     });
 
     expect(sink.records).toEqual([
       expect.objectContaining({
-        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        fields: { deviceId: "simlock_one", readyAfterMs: 30_000 },
         level: "warn",
+      }),
+    ]);
+  });
+
+  it("logs one warning, with the device id and the detail, when an iOS simulator could not be silenced", () => {
+    const sink = new MemoryLogSink();
+
+    logSilenceFailure(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }))({
+      deviceId: "simlock-ios-1",
+      detail: "timed out",
+    });
+
+    expect(sink.records).toEqual([
+      expect.objectContaining({
+        fields: { deviceId: "simlock-ios-1", detail: "timed out" },
+        level: "warn",
+        message: "Could not silence iOS simulator",
       }),
     ]);
   });
@@ -2530,7 +2612,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     return filesystem;
   }
 
-  function discoverAndroid(
+  async function discoverAndroid(
     filesystem: MemoryFilesystem,
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
@@ -2539,6 +2621,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     > = {},
   ) {
     return discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2586,6 +2669,7 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   try {
     await IosSimctlDriver.create({
       clock: new FakeClock(),
+      database: await memorySourceDatabase(),
       driverConfig: {},
       filesystem,
       idGenerator: new CryptoIdGenerator(),
@@ -2599,7 +2683,7 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   throw new Error("expected the iOS device root to be refused");
 }
 
-function discoverIos(
+async function discoverIos(
   overrides: {
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
@@ -2608,6 +2692,7 @@ function discoverIos(
   } = {},
 ) {
   return discoverDrivers({
+    database: await memorySourceDatabase(),
     clock: new FakeClock(),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
@@ -2634,7 +2719,12 @@ describe("deviceModeWiring", () => {
     (defaultMode) => {
       expect(
         deviceModeWiring({
-          ios: { defaultMode, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+          ios: {
+            defaultMode,
+            defaultModels: {},
+            slim: { bootTimeoutMs: 1 },
+            simulator: { audio: true },
+          },
         }),
       ).toEqual({
         defaultModes: { ios: defaultMode },
@@ -2881,6 +2971,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   async function discover(sink: MemoryLogSink) {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     return discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -4433,6 +4524,22 @@ describe("startDaemon state.db", () => {
     expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
   });
 
+  it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {
+    const worker = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    const gateway = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    temporaryDirectories.push(worker, gateway);
+    await start({ dataDirectory: worker });
+    await start({ dataDirectory: gateway, role: "gateway" });
+    const owners = async (directory: string) =>
+      (await queryState(directory, "SELECT owner FROM schema_versions"))
+        .map((row) => row["owner"])
+        .filter((owner) => owner === "ios-source-data" || owner === "android-source-data")
+        .sort();
+
+    expect(await owners(worker)).toEqual(["android-source-data", "ios-source-data"]);
+    expect(await owners(gateway)).toEqual([]);
+  });
+
   it("a second startDaemon on a folder whose daemon runs leaves state.db's schema_versions and bytes unchanged", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-live-state-"));
     temporaryDirectories.push(directory);
@@ -4921,5 +5028,228 @@ describe("startDaemon gateway update", () => {
       daemon.dispatch("events.replay", {}, operator) as Promise<readonly { event: string }[]>,
     ).resolves.toContainEqual(expect.objectContaining({ event: "daemon.update-failed" }));
     await expect(filesystem.exists(join(directory, "update-result.json"))).resolves.toBe(false);
+  });
+});
+
+describe("startDaemon worker lock", () => {
+  const LOCK_PATH = "/tmp/simlock-test/worker.lock";
+  const OTHER_FOLDER = "/home/other/.simlock";
+
+  async function filesystemWithLockHeldBy(
+    owner: { readonly pid: number; readonly folder: string },
+    path = LOCK_PATH,
+  ): Promise<MemoryFilesystem> {
+    const filesystem = new MemoryFilesystem();
+    await filesystem.mkdirp(path);
+    await filesystem.writeFileAtomic(
+      join(path, "owner.json"),
+      JSON.stringify({ ...owner, startedAt: "2026-11-02T08:00:00.000Z" }),
+    );
+    return filesystem;
+  }
+
+  async function installAndroidSdk(filesystem: MemoryFilesystem): Promise<void> {
+    vi.stubEnv("ANDROID_HOME", "/android-sdk");
+    for (const binary of [
+      "platform-tools/adb",
+      "emulator/emulator",
+      "cmdline-tools/latest/bin/avdmanager",
+      "cmdline-tools/latest/bin/sdkmanager",
+    ]) {
+      await filesystem.mkdirp(dirname(join("/android-sdk", binary)));
+      await filesystem.writeFileAtomic(join("/android-sdk", binary), "binary");
+    }
+  }
+
+  // why: real drivers are the ones discovered, so neither the drivers option nor the substitute module may be set.
+  async function startWithRealDrivers(
+    filesystem: MemoryFilesystem,
+    livePids: readonly number[] | FakeProcessSupervisor,
+    processRunner: ScriptedProcessRunner,
+    dataDirectory?: string,
+    extra: Partial<StartDaemonOptions> = {},
+  ) {
+    vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+    return start({
+      ...extra,
+      drivers: undefined,
+      filesystem,
+      hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+      npm: new FakeNpmCli(),
+      processRunner,
+      processSupervisor: Array.isArray(livePids)
+        ? new FakeProcessSupervisor(livePids)
+        : (livePids as FakeProcessSupervisor),
+      workerLockPath: LOCK_PATH,
+      ...(dataDirectory === undefined ? {} : { dataDirectory }),
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a worker whose lock is held by a live pid in another folder fails to start with the refusal message, before any driver is discovered", async () => {
+    const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
+    // why: without an SDK discovery does nothing a test can see, so a lock taken after it would pass; with one, discovery creates the Android device root.
+    await installAndroidSdk(filesystem);
+    const processRunner = new ScriptedProcessRunner([]);
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+
+    await expect(
+      startWithRealDrivers(filesystem, [4242], processRunner, dataDirectory),
+    ).rejects.toThrow(
+      `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since 2026-11-02T08:00:00.000Z); stop it first: SIMLOCK_HOME=${OTHER_FOLDER} simlock daemon stop`,
+    );
+    expect(processRunner.calls).toEqual([]);
+    expect(await filesystem.exists(join(dataDirectory, "devices", "android"))).toBe(false);
+  });
+
+  it.each([
+    { name: "real drivers", substitute: "none" },
+    { name: "drivers passed to startDaemon", substitute: "passed" },
+    { name: "SIMLOCK_DRIVERS_MODULE set", substitute: "module" },
+  ] as const)(
+    "takes the worker lock when drivers are discovered, writing its pid, folder and start time, and reads a held one never otherwise: $name",
+    async ({ substitute }) => {
+      const held = { folder: OTHER_FOLDER, pid: 4242 };
+      const filesystem = await filesystemWithLockHeldBy(
+        substitute === "none" ? { folder: "/gone", pid: 4343 } : held,
+      );
+      vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+      if (substitute === "module") {
+        vi.stubEnv(
+          "SIMLOCK_DRIVERS_MODULE",
+          await writeModule(`export function createDrivers() { return []; }`),
+        );
+      }
+
+      const { directory } = await start({
+        ...(substitute === "passed" ? {} : { drivers: undefined }),
+        filesystem,
+        hostInfo: new FakeHostInfo({ arch: "arm64", os: "macOS", osVersion: "15.5" }),
+        npm: new FakeNpmCli(),
+        processRunner: new ScriptedProcessRunner([]),
+        processSupervisor: new FakeProcessSupervisor([4242]),
+        workerLockPath: LOCK_PATH,
+      });
+
+      const owner = JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")));
+      expect(owner).toEqual(
+        substitute === "none"
+          ? { folder: directory, pid: process.pid, startedAt: "1970-01-01T00:00:01.000Z" }
+          : { ...held, startedAt: "2026-11-02T08:00:00.000Z" },
+      );
+    },
+  );
+
+  it("a worker that wins the socket claim while the lock names its folder and another live pid rewrites owner.json with its own pid", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    const filesystem = await filesystemWithLockHeldBy({ folder: dataDirectory, pid: 4242 });
+
+    await startWithRealDrivers(filesystem, [4242], new ScriptedProcessRunner([]), dataDirectory);
+
+    expect(JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")))).toEqual({
+      folder: dataDirectory,
+      pid: process.pid,
+      startedAt: "1970-01-01T00:00:01.000Z",
+    });
+  });
+
+  it("a worker that wins the socket claim while a live pid in another folder holds the lock fails its start with the refusal message", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    const filesystem = await filesystemWithLockHeldBy({ folder: dataDirectory, pid: 4242 });
+    const ownerFile = join(LOCK_PATH, "owner.json");
+    const reads: string[] = [];
+    // why: the other worker takes the lock over between this worker's take and its check after the claim, which a start cannot be made to wait for.
+    const readFile = filesystem.readFile.bind(filesystem);
+    filesystem.readFile = async (path: string) => {
+      if (path === ownerFile) reads.push(path);
+      return path === ownerFile && reads.length > 1
+        ? JSON.stringify({ folder: OTHER_FOLDER, pid: 4242, startedAt: "t0" })
+        : readFile(path);
+    };
+
+    await expect(
+      startWithRealDrivers(filesystem, [4242], new ScriptedProcessRunner([]), dataDirectory),
+    ).rejects.toThrow(
+      `another Simlock worker runs for this user (pid 4242, folder ${OTHER_FOLDER}, since t0)`,
+    );
+  });
+
+  it.each([
+    { name: "a stop removes the lock it wrote", takenOver: false, failedStart: false },
+    { name: "a stop leaves a lock another worker took over", takenOver: true, failedStart: false },
+    {
+      name: "a start that fails after taking the lock removes it",
+      takenOver: false,
+      failedStart: true,
+    },
+  ])("$name", async ({ failedStart, takenOver }) => {
+    const filesystem = new MemoryFilesystem();
+    const ownerFile = join(LOCK_PATH, "owner.json");
+    const taken = { folder: OTHER_FOLDER, pid: 4242, startedAt: "t0" };
+    // why: the Android driver's disposal ends the adb server this record names, which is the one thing a test can see a driver do at disposal; the lock must still stand then (ADR 0059 §3).
+    await installAndroidSdk(filesystem);
+    const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-main-lock-"));
+    temporaryDirectories.push(dataDirectory);
+    await filesystem.mkdirp(dataDirectory);
+    await filesystem.writeFileAtomic(
+      join(dataDirectory, "adb-server.json"),
+      JSON.stringify({ pid: 4343, port: 5038, startedAt: 1 }),
+    );
+    const supervisor = new FakeProcessSupervisor([4242, 4343]);
+    supervisor.answerCommandLine(4343, "/android-sdk/platform-tools/adb -P 5038 nodaemon server");
+    const lockAtDisposal: Promise<boolean>[] = [];
+    const signal = supervisor.signal.bind(supervisor);
+    supervisor.signal = (pid, kill) => {
+      lockAtDisposal.push(filesystem.exists(LOCK_PATH));
+      signal(pid, kill);
+      supervisor.markDead(pid);
+    };
+    const starting = startWithRealDrivers(
+      filesystem,
+      supervisor,
+      new ScriptedProcessRunner([]),
+      dataDirectory,
+      // why: a module named like a core route is refused by the module host, which runs after the lock is taken.
+      {
+        tcpProbe: new FakeTcpProbe([5038]),
+        ...(failedStart ? { optionalModules: [{ name: "status" } as never] } : {}),
+      },
+    );
+
+    if (failedStart) {
+      await expect(starting).rejects.toThrow("status");
+    } else {
+      const { daemon } = await starting;
+      if (takenOver) await filesystem.writeFileAtomic(ownerFile, JSON.stringify(taken));
+      await daemon.stop("test");
+    }
+
+    if (!failedStart) expect(await Promise.all(lockAtDisposal)).toEqual([true]);
+    expect(await filesystem.exists(LOCK_PATH)).toBe(takenOver);
+    if (takenOver) expect(JSON.parse(await filesystem.readFile(ownerFile))).toEqual(taken);
+  });
+
+  it("a gateway never takes the worker lock, even when it is held", async () => {
+    const filesystem = await filesystemWithLockHeldBy({ folder: OTHER_FOLDER, pid: 4242 });
+    vi.stubEnv("SIMLOCK_DRIVERS_MODULE", undefined as unknown as string);
+
+    const { daemon } = await startGateway({
+      // why: a gateway given no drivers is the case where a worker would discover them and take the lock.
+      drivers: undefined as never,
+      filesystem,
+      processSupervisor: new FakeProcessSupervisor([4242]),
+      workerLockPath: LOCK_PATH,
+    });
+
+    expect(daemon.health).toBe("running");
+    expect(JSON.parse(await filesystem.readFile(join(LOCK_PATH, "owner.json")))).toMatchObject({
+      pid: 4242,
+    });
   });
 });

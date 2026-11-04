@@ -13,6 +13,7 @@ import {
   type HostFacts,
   NoDriverError,
   type Nuke,
+  type BaselineService,
   type WarmKindForgetter,
   redactConfig,
   UnknownPassthroughToolError,
@@ -162,7 +163,9 @@ export interface DaemonServerEngineOptions {
   readonly enrollment?: DispatcherOptions["enrollment"];
   readonly nuke?: Nuke;
   readonly warmKinds?: WarmKindForgetter;
+  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
   readonly passthrough?: PassthroughResolver;
+  readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
   readonly relayTargets?: RelayTargets;
   readonly relayTwoWayTargets?: TwoWayRelayTargets;
@@ -314,7 +317,9 @@ function buildDispatcher(
     ...(options.enrollment === undefined ? {} : { enrollment: options.enrollment }),
     ...(options.nuke === undefined ? {} : { nuke: options.nuke }),
     ...(options.warmKinds === undefined ? {} : { warmKinds: options.warmKinds }),
+    ...(options.baselines === undefined ? {} : { baselines: options.baselines }),
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
+    ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
     queue: options.queue,
@@ -1166,6 +1171,24 @@ export class DaemonServer {
           frame.payload ?? {},
           this.#session(connection),
         );
+      case "baseline.list":
+        return this.#dispatcher.dispatch(
+          "baseline.list",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "baseline.remove":
+        return this.#dispatcher.dispatch(
+          "baseline.remove",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
+      case "baseline.save":
+        return this.#dispatcher.dispatch(
+          "baseline.save",
+          frame.payload ?? {},
+          this.#session(connection),
+        );
       case "events.replay":
         return this.#dispatcher.dispatch(
           "events.replay",
@@ -1209,6 +1232,8 @@ export class DaemonServer {
         // why: Unlike `driver.passthrough` above, this one runs the command here -- so it needs the
         // per-call push wiring `lease.request` needs, and gets it the same way.
         return this.#execDevice(connection, frame.id, frame.payload);
+      case "device.rotate":
+        return this.#dispatcher.dispatch("device.rotate", frame.payload, this.#session(connection));
       case "relay.request":
         return this.#relayRequest(connection, frame.id, frame.payload, relayChannel);
       case "relay.cancel":

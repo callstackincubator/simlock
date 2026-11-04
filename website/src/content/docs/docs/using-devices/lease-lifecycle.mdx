@@ -22,7 +22,7 @@ simlock lease --platform ios --device "iPhone 16"
    {"push":"progress","stage":"booting","etaMs":45000}
    ```
 
-   The stages are `queued`, `downloading` (only with `--allow-download`), `reclaiming` (the device is being wiped after its last holder), `provisioning` and `booting`.
+   The stages are `queued`, `downloading` (only with `--allow-download`), `reclaiming` (the device is being deleted, or for a phone wiped, after its last holder), `provisioning` and `booting`.
 
 2. **It prints the grant.** When the device is ready, one JSON line goes to stdout:
 
@@ -60,7 +60,7 @@ Many agents run each shell command in a fresh shell that exits right away. A hel
   simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
   ```
 
-  Renew before `ttlDeadline`. A detached lease that nobody renews expires one TTL after its last renewal, and the device is wiped for the next agent.
+  Renew before `ttlDeadline`. A detached lease that nobody renews expires one TTL after its last renewal, and the device is deleted (a phone is wiped) for the next agent.
 
 - **`--bind-pid <pid>`** keeps the held mode but watches the process you name instead of the direct parent. Point it at the agent's own long-lived process. The lease is released when that process exits.
 
@@ -87,7 +87,7 @@ simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
 {"leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3"}
 ```
 
-The command returns as soon as the lease ends. Simlock then wipes the device in the background, which can take tens of seconds for an iOS simulator. Anything you left on the device (apps, files, settings) is gone for the next holder.
+The command returns as soon as the lease ends. Simlock then deletes the device in the background. A physical device is wiped and kept instead. Anything you left on the device (apps, files, settings) is gone for the next holder. A lease that names a baseline starts from a copy of that baseline, so the next lease naming it starts from the baseline again, not from your changes.
 
 <Aside type="caution">
 `simlock release --all` ends every lease on the machine, including other agents' leases. It asks for confirmation, and without a terminal it refuses unless you pass `--yes`. Agents should release their own lease by id.
@@ -121,7 +121,7 @@ Release that lease first, or keep using it. An admin can allow more leases per r
 
 ## Who the requester is
 
-The requester id decides which leases are yours and enforces the one-lease limit. `simlock lease` takes the first of these that is set:
+The requester id decides which leases are yours and enforces the one-lease limit. It holds no control characters and is at most 256 characters; a longer or unprintable one is refused with `BAD_REQUEST`. `simlock lease` takes the first of these that is set:
 
 1. `--agent-id <id>` on the command.
 2. The `SIMLOCK_AGENT_ID` environment variable.

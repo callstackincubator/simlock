@@ -43,11 +43,17 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
 2. **Resolve** (no lock) — request → spec: default mode, class or OS range →
    exact model and runtime, `driver.resolveSpec`. May install a runtime when
    `allowDownload`. Physical requests skip this. See device selection.
+   A request naming a baseline resolves against `core.baselines` instead: unknown,
+   mismatch (`baselineMismatch`) or stale fails at once, and the spec is the
+   baseline's, with its name and version; no download is attempted.
 3. **Plan** (lock) — `AcquisitionPlanner.plan`; first that applies wins:
    grant a ready fitting device → wait for one the warm pool is booting →
    boot a shut-down one → provision → evict an
    idle device (device or running limit) → wait, or `NO_CAPACITY` under `noWait`.
    Only the head of the virtual line plans; every physical waiter plans.
+   Each plan first moves a waiting baseline request to the baseline's newest version. A device
+   made from an older version is never granted: a copy that finishes after a save is deleted at the
+   grant check and its waiter plans again.
    A blocked plan carries a reason (a capacity refusal, `behind-earlier-request`,
    `waiting-for-device` or `no-free-physical`). The waiter keeps it,
    in memory only, from its latest enqueue; `waitingRequests()` lists it on a `queued`
@@ -68,16 +74,18 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
 7. **End** — explicit release, TTL expiry, `device-lost` (health monitor or
    physical watcher), release-all (nuke), or startup. All go through
    `LeaseReleaseCoordinator`: one commit puts the device in `reclaiming` and
-   emits `lease.released` or `lease.expired`.
+   emits `lease.released` or `lease.expired`. `releaseToSave(leaseId, save)` (core's
+   `leaseSave` port, for `baseline.save`) ends the lease `explicit` the same way, then runs
+   `save` in the reclaim's place under the `reclaim` claim, as a normal release workflow
+   that nuke's maintenance waits for.
 8. **Lease-end participants** — called after that commit, outside the lock,
    with an `AbortSignal` bounded by `lease.endWaitMs`. Today: agent-device's
    `AgentDeviceLeaseEnd` and the stream's `createStreamLeaseEnd`. Reclaim waits for them.
 9. **Reclaim** (background, `reclaim` claim) — core's `ReclaimCoordinator`
-   wipes the device and commits the state the driver returns (iOS `shutdown`;
-   Android `ready`, or `shutdown` after a full clean, a changed config or a
-   failed snapshot load), deletes a spent
-   `fresh` device, or quarantines on failure. Then it kicks the queue and the
-   warm pool.
+   deletes a virtual device (shutdown, then destroy: it serves one lease,
+   whatever `lease.identity` says, ADR 0061 §2), or wipes a physical one and
+   commits the state the driver returns; it quarantines on failure. Then it
+   kicks the queue and the warm pool.
 
 Physical branch: plan picks the first ready, unclaimed, fitting enrolled
 device under a `grant` claim; presence is read outside the lock and checked

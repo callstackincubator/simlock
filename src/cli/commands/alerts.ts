@@ -7,6 +7,7 @@ import {
   writeResult,
 } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import type { CommandContext } from "../tree.js";
 
 const ALERTS_USAGE = "Usage: simlock alerts test <destination> [--json]\n";
@@ -33,7 +34,7 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     if (values.json) writeResult((value) => environment.stdout.write(value), result);
     else
       environment.stdout.write(
-        `Sent a test message to ${result.destination}: HTTP ${result.status}\n`,
+        `Sent a test message to ${esc(result.destination)}: HTTP ${result.status}\n`,
       );
     return 0;
   } finally {

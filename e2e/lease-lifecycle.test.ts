@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { waitForDeviceState, withDaemon } from "./helpers/index.js";
+import { events, waitFor, waitForDeviceState, withDaemon } from "./helpers/index.js";
+
+function deviceOf(entry: { readonly payload: unknown }): unknown {
+  return (entry.payload as { readonly deviceId?: unknown }).deviceId;
+}
 
 describe("lease lifecycle across both frontends", () => {
-  it("catalog -> lease --detach -> status/list agree -> release -> device returns to ready -> events", async () => {
+  it("catalog -> lease --detach -> status/list agree -> release -> device deleted -> events", async () => {
     const env = await withDaemon();
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
@@ -60,24 +64,27 @@ describe("lease lifecycle across both frontends", () => {
     const release = await env.cli(["release", leaseGrant.lease.id]);
     expect(release.code).toBe(0);
 
-    await waitForDeviceState(env, leaseGrant.device.driverDeviceId, "ready");
+    await waitForDeviceState(env, leaseGrant.device.driverDeviceId, "deleted");
 
-    await env.expectEvents(["lease.requested", "lease.granted", "lease.released"]);
+    await env.expectEvents([
+      "lease.requested",
+      "lease.granted",
+      "lease.released",
+      "device.deleted",
+    ]);
   });
 
   it.each([
-    ["ios", "iPhone 16", "18.4", "shutdown"],
-    ["android", "Pixel 8", "34", "ready"],
+    ["ios", "iPhone 16", "18.4", true],
+    ["ios", "iPhone 16", "18.4", false],
+    ["android", "Pixel 8", "34", true],
+    ["android", "Pixel 8", "34", false],
   ] as const)(
-    "releasing a %s lease (%s, OS %s) leaves its device ready in list --devices when the running limit has room, whatever state its reclaim returns",
-    async (platform, model, osVersion, reclaimResult) => {
-      // The iOS reclaim ends shut down and the Android one ready; the fake driver's default is
-      // `ready`, so iOS has to ask for `shutdown` the way the real driver returns it. The warm
-      // pool then boots the iOS device back, so both end ready.
+    "releasing a %s lease (%s, OS %s) with warmPool.enabled %s deletes its device with device.deleted initiator lease-end, and records no device.reclaimed",
+    async (platform, model, osVersion, poolEnabled) => {
       const env = await withDaemon({
-        driverScript: {
-          [platform]: { availableOsVersions: [osVersion], knownModels: [model], reclaimResult },
-        },
+        configOverrides: { warmPool: { enabled: poolEnabled } },
+        driverScript: { [platform]: { availableOsVersions: [osVersion], knownModels: [model] } },
       });
 
       const lease = await env.cli([
@@ -91,54 +98,23 @@ describe("lease lifecycle across both frontends", () => {
         "--detach",
       ]);
       expect(lease.code, lease.stderr).toBe(0);
-      const grant = lease.json as { lease: { id: string }; device: { driverDeviceId: string } };
+      const grant = lease.json as {
+        lease: { id: string };
+        device: { id: string; driverDeviceId: string };
+      };
 
       const release = await env.cli(["release", grant.lease.id]);
       expect(release.code, release.stderr).toBe(0);
 
-      await waitForDeviceState(env, grant.device.driverDeviceId, "ready");
-      await env.expectEvents(["lease.released", "device.reclaimed"]);
-    },
-  );
-
-  it.each([
-    ["ios", "iPhone 16", "18.4", "shutdown", ["lease.released", "device.reclaimed"]],
-    [
-      "android",
-      "Pixel 8",
-      "34",
-      "ready",
-      ["lease.released", "device.reclaimed", "device.shutdown"],
-    ],
-  ] as const)(
-    "with warmPool.enabled false, releasing a %s lease (%s, OS %s) leaves its device shutdown in list --devices",
-    async (platform, model, osVersion, reclaimResult, events) => {
-      const env = await withDaemon({
-        configOverrides: { warmPool: { enabled: false } },
-        driverScript: {
-          [platform]: { availableOsVersions: [osVersion], knownModels: [model], reclaimResult },
-        },
-      });
-
-      const lease = await env.cli([
-        "lease",
-        "--platform",
-        platform,
-        "--device",
-        model,
-        "--os",
-        osVersion,
-        "--detach",
-      ]);
-      expect(lease.code, lease.stderr).toBe(0);
-      const grant = lease.json as { lease: { id: string }; device: { driverDeviceId: string } };
-
-      const release = await env.cli(["release", grant.lease.id]);
-      expect(release.code, release.stderr).toBe(0);
-
-      await waitForDeviceState(env, grant.device.driverDeviceId, "shutdown");
-      // An iOS reclaim already ends shut down, so only the Android device is shut down by the pool.
-      await env.expectEvents(events);
+      await waitForDeviceState(env, grant.device.driverDeviceId, "deleted");
+      await env.expectEvents(["lease.released", "device.deleted"]);
+      const recorded = await events(env.env);
+      expect(recorded.map((entry) => entry.event)).not.toContain("device.reclaimed");
+      expect(
+        recorded.find(
+          (entry) => entry.event === "device.deleted" && deviceOf(entry) === grant.device.id,
+        )?.payload,
+      ).toMatchObject({ initiator: "lease-end" });
     },
   );
 
@@ -217,18 +193,39 @@ describe("lease lifecycle across both frontends", () => {
       return result.json as Granted;
     }
 
-    /** Leases and releases an exact device, leaving it warm and idle. */
-    async function warm(env: Awaited<ReturnType<typeof withDaemon>>, model: string, os = "18.4") {
-      const warmed = granted(await lease(env, "warmer", ["--device", model, "--os", os]));
-      await env.cli(["release", warmed.lease.id]);
-      await waitForDeviceState(env, warmed.device.driverDeviceId, "ready");
-      return warmed.device;
+    async function readyDeviceOf(env: Awaited<ReturnType<typeof withDaemon>>, model: string) {
+      let found: { id: string; driverDeviceId: string } | undefined;
+      await waitFor(
+        async () => {
+          const listed = await env.cli(["list", "--devices"]);
+          found = (
+            listed.json as {
+              id: string;
+              driverDeviceId: string;
+              state: string;
+              spec: { model: string };
+            }[]
+          ).find((device) => device.state === "ready" && device.spec.model === model);
+          return found !== undefined;
+        },
+        { label: `a ready ${model}`, timeout: 30_000 },
+      );
+      if (found === undefined) throw new Error(`no ready ${model}`);
+      return found;
     }
 
-    async function deviceWork(env: Awaited<ReturnType<typeof withDaemon>>) {
-      return (await env.driverLog.calls()).filter((call) =>
-        ["provision", "makeReady"].includes(call.operation),
-      ).length;
+    async function withWarmTarget(
+      target: { model: string; osVersion: string; mode?: "slim" | "full" },
+      options: { configOverrides?: Record<string, unknown>; script?: Record<string, unknown> } = {},
+    ) {
+      const env = await withDaemon({
+        configOverrides: {
+          ...options.configOverrides,
+          warmPool: { targets: [{ count: 1, platform: "ios", ...target }] },
+        },
+        driverScript: { ios: { ...iosScript, ...options.script } },
+      });
+      return { env, warmed: await readyDeviceOf(env, target.model) };
     }
 
     it("grants a lease with no --device and no --class a phone, the grant naming its model and OS", async () => {
@@ -244,66 +241,52 @@ describe("lease lifecycle across both frontends", () => {
     });
 
     it("grants --class phone a ready idle iPhone 15 without provisioning or booting, and not to an exact iPhone 16 request", async () => {
-      const env = await withDaemon({ driverScript: { ios: iosScript } });
-      const warmed = await warm(env, "iPhone 15", "26.0");
-      await env.driverLog.clear();
-
-      const byClass = await lease(env, "by-class", ["--class", "phone"]);
-      expect(byClass.code, byClass.stderr).toBe(0);
-      expect(granted(byClass).device.id).toBe(warmed.id);
-      expect(await deviceWork(env)).toBe(0);
-      await env.cli(["release", granted(byClass).lease.id]);
-      await waitForDeviceState(env, warmed.driverDeviceId, "ready");
+      const { env, warmed } = await withWarmTarget({ model: "iPhone 15", osVersion: "26.0" });
 
       const exact = await lease(env, "exact", ["--device", "iPhone 16"]);
       expect(exact.code, exact.stderr).toBe(0);
       expect(granted(exact).device.id).not.toBe(warmed.id);
       expect(granted(exact).device.spec.model).toBe("iPhone 16");
+
+      const byClass = await lease(env, "by-class", ["--class", "phone"]);
+      expect(byClass.code, byClass.stderr).toBe(0);
+      expect(granted(byClass).device.id).toBe(warmed.id);
+      // why: the pool refills its target after the grant, so the grant itself is read from its event.
+      const grant = (await events(env.env)).find(
+        (entry) =>
+          entry.event === "lease.granted" &&
+          (entry.payload as { leaseId?: string }).leaseId === granted(byClass).lease.id,
+      );
+      expect(grant?.payload).toMatchObject({ source: "warm" });
     });
 
     it("does not grant a request with no class an idle Apple Watch, and grants --class watch it", async () => {
-      const env = await withDaemon({ driverScript: { ios: iosScript } });
-      const watch = await lease(env, "warmer", [
-        "--device",
-        "Apple Watch Series 11",
-        "--os",
-        "18.4",
-      ]);
-      const watchDevice = granted(watch).device;
-      await env.cli(["release", granted(watch).lease.id]);
-      await waitForDeviceState(env, watchDevice.driverDeviceId, "ready");
+      const { env, warmed } = await withWarmTarget({
+        model: "Apple Watch Series 11",
+        osVersion: "18.4",
+      });
 
       const noClass = await lease(env, "no-class", []);
-      expect(granted(noClass).device.id).not.toBe(watchDevice.id);
-      await env.cli(["release", granted(noClass).lease.id]);
+      expect(granted(noClass).device.id).not.toBe(warmed.id);
 
       const byClass = await lease(env, "by-class", ["--class", "watch"]);
-      expect(granted(byClass).device.id).toBe(watchDevice.id);
+      expect(granted(byClass).device.id).toBe(warmed.id);
     });
 
     it("never grants a --mode full request a slim device, and a worker defaulting to full never grants one to a request with no mode", async () => {
-      const env = await withDaemon({
-        configOverrides: { ios: { defaultMode: "full" } },
-        driverScript: { ios: { ...iosScript, slimmableOsVersions: ["26.0"] } },
-      });
-      const slim = await lease(env, "slim", [
-        "--device",
-        "iPhone 15",
-        "--os",
-        "26.0",
-        "--mode",
-        "slim",
-      ]);
-      const slimDevice = granted(slim).device;
-      await env.cli(["release", granted(slim).lease.id]);
-      await waitForDeviceState(env, slimDevice.driverDeviceId, "ready");
+      const { env, warmed } = await withWarmTarget(
+        { mode: "slim", model: "iPhone 15", osVersion: "26.0" },
+        {
+          configOverrides: { ios: { defaultMode: "full" } },
+          script: { slimmableOsVersions: ["26.0"] },
+        },
+      );
 
       const full = await lease(env, "full", ["--class", "phone", "--mode", "full"]);
-      expect(granted(full).device.id).not.toBe(slimDevice.id);
-      await env.cli(["release", granted(full).lease.id]);
+      expect(granted(full).device.id).not.toBe(warmed.id);
 
       const noMode = await lease(env, "no-mode", ["--class", "phone"]);
-      expect(granted(noMode).device.id).not.toBe(slimDevice.id);
+      expect(granted(noMode).device.id).not.toBe(warmed.id);
     });
 
     it("never grants an --image-tag request a device of another tag", async () => {
@@ -335,7 +318,9 @@ describe("lease lifecycle across both frontends", () => {
       ]);
       const firstDevice = granted(first).device;
       await env.cli(["release", granted(first).lease.id]);
-      await waitForDeviceState(env, firstDevice.driverDeviceId, "ready");
+      // why: the release deleted that device (its record stays, state deleted); the warm pool makes a ready one of the same kind.
+      await waitForDeviceState(env, firstDevice.driverDeviceId, "deleted");
+      const idle = await readyDeviceOf(env, "Pixel 8");
 
       const second = await env.cli([
         "lease",
@@ -351,7 +336,7 @@ describe("lease lifecycle across both frontends", () => {
       ]);
 
       expect(second.code, second.stderr).toBe(0);
-      expect(granted(second).device.id).not.toBe(firstDevice.id);
+      expect(granted(second).device.id).not.toBe(idle.id);
     });
 
     it("refuses --class beside --device with BAD_REQUEST", async () => {

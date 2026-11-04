@@ -19,6 +19,7 @@ import type { EventBus, EventName } from "../bus/index.js";
 import {
   grantedDeviceSchema,
   isSimlockError,
+  WORKER_VIEW_BASELINE_EVENTS,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_UPDATE_EVENTS,
   workerViewFields,
@@ -414,13 +415,15 @@ export class WorkerLink {
     receivedAt: number,
     includeCatalog: boolean,
   ): Promise<void> {
-    const [devices, catalog, config] = await this.#withTimeout(
+    const [devices, catalog, config, baselines] = await this.#withTimeout(
       Promise.all([
         client.list({ kind: "devices" }),
         includeCatalog ? client.getCatalog() : undefined,
         // Read on the same pass as the catalog: neither changes with a lease or a device, so
         // the per-event refresh stays at the two calls that do.
         includeCatalog ? client.getConfig() : undefined,
+        // why: a baseline changes with a save, a remove or a stale mark, not with a lease, so it is read with the catalog.
+        includeCatalog ? client.listBaselines() : undefined,
       ]),
       "view refresh",
     );
@@ -444,6 +447,7 @@ export class WorkerLink {
         status,
         ...(catalog === undefined ? {} : { catalog }),
         ...(config === undefined ? {} : { config }),
+        ...(baselines === undefined ? {} : { baselines }),
       }),
       grantedDevices: grantedDevices(devices),
       version: client.daemonVersion,
@@ -534,9 +538,11 @@ export class WorkerLink {
    * (`GATEWAY_OWN_EVENTS`) are refused by name, or a worker would write `worker.removed` or
    * `request.granted` straight into the operator's audit trail. Any other name is forwarded
    * unchanged: a newer worker's vocabulary is a fact its consumers need, and a gateway that
-   * dropped it would lose it from `events.replay`. The name, module, `id` and `timestamp` travel
-   * as they arrived -- the fact happened on that machine at that time, and rewriting either would
-   * make the audit trail lie about where it happened; `workerId` is what says which machine.
+   * dropped it would lose it from `events.replay`. The name, module and `id` travel as they
+   * arrived -- the fact happened on that machine at that time, and rewriting either would
+   * make the audit trail lie about where it happened; `workerId` is what says which machine. An
+   * event whose payload nests deeper than `MAX_RELAYED_PAYLOAD_DEPTH`, or cannot be serialized,
+   * is dropped with one logged error.
    */
   #onWorkerEvent(envelope: {
     readonly id: string;
@@ -555,23 +561,40 @@ export class WorkerLink {
     const payload = isRecord(envelope.payload)
       ? { ...envelope.payload, workerId: this.workerId }
       : { workerId: this.workerId };
-    // The one cast in this file: a worker's event name is a string on the wire (see
+    // why: the one cast in this file: a worker's event name is a string on the wire (see
     // `eventEnvelopeSchema`), and a *newer* worker may legitimately send a name this gateway's
     // `EventMap` has never heard of. Forwarding it is better than dropping it -- the envelope
     // is what `events.replay` returns, and a consumer that knows the name gets it either way.
     // ADR 0014 §2: the worker's `id` and `timestamp` travel with the fact (the wire layer bounded
     // both); only `seq` is this bus's own.
-    this.options.eventBus.republish({
+    const stamped = {
       event: envelope.event as EventName,
       id: envelope.id,
       module: envelope.module,
       payload: payload as never,
       timestamp: envelope.timestamp,
-    });
+    };
+    // why: one event nobody can serialize (a payload nested too deep) would throw in the IPC push, `events.replay` and the history on every use while it stays in the ring, so it never enters the bus; the depth is measured without recursion because a stack-dependent check lets a payload just under the limit through.
+    try {
+      if (exceedsDepth(payload, MAX_RELAYED_PAYLOAD_DEPTH))
+        throw new Error("payload nests too deep");
+      JSON.stringify(stamped);
+    } catch (error: unknown) {
+      this.#logger.error("Worker sent an event that cannot be relayed; dropping it", {
+        workerId: this.workerId,
+        event: envelope.event,
+        eventId: envelope.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    this.options.eventBus.republish(stamped);
     // ADR 0010 §7: an installed component is a new catalog entry, so that refresh re-reads it.
     if (changesCapacityOrLeases(envelope.event))
       void this.refresh({
-        includeCatalog: (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event),
+        includeCatalog:
+          (WORKER_VIEW_CATALOG_EVENTS as readonly string[]).includes(envelope.event) ||
+          (WORKER_VIEW_BASELINE_EVENTS as readonly string[]).includes(envelope.event),
       });
   }
 }
@@ -608,6 +631,7 @@ function changesCapacityOrLeases(event: string): boolean {
     event.startsWith("lease.") ||
     event.startsWith("device.") ||
     INSTALL_EVENTS.has(event) ||
+    (WORKER_VIEW_BASELINE_EVENTS as readonly string[]).includes(event) ||
     (WORKER_VIEW_UPDATE_EVENTS as readonly string[]).includes(event)
   );
 }
@@ -643,9 +667,15 @@ function queueRefresh(queued: QueuedRefresh | undefined, next: RefreshOptions): 
   return { done, options, resolve };
 }
 
+// why: the largest real worker reply is under 1 MB (an `events.replay` page, a `list.get` of the fleet maximum); this is the uplink's 8 MiB message cap, so a worker cannot feed the gateway an unbounded line.
+const WORKER_REPLY_MAX_LINE_CHARS = 8 * 1024 * 1024;
+
 const defaultConnect: WorkerClientFactory = async (connection, principal) =>
   // why: the gateway's session is the one client that also makes relay calls, which `simlock/admin` does not export.
-  (await connectSimlockClient({ connection, principal }, true)) as GatewayWorkerClient;
+  (await connectSimlockClient(
+    { connection, principal, maxLineChars: WORKER_REPLY_MAX_LINE_CHARS },
+    true,
+  )) as GatewayWorkerClient;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -653,4 +683,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** why: real event payloads nest a handful of levels; far below any stack limit, far above real use. */
+const MAX_RELAYED_PAYLOAD_DEPTH = 64;
+
+/** why: iterative on purpose -- the answer must not depend on the stack. */
+function exceedsDepth(value: unknown, limit: number): boolean {
+  const pending: Array<[unknown, number]> = [[value, 0]];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [node, depth] = next;
+    if (typeof node !== "object" || node === null) continue;
+    if (depth >= limit) return true;
+    for (const child of Object.values(node)) pending.push([child, depth + 1]);
+  }
+  return false;
 }

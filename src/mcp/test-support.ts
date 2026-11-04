@@ -17,6 +17,7 @@ import {
   type ExecInput,
   type ExecOptions,
   type ExecOutput,
+  type RotateOutput,
   type DriverPassthroughInput,
   type LeaseCancelInput,
   type LeaseCancelOutput,
@@ -78,6 +79,8 @@ export class FakeSimlockClient implements SimlockClient {
   resolvePassthroughImpl: (input: DriverPassthroughInput) => Promise<PassthroughCommand> =
     notStubbed("resolvePassthrough");
   execImpl: (input: ExecInput, options: ExecOptions) => Promise<ExecOutput> = notStubbed("exec");
+  rotateImpl: (leaseId: string, orientation: RotateOutput["orientation"]) => Promise<RotateOutput> =
+    notStubbed("rotate");
 
   readonly #leaseLostListeners = new Set<(push: LeaseLostPush) => void>();
   readonly #deviceUnhealthyListeners = new Set<(push: DeviceUnhealthyPush) => void>();
@@ -148,6 +151,11 @@ export class FakeSimlockClient implements SimlockClient {
   exec(input: ExecInput, options: ExecOptions = {}): Promise<ExecOutput> {
     this.calls.push({ input, method: "exec" });
     return this.#dead ? this.#deadConnection() : this.execImpl(input, options);
+  }
+
+  rotate(leaseId: string, orientation: RotateOutput["orientation"]): Promise<RotateOutput> {
+    this.calls.push({ input: { leaseId, orientation }, method: "rotate" });
+    return this.#dead ? this.#deadConnection() : this.rotateImpl(leaseId, orientation);
   }
 
   onLeaseLost(listener: (push: LeaseLostPush) => void): () => void {
@@ -238,5 +246,19 @@ export function sampleGrant(overrides: { readonly leaseId?: string } = {}): Leas
       estimatedReadyMs: 6,
       estimatedReclaimMs: 1,
     },
+  };
+}
+
+export function startingStatus(): StatusGetOutput {
+  return {
+    daemon: {
+      health: "starting",
+      mode: "worker",
+      version: "0.0.0",
+      update: null,
+      lastUpdateFailure: null,
+      latestVersion: null,
+    },
+    host: { os: "darwin", osVersion: "26.0", arch: "arm64", tools: [] },
   };
 }

@@ -39,7 +39,7 @@ Flows: [startup](../../docs/internal/flows/startup.md). Catalog: [EVENTS.md](../
 | Wait on another connection's lock        | 5 s                           | none                 |
 
 - `status()` feeds `status.get` `history`: `opened`, `writing`, `setAsideAt`, `rebuiltAt`, `rebuildFailed`.
-- A failed write rolls back, logs one `error`, and sets `writing` false until restart. A storage failure also sends `replay` back to the ring; a projection failure leaves the file readable.
+- An event `JSON.stringify` cannot serialize is dropped with one `error` and writing goes on (the gateway's `WorkerLink` already refuses such a relayed event, so this is the second guard). A failed write rolls back, logs one `error`, and sets `writing` false until restart. A storage failure also sends `replay` back to the ring; a projection failure leaves the file readable.
 - A lock held past 5 s is never damage: nothing is set aside.
 - The file lives on the real disk: the daemon builds the history with its own `NodeFilesystem`.
 

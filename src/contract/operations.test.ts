@@ -34,6 +34,9 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "cleanup.run", input: {}, role: "admin" },
   { name: "nuke.run", input: {}, role: "admin" },
   { name: "warm.forget", input: { model: "Pixel", platform: "android" }, role: "admin" },
+  { name: "baseline.save", input: { leaseId: "L1", name: "checkout" }, role: "admin" },
+  { name: "baseline.list", input: {}, role: "agent" },
+  { name: "baseline.remove", input: { name: "checkout" }, role: "admin" },
   { name: "config.get", input: {}, role: "admin" },
   { name: "daemon.stop", input: {}, role: "admin" },
   { name: "daemon.update", input: {}, role: "admin" },
@@ -47,6 +50,11 @@ const ROLE_MATRIX: ReadonlyArray<{
   {
     name: "device.exec",
     input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    role: "agent",
+  },
+  {
+    name: "device.rotate",
+    input: { leaseId: "lease_1", orientation: "landscape_left" },
     role: "agent",
   },
   { name: "identity.get", input: {}, role: "agent" },
@@ -123,6 +131,9 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "cleanup.run", input: { dryRun: true }, effect: "read" },
   { name: "nuke.run", input: {}, effect: "write" },
   { name: "warm.forget", input: { model: "Pixel", platform: "android" }, effect: "write" },
+  { name: "baseline.save", input: { leaseId: "L1", name: "checkout" }, effect: "write" },
+  { name: "baseline.list", input: {}, effect: "read" },
+  { name: "baseline.remove", input: { name: "checkout" }, effect: "write" },
   { name: "config.get", input: {}, effect: "read" },
   { name: "daemon.stop", input: {}, effect: "write" },
   { name: "daemon.update", input: {}, effect: "write" },
@@ -136,6 +147,11 @@ const EFFECT_MATRIX: ReadonlyArray<{
   {
     name: "device.exec",
     input: { args: ["devices"], leaseId: "lease_1", tool: "adb" },
+    effect: "write",
+  },
+  {
+    name: "device.rotate",
+    input: { leaseId: "lease_1", orientation: "landscape_left" },
     effect: "write",
   },
   { name: "identity.get", input: {}, effect: "read" },
@@ -245,6 +261,18 @@ describe("component.install input", () => {
     ["carrying ';', sdkmanager's package path separator", "35;extras"],
   ])("refuses a version that is %s", (_label, version) => {
     expect(parse(version)).toBe(false);
+  });
+});
+
+describe("lease.request model", () => {
+  const parse = (model: string) =>
+    OPERATIONS["lease.request"].input.safeParse({ model, platform: "ios" });
+
+  it("accepts a model of 256 characters and refuses one of 257, naming the field", () => {
+    expect(parse("m".repeat(256)).success).toBe(true);
+    const result = parse("m".repeat(257));
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.path).toEqual(["model"]);
   });
 });
 
@@ -512,6 +540,7 @@ describe("operation input/output round trips", () => {
   it("doctor.run: round-trips a driver-advisory finding", () => {
     const report = {
       findings: [{ kind: "driver-advisory", platform: "ios", code: "slim-disabled", message: "x" }],
+      sources: [],
     };
     expect(OPERATIONS["doctor.run"].output.parse(report)).toBeDefined();
   });
@@ -524,11 +553,14 @@ describe("operation input/output round trips", () => {
       message: "The Android emulator package is not installed.",
       remedy: "Run `sdkmanager --install emulator`.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     const { remedy: _remedy, ...withoutRemedy } = finding;
-    expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
+    expect(() =>
+      OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy], sources: [] }),
+    ).toThrow();
   });
 
   it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list or a missing name, remedy or unknown manager", () => {
@@ -539,15 +571,22 @@ describe("operation input/output round trips", () => {
       missing: ["/Users/me/.nvm/versions/node/v22.13.0/bin/node"],
       remedy: "Run `simlock daemon install` again.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     expect(() =>
-      OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, missing: [] }] }),
+      OPERATIONS["doctor.run"].output.parse({
+        findings: [{ ...finding, missing: [] }],
+        sources: [],
+      }),
     ).toThrow();
     for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
       expect(() =>
-        OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, ...broken }] }),
+        OPERATIONS["doctor.run"].output.parse({
+          findings: [{ ...finding, ...broken }],
+          sources: [],
+        }),
       ).toThrow();
     }
   });
@@ -759,9 +798,9 @@ describe("operation input/output round trips", () => {
         target: "t",
       };
 
-      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
-        finding,
-      ]);
+      expect(
+        OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] }).findings,
+      ).toEqual([finding]);
     },
   );
 
@@ -774,8 +813,9 @@ describe("operation input/output round trips", () => {
       remedy: "run simlock component install ios 27.0",
       target: "iPhone 17 / 27.0 / full",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
   });
 
@@ -1149,6 +1189,55 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["device.exec"].output.parse({ exitCode: 0 })).toEqual({ exitCode: 0 });
   });
 
+  it("device.rotate: accepts a leaseId and requesterId of 1 to 256 characters and each orientation, and refuses an empty or 257-character one, another orientation or an unknown key", () => {
+    const parse = (input: object) => OPERATIONS["device.rotate"].input.parse(input);
+    const base = { leaseId: "lse_1", orientation: "portrait" };
+
+    for (const orientation of [
+      "portrait",
+      "portrait_upside_down",
+      "landscape_left",
+      "landscape_right",
+    ]) {
+      expect(parse({ ...base, orientation })).toEqual({ ...base, orientation });
+    }
+    expect(parse({ ...base, leaseId: "x".repeat(256), requesterId: "y".repeat(256) })).toEqual({
+      ...base,
+      leaseId: "x".repeat(256),
+      requesterId: "y".repeat(256),
+    });
+
+    for (const refused of [
+      { ...base, leaseId: "" },
+      { ...base, leaseId: "x".repeat(257) },
+      { ...base, requesterId: "" },
+      { ...base, requesterId: "y".repeat(257) },
+      { ...base, requesterId: "a\u001b[2Jb" },
+      { ...base, orientation: "upside_down" },
+      { ...base, angle: 90 },
+    ]) {
+      expect(() => parse(refused)).toThrow();
+    }
+  });
+
+  it("baseline.remove: accepts a workerId of 1 to 128 characters, and refuses an empty or 129-character one, a non-string and an unknown key", () => {
+    const parse = (input: object) => OPERATIONS["baseline.remove"].input.parse(input);
+    const base = { name: "checkout" };
+
+    expect(parse(base)).toEqual(base);
+    for (const workerId of ["w", "x".repeat(128)]) {
+      expect(parse({ ...base, workerId })).toEqual({ ...base, workerId });
+    }
+    for (const refused of [
+      { ...base, workerId: "" },
+      { ...base, workerId: "x".repeat(129) },
+      { ...base, workerId: 7 },
+      { ...base, worker: "wrk_a" },
+    ]) {
+      expect(() => parse(refused)).toThrow();
+    }
+  });
+
   it("the output push carries a frame id, a stream, and a chunk", () => {
     expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
       chunk: "hello",
@@ -1240,14 +1329,19 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: false },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({ audio: false });
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1306,7 +1400,12 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: true },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },

@@ -31,6 +31,7 @@ const TOOL_NAMES = [
   "release_simulator",
   "lease_status",
   "run_on_device",
+  "rotate_device",
 ];
 
 const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> = {
@@ -96,9 +97,13 @@ const REQUIRED: Readonly<Record<(typeof HEADINGS)[number], readonly string[]>> =
     `\`simlock simctl runtime ${REFUSED_RUNTIME_OPERATION}\``,
     `\`simlock simctl\` refuses any option before the subcommand, ${[...CALLER_SUPPLIED_SCOPE_FLAGS].map((flag) => `\`--${flag}\``).join(" and ")} included`,
     `\`simlock adb ${REFUSED_ADB_VERB}\``,
-    ...REFUSED_ADB_SEQUENCES.map(({ sequence }) => `\`simlock adb ${sequence.join(" ")}\``),
+    ...REFUSED_ADB_SEQUENCES.map(
+      ({ sequence, allowedNext }) =>
+        `\`simlock adb ${sequence.join(" ")}\`${allowedNext === undefined ? "" : ` subcommand except ${allowedNext.map((word) => `\`${word}\``).join(", ")}`}`,
+    ),
     "`simlock adb` refuses any option before the subcommand other than `-s`, `-t`, `-d` or `-e`",
     "`simlock adb shell`",
+    "`simlock rotate <orientation>`",
     ...[
       ERROR_TABLE.QUEUE_TIMEOUT.cliExitCode,
       ERROR_TABLE.NO_CAPACITY.cliExitCode,

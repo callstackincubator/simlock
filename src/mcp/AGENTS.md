@@ -29,11 +29,11 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
 2. **Rules** (`server.ts`) — the server options carry `MCP_SERVER_INSTRUCTIONS` (at most 4096
    characters), and the resource `simlock://instructions` (`text/markdown`) returns `AGENT_INSTRUCTIONS`,
    the text `simlock instructions` prints.
-3. **Tools** (`server.ts`), each one call on the typed client:
+3. **Tools** (`server.ts`), each one typed-client call, except `list_devices`, which makes two:
    - `lease_simulator` → `lease.request`. Input: the contract's lease fields minus
      `requesterId`, `fleetRequestId`, `requires`. Progress goes out as
      `notifications/progress`, only when the call carried a progress token.
-   - `list_devices` → `catalog.get`.
+   - `list_devices` → `catalog.get` and `status.get`: the catalog, plus `physicalDevices`, the status devices with `physical: true` and a state other than `deleted`, through a gateway only on a connected, undrained worker (no holder). `[]` while the daemon is starting.
    - `release_simulator` → `lease.release`. A lease not this principal's: the daemon's `FORBIDDEN`.
    - `lease_status` → `lease.list`, filtered to the held lease; `{ held: false }` when none.
    - `run_on_device` → `device.exec` on the held lease. Input: `tool`, `args`, `stdin?`, never a lease
@@ -41,8 +41,12 @@ Surface: [connect-your-agent.mdx](../../website/src/content/docs/docs/getting-st
      32 768 characters; a non-zero exit is a result. No held lease: `NO_LEASE`. With a progress
      token: `notifications/progress` on the first output, then at most one a second, and every 10 s
      while silent (the session's clock).
-4. **Serialize** — every tool call but `run_on_device` queues on one chain in `McpSession`;
-   `run_on_device` does not queue, so `lease_status` and `release_simulator` run while a command does.
+   - `rotate_device` → `device.rotate` on the held lease. Input: `orientation`, 1 to 64 characters,
+     parsed by the contract's `parseOrientation` (an unknown spelling: `BAD_REQUEST` with its
+     message, before any call). Result `{ leaseId, orientation }`. No held lease: `NO_LEASE`; the
+     daemon's refusal (`ROTATION_UNSUPPORTED`, `INPUT_UNAVAILABLE`) is the tool error.
+4. **Serialize** — every tool call but `run_on_device` and `rotate_device` queues on one chain in
+   `McpSession`; those two do not queue, so `lease_status` and `release_simulator` run while a command does.
 5. **Renew** — a grant starts `startLeaseRenewal` (lease-policy): every third of the TTL.
 6. **Pushes** → MCP logging messages, logger `simlock`: lease lost (warning), device
    unhealthy (warning), device recovered (info).

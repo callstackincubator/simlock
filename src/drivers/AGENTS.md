@@ -7,17 +7,18 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
 
 ## The interface core speaks (`core/driver.ts` `Driver`)
 
-| Verbs                                                                    | Contract                                                                                                          |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `resolveSpec`                                                            | Exact request → spec. Never downloads: throws `RuntimeMissingError` with `component` when a download could fix it |
-| `provision`, `makeReady`, `reclaim`, `shutdown`, `destroy`               | Lifecycle. `makeReady` returns a freshly read `address`; `reclaim` returns `ready` or `shutdown`                  |
-| `listManaged`, `revalidateRoot`, `findLegacy`, `destroyLegacy`           | What the root holds; re-proof before a purge; pre-root devices                                                    |
-| `listCatalog`, `estimate`, `advisories`, `toolVersions`                  | Read-only facts for catalog, ETAs, `doctor`, `status`                                                             |
-| `findComponent`, `installComponent`, `listComponents`, `removeComponent` | Runtimes / system images. Only core's `ComponentInstaller` installs or removes                                    |
-| `inspectPhysical`, `listPresentPhysical`                                 | Enrollment read and presence of physical devices                                                                  |
-| `leaseEnvironment`, `virtualLeaseEnvironment`, `passthrough`             | What a holder needs to reach its device                                                                           |
-| `dispose`                                                                | Daemon stop. Android reaps its adb server here                                                                    |
-| `screenCapture` (optional)                                               | A device's screen as core's frame envelope (`core/screen.ts`); absent = cannot stream                             |
+| Verbs                                                                    | Contract                                                                                                                                                     |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `resolveSpec`                                                            | Exact request → spec. Never downloads: throws `RuntimeMissingError` with `component` when a download could fix it                                            |
+| `provision`, `makeReady`, `reclaim`, `shutdown`, `destroy`               | Lifecycle. `makeReady` returns a freshly read `address`; `reclaim` (core calls it for a physical device only) returns `ready` or `shutdown`                  |
+| `listSources`, `destroySource`, `provision(spec, {source?})`             | Sources (ADR 0061): ready ones only, never leased; a seed is copied into every virtual device. Android lists its ready seeds and the orphan folders it flags |
+| `listManaged`, `revalidateRoot`, `findLegacy`, `destroyLegacy`           | What the root holds; re-proof before a purge; pre-root devices                                                                                               |
+| `listCatalog`, `estimate`, `advisories`, `toolVersions`                  | Read-only facts for catalog, ETAs, `doctor`, `status`                                                                                                        |
+| `findComponent`, `installComponent`, `listComponents`, `removeComponent` | Runtimes / system images. Only core's `ComponentInstaller` installs or removes                                                                               |
+| `inspectPhysical`, `listPresentPhysical`                                 | Enrollment read and presence of physical devices                                                                                                             |
+| `leaseEnvironment`, `virtualLeaseEnvironment`, `passthrough`             | What a holder needs to reach its device                                                                                                                      |
+| `dispose`                                                                | Daemon stop. Android reaps its adb server here, unless an emulator is still attached                                                                         |
+| `screenCapture` (optional)                                               | A device's screen as core's frame envelope (`core/screen.ts`); absent = cannot stream                                                                        |
 
 ## Rules both drivers keep
 
@@ -42,7 +43,7 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
    `hasTerminal: false` means `device.exec`: refuse what needs a tty.
 7. **Lease environment** — set on the lease at grant from `leaseEnvironment`; values are per platform.
 8. **Facts reach the bus through callbacks.** A driver never imports the bus; `daemon/main.ts`
-   bridges its constructor callbacks. Today only iOS `onSlimmed` → `device.slimmed`. Android `onDiagnostic` goes to the logger as
+   bridges its constructor callbacks. Today only iOS `onSlimmed` → `device.slimmed`. iOS `onSlimSkipped` and `onSilenceFailed` go to the logger as warnings. Android `onDiagnostic` goes to the logger as
    warnings (`logAndroidDiagnostic`), not the bus.
 
 ## Known gaps

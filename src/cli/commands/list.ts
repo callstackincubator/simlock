@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import { requestedClass, waitingRequestSchema } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, UsageError, writeResult } from "../args.js";
 import type { CommandContext } from "../tree.js";
 
@@ -67,6 +68,9 @@ const GATEWAY_REASON_TEXT: Readonly<
   disconnected: () => "Not connected",
   drained: () => "Drained",
   incompatible: () => "Protocol mismatch",
+  "baseline-mismatch": () => "Baseline is for another device",
+  "baseline-stale": () => "Baseline is stale",
+  "no-baseline": () => "Does not hold the baseline",
   "no-driver": (platform) => `No ${platform === "ios" ? "iOS" : "Android"} support`,
   "no-free-physical": () => WAITING_REASON_TEXT["no-free-physical"](""),
   "not-chosen": () => "Not chosen this time",
@@ -98,8 +102,24 @@ function workerReasonLines(
         : worker.capacityReason === undefined
           ? "Full"
           : WAITING_REASON_TEXT[worker.capacityReason](platform);
-    return `  ${names.get(worker.workerId) ?? worker.workerId}: ${lowerFirst(text)}`;
+    return `  ${esc(names.get(worker.workerId) ?? worker.workerId)}: ${lowerFirst(text)}`;
   });
+}
+
+// why: a request naming a baseline names no model or class, so it gets no class word.
+function requestedDeviceText(spec: WaitingRequestEntry["spec"]): string {
+  return [
+    spec.platform,
+    spec.physical === true ? "physical" : undefined,
+    spec.model ??
+      (spec.baseline === undefined ? `class ${String(requestedClass(spec))}` : undefined),
+    spec.osVersion,
+    spec.mode === undefined ? undefined : `mode ${spec.mode}`,
+    spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
+    spec.baseline === undefined ? undefined : `baseline ${spec.baseline}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" ");
 }
 
 function formatWaitingRequests(
@@ -110,25 +130,15 @@ function formatWaitingRequests(
   if (requests.length === 0) return "No requests are waiting.";
   return requests
     .map((request) => {
-      const { spec } = request;
-      const device = [
-        spec.platform,
-        spec.physical === true ? "physical" : undefined,
-        spec.model ?? `class ${String(requestedClass(spec))}`,
-        spec.osVersion,
-        spec.mode === undefined ? undefined : `mode ${spec.mode}`,
-        spec.imageTag === undefined ? undefined : `image tag ${spec.imageTag}`,
-      ]
-        .filter((part) => part !== undefined)
-        .join(" ");
-      const where = request.workerId === undefined ? "" : ` on ${request.workerId}`;
+      const device = requestedDeviceText(request.spec);
+      const where = request.workerId === undefined ? "" : ` on ${esc(request.workerId)}`;
       const stage =
         request.queuePosition === undefined
           ? request.stage
           : `${request.stage} at ${String(request.queuePosition)}`;
       const waited = Math.max(0, Math.round((now - request.createdAt) / 1000));
       const why = waitingReasonText(request);
-      const line = `Request ${request.id}: ${request.requesterId}${where}, ${device}, ${stage}, waiting ${String(waited)}s${why === undefined ? "" : ` — ${why}`}`;
+      const line = `Request ${esc(request.id)}: ${esc(request.requesterId)}${where}, ${esc(device)}, ${stage}, waiting ${String(waited)}s${why === undefined ? "" : ` — ${why}`}`;
       return [line, ...workerReasonLines(request, names)].join("\n");
     })
     .join("\n");

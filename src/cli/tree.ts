@@ -54,6 +54,7 @@ const leaseModule = () => import("./commands/lease.js");
 const tokenModule = () => import("./commands/token.js");
 const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
+const baselineModule = () => import("./commands/baseline.js");
 const alertsModule = () => import("./commands/alerts.js");
 const warmModule = () => import("./commands/warm.js");
 
@@ -121,6 +122,15 @@ export const COMMANDS: readonly CommandNode[] = [
     ],
   },
   {
+    name: "baseline",
+    load: baselineModule,
+    children: [
+      { name: "save", load: baselineModule },
+      { name: "list", load: baselineModule },
+      { name: "remove", load: baselineModule },
+    ],
+  },
+  {
     name: "device",
     load: deviceModule,
     children: [
@@ -130,6 +140,8 @@ export const COMMANDS: readonly CommandNode[] = [
   },
   { name: "simctl", load: () => import("./commands/passthrough.js") },
   { name: "adb", load: () => import("./commands/passthrough.js") },
+  { name: "rotate", load: () => import("./commands/rotate.js") },
+  { name: "tunnel", load: () => import("./commands/tunnel.js") },
   { name: "mcp", load: () => import("./commands/mcp.js") },
   { name: "instructions", load: () => import("./commands/instructions.js") },
   { name: "setup", load: () => import("./commands/setup.js") },
