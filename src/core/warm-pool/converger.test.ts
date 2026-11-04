@@ -58,12 +58,13 @@ function device(
 ): VirtualDevice {
   return {
     physical: false,
-    createdAt: 1,
+    // why: a virtual device that ended a lease is never granted again, so the fixture is a never-leased device whose createdAt orders it by recency.
+    createdAt: now - endedAgo,
     driverData: {},
     driverDeviceId: `driver-${id}`,
     id,
-    lastLeaseEndedAt: now - endedAgo,
     mode: "full",
+    readyAt: now,
     spec:
       platform === "ios"
         ? { model: "iPhone 15", osVersion: "26.0", physical: false, platform }
@@ -73,8 +74,7 @@ function device(
 }
 
 function neverLeased(id: string, platform: "ios" | "android"): VirtualDevice {
-  const { lastLeaseEndedAt: _dropped, ...rest } = device(id, "ready", 5_000, platform);
-  return { ...rest, readyAt: now - 11 * minute };
+  return { ...device(id, "ready", 5_000, platform), readyAt: now - 11 * minute };
 }
 
 function leaseOn(deviceId: string): LeaseRecord {

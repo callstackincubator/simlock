@@ -22,6 +22,7 @@ import {
   type DriverCatalogImage,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
@@ -302,7 +303,7 @@ const ANDROID_DEFAULT_MODELS: Readonly<Partial<Record<DeviceClass, readonly stri
 };
 
 const RECLAIM_INSTEAD =
-  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+  "Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead.";
 
 /**
  * why: `kill-server` would detach every leased emulator at once -- an agent's most reflexive
@@ -1081,6 +1082,14 @@ export class AndroidDriver implements Driver {
     }
     error.message = `No installed system image fits ${profile.name}${where}: ${reason}`;
     return error;
+  }
+
+  async listSources(): Promise<readonly DriverSource[]> {
+    return [];
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    throw new DriverCrashError(`Android keeps no source ${sourceId}`);
   }
 
   async provision(spec: VirtualSpec): Promise<DriverDevice> {

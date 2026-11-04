@@ -1,4 +1,5 @@
 import type { LeaseRecord, VirtualDevice } from "./domain.js";
+import type { Driver } from "./driver.js";
 import { type Logger, NoopLogger } from "../ports/index.js";
 import type { NukeExecutor } from "./core-ports.js";
 import { stableError } from "./stable-error.js";
@@ -43,15 +44,18 @@ export interface NukeServiceOptions {
   readonly acquisition: AcquisitionMaintenance;
   readonly leases: LeaseMaintenance;
   readonly registry: NukeRegistryView;
+  /** why: nuke --delete-devices also deletes the seeds the drivers keep; it names no other source (ADR 0061 §1). */
+  readonly drivers: readonly Pick<Driver, "platform" | "listSources" | "destroySource">[];
   readonly logger?: Logger;
   /** why: nuke starts the warm pool over, so the kinds it learned are not booted back. */
   readonly warmPool: { forget(): void };
 }
 
 /**
- * Coordinates the operator reset workflow without ever addressing driver
- * devices directly. It only forwards current registry records to lifecycle
- * operations, which perform their own final ownership and claim checks.
+ * why: Coordinates the operator reset workflow without ever addressing driver devices directly:
+ * it forwards current registry records to lifecycle operations, which perform their own final
+ * ownership and claim checks. The one thing it asks a driver for is its seeds (`listSources`,
+ * `destroySource`), and never an orphan source, which only `doctor --purge-orphans` deletes.
  */
 export class NukeService implements NukeExecutor {
   #tail: Promise<void> = Promise.resolve();
@@ -105,12 +109,39 @@ export class NukeService implements NukeExecutor {
         }
       }
 
+      if (deleteDevices) await this.#destroySeeds();
+
       return { releasedLeaseIds };
     } finally {
       try {
         if (releaseMaintenanceStarted) await this.options.leases.endMaintenance();
       } finally {
         await this.options.acquisition.endMaintenance();
+      }
+    }
+  }
+
+  /** why: one unreadable or stuck seed must not stop the rest of the reset; the seed stays and `doctor` lists it. */
+  async #destroySeeds(): Promise<void> {
+    for (const driver of this.options.drivers) {
+      try {
+        for (const source of await driver.listSources()) {
+          if (source.kind !== "seed" || source.orphan === true) continue;
+          try {
+            await driver.destroySource(source.id);
+          } catch (error: unknown) {
+            this.#logger.error("nuke could not delete a seed", {
+              platform: driver.platform,
+              sourceId: source.id,
+              error: stableError(error),
+            });
+          }
+        }
+      } catch (error: unknown) {
+        this.#logger.error("nuke could not list the seeds", {
+          platform: driver.platform,
+          error: stableError(error),
+        });
       }
     }
   }

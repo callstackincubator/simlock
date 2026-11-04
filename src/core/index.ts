@@ -76,6 +76,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverSource,
   type DriverRejection,
   type DriverToolVersion,
   InsufficientDiskSpaceError,

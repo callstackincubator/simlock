@@ -238,7 +238,7 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it(
-      "a released slim simulator leased again is slim with every label disabled after one boot",
+      "a slim simulator leased after a release is a new one, slim with every label disabled after one boot",
       { timeout: 900_000 },
       async () => {
         const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
@@ -246,22 +246,26 @@ describe.skipIf(process.platform !== "darwin")(
         const first = await leaseDetached(env, model, os, "slim-first");
         await expectSlim(env, first.mode, "a default-slim lease must be slim");
         await env.cli(["release", first.lease]);
-        // why: a lease landing while the release is still cleaning provisions a second device.
+        // why: the release deletes the simulator, and a lease landing while it is still going provisions a second device.
         await waitFor(
           async () => {
             const rows = (await env.cli(["list", "--devices"])).json as {
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === first.udid && row.state === "ready");
+            return rows.some((row) => row.driverDeviceId === first.udid && row.state === "deleted");
           },
-          { timeout: 60_000, label: "device returns to ready after release" },
+          { timeout: 60_000, label: "device is deleted after release" },
         );
 
         const second = await leaseDetached(env, model, os, "slim-second");
 
-        expect(second.udid, "the released simulator must be the one leased again").toBe(first.udid);
-        await expectSlim(env, second.mode, "a re-leased slim simulator must be slim");
+        expect(second.udid, "a released simulator is never leased again").not.toBe(first.udid);
+        await expectSlim(
+          env,
+          second.mode,
+          "the slim simulator leased after a release must be slim",
+        );
         const disabled = await printDisabled(second);
         expect([...ALL_LABELS].filter((label) => !disabled.has(label))).toEqual([]);
         await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });

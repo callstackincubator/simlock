@@ -96,10 +96,7 @@ export class ReclaimCoordinator {
   reclaim(released: ReleasedLease): Promise<void> {
     // A physical device is never retired: it has no spent state, so only its purge applies.
     if (released.device.physical) return this.#purge(released.device, released.lease.id);
-    if (!mayBeGranted(released.device)) {
-      return this.#retireSpent({ device: released.device, lease: released.lease });
-    }
-    return this.#purge(released.device, released.lease.id);
+    return this.#retireSpent({ device: released.device, lease: released.lease });
   }
 
   async #purge(device: DeviceRecord, leaseId?: string): Promise<void> {
@@ -137,7 +134,7 @@ export class ReclaimCoordinator {
     this.options.notifyAvailability();
   }
 
-  /** The wipe starts in the background under a claim and this returns once it has started: an erase runs tens of seconds, and startup waits for none. */
+  /** why: the reclaim starts in the background under a claim and this returns once it has started: a shutdown and delete run tens of seconds, and startup waits for none. */
   async recoverInterrupted(deviceId: string): Promise<boolean> {
     const device = await this.options.decisions.run(async () => {
       const current = this.options.registry.snapshot.virtualDevices.find(
@@ -236,7 +233,7 @@ export class ReclaimCoordinator {
   ): Promise<void> {
     const wipe = this.#purge(device, leaseId)
       .catch((error: unknown) => {
-        this.options.logger?.error("deferred wipe failed", {
+        this.options.logger?.error("deferred reclaim failed", {
           deviceId: device.id,
           error: error instanceof Error ? error.message : String(error),
           leaseId,

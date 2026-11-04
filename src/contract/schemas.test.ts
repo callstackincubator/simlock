@@ -680,11 +680,12 @@ describe("doctorReportSchema's module-unavailable finding", () => {
     remedy: "install agent-device 0.21.28 or later",
   };
   const parses = (candidate: unknown) =>
-    doctorReportSchema.safeParse({ findings: [candidate] }).success;
+    doctorReportSchema.safeParse({ findings: [candidate], sources: [] }).success;
 
   it("parses a module-unavailable finding, and refuses one without module, without message or without remedy", () => {
-    expect(doctorReportSchema.parse({ findings: [finding] })).toStrictEqual({
+    expect(doctorReportSchema.parse({ findings: [finding], sources: [] })).toStrictEqual({
       findings: [finding],
+      sources: [],
     });
 
     const { module: _module, ...withoutModule } = finding;
@@ -706,6 +707,34 @@ describe("doctorReportSchema's module-unavailable finding", () => {
     const { module: _module, ...rest } = finding;
     expect(parses({ ...rest, kind: "agent-device-unavailable" })).toBe(false);
     expect(parses({ ...finding, kind: "agent-device-unavailable" })).toBe(false);
+  });
+});
+
+describe("doctorReportSchema's sources", () => {
+  const source = { platform: "ios", kind: "seed", model: "iPhone 17", osVersion: "27.0" };
+  const parses = (candidate: unknown) =>
+    doctorReportSchema.safeParse({ findings: [], sources: [candidate] }).success;
+
+  it("parses a source with its optional fields, and refuses an unknown kind, a size that is negative or not whole, an over-long staleReason, model or osVersion, and an orphan that is not true", () => {
+    expect(
+      doctorReportSchema.parse({
+        findings: [],
+        sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+      }),
+    ).toStrictEqual({
+      findings: [],
+      sources: [{ ...source, imageTag: "api-35", sizeBytes: 0, staleReason: "x".repeat(300) }],
+    });
+    expect(parses({ ...source, orphan: true })).toBe(true);
+    expect(parses({ ...source, kind: "copy" })).toBe(false);
+    expect(parses({ ...source, sizeBytes: -1 })).toBe(false);
+    expect(parses({ ...source, sizeBytes: 1.5 })).toBe(false);
+    expect(parses({ ...source, staleReason: "x".repeat(301) })).toBe(false);
+    expect(parses({ ...source, model: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, osVersion: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, imageTag: "x".repeat(201) })).toBe(false);
+    expect(parses({ ...source, orphan: false })).toBe(false);
+    expect(doctorReportSchema.safeParse({ findings: [] }).success).toBe(false);
   });
 });
 
@@ -1038,6 +1067,7 @@ describe("opaque fields stay optional on the wire", () => {
       findings: [
         { kind: "orphan-device", platform: "ios", device: { deviceId: "SIM-1", address: "a" } },
       ],
+      sources: [],
     };
     const envelope = { id: "evt_1", seq: 1, timestamp: 1, event: "x", module: "m" };
     expect(deviceRecordSchema.safeParse(record).success).toBe(true);

@@ -126,7 +126,7 @@ pool's own `state.db` tables, kept across restarts and cleared by nuke.
 
 ## Known gaps
 
-- **A warm target under `lease.identity` `fresh` costs one create per lease.** Each grant spends a
+- **A warm target costs one create per lease.** Every virtual device serves one lease (ADR 0061 §2), so each grant spends a
   device; the pool creates and boots the next one off the lease path. It holds a slot and RAM while
   it waits; a burst larger than `count` pays the boot.
 - **A failing target retries forever.** 1, 2, 4 … minutes, at most 10 apart, no attempt limit; each

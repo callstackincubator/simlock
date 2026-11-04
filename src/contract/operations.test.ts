@@ -534,6 +534,7 @@ describe("operation input/output round trips", () => {
   it("doctor.run: round-trips a driver-advisory finding", () => {
     const report = {
       findings: [{ kind: "driver-advisory", platform: "ios", code: "slim-disabled", message: "x" }],
+      sources: [],
     };
     expect(OPERATIONS["doctor.run"].output.parse(report)).toBeDefined();
   });
@@ -546,11 +547,14 @@ describe("operation input/output round trips", () => {
       message: "The Android emulator package is not installed.",
       remedy: "Run `sdkmanager --install emulator`.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     const { remedy: _remedy, ...withoutRemedy } = finding;
-    expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
+    expect(() =>
+      OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy], sources: [] }),
+    ).toThrow();
   });
 
   it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list or a missing name, remedy or unknown manager", () => {
@@ -561,15 +565,22 @@ describe("operation input/output round trips", () => {
       missing: ["/Users/me/.nvm/versions/node/v22.13.0/bin/node"],
       remedy: "Run `simlock daemon install` again.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     expect(() =>
-      OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, missing: [] }] }),
+      OPERATIONS["doctor.run"].output.parse({
+        findings: [{ ...finding, missing: [] }],
+        sources: [],
+      }),
     ).toThrow();
     for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
       expect(() =>
-        OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, ...broken }] }),
+        OPERATIONS["doctor.run"].output.parse({
+          findings: [{ ...finding, ...broken }],
+          sources: [],
+        }),
       ).toThrow();
     }
   });
@@ -781,9 +792,9 @@ describe("operation input/output round trips", () => {
         target: "t",
       };
 
-      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
-        finding,
-      ]);
+      expect(
+        OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] }).findings,
+      ).toEqual([finding]);
     },
   );
 
@@ -796,8 +807,9 @@ describe("operation input/output round trips", () => {
       remedy: "run simlock component install ios 27.0",
       target: "iPhone 17 / 27.0 / full",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
   });
 

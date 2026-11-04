@@ -33,6 +33,7 @@ import { ReclaimCoordinator } from "./reclaim-coordinator.js";
 import type { Registry } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
+import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
 import { WarmPool } from "./warm-pool/index.js";
 
@@ -271,8 +272,8 @@ export function createCore(options: CoreOptions): Core {
   });
   const nuke = new NukeService({
     acquisition: {
-      // Closing acquisition first makes the pool skip every new action; then a boot or shutdown it
-      // already has in flight is waited for, so the reset sees a settled pool. A startup wipe still
+      // why: closing acquisition first makes the pool skip every new action; then a boot or shutdown it
+      // already has in flight is waited for, so the reset sees a settled pool. A startup reclaim still
       // running is waited for first: its commit can start a pool pass, and the device it holds in
       // `reclaiming` is one the reset would skip.
       beginMaintenance: async () => {
@@ -283,6 +284,7 @@ export function createCore(options: CoreOptions): Core {
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
     },
     devices: deviceLifecycle,
+    drivers: options.drivers,
     leases: leaseMaintenance.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
@@ -362,6 +364,7 @@ export function createCore(options: CoreOptions): Core {
       readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
     async converge(read) {
       await startup.converge(read);
+      await listStartupSources(options.drivers, options.logger);
       warmPool.start();
       capacityObserver.start();
     },
@@ -393,7 +396,7 @@ export function createCore(options: CoreOptions): Core {
       );
     },
     async settle() {
-      // The wipe's commit can start a pool pass, so the wipes are awaited first.
+      // why: a reclaim's commit can start a pool pass, so the reclaims are awaited first.
       await reclaim.settle();
       await warmPool.settle();
     },
@@ -402,4 +405,24 @@ export function createCore(options: CoreOptions): Core {
       quarantine.dispose();
     },
   };
+}
+
+/**
+ * why: the first `listSources` of a process is where a driver sweeps what an earlier process left
+ * in its sources (ADR 0061 §1); a failed read is logged, never fatal, and the sweep runs again on
+ * the next call.
+ */
+async function listStartupSources(
+  drivers: readonly Driver[],
+  logger: Logger | undefined,
+): Promise<void> {
+  for (const driver of drivers) {
+    try {
+      await driver.listSources();
+    } catch (error: unknown) {
+      logger?.warn(`could not list ${driver.platform} sources at start`, {
+        error: stableError(error),
+      });
+    }
+  }
 }

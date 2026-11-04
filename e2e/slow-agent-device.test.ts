@@ -142,10 +142,6 @@ function forLease(leaseId: string | undefined): (event: RecordedEvent) => boolea
   return (event) => (event.payload as { leaseId?: string }).leaseId === leaseId;
 }
 
-function wipeStartOf(reclaimed: RecordedEvent): number {
-  return reclaimed.timestamp - (reclaimed.payload as { duration: number }).duration;
-}
-
 const sharedEnvs = new Set<SharedTestEnv>();
 afterAll(async () => {
   await Promise.allSettled([...sharedEnvs].map((env) => env.teardown()));
@@ -355,7 +351,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "simlock release --all ends the agent's agent-device session before the device is wiped: no session sample starts after the wipe began, the last sample finds no session, another agent's open gets that same device where opening the fixture app fails, and the first agent's next command fails with lease ended by simlock",
+    "simlock release --all ends the agent's agent-device session before the device is deleted: no session sample starts after the delete completed, the last sample finds no session, another agent's open gets a new device where opening the fixture app fails, and the first agent's next command fails with lease ended by simlock",
     { timeout: 900_000 },
     async () => {
       const a = await agent("a");
@@ -374,28 +370,31 @@ function defineSuite(target: Target): void {
           const sessions = listField(await a.run(["session", "list"]), "sessions");
           samples.push({ at, hasSession: sessions.length > 0 });
           const devices = await listDevices(env);
-          return Date.now() - startedAt > 2_000 && devices.every((d) => d.state === "ready");
+          return (
+            Date.now() - startedAt > 2_000 &&
+            devices.some((d) => d.id === lease?.deviceId && d.state === "deleted")
+          );
         },
-        { timeout: DEVICE_READY_MS, interval: 250, label: "device ready after release --all" },
+        { timeout: DEVICE_READY_MS, interval: 250, label: "device deleted after release --all" },
       );
       const released = await env.cli(["release", "--all", "--yes"], { timeout: 60_000 });
       expect(released.code, released.stderr).toBe(0);
       await sampling;
 
-      const reclaimed = await eventAfter(env, "device.reclaimed", startedAt);
-      expect(reclaimed, "no device.reclaimed after release --all").toBeDefined();
-      const wipeStart = wipeStartOf(reclaimed as RecordedEvent);
+      const deleted = await eventAfter(env, "device.deleted", startedAt);
+      expect(deleted, "no device.deleted after release --all").toBeDefined();
+      const deletedAt = (deleted as RecordedEvent).timestamp;
       expect(samples.some((sample) => !sample.hasSession)).toBe(true);
       expect(samples.at(-1)?.hasSession).toBe(false);
       expect(
-        samples.filter((sample) => sample.hasSession && sample.at >= wipeStart),
-        "a sample saw the session after the wipe began",
+        samples.filter((sample) => sample.hasSession && sample.at >= deletedAt),
+        "a sample saw the session after the device was deleted",
       ).toEqual([]);
 
       ok(await open(b));
-      expect((await listLeases(env))[0]?.deviceId).toBe(lease?.deviceId);
+      expect((await listLeases(env))[0]?.deviceId).not.toBe(lease?.deviceId);
       const reopened = await b.run(["open", target.bundleId]);
-      expect(reopened.code, "the fixture app survived the wipe").not.toBe(0);
+      expect(reopened.code, "the fixture app is on the new device").not.toBe(0);
       const next = await a.run(["snapshot"]);
       expect(next.code).not.toBe(0);
       expect(failureText(next)).toContain("lease ended by simlock");
@@ -403,7 +402,7 @@ function defineSuite(target: Target): void {
   );
 
   it(
-    "a wait 20000 running when simlock release --all is called exits 0 after at least 20 s, and the wipe starts after it exits",
+    "a wait 20000 running when simlock release --all is called exits 0 after at least 20 s, and the device is deleted after it exits",
     { timeout: 600_000 },
     async () => {
       const a = await agent("a");
@@ -429,11 +428,11 @@ function defineSuite(target: Target): void {
       expect(exitedAt - startedAt).toBeGreaterThanOrEqual(20_000);
 
       await waitFor(
-        async () => (await eventAfter(env, "device.reclaimed", startedAt)) !== undefined,
-        { timeout: 240_000, interval: 1_000, label: "device.reclaimed" },
+        async () => (await eventAfter(env, "device.deleted", startedAt)) !== undefined,
+        { timeout: 240_000, interval: 1_000, label: "device.deleted" },
       );
-      const reclaimed = (await eventAfter(env, "device.reclaimed", startedAt)) as RecordedEvent;
-      expect(wipeStartOf(reclaimed)).toBeGreaterThanOrEqual(exitedAt - 1_000);
+      const deleted = (await eventAfter(env, "device.deleted", startedAt)) as RecordedEvent;
+      expect(deleted.timestamp).toBeGreaterThanOrEqual(exitedAt - 1_000);
     },
   );
 

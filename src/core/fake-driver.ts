@@ -18,7 +18,9 @@ import {
   type DriverCatalogEntry,
   type DriverCatalogImage,
   type DriverComponent,
+  DriverCrashError,
   type DriverDevice,
+  type DriverSource,
   type DriverEstimate,
   type DriverReality,
   type DriverRefusalReason,
@@ -60,7 +62,9 @@ export type FakeDriverOperation =
   | "removeComponent"
   | "revalidateRoot"
   | "findLegacy"
-  | "destroyLegacy";
+  | "destroyLegacy"
+  | "listSources"
+  | "destroySource";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -113,8 +117,6 @@ export interface FakeDriverOptions {
   ) => PassthroughCommand;
   readonly platform: Platform;
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
-  readonly reclaimResult?: "ready" | "shutdown";
-  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly physicalDevices?: readonly FakePhysicalDevice[];
   /**
    * why: a real iOS simulator is addressed by its device id; set it to give a virtual device that
@@ -158,6 +160,7 @@ export class FakeDriver implements Driver {
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
+  #sources: readonly DriverSource[] = [];
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
@@ -173,8 +176,6 @@ export class FakeDriver implements Driver {
   readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
-  readonly #reclaimResult: "ready" | "shutdown";
-  readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
   readonly #legacyDevices: Map<string, LegacyDevice>;
   readonly #bootCounts = new Map<string, number>();
@@ -214,8 +215,6 @@ export class FakeDriver implements Driver {
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
-    this.#reclaimResult = options.reclaimResult ?? "ready";
-    this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
     this.#scriptedPhysicalDevices = options.physicalDevices;
     this.#install = options;
     this.#receipts = preinstalledReceipts(this.#availableOsVersions);
@@ -401,6 +400,16 @@ export class FakeDriver implements Driver {
     return this.#addressIsDeviceId ? deviceId : addressFor(deviceId, bootCount);
   }
 
+  async listSources(): Promise<readonly DriverSource[]> {
+    await this.#beforeCall("listSources");
+    return [...this.#sources];
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    await this.#beforeCall("destroySource", sourceId);
+    this.#sources = this.#sources.filter((source) => source.id !== sourceId);
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
@@ -454,9 +463,7 @@ export class FakeDriver implements Driver {
   ): Promise<ReclaimResult> {
     await this.#beforeCall("reclaim", device, options);
     if (isPhysicalDriverDevice(device)) return this.#reclaimPhysical(device);
-    this.#requireDevice(device);
-    this.#devices.set(device.deviceId, this.#reclaimResult);
-    return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   #reclaimPhysical(device: PhysicalDriverDevice): ReclaimResult {
@@ -470,8 +477,9 @@ export class FakeDriver implements Driver {
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "snapshot" | "wipe" | "uninstall" {
-    return isPhysicalDriverDevice(device) ? "uninstall" : this.#reclaimStrategy;
+  ): "uninstall" {
+    if (isPhysicalDriverDevice(device)) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -628,6 +636,10 @@ export class FakeDriver implements Driver {
     for (const resolve of this.#pendingMakeReady.splice(0)) {
       resolve();
     }
+  }
+
+  setSources(sources: readonly DriverSource[]): void {
+    this.#sources = sources;
   }
 
   /**

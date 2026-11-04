@@ -16,7 +16,7 @@ You ask Simlock for a device, for example "an iPhone 16 on iOS 18.4". You get ba
 - If a matching device is free, you get it at once.
 - If none is free, Simlock creates one, up to the limit your machine can run.
 - If the machine is full, your request waits in a queue until a device frees up.
-- When you release the device, Simlock wipes it before the next agent gets it.
+- When you release the device, Simlock deletes it; the next agent gets a new one.
 - If your agent crashes without releasing, the lease runs out on its own after its time to live (TTL), so the device is never stuck.
 
 Simlock works by agreement, not by force. It does not hide other devices or block `xcrun simctl`. It works because you tell your agents to use only the device a lease hands them.

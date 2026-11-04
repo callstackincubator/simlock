@@ -257,8 +257,9 @@ async function settledOrPending(promise: Promise<unknown>): Promise<unknown> {
   ]);
 }
 
-function reclaims(driver: FakeDriver) {
-  return driver.calls.filter((call) => call.operation === "reclaim");
+/** why: a released virtual device is destroyed, never reclaimed, so the destroy marks the end of the wait. */
+function destroys(driver: FakeDriver) {
+  return driver.calls.filter((call) => call.operation === "destroy");
 }
 
 function stateOf(harness: Harness, deviceId: string): string | undefined {
@@ -366,20 +367,20 @@ describe("lease-end participants (#469)", () => {
     expect(grant.device.id).toBe(participant.calls[0]?.ended.deviceId);
   });
 
-  it("the driver's reclaim does not start until the participant returns; when it returns, the reclaim runs and the device becomes ready", async () => {
+  it("the device is not destroyed until the participant returns; when it returns, the device is destroyed and deleted", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
     expect(stateOf(harness, grant.device.id)).toBe("reclaiming");
 
     participant.calls[0]?.resolve();
     await flush();
 
-    expect(reclaims(harness.driver)).toHaveLength(1);
-    expect(stateOf(harness, grant.device.id)).toBe("ready");
+    expect(destroys(harness.driver)).toHaveLength(1);
+    expect(stateOf(harness, grant.device.id)).toBe("deleted");
   });
 
-  it("while the participant has not returned, a request for the same spec is not granted that device, and it is granted it after the reclaim", async () => {
+  it("while the participant has not returned, a request for the same spec is not granted that device, and it is granted a new device once the ended one is destroyed", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
 
@@ -389,12 +390,13 @@ describe("lease-end participants (#469)", () => {
     participant.calls[0]?.resolve();
     await flush();
     await harness.engine.settle();
-    await expect(settledOrPending(second)).resolves.toMatchObject({
-      device: { id: grant.device.id },
-    });
+    const granted = (await settledOrPending(second)) as LeaseGrant;
+    expect(granted).toMatchObject({ lease: { requesterId: "next" } });
+    expect(granted.device.id).not.toBe(grant.device.id);
+    expect(stateOf(harness, grant.device.id)).toBe("deleted");
   });
 
-  it("the device is claimed from before the participant is called until the reclaim ends", async () => {
+  it("the device is claimed from before the participant is called until the destroy ends", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
 
@@ -403,7 +405,7 @@ describe("lease-end participants (#469)", () => {
     participant.calls[0]?.resolve();
     await flush();
     await harness.engine.settle();
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
     expect(harness.engine.claimReader.isClaimed(grant.device.id)).toBe(false);
   });
 
@@ -428,13 +430,13 @@ describe("lease-end participants (#469)", () => {
     expect((third as LeaseGrant).device.id).not.toBe(ending.device.id);
   });
 
-  it("a participant that never returns: 1 ms before lease.endWaitMs the reclaim has not started; at lease.endWaitMs its signal is aborted, a warning naming the lease and device is logged, and the reclaim starts; when that participant resolves later, the driver's reclaim has still run once", async () => {
+  it("a participant that never returns: 1 ms before lease.endWaitMs the destroy has not started; at lease.endWaitMs its signal is aborted, a warning naming the lease and device is logged, and the destroy starts; when that participant resolves later, the driver's destroy has still run once", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
 
     harness.clock.advance(END_WAIT_MS - 1);
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
     expect(participant.calls[0]?.signal.aborted).toBe(false);
 
     harness.clock.advance(1);
@@ -443,14 +445,14 @@ describe("lease-end participants (#469)", () => {
     expect(warningsFor(harness, grant.lease.id)).toMatchObject([
       { fields: { deviceId: grant.device.id, leaseId: grant.lease.id } },
     ]);
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
 
     participant.calls[0]?.resolve();
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
   });
 
-  it("two participants are both called before either returns; the reclaim waits for the slower one", async () => {
+  it("two participants are both called before either returns; the destroy waits for the slower one", async () => {
     const fast = new TestParticipant();
     const slow = new TestParticipant();
     const harness = await startEngine({ participants: [fast, slow] });
@@ -462,11 +464,11 @@ describe("lease-end participants (#469)", () => {
 
     fast.calls[0]?.resolve();
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
 
     slow.calls[0]?.resolve();
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
   });
 
   it("one ceiling, counted from the call, covers both participants and is not reset when the first returns", async () => {
@@ -483,15 +485,15 @@ describe("lease-end participants (#469)", () => {
     await flush();
     harness.clock.advance(END_WAIT_MS / 2 - 1);
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
 
     harness.clock.advance(1);
     await flush();
     expect(slow.calls[0]?.signal.aborted).toBe(true);
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
   });
 
-  it("a participant that rejects, and one that throws, are each logged as an error with the lease id, device id and error message; the other participant is still awaited; the device becomes ready", async () => {
+  it("a participant that rejects, and one that throws, are each logged as an error with the lease id, device id and error message; the other participant is still awaited; the device is then destroyed", async () => {
     const rejecting = new TestParticipant();
     const waiting = new TestParticipant();
     const harness = await startEngine({
@@ -505,7 +507,7 @@ describe("lease-end participants (#469)", () => {
 
     rejecting.calls[0]?.reject(new Error("participant rejected"));
     await flush();
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
     expect(errorsFor(harness, grant.lease.id)).toMatchObject([
       { fields: { deviceId: grant.device.id, error: "participant threw" } },
       { fields: { deviceId: grant.device.id, error: "participant rejected" } },
@@ -513,7 +515,7 @@ describe("lease-end participants (#469)", () => {
 
     waiting.calls[0]?.resolve();
     await flush();
-    expect(stateOf(harness, grant.device.id)).toBe("ready");
+    expect(stateOf(harness, grant.device.id)).toBe("deleted");
   });
 
   it("a participant that rejects after the ceiling passed is logged as an error with the lease id; the run reports no unhandled rejection", async () => {
@@ -522,7 +524,7 @@ describe("lease-end participants (#469)", () => {
       expect(participant.calls).toHaveLength(1);
       harness.clock.advance(END_WAIT_MS);
       await flush();
-      expect(reclaims(harness.driver)).toHaveLength(1);
+      expect(destroys(harness.driver)).toHaveLength(1);
 
       participant.calls[0]?.reject(new Error("rejected late"));
       await flush();
@@ -548,7 +550,7 @@ describe("lease-end participants (#469)", () => {
     });
   });
 
-  it("release with reason killed calls the participant with that reason before the reclaim", async () => {
+  it("release with reason killed calls the participant with that reason before the destroy", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant] });
     const grant = await harness.engine.request(request, asking("agent"));
@@ -557,10 +559,10 @@ describe("lease-end participants (#469)", () => {
     await flush();
 
     expect(participant.calls.map((call) => call.ended.reason)).toEqual(["killed"]);
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
   });
 
-  it("releaseAll calls the participant once per lease, before any reclaim", async () => {
+  it("releaseAll calls the participant once per lease, before any destroy", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({
       ios: { maxDevices: 2, maxRunning: 2 },
@@ -575,10 +577,10 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls.map((call) => call.ended.leaseId).sort()).toEqual(
       [first.lease.id, second.lease.id].sort(),
     );
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
   });
 
-  it("an expiry calls the participant with reason expired before the reclaim", async () => {
+  it("an expiry calls the participant with reason expired before the destroy", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ lease: { defaultTtlMs: 10 }, participants: [participant] });
     await harness.engine.request(request, asking("agent"));
@@ -587,10 +589,10 @@ describe("lease-end participants (#469)", () => {
     await flush();
 
     expect(participant.calls.map((call) => call.ended.reason)).toEqual(["expired"]);
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
   });
 
-  it("the health monitor's device-lost release calls the participant with reason device-lost before the reclaim", async () => {
+  it("the health monitor's device-lost release calls the participant with reason device-lost before the destroy", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant] });
     await harness.engine.request(request, asking("agent"));
@@ -604,14 +606,14 @@ describe("lease-end participants (#469)", () => {
     harness.engine.healthMonitor.dispose();
 
     expect(participant.calls.map((call) => call.ended.reason)).toEqual(["device-lost"]);
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
   });
 
   it.each([
     ["expired", 10_000],
     ["device-lost", 3_600_000],
   ] as const)(
-    "a startup ending with reclaim calls the participant with reason %s before the reclaim",
+    "a startup ending with reclaim calls the participant with reason %s before the destroy",
     async (reason, ttlMs) => {
       const participant = new TestParticipant();
       const { grant, second, world } = await endStartupLease({
@@ -629,11 +631,11 @@ describe("lease-end participants (#469)", () => {
       expect(participant.calls.map((call) => call.ended)).toMatchObject([
         { deviceId: grant.device.id, leaseId: grant.lease.id, reason },
       ]);
-      expect(reclaims(world.driver)).toHaveLength(0);
+      expect(destroys(world.driver)).toHaveLength(0);
     },
   );
 
-  it("a startup ending with reclaim whose participant has not returned, followed by core.converge: converge leaves the device alone, and the device is wiped once the participant returns", async () => {
+  it("a startup ending with reclaim whose participant has not returned, followed by core.converge: converge leaves the device alone, and the device is destroyed once the participant returns", async () => {
     const participant = new TestParticipant();
     const { grant, second, world } = await endStartupLease({
       afterFirstStop: async (first, leased) => {
@@ -659,16 +661,16 @@ describe("lease-end participants (#469)", () => {
             (event.payload as { initiator?: string }).initiator === "startup-interrupted-reclaim",
         ),
     ).toEqual([]);
-    expect(reclaims(world.driver)).toHaveLength(0);
+    expect(destroys(world.driver)).toHaveLength(0);
 
     participant.calls[0]?.resolve();
     await flush();
     await second.engine.settle();
-    expect(reclaims(world.driver)).toHaveLength(1);
-    expect(stateOf(second, grant.device.id)).toBe("ready");
+    expect(destroys(world.driver)).toHaveLength(1);
+    expect(stateOf(second, grant.device.id)).toBe("deleted");
   });
 
-  it("a startup ending with wait calls the participant with its reason, starts no reclaim, and leaves the device reclaiming with its deferred wipe recorded", async () => {
+  it("a startup ending with wait calls the participant with its reason, starts no destroy, and leaves the device reclaiming with its deferred wipe recorded", async () => {
     const participant = new TestParticipant();
     const { grant, second, world } = await endStartupLease({
       afterFirstStop: (first) => {
@@ -689,7 +691,7 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls.map((call) => call.ended)).toMatchObject([
       { deviceId: grant.device.id, leaseId: grant.lease.id, reason: "device-lost" },
     ]);
-    expect(reclaims(world.driver)).toHaveLength(0);
+    expect(destroys(world.driver)).toHaveLength(0);
     expect(stateOf(second, grant.device.id)).toBe("reclaiming");
     expect(markerOf(second, grant.device.id)).toBe(grant.lease.id);
   });
@@ -828,7 +830,7 @@ describe("lease-end participants (#469)", () => {
     ["nuke", (harness: Harness) => harness.engine.nuke(false), { releasedLeaseIds: [] }],
     ["settle()", (harness: Harness) => harness.engine.settle(), undefined],
   ] as const)(
-    "%s while a participant has not returned aborts its signal, starts the reclaim at once, and completes without the clock advancing",
+    "%s while a participant has not returned aborts its signal, starts the destroy at once, and completes without the clock advancing",
     async (_call, run, completed) => {
       const { harness, participant } = await leaseAndRelease();
       expect(participant.calls).toHaveLength(1);
@@ -837,22 +839,22 @@ describe("lease-end participants (#469)", () => {
 
       await expect(settledOrPending(running)).resolves.toEqual(completed);
       expect(participant.calls[0]?.signal.aborted).toBe(true);
-      expect(reclaims(harness.driver)).toHaveLength(1);
+      expect(destroys(harness.driver)).toHaveLength(1);
     },
   );
 
-  it("advancing the clock past lease.endWaitMs after a nuke cut a wait short, and the participant then resolving, logs no ceiling warning and starts no second reclaim", async () => {
+  it("advancing the clock past lease.endWaitMs after a nuke cut a wait short, and the participant then resolving, logs no ceiling warning and starts no second destroy", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
     await harness.engine.nuke(false);
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
 
     harness.clock.advance(END_WAIT_MS + 1);
     participant.calls[0]?.resolve();
     await flush();
 
     expect(warningsFor(harness, grant.lease.id)).toEqual([]);
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
   });
 
   it("nuke with leased devices calls each participant with an already aborted signal, and completes without the clock advancing even when the participant never returns", async () => {
@@ -883,10 +885,10 @@ describe("lease-end participants (#469)", () => {
 
     expect(participant.calls).toHaveLength(1);
     expect(participant.calls[0]?.abortedAtCall).toBe(false);
-    expect(reclaims(harness.driver)).toHaveLength(0);
+    expect(destroys(harness.driver)).toHaveLength(0);
   });
 
-  it("when the participant resolves after settle(), the driver's reclaim has run once, and advancing past lease.endWaitMs logs no ceiling warning", async () => {
+  it("when the participant resolves after settle(), the driver's destroy has run once, and advancing past lease.endWaitMs logs no ceiling warning", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
     await harness.engine.settle();
@@ -895,11 +897,11 @@ describe("lease-end participants (#469)", () => {
     harness.clock.advance(END_WAIT_MS + 1);
     await flush();
 
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
     expect(warningsFor(harness, grant.lease.id)).toEqual([]);
   });
 
-  it("a release after settle() began calls the participant with an already aborted signal and reclaims at once", async () => {
+  it("a release after settle() began calls the participant with an already aborted signal and destroys at once", async () => {
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant] });
     const grant = await harness.engine.request(request, asking("agent"));
@@ -909,7 +911,7 @@ describe("lease-end participants (#469)", () => {
     await flush();
 
     expect(participant.calls.map((call) => call.abortedAtCall)).toEqual([true]);
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
   });
 
   it("a participant that returns before the ceiling: advancing the clock past lease.endWaitMs afterwards logs no ceiling warning and aborts no signal", async () => {
@@ -921,12 +923,12 @@ describe("lease-end participants (#469)", () => {
     harness.clock.advance(END_WAIT_MS + 1);
     await flush();
 
-    expect(reclaims(harness.driver)).toHaveLength(1);
+    expect(destroys(harness.driver)).toHaveLength(1);
     expect(warningsFor(harness, grant.lease.id)).toEqual([]);
     expect(participant.calls[0]?.signal.aborted).toBe(false);
   });
 
-  it("dispose() with a participant still running aborts its signal; advancing the clock past lease.endWaitMs afterwards, and the participant then resolving, logs no ceiling warning and starts no reclaim", async () => {
+  it("dispose() with a participant still running aborts its signal; advancing the clock past lease.endWaitMs afterwards, and the participant then resolving, logs no ceiling warning and starts no destroy", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
 
@@ -937,23 +939,23 @@ describe("lease-end participants (#469)", () => {
     await flush();
 
     expect(warningsFor(harness, grant.lease.id)).toEqual([]);
-    expect(reclaims(harness.driver)).toEqual([]);
+    expect(destroys(harness.driver)).toEqual([]);
   });
 
-  it("with no participant, the reclaim starts without the clock advancing and the device record carries no deferred-reclaim marker", async () => {
-    const world = await createWorld({ latencyMs: { reclaim: 20 } });
+  it("with no participant, the destroy starts without the clock advancing, the device is shut down while it runs, and the record carries no deferred-reclaim marker", async () => {
+    const world = await createWorld({ latencyMs: { destroy: 20 } });
     const harness = await startEngine({ world });
     const grant = await harness.engine.request(request, asking("agent"));
 
     await harness.engine.release(grant.lease.id, "explicit");
     await flush();
 
-    expect(reclaims(harness.driver)).toHaveLength(1);
-    expect(stateOf(harness, grant.device.id)).toBe("reclaiming");
+    expect(destroys(harness.driver)).toHaveLength(1);
+    expect(stateOf(harness, grant.device.id)).toBe("shutdown");
     expect(markerOf(harness, grant.device.id)).toBeUndefined();
   });
 
-  it("with a participant, the device is reclaiming with its deferred-reclaim marker while the participant runs, and the marker is gone once the device is ready", async () => {
+  it("with a participant, the device is reclaiming with its deferred-reclaim marker while the participant runs, and the marker is gone once the device is deleted", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
     expect(stateOf(harness, grant.device.id)).toBe("reclaiming");
@@ -962,11 +964,11 @@ describe("lease-end participants (#469)", () => {
     participant.calls[0]?.resolve();
     await flush();
 
-    expect(stateOf(harness, grant.device.id)).toBe("ready");
+    expect(stateOf(harness, grant.device.id)).toBe("deleted");
     expect(markerOf(harness, grant.device.id)).toBeUndefined();
   });
 
-  it("with running capacity full, while a participant waits, a lease request for another spec queues, and a noWait request gets NO_CAPACITY; the queued one is granted once the wait and the wipe end", async () => {
+  it("with running capacity full, while a participant waits, a lease request for another spec queues, and a noWait request gets NO_CAPACITY; the queued one is granted once the wait and the destroy end", async () => {
     const { harness, participant } = await leaseAndRelease({
       ios: { maxDevices: 2, maxRunning: 1 },
     });
@@ -985,7 +987,7 @@ describe("lease-end participants (#469)", () => {
     });
   });
 
-  it("a daemon stopped while a participant has not returned: a new engine on the same registry runs the full wipe, the device becomes ready, and no participant registered in the new engine is called", async () => {
+  it("a daemon stopped while a participant has not returned: a new engine on the same registry wipes nothing, destroys the device, and calls no participant registered in the new engine", async () => {
     const { grant, harness, participant } = await leaseAndRelease();
     expect(participant.calls).toHaveLength(1);
     const replacement = new TestParticipant();
@@ -995,15 +997,14 @@ describe("lease-end participants (#469)", () => {
     await flush();
     await restarted.engine.settle();
 
-    expect(reclaims(harness.driver)).toMatchObject([
-      { arguments: [expect.anything(), { clean: "standard" }] },
-    ]);
-    expect(stateOf(restarted, grant.device.id)).toBe("ready");
+    expect(harness.driver.calls.filter((call) => call.operation === "reclaim")).toEqual([]);
+    expect(destroys(harness.driver)).toHaveLength(1);
+    expect(stateOf(restarted, grant.device.id)).toBe("deleted");
     expect(replacement.calls).toEqual([]);
   });
 
-  it("a daemon stopped during the wipe that follows the wait also gets a full wipe at the next start", async () => {
-    const world = await createWorld({ latencyMs: { reclaim: 20 } });
+  it("a daemon stopped during the destroy that follows the wait destroys the device again at the next start", async () => {
+    const world = await createWorld({ latencyMs: { destroy: 20 } });
     const participant = new TestParticipant();
     const harness = await startEngine({ participants: [participant], world });
     const grant = await harness.engine.request(request, asking("agent"));
@@ -1012,20 +1013,21 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls).toHaveLength(1);
     participant.calls[0]?.resolve();
     await flush();
-    expect(reclaims(world.driver)).toHaveLength(1);
-    const wipesBefore = reclaims(world.driver).length;
+    expect(destroys(world.driver)).toHaveLength(1);
+    const destroysBefore = destroys(world.driver).length;
 
     const restarted = await startEngine({ world });
-    await restarted.engine.convergeRunningCapacity();
-    await flush();
+    const converging = restarted.engine.convergeRunningCapacity();
+    for (let tick = 0; tick < 5; tick += 1) {
+      world.clock.advance(20);
+      await flush();
+    }
+    await converging;
 
-    expect(reclaims(world.driver).length - wipesBefore).toBe(1);
-    expect(reclaims(world.driver).at(-1)).toMatchObject({
-      arguments: [expect.anything(), { clean: "standard" }],
-    });
+    expect(destroys(world.driver).length - destroysBefore).toBe(1);
   });
 
-  it("a release with a participant emits the same events in the same order as one without (lease.released, then device.reclaimed)", async () => {
+  it("a release with a participant emits the same events in the same order as one without (lease.released, then device.deleted)", async () => {
     const plain = await startEngine();
     const plainGrant = await plain.engine.request(request, asking("agent"));
     const plainBefore = eventNames(plain).length;
@@ -1045,7 +1047,7 @@ describe("lease-end participants (#469)", () => {
     await waiting.engine.settle();
 
     const expected = eventNames(plain).slice(plainBefore);
-    expect(expected.indexOf("lease.released")).toBeLessThan(expected.indexOf("device.reclaimed"));
+    expect(expected.indexOf("lease.released")).toBeLessThan(expected.indexOf("device.deleted"));
     expect(eventNames(waiting).slice(waitingBefore)).toEqual(expected);
   });
 });

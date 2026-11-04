@@ -78,6 +78,7 @@ import {
 } from "./main.js";
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
+import { memorySourceDatabase } from "../drivers/ios/testing.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -1285,11 +1286,11 @@ describe("startDaemon wires core and leasing together", () => {
     const { daemon, driver, grant } = await leasedIos({
       availableOsVersions: ["26.5"],
       clock,
-      latencyMs: { reclaim: 600_000 },
+      latencyMs: { destroy: 600_000 },
       platform: "ios",
-      reclaimResult: "shutdown",
     });
     await daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
+    await settleRealTime();
 
     clock.advance(300_000);
     const devices = (await daemon.dispatch("list.get", { kind: "devices" }, admin)) as readonly {
@@ -1298,7 +1299,7 @@ describe("startDaemon wires core and leasing together", () => {
       readonly stalled?: true;
     }[];
     expect(devices.map(({ id, state, stalled }) => ({ id, state, stalled }))).toEqual([
-      { id: grant.device.id, state: "reclaiming", stalled: undefined },
+      { id: grant.device.id, state: "shutdown", stalled: undefined },
     ]);
 
     let stopped = false;
@@ -1309,7 +1310,7 @@ describe("startDaemon wires core and leasing together", () => {
     expect(stopped).toBe(false);
     clock.advance(300_000);
     await stopping;
-    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
   it("cancels the expiry timer of an outstanding lease on shutdown, so nothing expires after it", async () => {
@@ -1332,7 +1333,7 @@ describe("startDaemon wires core and leasing together", () => {
   it("cancels the quarantine retry timer on shutdown, so no retry runs after it", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const started = await start({ clock, drivers: [driver] });
     const grant = (await started.daemon.dispatch("lease.request", ios, agent)) as Grant;
     await started.daemon.dispatch("lease.release", { leaseId: grant.lease.id }, agent);
@@ -1341,10 +1342,10 @@ describe("startDaemon wires core and leasing together", () => {
     clock.advance(30_000);
     await settleRealTime();
 
-    expect(driver.calls.filter((call) => call.operation === "reclaim")).toHaveLength(1);
+    expect(driver.calls.filter((call) => call.operation === "destroy")).toHaveLength(1);
   });
 
-  describe("a device quarantined by a failed purge", () => {
+  describe("a device quarantined by a failed delete", () => {
     type CauseView = {
       readonly id: string;
       readonly quarantineCause?: { readonly kind: string; readonly message?: string };
@@ -1354,7 +1355,7 @@ describe("startDaemon wires core and leasing together", () => {
     async function quarantinedAfterFailedPurge() {
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-      driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+      driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
       const { daemon } = await start({
         clock,
         configOverrides: { warmPool: { enabled: false } },
@@ -1376,7 +1377,7 @@ describe("startDaemon wires core and leasing together", () => {
         }
       ).devices;
 
-    it("shows quarantineCause purge-failed with the driver's error in status.get and list.get", async () => {
+    it("shows quarantineCause delete-failed with the driver's error in status.get and list.get", async () => {
       const daemon = await quarantinedAfterFailedPurge();
 
       const status = await devicesOf(daemon, admin);
@@ -1390,7 +1391,7 @@ describe("startDaemon wires core and leasing together", () => {
         expect(devices).toHaveLength(1);
         expect(devices[0]).toMatchObject({ state: "quarantined" });
         expect(devices[0]?.quarantineCause).toEqual({
-          kind: "purge-failed",
+          kind: "delete-failed",
           message: "DriverCrashError: purge exploded",
         });
       }
@@ -2147,7 +2148,7 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     ]);
     const port = await freeLoopbackPort();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new DriverCrashError("purge exploded"));
+    driver.failOn("destroy", 1, new DriverCrashError("purge exploded"));
     const daemon = await startDaemon({
       deviceDataTables: fakeDeviceDataTables,
       clock,
@@ -2185,10 +2186,10 @@ describe("startDaemon HTTP status for a quarantined device", () => {
     };
 
     expect(await causeFor("slk_cause_operator")).toEqual({
-      kind: "purge-failed",
+      kind: "delete-failed",
       message: "DriverCrashError: purge exploded",
     });
-    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "purge-failed" });
+    expect(await causeFor("slk_cause_agent")).toEqual({ kind: "delete-failed" });
   });
 });
 
@@ -2202,6 +2203,7 @@ describe("discoverDrivers", () => {
     const filesystem = new MemoryFilesystem();
 
     const { drivers } = await discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2540,7 +2542,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     return filesystem;
   }
 
-  function discoverAndroid(
+  async function discoverAndroid(
     filesystem: MemoryFilesystem,
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
@@ -2549,6 +2551,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     > = {},
   ) {
     return discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
@@ -2596,6 +2599,7 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   try {
     await IosSimctlDriver.create({
       clock: new FakeClock(),
+      database: await memorySourceDatabase(),
       driverConfig: {},
       filesystem,
       idGenerator: new CryptoIdGenerator(),
@@ -2609,7 +2613,7 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
   throw new Error("expected the iOS device root to be refused");
 }
 
-function discoverIos(
+async function discoverIos(
   overrides: {
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
@@ -2618,6 +2622,7 @@ function discoverIos(
   } = {},
 ) {
   return discoverDrivers({
+    database: await memorySourceDatabase(),
     clock: new FakeClock(),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
@@ -2891,6 +2896,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
   async function discover(sink: MemoryLogSink) {
     const logger = new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink });
     return discoverDrivers({
+      database: await memorySourceDatabase(),
       clock: new FakeClock(),
       driversConfig: {},
       eventBus: new EventBus(new FakeClock()),
