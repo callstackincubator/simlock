@@ -311,7 +311,6 @@ export class IosSimctlDriver implements Driver {
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #silent: boolean;
-  #silenceTail: Promise<void> = Promise.resolve();
   readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -1168,18 +1167,7 @@ export class IosSimctlDriver implements Driver {
     return this.#readBack(device, data, write);
   }
 
-  /**
-   * why: notifyd's volume state is one value for every booted simulator, so two simulators
-   * running these four commands at once set and post each other's values; one device at a
-   * time keeps each sequence whole (#1238). `#silenceNow` never throws, so the tail never rejects.
-   */
   async #silence(udid: string, deviceId: string): Promise<void> {
-    const run = this.#silenceTail.then(() => this.#silenceNow(udid, deviceId));
-    this.#silenceTail = run;
-    await run;
-  }
-
-  async #silenceNow(udid: string, deviceId: string): Promise<void> {
     // why: notifyd's state outlives a simulator, so a new boot may already read 0, and a set to 0 is then no change for the simulator to write; the 1 first makes the 0 one (#1238).
     const commands = [
       ["-s", VOLUME_STATE_KEY, "1"],
