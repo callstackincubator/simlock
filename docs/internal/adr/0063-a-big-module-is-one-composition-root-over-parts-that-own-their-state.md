@@ -1,6 +1,6 @@
 # 0063. A big module is one composition root over parts that own their state
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-04
 - **Issue:** [#1259](https://github.com/callstackincubator/simlock/issues/1259) (request [#1251](https://github.com/callstackincubator/simlock/issues/1251))
 - **Supersedes:** nothing. Narrows testing rule 6 (§2): a part of a
