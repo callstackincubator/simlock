@@ -1,4 +1,4 @@
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   ensureOwnedRoot,
@@ -13,7 +13,6 @@ import {
   type ComponentInstallResult,
   type ComponentReceipt,
   type ComponentRemoval,
-  COMPONENT_REMOVAL_TIMEOUT_MS,
   type ExactDeviceRequest,
   type Driver,
   type DriverCatalogEntry,
@@ -40,18 +39,13 @@ import {
   type DeviceInputFactory,
   type ScreenCapture,
   ScreenUnavailableError,
-  RuntimeMissingError,
-  sameReceipt,
 } from "../../core/index.js";
 import { AndroidSourceTable, type SourceRow } from "./source-data.js";
-import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
-  isMissingPathError,
   type Clock,
   type Filesystem,
   type IdGenerator,
   type Logger,
-  type ProcessResult,
   type ProcessRunner,
   type ProcessSupervisor,
   type SqliteDatabase,
@@ -83,7 +77,6 @@ import {
   assertLibraryProfileWritable,
   ERASABLE_MARK_PATH,
   ERASABLE_MARK_READ_BYTES,
-  iniValues,
   MARK_READ_TIMEOUT_MS,
   parseErasableMark,
 } from "./avd-config.js";
@@ -100,8 +93,15 @@ import {
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
-import { fits, misfitReason } from "./image-fit.js";
-import { AndroidLicenseNotAcceptedError } from "./system-images.js";
+import { fits } from "./image-fit.js";
+import {
+  ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES,
+  AndroidImageTagMissingError,
+  compareApiLevels,
+  installedApiLevels,
+  SystemImages,
+  systemImagePackage,
+} from "./system-images.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { createAndroidDeviceInput } from "./input/index.js";
 import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
@@ -118,18 +118,9 @@ export {
 
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
-// why: `sdkmanager --licenses` prompts once per outstanding license with a bare `y/N`. Answering
-// more times than there are real licenses is harmless -- the extra `y`s land after the prompt
-// loop has already exited and sdkmanager simply never reads them -- so this just needs to be
-// comfortably above the largest real Android SDK license count rather than exact.
-const LICENSE_ACCEPT_ANSWERS = 100;
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
-// why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
-// before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
-// mid-download.
-const ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES = 2 * 1024 ** 3;
 const PROVISION_ESTIMATE_MS = 1_000;
 // why: making a seed is two cold boots, a power-off and a snapshot save.
 const SEED_MAKE_ESTIMATE_MS = 150_000;
@@ -265,7 +256,6 @@ export class AndroidDriver implements Driver {
   readonly #ownership: Ownership;
   readonly #passthroughRules: PassthroughRules;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
-  readonly #acceptAndroidLicenses: boolean;
   readonly #avdmanagerDevices: AvdmanagerDeviceList;
   readonly #clock: Clock;
   readonly #deviceProfiles: DeviceProfileRegistry;
@@ -273,7 +263,6 @@ export class AndroidDriver implements Driver {
   readonly #devices = new Map<string, DeviceState>();
   readonly #deviceRoot: string;
   readonly #filesystem: Filesystem;
-  readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
   readonly #locks = new Map<string, Promise<void>>();
@@ -286,6 +275,7 @@ export class AndroidDriver implements Driver {
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #sources: AndroidSourceTable;
+  readonly #systemImages: SystemImages;
   /** why: the seeds this process is making; a `making` row not named here is a leftover of an earlier process. */
   readonly #making = new Set<string>();
   readonly componentFootprint: { readonly path: string; readonly bytes: number };
@@ -301,7 +291,6 @@ export class AndroidDriver implements Driver {
     adbServer: AdbServerSupervisor,
     adbServerPort: number,
   ) {
-    this.#acceptAndroidLicenses = options.acceptAndroidLicenses ?? false;
     this.#adbServer = adbServer;
     this.#adbServerPort = adbServerPort;
     this.#adbTools = new AdbTools({
@@ -329,7 +318,6 @@ export class AndroidDriver implements Driver {
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
     this.#filesystem = options.filesystem;
-    this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
     this.#onDiagnostic = options.onDiagnostic;
     this.#processRunner = options.processRunner;
@@ -356,6 +344,23 @@ export class AndroidDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
     this.#sources = new AndroidSourceTable(options.database);
+    // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
+    // had configured then, or the SDK's own default. Used only by `findLegacy` /
+    // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
+    // because a stranded device cannot be found anywhere else (ADR 0001, Migration) -- and
+    // read by `SystemImages.listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
+    this.#legacyAvdHome =
+      options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
+    this.#systemImages = new SystemImages({
+      acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
+      clock: options.clock,
+      deviceRoot,
+      filesystem: options.filesystem,
+      hostAbi: options.hostAbi,
+      legacyAvdHome: this.#legacyAvdHome,
+      processRunner: options.processRunner,
+      sdk,
+    });
     this.componentFootprint = { bytes: ANDROID_SYSTEM_IMAGE_MIN_FREE_BYTES, path: sdk.root };
     const deviceTarget = this.#deviceTargetFor(options, sdk.adb, adbServerPort);
     const targetFor = this.#screenTargetFor(options, deviceTarget);
@@ -373,13 +378,6 @@ export class AndroidDriver implements Driver {
               this.#passthroughRules.runAdbOn(device, args, timeoutMs),
             warn: (message, detail) => options.logger?.warn(message, detail),
           });
-    // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
-    // had configured then, or the SDK's own default. Used only by `findLegacy` /
-    // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
-    // because a stranded device cannot be found anywhere else (ADR 0001, Migration) -- and
-    // read by `listComponents`, which counts the user's own AVDs there (ADR 0010 §8).
-    this.#legacyAvdHome =
-      options.env.ANDROID_AVD_HOME ?? join(options.homeDirectory, ".android", "avd");
     this.#consolePorts = new ConsolePorts({
       adbTools: this.#adbTools,
       allocator: portAllocatorFor(options.processRunner, sdk.adb),
@@ -687,7 +685,7 @@ export class AndroidDriver implements Driver {
     }
 
     const profile = await this.#deviceProfiles.resolve(request.model);
-    const images = await this.#installedImages();
+    const images = await this.#systemImages.installedImages();
     if (request.imageTag !== undefined) {
       const apiLevel = this.#taggedApiLevel(profile, images, request.imageTag, request.osVersion);
       this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
@@ -703,44 +701,11 @@ export class AndroidDriver implements Driver {
     const levels = fittingApiLevels(profile, images);
     const apiLevel = request.osVersion ?? levels.at(-1);
     if (apiLevel === undefined || !levels.includes(apiLevel)) {
-      throw this.#noFittingImage(profile, images, request.osVersion);
+      throw this.#systemImages.noFittingImage(profile, images, request.osVersion);
     }
 
     this.#resolvedProfiles.set(profile.name.toLocaleLowerCase(), profile);
     return { model: profile.name, osVersion: apiLevel, physical: false, platform: this.platform };
-  }
-
-  // fallow-ignore-next-line complexity -- one refusal builder: each branch is one message the spec lists.
-  #noFittingImage(
-    profile: DeviceProfile,
-    images: readonly SystemImage[],
-    level: string | undefined,
-    imageTag?: string,
-  ): RuntimeMissingError {
-    const considered = level === undefined ? images : images.filter((i) => i.apiLevel === level);
-    const where = level === undefined ? "" : ` at Android ${level}`;
-    const tagged = imageTag === undefined ? [] : considered.filter((i) => i.tag === imageTag);
-    const downloadable =
-      level !== undefined &&
-      imageTag === undefined &&
-      considered.length === 0 &&
-      fits(profile, { apiLevel: level, tag: "google_apis", tags: ["google_apis"] });
-    const error = downloadable
-      ? new RuntimeMissingError(this.platform, level, { component: level })
-      : new RuntimeMissingError(this.platform, level ?? "default", { downloadable: false });
-    let reason: string;
-    if (imageTag !== undefined) {
-      const why = misfitReason(profile, tagged);
-      reason = `the ${imageTag} image does not fit it${why === undefined ? "" : `: ${why}`}`;
-    } else if (images.length === 0) {
-      reason = "no system image is installed";
-    } else if (considered.length === 0) {
-      reason = `Android ${level} is not installed`;
-    } else {
-      reason = misfitReason(profile, considered) ?? "none of the installed images fit it";
-    }
-    error.message = `No installed system image fits ${profile.name}${where}: ${reason}`;
-    return error;
   }
 
   async listSources(): Promise<readonly DriverSource[]> {
@@ -749,7 +714,7 @@ export class AndroidDriver implements Driver {
     const orphans = await this.#orphanSources();
     if (rows.length === 0) return orphans;
     const [images, emulatorVersion] = await Promise.all([
-      this.#installedImages(),
+      this.#systemImages.installedImages(),
       this.#adbTools.emulatorVersion(),
     ]);
     const listed: DriverSource[] = [];
@@ -1036,7 +1001,7 @@ export class AndroidDriver implements Driver {
     this.#assertAndroidSpec(spec);
     if (options.source !== undefined) return await this.#provisionFromSource(options.source);
     const profile = await this.#profileFor(spec.model);
-    const image = await this.#requireImage(profile, spec.osVersion, spec.imageTag);
+    const image = await this.#systemImages.requireImage(profile, spec.osVersion, spec.imageTag);
     // why: Cosmetic only, and worth saying so: the prefix is a label that names the device's
     // folder. Nothing reads it back as evidence of anything -- ownership comes from the root.
     const deviceId = `simlock_${this.#idGenerator.generate()}`;
@@ -1048,7 +1013,7 @@ export class AndroidDriver implements Driver {
       if (ready !== undefined) {
         const reason = await this.#staleReasonOf(
           ready,
-          await this.#installedImages(),
+          await this.#systemImages.installedImages(),
           await this.#adbTools.emulatorVersion(),
         );
         if (reason === undefined) return ready;
@@ -1087,7 +1052,7 @@ export class AndroidDriver implements Driver {
     }
     const reason = await this.#staleReasonOf(
       row,
-      await this.#installedImages(),
+      await this.#systemImages.installedImages(),
       await this.#adbTools.emulatorVersion(),
     );
     if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
@@ -1616,28 +1581,10 @@ export class AndroidDriver implements Driver {
     return { erasableMarkByDeviceId, processes, runningByDeviceId, unreadableSerial };
   }
 
-  async toolVersions(): Promise<readonly DriverToolVersion[]> {
-    const packages = [
-      { name: "emulator", path: dirname(this.#sdk.emulator) },
-      { name: "platform-tools", path: dirname(this.#sdk.adb) },
-      {
-        name: this.#sdk.sdkmanager.includes("/cmdline-tools/") ? "cmdline-tools" : "tools",
-        path: dirname(dirname(this.#sdk.sdkmanager)),
-      },
-    ];
-    const versions = await Promise.all(
-      packages.map(async ({ name, path }) => {
-        const version = await packageRevision(this.#filesystem, path);
-        return version === undefined ? undefined : { name, version };
-      }),
-    );
-    return versions.filter((version) => version !== undefined);
-  }
-
   async listCatalog(): Promise<DriverCatalogEntry> {
     const [{ catalog, modelProfiles }, images] = await Promise.all([
       this.#deviceProfiles.catalogWithProfiles(),
-      this.#installedImages(),
+      this.#systemImages.installedImages(),
     ]);
     const { customModels, modelAliases, modelClasses, models } = catalog;
     const runtimes = installedApiLevels(images);
@@ -1714,9 +1661,12 @@ export class AndroidDriver implements Driver {
     return first.id;
   }
 
+  async toolVersions(): Promise<readonly DriverToolVersion[]> {
+    return this.#systemImages.toolVersions();
+  }
+
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
-    const image = this.#matchingImage(await this.#installedImages(), component, undefined);
-    return image === undefined ? undefined : this.#installedComponent(image);
+    return this.#systemImages.findComponent(component);
   }
 
   async installComponent(
@@ -1726,28 +1676,11 @@ export class AndroidDriver implements Driver {
       readonly signal: AbortSignal;
     },
   ): Promise<ComponentInstallResult> {
-    const packageName = systemImagePackage(component, "google_apis", this.#hostAbi);
-    const before = await Promise.all(
-      (await this.#installedImages()).map(async (image) => this.#imageReceipt(image)),
-    );
-    await this.#installSystemImageOrThrow(packageName, options);
-
-    const image = (await this.#installedImages()).find(
-      (candidate) =>
-        systemImagePackage(candidate.apiLevel, candidate.tag, candidate.abi) === packageName,
-    );
-    if (image === undefined) {
-      throw new DriverCrashError(
-        `sdkmanager reported success but ${packageName} is still not installed`,
-      );
-    }
-    const installed = await this.#installedComponent(image);
-    const wasThere = before.some((receipt) => sameReceipt(receipt, installed.receipt));
-    return { ...installed, outcome: wasThere ? "already-installed" : "installed" };
+    return this.#systemImages.installComponent(component, options);
   }
 
   async listComponents(): Promise<readonly DriverComponent[]> {
-    return (await this.#listedImages()).map(({ image: _image, ...component }) => component);
+    return this.#systemImages.listComponents();
   }
 
   async removeComponent(
@@ -1755,12 +1688,12 @@ export class AndroidDriver implements Driver {
     options: { readonly signal: AbortSignal },
   ): Promise<ComponentRemoval> {
     return removeListedComponent({
-      list: () => this.#listedImages(),
+      list: () => this.#systemImages.listedImages(),
       platform: this.platform,
       receipt,
       remove: async ({ image }) => {
         const packageName = systemImagePackage(image.apiLevel, image.tag, image.abi);
-        await this.#uninstall(packageName, options);
+        await this.#systemImages.uninstall(packageName, options);
         await this.#destroySeedsOf(packageName);
         return {};
       },
@@ -1783,279 +1716,6 @@ export class AndroidDriver implements Driver {
     }
   }
 
-  async #uninstall(packageName: string, options: { readonly signal: AbortSignal }): Promise<void> {
-    const command = `${this.#sdk.sdkmanager} --uninstall ${packageName}`;
-    let outcome;
-    try {
-      outcome = await runBoundedProcess(
-        this.#processRunner,
-        this.#clock,
-        this.#sdk.sdkmanager,
-        ["--uninstall", packageName],
-        { signal: options.signal, timeoutMs: COMPONENT_REMOVAL_TIMEOUT_MS },
-      );
-    } catch (error: unknown) {
-      throw new DriverCrashError(
-        `${command} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (outcome.timedOut) {
-      throw new DriverCrashError(
-        `${command} timed out after ${String(COMPONENT_REMOVAL_TIMEOUT_MS)}ms`,
-      );
-    }
-    if (outcome.stopped) throw new DriverCrashError(`${command} was ended before it finished`);
-    if (outcome.result.code !== 0) {
-      throw new DriverCrashError(
-        `${command} failed: ${outcome.result.stderr || outcome.result.stdout}`,
-      );
-    }
-  }
-
-  async #listedImages(): Promise<(DriverComponent & { readonly image: SystemImage })[]> {
-    const [images, foreignAvds] = await Promise.all([
-      this.#installedImages(),
-      this.#foreignAvdImageDirectories(),
-    ]);
-    return Promise.all(
-      images.map(async (image): Promise<DriverComponent & { readonly image: SystemImage }> => {
-        const sizeBytes = await this.#filesystem.directorySize(image.path).catch(() => undefined);
-        const directories = [image.path, relativeImageDirectory(image)];
-        return {
-          ...(await this.#installedComponent(image)),
-          image,
-          foreignDevices: foreignAvds.filter((named) =>
-            named.some((directory) => directories.includes(directory)),
-          ).length,
-          variant: `${image.tag}/${image.abi}`,
-          ...(sizeBytes === undefined ? {} : { sizeBytes }),
-        };
-      }),
-    );
-  }
-
-  /**
-   * why: For every AVD in the user's own AVD home, the image directories its `config.ini` names
-   * (`image.sysdir.N`), without trailing slashes. Read-only (safety rule 1). A home or a
-   * `config.ini` that does not exist names no image. Any other read failure rejects: a count that
-   * silently left an AVD out would read as "nothing of the user's uses this image". A home that is
-   * this driver's own root -- the daemon started from a lease's environment -- holds Simlock's
-   * AVDs, which the registry counts, and none of the user's.
-   */
-  async #foreignAvdImageDirectories(): Promise<readonly (readonly string[])[]> {
-    const home = this.#legacyAvdHome;
-    if (home === this.#deviceRoot) return [];
-    let entries: string[];
-    try {
-      entries = await this.#filesystem.readdir(home);
-    } catch (error: unknown) {
-      if (isMissingPathError(error)) return [];
-      throw error;
-    }
-    const avds = entries
-      .filter((entry) => entry.endsWith(".ini"))
-      .map(async (entry) => {
-        const pointer = await this.#filesystem.readFile(join(home, entry));
-        const avdPath =
-          iniValues(pointer, /^path$/)[0] ?? join(home, `${entry.slice(0, -".ini".length)}.avd`);
-        const config = await this.#readIfPresent(join(avdPath, "config.ini"));
-        if (config === undefined) return [];
-        return iniValues(config, /^image\.sysdir\.\d+$/).map((value) => value.replace(/\/+$/, ""));
-      });
-    return Promise.all(avds);
-  }
-
-  async #readIfPresent(path: string): Promise<string | undefined> {
-    try {
-      return await this.#filesystem.readFile(path);
-    } catch (error: unknown) {
-      if (isMissingPathError(error)) return undefined;
-      throw error;
-    }
-  }
-
-  async #installedComponent(image: SystemImage): Promise<InstalledComponent> {
-    return { receipt: await this.#imageReceipt(image), version: image.apiLevel };
-  }
-
-  /**
-   * why: The one function that builds this driver's receipt (ADR 0010 §5): the package, its
-   * revision, and a stamp of the image's own `source.properties` -- which file it is and when it
-   * was written -- so an image deleted and installed again at the same revision differs.
-   */
-  async #imageReceipt(image: SystemImage): Promise<ComponentReceipt> {
-    let stamp = "";
-    try {
-      const stat = await this.#filesystem.stat(`${image.path}/source.properties`);
-      stamp = `${stat.identity}@${String(stat.modifiedAtMs)}`;
-    } catch {}
-    return {
-      package: systemImagePackage(image.apiLevel, image.tag, image.abi),
-      revision: image.version,
-      stamp,
-    };
-  }
-
-  /**
-   * why: Installs a system image, accepting Android SDK licenses first when `sdkmanager` refuses
-   * on an unaccepted one and `acceptAndroidLicenses` allows it -- never otherwise: license
-   * consent is independent of, and never implied by, download permission.
-   */
-  async #installSystemImageOrThrow(
-    packageName: string,
-    options: {
-      readonly onProgress: (progress: ComponentInstallProgress) => void;
-      readonly signal: AbortSignal;
-    },
-  ): Promise<void> {
-    const result = await this.#sdkmanager(["--install", packageName], options);
-    if (result.code === 0 && !hasUnacceptedLicense(result)) {
-      return;
-    }
-    if (!hasUnacceptedLicense(result)) {
-      throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} --install ${packageName} failed: ${result.stderr || result.stdout}`,
-      );
-    }
-    if (!this.#acceptAndroidLicenses) {
-      throw new AndroidLicenseNotAcceptedError(packageName);
-    }
-
-    await this.#acceptLicenses(options);
-
-    const retry = await this.#sdkmanager(["--install", packageName], options);
-    if (retry.code !== 0 || hasUnacceptedLicense(retry)) {
-      throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} --install ${packageName} still failed after accepting licenses: ` +
-          `${retry.stderr || retry.stdout}`,
-      );
-    }
-  }
-
-  async #acceptLicenses(options: {
-    readonly onProgress: (progress: ComponentInstallProgress) => void;
-    readonly signal: AbortSignal;
-  }): Promise<void> {
-    const result = await this.#sdkmanager(["--licenses"], {
-      ...options,
-      // why: `sdkmanager --licenses` prompts once per outstanding license; answering more times
-      // than there are real licenses is harmless (see `LICENSE_ACCEPT_ANSWERS`).
-      input: "y\n".repeat(LICENSE_ACCEPT_ANSWERS),
-    });
-    if (result.code !== 0) {
-      throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} --licenses failed: ${result.stderr || result.stdout}`,
-      );
-    }
-  }
-
-  async #sdkmanager(
-    args: readonly string[],
-    options: {
-      readonly onProgress: (progress: ComponentInstallProgress) => void;
-      readonly signal: AbortSignal;
-      readonly input?: string;
-    },
-  ): Promise<ProcessResult> {
-    let outcome;
-    try {
-      outcome = await runInstallerProcess(
-        this.#processRunner,
-        this.#clock,
-        this.#sdk.sdkmanager,
-        args,
-        options,
-      );
-    } catch (error: unknown) {
-      throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} ${args.join(" ")} failed: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (outcome.stopped) {
-      throw new DriverCrashError(
-        `${this.#sdk.sdkmanager} ${args.join(" ")} was ended before it finished`,
-      );
-    }
-    return outcome.result;
-  }
-
-  async #installedImages(): Promise<SystemImage[]> {
-    const root = `${this.#sdk.root}/system-images`;
-    if (!(await this.#filesystem.exists(root))) {
-      return [];
-    }
-
-    const images: SystemImage[] = [];
-    for (const apiDirectory of await this.#filesystem.readdir(root)) {
-      const apiMatch = /^android-(.+)$/.exec(apiDirectory);
-      if (apiMatch?.[1] === undefined) {
-        continue;
-      }
-      const apiPath = `${root}/${apiDirectory}`;
-      // why: A dot entry (`.DS_Store`, an editor's swap file) is never a tag or an ABI.
-      for (const tag of (await this.#filesystem.readdir(apiPath)).filter(isVisibleEntry)) {
-        const tagPath = `${apiPath}/${tag}`;
-        for (const abi of (await this.#filesystem.readdir(tagPath)).filter(isVisibleEntry)) {
-          const path = `${tagPath}/${abi}`;
-          const properties = await readSourceProperties(this.#filesystem, path);
-          const sourceApiLevel = sourcePropertyValue(properties, "AndroidVersion.ApiLevel");
-          images.push({
-            abi,
-            apiLevel: apiMatch[1],
-            path,
-            ...(sourceApiLevel === undefined ? {} : { sourceApiLevel }),
-            tag,
-            tags: systemImageTags(properties, tag),
-            version: await systemImageVersion(this.#filesystem, path),
-          });
-        }
-      }
-    }
-    return images;
-  }
-
-  #matchingImage(
-    images: readonly SystemImage[],
-    apiLevel: string,
-    imageTag: string | undefined,
-  ): SystemImage | undefined {
-    const matching = images.filter((image) => image.apiLevel === apiLevel);
-    if (imageTag !== undefined) {
-      const tagged = matching.filter((image) => image.tag === imageTag);
-      return tagged.find((image) => image.abi === this.#hostAbi) ?? tagged[0];
-    }
-    return (
-      matching.find((image) => image.tag === "google_apis" && image.abi === this.#hostAbi) ??
-      matching.find((image) => image.abi === this.#hostAbi) ??
-      matching.find((image) => image.tag === "google_apis") ??
-      matching[0]
-    );
-  }
-
-  async #requireImage(
-    profile: DeviceProfile,
-    apiLevel: string,
-    imageTag: string | undefined,
-  ): Promise<SystemImage> {
-    const images = await this.#installedImages();
-    const image = this.#matchingImage(
-      images.filter((candidate) => fits(profile, candidate)),
-      apiLevel,
-      imageTag,
-    );
-    if (image === undefined) {
-      if (
-        imageTag !== undefined &&
-        !images.some((i) => i.apiLevel === apiLevel && i.tag === imageTag)
-      ) {
-        throw new AndroidImageTagMissingError(apiLevel, imageTag);
-      }
-      throw this.#noFittingImage(profile, images, apiLevel, imageTag);
-    }
-    return image;
-  }
-
   #taggedApiLevel(
     profile: DeviceProfile,
     images: readonly SystemImage[],
@@ -2072,7 +1732,7 @@ export class AndroidDriver implements Driver {
     const levels = fittingApiLevels(profile, tagged);
     const apiLevel = requested ?? levels.at(-1);
     if (apiLevel === undefined || !levels.includes(apiLevel)) {
-      throw this.#noFittingImage(profile, images, requested, imageTag);
+      throw this.#systemImages.noFittingImage(profile, images, requested, imageTag);
     }
     return apiLevel;
   }
@@ -2180,45 +1840,8 @@ async function discoverSdk(options: AndroidDriverOptions): Promise<AndroidSdkPat
   throw new SdkMissingError(location.searched);
 }
 
-/**
- * why: No installed image of the requested tag for the API level. Never downloadable: a component is
- * an API level, not a tag, so `--allow-download` cannot supply it; the operator installs it with
- * `sdkmanager`.
- */
-class AndroidImageTagMissingError extends RuntimeMissingError {
-  constructor(apiLevel: string, imageTag: string) {
-    super("android", apiLevel, { downloadable: false });
-    this.message =
-      apiLevel === "default"
-        ? `No ${imageTag} system image is installed for any Android API level`
-        : `No ${imageTag} system image is installed for Android API ${apiLevel}`;
-  }
-}
-
-function installedApiLevels(images: readonly SystemImage[]): string[] {
-  // why: a preview folder (`Baklava`) ranks by the highest level any of its images records, so an
-  // image that records none cannot make the preview outrank a numeric level.
-  const rank = new Map<string, string>();
-  for (const image of images) {
-    const level = /^\d/.test(image.apiLevel) ? image.apiLevel : image.sourceApiLevel;
-    const current = rank.get(image.apiLevel);
-    if (level !== undefined && (current === undefined || compareApiLevels(level, current) > 0)) {
-      rank.set(image.apiLevel, level);
-    }
-  }
-  return [...new Set(images.map((image) => image.apiLevel))].sort(
-    (left, right) =>
-      compareApiLevels(rank.get(left) ?? left, rank.get(right) ?? right) ||
-      left.localeCompare(right),
-  );
-}
-
 function fittingApiLevels(profile: DeviceProfile, images: readonly SystemImage[]): string[] {
   return installedApiLevels(images.filter((image) => fits(profile, image)));
-}
-
-function isVisibleEntry(name: string): boolean {
-  return !name.startsWith(".");
 }
 
 function compareCatalogImages(left: DriverCatalogImage, right: DriverCatalogImage): number {
@@ -2227,42 +1850,6 @@ function compareCatalogImages(left: DriverCatalogImage, right: DriverCatalogImag
     left.tag.localeCompare(right.tag) ||
     left.abi.localeCompare(right.abi)
   );
-}
-
-function compareApiLevels(left: string, right: string): number {
-  const numericDifference = Number(left) - Number(right);
-  return Number.isNaN(numericDifference) || numericDifference === 0
-    ? left.localeCompare(right)
-    : numericDifference;
-}
-
-function systemImagePackage(apiLevel: string, tag: string, abi: string): string {
-  return `system-images;android-${apiLevel};${tag};${abi}`;
-}
-
-async function systemImageVersion(filesystem: Filesystem, imagePath: string): Promise<string> {
-  return (await packageRevision(filesystem, imagePath)) ?? "unknown";
-}
-
-async function packageRevision(
-  filesystem: Filesystem,
-  packagePath: string,
-): Promise<string | undefined> {
-  try {
-    const properties = await filesystem.readFile(`${packagePath}/source.properties`);
-    const revision = properties
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("Pkg.Revision="))
-      ?.slice("Pkg.Revision=".length)
-      .trim();
-    return revision === "" ? undefined : revision;
-  } catch {
-    return undefined;
-  }
-}
-
-function relativeImageDirectory(image: SystemImage): string {
-  return `system-images/android-${image.apiLevel}/${image.tag}/${image.abi}`;
 }
 
 function observedAndroidDevice(
@@ -2313,34 +1900,6 @@ function buildObservedMark(
   return { durable, erasable: running ? erasable : undefined, erasableReadable: running };
 }
 
-async function readSourceProperties(
-  filesystem: Filesystem,
-  imagePath: string,
-): Promise<string | undefined> {
-  try {
-    return await filesystem.readFile(`${imagePath}/source.properties`);
-  } catch {
-    return undefined;
-  }
-}
-
-function sourcePropertyValue(properties: string | undefined, key: string): string | undefined {
-  const value = properties
-    ?.split(/\r?\n/)
-    .find((line) => line.startsWith(`${key}=`))
-    ?.slice(key.length + 1)
-    .trim();
-  return value === undefined || value === "" ? undefined : value;
-}
-
-function systemImageTags(properties: string | undefined, folder: string): readonly string[] {
-  const tags = (sourcePropertyValue(properties, "SystemImage.TagId") ?? "")
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter((tag) => tag !== "");
-  return tags.length > 0 ? tags : [folder];
-}
-
 /**
  * why: The launch settings a seed's boot snapshot depends on: the window and the GPU mode change the
  * emulator's graphics state, so a snapshot taken under one does not load cleanly under the
@@ -2361,20 +1920,6 @@ function seedLaunchInputs(
 
 export function hostAbiFor(architecture: string): string {
   return architecture === "arm64" ? "arm64-v8a" : "x86_64";
-}
-
-/**
- * why: `sdkmanager --install` reports an unaccepted license in its output rather than through a
- * dedicated exit code, so this is a best-effort text match against sdkmanager's own wording
- * (e.g. `Warning: License for package ... not accepted.` /
- * `... licenses have not been accepted.`), checked across both streams since sdkmanager splits
- * its output between them across versions.
- */
-function hasUnacceptedLicense(result: ProcessResult): boolean {
-  const combined = `${result.stdout}\n${result.stderr}`;
-  // why: Covers both documented sdkmanager phrasings: "License for package ... not accepted." and
-  // "licenses have not been accepted." -- the latter has "been" between "not" and "accepted".
-  return /licen[cs]e/i.test(combined) && /not (?:been )?accepted/i.test(combined);
 }
 
 /**

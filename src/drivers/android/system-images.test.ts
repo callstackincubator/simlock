@@ -518,14 +518,11 @@ describe("SystemImages", () => {
 
     it("names the legacy SDK tools package as tools when its sdkmanager is the one in use", async () => {
       const filesystem = await androidFilesystem();
-      await filesystem.rm(`${sdk}/cmdline-tools`);
-      const legacyTools = `${sdk}/tools/bin`;
-      await filesystem.mkdirp(legacyTools);
-      await filesystem.writeFileAtomic(`${legacyTools}/avdmanager`, "binary");
-      await filesystem.writeFileAtomic(`${legacyTools}/sdkmanager`, "binary");
       await filesystem.mkdirp(`${sdk}/tools`);
       await filesystem.writeFileAtomic(`${sdk}/tools/source.properties`, "Pkg.Revision=26.1.1\n");
-      const part = createPart(filesystem, new ScriptedProcessRunner([]));
+      const part = createPart(filesystem, new ScriptedProcessRunner([]), {
+        sdkmanager: `${sdk}/tools/bin/sdkmanager`,
+      });
 
       await expect(part.toolVersions()).resolves.toEqual([{ name: "tools", version: "26.1.1" }]);
     });
