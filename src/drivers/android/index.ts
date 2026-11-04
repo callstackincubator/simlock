@@ -362,21 +362,7 @@ export class AndroidDriver implements Driver {
       platform: this.platform,
       processRunner: options.processRunner,
     });
-    this.#emulator = new Emulator({
-      adb: sdk.adb,
-      adbServerPort,
-      adbTools: this.#adbTools,
-      clock: options.clock,
-      deviceRoot,
-      emulator: sdk.emulator,
-      emulatorLaunch: options.emulator,
-      filesystem: options.filesystem,
-      onDiagnostic: options.onDiagnostic,
-      ownership: this.#ownership,
-      processRunner: options.processRunner,
-      readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
-      tcpProbe: options.tcpProbe,
-    });
+    this.#emulator = this.#emulatorFor(options, sdk, deviceRoot, adbServerPort);
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
     this.#sources = new AndroidSourceTable(options.database);
@@ -427,6 +413,29 @@ export class AndroidDriver implements Driver {
       options.deviceProfileSources ??
         (defaults === undefined ? [] : [defaults.library, defaults.builtin, defaults.user]),
     );
+  }
+
+  #emulatorFor(
+    options: AndroidDriverOptions,
+    sdk: AndroidSdkPaths,
+    deviceRoot: string,
+    adbServerPort: number,
+  ): Emulator {
+    return new Emulator({
+      adb: sdk.adb,
+      adbServerPort,
+      adbTools: this.#adbTools,
+      clock: options.clock,
+      deviceRoot,
+      emulator: sdk.emulator,
+      emulatorLaunch: options.emulator,
+      filesystem: options.filesystem,
+      onDiagnostic: options.onDiagnostic,
+      ownership: this.#ownership,
+      processRunner: options.processRunner,
+      readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
+      tcpProbe: options.tcpProbe,
+    });
   }
 
   // why: the screen and the input helper ride on the scrcpy server, so without its path they have no target even when a device port can be opened.

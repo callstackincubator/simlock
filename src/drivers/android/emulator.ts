@@ -25,19 +25,19 @@ import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
 // Under-quoting matters more than over-quoting: `Doctor` derives its stalled-transition
 // threshold from this number, so a low estimate flags healthy boots on a slower machine.
 export const COLD_BOOT_ESTIMATE_MS = 70_000;
-export const PORT_POLL_INTERVAL_MS = 2_000;
+const PORT_POLL_INTERVAL_MS = 2_000;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
 // already attached, short enough that a lost announcement costs seconds, not the whole
 // readiness timeout.
-export const REGISTRATION_RETRY_AFTER_MS = 5_000;
+const REGISTRATION_RETRY_AFTER_MS = 5_000;
 // why: A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
 // from ever turning a "we already killed it" cleanup into an unbounded await.
 export const SIGKILL_REAP_TIMEOUT_MS = 5_000;
-export const EMULATOR_LOG_TAIL_BYTES = 8_192;
-export const EMULATOR_LOG_TAIL_LINES = 10;
-export const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
+const EMULATOR_LOG_TAIL_BYTES = 8_192;
+const EMULATOR_LOG_TAIL_LINES = 10;
+const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 
 /**
  * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
