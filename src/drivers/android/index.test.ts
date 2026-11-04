@@ -812,6 +812,47 @@ describe("AndroidDriver", () => {
         harness.runner.calls.filter((call) => call.args.join(" ") === "list device"),
       ).toHaveLength(1);
     });
+
+    it.each([
+      {
+        env: { ANDROID_USER_HOME: "/user-home" },
+        path: "/user-home/devices.xml",
+        situation: "ANDROID_USER_HOME",
+      },
+      { env: {}, path: `${home}/.android/devices.xml`, situation: "its home directory" },
+    ])(
+      "hands the catalog its scoped environment, its SDK root, its diagnostics callback and the devices.xml under $situation",
+      async ({ env, path }) => {
+        const addOnDevicesXml = `${sdk}/add-ons/addon-acme/devices.xml`;
+        const filesystem = await androidFilesystem();
+        await filesystem.mkdirp(path.slice(0, path.lastIndexOf("/")));
+        await filesystem.writeFileAtomic(path, "not xml at all {{{");
+        await filesystem.mkdirp(`${sdk}/add-ons/addon-acme`);
+        await filesystem.writeFileAtomic(addOnDevicesXml, "<d:devices/>");
+        const runner = new EmulatorExitingRunner([
+          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+          processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+        ]);
+        const diagnostics: AndroidDriverDiagnostic[] = [];
+        const driver = await createDriver(filesystem, runner, {
+          extraEnv: env,
+          onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+        });
+
+        await driver.listCatalog();
+        await filesystem.writeFileAtomic(addOnDevicesXml, "<d:devices></d:devices>");
+        await driver.listCatalog();
+
+        const listRuns = runner.calls.filter((call) => call.args.join(" ") === "list device");
+        expect(listRuns.map((call) => call.options.env)).toEqual([
+          { ...scopedEnv, ...env },
+          { ...scopedEnv, ...env },
+        ]);
+        expect(diagnostics).toContainEqual(
+          expect.objectContaining({ kind: "device-profile-source-unreadable", path }),
+        );
+      },
+    );
   });
 
   it("reports one running root AVD, one stopped root AVD and the running AVD's process", async () => {
