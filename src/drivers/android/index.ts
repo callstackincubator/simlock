@@ -75,7 +75,16 @@ import {
   portAllocatorFor,
   portsFromAdbDevices,
 } from "./console-ports.js";
-import type { AndroidDriverData, DeviceState } from "./data.js";
+import type { AndroidDriverData, DeviceState, SystemImage } from "./data.js";
+import {
+  AvdConfig,
+  assertLibraryProfileWritable,
+  ERASABLE_MARK_PATH,
+  ERASABLE_MARK_READ_BYTES,
+  iniValues,
+  MARK_READ_TIMEOUT_MS,
+  parseErasableMark,
+} from "./avd-config.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, Ownership } from "./ownership.js";
 import { ANDROID_PASSTHROUGH_TOOLS, PassthroughRules } from "./passthrough-rules.js";
 import { AndroidPhysicalHandler, PHYSICAL_RECLAIM_ESTIMATE_MS } from "./physical-handler.js";
@@ -83,14 +92,13 @@ import {
   AvdmanagerDeviceList,
   BuiltinDeviceProfileSource,
   hiddenUserProfiles,
-  containsForbiddenCharacter,
   DeviceProfileRegistry,
   UserDeviceProfileSource,
   type DeviceProfileSource,
   type DeviceProfileSourceDiagnostic,
   type DeviceProfile,
 } from "./device-profile-source.js";
-import { fits, isPlayStoreImage, misfitReason } from "./image-fit.js";
+import { fits, misfitReason } from "./image-fit.js";
 import { LibraryDeviceProfileSource } from "./profiles/index.js";
 import { createAndroidDeviceInput } from "./input/index.js";
 import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js";
@@ -127,8 +135,6 @@ const LICENSE_ACCEPT_ANSWERS = 100;
 const SIGKILL_REAP_TIMEOUT_MS = 5_000;
 const EMULATOR_LOG_TAIL_BYTES = 8_192;
 const EMULATOR_LOG_TAIL_LINES = 10;
-const MARK_READ_TIMEOUT_MS = 5_000;
-const ERASABLE_MARK_READ_BYTES = 4096;
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
@@ -158,8 +164,6 @@ const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 const SAVE_EXIT_POLL_INTERVAL_MS = 1_000;
 // why: adb shell sync and reboot -p have no limit of their own; a wedged adbd would hold the kind's lock.
 const SEED_SHELL_TIMEOUT_MS = 60_000;
-const DURABLE_MARK_KEY = "simlock.mark";
-const ERASABLE_MARK_PATH = "/data/local/tmp/simlock-mark.json";
 
 /**
  * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
@@ -262,16 +266,6 @@ interface SeedRecord {
   readonly sourceId: string;
 }
 
-interface SystemImage {
-  readonly abi: string;
-  readonly apiLevel: string;
-  readonly path: string;
-  readonly sourceApiLevel?: string | undefined;
-  readonly tag: string;
-  readonly tags: readonly string[];
-  readonly version: string;
-}
-
 /**
  * why: ADR 0015 §4: the models Simlock tries for each class on Android when the operator names none
  * first, newest first. Medium Tablet is Android's only `tablet`; Android has no `vision` list.
@@ -317,6 +311,7 @@ export class AndroidDriver implements Driver {
   readonly #adbServer: AdbServerSupervisor;
   readonly #adbServerPort: number;
   readonly #adbTools: AdbTools;
+  readonly #avdConfigPart: AvdConfig;
   readonly #ownership: Ownership;
   readonly #passthroughRules: PassthroughRules;
   readonly #baseEnv: Readonly<Record<string, string | undefined>>;
@@ -332,7 +327,6 @@ export class AndroidDriver implements Driver {
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
   readonly #emulatorFlags: readonly string[];
-  readonly #seedLaunchInputs: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #consolePorts: ConsolePorts;
@@ -371,6 +365,13 @@ export class AndroidDriver implements Driver {
       emulator: sdk.emulator,
       processRunner: options.processRunner,
     });
+    this.#avdConfigPart = new AvdConfig({
+      adb: sdk.adb,
+      adbTools: this.#adbTools,
+      filesystem: options.filesystem,
+      idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
+      seedLaunchInputs: seedLaunchInputs(options.emulator),
+    });
     this.#ownership = new Ownership({
       adb: sdk.adb,
       adbTools: this.#adbTools,
@@ -380,7 +381,6 @@ export class AndroidDriver implements Driver {
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
     this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
-    this.#seedLaunchInputs = seedLaunchInputs(options.emulator);
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -899,7 +899,7 @@ export class AndroidDriver implements Driver {
     } else if (emulatorVersion !== row.emulatorVersion) {
       reason = `emulator changed from ${row.emulatorVersion} to ${emulatorVersion}`;
     } else if (
-      (await this.#currentConfigHash(
+      (await this.#avdConfigPart.currentConfigHash(
         join(row.folder, `${row.avdName}.avd`),
         row.imageIdentity,
         row.emulatorVersion,
@@ -960,7 +960,7 @@ export class AndroidDriver implements Driver {
           port: 0,
           serial: "",
         });
-        const configHash = await this.#currentConfigHash(
+        const configHash = await this.#avdConfigPart.currentConfigHash(
           avdFolder,
           kind.imageIdentity,
           emulatorVersion,
@@ -1216,10 +1216,10 @@ export class AndroidDriver implements Driver {
         { env: { ...this.#adbTools.env(), ANDROID_AVD_HOME: folder } },
       );
       if (profile.kind === "properties") {
-        await this.#applyHardwareProperties(avdFolder, profile.hardwareProperties);
+        await this.#avdConfigPart.applyHardwareProperties(avdFolder, profile.hardwareProperties);
       }
       if (profile.kind === "library") {
-        await this.#applyLibraryProfile(avdFolder, profile, image);
+        await this.#avdConfigPart.applyLibraryProfile(avdFolder, profile, image);
       }
       await this.#bootSeedTwice(sourceId, {
         avdHome: folder,
@@ -1230,7 +1230,11 @@ export class AndroidDriver implements Driver {
         serial: "",
       });
       // why: taken after the boots, since the emulator normalizes the config.ini it boots from; a hash from before would read as a launch-settings change at once.
-      const configHash = await this.#currentConfigHash(avdFolder, imageIdentity, emulatorVersion);
+      const configHash = await this.#avdConfigPart.currentConfigHash(
+        avdFolder,
+        imageIdentity,
+        emulatorVersion,
+      );
       const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
       this.#sources.markReady(sourceId, configHash, sizeBytes);
       return { configHash, folder, sourceId };
@@ -1393,27 +1397,27 @@ export class AndroidDriver implements Driver {
         // can't have gone stale. Re-mark anyway: this is the
         // single readiness transition that lets a caller re-lease an already-ready device
         // without ever seeing a moment where "ready" and "marked" disagree.
-        await this.#writeMark(running);
+        await this.#avdConfigPart.writeMark(running);
         return { address: running.serial, deviceId: device.deviceId, driverData: running };
       }
 
       if (options?.purpose === "recover") {
         await this.#startEmulator(data, state, ["-no-snapshot-load"], false);
-        await this.#writeMark(data);
+        await this.#avdConfigPart.writeMark(data);
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
       if (data.avdHome !== undefined) {
         const copy = await this.#consolePorts.withReservedPort(data, state);
         await this.#startEmulator(copy, state, ["-snapshot", BOOT_SNAPSHOT], true);
-        await this.#writeMark(copy);
+        await this.#avdConfigPart.writeMark(copy);
         return { address: copy.serial, deviceId: device.deviceId, driverData: copy };
       }
 
       // why: a device made before copies has no boot snapshot: it boots once with a wipe and is destroyed at its release.
       const booted = await this.#consolePorts.withReservedPort(data, state);
       await this.#startEmulator(booted, state, ["-wipe-data", "-no-snapshot-load"], false);
-      await this.#writeMark(booted);
+      await this.#avdConfigPart.writeMark(booted);
       return { address: booted.serial, deviceId: device.deviceId, driverData: booted };
     });
   }
@@ -1570,7 +1574,7 @@ export class AndroidDriver implements Driver {
       unattributableTransitionalSerial,
     );
     const running = runningByDeviceId.has(entry.deviceId);
-    const durable = await this.#readDurableMark(entry.folder);
+    const durable = await this.#avdConfigPart.readDurableMark(entry.folder);
     const mark = buildObservedMark(durable, running, erasableMarkByDeviceId.get(entry.deviceId));
     return mark === undefined ? base : { ...base, mark };
   }
@@ -1793,38 +1797,6 @@ export class AndroidDriver implements Driver {
       );
     }
     return first.id;
-  }
-
-  async #applyLibraryProfile(
-    folder: string,
-    profile: Extract<DeviceProfile, { readonly kind: "library" }>,
-    image: SystemImage,
-  ): Promise<void> {
-    await this.#mergeConfigIniLines(
-      folder,
-      {
-        ...profile.hardware,
-        "PlayStore.enabled": profile.playStore && isPlayStoreImage(image) ? "yes" : "no",
-      },
-      (line) => !isSeedHardwareLine(line),
-    );
-    const bootPropPath = `${folder}/boot.prop`;
-    const properties = Object.entries(profile.bootProperties);
-    if (properties.length > 0) {
-      await this.#filesystem.writeFileAtomic(
-        bootPropPath,
-        `${properties.map(([key, value]) => `${key}=${value}`).join("\n")}\n`,
-      );
-    } else if (await this.#filesystem.exists(bootPropPath)) {
-      await this.#filesystem.rm(bootPropPath);
-    }
-  }
-
-  async #applyHardwareProperties(
-    folder: string,
-    properties: Readonly<Record<string, string>>,
-  ): Promise<void> {
-    await this.#mergeConfigIniLines(folder, properties);
   }
 
   async findComponent(component: string): Promise<InstalledComponent | undefined> {
@@ -2190,41 +2162,6 @@ export class AndroidDriver implements Driver {
     return apiLevel;
   }
 
-  /**
-   * why: What a seed's boot snapshot depends on. A mismatch against the hash stored with the seed
-   * makes it stale, so it is made again rather than copied into devices whose snapshot the
-   * emulator would refuse.
-   */
-  async #currentConfigHash(
-    folder: string,
-    imageIdentity: string,
-    knownEmulatorVersion?: string,
-  ): Promise<string> {
-    const [emulatorVersion, config] = await Promise.all([
-      knownEmulatorVersion ?? this.#adbTools.emulatorVersion(),
-      this.#avdConfig(folder),
-    ]);
-    return stableHash([imageIdentity, emulatorVersion, config, ...this.#seedLaunchInputs]);
-  }
-
-  async #avdConfig(folder: string): Promise<string> {
-    try {
-      const contents = await this.#filesystem.readFile(`${folder}/config.ini`);
-      return (
-        contents
-          .split(/\r?\n/)
-          .filter((line) => /^(image\.sysdir\.1|hw\.|disk\.dataPartition\.)/.test(line))
-          // why: `avdmanager` writes `hw.device.hash2` into every AVD in the home, and the emulator
-          // ignores it, so counting it would make every seed stale.
-          .filter((line) => !line.startsWith("hw.device.hash2="))
-          .sort()
-          .join("\n")
-      );
-    } catch {
-      return "";
-    }
-  }
-
   #emulatorLogPath(data: AndroidDriverData): string {
     return `${this.#adbTools.avdFolder(data)}/emulator.log`;
   }
@@ -2244,84 +2181,6 @@ export class AndroidDriver implements Driver {
         .join("\n");
     } catch {
       return "(the emulator's log could not be read)";
-    }
-  }
-
-  /**
-   * why: Writes the same provenance token into both regions of the mark: the durable
-   * `simlock.mark` key in `config.ini` (host-side, survives an erase) and the erasable
-   * `/data/local/tmp/simlock-mark.json` file on the device (destroyed by an erase). Must be
-   * called after every readiness transition -- see the call sites in `makeReady`.
-   */
-  async #writeMark(data: AndroidDriverData): Promise<void> {
-    const token = this.#idGenerator.generate();
-    await Promise.all([
-      this.#writeDurableMark(this.#adbTools.avdFolder(data), token),
-      this.#writeErasableMark(data.serial, token),
-    ]);
-  }
-
-  async #writeDurableMark(folder: string, token: string): Promise<void> {
-    await this.#mergeConfigIniLines(folder, { [DURABLE_MARK_KEY]: token });
-  }
-
-  async #mergeConfigIniLines(
-    folder: string,
-    entries: Readonly<Record<string, string>>,
-    keepLine: (line: string) => boolean = () => true,
-  ): Promise<void> {
-    for (const [key, value] of Object.entries(entries)) {
-      if (containsForbiddenCharacter(key) || containsForbiddenCharacter(value)) {
-        throw new DriverCrashError(
-          `Refusing to merge config.ini entry with a line break or NUL (key ${JSON.stringify(key)})`,
-        );
-      }
-    }
-    const path = `${folder}/config.ini`;
-    let contents: string;
-    try {
-      contents = await this.#filesystem.readFile(path);
-    } catch (error: unknown) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      contents = "";
-    }
-    const lines = (contents === "" ? [] : contents.replace(/\r?\n$/, "").split(/\r?\n/)).filter(
-      keepLine,
-    );
-    for (const [key, value] of Object.entries(entries)) {
-      const line = `${key}=${value}`;
-      const existingIndex = lines.findIndex((entry) => entry.startsWith(`${key}=`));
-      if (existingIndex >= 0) {
-        lines[existingIndex] = line;
-      } else {
-        lines.push(line);
-      }
-    }
-    await this.#filesystem.writeFileAtomic(path, `${lines.join("\n")}\n`);
-  }
-
-  async #writeErasableMark(serial: string, token: string): Promise<void> {
-    const payload = JSON.stringify({ token });
-    await this.#adbTools.runOrThrow(this.#sdk.adb, [
-      "-s",
-      serial,
-      "shell",
-      `echo '${payload}' > ${ERASABLE_MARK_PATH}`,
-    ]);
-  }
-
-  async #readDurableMark(folder: string): Promise<string | undefined> {
-    try {
-      const contents = await this.#filesystem.readFile(`${folder}/config.ini`);
-      const line = contents
-        .split(/\r?\n/)
-        .find((entry) => entry.startsWith(`${DURABLE_MARK_KEY}=`));
-      const value = line?.slice(`${DURABLE_MARK_KEY}=`.length).trim();
-      return value === undefined || value === "" ? undefined : value;
-    } catch {
-      return undefined;
     }
   }
 
@@ -2694,15 +2553,6 @@ async function packageRevision(
   }
 }
 
-function iniValues(contents: string, key: RegExp): string[] {
-  return contents.split(/\r?\n/).flatMap((line) => {
-    const separator = line.indexOf("=");
-    if (separator === -1 || !key.test(line.slice(0, separator).trim())) return [];
-    const value = line.slice(separator + 1).trim();
-    return value === "" ? [] : [value];
-  });
-}
-
 function relativeImageDirectory(image: SystemImage): string {
   return `system-images/android-${image.apiLevel}/${image.tag}/${image.abi}`;
 }
@@ -2753,42 +2603,6 @@ function buildObservedMark(
     return undefined;
   }
   return { durable, erasable: running ? erasable : undefined, erasableReadable: running };
-}
-
-function parseErasableMark(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (trimmed === "") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as { readonly token?: unknown };
-    return typeof parsed.token === "string" ? parsed.token : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isSeedHardwareLine(line: string): boolean {
-  return (
-    (line.startsWith("hw.") && !line.startsWith("hw.cpu.arch=")) ||
-    line.startsWith("vm.heapSize=") ||
-    line.startsWith("skin.")
-  );
-}
-
-function assertLibraryProfileWritable(
-  profile: Extract<DeviceProfile, { readonly kind: "library" }>,
-): void {
-  for (const [key, value] of [
-    ...Object.entries(profile.hardware),
-    ...Object.entries(profile.bootProperties),
-  ]) {
-    if (containsForbiddenCharacter(key) || containsForbiddenCharacter(value)) {
-      throw new DriverCrashError(
-        `Refusing library profile ${JSON.stringify(profile.name)}: ${JSON.stringify(key)} holds a line break or NUL`,
-      );
-    }
-  }
 }
 
 async function readSourceProperties(
@@ -2846,15 +2660,6 @@ function seedLaunchInputs(
     return [];
   }
   return [`headless=${String(launch.headless)}`, `gpu=${launch.gpu}`];
-}
-
-function stableHash(parts: readonly string[]): string {
-  let hash = 0x811c9dc5;
-  for (const character of parts.join("\u0000")) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 export function hostAbiFor(architecture: string): string {
