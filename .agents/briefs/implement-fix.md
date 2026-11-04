@@ -45,7 +45,7 @@ mechanical. Inputs include immutable `base`, `merge-base`, `previous` and
      trailing `&`, no loop that sleeps, no bare `cat > file`. The tool guard
      refuses each; a background job would hold your report until it ends or
      hits its 30-minute cap, which stalls the whole delivery.
-3. Run only the commands under "Tests agents run" in `toolchain.md`. Never
+3. Run only the commands under "Tests agents run" in `implementer.md`. Never
    run a check listed under "Checks agents never run", nor a tool behind it,
    from any path: the commit and push hooks run them, and their errors show
    in the hook's output.
