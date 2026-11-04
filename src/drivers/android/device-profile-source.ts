@@ -602,10 +602,10 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
     if (rawName === undefined || rawName === "") {
       continue;
     }
-    // A value containing CR, LF, or NUL is never a legitimate device name or property --
+    // why: A value containing CR, LF, or NUL is never a legitimate device name or property --
     // devices.xml is Android Studio's own file, but Simlock only ever reads it (safety rule 1),
     // and every value here eventually flows into a `config.ini` line-merge
-    // (`AndroidDriver#applyHardwareProperties` -> `#mergeConfigIniLines`). A newline there would
+    // (`AvdConfig#applyHardwareProperties` -> `#mergeConfigIniLines`). A newline there would
     // inject an arbitrary extra `config.ini` key. Thrown rather than silently skipped or
     // sanitized: this routes through the same malformed-devices.xml diagnostic path the caller
     // (`UserDeviceProfileSource#devicesXmlProfiles`) already has for an unparseable file, so a poisoned
@@ -630,10 +630,10 @@ export function parseDevicesXml(contents: string): readonly DevicesXmlProfile[] 
     applyRamProperty(block, hardwareProperties);
     const fit = readFitFields(block, name);
 
-    // Defense in depth beyond the per-field checks above: every value about to leave this
+    // why: Defense in depth beyond the per-field checks above: every value about to leave this
     // parser (including ones a future field addition might forget to check individually) must
     // be a single line before it is handed to the driver -- the same invariant
-    // `AndroidDriver#mergeConfigIniLines` enforces again on its own side, independently.
+    // `AvdConfig#mergeConfigIniLines` enforces again on its own side, independently.
     if (Object.values(hardwareProperties).some(containsForbiddenCharacter)) {
       throw new Error(
         `devices.xml property for device "${name}" contains an embedded line break or NUL byte`,

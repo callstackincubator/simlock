@@ -42,3 +42,13 @@ export interface DeviceState {
    */
   restored?: boolean;
 }
+
+export interface SystemImage {
+  readonly abi: string;
+  readonly apiLevel: string;
+  readonly path: string;
+  readonly sourceApiLevel?: string | undefined;
+  readonly tag: string;
+  readonly tags: readonly string[];
+  readonly version: string;
+}
