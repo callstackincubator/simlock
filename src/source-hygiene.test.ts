@@ -20,6 +20,41 @@ const lsFiles = (args: string[]): string[] =>
     .split("\0")
     .filter((name) => name.length > 0);
 
+type SizedFile = { path: string; lines: number };
+
+/**
+ * why: ADR 0063 section 3. These files were over their limit when the size test landed; each may
+ * only shrink. A PR that has to grow one raises its number here, as a visible line of its diff.
+ */
+const SHRINK_ONLY: Record<string, number> = {
+  "src/agent-device/edge.test.ts": 4506,
+  "src/cli/index.test.ts": 11542,
+  "src/contract/schemas.ts": 1497,
+  "src/core/config.test.ts": 2519,
+  "src/core/doctor.test.ts": 3534,
+  "src/core/registry.test.ts": 2901,
+  "src/core/warm-pool/converger.test.ts": 2965,
+  "src/daemon/dispatcher.test.ts": 6284,
+  "src/daemon/main.test.ts": 5255,
+  "src/daemon/main.ts": 1916,
+  "src/daemon/server.test.ts": 4380,
+  "src/daemon/server.ts": 1803,
+  "src/drivers/android/index.test.ts": 8442,
+  "src/drivers/android/index.ts": 3573,
+  "src/drivers/ios/index.test.ts": 5873,
+  "src/drivers/ios/index.ts": 2671,
+  "src/gateway/dispatcher.test.ts": 3022,
+  "src/gateway/fleet-coordinator.test.ts": 5283,
+  "src/gateway/fleet-coordinator.ts": 1659,
+  "src/http/app.test.ts": 3487,
+  "src/leasing/create-leasing.test.ts": 5276,
+  "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
+  "src/leasing/lease-acquisition-coordinator.ts": 1622,
+};
+
+// why: a stub until the size test's code lands; it reports no file.
+const sizeFailures = (_files: SizedFile[], _shrinkOnly: Record<string, number>): string[] => [];
+
 /**
  * why: a vendored artifact lands untracked -- the directory is complete, at the right checksum,
  * long before anybody stages it, and a check that read only the index would wave a half-vendored
@@ -95,6 +130,38 @@ describe("tracked files", () => {
         return false;
       }
     });
+
+  const SIZED_EXTENSIONS = /\.(ts|tsx|mts|mjs|js|cjs)$/;
+  const SIZED_DIRECTORIES = /^(src|ui|e2e|scripts|\.agents\/scripts)\//;
+  const trackedSizes = trackedFiles
+    .filter((name) => SIZED_DIRECTORIES.test(name) && SIZED_EXTENSIONS.test(name))
+    .map((name) => ({
+      path: name,
+      lines: readFileSync(join(REPO_ROOT, name)).filter((byte) => byte === 0x0a).length,
+    }));
+
+  it("fails a file over its size limit that is not on the shrink-only list, naming the file, its lines and the limit", () => {
+    const failures = sizeFailures(
+      [
+        { path: "src/a/ok.ts", lines: 1400 },
+        { path: "src/a/big.ts", lines: 1401 },
+        { path: "src/a/ok.test.ts", lines: 2500 },
+        { path: "src/a/big.test.ts", lines: 2501 },
+        { path: "src/a/test-x.ts", lines: 2501 },
+        { path: "src/a/testing.ts", lines: 2501 },
+      ],
+      {},
+    );
+    expect(failures).toEqual([
+      "src/a/big.ts: 1401 lines; a code file may have at most 1400. Split it (ADR 0063).",
+      "src/a/big.test.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+      "src/a/test-x.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+      "src/a/testing.ts: 2501 lines; a test file may have at most 2500. Split it (ADR 0063).",
+    ]);
+    expect(
+      sizeFailures(trackedSizes, SHRINK_ONLY).filter((line) => line.includes("may have at most")),
+    ).toEqual([]);
+  });
 
   it("were enumerated from the git index", () => {
     // why: Without this, an `execFileSync` that returned nothing would leave `it.each` with an
