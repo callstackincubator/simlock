@@ -29,7 +29,9 @@
   0003](0003-one-typed-daemon-contract-behind-every-frontend.md) (one typed
   contract behind every frontend), [ADR
   0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) (the
-  console acts through the HTTP routes).
+  console acts through the HTTP routes), [ADR
+  0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md)
+  (a learned warm kind carries its baseline).
 
 ## Context
 
@@ -69,7 +71,8 @@ flowchart LR
 The warm pool owns two more tables in `state.db` (ADR 0036), beside
 `warm_kinds` and `warm_kind_leases`: the runtime target list, in order, and
 the runtime `learn` value. Its schema owner `warm-pool` rises by one
-version and ships one migration step. A restart keeps the rows. `nuke`
+version (from 2, the version ADR 0061's baseline kinds took, to 3) and
+ships one migration step. A restart keeps the rows. `nuke`
 leaves them: they are the operator's settings, not something the pool
 learned. `config.json` is never written by the daemon.
 
@@ -79,6 +82,11 @@ an integer from 0 to 256. Its **key** is its written `platform`, `model`,
 `osVersion` and `mode`, exactly as given; an absent field is part of the
 key. A list holds at most 256 rows, and two rows of one list with the same
 key are refused.
+
+A runtime row names no baseline, as a configured target names none: it
+resolves to a plain kind. A learned baseline kind (ADR 0061 §5) resolves
+to a different spec from every row, so no row replaces it or sets its
+count to 0; `warm forget` still drops it (ADR 0050).
 
 ### 2. A runtime row replaces the configured targets with the same key
 
@@ -227,6 +235,10 @@ sequenceDiagram
 - **Rows keyed by the spec they resolve to.** Rejected: a row that does not
   resolve today (no runtime yet) would have no key, and the console could
   not tell which configured row a runtime row replaces.
+- **A runtime row that names a baseline.** Deferred: a configured target
+  cannot name one either, and a baseline is removed or replaced on its
+  own, so such a row would need a rule for a baseline that is gone or
+  stale. Learning already keeps baseline devices warm (ADR 0061 §5).
 - **A revision number on `warm.set` to refuse a stale write.** Deferred:
   one operator per worker is the common case; the event marks every
   console's list stale.
