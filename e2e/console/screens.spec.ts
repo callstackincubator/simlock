@@ -415,3 +415,84 @@ test("adds a running device without page reload after an event, a poll, or retur
     ).toBe(0);
   }
 });
+
+test("uses the latest visibility entry in a batch to stop and resume only that tile", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.addInitScript(() => {
+    const NativeObserver = window.IntersectionObserver;
+    const targets = new Map<
+      Element,
+      { observer: IntersectionObserver; callback: IntersectionObserverCallback }
+    >();
+    window.IntersectionObserver = class extends NativeObserver {
+      readonly callback: IntersectionObserverCallback;
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        super(callback, options);
+        this.callback = callback;
+      }
+      observe(target: Element) {
+        targets.set(target, { observer: this, callback: this.callback });
+        super.observe(target);
+      }
+      disconnect() {
+        for (const [target, record] of targets)
+          if (record.observer === this) targets.delete(target);
+        super.disconnect();
+      }
+    };
+    Object.assign(window, {
+      screenVisibilityBatch(states: boolean[]) {
+        const target = document.querySelector(".screens-tile")!;
+        const record = targets.get(target)!;
+        const rect = target.getBoundingClientRect();
+        const now = performance.now();
+        record.callback(
+          states.map((isIntersecting, index) => ({
+            target,
+            time: now + index,
+            isIntersecting,
+            boundingClientRect: rect,
+            intersectionRect: isIntersecting ? rect : new DOMRect(),
+            rootBounds: null,
+            intersectionRatio: isIntersecting ? 1 : 0,
+            toJSON: () => ({ isIntersecting }),
+          })),
+          record.observer,
+        );
+      },
+    });
+  });
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await page.goto(`${origin}/screens`);
+  await expect.poll(() => active(page)).toEqual(["four", "one", "three", "two"]);
+  for (const [states, expected] of [
+    [
+      [true, false],
+      ["one", "three", "two"],
+    ],
+    [
+      [false, true],
+      ["four", "one", "three", "two"],
+    ],
+    [
+      [true, false, true, false],
+      ["one", "three", "two"],
+    ],
+  ] as const) {
+    await page.evaluate(
+      (states) =>
+        (
+          window as unknown as { screenVisibilityBatch(states: readonly boolean[]): void }
+        ).screenVisibilityBatch(states),
+      states,
+    );
+    await expect.poll(() => active(page)).toEqual(expected);
+  }
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
+    ),
+  ).toBe(0);
+});

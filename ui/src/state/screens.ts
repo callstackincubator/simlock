@@ -30,7 +30,7 @@ export function useScreenVisibility() {
     setVisible(false);
     if (element === null) return;
     observer.current = new IntersectionObserver((entries) => {
-      setVisible(entries.some((entry) => entry.isIntersecting));
+      setVisible(entries.at(-1)?.isIntersecting ?? false);
     });
     observer.current.observe(element);
   }, []);

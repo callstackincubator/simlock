@@ -72,9 +72,9 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
+The sidebar leads to every page: **Overview**, **Inbox**, **Fleet**, **Leases**, **Queue**, **Screens**, **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
 
-Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
+Screens shows device screens in a responsive grid. Tables show 25 rows at a time, with a pager for 50 or 100.
 
 Every page keeps itself current: a lease being granted or a device booting shows within about a second, with no reload. Readings with no event of their own, such as host load, refresh within 15 seconds. The bottom of the sidebar says how the connection is:
 
@@ -206,3 +206,5 @@ Select an event to see its whole payload and a link to the lease, worker, reques
 Select **Screens** under **Observe** to watch running devices side by side across workers. Each tile names its worker, device model, platform and runtime, and **Open device Screen** opens the existing device drawer. Devices that are ready or leased appear; a disconnected worker or disabled streaming explains why no picture is available.
 
 Only tiles in view capture a screen. Captures pause when you hide the browser tab or scroll a tile out of view, and stop when you leave Screens or sign out. Returning starts a new capture. An ended or failed stream clears its picture and shows its reason independently of the other tiles.
+
+With Chromium over HTTP/1, five simultaneous screen streams plus the console event stream can fill the browser's connection pool. Further streams and data refreshes may wait until another stream closes. Scroll tiles out of view or leave Screens to free connections.

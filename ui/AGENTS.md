@@ -119,6 +119,8 @@ not (its highlight is an index it resets when the items change), so the listbox 
 The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
 Observe (Screens, Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
+The Screens page reads the shared workers query through `state/screens.ts` and derives stable worker/device tiles in `model/screens.ts`. `useScreenVisibility` gates each tile with document visibility and an IntersectionObserver. Each active tile mounts the existing `useDeviceScreen` hook; `screens/screen-view.tsx` presents the same stream in the grid and Fleet drawer. Disconnected workers or daemon connections show no retained picture.
+
 Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it
 (`state/drawer.ts`: closing steps back when the drawer was opened from the list).
 
@@ -168,4 +170,4 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 - **The Events chart counts from the events held.** It reaches back one hour only; the Overview's
   figures come from `GET /v1/stats` for the range in `?range=`.
 
-The Screens page reads the shared workers query through `state/screens.ts` and derives stable worker/device tiles in `model/screens.ts`. `useScreenVisibility` gates each tile with document visibility and an IntersectionObserver. Each active tile mounts the existing `useDeviceScreen` hook; `screens/screen-view.tsx` presents the same stream in the grid and Fleet drawer. Disconnected workers or daemon connections show no retained picture.
+- **HTTP/1 screen streams can delay data reads.** In Chromium, five simultaneous captures plus the console event stream can fill the per-origin connection pool. Further streams and data reads wait until a connection is freed. Hidden/offscreen tiles release their captures; the grid has no shared capture budget.
