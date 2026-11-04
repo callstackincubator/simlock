@@ -113,14 +113,14 @@ not (its highlight is an index it resets when the items change), so the listbox 
 | `/queue[/<id>]`              | Queue     | Wait p95 tile + table; a request opens in a `Drawer`                                                                                                                                             |
 | `/baselines`                 | Baselines | one table, a row per baseline (a Worker column on a gateway); read-only                                                                                                                          |
 | `/inbox[/<key>]`             | Inbox     | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                                                                            |
-| `/screens`                   | Screens   | responsive grid of ready/leased devices across workers; visible tiles own captures, hidden/offscreen tiles pause, removal/navigation/logout unmounts them                                        |
+| `/screens`                   | Screens   | responsive grid of ready/leased devices across workers; up to four visible tiles own captures, the rest wait; hidden/offscreen tiles pause, removal/navigation/logout unmounts them              |
 | `/activity[/<id>]`           | Activity  | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload                                                            |
 | `/usage`                     | Usage     | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                                                                    |
 
 The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue, Baselines), then
 Observe (Screens, Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
-The Screens page reads the shared workers query through `state/screens.ts` and derives stable worker/device tiles in `model/screens.ts`. `useScreenVisibility` gates each tile with document visibility and an IntersectionObserver. Each active tile mounts the existing `useDeviceScreen` hook; `screens/screen-view.tsx` presents the same stream in the grid and Fleet drawer. Disconnected workers or daemon connections show no retained picture.
+The Screens page reads the shared workers query through `state/screens.ts` and derives stable worker/device tiles in `model/screens.ts`. `useScreenVisibility` gates each tile with document visibility and an IntersectionObserver. Each eligible visible tile mounts the existing `useDeviceScreen` hook with the page-owned four-capture budget. Additional tiles wait without opening a stream; they do not rotate automatically. A slot is released only after its capture and retained reader cancellation finish, including failure, hidden/offscreen removal, navigation and logout. The admitted view mounts its canvas before capture starts; `screens/screen-view.tsx` presents the same stream in the grid and Fleet drawer. Disconnected workers or daemon connections show no retained picture.
 
 Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it
 (`state/drawer.ts`: closing steps back when the drawer was opened from the list).
@@ -171,4 +171,4 @@ Lists page in the URL (`state/paging.ts`, `model/paging.ts`).
 - **The Events chart counts from the events held.** It reaches back one hour only; the Overview's
   figures come from `GET /v1/stats` for the range in `?range=`.
 
-- **HTTP/1 screen streams can delay data reads.** In Chromium, five simultaneous captures plus the console event stream can fill the per-origin connection pool. Further streams and data reads wait until a connection is freed. Hidden/offscreen tiles release their captures; the grid has no shared capture budget.
+- **The capture budget belongs to one Screens page.** The four-capture limit applies on HTTP/1 and HTTP/2. It leaves room beside the page's event stream for reads in the usual Chromium HTTP/1 pool, but does not coordinate other tabs or unrelated same-origin traffic. Browser cancellation completion does not acknowledge that the server has finished closing its request; transient transport overlap may still queue a read.

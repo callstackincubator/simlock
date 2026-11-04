@@ -1,12 +1,17 @@
 import "./screens.css";
 
 import { Empty, Id, Link, Loaded, Page } from "../../ds";
-import { type ScreenTile, useScreens, useScreenTile } from "../../state/screens";
+import {
+  type AcquireCapture,
+  type ScreenTile,
+  useScreens,
+  useScreenTile,
+} from "../../state/screens";
 import { useDeviceScreen } from "../../state/screen";
 import { ScreenView } from "../screen-view";
 
 export function ScreensScreen() {
-  const { view, connected } = useScreens();
+  const { view, connected, acquire } = useScreens();
   return (
     <Page title="Screens">
       <Loaded view={view}>
@@ -16,7 +21,7 @@ export function ScreensScreen() {
           ) : (
             <div className="screens-grid">
               {tiles.map((tile) => (
-                <Tile key={tile.key} tile={tile} connected={connected} />
+                <Tile key={tile.key} tile={tile} connected={connected} acquire={acquire} />
               ))}
             </div>
           )
@@ -26,7 +31,15 @@ export function ScreensScreen() {
   );
 }
 
-function Tile({ tile, connected }: { readonly tile: ScreenTile; readonly connected: boolean }) {
+function Tile({
+  tile,
+  connected,
+  acquire,
+}: {
+  readonly tile: ScreenTile;
+  readonly connected: boolean;
+  readonly acquire: AcquireCapture;
+}) {
   const { target, notice } = useScreenTile(tile, connected);
   return (
     <article
@@ -50,13 +63,23 @@ function Tile({ tile, connected }: { readonly tile: ScreenTile; readonly connect
           Open device Screen
         </Link>
       </header>
-      {notice !== undefined ? <ScreenNotice text={notice} /> : <Picture tile={tile} />}
+      {notice !== undefined ? (
+        <ScreenNotice text={notice} />
+      ) : (
+        <Picture tile={tile} acquire={acquire} />
+      )}
     </article>
   );
 }
 
-function Picture({ tile }: { readonly tile: ScreenTile }) {
-  const shown = useDeviceScreen(tile.workerId, tile.deviceId, tile.state, tile.offer);
+function Picture({
+  tile,
+  acquire,
+}: {
+  readonly tile: ScreenTile;
+  readonly acquire: AcquireCapture;
+}) {
+  const shown = useDeviceScreen(tile.workerId, tile.deviceId, tile.state, tile.offer, acquire);
   return shown.kind === "picture" ? (
     <ScreenView
       screen={shown.screen}

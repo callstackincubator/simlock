@@ -47,6 +47,8 @@ async function fixture(page: Page) {
     const counts = { opened: 0, closed: 0, max: 0, duplicates: 0 };
     let mode = "running";
     let workerIds = ["synthetic"];
+    let holdCancel: string | undefined;
+    let finishCancel: (() => void) | undefined;
     let devices = ["one", "two", "three", "four"];
     const encoder = new TextEncoder();
     const packet = (tag: number, bytes: Uint8Array) => {
@@ -112,6 +114,13 @@ async function fixture(page: Page) {
         mode = value;
         events.enqueue(encoder.encode("event: device.changed\ndata: {}\n\n"));
       },
+      holdCancel(id: string) {
+        holdCancel = id;
+      },
+      finishCancel() {
+        holdCancel = undefined;
+        finishCancel?.();
+      },
       duplicateWorkers() {
         workerIds = ["synthetic", "other"];
         devices = ["one"];
@@ -170,7 +179,18 @@ async function fixture(page: Page) {
                 { once: true },
               );
           },
-          cancel: close,
+          cancel: () => {
+            if (holdCancel !== id) {
+              close();
+              return undefined;
+            }
+            return new Promise<void>((resolve) => {
+              finishCancel = () => {
+                close();
+                resolve();
+              };
+            });
+          },
         }),
         { headers: { "Content-Type": "application/octet-stream" } },
       );
@@ -234,6 +254,8 @@ type Controls = {
   end(id: string): void;
   add(notify: boolean): void;
   remove(): void;
+  holdCancel(id: string): void;
+  finishCancel(): void;
   duplicateWorkers(): void;
   unauthorized: boolean;
 };
@@ -426,7 +448,10 @@ test("adds a running device without page reload after an event, a poll, or retur
       );
     await expect(page.locator(".screens-tile")).toHaveCount(5);
     await expect(page.locator('a[href="/fleet/synthetic/five?drawer=screen"]')).toBeVisible();
-    await expect.poll(() => active(page)).toHaveLength(5);
+    await expect.poll(() => active(page)).toHaveLength(4);
+    await expect(
+      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+    ).toHaveCount(1);
     expect(
       await page.evaluate(
         () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
@@ -514,4 +539,65 @@ test("uses the latest visibility entry in a batch to stop and resume only that t
       () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
     ),
   ).toBe(0);
+});
+
+test("retains a capture's slot while its reader cancellation is still pending", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await page.clock.install();
+  for (const outcome of ["promote", "hidden", "navigation", "logout", "unavailable"] as const) {
+    await page.goto(`${origin}/screens`);
+    await expect.poll(() => active(page)).toHaveLength(4);
+    await page.evaluate(() => {
+      const controls = (window as unknown as { wallTest: Controls }).wallTest;
+      controls.add(true);
+      controls.holdCancel("one");
+    });
+    await page.clock.runFor(350);
+    await expect(page.locator(".screens-tile")).toHaveCount(5);
+    await expect(
+      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+    ).toHaveCount(1);
+    await page.evaluate(() => (window as unknown as { wallTest: Controls }).wallTest.end("one"));
+    await expect(page.getByText("The lease was released.", { exact: true })).toBeVisible();
+    await page.clock.runFor(15_001);
+    expect(await active(page)).toEqual(["four", "one", "three", "two"]);
+    await expect(
+      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+    ).toHaveCount(1);
+    if (outcome === "hidden")
+      await page.evaluate(() =>
+        (window as unknown as { wallTest: Controls }).wallTest.hidden(true),
+      );
+    if (outcome === "navigation")
+      await page.getByRole("link", { name: "Fleet", exact: true }).click();
+    if (outcome === "logout")
+      await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    if (outcome === "unavailable") {
+      await page.evaluate(() =>
+        (window as unknown as { wallTest: Controls }).wallTest.mode("disabled"),
+      );
+      await page.clock.runFor(350);
+      await expect(
+        page.getByText("Streaming is off on Synthetic worker.", { exact: true }),
+      ).toHaveCount(5);
+    }
+    await page.evaluate(() =>
+      (window as unknown as { wallTest: Controls }).wallTest.finishCancel(),
+    );
+    if (outcome === "promote")
+      await expect.poll(() => active(page)).toEqual(["five", "four", "three", "two"]);
+    else {
+      await expect.poll(() => active(page)).toEqual([]);
+      await page.clock.runFor(15_001);
+      expect(await active(page)).toEqual([]);
+    }
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { wallTest: Controls }).wallTest.counts.duplicates,
+      ),
+    ).toBe(0);
+  }
 });

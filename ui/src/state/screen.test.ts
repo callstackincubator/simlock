@@ -56,6 +56,7 @@ describe("what a refused stream says", () => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 // why: `capture` is the retry loop and the console has no DOM test of the screen panel (a hook over
@@ -112,4 +113,85 @@ describe("a screen stream the server ends", () => {
     expect(opened).toBe(5);
     expect(ended).toEqual(["The lease was released.", "The stream ended."]);
   });
+});
+
+it("discards late headers and JPEGs after abort, and waits for their owned cleanup", async () => {
+  vi.useFakeTimers();
+  for (const late of ["headers", "jpeg"] as const) {
+    const controller = new AbortController();
+    const closed = vi.fn();
+    const draw = vi.fn();
+    const live = vi.fn();
+    const meta = vi.fn();
+    const stats = vi.fn();
+    const ended = vi.fn();
+    let finishCancel!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      finishCancel = resolve;
+    });
+    let supplyImage!: (image: ImageBitmap) => void;
+    const image = new Promise<ImageBitmap>((resolve) => {
+      supplyImage = resolve;
+    });
+    vi.stubGlobal("createImageBitmap", () => image);
+    const frame = (tag: number, value: string) => {
+      const data = new TextEncoder().encode(value);
+      const packet = new Uint8Array(data.length + 5);
+      new DataView(packet.buffer).setUint32(0, data.length + 1);
+      packet[4] = tag;
+      packet.set(data, 5);
+      return packet;
+    };
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(frame(5, JSON.stringify({ codec: "mjpeg", width: 1, height: 1, fps: 5 })));
+        stream.enqueue(frame(3, "synthetic-jpeg"));
+      },
+      cancel() {
+        return cancellation;
+      },
+    });
+    let headers!: (value: { body: typeof body; date: null }) => void;
+    const response = new Promise<{ body: typeof body; date: null }>((resolve) => {
+      headers = resolve;
+    });
+    const api = { stream: () => response } as unknown as Parameters<typeof capture>[0];
+    const sinks = {
+      canvas: {
+        current: {
+          width: 1,
+          height: 1,
+          getContext: () => ({ drawImage: draw }),
+        } as unknown as HTMLCanvasElement,
+      },
+      conflict: ended,
+      ended,
+      live,
+      setMeta: meta,
+      setStats: stats,
+    } satisfies CaptureSinks;
+    let finished = false;
+    const watching = capture(api, "worker", "device", controller.signal, sinks).then(() => {
+      finished = true;
+    });
+    if (late === "jpeg") {
+      headers({ body, date: null });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    const statsBeforeAbort = stats.mock.calls.length;
+    controller.abort();
+    if (late === "headers") headers({ body, date: null });
+    await vi.advanceTimersByTimeAsync(0);
+    const beforeCleanup = finished;
+    supplyImage({ width: 1, height: 1, close: closed } as unknown as ImageBitmap);
+    finishCancel();
+    await watching;
+    expect(beforeCleanup, late).toBe(false);
+    expect(draw, late).not.toHaveBeenCalled();
+    expect(ended, late).not.toHaveBeenCalled();
+    expect(live).toHaveBeenCalledTimes(late === "headers" ? 0 : 1);
+    expect(meta).toHaveBeenCalledTimes(late === "headers" ? 0 : 1);
+    expect(stats).toHaveBeenCalledTimes(statsBeforeAbort);
+    expect(closed).toHaveBeenCalledTimes(late === "headers" ? 0 : 1);
+  }
 });

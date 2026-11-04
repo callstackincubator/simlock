@@ -6,7 +6,7 @@
  * pane that asked for it. That is also why nothing here polls or holds a stream open across a
  * navigation; the one retry is a started stream the server ended with no reason (see `capture`).
  */
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../data/api";
 import { readStream, type StreamMeta, type StreamStats } from "../data/stream";
@@ -21,6 +21,8 @@ import {
 import { useApi } from "./services";
 
 export type { Readout, StreamOffer } from "../model/screen";
+
+export type AcquireCapture = (signal: AbortSignal) => Promise<(() => void) | undefined>;
 
 const EMPTY: StreamStats = {
   dropped: 0,
@@ -63,37 +65,79 @@ export function useDeviceScreen(
   deviceId: string,
   state: string,
   offer: StreamOffer,
+  acquire?: AcquireCapture,
 ): DeviceScreenView {
-  const screen = useScreen(workerId, deviceId, streamsDevice(state, offer));
-  const shown = deviceScreen({ conflict: screen.conflict, offer, state });
+  const screen = useScreen(workerId, deviceId, streamsDevice(state, offer), acquire);
+  const shown = deviceScreen({ conflict: screen.conflict, offer, state, queued: screen.queued });
   return shown.kind === "picture" ? { kind: "picture", screen } : shown;
 }
 
-function useScreen(workerId: string, deviceId: string, enabled: boolean): Screen {
+function useScreen(
+  workerId: string,
+  deviceId: string,
+  enabled: boolean,
+  acquire?: AcquireCapture,
+): Screen & { readonly queued: boolean } {
   const api = useApi();
   const canvas = useRef<HTMLCanvasElement | null>(null);
-  const controller = useRef<AbortController | undefined>(undefined);
+  const [owner, setOwner] = useState<
+    | {
+        readonly abort: AbortController;
+        readonly release: (() => void) | undefined;
+        started: boolean;
+      }
+    | undefined
+  >(undefined);
   const [phase, setPhase] = useState<ScreenPhase>("idle");
+  const [queued, setQueued] = useState(acquire !== undefined);
   const [meta, setMeta] = useState<StreamMeta | undefined>(undefined);
   const [stats, setStats] = useState<StreamStats>(EMPTY);
   const [note, setNote] = useState<string | undefined>(undefined);
   const [conflict, setConflict] = useState<string | undefined>(undefined);
 
-  const stop = useCallback(() => {
-    controller.current?.abort();
-    controller.current = undefined;
-    setPhase("stopped");
-  }, []);
-
-  const start = useCallback(() => {
+  useEffect(() => {
+    if (!enabled) {
+      setQueued(false);
+      setOwner(undefined);
+      return undefined;
+    }
     const abort = new AbortController();
-    controller.current = abort;
+    let admitted: NonNullable<typeof owner> | undefined;
+    setOwner(undefined);
     setNote(undefined);
     setConflict(undefined);
     setMeta(undefined);
     setStats(EMPTY);
-    setPhase("starting");
-    void capture(api, workerId, deviceId, abort.signal, {
+    setQueued(acquire !== undefined);
+    const admit = (release: (() => void) | undefined) => {
+      if (abort.signal.aborted) {
+        release?.();
+        return;
+      }
+      admitted = { abort, release, started: false };
+      setQueued(false);
+      setPhase("starting");
+      setOwner(admitted);
+    };
+    if (acquire === undefined) admit(undefined);
+    else
+      void acquire(abort.signal).then((release) => {
+        if (release !== undefined) admit(release);
+      });
+    return () => {
+      abort.abort();
+      if (admitted !== undefined && !admitted.started) admitted.release?.();
+      setPhase("stopped");
+    };
+  }, [enabled, api, workerId, deviceId, acquire]);
+
+  // why: admission first mounts the canvas; its effect then starts the capture, so even a first
+  // frame supplied immediately has somewhere to paint. A slot outlives abort until cleanup settles.
+  useEffect(() => {
+    if (owner === undefined || owner.abort.signal.aborted) return undefined;
+    owner.started = true;
+    const signal = owner.abort.signal;
+    void capture(api, workerId, deviceId, signal, {
       canvas,
       conflict: (message) => {
         setConflict(message);
@@ -106,20 +150,11 @@ function useScreen(workerId: string, deviceId: string, enabled: boolean): Screen
       live: () => setPhase("live"),
       setMeta,
       setStats,
-    });
-  }, [api, workerId, deviceId]);
+    }).finally(() => owner.release?.());
+    return () => owner.abort.abort();
+  }, [owner, api, workerId, deviceId]);
 
-  // why: the picture starts when the panel is drawn and stops when it is not, so leaving the tab,
-  // closing the drawer and navigating away are one event and a capture cannot outlive its viewer.
-  // A change of the device's state between two that stream does not change `enabled`, so it asks
-  // for nothing again; one that stops and then allows streaming does.
-  useEffect(() => {
-    if (!enabled) return undefined;
-    start();
-    return stop;
-  }, [enabled, start, stop]);
-
-  return { canvas, conflict, ...screenView({ meta, note, phase, stats }) };
+  return { canvas, conflict, queued, ...screenView({ meta, note, phase, stats }) };
 }
 
 /**
@@ -190,6 +225,10 @@ async function captureOnce(
       signal,
       STREAM_HEAD_TIMEOUT_MS,
     );
+    if (signal.aborted) {
+      await body.cancel().catch(() => undefined);
+      return false;
+    }
     sinks.live();
     await readStream(
       body,
@@ -200,15 +239,22 @@ async function captureOnce(
           else sinks.ended(reason ?? "The stream ended.");
         },
         onFrame: (frame) => {
-          paint(sinks.canvas.current, frame.displayWidth, frame.displayHeight, frame);
+          if (!signal.aborted)
+            paint(sinks.canvas.current, frame.displayWidth, frame.displayHeight, frame);
           frame.close();
         },
-        onImage: (image) => paint(sinks.canvas.current, image.width, image.height, image),
+        onImage: (image) => {
+          if (!signal.aborted) paint(sinks.canvas.current, image.width, image.height, image);
+          image.close();
+        },
         onMeta: (meta) => {
+          if (signal.aborted) return;
           started = true;
           sinks.setMeta(meta);
         },
-        onStats: sinks.setStats,
+        onStats: (stats) => {
+          if (!signal.aborted) sinks.setStats(stats);
+        },
       },
       signal,
     );

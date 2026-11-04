@@ -108,6 +108,21 @@ describe("what a device's Screen tab shows", () => {
       expect(deviceScreen({ conflict: undefined, offer, state }), state).toEqual(expected);
     }
 
+    const input = { state: "ready", offer: { offered: true }, conflict: undefined, queued: true };
+    expect(deviceScreen(input)).toEqual({
+      kind: "sentence",
+      text: "Paused: four screens are already capturing.",
+    });
+    expect(deviceScreen({ ...input, offer: { offered: false, reason: "Unavailable." } })).toEqual({
+      kind: "sentence",
+      text: "Unavailable.",
+    });
+    expect(deviceScreen({ ...input, state: "shutdown" })).toEqual({
+      kind: "sentence",
+      text: "The device is shut down. Its screen shows while it runs.",
+    });
+    expect(deviceScreen({ ...input, queued: false })).toEqual({ kind: "picture" });
+
     const conflict = "The device is shutdown; only a ready or leased device streams";
 
     expect(deviceScreen({ conflict, offer, state: "ready" })).toEqual(sentence(conflict));
