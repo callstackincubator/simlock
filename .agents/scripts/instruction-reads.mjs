@@ -9,7 +9,7 @@
 // module manual (AGENTS.md). The agent's own definition is not a file it opens: the harness
 // loads it. Prints one Markdown table per role: runs, then each file with the runs that
 // opened it, most opened first. This is the number that judges a rewrite of the rules, the
-// briefs or the router (PROCESS-REVIEW-2026-10-21.md, items 16 to 18).
+// briefs or the router (the 2026-10-21 process review, #794, items 16 to 18).
 import { runOf, taggedRuns } from "./transcripts.mjs";
 import { option } from "./cli-args.mjs";
 
