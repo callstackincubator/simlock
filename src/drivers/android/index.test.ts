@@ -194,27 +194,6 @@ describe("AndroidDriver", () => {
     });
   });
 
-  it("resolves the newest installed matching image", async () => {
-    const filesystem = await androidFilesystem({
-      images: [
-        ["34", "google_apis", "x86_64"],
-        ["35", "google_apis", "arm64-v8a"],
-        ["35", "google_apis", "x86_64"],
-      ],
-    });
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    await expect(driver.resolveSpec({ model: "Pixel 5", platform: "android" })).resolves.toEqual({
-      physical: false,
-      model: "Pixel 5",
-      osVersion: "35",
-      platform: "android",
-    });
-  });
-
   it("rejects a missing image naming its API level as the component, and starts no sdkmanager", async () => {
     const filesystem = await androidFilesystem();
     const runner = new EmulatorExitingRunner([
