@@ -35,6 +35,7 @@ import {
 import {
   AdbServerUnavailableError,
   AndroidDriver,
+  AndroidLicenseNotAcceptedError,
   SdkMissingError,
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
@@ -2449,6 +2450,40 @@ describe("AndroidDriver", () => {
   });
 
   describe("component install", () => {
+    it("refuses an unaccepted licence with AndroidLicenseNotAcceptedError unless the config accepts them", async () => {
+      const filesystem = await androidFilesystem();
+      const runner = new EmulatorExitingRunner([
+        {
+          match: {
+            args: ["--install", "system-images;android-35;google_apis;arm64-v8a"],
+            command: binaries.sdkmanager,
+          },
+          result: {
+            code: 1,
+            stderr: "",
+            stdout: "Warning: License for package Android SDK Platform 35 not accepted.\n",
+          },
+        },
+      ]);
+      const driver = await createDriver(filesystem, runner);
+
+      await expect(installFor(driver, "35")).rejects.toBeInstanceOf(AndroidLicenseNotAcceptedError);
+      expect(runner.calls.some((call) => call.args[0] === "--licenses")).toBe(false);
+    });
+
+    it("reports the revisions of the tool packages under the SDK root it was given", async () => {
+      const filesystem = await androidFilesystem();
+      await filesystem.writeFileAtomic(
+        `${sdk}/emulator/source.properties`,
+        "Pkg.Revision=35.4.9\n",
+      );
+      const driver = await createDriver(filesystem, new EmulatorExitingRunner([]));
+
+      await expect(driver.toolVersions()).resolves.toEqual([
+        { name: "emulator", version: "35.4.9" },
+      ]);
+    });
+
     it("states 2 GiB on the SDK root as the footprint of one install", async () => {
       const filesystem = await androidFilesystem();
       const driver = await createDriver(filesystem, new EmulatorExitingRunner([]));
