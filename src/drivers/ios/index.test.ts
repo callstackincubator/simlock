@@ -5745,3 +5745,52 @@ describe("IosSimctlDriver device set", () => {
     }
   });
 });
+
+describe("IosSimctlDriver simulator audio", () => {
+  const volumeState = "com.apple.springboard.volumestate";
+
+  async function createSilentDriver(
+    runner: ScriptedProcessRunner,
+    simulatorAudio: boolean,
+  ): Promise<IosSimctlDriver> {
+    scopedRunners.push(runner);
+    return IosSimctlDriver.create({
+      clock: new FakeClock(),
+      database: await memorySourceDatabase(),
+      driverConfig: { deviceRoot },
+      filesystem: new MemoryFilesystem(),
+      idGenerator: { generate: () => "device-1" },
+      instanceId,
+      processRunner: runner,
+      simlockHome: "/home/.simlock",
+      simulatorAudio,
+    });
+  }
+
+  it("sets a simulator's volume to 0 before handing it on when ios.simulator.audio is false", async () => {
+    const udid = driverData.udid;
+    const runner = new ScriptedProcessRunner([
+      { match: simctl("boot", udid) },
+      { match: simctl("bootstatus", udid, "-b") },
+      { match: simctl("listapps", udid) },
+      { match: simctl("spawn", udid, "notifyutil", "-s", volumeState, "0") },
+      { match: simctl("spawn", udid, "notifyutil", "-p", volumeState) },
+    ]);
+    const driver = await createSilentDriver(runner, false);
+
+    await driver.makeReady(
+      { address: udid, deviceId: udid, driverData },
+      { mode: "full", purpose: "prepare" },
+    );
+
+    expect(runner.calls.map((call) => call.args)).toEqual([
+      simctlArgs("boot", udid),
+      simctlArgs("bootstatus", udid, "-b"),
+      simctlArgs("listapps", udid),
+      simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
+      simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
+    ]);
+    expect(runner.calls[3]?.options).toEqual({ timeoutMs: 30_000 });
+    expect(runner.calls[4]?.options).toEqual({ timeoutMs: 30_000 });
+  });
+});

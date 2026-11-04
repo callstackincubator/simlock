@@ -189,6 +189,11 @@ export interface SlimSkippedFact {
   readonly detail: string;
 }
 
+export interface SilenceFailedFact {
+  readonly deviceId: string;
+  readonly detail: string;
+}
+
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
   readonly database: SqliteDatabase;
@@ -206,6 +211,9 @@ export interface IosSimctlDriverOptions {
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
+  /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
+  readonly simulatorAudio?: boolean;
+  readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
   readonly slim?: {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
