@@ -33,9 +33,9 @@ same loader the daemon starts with (`loadConfig`, called from
 so every change "takes effect on daemon restart"
 (`src/cli/commands/config.ts:61`).
 
-`config.get` answers the running config as written, secrets included
-(`src/daemon/dispatcher.ts:835`, `src/core/config.ts:416-423`); #1097
-reports that as a leak. Nothing restarts a daemon but the updater, which
+`config.get` answers the running config with its secrets masked, unless
+the caller asks `showSecrets: true` (`src/daemon/dispatcher.ts:982-983`,
+`src/core/config.ts:484`; #1097, fixed by #1157). Nothing restarts a daemon but the updater, which
 sends `daemon.stop` and runs `daemon start` (ADR 0042 §7). The console has
 no settings page and no config route.
 
@@ -121,8 +121,8 @@ to the live list is a code change with its own test, never a setting.
 (`src/core/config.ts:482-500`), taken from one list both read. `config.list`
 says only whether each is set in the saved file (in the running config
 when the file does not load); a secret row can be pending like any other. `config.set` replaces one whole; its answer
-and every error message carry no value. `config.get` is not changed here
-(#1097 owns it).
+and every error message carry no value. `config.get` is not changed here:
+it masks secrets unless `showSecrets: true` is asked (#1157).
 
 ### 5. A restart through the updater process
 
@@ -210,7 +210,6 @@ CLI with no daemon running emits nothing.
 - A hand edit while the daemon runs is still read by the next
   `config.set` and the next start; one made between a `config.set`'s read
   and write is lost. Rare: one operator, seconds apart.
-- `config.get` still returns secrets; #1097 decides how it redacts.
 - A port or host change can leave the console on an address the operator
   must type; turning HTTP off ends the console until the CLI turns it on.
 - The protocol rises by one for `config.list`, `config.set` and
