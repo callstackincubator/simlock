@@ -7,6 +7,7 @@ import {
   type ScriptedProcessExpectation,
   type SqliteDatabase,
 } from "../../ports/index.js";
+import type { LibraryDeviceProfile } from "./profiles/index.js";
 import { androidSourceDataOwner } from "./source-data.js";
 
 export const ANDROID_SDK_ROOT = "/android-sdk";
@@ -130,5 +131,93 @@ export function customDeviceXml(name: string, ramMiB: number): string {
   return (
     `<d:device><d:name>${name}</d:name><d:hardware>` +
     `<d:ram unit="MiB">${ramMiB}</d:ram></d:hardware></d:device>`
+  );
+}
+
+export type FitImage = readonly [api: string, tag: string, abi: string, properties?: string];
+
+export const fitDevices =
+  `Available devices:\n` +
+  `id: 0 or "pixel_5"\n    Name: Pixel 5\n    OEM : Google\n---------\n` +
+  `id: 1 or "pixel_9_pro"\n    Name: Pixel 9 Pro\n    OEM : Google\n---------\n` +
+  `id: 2 or "tv_720p"\n    Name: Television (720p)\n    OEM : Google\n    Tag : android-tv\n---------\n` +
+  `id: 3 or "My Tablet"\n    Name: My Tablet\n    OEM : User\n---------\n` +
+  `id: 4 or "odd"\n    Name: Odd Device\n    OEM : Google\n    Tag : foo-device\n---------\n` +
+  `id: 5 or "xr_headset"\n    Name: XR Headset\n    OEM : Google\n    Tag : android-xr\n---------\n` +
+  `id: 6 or "glasses"\n    Name: AI Glasses\n    OEM : Google\n    Tag : ai-glasses\n`;
+
+export type Refusal = Error & { readonly component?: string; readonly downloadable?: boolean };
+
+export const HOST_IMAGES: readonly FitImage[] = [
+  ["35", "google_apis", "arm64-v8a"],
+  ["36", "google_apis_playstore", "arm64-v8a"],
+  ["34", "android-tv", "arm64-v8a"],
+];
+
+export function testLibraryProfile(
+  overrides: Partial<LibraryDeviceProfile> = {},
+): LibraryDeviceProfile {
+  return {
+    apiRange: { min: 1 },
+    bootProperties: {},
+    copiedFrom: "20.0",
+    deviceClass: "phone",
+    hardware: { "hw.lcd.height": "100", "hw.ramSize": "2G" },
+    id: "test_phone",
+    imageKind: undefined,
+    kind: "library",
+    name: "Test Phone",
+    names: ["Test Phone", "test_phone"],
+    playStore: true,
+    tablet: false,
+    ...overrides,
+  };
+}
+
+export interface CustomFitProfile {
+  readonly apiLevel?: string;
+  readonly diagonal?: string;
+  readonly folded?: boolean;
+  readonly name: string;
+  readonly playStore?: string;
+  readonly tagId?: string;
+}
+
+export function customFitXml(profile: CustomFitProfile): string {
+  const screen =
+    profile.diagonal === undefined && profile.folded !== true
+      ? ""
+      : `<d:screen>${profile.diagonal === undefined ? "" : `<d:diagonal-length>${profile.diagonal}</d:diagonal-length>`}` +
+        (profile.folded === true
+          ? "<d:x-folded-dimension>1080</d:x-folded-dimension><d:y-folded-dimension>2400</d:y-folded-dimension>"
+          : "") +
+        "</d:screen>";
+  return (
+    `<d:device><d:name>${profile.name}</d:name>` +
+    (profile.tagId === undefined ? "" : `<d:tag-id>${profile.tagId}</d:tag-id>`) +
+    `<d:hardware>${screen}</d:hardware>` +
+    (profile.apiLevel === undefined
+      ? ""
+      : `<d:software><d:api-level>${profile.apiLevel}</d:api-level></d:software>`) +
+    (profile.playStore === undefined
+      ? ""
+      : `<d:playstore-enabled>${profile.playStore}</d:playstore-enabled>`) +
+    "</d:device>"
+  );
+}
+
+export function userListing(
+  ...entries: readonly (readonly [name: string, tag?: string])[]
+): string {
+  return (
+    "Available devices:\n" +
+    entries
+      .map(
+        ([name, tag]) =>
+          `id: 9 or "${name}"\n    Name: ${name}\n    OEM : User\n` +
+          (tag === undefined ? "" : `    Tag : ${tag}\n`) +
+          "---------\n",
+      )
+      .join("")
   );
 }
