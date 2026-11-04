@@ -177,6 +177,34 @@ describe("tracked files", () => {
     ).toEqual([]);
   });
 
+  it("fails a listed file that grew past its listed length or no longer needs the entry", () => {
+    const list = {
+      "src/a/same.ts": 1500,
+      "src/a/shrunk.ts": 1500,
+      "src/a/grew.ts": 1500,
+      "src/a/under.ts": 1500,
+      "src/a/gone.ts": 1500,
+    };
+    expect(
+      sizeFailures(
+        [
+          { path: "src/a/same.ts", lines: 1500 },
+          { path: "src/a/shrunk.ts", lines: 1450 },
+          { path: "src/a/grew.ts", lines: 1501 },
+          { path: "src/a/under.ts", lines: 1400 },
+        ],
+        list,
+      ),
+    ).toEqual([
+      "src/a/grew.ts: 1501 lines, longer than its listed 1500. A listed file may only shrink (ADR 0063).",
+      "src/a/under.ts: 1400 lines, within its limit now. Remove it from the shrink-only list.",
+      "src/a/gone.ts: listed but not tracked. Remove it from the shrink-only list.",
+    ]);
+    expect(
+      sizeFailures(trackedSizes, SHRINK_ONLY).filter((line) => !line.includes("may have at most")),
+    ).toEqual([]);
+  });
+
   it("were enumerated from the git index", () => {
     // why: Without this, an `execFileSync` that returned nothing would leave `it.each` with an
     // empty list and the suite would pass while checking no file at all.
