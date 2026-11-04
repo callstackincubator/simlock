@@ -7,10 +7,11 @@ interface AndroidDeviceDataRow {
   readonly image_identity: string | null;
   readonly port: number;
   readonly serial: string;
+  readonly avd_home: string | null;
 }
 
 const STRING_KEYS = ["avdName", "configHash", "serial"] as const;
-const KNOWN_KEYS = new Set<string>([...STRING_KEYS, "imageIdentity", "port"]);
+const KNOWN_KEYS = new Set<string>([...STRING_KEYS, "avdHome", "imageIdentity", "port"]);
 
 function isAndroidDeviceData(value: unknown): value is AndroidDriverData {
   if (typeof value !== "object" || value === null) return false;
@@ -19,7 +20,8 @@ function isAndroidDeviceData(value: unknown): value is AndroidDriverData {
     Object.keys(record).every((key) => KNOWN_KEYS.has(key)) &&
     STRING_KEYS.every((key) => typeof record[key] === "string") &&
     Number.isInteger(record.port) &&
-    (record.imageIdentity === undefined || typeof record.imageIdentity === "string")
+    (record.imageIdentity === undefined || typeof record.imageIdentity === "string") &&
+    (record.avdHome === undefined || typeof record.avdHome === "string")
   );
 }
 
@@ -33,16 +35,18 @@ export const androidDeviceDataTable: DeviceDataTable = {
        port INTEGER NOT NULL,
        serial TEXT NOT NULL
      ) STRICT`,
+    "ALTER TABLE android_device_data ADD COLUMN avd_home TEXT",
   ],
   name: "android-device-data",
   read(database, deviceId) {
     const row = database
       .prepare(
-        "SELECT avd_name, config_hash, image_identity, port, serial FROM android_device_data WHERE device_id = ?",
+        "SELECT avd_name, avd_home, config_hash, image_identity, port, serial FROM android_device_data WHERE device_id = ?",
       )
       .get(deviceId) as AndroidDeviceDataRow | undefined;
     if (row === undefined) throw new Error(`No android driver data for device ${deviceId}`);
     return {
+      ...(row.avd_home === null ? {} : { avdHome: row.avd_home }),
       avdName: row.avd_name,
       configHash: row.config_hash,
       ...(row.image_identity === null ? {} : { imageIdentity: row.image_identity }),
@@ -50,7 +54,7 @@ export const androidDeviceDataTable: DeviceDataTable = {
       serial: row.serial,
     };
   },
-  version: 1,
+  version: 2,
   write(database, deviceId, driverData) {
     if (!isAndroidDeviceData(driverData)) {
       throw new Error(`Invalid android driver data for device ${deviceId}`);
@@ -58,15 +62,16 @@ export const androidDeviceDataTable: DeviceDataTable = {
     const data = driverData;
     database
       .prepare(
-        `INSERT INTO android_device_data (device_id, avd_name, config_hash, image_identity, port, serial)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (device_id) DO UPDATE SET avd_name = excluded.avd_name,
+        `INSERT INTO android_device_data (device_id, avd_name, avd_home, config_hash, image_identity, port, serial)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (device_id) DO UPDATE SET avd_name = excluded.avd_name, avd_home = excluded.avd_home,
            config_hash = excluded.config_hash, image_identity = excluded.image_identity,
            port = excluded.port, serial = excluded.serial`,
       )
       .run(
         deviceId,
         data.avdName,
+        data.avdHome ?? null,
         data.configHash,
         data.imageIdentity ?? null,
         data.port,

@@ -56,6 +56,7 @@ import {
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidDeviceDataTable,
+  androidSourceDataOwner,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
@@ -365,6 +366,7 @@ async function composeDaemon(
             warmPoolOwner,
             tokensOwner,
             iosSourceDataOwner,
+            androidSourceDataOwner,
             ...new Set(deviceDataTables.values()),
           ],
     sqlite: new NodeSqliteOpener(),
@@ -1476,7 +1478,7 @@ async function discoverIosDriver(
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
   if (diagnostic.kind === "snapshot-cold-boot") {
     logger.warn("Android snapshot boot fell back to a cold boot", {
-      avdName: diagnostic.avdName,
+      deviceId: diagnostic.deviceId,
       readyAfterMs: diagnostic.readyAfterMs,
     });
     return;
@@ -1501,6 +1503,7 @@ async function discoverAndroidDriver(
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
+      database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       emulator: options.androidEmulator,
       env: process.env,

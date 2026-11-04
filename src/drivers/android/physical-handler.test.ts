@@ -23,6 +23,7 @@ import {
   type StreamingProcessHandle,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
+import { memoryAndroidSourceDatabase } from "./testing.js";
 import { AndroidPhysicalHandler } from "./physical-handler.js";
 import type { ScreenTarget } from "./screen/index.js";
 
@@ -298,6 +299,7 @@ async function world(
   );
   const driver = await AndroidDriver.create({
     clock: new FakeClock(),
+    database: await memoryAndroidSourceDatabase(),
     driverConfig: {},
     env: { ANDROID_HOME: sdk, ...options.env },
     filesystem,
@@ -1358,24 +1360,25 @@ describe("Android physical handler: independence from emulator calls", () => {
 
   it("while an emulator call holds the device lock and a PortAllocator port, listPresentPhysical and passthrough on a physical device resolve", async () => {
     const phone = new PhoneAdb();
+    // why: the emulator call is the first boot of a seed, made inside `provision`: it holds the seed's lock and a console port while its emulator never answers.
     const emulatorExpectations = [
       scripted(sdkTool("avdmanager"), ["list", "device"], pixelDevices),
+      scripted(`${sdk}/emulator/emulator`, ["-version"], "Android emulator version 36.1.9"),
       scripted(sdkTool("avdmanager"), [
         "create",
         "avd",
         "-n",
-        "simlock_one",
+        "simlock",
         "-k",
         /.+/,
         "-d",
         "pixel_8",
       ]),
-      scripted(`${sdk}/emulator/emulator`, ["-version"], "Android emulator version 36.1.9"),
       scripted(adb, ["devices"], "List of devices attached\n"),
       {
         hangs: true,
         match: {
-          args: [/^-avd$/, "simlock_one", /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/],
+          args: [/^-avd$/, "simlock", /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/, /.*/],
           command: `${sdk}/emulator/emulator`,
         },
       },
@@ -1389,10 +1392,12 @@ describe("Android physical handler: independence from emulator calls", () => {
     ];
     const emulator = new ScriptedProcessRunner(emulatorExpectations);
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+    const seedAvd = `${avdDirectory}/sources/seed_one/simlock.avd`;
+    await filesystem.mkdirp(seedAvd);
+    await filesystem.writeFileAtomic(`${seedAvd}/config.ini`, "hw.ramSize=2048\n");
     await filesystem.writeFileAtomic(
-      `${avdDirectory}/simlock_one.avd/config.ini`,
-      "hw.ramSize=2048\n",
+      `${avdDirectory}/sources/seed_one/simlock.ini`,
+      `avd.ini.encoding=UTF-8\npath=${seedAvd}\n`,
     );
     const { driver } = await world({
       filesystem,
@@ -1404,9 +1409,8 @@ describe("Android physical handler: independence from emulator calls", () => {
       osVersion: "34",
       platform: "android",
     });
-    const provisioned = await driver.provision(spec);
     let emulatorSettled = false;
-    void driver.makeReady(provisioned).then(
+    void driver.provision(spec).then(
       () => (emulatorSettled = true),
       () => (emulatorSettled = true),
     );

@@ -2428,6 +2428,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         "-no-window",
         "-gpu",
         "host",
+        "-wipe-data",
         "-no-snapshot-load",
       ],
     ]);
@@ -2510,18 +2511,18 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     }
   });
 
-  it("logs a warning, with the AVD name and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
+  it("logs a warning, with the device id and how long the boot took, when a snapshot boot fell back to a cold boot", () => {
     const sink = new MemoryLogSink();
 
     logAndroidDiagnostic(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }), {
-      avdName: "simlock_one",
+      deviceId: "simlock_one",
       kind: "snapshot-cold-boot",
       readyAfterMs: 30_000,
     });
 
     expect(sink.records).toEqual([
       expect.objectContaining({
-        fields: { avdName: "simlock_one", readyAfterMs: 30_000 },
+        fields: { deviceId: "simlock_one", readyAfterMs: 30_000 },
         level: "warn",
       }),
     ]);
@@ -4447,6 +4448,22 @@ describe("startDaemon state.db", () => {
     });
 
     expect(existsSync(join(directory, "state.db-wal"))).toBe(false);
+  });
+
+  it("a worker's state.db holds both platforms' source-data tables, a gateway's holds neither", async () => {
+    const worker = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    const gateway = await mkdtemp(join(tmpdir(), "simlock-main-source-owners-"));
+    temporaryDirectories.push(worker, gateway);
+    await start({ dataDirectory: worker });
+    await start({ dataDirectory: gateway, role: "gateway" });
+    const owners = async (directory: string) =>
+      (await queryState(directory, "SELECT owner FROM schema_versions"))
+        .map((row) => row["owner"])
+        .filter((owner) => owner === "ios-source-data" || owner === "android-source-data")
+        .sort();
+
+    expect(await owners(worker)).toEqual(["android-source-data", "ios-source-data"]);
+    expect(await owners(gateway)).toEqual([]);
   });
 
   it("a second startDaemon on a folder whose daemon runs leaves state.db's schema_versions and bytes unchanged", async () => {

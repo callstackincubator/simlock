@@ -1,8 +1,13 @@
-import { symlink } from "node:fs/promises";
+import { stat, symlink, utimes, writeFile } from "node:fs/promises";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type Filesystem, MemoryFilesystem, NodeFilesystem } from "./index.js";
+import {
+  type Filesystem,
+  MemoryFilesystem,
+  NodeFilesystem,
+  ScriptedProcessRunner,
+} from "./index.js";
 
 // why: Per process: `afterEach` deletes it, so a shared name let two overlapping runs (two suites in
 // one checkout, Stryker's runners in one sandbox) delete each other's files mid-test.
@@ -363,5 +368,87 @@ describe("MemoryFilesystem", () => {
     await filesystem.mkdir("/devices/ios");
 
     await expect(filesystem.lstat("/devices/ios")).resolves.toMatchObject({ mode: 0o700 });
+  });
+});
+
+describe("Filesystem.copyTree", () => {
+  const cpResult = (code: number, stderr = "") => ({ code, stderr, stdout: "" });
+  const runnerFor = (args: readonly string[], result = cpResult(0)) =>
+    new ScriptedProcessRunner([{ match: { args, command: "cp" }, result }]);
+
+  it("copies a folder to a path that does not exist with file modification times kept, through cp on macOS and Linux and in Node elsewhere, and rejects with cp's own message", async () => {
+    const darwin = runnerFor(["-c", "-p", "-R", "/from", "/to"]);
+    await new NodeFilesystem({ platform: "darwin", processRunner: darwin }).copyTree(
+      "/from",
+      "/to",
+      {
+        timeoutMs: 600_000,
+      },
+    );
+    expect(darwin.calls).toHaveLength(1);
+
+    const linux = runnerFor(["-a", "--reflink=auto", "/from", "/to"]);
+    await new NodeFilesystem({ platform: "linux", processRunner: linux }).copyTree("/from", "/to", {
+      timeoutMs: 600_000,
+    });
+    expect(linux.calls).toHaveLength(1);
+
+    const failing = runnerFor(
+      ["-c", "-p", "-R", "/from", "/to"],
+      cpResult(1, "cp: /from: No such file or directory\n"),
+    );
+    await expect(
+      new NodeFilesystem({ platform: "darwin", processRunner: failing }).copyTree("/from", "/to", {
+        timeoutMs: 600_000,
+      }),
+    ).rejects.toThrow("cp: /from: No such file or directory");
+
+    const modifiedAt = new Date("2026-01-02T03:04:05Z");
+    const source = `${temporaryDirectory}/copy-tree/source`;
+    const real = new NodeFilesystem();
+    await real.mkdirp(source);
+    await writeFile(`${source}/disk.img`, "image");
+    await utimes(`${source}/disk.img`, modifiedAt, modifiedAt);
+    for (const platform of ["win32", process.platform] as const) {
+      const target = `${temporaryDirectory}/copy-tree/${platform}`;
+      await new NodeFilesystem({ platform }).copyTree(source, target, { timeoutMs: 600_000 });
+      await expect(real.readFile(`${target}/disk.img`)).resolves.toBe("image");
+      expect((await stat(`${target}/disk.img`)).mtimeMs).toBe(modifiedAt.getTime());
+    }
+
+    const memory = new MemoryFilesystem();
+    await memory.mkdirp("/from/nested");
+    await memory.writeFileAtomic("/from/nested/disk.img", "image");
+    memory.defineAttributes("/from/nested/disk.img", { modifiedAtMs: 1_234 });
+    await memory.copyTree("/from", "/to", { timeoutMs: 600_000 });
+    await expect(memory.stat("/to/nested/disk.img")).resolves.toMatchObject({
+      modifiedAtMs: 1_234,
+    });
+    await expect(memory.readFile("/to/nested/disk.img")).resolves.toBe("image");
+  });
+
+  it("kills cp at timeoutMs and rejects with how long it waited", async () => {
+    vi.useFakeTimers();
+    try {
+      const runner = new ScriptedProcessRunner([
+        { hangs: true, match: { args: ["-c", "-p", "-R", "/from", "/to"], command: "cp" } },
+      ]);
+      const copying = new NodeFilesystem({ platform: "darwin", processRunner: runner }).copyTree(
+        "/from",
+        "/to",
+        { timeoutMs: 600_000 },
+      );
+      const rejected = expect(copying).rejects.toThrow("timed out after 600000ms");
+      const kill = vi.spyOn(runner.handles[0] as { kill(): void }, "kill");
+
+      await vi.advanceTimersByTimeAsync(599_999);
+      expect(kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(kill).toHaveBeenCalledTimes(1);
+
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
