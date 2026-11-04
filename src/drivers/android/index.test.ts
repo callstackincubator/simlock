@@ -6862,6 +6862,14 @@ describe("AndroidDriver image fit", () => {
         harness.runner.calls.some((call) => call.args.slice(-2).join(" ") === "emu kill"),
         "destroy stops the emulator the wipe boot started",
       ).toBe(true);
+      expect(
+        harness.runner.calls.some(
+          (call) =>
+            call.command === binaries.avdmanager &&
+            call.args.join(" ") === "delete avd -n simlock_old",
+        ),
+        "destroy deletes the device through avdmanager",
+      ).toBe(true);
     });
 
     it("destroys a plain Android device after its ownership check: the emulator is killed and its folder deleted, an unreadable check or a failing delete throws and keeps it, and a folder outside the root is never deleted", async () => {
