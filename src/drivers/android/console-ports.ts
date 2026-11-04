@@ -22,7 +22,7 @@ export const GRPC_PORT_OFFSET = 3000;
 
 const allocationsByRunner = new WeakMap<ProcessRunner, PortAllocator>();
 
-export class PortAllocator {
+class PortAllocator {
   readonly #reserved = new Set<number>();
   #lock = Promise.resolve();
 
