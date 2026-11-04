@@ -2,7 +2,7 @@ import { spawn as spawnChildProcess, type ChildProcess } from "node:child_proces
 import { closeSync, openSync } from "node:fs";
 import { constants } from "node:os";
 
-import { childLaunch } from "./windows-command.js";
+import { type ChildLaunch, childLaunch } from "./windows-command.js";
 
 // `close` normally follows `exit` within the same tick, once the child's own stdio
 // pipes report EOF. But a child that forks a grandchild before it dies leaves that
@@ -283,8 +283,7 @@ export class NodeProcessRunner implements ProcessRunner {
       options.lineEnd ?? "newline",
       this.exitDeferralCapMs,
       this.exitGraceMs,
-      launch.windowsVerbatimArguments ||
-        (process.platform === "win32" && options.killTree === true),
+      killsTree(launch, options),
     );
   }
 
@@ -557,6 +556,13 @@ class NodeStreamingProcessHandle implements StreamingProcessHandle {
 }
 
 const TASKKILL_TIMEOUT_MS = 10_000;
+
+/** why: on Windows a `.bat`/`.cmd` wrapper, or a child spawned with `killTree`, is killed as a whole tree. */
+function killsTree(launch: ChildLaunch, options: ProcessRunOptions): boolean {
+  return (
+    launch.windowsVerbatimArguments || (process.platform === "win32" && options.killTree === true)
+  );
+}
 
 /**
  * why: Windows has no process groups, and a batch file runs under a `cmd.exe` wrapper
