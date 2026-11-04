@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
-import type { ProcessRunner } from "../../ports/index.js";
+import type { ProcessRunner, ScriptedProcessExpectation } from "../../ports/index.js";
 import { Catalog } from "./catalog.js";
 import type { DeviceProfileSourceDiagnostic } from "./device-profile-source.js";
 import { SystemImages } from "./system-images.js";
@@ -66,12 +66,14 @@ function createPart(
   filesystem: MemoryFilesystem,
   processRunner: ProcessRunner,
   options: {
+    readonly avdmanager?: string;
     readonly extraEnv?: Readonly<Record<string, string>>;
+    readonly hostAbi?: string;
     readonly onDiagnostic?: (diagnostic: DeviceProfileSourceDiagnostic) => void;
   } = {},
 ): Catalog {
   return new Catalog({
-    avdmanager,
+    avdmanager: options.avdmanager ?? avdmanager,
     avdmanagerEnv: () => ({ ANDROID_HOME: sdk }),
     env: { ANDROID_HOME: sdk, ...options.extraEnv },
     filesystem,
@@ -84,7 +86,7 @@ function createPart(
       clock: new FakeClock(),
       deviceRoot: `${home}/.simlock/devices/android`,
       filesystem,
-      hostAbi: "arm64-v8a",
+      hostAbi: options.hostAbi ?? "arm64-v8a",
       legacyAvdHome: `${home}/.android/avd`,
       processRunner,
       sdk: {
@@ -126,7 +128,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     await expect(
       part.resolveSpec({
@@ -149,7 +151,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     // why: Strict: with no custom device profile there is no `customModels` key at all, not one
     // present as undefined.
@@ -183,7 +185,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -204,7 +206,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     await expect(part.listCatalog()).resolves.toEqual({
       defaultRuntime: undefined,
@@ -221,7 +223,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(await androidFilesystem(), runner);
+    const part = createPart(await androidFilesystem(), runner);
 
     const catalog = await part.listCatalog();
 
@@ -237,7 +239,7 @@ describe("Catalog", () => {
           `id: 1 or "Automotive_1024p"\n    Name: automotive_1024p\n`,
       ),
     ]);
-    const part = await createPart(await androidFilesystem(), runner);
+    const part = createPart(await androidFilesystem(), runner);
 
     const catalog = await part.listCatalog();
 
@@ -262,7 +264,7 @@ describe("Catalog", () => {
         processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
       ),
     );
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
     const catalog = await part.listCatalog();
     const names = catalog.models.flatMap((model) => [
       { model, name: model },
@@ -299,7 +301,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -313,7 +315,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -328,7 +330,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -342,7 +344,7 @@ describe("Catalog", () => {
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
       processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
     ]);
-    const part = await createPart(await androidFilesystem(), runner);
+    const part = createPart(await androidFilesystem(), runner);
 
     const catalog = await part.listCatalog();
 
@@ -362,7 +364,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -391,7 +393,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -410,7 +412,7 @@ describe("Catalog", () => {
     const runner = new ScriptedProcessRunner([
       processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
@@ -431,11 +433,446 @@ describe("Catalog", () => {
         "Available Packages:\n  system-images;android-35;google_apis;arm64-v8a | 1 | Google APIs\n",
       ),
     ]);
-    const part = await createPart(filesystem, runner);
+    const part = createPart(filesystem, runner);
 
     const catalog = await part.listCatalog();
 
     expect(catalog.images).toEqual([{ abi: "arm64-v8a", runtime: "34", tag: "google_apis" }]);
     expect(runner.calls.some((call) => call.command === binaries.sdkmanager)).toBe(false);
+  });
+
+  describe("image tag", () => {
+    async function taggedHarness(
+      images: readonly (readonly [string, string, string])[],
+      hostAbi = "arm64-v8a",
+    ) {
+      const filesystem = await androidFilesystem({ images });
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      ]);
+      const part = createPart(filesystem, runner, { hostAbi });
+      return { part, runner };
+    }
+
+    it("fails a tag that is not installed for the API level as a runtime that cannot be downloaded, naming the tag, and starts no sdkmanager", async () => {
+      const { part, runner } = await taggedHarness([
+        ["34", "google_apis", "arm64-v8a"],
+        ["35", "google_apis_playstore", "arm64-v8a"],
+      ]);
+
+      const failure = await part
+        .resolveSpec({
+          imageTag: "google_apis_playstore",
+          model: "Pixel 5",
+          osVersion: "34",
+          platform: "android",
+        })
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({
+        component: undefined,
+        downloadable: false,
+        name: "RuntimeMissingError",
+      });
+      expect((failure as Error).message).toContain("google_apis_playstore");
+      expect(runner.calls.map((call) => call.command)).not.toContain(binaries.sdkmanager);
+    });
+
+    it("gives a tagged request with no API level the newest API level that has an image of that tag", async () => {
+      const { part } = await taggedHarness([
+        ["33", "google_apis_playstore", "arm64-v8a"],
+        ["34", "google_apis_playstore", "arm64-v8a"],
+        ["35", "google_apis", "arm64-v8a"],
+      ]);
+
+      await expect(
+        part.resolveSpec({
+          imageTag: "google_apis_playstore",
+          model: "Pixel 5",
+          platform: "android",
+        }),
+      ).resolves.toMatchObject({ imageTag: "google_apis_playstore", osVersion: "34" });
+    });
+
+    it("fails a tag installed for no API level, with no API level named, naming the tag and no API level", async () => {
+      const { part } = await taggedHarness([["34", "google_apis", "arm64-v8a"]]);
+
+      const failure = await part
+        .resolveSpec({ imageTag: "google_apis_playstore", model: "Pixel 5", platform: "android" })
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({
+        component: undefined,
+        downloadable: false,
+        message: "No google_apis_playstore system image is installed for any Android API level",
+        name: "RuntimeMissingError",
+      });
+    });
+  });
+
+  describe("avdmanager list device reads", () => {
+    const toolsPackage = `${sdk}/cmdline-tools/latest`;
+    const sdklibJar = `${toolsPackage}/lib/sdklib/sdklib.core.jar`;
+    const userDevicesXml = `${home}/.android/devices.xml`;
+    const imageDevicesXml = `${sdk}/system-images/android-34/google_apis/arm64-v8a/devices.xml`;
+    const addOnDevicesXml = `${sdk}/add-ons/addon-acme/devices.xml`;
+    const extraDirectory = `${sdk}/extras/acme/device_profiles`;
+    const extraDevicesXml = `${extraDirectory}/devices.xml`;
+    const rereadDevices = `Available devices:\nid: 0 or "reread_phone"\n    Name: Reread Phone\n    OEM : Acme\n`;
+
+    /** why: sdklib reads `extras/<vendor>/<item>/devices.xml` only when the item's source.properties says `Extra.Path=DeviceProfiles`. */
+    async function profilesExtra(filesystem: MemoryFilesystem, devicesXml?: string): Promise<void> {
+      await filesystem.mkdirp(extraDirectory);
+      await filesystem.writeFileAtomic(
+        `${extraDirectory}/source.properties`,
+        "Pkg.Revision=1\nExtra.Path=DeviceProfiles\n",
+      );
+      if (devicesXml !== undefined) await filesystem.writeFileAtomic(extraDevicesXml, devicesXml);
+    }
+
+    /** why: every input the read is keyed on is present, so a change to any of them is a change, not a creation. */
+    async function readsHarness(
+      options: {
+        readonly avdmanager?: string;
+        readonly before?: (filesystem: MemoryFilesystem) => Promise<void>;
+        readonly results?: readonly ScriptedProcessExpectation[];
+      } = {},
+    ) {
+      const filesystem = await androidFilesystem();
+      await filesystem.mkdirp(`${toolsPackage}/lib/sdklib`);
+      await filesystem.writeFileAtomic(sdklibJar, "jar");
+      await filesystem.writeFileAtomic(`${toolsPackage}/source.properties`, "Pkg.Revision=20.0\n");
+      await filesystem.writeFileAtomic(imageDevicesXml, "<d:devices/>");
+      await filesystem.mkdirp(`${sdk}/add-ons/addon-acme`);
+      await filesystem.writeFileAtomic(addOnDevicesXml, "<d:devices/>");
+      await options.before?.(filesystem);
+      const avdmanager = options.avdmanager ?? binaries.avdmanager;
+      const runner = new ScriptedProcessRunner(
+        options.results ?? [
+          processResult(avdmanager, ["list", "device"], pixelDevices),
+          processResult(avdmanager, ["list", "device"], rereadDevices),
+        ],
+      );
+      const part = createPart(filesystem, runner, { avdmanager });
+      const listRuns = () =>
+        runner.calls.filter(
+          (call) => call.command === avdmanager && call.args.join(" ") === "list device",
+        );
+      return { part, filesystem, listRuns, runner };
+    }
+
+    it("runs `avdmanager list device` once, with a 30 s limit, for two catalogs read while none of its inputs changed", async () => {
+      const { part, listRuns } = await readsHarness();
+
+      const first = await part.listCatalog();
+      const second = await part.listCatalog();
+
+      expect(first.models).toContain("Pixel 5");
+      expect(second.models).toContain("Pixel 5");
+      expect(second.models).not.toContain("Reread Phone");
+      expect(listRuns()).toHaveLength(1);
+      expect(listRuns()[0]?.options.timeoutMs).toBe(30_000);
+    });
+
+    it("runs `avdmanager list device` again after any file it reads device profiles from changed", async () => {
+      const legacyTools = `${sdk}/tools`;
+      const legacyJar = `${legacyTools}/lib/sdklib-26.0.0-dev.jar`;
+      const cases: readonly {
+        readonly change: string;
+        readonly avdmanager?: string;
+        readonly before?: (filesystem: MemoryFilesystem) => Promise<void>;
+        readonly act: (filesystem: MemoryFilesystem) => Promise<void>;
+      }[] = [
+        {
+          act: async (filesystem) =>
+            filesystem.defineAttributes(sdklibJar, { modifiedAtMs: 5_000 }),
+          change: "the sdklib jar's modified time",
+        },
+        {
+          act: async (filesystem) => filesystem.writeFileAtomic(sdklibJar, "jar, updated"),
+          change: "the sdklib jar's size",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(
+              `${toolsPackage}/source.properties`,
+              "Pkg.Revision=21.0.1\n",
+            ),
+          change: "the command-line tools' source.properties",
+        },
+        {
+          act: async (filesystem) => writeDevicesXml(filesystem, customDeviceXml("Made", 2048)),
+          change: "devices.xml created",
+        },
+        {
+          act: async (filesystem) =>
+            writeDevicesXml(
+              filesystem,
+              customDeviceXml("Kept", 2048) + customDeviceXml("New", 2048),
+            ),
+          before: async (filesystem) => writeDevicesXml(filesystem, customDeviceXml("Kept", 2048)),
+          change: "devices.xml edited",
+        },
+        {
+          act: async (filesystem) => filesystem.rm(userDevicesXml),
+          before: async (filesystem) => writeDevicesXml(filesystem, customDeviceXml("Kept", 2048)),
+          change: "devices.xml deleted",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.mkdirp(`${sdk}/system-images/android-35/google_apis/arm64-v8a`),
+          change: "a system image installed",
+        },
+        {
+          act: async (filesystem) => {
+            await filesystem.mkdirp(`${sdk}/system-images/android-36/android-wear/arm64-v8a`);
+            await filesystem.writeFileAtomic(
+              `${sdk}/system-images/android-36/android-wear/arm64-v8a/devices.xml`,
+              "<d:devices/>",
+            );
+          },
+          change: "a system image installed with its own devices.xml",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(imageDevicesXml, "<d:devices></d:devices>"),
+          change: "an installed system image's devices.xml",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(addOnDevicesXml, "<d:devices></d:devices>"),
+          change: "an add-on's devices.xml",
+        },
+        {
+          act: async (filesystem) => filesystem.writeFileAtomic(extraDevicesXml, "<d:devices/>"),
+          before: async (filesystem) => profilesExtra(filesystem),
+          change: "an extra's devices.xml created",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(extraDevicesXml, "<d:devices></d:devices>"),
+          before: async (filesystem) => profilesExtra(filesystem, "<d:devices/>"),
+          change: "an extra's devices.xml edited",
+        },
+        {
+          act: async (filesystem) => filesystem.rm(extraDevicesXml),
+          before: async (filesystem) => profilesExtra(filesystem, "<d:devices/>"),
+          change: "an extra's devices.xml removed",
+        },
+        {
+          act: async (filesystem) =>
+            filesystem.writeFileAtomic(
+              `${extraDirectory}/source.properties`,
+              "Extra.Path=DeviceProfiles\n",
+            ),
+          before: async (filesystem) => {
+            await profilesExtra(filesystem, "<d:devices/>");
+            await filesystem.writeFileAtomic(
+              `${extraDirectory}/source.properties`,
+              "Extra.Path=usb_driver\n",
+            );
+          },
+          change: "an extra's source.properties made it a device-profiles extra",
+        },
+        {
+          act: async (filesystem) => filesystem.writeFileAtomic(legacyJar, "legacy jar, updated"),
+          avdmanager: `${legacyTools}/bin/avdmanager`,
+          before: async (filesystem) => {
+            await filesystem.rm(toolsPackage);
+            await filesystem.mkdirp(`${legacyTools}/bin`);
+            await filesystem.writeFileAtomic(`${legacyTools}/bin/avdmanager`, "binary");
+            await filesystem.writeFileAtomic(`${legacyTools}/bin/sdkmanager`, "binary");
+            await filesystem.mkdirp(`${legacyTools}/lib`);
+            await filesystem.writeFileAtomic(legacyJar, "legacy jar");
+          },
+          change: "the legacy tools' sdklib jar",
+        },
+      ];
+
+      const seen: Record<string, readonly unknown[]> = {};
+      for (const row of cases) {
+        const { part, filesystem, listRuns } = await readsHarness({
+          ...(row.avdmanager === undefined ? {} : { avdmanager: row.avdmanager }),
+          ...(row.before === undefined ? {} : { before: row.before }),
+        });
+        const first = await part.listCatalog();
+        await row.act(filesystem);
+        const second = await part.listCatalog();
+        seen[row.change] = [
+          first.models.includes("Reread Phone"),
+          second.models.includes("Reread Phone"),
+          listRuns().length,
+        ];
+      }
+
+      expect(seen).toEqual(Object.fromEntries(cases.map((row) => [row.change, [false, true, 2]])));
+    });
+
+    it("runs `avdmanager list device` again after a read that failed", async () => {
+      const { part, listRuns } = await readsHarness({
+        results: [
+          {
+            match: { args: ["list", "device"], command: binaries.avdmanager },
+            result: { code: 1, stderr: "Error: could not read device definitions", stdout: "" },
+          },
+          processResult(binaries.avdmanager, ["list", "device"], rereadDevices),
+        ],
+      });
+
+      await expect(part.listCatalog()).rejects.toThrow("could not read device definitions");
+      const catalog = await part.listCatalog();
+
+      expect(catalog.models).toContain("Reread Phone");
+      expect(listRuns()).toHaveLength(2);
+    });
+
+    it("runs one `avdmanager list device` for two catalogs read at once", async () => {
+      const scripted = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      ]);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // why: the run stays in flight until both catalogs have asked, so the second cannot be served from a finished read.
+      const runner: ProcessRunner = {
+        run: async (command, args, options) => {
+          await held;
+          return scripted.run(command, args, options);
+        },
+        spawn: (command, args, options) => scripted.spawn(command, args, options),
+        spawnStreaming: (command, args, options) => scripted.spawnStreaming(command, args, options),
+      };
+      const part = createPart(await androidFilesystem(), runner);
+
+      const catalogs = Promise.allSettled([part.listCatalog(), part.listCatalog()]);
+      // why: the filesystem fake settles in microtasks, so one macrotask lets both catalogs
+      // reach the read before the first run ends.
+      await new Promise((resolve) => setImmediate(resolve));
+      release();
+
+      expect(
+        (await catalogs).map(
+          (catalog) => catalog.status === "fulfilled" && catalog.value.models.includes("Pixel 5"),
+        ),
+      ).toEqual([true, true]);
+      expect(scripted.calls.filter((call) => call.args.join(" ") === "list device")).toHaveLength(
+        1,
+      );
+    });
+  });
+
+  describe("library catalog", () => {
+    const classes: Record<string, string> = {
+      "Automotive (1024p landscape)": "auto",
+      "Automotive (1080p landscape)": "auto",
+      "Large Desktop": "desktop",
+      "Medium Desktop": "desktop",
+      "Medium Phone": "phone",
+      "Medium Tablet": "tablet",
+      "Pixel 6": "phone",
+      "Pixel 7": "phone",
+      "Pixel 8": "phone",
+      "Pixel 9": "phone",
+      "Pixel 9 Pro XL": "phone",
+      "Small Phone": "phone",
+      "Television (1080p)": "tv",
+      "Television (4K)": "tv",
+      "Wear OS Large Round": "watch",
+      "Wear OS Small Round": "watch",
+    };
+
+    it("surfaces malformed devices.xml as a diagnostic and falls through to UnknownModelError, never throwing from the parse itself", async () => {
+      const filesystem = await androidFilesystem();
+      await filesystem.mkdirp(`${home}/.android`);
+      await filesystem.writeFileAtomic(`${home}/.android/devices.xml`, "not xml at all {{{");
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+      ]);
+      const diagnostics: DeviceProfileSourceDiagnostic[] = [];
+      const part = createPart(filesystem, runner, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      await expect(
+        part.resolveSpec({
+          model: "Nonexistent Model",
+          osVersion: "34",
+          platform: "android",
+        }),
+      ).rejects.toMatchObject({ name: "UnknownModelError" });
+
+      expect(diagnostics).toEqual([
+        expect.objectContaining({ kind: "device-profile-source-unreadable" }),
+      ]);
+    });
+
+    it("lists Pixel 9 first in the catalog, once, as `phone`, not custom, with `pixel_9` as its other name", async () => {
+      const filesystem = await androidFilesystem();
+      await writeDevicesXml(
+        filesystem,
+        customDeviceXml("pixel_9", 4096) + customDeviceXml("PIXEL 9", 4096),
+      );
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], twoPixelDevices),
+      ]);
+      const part = createPart(filesystem, runner);
+
+      const catalog = await part.listCatalog();
+
+      expect(catalog.models[0]).toBe("Pixel 9");
+      expect(catalog.models.filter((model) => model.toLocaleLowerCase() === "pixel 9")).toEqual([
+        "Pixel 9",
+      ]);
+      expect(catalog.modelClasses["Pixel 9"]).toBe("phone");
+      expect(catalog.customModels ?? []).not.toContain("Pixel 9");
+      expect(catalog.modelAliases["Pixel 9"]).toEqual(["pixel_9"]);
+    });
+
+    it("every library model resolves, and the catalog lists all 16 with their table classes, when `avdmanager list device` lists none of them", async () => {
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], "Available devices:\n"),
+      ]);
+      const part = createPart(
+        await androidFilesystem({
+          images: [
+            ["36", "google_apis", "arm64-v8a"],
+            ["36", "android-tv", "arm64-v8a"],
+            ["36", "android-wear", "arm64-v8a"],
+            ["36", "android-automotive", "arm64-v8a"],
+            ["36", "android-automotive-playstore", "arm64-v8a"],
+            ["36", "android-desktop", "arm64-v8a"],
+          ],
+        }),
+        runner,
+      );
+
+      const catalog = await part.listCatalog();
+      const resolved: string[] = [];
+      for (const model of Object.keys(classes)) {
+        resolved.push((await part.resolveSpec({ model, platform: "android" })).model);
+      }
+
+      expect(resolved).toEqual(Object.keys(classes));
+      expect(Object.keys(classes).filter((model) => !catalog.models.includes(model))).toEqual([]);
+      for (const [model, deviceClass] of Object.entries(classes)) {
+        expect(catalog.modelClasses[model], model).toBe(deviceClass);
+      }
+      expect(catalog.modelAliases["Television (4K)"]).toEqual(["tv_4k"]);
+    });
+
+    it("the catalog classes Medium Tablet `tablet` when `avdmanager list device` also lists `medium_tablet`", async () => {
+      const listing =
+        'Available devices:\nid: 0 or "medium_tablet"\n    Name: Medium Tablet\n    OEM : Generic\n';
+      const runner = new ScriptedProcessRunner([
+        processResult(binaries.avdmanager, ["list", "device"], listing),
+      ]);
+      const part = createPart(await androidFilesystem(), runner);
+
+      const catalog = await part.listCatalog();
+
+      expect(catalog.modelClasses["Medium Tablet"]).toBe("tablet");
+      expect(catalog.models.filter((model) => model === "Medium Tablet")).toHaveLength(1);
+    });
   });
 });
