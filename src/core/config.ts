@@ -1005,7 +1005,7 @@ function defaultConfig(
       slim: {
         bootTimeoutMs: 600_000,
       },
-      simulator: { audio: false },
+      simulator: { audio: true },
     },
     android: {
       defaultModels: {},
@@ -1170,6 +1170,9 @@ export function configValidators(
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
+      }),
+      simulator: objectValidator({
+        audio: booleanValue,
       }),
     }),
     android: objectValidator({

@@ -1329,7 +1329,12 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: true },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
@@ -1395,7 +1400,12 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: true },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
