@@ -5864,6 +5864,14 @@ describe("IosSimctlDriver simulator audio", () => {
         await flushMicrotasks221();
         expect(state.state).toBe("fulfilled");
       }
+      if (c.volume === undefined && c.audio !== true) {
+        await waitForCalls(runner, bootCalls.length + 2);
+        await flushMicrotasks221();
+        expect(runner.calls, "the 0 waits for the simulator to handle the 1").toHaveLength(
+          bootCalls.length + 2,
+        );
+        clock.advance(3_000);
+      }
       const device = await ready;
 
       expect(device.address).toBe(udid);
