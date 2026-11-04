@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryFilesystem } from "../../src/ports/index.js";
-import { findAndroidSdk, sdkToolInvocation } from "./android-sdk.js";
+import { findAndroidSdk, runSdkTool } from "./test-android-sdk.js";
 
 const SDK = "/Local/Android/Sdk";
 const WINDOWS_TOOLS = [
@@ -23,8 +23,8 @@ async function sdkWith(tools: readonly string[]): Promise<MemoryFilesystem> {
 }
 
 // why: the lookup's search order and tool names are proven in src/drivers/android/prerequisites.test.ts;
-// these prove only what this helper adds: a skip on anything short of a complete SDK, and how a
-// `.bat` tool is run.
+// these prove only what this helper adds: a skip on anything short of a complete SDK, and that a
+// tool which fails or runs past its timeout rejects, as `execFile` did.
 describe("findAndroidSdk", () => {
   it("finds a Windows SDK under %LOCALAPPDATA% with its .exe and .bat tools", async () => {
     const sdk = await findAndroidSdk(
@@ -65,31 +65,22 @@ describe("findAndroidSdk", () => {
   });
 });
 
-describe("sdkToolInvocation", () => {
-  it("runs a .bat on Windows through a shell with the tool and every argument quoted", () => {
-    expect(
-      sdkToolInvocation("C:/Program Files/Sdk/avdmanager.bat", ["list", "avd"], "win32"),
-    ).toEqual({
-      args: ['"list"', '"avd"'],
-      file: '"C:/Program Files/Sdk/avdmanager.bat"',
-      shell: true,
+describe("runSdkTool", () => {
+  it("answers a tool that exits 0 with its output", async () => {
+    await expect(
+      runSdkTool(process.execPath, ["-e", 'process.stdout.write("ok")']),
+    ).resolves.toMatchObject({ stdout: "ok" });
+  });
+
+  it("rejects a tool that exits non-zero, not killed", async () => {
+    await expect(runSdkTool(process.execPath, ["-e", "process.exit(3)"])).rejects.toMatchObject({
+      killed: false,
     });
   });
 
-  it.each([
-    ["an .exe on Windows", "C:/Sdk/adb.exe", "win32"],
-    ["a tool on macOS", "/Sdk/cmdline-tools/latest/bin/avdmanager", "darwin"],
-  ] as const)("runs %s directly, without a shell", (_case, tool, platform) => {
-    expect(sdkToolInvocation(tool, ["list", "avd"], platform)).toEqual({
-      args: ["list", "avd"],
-      file: tool,
-      shell: false,
-    });
-  });
-
-  it.each(["%PATH%", 'a"b', "a!b"])("refuses to pass %s to a .bat through cmd.exe", (arg) => {
-    expect(() => sdkToolInvocation("C:/Sdk/avdmanager.bat", [arg], "win32")).toThrow(
-      `cannot pass ${JSON.stringify(arg)} to a .bat through cmd.exe`,
-    );
+  it("rejects a tool its timeout ended, killed", async () => {
+    await expect(
+      runSdkTool(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { timeout: 200 }),
+    ).rejects.toMatchObject({ killed: true });
   });
 });

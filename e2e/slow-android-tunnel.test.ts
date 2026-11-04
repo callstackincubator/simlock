@@ -13,7 +13,7 @@ import {
   withSharedDaemon,
   type SharedTestEnv,
 } from "./helpers/index.js";
-import { ANDROID_SDK } from "./helpers/android-sdk.js";
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 
 const BODY = "simlock-tunnel-ok";
 

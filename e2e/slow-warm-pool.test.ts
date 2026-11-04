@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/android-sdk.js";
+import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/test-android-sdk.js";
 import { withDaemon, waitFor, type RecordedEvent, type TestEnv } from "./helpers/index.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 

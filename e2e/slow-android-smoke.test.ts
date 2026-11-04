@@ -2,13 +2,14 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import type { AndroidSdkPaths } from "../src/drivers/android/index.js";
-import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/android-sdk.js";
+import type { AndroidSdkPaths } from "../src/drivers/android/testing.js";
+import { defaultWorkerLockPath } from "../src/ports/index.js";
+import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/test-android-sdk.js";
 import { withDaemon } from "./helpers/index.js";
 import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
@@ -257,7 +258,11 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(list.code).toBe(0);
 
           // why: ADR 0059: the worker with real drivers holds the machine's worker lock while it runs and frees it at its stop.
-          const lockFolder = join(`/tmp/simlock-${process.getuid?.() ?? 0}`, "worker.lock");
+          const lockFolder = defaultWorkerLockPath(
+            process.platform,
+            process.getuid?.() ?? 0,
+            tmpdir(),
+          );
           const owner = JSON.parse(await readFile(join(lockFolder, "owner.json"), "utf8")) as {
             folder: string;
             pid: number;

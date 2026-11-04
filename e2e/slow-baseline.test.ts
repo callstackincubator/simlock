@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { IOS } from "./helpers/agent-device-targets.js";
-import { ANDROID_SDK } from "./helpers/android-sdk.js";
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
