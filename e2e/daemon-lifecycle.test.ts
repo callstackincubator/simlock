@@ -1,12 +1,37 @@
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  holdLoopbackPort,
+  REPO_ROOT,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+} from "./helpers/index.js";
+
+async function waitForReadyDevice(env: TestEnv, model: string): Promise<string> {
+  let driverDeviceId = "";
+  await waitFor(
+    async () => {
+      const listed = await env.cli(["list", "--devices"]);
+      const rows = listed.json as {
+        driverDeviceId: string;
+        spec: { model: string };
+        state: string;
+      }[];
+      driverDeviceId =
+        rows.find((row) => row.state === "ready" && row.spec.model === model)?.driverDeviceId ?? "";
+      return driverDeviceId !== "";
+    },
+    { label: `the warm pool makes a ready ${model}` },
+  );
+  return driverDeviceId;
+}
 
 // why: `admin.token` is written before startup finishes, and a SIGTERM before then takes the
 // exit-at-once path, which never logs `Daemon stopping`. A daemon is up once it logged
@@ -142,19 +167,13 @@ describe("daemon lifecycle & recovery", () => {
     }
     expect(await runDaemonEntry(env, [])).toBe(1);
 
-    const holder = createServer();
-    const port = await new Promise<number>((resolve) => {
-      holder.listen(0, "127.0.0.1", () => {
-        const address = holder.address();
-        resolve(typeof address === "object" && address !== null ? address.port : 0);
-      });
-    });
+    const held = await holdLoopbackPort();
     try {
-      const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
+      const set = await env.cli(["--gateway", "config", "set", "http.port", String(held.port)]);
       expect(set.code, set.stderr).toBe(0);
       expect(await runDaemonEntry(env, ["--gateway"])).toBe(1);
     } finally {
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      await held.release();
     }
   }, 60_000);
 
@@ -238,6 +257,88 @@ describe("daemon lifecycle & recovery", () => {
       timeout: 10_000,
       label: "daemon socket removed",
     });
+  });
+
+  // why: #1056. The expectation is the maintainer's decision on that issue, not today's behaviour.
+  it("daemon stop shuts down every idle device it booted and leaves the leased one running", async () => {
+    const env = await withDaemon({
+      configOverrides: {
+        warmPool: {
+          targets: [
+            { count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" },
+            { count: 1, model: "iPhone 15", osVersion: "18.4", platform: "ios" },
+          ],
+        },
+      },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 15", "iPhone 16", "iPhone 17"], availableOsVersions: ["18.4"] },
+    });
+    const idle = [
+      await waitForReadyDevice(env, "iPhone 16"),
+      await waitForReadyDevice(env, "iPhone 15"),
+    ];
+    const result = await env.cli([
+      "lease",
+      "--platform",
+      "ios",
+      "--device",
+      "iPhone 17",
+      "--agent-id",
+      "stop-held",
+      "--detach",
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    const held = result.json as { device: { driverDeviceId: string } };
+    await env.driverLog.clear();
+
+    expect((await env.cli(["daemon", "stop"])).code).toBe(0);
+    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+
+    const shutdowns = (await env.driverLog.calls())
+      .filter((call) => call.operation === "shutdown")
+      .map((call) => (call.arguments[0] as { deviceId: string }).deviceId);
+    expect([...shutdowns].sort()).toEqual([...idle].sort());
+    expect(shutdowns).not.toContain(held.device.driverDeviceId);
+  });
+
+  it("daemon stop still completes when an idle device fails to shut down, and logs the failure", async () => {
+    const env = await withDaemon({
+      configOverrides: {
+        warmPool: {
+          targets: [{ count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
+        },
+      },
+    });
+    await env.driverScript.set({
+      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+    });
+    await waitForReadyDevice(env, "iPhone 16");
+    await env.driverScript.merge({
+      ios: {
+        failures: { shutdown: { type: "generic", message: "scripted shutdown failure 9c1e" } },
+      },
+    });
+
+    expect((await env.cli(["daemon", "stop"])).code).toBe(0);
+    await waitFor(() => !existsSync(env.socketPath), { label: "daemon socket removed" });
+
+    const lines = (await readFile(env.logPath, "utf8"))
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map(
+        (line) =>
+          JSON.parse(line) as { level: string; message: string; fields?: Record<string, unknown> },
+      );
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "shutdown of an idle device at daemon stop failed",
+        fields: expect.objectContaining({
+          error: expect.stringContaining("scripted shutdown failure 9c1e"),
+        }),
+      }),
+    );
   });
 });
 

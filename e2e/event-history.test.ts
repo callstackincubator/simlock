@@ -98,11 +98,18 @@ describe("event history", () => {
     expect(new Set(afterRestart.map((entry) => entry.id)).size).toBe(afterRestart.length);
   });
 
-  it("shows lease.granted with the requestId of the preceding lease.requested, provisioned for a first lease and warm for the next on the same device", async () => {
+  it("shows lease.granted with the requestId of the preceding lease.requested, provisioned for a first lease and warm for the next on the device the pool made after the release", async () => {
     const env = await withDaemon();
     await prepare(env);
     const firstId = await leaseDevice(env);
     expect((await env.cli(["release", firstId])).code).toBe(0);
+    await waitFor(
+      async () =>
+        ((await env.cli(["list", "--devices"])).json as { state: string }[]).some(
+          (device) => device.state === "ready",
+        ),
+      { label: "the pool makes a ready device in place of the released one" },
+    );
     const secondId = await leaseDevice(env);
 
     const history = parseLines((await env.cli(["events", "--since", "1h"])).stdout);
@@ -118,7 +125,7 @@ describe("event history", () => {
     }
     expect(granted.map((grant) => grant?.payload.source)).toEqual(["provisioned", "warm"]);
     expect(granted[0]?.payload.deviceId).toEqual(expect.any(String));
-    expect(granted[1]?.payload.deviceId).toBe(granted[0]?.payload.deviceId);
+    expect(granted[1]?.payload.deviceId).not.toBe(granted[0]?.payload.deviceId);
   });
 
   it("shows capacity.changed and queue.changed from daemon start, never two in a row with equal payloads", async () => {

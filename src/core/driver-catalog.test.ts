@@ -6,6 +6,7 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
 } from "./driver.js";
+import { FakeDeviceTcp } from "./fake-device-tcp.js";
 import { FakeDriver } from "./fake-driver.js";
 import { DriverCatalog, NoDriverError, UnknownPassthroughToolError } from "./driver-catalog.js";
 
@@ -43,7 +44,36 @@ function route(
   );
 }
 
+// why: the catalog is pure routing by platform with many cases (passthrough tools, class defaults, device ports), driven through the fake drivers it routes to.
 describe("DriverCatalog", () => {
+  it("reverses a device port through its driver's deviceTcp, and answers TUNNEL_UNSUPPORTED, naming the device, for a platform with none", async () => {
+    const clock = new FakeClock();
+    const deviceTcp = new FakeDeviceTcp();
+    const catalog = new DriverCatalog([
+      new FakeDriver({ availableOsVersions: ["14"], clock, deviceTcp, platform: "android" }),
+      new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" }),
+    ]);
+    const simulator = { address: "", deviceId: "sim", driverData: {}, physical: false } as const;
+    const phone = { ...simulator, enrolledApps: [], physical: true } as const;
+    const signal = new AbortController().signal;
+
+    expect(catalog.supportsDeviceTcp("android", simulator)).toBe(true);
+    expect(catalog.supportsDeviceTcp("ios", simulator)).toBe(false);
+    await catalog.reverseDevicePort("android", simulator, 5173, signal);
+    expect(deviceTcp.reversed).toEqual([5173]);
+    for (const [device, noun] of [
+      [simulator, "an iOS simulator"],
+      [phone, "an iPhone"],
+    ] as const) {
+      await expect(catalog.reverseDevicePort("ios", device, 5173, signal)).rejects.toEqual(
+        expect.objectContaining({
+          code: "TUNNEL_UNSUPPORTED",
+          message: `the lease is on ${noun}; tunnels need an Android emulator or phone`,
+        }),
+      );
+    }
+  });
+
   it("resolves a request through its registered driver", async () => {
     const clock = new FakeClock();
     const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });

@@ -13,7 +13,8 @@
  *    gateway mints its own credentials, §24), `usage.get` (read from the gateway's own history by
  *    `createUsageReader`), and -- as of #118 -- the lease *lifecycle*
  *    (`lease.request`/`renew`/`release`/`cancel`/`release-all`) and `device.exec`, all forwarded
- *    through `FleetLeaseCoordinator`.
+ *    through `FleetLeaseCoordinator`, and `baseline.save` (forwarded to the lease's worker),
+ *    `baseline.list` (read from the views) and `baseline.remove` (forwarded to the worker it names).
  * 2. **Refused permanently** (`unsupportedByDesign`): `nuke.run`, `cleanup.run`, `doctor.run`,
  *    `warm.forget` and `driver.passthrough` (§34) -- operations that act on one machine's devices as a whole --
  *    and `component.install` (ADR 0010 §7), which installs on one machine; its message points at
@@ -35,7 +36,7 @@
 import type { TokenOperations } from "../auth/index.js";
 import type { z } from "zod";
 
-import { createUsageReader, type UsageReader } from "../core/index.js";
+import { createUsageReader, redactConfig, type UsageReader } from "../core/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   consoleUrlField,
@@ -50,6 +51,7 @@ import {
 import {
   DispatchError,
   identityGet,
+  principalAsRequester,
   runDispatch,
   eventsPageAnswer,
   usageAnswer,
@@ -61,7 +63,13 @@ import { NoopLogger } from "../ports/index.js";
 import { aggregateCatalog, aggregateStatus, type AggregateStatusOptions } from "./aggregate.js";
 import { relayComponentInstall } from "./component-relay.js";
 import type { FleetLeaseCoordinator } from "./fleet-coordinator.js";
-import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
+import {
+  isUplinkLost,
+  liveClient,
+  type WorkerDirectory,
+  type WorkerDispatchTarget,
+} from "./fleet-ports.js";
+import type { GatewayWorkerClient } from "./worker-client.js";
 import type { FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerRegistry } from "./worker-registry.js";
 
@@ -137,8 +145,10 @@ export interface GatewayDispatcherOptions {
     | "cancelPending"
     | "renew"
     | "release"
+    | "saveBaseline"
     | "releaseAll"
     | "exec"
+    | "rotate"
     | "queueDepth"
     | "physicalQueueDepth"
     | "ownerId"
@@ -242,6 +252,9 @@ export class GatewayDispatcher {
       "alerts.test": this.#alertsTest,
       "daemon.update": this.#daemonUpdate,
       "worker.install-component": this.#workerInstallComponent,
+      "baseline.save": this.#baselineSave,
+      "baseline.list": this.#baselineList,
+      "baseline.remove": this.#baselineRemove,
       "lease.list": this.#leaseList,
       "lease.get": this.#leaseGet,
       "list.get": this.#listGet,
@@ -280,6 +293,7 @@ export class GatewayDispatcher {
       "lease.cancel": this.#leaseCancel,
       "lease.release-all": this.#leaseReleaseAll,
       "device.exec": this.#deviceExec,
+      "device.rotate": this.#deviceRotate,
       "relay.request": relayRefused,
       "relay.cancel": relayRefused,
       // why: "daemon.stop" is absent for the same reason it is absent from the worker's table: the
@@ -361,10 +375,13 @@ export class GatewayDispatcher {
         waiting: [],
       })),
       leases: this.#ownedFleetLeases(principal),
-      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester decides.
+      // why: a waiting entry carries no owner, so the fleet queue's recorded owner of its requester on that row's platform decides.
       waiting: (answer.waiting ?? []).filter(
         (request) =>
-          this.options.coordinator.pendingRequestOwner(request.requesterId) === principal,
+          this.options.coordinator.pendingRequestOwner(
+            request.requesterId,
+            request.spec.platform,
+          ) === principal,
       ),
     });
   };
@@ -372,7 +389,8 @@ export class GatewayDispatcher {
   #catalogGet: Handler<"catalog.get"> = (input) =>
     aggregateCatalog(this.options.workers.views(), input.platform);
 
-  #configGet: Handler<"config.get"> = () => this.options.config;
+  #configGet: Handler<"config.get"> = (input) =>
+    input.showSecrets === true ? this.options.config : redactConfig(this.options.config);
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));
 
@@ -454,19 +472,7 @@ export class GatewayDispatcher {
   });
 
   #workerUpdate: Handler<"worker.update"> = async (input) => {
-    const view = this.options.workers.view(input.workerId);
-    if (view === undefined) {
-      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${input.workerId}`, {
-        workerId: input.workerId,
-      });
-    }
-    const target = this.options.directory.target(input.workerId);
-    const client = liveClient(target);
-    if (view.connection === "disconnected" || client === undefined || target === undefined) {
-      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${input.workerId} is not connected`, {
-        workerId: input.workerId,
-      });
-    }
+    const { client, target } = this.#connectedWorker(input.workerId);
     const { workerId, ...request } = input;
     const answer = await this.#withinUplinkBound(
       client.updateDaemon(request).catch((error: unknown) => {
@@ -478,6 +484,25 @@ export class GatewayDispatcher {
     await target.refresh();
     return { ...answer, workerId };
   };
+
+  // why: `worker.update` and `baseline.remove` name one worker: no view is `UNKNOWN_WORKER`, no live link `WORKER_NOT_CONNECTED`.
+  #connectedWorker(workerId: string): {
+    readonly client: GatewayWorkerClient;
+    readonly target: WorkerDispatchTarget;
+  } {
+    const view = this.options.workers.view(workerId);
+    if (view === undefined) {
+      throw new DispatchError("UNKNOWN_WORKER", `Unknown worker: ${workerId}`, { workerId });
+    }
+    const target = this.options.directory.target(workerId);
+    const client = liveClient(target);
+    if (view.connection === "disconnected" || client === undefined || target === undefined) {
+      throw new DispatchError("WORKER_NOT_CONNECTED", `worker ${workerId} is not connected`, {
+        workerId,
+      });
+    }
+    return { client, target };
+  }
 
   // why: above the worker's own npm `view` and `root -g` (30 s each); at the limit the view catches up on the next read.
   #withinUplinkBound<Value>(call: Promise<Value>, workerId: string): Promise<Value> {
@@ -692,7 +717,7 @@ export class GatewayDispatcher {
         // count through a gateway (ADR 0009 §3).
         noWait: input.noWait ?? false,
         ownerId: input.owner ?? session.principal,
-        requesterId: input.requesterId ?? session.principal,
+        requesterId: input.requesterId ?? principalAsRequester(session.principal),
         ...(session.onProgress === undefined ? {} : { onProgress: session.onProgress }),
         ...(session.onRequestAdmitted === undefined
           ? {}
@@ -725,10 +750,47 @@ export class GatewayDispatcher {
     return { leaseId: input.leaseId };
   };
 
+  #baselineSave: Handler<"baseline.save"> = async (input) =>
+    this.options.coordinator.saveBaseline(input.leaseId, {
+      name: input.name,
+      ...(input.note === undefined ? {} : { note: input.note }),
+    });
+
+  /** why: from the views, so a disconnected worker's last baselines are listed and no worker is called. */
+  #baselineList: Handler<"baseline.list"> = async () => ({
+    baselines: this.options.workers
+      .views()
+      .flatMap((view) =>
+        (view.baselines ?? []).map((baseline) => ({ ...baseline, workerId: view.id })),
+      ),
+  });
+
+  #baselineRemove: Handler<"baseline.remove"> = async (input) => {
+    const { workerId, ...request } = input;
+    if (workerId === undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        "baseline.remove on a gateway needs the worker that holds the baseline: pass --worker <id>",
+      );
+    }
+    const { client, target } = this.#connectedWorker(workerId);
+    const removed = await client.removeBaseline(request).catch((error: unknown) => {
+      throw relayedUpdateError(error, workerId);
+    });
+    await target.refresh({ includeCatalog: true });
+    return removed;
+  };
+
   #leaseReleaseAll: Handler<"lease.release-all"> = async () => {
     const leaseIds = await this.options.coordinator.releaseAll();
     return { leaseIds: [...leaseIds] };
   };
+
+  #deviceRotate: Handler<"device.rotate"> = async (input, session) =>
+    this.options.coordinator.rotate(
+      { leaseId: input.leaseId, orientation: input.orientation },
+      session,
+    );
 
   #deviceExec: Handler<"device.exec"> = async (input, session) =>
     this.options.coordinator.exec(

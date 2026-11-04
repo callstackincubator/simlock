@@ -325,6 +325,8 @@ export interface FleetOptions {
   readonly execCommand?: FleetExec;
   // why: a test puts a proxy between the worker and the gateway, so the worker dials the proxy.
   readonly gatewayUrl?: (gatewayPort: number) => string | Promise<string>;
+  // why: a test starts the gateway behind an identity-aware proxy, so http.proxyAuth is set.
+  readonly proxyAuth?: Record<string, unknown>;
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
@@ -337,7 +339,14 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
   const gateway = await startDaemon({
-    configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+    configOverrides: {
+      http: {
+        enabled: true,
+        host: "127.0.0.1",
+        port,
+        ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+      },
+    },
     role: "gateway",
     dataDirectory: gatewayDirectory,
     filesystem: new MemoryFilesystem(),

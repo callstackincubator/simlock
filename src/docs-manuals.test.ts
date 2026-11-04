@@ -128,6 +128,20 @@ describe("module manuals, flow docs and the architecture map", () => {
     expect([...manuals, ...flows].flatMap(privateMembers)).toEqual([]);
   });
 
+  it("name code by file and symbol, never by line number", () => {
+    const lineRefs = (doc: string, text = lines(doc)) =>
+      text.flatMap((line, index) =>
+        [...line.matchAll(/[\w./-]+\.(?:ts|tsx|mjs|js):\d+/g)].map(
+          (match) => `${doc}:${index + 1}: ${match[0]}`,
+        ),
+      );
+
+    expect(lineRefs("sample.md", ["see `src/a.ts:12`", "see `src/a.ts` and `version:2`"])).toEqual([
+      "sample.md:1: src/a.ts:12",
+    ]);
+    expect([...manuals, ...flows, MAP].flatMap((doc) => lineRefs(doc))).toEqual([]);
+  });
+
   it("each manual opens with its Does, Entry and Uses lines", () => {
     const missing = manuals.flatMap((manual) =>
       ["Does", "Entry", "Uses"]

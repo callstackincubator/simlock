@@ -14,7 +14,7 @@ export const deviceClassSchema = z.enum([
 ]);
 export type DeviceClass = z.infer<typeof deviceClassSchema>;
 
-const deviceStateSchema = z.enum([
+export const deviceStateSchema = z.enum([
   "provisioning",
   "ready",
   "leased",
@@ -25,7 +25,7 @@ const deviceStateSchema = z.enum([
   "deleted",
 ]);
 
-const absentReasonSchema = z.enum(["locked", "untrusted", "not-present"]);
+export const absentReasonSchema = z.enum(["locked", "untrusted", "not-present"]);
 
 const devicePresenceSchema = z.discriminatedUnion("present", [
   z.object({ present: z.literal(true) }),
@@ -36,7 +36,7 @@ const deviceModeSchema = z.enum(["slim", "full"]);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
-const physicalClassSchema = z.enum(["phone", "tablet"]);
+export const physicalClassSchema = z.enum(["phone", "tablet"]);
 
 function checkDeviceType(
   device: { readonly physical: boolean; readonly mode?: unknown; readonly class?: unknown },
@@ -89,12 +89,73 @@ export const imageTagSchema = z
   .max(IMAGE_TAG_MAX)
   .regex(/^[A-Za-z0-9_.-]+$/, "imageTag may contain only letters, digits, '_', '.' and '-'");
 
+/** why: a baseline's name is its handle on the command line and in a path-like URL, so it is lowercase and starts with a letter or digit. */
+export const baselineNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(
+    /^[a-z0-9][a-z0-9._-]*$/,
+    "baseline name may contain only a-z, 0-9, '.', '_' and '-', and must start with a letter or digit",
+  );
+
+// oxlint-disable-next-line no-control-regex -- refusing control characters is the whole point.
+const NO_CONTROL_CHARACTERS = /^[^\u0000-\u001f\u007f]*$/;
+
+export const baselineNoteSchema = z
+  .string()
+  .max(200)
+  .regex(NO_CONTROL_CHARACTERS, "baseline note may not contain control characters");
+
+/** why: the bound a worker id has on the wire, shared by the events page, a baseline entry and `baseline.remove`. */
+export const WORKER_ID_MAX = 128;
+
+/** why: one baseline as `baseline.save` and `baseline.list` answer it; `sizeBytes` is absent when the source's size could not be counted. */
+export const baselineEntrySchema = z.object({
+  name: baselineNameSchema,
+  version: z.number().int().min(1),
+  platform: platformSchema,
+  model: z.string().max(64),
+  osVersion: z.string().max(64),
+  mode: z.enum(["slim", "full"]),
+  imageTag: imageTagSchema.optional(),
+  note: baselineNoteSchema.optional(),
+  sizeBytes: z.number().int().min(0).optional(),
+  savedAt: z.string().max(64),
+  staleReason: z.string().max(300).optional(),
+  /** why: set only by a gateway's `baseline.list`: the worker that holds the baseline, what `--worker` takes. */
+  workerId: z.string().min(1).max(WORKER_ID_MAX).optional(),
+});
+
+export type BaselineEntry = z.infer<typeof baselineEntrySchema>;
+
+const REQUESTER_ID_MAX = 256;
+const GATEWAY_PREFIX = /^gw:[^:]{0,100}:/;
+
+/**
+ * A requester id as any input names it: printable, no control characters, at most 256 characters.
+ * why: 256 holds every principal Simlock builds (a sign-in-proxy `proxy:<issuer>#<sub>` reaches 255).
+ * why: a gateway hands its worker `gw:<instance id>:<requester id>`, so the limit counts what
+ * follows that prefix and the worker accepts the namespaced form of an id the gateway let in.
+ */
+export const requesterIdSchema = z
+  .string()
+  .refine(
+    (id) => !/[\p{Cc}\u2028\u2029]/u.test(id),
+    "requesterId must not contain control characters",
+  )
+  .refine(
+    (id) => id.replace(GATEWAY_PREFIX, "").length <= REQUESTER_ID_MAX,
+    `requesterId may be at most ${String(REQUESTER_ID_MAX)} characters`,
+  );
+
 const deviceSpecSchema = z.object({
   physical: z.boolean(),
   platform: platformSchema,
   model: z.string(),
   osVersion: z.string(),
   imageTag: imageTagSchema.optional(),
+  baseline: z.object({ name: baselineNameSchema, version: z.number().int().min(1) }).optional(),
 });
 
 const QUARANTINE_MESSAGE_MAX = 300;
@@ -314,6 +375,7 @@ const requestedDeviceSchema = z.object({
   osVersion: z.string().optional(),
   mode: deviceModeSchema.optional(),
   imageTag: imageTagSchema.optional(),
+  baseline: baselineNameSchema.optional(),
   physical: z.literal(true).optional(),
 });
 
@@ -359,6 +421,9 @@ const gatewayWaitingReasonSchema = z.enum([
   "no-driver",
   "unknown-model",
   "runtime-missing",
+  "no-baseline",
+  "baseline-mismatch",
+  "baseline-stale",
   "capability-missing",
   "full",
   "no-free-physical",
@@ -499,6 +564,7 @@ const warmPoolTargetSchema = z.object({
   osVersion: z.string().max(WARM_POOL_NAME_MAX).optional(),
   mode: z.enum(["slim", "full"]),
   imageTag: imageTagSchema.optional(),
+  baseline: baselineNameSchema.optional(),
   origin: z.enum(["configured", "learned"]),
   count: z.number().int().nonnegative(),
   ready: z.number().int().nonnegative(),
@@ -851,11 +917,28 @@ const doctorFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const doctorReportSchema = z.object({ findings: z.array(doctorFindingSchema) });
+const doctorSourceSchema = z.object({
+  platform: platformSchema,
+  kind: z.enum(["seed", "baseline"]),
+  model: z.string().max(200),
+  osVersion: z.string().max(200),
+  imageTag: z.string().max(200).optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  staleReason: z.string().max(300).optional(),
+  orphan: z.literal(true).optional(),
+  baselineName: baselineNameSchema.optional(),
+  baselineVersion: z.number().int().min(1).optional(),
+});
+
+export const doctorReportSchema = z.object({
+  findings: z.array(doctorFindingSchema).max(100_000),
+  sources: z.array(doctorSourceSchema).max(100_000),
+});
 
 export const nukeReportSchema = z.object({
   deletedDevices: z.array(z.string()),
   releasedLeaseIds: z.array(z.string()),
+  removedBaselines: z.array(baselineNameSchema).max(1000),
 });
 
 const MAX_DATE_MS = 8.64e15;
@@ -1016,6 +1099,7 @@ export const configSchema = z.object({
       categories: z.array(z.string()).optional(),
       bootTimeoutMs: z.number(),
     }),
+    simulator: z.object({ audio: z.boolean() }),
   }),
   android: z.object({
     defaultModels: defaultModelsSchema,
@@ -1207,6 +1291,8 @@ export const workerViewSchema = z.object({
   leases: z.array(leaseRecordSchema).optional(),
   devices: z.array(statusDeviceSchema).optional(),
   catalog: z.array(platformCatalogSchema).optional(),
+  /** why: absent while a worker is starting, `[]` when it holds none: the worker's own `baseline.list`, read with the catalog. */
+  baselines: z.array(baselineEntrySchema).max(1000).optional(),
   /** why: Cleared on connect, so a just-connected worker has none: it tells a catalog read and found empty from one not yet arrived. */
   catalogReadAt: z.number().optional(),
   host: hostFactsSchema.optional(),
@@ -1227,7 +1313,7 @@ const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
 
 // why: an Inbox item names the worker it is about by the view's fields that the page does not read from the worker list, plus two counts the view's lists would otherwise have to be sent for.
 const inboxWorkerSchema = workerViewSchema
-  .omit({ catalog: true, devices: true, downloads: true, leases: true })
+  .omit({ baselines: true, catalog: true, devices: true, downloads: true, leases: true })
   .extend({
     heldLeases: z.number().int().nonnegative(),
     leasedDevices: z.number().int().nonnegative(),

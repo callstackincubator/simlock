@@ -27,11 +27,31 @@ Each worker shows:
 - devices running of the limit per platform, and how many leases it holds;
 - its Simlock version, with the newest release in brackets when npm has a newer one, and `updating to <version>: <stage>` while it updates (the stage is `waiting for <n> leases`, `installing` or `restarting`);
 - its operating system, platform tools and optional modules;
-- under it, the last load reading, and any runtime or system image being installed.
+- under it, the last load reading, the baselines it holds, and any runtime or system image being installed.
+
+The `Baselines:` line gives each baseline's name and version, its device, and `stale` for one that cannot be used now, for example `Baselines: checkout v2: android Pixel 9, Android 36 (google_apis), full; smoke v1: ios iPhone 17, iOS 27.0, slim, stale`. It says `none` for a worker with no baselines, and is missing while a worker starts.
 
 A disconnected worker shows the last values it reported. The gateway keeps it in the list for `gateway.disconnectedRetentionMs` (24 hours by default), and for as long as it holds a lease made through the gateway.
 
 Add `--json` for the full details as JSON.
+
+## Baselines through a gateway
+
+A request that names a baseline (`simlock --gateway lease --platform android --baseline checkout`) goes only to a worker that holds a fresh copy of it. A request no worker can serve that way fails at once; see [How requests are routed](/simlock/docs/gateway/routing#when-no-worker-can-serve-a-request). If the only worker that holds the baseline is busy, the request waits in the fleet queue.
+
+Save, list and remove baselines through the gateway. These commands need admin rights, except `list`.
+
+```sh
+simlock --gateway baseline save checkout --lease wrk_a.L7 --note "app 4.3"
+simlock --gateway baseline list
+simlock --gateway baseline remove smoke --worker wrk_a
+```
+
+- `save` goes to the worker that holds the lease.
+- `list` covers every worker; the `WORKER` column is what `--worker` takes.
+- `remove` needs `--worker`, because workers hold their own copies: one remove changes one worker. Without it the gateway answers `BAD_REQUEST` and removes nothing. Over HTTP it is `DELETE /v1/baselines/{name}?workerId=<id>`.
+
+Simlock does not copy a baseline between workers. Save it on each worker that should hold it. See [Baselines](/simlock/docs/worker/baselines) for what a baseline is.
 
 ## Take a worker out of service
 

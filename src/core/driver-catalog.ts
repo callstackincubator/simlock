@@ -1,4 +1,4 @@
-import { type Logger, NoopLogger } from "../ports/index.js";
+import { type Logger, NoopLogger, type TcpStream } from "../ports/index.js";
 import { classCandidates, pairedRuntimes } from "./catalog-match.js";
 import { DEVICE_CLASSES, type DeviceClass, type VirtualSpec, type Platform } from "./domain.js";
 import type {
@@ -10,6 +10,7 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
+import { DeviceTcpError, unsupportedTunnelMessage, type DeviceReverse } from "./device-tcp.js";
 import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
@@ -100,6 +101,45 @@ export class DriverCatalog {
     const factory = this.#drivers.get(platform)?.input;
     if (factory === undefined) return { unavailable: `${platform} devices take no input` };
     return await factory.open(device, signal);
+  }
+
+  supportsDeviceTcp(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean {
+    return this.#drivers.get(platform)?.deviceTcp?.supports(device) ?? false;
+  }
+
+  async reverseDevicePort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<DeviceReverse> {
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp === undefined) {
+      throw new DeviceTcpError(
+        "TUNNEL_UNSUPPORTED",
+        unsupportedTunnelMessage(platform, device.physical),
+      );
+    }
+    return await deviceTcp.reverse(device, devicePort, signal);
+  }
+
+  async connectDevicePort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<TcpStream> {
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp === undefined) {
+      throw new DeviceTcpError(
+        "TUNNEL_UNSUPPORTED",
+        unsupportedTunnelMessage(platform, device.physical),
+      );
+    }
+    return await deviceTcp.connect(device, devicePort, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

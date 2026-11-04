@@ -12,6 +12,7 @@ import type {
   Config,
   DeviceInput,
   DeviceRecord,
+  DeviceReverse,
   UnavailableDeviceInput,
   LeaseRecord,
   PhysicalDriverDevice,
@@ -29,6 +30,7 @@ import type {
   ProcessRunner,
   ProcessSupervisor,
   TcpProbe,
+  TcpStream,
 } from "../ports/index.js";
 
 export interface ModuleConfig<C> {
@@ -187,13 +189,36 @@ export interface ModuleScreens {
   screenAvailability(): Promise<readonly ScreenAvailability[]>;
 }
 
-// why: the drivers' device input, routed by platform, without handing a module the drivers.
+// why: one user's hold on a lease's shared device input; `release` is how the user says it is done, and the last release closes the input.
+export interface LeaseInputHandle {
+  readonly input: DeviceInput | UnavailableDeviceInput;
+  release(): void;
+}
+
+// why: the daemon's device input per lease, shared by every user of it (the input module's sockets and `device.rotate`), without handing a module the drivers.
 export interface ModuleInputs {
-  openInput(
+  leaseInput(
+    leaseId: string,
     platform: Platform,
     device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): Promise<LeaseInputHandle>;
+}
+
+// why: the drivers' device ports, routed by platform, without handing a module the drivers.
+export interface ModuleDeviceTcp {
+  supports(platform: Platform, device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  reverse(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
     signal: AbortSignal,
-  ): Promise<DeviceInput | UnavailableDeviceInput>;
+  ): Promise<DeviceReverse>;
+  connect(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    devicePort: number,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }
 
 export interface WorkerContext<C> {
@@ -219,6 +244,7 @@ export interface WorkerContext<C> {
   readonly registry: ModuleRegistryView;
   readonly screens: ModuleScreens;
   readonly inputs: ModuleInputs;
+  readonly deviceTcp: ModuleDeviceTcp;
   cancelPending(requesterId: string): Promise<unknown>;
   readonly events: {
     subscribe<Event extends EventName>(event: Event, handler: EventHandler<Event>): () => void;

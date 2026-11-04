@@ -302,6 +302,7 @@ export interface DeviceRow {
   readonly physical: boolean;
   readonly mode?: string;
   readonly imageTag?: string;
+  readonly baseline?: string;
 }
 
 // why: a worker names a lease by its own id, but a gateway lists it, and opens its page, as
@@ -335,6 +336,10 @@ function deviceRow(
     ...leaseFacts(device, worker, now, tokens, leaseIds),
     ...defined({
       udid: device.physical ? device.driverDeviceId : undefined,
+      baseline:
+        device.spec.baseline === undefined
+          ? undefined
+          : `${device.spec.baseline.name} v${String(device.spec.baseline.version)}`,
       imageTag: virtual ? device.spec.imageTag : undefined,
       mode: virtual && !device.servesDefaultMode ? device.mode : undefined,
       since: entered === undefined ? undefined : formatDuration(now - entered),

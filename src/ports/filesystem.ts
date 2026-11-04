@@ -1,6 +1,7 @@
 import {
   chmod,
   copyFile,
+  cp,
   link,
   lstat,
   mkdir,
@@ -15,6 +16,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+
+import { NodeProcessRunner, type ProcessRunner } from "./process-runner.js";
 
 export interface FileStat {
   readonly kind: "file" | "directory";
@@ -72,6 +75,11 @@ export interface Filesystem {
    */
   mkdirp(path: string, options?: MkdirpOptions): Promise<void>;
   copyFile(from: string, to: string): Promise<void>;
+  /**
+   * why: `to` must not exist; it becomes a copy of the folder `from` with file modification times kept.
+   * `timeoutMs` bounds the copy where the adapter runs a child process for it.
+   */
+  copyTree(from: string, to: string, options: { readonly timeoutMs: number }): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   rm(path: string): Promise<void>;
   stat(path: string): Promise<FileStat>;
@@ -116,13 +124,61 @@ async function createDirectory(directory: string, mode: number): Promise<boolean
   }
 }
 
+export interface NodeFilesystemOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly processRunner?: ProcessRunner;
+}
+
 export class NodeFilesystem implements Filesystem {
+  readonly #platform: NodeJS.Platform;
+  readonly #processRunner: ProcessRunner;
+
+  constructor(options: NodeFilesystemOptions = {}) {
+    this.#platform = options.platform ?? process.platform;
+    this.#processRunner = options.processRunner ?? new NodeProcessRunner();
+  }
+
   async readFile(path: string): Promise<string> {
     return readFile(path, "utf8");
   }
 
   async copyFile(from: string, to: string): Promise<void> {
     await copyFile(from, to);
+  }
+
+  async copyTree(from: string, to: string, options: { readonly timeoutMs: number }): Promise<void> {
+    if (this.#platform === "darwin") return this.#copyWithCp(["-c", "-p", "-R", from, to], options);
+    if (this.#platform === "linux") {
+      return this.#copyWithCp(["-a", "--reflink=auto", from, to], options);
+    }
+    // why: no child process runs here, so `timeoutMs` bounds nothing on this path.
+    await cp(from, to, {
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true,
+      recursive: true,
+    });
+  }
+
+  async #copyWithCp(
+    args: readonly string[],
+    options: { readonly timeoutMs: number },
+  ): Promise<void> {
+    const handle = this.#processRunner.spawn("cp", args);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      handle.kill();
+    }, options.timeoutMs);
+    try {
+      const result = await handle.wait();
+      if (timedOut) throw new Error(`timed out after ${options.timeoutMs}ms`);
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || `cp exited with code ${String(result.code)}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async readFileFrom(path: string, offset: number): Promise<string> {
@@ -280,12 +336,25 @@ export class NodeFilesystem implements Filesystem {
     };
   }
 
+  /**
+   * why: a file listed a moment ago may be gone (simctl's atomic `device.plist.sb-*` write), and a
+   * size that fails on it leaves a saved source with no size; a vanished file counts for 0.
+   */
+  async #sizeOfFile(path: string): Promise<number> {
+    try {
+      return (await lstat(path)).size;
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+  }
+
   async directorySize(path: string): Promise<number> {
     let total = 0;
     for (const entry of await readdir(path, { withFileTypes: true })) {
       const child = join(path, entry.name);
       if (entry.isDirectory()) total += await this.directorySize(child);
-      else if (entry.isFile()) total += (await lstat(child)).size;
+      else if (entry.isFile()) total += await this.#sizeOfFile(child);
     }
     return total;
   }
@@ -343,6 +412,29 @@ export class MemoryFilesystem implements Filesystem {
 
   async copyFile(from: string, to: string): Promise<void> {
     await this.writeFileAtomic(to, await this.readFile(from));
+  }
+
+  async copyTree(
+    from: string,
+    to: string,
+    _options: { readonly timeoutMs: number },
+  ): Promise<void> {
+    this.#failIfDefined(from);
+    this.#failIfDefined(to);
+    this.#rawEntryAt(from);
+    if (this.#entries.has(to)) throw errnoError("EEXIST", `File already exists: ${to}`);
+    this.#requireDirectory(parentPath(to));
+    const prefix = `${from}/`;
+    for (const [entryPath, entry] of Array.from(this.#entries)) {
+      if (entryPath !== from && !entryPath.startsWith(prefix)) continue;
+      this.#entries.set(
+        entryPath === from ? to : joinMemoryPath(to, entryPath.slice(prefix.length)),
+        {
+          ...entry,
+          identity: this.#nextIdentity++,
+        },
+      );
+    }
   }
 
   async readFileFrom(path: string, offset: number): Promise<string> {

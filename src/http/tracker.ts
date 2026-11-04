@@ -17,6 +17,7 @@ export interface LeaseRequestInput {
   readonly allowDownload?: boolean;
   readonly mode?: "slim" | "full";
   readonly imageTag?: string;
+  readonly baseline?: string;
   readonly physical?: boolean;
   /** Not gated here: the shared dispatcher rejects a non-admin token that names an owner. */
   readonly owner?: string;
@@ -40,6 +41,7 @@ export interface LeasePayload {
   readonly mode?: "slim" | "full";
   /** The image tag the device was created from, on a device whose request named one. */
   readonly imageTag?: string;
+  readonly baseline?: { readonly name: string; readonly version: number };
   /** The worker a gateway-issued lease lives on, as its lease record names it. Absent from a
    * worker's own lease. */
   readonly worker?: { readonly id: string; readonly label?: string | undefined };
@@ -79,6 +81,7 @@ export function buildLeasePayload(
     dataPlane: null,
     ...(device.mode === undefined ? {} : { mode: device.mode }),
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
+    ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
     // `workerId` derives from `worker` so the two never disagree.
     ...(lease.worker === undefined ? {} : { worker: lease.worker, workerId: lease.worker.id }),
   };
@@ -92,6 +95,7 @@ function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: stri
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
     ...requestOptions(body),
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
@@ -387,6 +391,7 @@ export interface HttpLeaseDevice {
     readonly model: string;
     readonly osVersion: string;
     readonly imageTag?: string | undefined;
+    readonly baseline?: { readonly name: string; readonly version: number } | undefined;
   };
   /** Absent only for a physical device, which has no mode. */
   readonly mode?: "slim" | "full" | undefined;

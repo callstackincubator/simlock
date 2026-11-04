@@ -353,25 +353,27 @@ describe("the core knows physical devices", () => {
     expect(await iosCapacity(env)).toMatchObject({ running: 1, used: 1, warm: 0 });
   });
 
-  it("with limits.ios.maxDevices 1, an idle ready iPhone 16 simulator and a ready physical record whose lastLeaseEndedAt is older than the simulator's, lease --platform ios --device iPhone 15 Pro evicts the simulator (a destroy call names it) and is granted a new simulator; the physical record stays ready, and no driver call names it", async () => {
+  it("with limits.ios.maxDevices 1 and a ready physical record, releasing an iPhone 16 simulator lease deletes that simulator (one destroy call names it), the next lease --platform ios --device iPhone 15 Pro is granted a new simulator, and the physical record stays ready with no driver call naming it", async () => {
     const env = await startWith([READY], {
       config: { limits: { ios: { maxDevices: 1, maxRunning: 8 } } },
-      script: { reclaimResult: "ready" },
     });
     const first = await leaseSimulator(env, ["--device", "iPhone 16", "--os", PHYSICAL_OS]);
     expect((await env.cli(["release", first.lease.id])).code).toBe(0);
-    await waitFor(async () => (await stateOf(env, first.device.id)) === "ready", {
-      label: "the iPhone 16 simulator is idle and ready",
+    await waitFor(async () => (await stateOf(env, first.device.id)) === "deleted", {
+      label: "the released iPhone 16 simulator is deleted",
     });
 
     const granted = await leaseSimulator(env, ["--device", PHYSICAL_MODEL, "--os", PHYSICAL_OS]);
 
     expect(granted.device.id).not.toBe(READY.id);
+    expect(granted.device.id).not.toBe(first.device.id);
     expect(granted.device.spec.model).toBe(PHYSICAL_MODEL);
     const destroyed = (await env.driverLog.calls()).filter((call) => call.operation === "destroy");
-    expect(destroyed.map((call) => JSON.stringify(call.arguments))).toEqual([
-      expect.stringContaining(first.device.driverDeviceId),
-    ]);
+    const destroyedArguments = destroyed.map((call) => JSON.stringify(call.arguments));
+    expect(
+      destroyedArguments.filter((call) => call.includes(first.device.driverDeviceId)),
+    ).toHaveLength(1);
+    expect(destroyedArguments.filter((call) => call.includes(READY.driverDeviceId))).toEqual([]);
     await expectState(env, READY.id, "ready");
     expect(await callsNaming(env, READY.driverDeviceId)).toEqual([]);
   });
@@ -424,18 +426,23 @@ describe("the core knows physical devices", () => {
     await expectState(env, READY.id, "ready");
   });
 
-  it("with a ready and a reclaiming physical record and no physical lease, nuke --delete-devices --yes destroys a simulator as today, keeps both physical records in their states, and no shutdown or destroy call names them", async () => {
-    const env = await startWith([READY, RECLAIMING]);
-    const held = await leaseSimulator(env, ["--device", "iPhone 16", "--os", PHYSICAL_OS]);
-    expect((await env.cli(["release", held.lease.id])).code).toBe(0);
+  it("with a ready and a reclaiming physical record and two idle simulators, nuke --delete-devices --yes destroys both simulators, keeps both physical records in their states, and no shutdown or destroy call names them", async () => {
+    const simulators = [
+      { driverDeviceId: "fake-ios-idle-a", id: "dev_vidlea" },
+      { driverDeviceId: "fake-ios-idle-b", id: "dev_vidleb" },
+    ];
+    const env = await startWith([READY, RECLAIMING], { simulators });
 
     const nuke = await env.cli(["nuke", "--delete-devices", "--yes"]);
     expect(nuke.code, nuke.stderr).toBe(0);
 
-    const destroyed = (await env.driverLog.calls()).filter((call) => call.operation === "destroy");
-    expect(destroyed.map((call) => JSON.stringify(call.arguments))).toEqual([
-      expect.stringContaining(held.device.driverDeviceId),
-    ]);
+    const destroyed = (await env.driverLog.calls())
+      .filter((call) => call.operation === "destroy")
+      .map((call) => JSON.stringify(call.arguments));
+    expect(destroyed).toHaveLength(2);
+    for (const simulator of simulators) {
+      expect(destroyed.filter((call) => call.includes(simulator.driverDeviceId))).toHaveLength(1);
+    }
     await expectState(env, READY.id, "ready");
     await expectState(env, RECLAIMING.id, "reclaiming");
     expect(await callsNaming(env, READY.driverDeviceId, RECLAIMING.driverDeviceId)).toEqual([]);

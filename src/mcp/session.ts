@@ -7,7 +7,9 @@ import {
   type LeaseRecord,
   type LeaseRequestInput,
   type SimlockClient,
+  type StatusGetOutput,
 } from "../client/index.js";
+import { parseOrientation } from "../contract/index.js";
 import {
   awaitWithin,
   RELEASE_TIMEOUT_MS,
@@ -21,8 +23,11 @@ import type {
   LeaseStatusOutput,
   ListDevicesInput,
   ListDevicesOutput,
+  PhysicalDevice,
   ReleaseSimulatorInput,
   ReleaseSimulatorOutput,
+  RotateDeviceInput,
+  RotateDeviceOutput,
   RunOnDeviceInput,
 } from "./contracts.js";
 
@@ -256,7 +261,10 @@ export class McpSession {
     return this.#mutate(async () => {
       this.#throwIfClosed();
       const client = await this.#clientForUse();
-      return client.getCatalog(input);
+      const catalog = await client.getCatalog(input);
+      const status = await client.getStatus();
+      const physicalDevices = enrolledPhones(status);
+      return { ...catalog, physicalDevices };
     });
   }
 
@@ -298,6 +306,22 @@ export class McpSession {
     }
     const client = await this.#clientForUse();
     return client.exec({ ...input, leaseId }, { onOutput });
+  }
+
+  // why: not on `#mutate`, like `runOnDevice`; the parse is first so a bad spelling never reaches the daemon.
+  async rotateDevice(input: RotateDeviceInput): Promise<RotateDeviceOutput> {
+    this.#throwIfClosed();
+    const parsed = parseOrientation(input.orientation);
+    if (!parsed.ok) throw new McpSessionError("BAD_REQUEST", parsed.message);
+    const leaseId = this.#heldLeaseId;
+    if (leaseId === undefined) {
+      throw new McpSessionError(
+        "NO_LEASE",
+        "This MCP session holds no lease. Call lease_simulator first.",
+      );
+    }
+    const client = await this.#clientForUse();
+    return client.rotate(leaseId, parsed.orientation);
   }
 
   /** Notifies when this session's held lease ends elsewhere (expiry or a force-release). */
@@ -676,4 +700,28 @@ function endsRenewal(error: unknown): boolean {
       error.code === "FORBIDDEN" ||
       error.code === "DAEMON_CONNECTION_LOST")
   );
+}
+
+function enrolledPhones(status: StatusGetOutput): PhysicalDevice[] {
+  const usableWorkers = new Set(
+    (status.workers ?? [])
+      .filter((worker) => worker.connection === "connected" && !worker.drained)
+      .map((worker) => worker.id),
+  );
+  return (status.devices ?? [])
+    .filter(
+      (device) =>
+        device.physical &&
+        device.state !== "deleted" &&
+        (device.workerId === undefined || usableWorkers.has(device.workerId)),
+    )
+    .map((device) => ({
+      ...(device.workerId === undefined ? {} : { workerId: device.workerId }),
+      platform: device.spec.platform,
+      model: device.spec.model,
+      osVersion: device.spec.osVersion,
+      ...(device.class === undefined ? {} : { class: device.class }),
+      state: device.state,
+      ...(device.absentReason === undefined ? {} : { absentReason: device.absentReason }),
+    }));
 }

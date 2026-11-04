@@ -27,6 +27,7 @@
                   "MaxPerRequester",
                   "SerializedDecision",
                   "UsageReader",
+                  "baselineMismatch",
                   "createUsageReader",
                   "findCatalogModel",
                   "fits",
@@ -34,7 +35,8 @@
                   "modelClass",
                   "newLeaseRequestId",
                   "noPhysicalMatch",
-                  "pairedRuntimes"
+                  "pairedRuntimes",
+                  "redactConfig"
                 ],
                 "message": "the gateway may import only the names its allow-list gives"
               },

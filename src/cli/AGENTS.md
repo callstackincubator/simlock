@@ -19,25 +19,27 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 
 ## Files
 
-| File             | Role                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `index.ts`       | `runCli`: the global `--token`, `--gateway` and `--local`, the command lookup, the error boundary |
-| `tree.ts`        | The command tree — each node names the module that implements it                                  |
-| `environment.ts` | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed                 |
-| `types.ts`       | `CliEnvironment` and its ports — types only, so routing loads no code                             |
-| `errors.ts`      | The error → code/exit mapping                                                                     |
-| `usage-error.ts` | `UsageError` and `withHelpHint`, the help pointer's one wording                                   |
-| `connect.ts`     | `connectDaemonClient`: credential order, the admin session, the notice                            |
-| `args.ts`        | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                        |
-| `commands/*.ts`  | One module per command, `run(argv, context)`; loaded by the tree on a hit                         |
-| `format.ts`      | The human renderers for `status`, `worker list`, `daemon start`, etc.                             |
-| `duration.ts`    | `parseDuration` for `--ttl`-style flags                                                           |
-| `termination.ts` | The signals and parent-exit wait a held lease blocks on                                           |
-| `log-file.ts`    | `readLogFile`: `daemon.log` plus a rotated generation                                             |
-| `stdio.ts`       | `readPipedStdin`: a piped stdin for `simctl`/`adb`, read to EOF                                   |
-| `passthrough.ts` | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                           |
-| `follow-log.ts`  | `followLog`: `daemon logs --follow` across rotations                                              |
-| `main.ts`        | The bin; sets `process.exitCode`                                                                  |
+| File              | Role                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `index.ts`        | `runCli`: the global `--token`, `--gateway` and `--local`, the command lookup, the error boundary                                                |
+| `tree.ts`         | The command tree — each node names the module that implements it                                                                                 |
+| `environment.ts`  | `buildCliEnvironment`: the ports a command may reach, from the ports it is handed                                                                |
+| `types.ts`        | `CliEnvironment` and its ports — types only, so routing loads no code                                                                            |
+| `errors.ts`       | The error → code/exit mapping                                                                                                                    |
+| `usage-error.ts`  | `UsageError` and `withHelpHint`, the help pointer's one wording                                                                                  |
+| `connect.ts`      | `connectDaemonClient`: credential order, the admin session, the notice                                                                           |
+| `args.ts`         | `commandArgs` / `requiredPositional` / `subcommandOrUsage` / `writeResult`                                                                       |
+| `commands/*.ts`   | One module per command, `run(argv, context)`; loaded by the tree on a hit                                                                        |
+| `format.ts`       | The human renderers for `status`, `worker list`, `daemon start`, the `baseline` lines and table, etc.                                            |
+| `escape.ts`       | `escapeControl`: remote text shown with control characters as `\u00XX`; every renderer and text-printing command applies it                      |
+| `duration.ts`     | `parseDuration` for `--ttl`-style flags                                                                                                          |
+| `termination.ts`  | The signals and parent-exit wait a held lease blocks on                                                                                          |
+| `log-file.ts`     | `readLogFile`: `daemon.log` plus a rotated generation                                                                                            |
+| `stdio.ts`        | `readPipedStdin`: stdin for `simctl`/`adb --stdin`, read to EOF, a terminal included                                                             |
+| `remote-lease.ts` | `resolveRemoteLeaseId`: the requester's only lease, shared by `simctl`/`adb` and `rotate`; `selectOnlyLease` words a token's errors for `tunnel` |
+| `passthrough.ts`  | `spawnPassthrough`: runs a resolved simctl/adb command, stdio inherited                                                                          |
+| `follow-log.ts`   | `followLog`: `daemon logs --follow` across rotations                                                                                             |
+| `main.ts`         | The bin; sets `process.exitCode`                                                                                                                 |
 
 `format.ts`, `duration.ts` and `termination.ts` are reached only from a command module, and
 `follow-log.ts` and `passthrough.ts` only from a dynamic import inside `environment.ts`.
@@ -86,15 +88,29 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 5. **`simlock simctl` / `adb`** — reads `status.get` `daemon.mode`:
    - worker: `driver.passthrough` returns a scoped command; `spawnPassthrough` runs it here.
    - gateway: `device.exec` on `--lease`, or the requester's only lease; the worker's driver
-     fills the lease's device in and refuses another (ADR 0047). A piped stdin is
-     read to EOF first; output chunks go to stdout and stderr.
+     fills the lease's device in and refuses another (ADR 0047). `--stdin` (taken
+     off the front with `--lease`, in either order; a worker ignores it) makes `readPipedStdin` read stdin
+     to EOF and send it; without it stdin is never read and `stdin: ""` is sent (ADR 0058). Output chunks
+     go to stdout and stderr.
      `PASSTHROUGH_REFUSED` and `UNKNOWN_PASSTHROUGH_TOOL` become usage errors (exit 2).
+     5a. **`simlock rotate <orientation> [--lease <id>]`** — `parseOrientation` (contract) spells the
+     orientation, an unknown one is a usage error (exit 2); the lease is `--lease` (anywhere on the line)
+     or the requester's only lease (`resolveRemoteLeaseId`); `device.rotate` answers, and the line printed
+     is `Rotated lease <id> to <orientation>` from the answer. Worker or gateway alike.
+     5b. **`simlock tunnel reverse|forward <d>[:<c>] … [--lease <id>] [--url <u>]`** — talks to a worker or gateway over
+     HTTP and a WebSocket, never the local daemon: `--url`/`SIMLOCK_URL` (`https://`, or `http://` on loopback only; the origin, no path, query or fragment)
+     and `--token`/`SIMLOCK_TOKEN`. Without `--lease`, `GET /v1/identity` and `/v1/leases` pick an agent token's only
+     lease (`selectOnlyLease`; an operator token must name one). One line per tunnel on `READY`; each `OPEN` connects
+     to the caller's loopback port (no listener: `RESET` and a stderr warning per tunnel every 10 s), and `CREDIT`
+     flows both ways. A `forward` tunnel binds its caller port (loopback, 1024 and up) through `tcpListeners` before anything else (busy: exit 1 `TUNNEL_CALLER_PORT_IN_USE`), holds accepted connections until `READY` (closed on `REFUSED`), opens each with an even-id `OPEN`, and closes every listener when the command ends. Failures print one JSON line itself: a refused upgrade or `REFUSED` frame with the worker's code,
+     close 4001 exit 14 `TUNNEL_LEASE_ENDED`, a lost socket, 45 s of silence or 90 s without `READY` `TUNNEL_DISCONNECTED`.
+     Ctrl-C and SIGTERM close the socket, wait at most 2 s, exit 0. `ws` loads on the first connect, for this command only.
 6. **`simlock events --follow`** — subscribe, then replay, then print buffered pushes not
    already replayed (by `eventKey`). `--since` without `--follow` never launches a daemon;
    with none running it reads `history.db` itself (read-only; no file is empty, an unreadable
    one is an error, exit 1). `simlock status` adds a `CLI:` line (the CLI's own package version, `cliVersion` in `--json`) and a `History:` line for a history that is not
    written, one for a set-aside file, one after a rebuild of the usage figures and one after a failed rebuild. `simlock config set` drops `eventLog.rotateBytes` and says so on stderr.
-   6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
+   6a. **`simlock stats`** — `usageWindow` (contract) turns `--since`, `--from`, `--to` into a window; each refusal is a usage error (exit 2) worded here. Asks `usage.get` and prints `formatUsage` (`stats.ts`) or the answer as `--json`; computes no figure. `--csv` asks with `includeLedger` and writes `ledgerCsv` (`csv.ts`, RFC 4180, CRLF, a leading `'` before `=`, `+`, `-`, `@`, after any leading control or whitespace characters); `--csv` with `--json` is a usage error; a `ledgerTruncated` answer adds a stderr notice.
 7. **`simlock daemon logs --follow`** — `followLog` polls every 250 ms from a byte offset.
    A new identity on `daemon.log.1` is a rotation: print its rest, restart at offset 0.
 8. **`simlock config set`** — validates the merged file with `loadConfig`, creates the
@@ -120,9 +136,3 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
 - Renewal stops before the release; no timer outlives a command.
 - `CliEnvironment` carries every port and process handle; tests build it with fakes.
 - Nothing printed names a file path in this repo (documentation rules).
-
-## Known gaps
-
-- **`simlock simctl` / `adb` can hang on a piped stdin.** Through a gateway,
-  `readPipedStdin` reads stdin to EOF before sending, with no bound. A pipe nobody closes
-  blocks before the command goes out. Redirect stdin from `/dev/null`.

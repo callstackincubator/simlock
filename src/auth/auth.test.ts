@@ -326,6 +326,25 @@ describe("authenticateUplink", () => {
     );
   });
 
+  it("refuses a worker id outside [A-Za-z0-9_-]{1,128} as worker-mismatch before the token is pinned, and accepts a UUID", async () => {
+    const auth = createAuth(await options());
+    const uuid = "4b1e9c2a-6d3f-4a8e-9b2c-7f1d0e5a3c68";
+
+    for (const id of ["*", ".", "..", "a/b", "a b", "a".repeat(129)]) {
+      await expect(auth.authenticateUplink("slk_worker", id)).resolves.toBe("worker-mismatch");
+    }
+    expect((await auth.tokens.list()).find((token) => token.id === "tok_worker")?.workerId).toBe(
+      undefined,
+    );
+    await expect(auth.authenticateUplink("slk_worker", uuid)).resolves.toEqual({
+      outcome: "accept",
+      tokenId: "tok_worker",
+    });
+    await expect(
+      createAuth(await options()).authenticateUplink("slk_worker", "a".repeat(128)),
+    ).resolves.toEqual({ outcome: "accept", tokenId: "tok_worker" });
+  });
+
   it("accepts exactly one of two first joins with one worker token at once, and refuses the other as worker-mismatch", async () => {
     const auth = createAuth(await options());
 

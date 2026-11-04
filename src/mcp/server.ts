@@ -15,6 +15,8 @@ import {
   listDevicesOutputSchema,
   releaseSimulatorInputSchema,
   releaseSimulatorOutputSchema,
+  rotateDeviceInputSchema,
+  rotateDeviceOutputSchema,
   runOnDeviceInputSchema,
   runOnDeviceOutputSchema,
 } from "./contracts.js";
@@ -204,7 +206,7 @@ export function createMcpServer(
     {
       title: "Lease simulator",
       description:
-        "Lease one simulator or emulator for this MCP session. Name an exact model (`model`), or a device class (`class`: phone, tablet, watch, tv, vision, auto or desktop), or name neither to get a phone; naming both is an error. A class or no-model request is served by a fitting idle device before a new one is created. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. `osVersion` is an exact version (`18.4`) or a range: `>=`, `>`, `<=` or `<` followed by a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`); a range is served by a fitting device or the newest installed runtime in it, and never downloads. Downloads are disabled by default and require allowDownload: true. On Android, imageTag picks the system image type (a tag from list_devices' images, such as google_apis_playstore); a request with imageTag uses only an installed image and never downloads. Pass `leaseId` to choose the lease's ID instead of getting one generated: 1 to 64 ASCII letters, digits, `-` or `_`, starting with a letter or digit; you keep it unique for all time, and an ID that an active lease or a waiting request already holds is refused with LEASE_ID_TAKEN.",
+        "Lease one simulator or emulator for this MCP session. Name an exact model (`model`), or a device class (`class`: phone, tablet, watch, tv, vision, auto or desktop), or name neither to get a phone; naming both is an error. A class or no-model request is served by a fitting idle device before a new one is created. The lease is held until released or this MCP connection closes; provisioning can block unless noWait is true. `osVersion` is an exact version (`18.4`) or a range: `>=`, `>`, `<=` or `<` followed by a version, joined by single spaces (`>=18 <26`), or a hyphen range (`18 - 26`); a range is served by a fitting device or the newest installed runtime in it, and never downloads. Downloads are disabled by default and require allowDownload: true. On Android, imageTag picks the system image type (a tag from list_devices' images, such as google_apis_playstore); a request with imageTag uses only an installed image and never downloads. Pass `baseline` (a name the operator saved) to get a new copy of that baseline, with the operator's apps, files and settings; it must match any `model`, `osVersion`, `mode` or `imageTag` you also pass (BASELINE_MISMATCH otherwise), cannot be combined with `class`, and fails at once as UNKNOWN_BASELINE or BASELINE_STALE when the baseline is missing or unusable. Pass `leaseId` to choose the lease's ID instead of getting one generated: 1 to 64 ASCII letters, digits, `-` or `_`, starting with a letter or digit; you keep it unique for all time, and an ID that an active lease or a waiting request already holds is refused with LEASE_ID_TAKEN.",
       inputSchema: leaseSimulatorInputSchema,
       outputSchema: leaseSimulatorOutputSchema,
     },
@@ -237,7 +239,7 @@ export function createMcpServer(
     {
       title: "List devices",
       description:
-        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). modelRuntimes gives, for each model, the installed runtimes it pairs with; pick a model and os from it, since a listed model and a listed runtime do not always pair. modelAliases gives other names a model answers to (on Android, the device profile id); modelClasses gives the class of each model whose tooling reports one (phone, tablet, watch, tv, vision, auto or desktop); classDefaults gives, per class, the model Simlock would create for it on this host; images lists Android's installed system images with API level, tag, and ABI. Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
+        "List resolvable device models and installed runtimes per available platform, marking each platform's default runtime (the newest installed). modelRuntimes gives, for each model, the installed runtimes it pairs with; pick a model and os from it, since a listed model and a listed runtime do not always pair. modelAliases gives other names a model answers to (on Android, the device profile id); modelClasses gives the class of each model whose tooling reports one (phone, tablet, watch, tv, vision, auto or desktop); classDefaults gives, per class, the model Simlock would create for it on this host; images lists Android's installed system images with API level, tag, and ABI. physicalDevices lists the enrolled phones and tablets, one entry per device with its platform, model, osVersion, class, state (ready, leased, absent or another device state) and, when absent, absentReason (locked, untrusted or not-present), plus workerId through a gateway; it never says who holds a leased one, and it is a snapshot, so leasing decides; it is empty while the daemon is still starting or when none is enrolled. Read-only: never downloads a runtime or system image. Call this once to pick a valid device/os combination before lease_simulator, instead of guessing.",
       inputSchema: listDevicesInputSchema,
       outputSchema: listDevicesOutputSchema,
     },
@@ -256,7 +258,7 @@ export function createMcpServer(
     {
       title: "Release simulator",
       description:
-        "Release the simulator lease owned by this MCP session. A session can release only its own held lease. Returns as soon as the lease is given up: wiping the device runs in the background afterwards, so there is nothing to wait for and you can move straight on to other work. The device is not leasable again until that wipe finishes.",
+        "Release the simulator lease owned by this MCP session. A session can release only its own held lease. Returns as soon as the lease is given up: deleting the simulator runs in the background afterwards, so there is nothing to wait for and you can move straight on to other work. The simulator is never leased again; the next lease gets a new one.",
       inputSchema: releaseSimulatorInputSchema,
       outputSchema: releaseSimulatorOutputSchema,
     },
@@ -345,6 +347,24 @@ export function createMcpServer(
   session.onDeviceHealth((notice) => {
     void server.server.sendLoggingMessage(deviceHealthLoggingMessage(notice));
   });
+
+  server.registerTool(
+    "rotate_device",
+    {
+      title: "Rotate device",
+      description:
+        "Turn this session's leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right. Only an iOS phone or tablet simulator rotates: an Android emulator, a physical device or an Apple TV is refused with ROTATION_UNSUPPORTED.",
+      inputSchema: rotateDeviceInputSchema,
+      outputSchema: rotateDeviceOutputSchema,
+    },
+    async (input) => {
+      try {
+        return success(await session.rotateDevice(input));
+      } catch (error: unknown) {
+        return failure(error);
+      }
+    },
+  );
 
   return server;
 }

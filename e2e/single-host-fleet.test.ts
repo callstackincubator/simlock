@@ -53,7 +53,7 @@ async function httpHost(): Promise<HttpHost> {
 }
 
 describe("a single host as a fleet of one", () => {
-  it("simlock worker list against a worker waits for the reading, then sees the worker line and its Load line", async () => {
+  it("simlock worker list against a worker waits for the reading, then sees the worker line, its Load line and its Baselines line", async () => {
     const env = await withDaemon({ configOverrides: { gateway: { label: "mac-mini-1" } } });
     const id = await instanceId(env);
 
@@ -70,9 +70,10 @@ describe("a single host as a fleet of one", () => {
 
     expect(text.code).toBe(0);
     const lines = text.stdout.trim().split("\n");
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     expect(lines[0]).toMatch(new RegExp(`^${id} \\(mac-mini-1\\): connected -- `));
     expect(lines[1]).toMatch(/^ {2}Load: .*memory .*read \d+s ago$/);
+    expect(lines[2]).toBe("  Baselines: none");
     expect(json.code).toBe(0);
     expect(json.json).toMatchObject({
       workers: [{ connection: "connected", drained: false, id, label: "mac-mini-1" }],

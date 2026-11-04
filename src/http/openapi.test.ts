@@ -58,7 +58,7 @@ describe("buildOpenApiDocument", () => {
     });
   });
 
-  it("an integrator reads the lease routes in the document, each with its own codes and every SSE event's data schema", () => {
+  it("an integrator reads the lease routes in the document, each with its own tag and codes", () => {
     const paths = buildOpenApiDocument([]).paths ?? {};
     const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     const post = operation("/v1/lease-requests", "post");
@@ -103,12 +103,22 @@ describe("buildOpenApiDocument", () => {
     ]);
     expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
     expect(
-      Object.fromEntries(["409", "422", "503"].map((status) => [status, errorCodes(post, status)])),
+      Object.fromEntries(
+        ["404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
+      ),
     ).toEqual({
+      "404": ["UNKNOWN_BASELINE"],
       "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
-      "422": ["UNKNOWN_MODEL"],
+      "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
+    const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties
+      ?.lease as {
+      properties?: object;
+    };
+    expect(Object.keys(leaseShape.properties ?? {})).toEqual(
+      expect.arrayContaining(["imageTag", "baseline"]),
+    );
     expect(Object.keys(replySchema(release, "202").properties ?? {})).toEqual([
       "device",
       "released",
@@ -161,7 +171,11 @@ describe("buildOpenApiDocument", () => {
       leaseId: ["code", "message", "leaseId"],
       retryAfter: [["Retry-After", false]],
     });
+  });
 
+  it("an integrator reads every lease SSE event's name and data schema in the document", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+    const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     expect({
       exec: streamEvents(operation("/v1/leases/{id}/exec", "post")),
       lease: streamEvents(operation("/v1/leases/{id}/events", "get")),
@@ -219,6 +233,9 @@ describe("buildOpenApiDocument", () => {
       ["get", "/v1/components", "Components"],
       ["delete", "/v1/components/{platform}/{version}", "Components"],
       ["post", "/v1/components/install", "Components"],
+      ["get", "/v1/baselines", "Baselines"],
+      ["post", "/v1/baselines", "Baselines"],
+      ["delete", "/v1/baselines/{name}", "Baselines"],
       ["get", "/v1/tokens", "Tokens"],
       ["get", "/v1/events", "Events"],
       ["get", "/v1/events/stream", "Events"],
@@ -395,7 +412,7 @@ describe("buildOpenApiDocument with a module that carries http", () => {
         (path) => path.startsWith("/v1/agent-device") || path === "/v1/uplink",
       ),
     ).toEqual([]);
-    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["input", "stream"]);
+    expect((document.tags ?? []).map((tag) => tag.name)).toEqual(["input", "stream", "tunnel"]);
   });
 });
 
@@ -410,6 +427,13 @@ describe("buildOpenApiDocument with the input module", () => {
     expect(errorCodes(input, "404")).toEqual(["UNKNOWN_LEASE"]);
     expect(errorCodes(input, "426")).toEqual(["BAD_REQUEST"]);
     expect(errorCodes(input, "503")).toEqual(["INPUT_UNAVAILABLE", "WORKER_UNREACHABLE"]);
+
+    const tunnel = document.paths?.["/v1/leases/{id}/tunnel"]?.get;
+    expect(tunnel?.tags).toEqual(["tunnel"]);
+    expect(sortedKeys(tunnel?.responses)).toEqual(["101", "401", "403", "404", "426", "503"]);
+    expect(errorCodes(tunnel, "404")).toEqual(["UNKNOWN_LEASE"]);
+    expect(errorCodes(tunnel, "426")).toEqual(["BAD_REQUEST"]);
+    expect(errorCodes(tunnel, "503")).toEqual(["TUNNEL_UNAVAILABLE", "WORKER_UNREACHABLE"]);
   });
 });
 

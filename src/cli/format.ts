@@ -1,8 +1,15 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import { isNewerVersion } from "../contract/index.js";
-import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type {
+  BaselineRemoveOutput,
+  BaselineSaveOutput,
+  StatusGetOutput,
+  WorkerView,
+} from "../admin/index.js";
+import type { BaselineEntry } from "../contract/index.js";
 import type { ServiceManagerName, ServiceState } from "../ports/index.js";
+import { escapeControl as esc } from "./escape.js";
 
 export function formatWorkers(
   workers: WorkerView[],
@@ -17,7 +24,8 @@ export function formatWorkers(
           ? (worker.installs ?? []).map((install) => `\n  ${formatInstall(install, now)}`).join("")
           : "";
       const load = workerLoadLine(worker, now);
-      const label = worker.label === undefined ? worker.id : `${worker.id} (${worker.label})`;
+      const label =
+        worker.label === undefined ? esc(worker.id) : `${esc(worker.id)} (${esc(worker.label)})`;
       const state = workerState(worker);
       const capacity =
         worker.capacity === undefined
@@ -33,11 +41,11 @@ export function formatWorkers(
       const capabilities = (worker.capabilities ?? [])
         .map((entry) =>
           entry.state === "unavailable"
-            ? ` -- ${entry.name} unavailable: ${entry.reason ?? "unknown"}`
-            : ` -- ${entry.name} ${entry.state}`,
+            ? ` -- ${esc(entry.name)} unavailable: ${esc(entry.reason ?? "unknown")}`
+            : ` -- ${esc(entry.name)} ${esc(entry.state)}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${installs}`;
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${workerBaselinesLine(worker)}${installs}`;
     })
     .join("\n");
 }
@@ -61,10 +69,10 @@ function workerVersion(worker: WorkerView): string {
   const { latestVersion, update, version } = worker;
   const available =
     version !== undefined && latestVersion != null && isNewerVersion(latestVersion, version)
-      ? ` (${latestVersion} available)`
+      ? ` (${esc(latestVersion)} available)`
       : "";
-  const running = version === undefined ? "" : ` -- simlock ${version}${available}`;
-  return `${running}${update == null ? "" : ` -- updating to ${update.to}: ${updateStage(update)}`}`;
+  const running = version === undefined ? "" : ` -- simlock ${esc(version)}${available}`;
+  return `${running}${update == null ? "" : ` -- updating to ${esc(update.to)}: ${updateStage(update)}`}`;
 }
 
 function updateStage(update: NonNullable<WorkerView["update"]>): string {
@@ -81,10 +89,10 @@ function formatInstall(
   install: NonNullable<StatusGetOutput["installs"]>[number],
   now: number,
 ): string {
-  const where = install.workerId === undefined ? "" : ` on ${install.workerId}`;
+  const where = install.workerId === undefined ? "" : ` on ${esc(install.workerId)}`;
   const ageSeconds = Math.max(0, Math.round((now - install.since) / 1000));
   const waiters = `${String(install.waiters)} waiter${install.waiters === 1 ? "" : "s"}`;
-  return `Install ${install.platform} ${install.component}${where}: ${install.state} for ${String(ageSeconds)}s, ${waiters}`;
+  return `Install ${esc(install.platform)} ${esc(install.component)}${where}: ${esc(install.state)} for ${String(ageSeconds)}s, ${waiters}`;
 }
 
 function formatGibibytes(bytes: number): string {
@@ -92,9 +100,9 @@ function formatGibibytes(bytes: number): string {
 }
 
 function formatHost(host: StatusGetOutput["host"]): string {
-  const system = `${host.os} ${host.osVersion} ${host.arch}`;
-  const tools = host.tools.map(
-    (tool) => `${tool.name} ${tool.version}${tool.build === undefined ? "" : ` (${tool.build})`}`,
+  const system = esc(`${host.os} ${host.osVersion} ${host.arch}`);
+  const tools = host.tools.map((tool) =>
+    esc(`${tool.name} ${tool.version}${tool.build === undefined ? "" : ` (${tool.build})`}`),
   );
   return tools.length === 0 ? system : `${system}; ${tools.join(", ")}`;
 }
@@ -181,7 +189,7 @@ function formatLocalMinute(epochMs: number): string {
 }
 
 export function consoleLines(daemon: StatusGetOutput["daemon"]): string[] {
-  return daemon.consoleUrl === undefined ? [] : [`Console: ${daemon.consoleUrl}`];
+  return daemon.consoleUrl === undefined ? [] : [`Console: ${esc(daemon.consoleUrl)}`];
 }
 
 /** why: the role's service as `daemon status --json` prints it, and `serviceLine` renders it. */
@@ -205,16 +213,16 @@ function daemonLines(daemon: StatusGetOutput["daemon"], cliVersion: string | und
   const { update, lastUpdateFailure, latestVersion } = daemon;
   const available =
     latestVersion !== null && isNewerVersion(latestVersion, daemon.version)
-      ? ` (${latestVersion} available)`
+      ? ` (${esc(latestVersion)} available)`
       : "";
   return [
-    `Daemon: ${daemon.health} (${daemon.mode})`,
-    `Simlock: ${daemon.version}${available}`,
-    ...(cliVersion === undefined ? [] : [`CLI: ${cliVersion}`]),
+    `Daemon: ${esc(daemon.health)} (${esc(daemon.mode)})`,
+    `Simlock: ${esc(daemon.version)}${available}`,
+    ...(cliVersion === undefined ? [] : [`CLI: ${esc(cliVersion)}`]),
     ...(update === null
       ? []
       : [
-          `Updating to ${update.to}: ${
+          `Updating to ${esc(update.to)}: ${
             update.stage === "waiting"
               ? `waiting for ${update.leases} ${update.leases === 1 ? "lease" : "leases"}`
               : update.stage
@@ -222,7 +230,9 @@ function daemonLines(daemon: StatusGetOutput["daemon"], cliVersion: string | und
         ]),
     ...(lastUpdateFailure === null
       ? []
-      : [`Last update failed (${lastUpdateFailure.stage}): ${lastUpdateFailure.message}`]),
+      : [
+          `Last update failed (${esc(lastUpdateFailure.stage)}): ${esc(lastUpdateFailure.message)}`,
+        ]),
     ...consoleLines(daemon),
   ];
 }
@@ -274,12 +284,12 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
       device.stalled === true ? "stalled" : undefined,
     ].filter((marker) => marker !== undefined);
     const suffix = markers.length === 0 ? "" : ` (${markers.join(", ")})`;
-    const where = device.workerId === undefined ? "" : ` on ${device.workerId}`;
-    return `Device ${device.id}${where}: ${stateLabel(device)}, ${deviceKind(device)}${suffix}`;
+    const where = device.workerId === undefined ? "" : ` on ${esc(device.workerId)}`;
+    return `Device ${esc(device.id)}${where}: ${stateLabel(device)}, ${deviceKind(device)}${suffix}`;
   });
   const leaseLines = leases.map(
     (lease) =>
-      `Lease ${lease.id}: ${lease.requesterId}${lease.workerId === undefined ? "" : ` on ${lease.workerId}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
+      `Lease ${esc(lease.id)}: ${esc(lease.requesterId)}${lease.workerId === undefined ? "" : ` on ${esc(lease.workerId)}`} since ${lease.grantedAt}, last renewed ${lease.lastRenewedAt}`,
   );
   return [
     ...daemonLines(daemon, cliVersion),
@@ -300,13 +310,17 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
 
 function stateLabel(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   return device.state === "absent" && device.absentReason !== undefined
-    ? `absent (${device.absentReason})`
+    ? `absent (${esc(device.absentReason)})`
     : device.state;
 }
 
 function deviceKind(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   if (device.physical) return `physical ${String(device.class)}`;
-  return `mode ${String(device.mode)}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}`;
+  const baseline =
+    device.spec.baseline === undefined
+      ? ""
+      : `, baseline ${esc(device.spec.baseline.name)} v${device.spec.baseline.version}`;
+  return `mode ${esc(String(device.mode))}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}${baseline}`;
 }
 
 function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): string[] {
@@ -314,11 +328,19 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
   return [
     `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
     ...targets.map((target) => {
-      const name = [target.model, target.osVersion, target.mode, target.imageTag]
-        .filter((part) => part !== undefined)
-        .join(" / ");
-      const short = target.short === undefined ? "" : `  short: ${target.short}`;
-      return `  ${name}   ${target.origin}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
+      const name = esc(
+        [
+          target.model,
+          target.osVersion,
+          target.mode,
+          target.imageTag,
+          target.baseline === undefined ? undefined : `baseline ${target.baseline}`,
+        ]
+          .filter((part) => part !== undefined)
+          .join(" / "),
+      );
+      const short = target.short === undefined ? "" : `  short: ${esc(target.short)}`;
+      return `  ${name}   ${esc(target.origin)}   wanted ${target.count}  ready ${target.ready}  booting ${target.booting}${short}`;
     }),
   ];
 }
@@ -338,7 +360,98 @@ function quarantineCauseText(cause: {
   readonly stalledState?: string | undefined;
   readonly message?: string | undefined;
 }): string {
-  if (cause.kind === "stalled") return `stalled while ${cause.stalledState ?? ""}`;
+  if (cause.kind === "stalled") return `stalled while ${esc(cause.stalledState ?? "")}`;
   const text = cause.kind.replace("-", " ");
-  return cause.message === undefined ? text : `${text}: ${cause.message}`;
+  return cause.message === undefined ? text : `${text}: ${esc(cause.message)}`;
+}
+
+/** why: sizes in the baseline lines are decimal, the way a disk is sold: GB from 10^9 bytes, MB below. */
+function baselineSize(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function baselineSpec(baseline: BaselineEntry, withSize = true): string {
+  const system = baseline.platform === "ios" ? "iOS" : "Android";
+  const tag = baseline.imageTag === undefined ? "" : ` (${baseline.imageTag})`;
+  const size =
+    !withSize || baseline.sizeBytes === undefined ? "" : `, ${baselineSize(baseline.sizeBytes)}`;
+  return `${baseline.platform} ${baseline.model}, ${system} ${baseline.osVersion}${tag}, ${baseline.mode}${size}`;
+}
+
+/** why: the `Baselines:` line of `worker list`: each baseline's name, version and spec, `stale` marked, in the order the worker lists them. */
+function workerBaselinesLine(worker: WorkerView): string {
+  if (worker.baselines === undefined) return "";
+  const entries = worker.baselines.map(
+    (baseline) =>
+      `${esc(baseline.name)} v${String(baseline.version)}: ${esc(baselineSpec(baseline, false))}${baseline.staleReason === undefined ? "" : ", stale"}`,
+  );
+  return `\n  Baselines: ${entries.length === 0 ? "none" : entries.join("; ")}`;
+}
+
+export function baselineSavedLine(saved: BaselineSaveOutput): string {
+  const { baseline } = saved;
+  return `Saved baseline ${baseline.name} v${String(baseline.version)}: ${baselineSpec(baseline)}. Lease ${saved.leaseId} ended.\n`;
+}
+
+const BASELINE_COLUMNS = [
+  "NAME",
+  "VERSION",
+  "PLATFORM",
+  "MODEL",
+  "OS",
+  "MODE",
+  "IMAGE",
+  "SIZE",
+  "SAVED",
+  "NOTE",
+] as const;
+
+/** why: the list an operator reads: one row per baseline, its stale reason on its own line under it; a gateway's puts the worker first. */
+export function baselineTable(
+  baselines: readonly BaselineEntry[],
+  { gateway }: { readonly gateway: boolean },
+): string {
+  if (baselines.length === 0) {
+    return gateway ? "No baselines on any worker.\n" : "No baselines on this worker.\n";
+  }
+  const columns = gateway ? (["WORKER", ...BASELINE_COLUMNS] as const) : BASELINE_COLUMNS;
+  const rows = baselines.map((baseline) => [
+    ...(gateway ? [baseline.workerId ?? ""] : []),
+    baseline.name,
+    String(baseline.version),
+    baseline.platform,
+    baseline.model,
+    baseline.osVersion,
+    baseline.mode,
+    baseline.imageTag ?? "-",
+    baseline.sizeBytes === undefined ? "-" : baselineSize(baseline.sizeBytes),
+    formatLocalMinute(Date.parse(baseline.savedAt)),
+    baseline.note ?? "",
+  ]);
+  const widths = columns.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  const line = (cells: readonly string[]): string =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join("  ")
+      .trimEnd();
+  const lines = [line(columns)];
+  for (const [index, row] of rows.entries()) {
+    lines.push(line(row));
+    const reason = baselines[index]?.staleReason;
+    if (reason !== undefined) lines.push(`  stale: ${reason}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function baselineRemovedLine(removed: BaselineRemoveOutput, workerId?: string): string {
+  const versions = removed.versions.map((version) => `v${String(version)}`).join(", ");
+  const count = removed.deletedDevices.length;
+  const devices =
+    count === 0
+      ? ""
+      : ` Deleted ${String(count)} idle ${count === 1 ? "device" : "devices"} made from it.`;
+  const from = workerId === undefined ? "" : ` from ${esc(workerId)}`;
+  return `Removed baseline ${removed.name} ${versions}${from}.${devices}\n`;
 }

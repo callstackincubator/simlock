@@ -23,6 +23,7 @@ describe("the console's routes", () => {
       "/fleet",
       "/leases",
       "/queue",
+      "/baselines",
       "/activity",
       "/usage",
     ]);

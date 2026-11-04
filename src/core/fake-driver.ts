@@ -18,7 +18,9 @@ import {
   type DriverCatalogEntry,
   type DriverCatalogImage,
   type DriverComponent,
+  DriverCrashError,
   type DriverDevice,
+  type DriverSource,
   type DriverEstimate,
   type DriverReality,
   type DriverRefusalReason,
@@ -39,6 +41,7 @@ import {
   UnknownModelError,
   uninstallPlan,
 } from "./driver.js";
+import type { DeviceTcp } from "./device-tcp.js";
 import type { DeviceInputFactory } from "./input.js";
 import type { ScreenCapture } from "./screen.js";
 
@@ -59,7 +62,10 @@ export type FakeDriverOperation =
   | "removeComponent"
   | "revalidateRoot"
   | "findLegacy"
-  | "destroyLegacy";
+  | "destroyLegacy"
+  | "listSources"
+  | "destroySource"
+  | "saveSource";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -79,6 +85,8 @@ export interface FakeDriverCall {
 
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
+  /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
+  readonly defaultImageTag?: string;
   readonly clock: Clock;
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   readonly installProgress?: readonly number[];
@@ -103,6 +111,7 @@ export interface FakeDriverOptions {
   readonly passthroughTools?: readonly string[];
   readonly screenCapture?: ScreenCapture;
   readonly input?: DeviceInputFactory;
+  readonly deviceTcp?: DeviceTcp;
   readonly passthrough?: (
     tool: string,
     device: VirtualDriverDevice | PhysicalDriverDevice | undefined,
@@ -111,8 +120,6 @@ export interface FakeDriverOptions {
   ) => PassthroughCommand;
   readonly platform: Platform;
   readonly legacyDevices?: Readonly<Record<string, LegacyDevice>>;
-  readonly reclaimResult?: "ready" | "shutdown";
-  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly physicalDevices?: readonly FakePhysicalDevice[];
   /**
    * why: a real iOS simulator is addressed by its device id; set it to give a virtual device that
@@ -156,22 +163,27 @@ export class FakeDriver implements Driver {
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
+  #sources: readonly DriverSource[] = [];
+  readonly #deviceFiles = new Map<string, Map<string, string>>();
+  readonly #deviceSpecs = new Map<string, VirtualSpec>();
+  readonly #sourceFiles = new Map<string, ReadonlyMap<string, string>>();
+  #nextSourceNumber = 1;
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
   readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
+  readonly #defaultImageTag: string | undefined;
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
   readonly passthroughTools: readonly string[] | undefined;
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
+  readonly deviceTcp: DeviceTcp | undefined;
   readonly #passthrough: FakeDriverOptions["passthrough"];
   #nextDeviceNumber = 1;
   readonly #pendingMakeReady: (() => void)[] = [];
-  readonly #reclaimResult: "ready" | "shutdown";
-  readonly #reclaimStrategy: "erase" | "snapshot" | "wipe";
   readonly #devices = new Map<string, "provisioned" | "ready" | "shutdown">();
   readonly #legacyDevices: Map<string, LegacyDevice>;
   readonly #bootCounts = new Map<string, number>();
@@ -200,6 +212,7 @@ export class FakeDriver implements Driver {
     this.#modelClasses = options.modelClasses;
     this.#defaultModels = options.defaultModels;
     this.#images = options.images;
+    this.#defaultImageTag = options.defaultImageTag;
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
@@ -207,11 +220,10 @@ export class FakeDriver implements Driver {
     this.passthroughTools = options.passthroughTools;
     this.screenCapture = options.screenCapture;
     this.input = options.input;
+    this.deviceTcp = options.deviceTcp;
     this.#passthrough = options.passthrough;
     this.platform = options.platform;
     this.deviceRoot = options.deviceRoot ?? `/fake/${options.platform}`;
-    this.#reclaimResult = options.reclaimResult ?? "ready";
-    this.#reclaimStrategy = options.reclaimStrategy ?? "wipe";
     this.#scriptedPhysicalDevices = options.physicalDevices;
     this.#install = options;
     this.#receipts = preinstalledReceipts(this.#availableOsVersions);
@@ -397,13 +409,79 @@ export class FakeDriver implements Driver {
     return this.#addressIsDeviceId ? deviceId : addressFor(deviceId, bootCount);
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async listSources(): Promise<readonly DriverSource[]> {
+    await this.#beforeCall("listSources");
+    return [...this.#sources];
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    await this.#beforeCall("destroySource", sourceId);
+    this.#sources = this.#sources.filter((source) => source.id !== sourceId);
+    this.#sourceFiles.delete(sourceId);
+  }
+
+  async saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes: number; imageTag?: string }> {
+    await this.#beforeCall("saveSource", device);
+    this.#requireDevice(device);
+    const spec = this.#deviceSpecs.get(device.deviceId);
+    if (spec === undefined) throw new Error(`No spec recorded for ${device.deviceId}`);
+    this.#devices.set(device.deviceId, "shutdown");
+    this.#managedReality = removeManagedProcess(this.#managedReality, device.deviceId);
+    const files = new Map(this.#deviceFiles.get(device.deviceId));
+    const sizeBytes = [...files.values()].reduce((total, content) => total + content.length, 0);
+    const imageTag = spec.imageTag ?? this.#defaultImageTag;
+    const sourceId = `fake-source-${String(this.#nextSourceNumber)}`;
+    this.#nextSourceNumber += 1;
+    this.#sourceFiles.set(sourceId, files);
+    this.#sources = [
+      ...this.#sources,
+      {
+        id: sourceId,
+        kind: "baseline",
+        model: spec.model,
+        osVersion: spec.osVersion,
+        ...(imageTag === undefined ? {} : { imageTag }),
+        sizeBytes,
+      },
+    ];
+    return { sourceId, sizeBytes, ...(imageTag === undefined ? {} : { imageTag }) };
+  }
+
+  /** why: a test hook that puts a file on a device, so a saved source can be shown to carry it. */
+  writeDeviceFile(deviceId: string, path: string, content: string): void {
+    const files = this.#deviceFiles.get(deviceId) ?? new Map<string, string>();
+    files.set(path, content);
+    this.#deviceFiles.set(deviceId, files);
+  }
+
+  /** why: a test hook that reads a file off a device, so a copy made from a source can be shown to carry the source's files. */
+  deviceFile(deviceId: string, path: string): string | undefined {
+    return this.#deviceFiles.get(deviceId)?.get(path);
+  }
+
+  /** why: what a saved source holds, for a test to compare with what the device held. */
+  sourceFiles(sourceId: string): ReadonlyMap<string, string> | undefined {
+    return this.#sourceFiles.get(sourceId);
+  }
+
+  async provision(
+    spec: VirtualSpec,
+    options?: { readonly source?: string },
+  ): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
 
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;
     this.#nextDeviceNumber += 1;
+    this.#deviceSpecs.set(deviceId, spec);
     this.#devices.set(deviceId, "provisioned");
+    if (options?.source !== undefined) {
+      const files = this.#sourceFiles.get(options.source);
+      if (files === undefined) throw new Error(`No source ${options.source}`);
+      this.#deviceFiles.set(deviceId, new Map(files));
+    }
 
     return {
       address: this.#addressOf(deviceId, 0),
@@ -450,9 +528,7 @@ export class FakeDriver implements Driver {
   ): Promise<ReclaimResult> {
     await this.#beforeCall("reclaim", device, options);
     if (isPhysicalDriverDevice(device)) return this.#reclaimPhysical(device);
-    this.#requireDevice(device);
-    this.#devices.set(device.deviceId, this.#reclaimResult);
-    return { state: this.#reclaimResult, strategy: this.#reclaimStrategy };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   #reclaimPhysical(device: PhysicalDriverDevice): ReclaimResult {
@@ -466,8 +542,9 @@ export class FakeDriver implements Driver {
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "snapshot" | "wipe" | "uninstall" {
-    return isPhysicalDriverDevice(device) ? "uninstall" : this.#reclaimStrategy;
+  ): "uninstall" {
+    if (isPhysicalDriverDevice(device)) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -481,6 +558,7 @@ export class FakeDriver implements Driver {
     await this.#beforeCall("destroy", device);
     this.#requireDevice(device);
     this.#devices.delete(device.deviceId);
+    this.#deviceFiles.delete(device.deviceId);
     this.#managedReality = removeManagedDevice(this.#managedReality, device.deviceId);
   }
 
@@ -624,6 +702,10 @@ export class FakeDriver implements Driver {
     for (const resolve of this.#pendingMakeReady.splice(0)) {
       resolve();
     }
+  }
+
+  setSources(sources: readonly DriverSource[]): void {
+    this.#sources = sources;
   }
 
   /**

@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach } from "vitest";
 
@@ -24,6 +24,7 @@ import { events, expectEvents, type RecordedEvent } from "./events.js";
 import { emptyDeviceSet, iosDeviceSet } from "./ios-device-set.js";
 import { mcpClient, type McpClientHandle, type McpClientOptions } from "./mcp.js";
 import { freeLoopbackPort } from "./port.js";
+import { removeHome } from "./remove-home.js";
 import { REPO_ROOT } from "./repo-root.js";
 import { waitFor } from "./wait.js";
 
@@ -476,9 +477,39 @@ interface PidDiscoveryResult {
   readonly pids: number[];
 }
 
+/**
+ * why: a failed run's daemon logs are the evidence of why it failed, and teardown deletes the
+ * home they live in. A failed copy is swallowed so it never hides teardown's own error. A copy
+ * already kept is never replaced: a teardown that runs again (the file's afterAll after a suite's
+ * failed one) finds only what was written into the home after the first, often an empty log.
+ */
+async function keepDaemonLogs(dataDirectory: string, home: string): Promise<void> {
+  const logDirectory = process.env.SIMLOCK_E2E_LOG_DIR;
+  if (logDirectory === undefined || logDirectory === "") return;
+  try {
+    const target = join(logDirectory, basename(home));
+    await mkdir(target, { recursive: true });
+    for (const name of await readdir(dataDirectory)) {
+      if (name.startsWith("daemon.log")) {
+        await cp(join(dataDirectory, name), join(target, name), { force: false });
+      }
+    }
+  } catch {
+    // why: see above; the copy is best effort.
+  }
+}
+
 async function teardown(state: TeardownState): Promise<void> {
-  const { backgroundProcesses, env, gatewayFlag, home, mcpClients, realDrivers, socketPath } =
-    state;
+  const {
+    backgroundProcesses,
+    dataDirectory,
+    env,
+    gatewayFlag,
+    home,
+    mcpClients,
+    realDrivers,
+    socketPath,
+  } = state;
   for (const client of mcpClients) {
     await client.close().catch(() => undefined);
   }
@@ -499,7 +530,8 @@ async function teardown(state: TeardownState): Promise<void> {
 
   // why: a timed-out test may still be running and writing into its simulator home
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
-  await rm(home, { force: true, recursive: true });
+  await keepDaemonLogs(dataDirectory, home);
+  await removeHome(home);
 
   if (stopResult.stopError !== undefined) throw stopResult.stopError;
   if (strayPids.length > 0) {
@@ -561,8 +593,9 @@ async function waitForDaemonSocketRemoval(
 ): Promise<unknown> {
   if (discovery.pids.length === 0 && discovery.error === undefined) return undefined;
   try {
+    // why: `daemon stop` answers when the stop starts; the daemon first settles the boot of the pool's next device and shuts idle devices down, which takes 15 s on a real simulator.
     await waitFor(() => !existsSync(socketPath), {
-      timeout: 5_000,
+      timeout: 60_000,
       label: "daemon socket removed during teardown",
     });
     return undefined;

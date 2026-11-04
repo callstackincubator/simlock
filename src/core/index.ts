@@ -46,7 +46,13 @@ export {
 } from "./capacity/index.js";
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
-export { integerInRange, invalidValue, nonEmptyString, objectValidator } from "./validation.js";
+export {
+  ConfigError,
+  integerInRange,
+  invalidValue,
+  nonEmptyString,
+  objectValidator,
+} from "./validation.js";
 export {
   BootTimeoutError,
   ComponentBusyError,
@@ -70,6 +76,7 @@ export {
   type DriverDevice,
   type DriverEstimate,
   type DriverReality,
+  type DriverSource,
   type DriverRejection,
   type DriverToolVersion,
   InsufficientDiskSpaceError,
@@ -93,6 +100,8 @@ export {
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,
+  BaselineMismatchError,
+  BaselineStaleError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 export {
@@ -102,6 +111,13 @@ export {
   type ScreenAvailability,
   UnknownPassthroughToolError,
 } from "./driver-catalog.js";
+export {
+  DeviceTcpError,
+  unsupportedTunnelMessage,
+  type DeviceReverse,
+  type DeviceTcp,
+  type SweptDevice,
+} from "./device-tcp.js";
 export {
   closeReason,
   type DeviceInput,
@@ -150,6 +166,14 @@ export type { InstanceIdentityOptions } from "./instance-identity.js";
 export { Nuke } from "./nuke.js";
 export { type NukeExecutor } from "./core-ports.js";
 export { registryOwner } from "./registry-schema.js";
+export {
+  BaselineInUseError,
+  BaselineSaveFailedError,
+  BaselineService,
+  type CurrentBaseline,
+  UnknownBaselineError,
+} from "./baselines.js";
+export { baselinesOwner } from "./baselines-schema.js";
 export { warmPoolOwner } from "./warm-pool/index.js";
 export { RegistryLoadError } from "./registry-rows.js";
 export { Registry, RegistryEventError, UnknownDeviceError, UnknownLeaseError } from "./registry.js";
@@ -202,6 +226,7 @@ export {
 } from "./physical-enrollment.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
+  baselineMismatch,
   exactRequirement,
   isSettled,
   type LeaseProgress,

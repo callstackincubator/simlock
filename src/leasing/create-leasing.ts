@@ -145,6 +145,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
     store: registry,
   });
   const acquisition: LeaseAcquisitionCoordinator = new LeaseAcquisitionCoordinator({
+    baselines: core.baselines,
     catalog: core.drivers,
     claims: core.claims,
     components: options.components,
@@ -233,6 +234,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
         },
       },
       leaseMaintenance: { acquisition, leases: releaseCoordinator },
+      leaseSave: releaseCoordinator,
       notifyAvailability: () => acquisition.kick(),
       physicalDeviceReady: (deviceId) => physicalDeviceWatcher.reset(deviceId),
       warmPoolDemand: {

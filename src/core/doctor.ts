@@ -19,6 +19,7 @@ import {
   type DriverDevice,
   type DriverRejection,
   type DriverReality,
+  type DriverSource,
   type DriverRejectionReason,
   type MissingPrerequisite,
   type ObservedDevice,
@@ -132,6 +133,22 @@ type OrphanDeviceFinding = Extract<DoctorFinding, { readonly kind: "orphan-devic
 
 export interface DoctorReport {
   readonly findings: readonly DoctorFinding[];
+  readonly sources: readonly DoctorSource[];
+}
+
+export interface DoctorSource extends Omit<DriverSource, "id"> {
+  readonly platform: Platform;
+  readonly baselineName?: string;
+  readonly baselineVersion?: number;
+}
+
+/** why: the baselines the worker holds name their sources and are checked for staleness before a report. */
+export interface DoctorBaselines {
+  checkStale(): Promise<void>;
+  nameSources(sources: readonly DriverSource[]): readonly (DriverSource & {
+    readonly baselineName?: string;
+    readonly baselineVersion?: number;
+  })[];
 }
 
 export interface DoctorQuarantine {
@@ -145,6 +162,7 @@ export interface DoctorOptions {
    * why: The decision section every registry write of this daemon is made in. A write made outside it
    * can land on top of a concurrent one that read the registry before it, and undo it.
    */
+  readonly baselines?: DoctorBaselines;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
@@ -247,7 +265,7 @@ export class Doctor {
       ...this.#optionalModuleFindings(),
     ];
 
-    const report = { findings: remaining };
+    const report = { findings: remaining, sources: await this.#sources(purgeOrphans) };
     this.#emitFindingEvents(remaining);
     this.options.eventBus.emit(
       "doctor.reconciled",
@@ -259,6 +277,68 @@ export class Doctor {
       "doctor",
     );
     return report;
+  }
+
+  /** why: a platform whose source read fails lists none; one failure must not hide the rest of the report. */
+  async #sources(purgeOrphans: boolean): Promise<readonly DoctorSource[]> {
+    await this.#checkBaselines();
+    const lists = await Promise.all(
+      this.options.drivers.map(async (driver) => {
+        try {
+          const listed = this.#named(await driver.listSources());
+          const kept: DriverSource[] = [];
+          for (const source of listed) {
+            if (
+              purgeOrphans &&
+              source.orphan === true &&
+              (await this.#purgeSource(driver, source))
+            ) {
+              continue;
+            }
+            kept.push(source);
+          }
+          return kept.map(({ id: _id, ...source }): DoctorSource => ({
+            ...source,
+            platform: driver.platform,
+          }));
+        } catch (error: unknown) {
+          this.#logger.warn(
+            `could not list ${driver.platform} sources: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return [];
+        }
+      }),
+    );
+    return lists.flat();
+  }
+
+  /** why: a stale check that fails must not hide the rest of the report. */
+  async #checkBaselines(): Promise<void> {
+    try {
+      await this.options.baselines?.checkStale();
+    } catch (error: unknown) {
+      this.#logger.warn(
+        `could not check baselines for staleness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  #named(sources: readonly DriverSource[]): readonly DriverSource[] {
+    return this.options.baselines?.nameSources(sources) ?? sources;
+  }
+
+  async #purgeSource(driver: Driver, source: DriverSource): Promise<boolean> {
+    try {
+      await driver.destroySource(source.id);
+      return true;
+    } catch (error: unknown) {
+      this.#logger.error("Could not purge orphan source", {
+        platform: driver.platform,
+        sourceId: source.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   async #realities(

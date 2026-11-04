@@ -15,6 +15,7 @@ import {
   type DriverCatalogEntry,
   type DriverComponent,
   type DriverDevice,
+  type DriverSource,
   DriverCrashError,
   type DriverEstimate,
   type DriverReality,
@@ -54,18 +55,29 @@ import type {
   Logger,
   ProcessResult,
   ProcessRunner,
+  SqliteDatabase,
 } from "../../ports/index.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
-import { refuseOwnSetLeftovers, refuseXcodeSetLeftovers } from "./device-set-leftovers.js";
+import {
+  refuseDefaultSourcesLeftovers,
+  refuseOwnSetLeftovers,
+  refuseXcodeSetLeftovers,
+  UDID_PATTERN,
+} from "./device-set-leftovers.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
 import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
+import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
-import { labelsFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
+/** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
+const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -98,9 +110,9 @@ const IOS_RUNTIME_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_i
 // failure mode #56 is about. The cost is that `Doctor`'s `provisioning` stall threshold widens
 // with it -- see the note there on why that is the cheaper of the two errors.
 const COLD_BOOT_ESTIMATE_MS = 60_000;
-// why: measured, not guessed: a single `simctl erase` took ~34s in #43's investigation. Unlike
-// Android, iOS has no deferred-wipe path -- `erase` is synchronous and every simulator reclaim
-// pays it, at either clean level, so this is the only simulator reclaim number the driver has.
+// why: measured, not guessed: a single `simctl erase` took ~34s in #43's investigation. A
+// simulator is no longer erased -- a lease's end deletes it (ADR 0061 §2) -- but the number stays
+// as the simulator "reclaim" estimate, which only widens `Doctor`'s stall threshold (#1204).
 // A physical device reclaim uninstalls apps instead and has its own estimate below.
 const ERASE_ESTIMATE_MS = 34_000;
 const PHYSICAL_RECLAIM_ESTIMATE_MS = 90_000;
@@ -146,43 +158,20 @@ export const SHUTDOWN_ALL_TARGET = "all";
 export const REFUSED_RUNTIME_OPERATION = "delete";
 
 const RECLAIM_INSTEAD =
-  "Use `simlock release` (which reclaims the device for you) or `simlock cleanup` instead.";
+  "Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead.";
 
-// why: Slim mode reboots the device a second time and runs a launchctl-disable pass on top of the
-// usual cold boot -- without a dedicated estimate, `doctor`'s provisioning-stall threshold would
-// be sized for a single boot and flag every slim device as stuck. Budget: one `COLD_BOOT_ESTIMATE_MS`
-// boot, a second one for the post-slim reboot, plus headroom for the chunked `simctl spawn` calls
-// (a handful of ~60s-capped chunks that in practice finish in a few seconds each).
-const SLIM_BOOT_ESTIMATE_MS = 150_000;
-// why: simslim batches ~170 individual `launchctl disable` calls into shell loops rather than one
-// `simctl spawn` per label -- at ~150ms/spawn that is well over half a minute of pure process
-// overhead per full slim, which would swamp the boot budget above. 50 labels/chunk keeps each
-// chunk's own script small (and its timeout comfortably generous) while still cutting spawn count
-// by ~50x versus one-label-per-call.
-const SLIM_CHUNK_SIZE = 50;
-// why: A chunk of 50 `launchctl disable` calls inside a simulator is not instant -- COMMAND_TIMEOUT_MS
-// (30s) has been observed to be tight for this under load, so slim chunks get their own, more
-// generous budget instead of reusing it.
-const SLIM_CHUNK_TIMEOUT_MS = 60_000;
-const SLIM_FAILED_MARKER = "simlock-slim-failed";
-const SLIM_SCRIPT_PRELUDE = '[ -n "$SIMULATOR_ROOT" ] && export DYLD_ROOT_PATH="$SIMULATOR_ROOT";';
-// why: Built from `SLIM_FAILED_MARKER` (rather than a second hardcoded literal) so a change to the
-// constant can never silently desync the script that emits the marker from the parser that reads
-// it back -- see `#applySlimLabels`.
-const SLIM_FAILED_MARKER_PATTERN = new RegExp(`^${SLIM_FAILED_MARKER} (\\S+)$`);
-// why: Slim labels are compile-time constants from our own data file (`slim-labels.ts`), so this can
-// never actually reject anything in production -- it exists purely as a second line of defense:
-// if that data file ever grew a label containing shell metacharacters, this stops it from
-// escaping the generated `sh -c` script instead of silently trusting the data.
-const SLIM_LABEL_SAFE_PATTERN = /^[A-Za-z0-9._-]+$/;
+// why: ADR 0060 §2: simslim's limit for a simulator just after its first boot.
+const READBACK_TIMEOUT_MS = 120_000;
+const LAUNCH_SERVICES_DATABASE = /^com\.apple\.LaunchServices-.*\.csstore$/;
+const OVERRIDES_FILE_NAME = "disabled.plist";
+const DEFAULT_OVERRIDES_ROOT = "/private/var/tmp";
+const OVERRIDES_FOLDER_PREFIX = "com.apple.CoreSimulator.SimDevice.";
 
 interface IosDriverData {
   readonly deviceTypeId: string;
   readonly name: string;
   readonly runtimeId: string;
   readonly udid: string;
-  readonly slimSignature?: string;
-  readonly slimMarkToken?: string;
 }
 
 export interface SlimmedFact {
@@ -201,8 +190,14 @@ export interface SlimSkippedFact {
   readonly detail: string;
 }
 
+export interface SilenceFailedFact {
+  readonly deviceId: string;
+  readonly detail: string;
+}
+
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driverConfig: Readonly<Record<string, string | number | boolean>>;
   readonly filesystem: Filesystem;
   readonly idGenerator: IdGenerator;
@@ -213,8 +208,13 @@ export interface IosSimctlDriverOptions {
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
   readonly coreSimulatorRoot?: string;
+  // why: where launchd_sim keeps each simulator's overrides folder; a test points it elsewhere.
+  readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
+  /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
+  readonly simulatorAudio?: boolean;
+  readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
   readonly slim?: {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
@@ -235,13 +235,15 @@ export interface IosSimctlDriverOptions {
 
 type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
 
-type SlimApplyOutcome =
+type SlimWrite =
+  | { readonly kind: "no-categories"; readonly detail: string }
   | {
-      readonly kind: "applied";
-      readonly rejectedLabels: readonly string[];
-      readonly unattemptedLabels: readonly string[];
-    }
-  | { readonly kind: "failed"; readonly detail: string };
+      readonly kind: "written";
+      readonly resolved: ReturnType<typeof resolveSlimCategories>;
+      readonly wanted: ReadonlyMap<string, boolean>;
+      readonly startedAt: number;
+      readonly writeError: string | undefined;
+    };
 
 const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new Map([
   ["iPhone", "phone"],
@@ -304,8 +306,18 @@ export class IosSimctlDriver implements Driver {
   readonly #deviceRoot: string;
   readonly #instanceId: string;
   readonly #rootOptions: EnsureOwnedRootOptions | undefined;
+  readonly #logger: Logger | undefined;
+  readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
+  readonly #silent: boolean;
+  readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
   readonly #slimByDefault: boolean;
+  readonly #sources: IosSourceTable;
+  readonly #sourcesSet: string;
+  #sourceMaker: string | undefined;
+  #swept = false;
+  readonly #seedMakes = new Map<string, Promise<ReadySeed>>();
+  readonly #seedLocks = new Map<string, Promise<unknown>>();
 
   private constructor(
     options: IosSimctlDriverOptions,
@@ -331,30 +343,23 @@ export class IosSimctlDriver implements Driver {
     this.#deviceRoot = deviceRoot;
     this.#instanceId = options.instanceId;
     this.#rootOptions = rootOptions;
+    this.#logger = options.logger;
+    this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
+    this.#silent = options.simulatorAudio === false;
+    this.#onSilenceFailed = options.onSilenceFailed;
     this.#slimByDefault = options.slimByDefault === true;
-    this.screenCapture =
-      options.screenCapture === undefined
-        ? undefined
-        : createIosScreenCapture({
-            baseEnvironment: options.screenCapture.baseEnvironment,
-            clock: options.clock,
-            command: configuredScreenCaptureCommand(options) ?? options.screenCapture.command,
-            ...(options.screenCapture.deviceCommand === undefined &&
-            configuredDeviceCaptureCommand(options) === undefined
-              ? {}
-              : {
-                  deviceCommand:
-                    configuredDeviceCaptureCommand(options) ?? options.screenCapture.deviceCommand,
-                }),
-            deviceOsVersion: (udid) => this.#physical.osVersion(udid),
-            ...(rootOptions === undefined ? {} : { deviceSet: deviceRoot }),
-            filesystem: options.filesystem,
-            launcher: options.screenCapture.launcher,
-            ...(options.screenCapture.onLog === undefined
-              ? {}
-              : { onLog: options.screenCapture.onLog }),
-          });
+    this.#sources = new IosSourceTable(options.database);
+    this.#sourcesSet =
+      rootOptions === undefined
+        ? join(options.simlockHome, "devices", "ios-sources")
+        : join(deviceRoot, "sources");
+    this.screenCapture = createScreenCaptureFor(
+      options,
+      deviceRoot,
+      rootOptions !== undefined,
+      (udid) => this.#physical.osVersion(udid),
+    );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
   }
 
@@ -375,6 +380,10 @@ export class IosSimctlDriver implements Driver {
       await refuseOwnSetLeftovers(options.filesystem, join(options.simlockHome, "devices", "ios"));
       return new IosSimctlDriver(options, xcodeDeviceSetPath(options), undefined);
     }
+    await refuseDefaultSourcesLeftovers(
+      options.filesystem,
+      join(options.simlockHome, "devices", "ios-sources"),
+    );
     if (options.coreSimulatorRoot !== undefined) {
       await refuseXcodeSetLeftovers(
         options.filesystem,
@@ -559,6 +568,7 @@ export class IosSimctlDriver implements Driver {
       receipt,
       remove: async ({ image, unusedDevices, version }) => {
         const deadline = this.#clock.now() + COMPONENT_REMOVAL_TIMEOUT_MS;
+        await this.#destroySeedsOf(image.runtimeIdentifier);
         await this.#deleteRuntimeImage(image.identifier, options.signal);
         await this.#waitWhileDeleting(image.identifier, version, deadline, options.signal);
         const sentences = [
@@ -568,6 +578,22 @@ export class IosSimctlDriver implements Driver {
         return sentences.length === 0 ? {} : { residue: sentences.join(". ") };
       },
     });
+  }
+
+  /** why: ADR 0061 §3: a seed of a removed runtime can never be copied again; a stuck one is logged and the removal goes on. */
+  async #destroySeedsOf(runtimeId: string): Promise<void> {
+    for (const row of this.#sources.readyRows()) {
+      if (row.kind !== "seed" || row.runtimeId !== runtimeId || row.udid === undefined) continue;
+      const udid = row.udid;
+      try {
+        await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+        this.#sources.deleteRow(row.sourceId);
+      } catch (error: unknown) {
+        this.#logger?.warn(
+          `could not remove seed ${udid} of removed runtime ${runtimeId}: ${errorMessage(error)}`,
+        );
+      }
+    }
   }
 
   async #deleteRuntimeImage(identifier: string, signal: AbortSignal): Promise<void> {
@@ -748,34 +774,161 @@ export class IosSimctlDriver implements Driver {
     throw new DriverCrashError(`xcodebuild ${args.join(" ")} failed: ${message}`);
   }
 
-  async provision(spec: VirtualSpec): Promise<DriverDevice> {
+  async listSources(): Promise<readonly DriverSource[]> {
+    await this.#sweepLeftovers();
+    const rows = this.#sources.readyRows();
+    const orphans = await this.#orphanSources();
+    if (rows.length === 0) return orphans;
+    const catalog = await this.#loadCatalog();
+    return [
+      ...rows.map((row) => {
+        const staleReason = sourceStaleReason(row, catalog);
+        return {
+          id: row.sourceId,
+          kind: row.kind,
+          model: row.model,
+          osVersion: row.osVersion,
+          ...(row.sizeBytes === undefined ? {} : { sizeBytes: row.sizeBytes }),
+          ...(staleReason === undefined ? {} : { staleReason }),
+        };
+      }),
+      ...orphans,
+    ];
+  }
+
+  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
+    const data = iosDriverData(device);
+    const catalog = await this.#loadCatalog();
+    const runtime = catalog.runtimes.find((entry) => entry.identifier === data.runtimeId);
+    const deviceType = catalog.deviceTypes.find((entry) => entry.identifier === data.deviceTypeId);
+    if (runtime === undefined || deviceType === undefined) {
+      throw new DriverCrashError(
+        `device ${data.udid} was made with a runtime or device type that is gone`,
+      );
+    }
+    const sourceId = this.#idGenerator.generate();
+    this.#sources.insertMaking({
+      createdAt: this.#clock.now(),
+      deviceTypeId: data.deviceTypeId,
+      kind: "baseline",
+      maker: this.#maker(),
+      model: deviceType.name,
+      osVersion: runtime.version,
+      runtimeBuild: runtime.build,
+      runtimeId: data.runtimeId,
+      setPath: this.#sourcesSet,
+      sourceId,
+      specKey: `baseline-${sourceId}`,
+    });
+    let cloneUdid: string | undefined;
+    try {
+      await this.#ensureSourcesSet();
+      await this.#shutdown(data.udid);
+      const cloned = await this.#simctl(
+        ["clone", data.udid, `simlock-baseline-${sourceId}`, this.#sourcesSet],
+        COMMAND_TIMEOUT_MS,
+      );
+      cloneUdid = cloned.stdout.trim();
+      if (cloneUdid === "") throw new DriverCrashError("simctl clone returned no device UDID");
+      this.#sources.setUdid(sourceId, cloneUdid);
+      await this.#copyOverrides(data.udid, cloneUdid);
+      await this.#dropLaunchServicesDatabase(this.#sourcesSet, cloneUdid);
+      const sizeBytes = await this.#sizeOf(cloneUdid);
+      this.#sources.markReady(sourceId, sizeBytes);
+      return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+    } catch (error: unknown) {
+      if (cloneUdid !== undefined && cloneUdid !== "") {
+        await this.#deleteSeedSimulator(cloneUdid).catch(() => undefined);
+      }
+      this.#sources.deleteRow(sourceId);
+      throw error;
+    }
+  }
+
+  async destroySource(sourceId: string): Promise<void> {
+    const row = this.#sources.findRow(sourceId);
+    if (row === undefined) {
+      // why: safety rule 1 (ADR 0061 §1): a UDID no row names is deleted only when it is a simulator folder of the sources set.
+      if (!(await this.#isOrphanSource(sourceId))) {
+        throw new DriverCrashError(`iOS keeps no source ${sourceId}`);
+      }
+      await this.#withSeedLock(sourceId, () => this.#deleteSeedSimulator(sourceId));
+      return;
+    }
+    if (row.udid !== undefined) {
+      const udid = row.udid;
+      await this.#withSeedLock(udid, () => this.#deleteSeedSimulator(udid));
+    }
+    this.#sources.deleteRow(sourceId);
+  }
+
+  /** why: a simulator in the sources set that no row names is a leftover of a crash; `doctor` reports it and only `--purge-orphans` deletes it. */
+  async #orphanSources(): Promise<readonly DriverSource[]> {
+    const named = new Set(this.#sources.allUdids());
+    return (await this.#sourceFolders())
+      .filter((udid) => !named.has(udid))
+      .map((udid) => ({
+        id: udid,
+        kind: "seed",
+        model: "unknown",
+        orphan: true,
+        osVersion: "unknown",
+      }));
+  }
+
+  async #isOrphanSource(udid: string): Promise<boolean> {
+    return (await this.#sourceFolders()).includes(udid) && !this.#sources.allUdids().includes(udid);
+  }
+
+  async #sourceFolders(): Promise<readonly string[]> {
+    try {
+      return (await this.#filesystem.readdir(this.#sourcesSet)).filter((entry) =>
+        UDID_PATTERN.test(entry),
+      );
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }
+
+  async provision(
+    spec: VirtualSpec,
+    options?: { readonly source?: string },
+  ): Promise<DriverDevice> {
     this.#requireIosPlatform(spec.platform);
     const resolved = await this.#resolvedSpec(spec);
+    const seed =
+      options?.source === undefined
+        ? await this.#seedFor(resolved)
+        : await this.#namedSource(options.source);
     // why: Cosmetic, and deliberately so: what proves this device is Simlock's is that it
     // lives in the device set every call below is scoped to, never what it is called
     // (safety rule 8). The name exists because it is what a human reads in `simctl list`
     // and in the simulator's window title.
     const name = `simlock-${this.#idGenerator.generate()}`;
-    const result = await this.#simctl(
-      ["create", name, resolved.deviceType.identifier, resolved.runtime.identifier],
-      COMMAND_TIMEOUT_MS,
+    const result = await this.#withSeedLock(seed.udid, () =>
+      this.#simctl(
+        ["clone", seed.udid, name, this.#deviceRoot],
+        COMMAND_TIMEOUT_MS,
+        this.#sourcesSet,
+      ),
     );
     const udid = result.stdout.trim();
 
     if (udid === "") {
-      throw new DriverCrashError("simctl create returned no device UDID");
+      throw new DriverCrashError("simctl clone returned no device UDID");
     }
 
     try {
       await this.#writeMark(udid);
+      await this.#dropLaunchServicesDatabase(this.#deviceRoot, udid);
     } catch (error: unknown) {
-      // why: In Xcode's set an unmarked simulator is nobody's, so one left here would never
-      // be listed, reclaimed or deleted by Simlock again.
-      if (this.#rootOptions === undefined) {
-        await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
-      }
+      // why: a clone whose mark or database drop failed is not a device Simlock hands out, and
+      // in Xcode's set an unmarked one would never be listed, reclaimed or deleted again.
+      await this.#invokeSimctl(["delete", udid], COMMAND_TIMEOUT_MS).catch(() => undefined);
       throw error;
     }
+    await this.#copyOverrides(seed.udid, udid);
 
     return {
       address: udid,
@@ -789,14 +942,211 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
+  async #namedSource(sourceId: string): Promise<{ readonly udid: string }> {
+    const row = this.#sources.findRow(sourceId);
+    if (row?.state !== "ready" || row.udid === undefined) {
+      throw new DriverCrashError(`iOS keeps no ready source ${sourceId}`);
+    }
+    const reason = sourceStaleReason(row, await this.#loadCatalog());
+    if (reason !== undefined) throw new DriverCrashError(`source ${sourceId} is stale: ${reason}`);
+    return { udid: row.udid };
+  }
+
+  /** why: two provisions of one kind at once make one seed, the second waiting for the first's make. */
+  #seedFor(resolved: ResolvedIosSpec): Promise<ReadySeed> {
+    const specKey = seedSpecKey(resolved);
+    const running = this.#seedMakes.get(specKey);
+    if (running !== undefined) return running;
+    const made = this.#findOrMakeSeed(resolved, specKey).finally(() => {
+      this.#seedMakes.delete(specKey);
+    });
+    this.#seedMakes.set(specKey, made);
+    return made;
+  }
+
+  /** why: clones of one seed, and the seed's deletion, take turns, so nuke never deletes a seed under a running clone. */
+  async #withSeedLock<T>(udid: string, run: () => Promise<T>): Promise<T> {
+    const before = this.#seedLocks.get(udid) ?? Promise.resolve();
+    const turn = before.then(run, run);
+    const settled = turn.catch(() => undefined);
+    this.#seedLocks.set(udid, settled);
+    try {
+      return await turn;
+    } finally {
+      if (this.#seedLocks.get(udid) === settled) this.#seedLocks.delete(udid);
+    }
+  }
+
+  async #findOrMakeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
+    const seed = this.#sources.findReadySeed(specKey);
+    if (seed !== undefined && !seedIsStale(seed, resolved)) return seed;
+    if (seed !== undefined) await this.#destroySeed(seed);
+    return this.#makeSeed(resolved, specKey);
+  }
+
+  async #makeSeed(resolved: ResolvedIosSpec, specKey: string): Promise<ReadySeed> {
+    // why: a `making` row of this process older than the longest a make can take belongs to a make that never ended.
+    for (const row of this.#sources.makingRowsOfKindBefore(
+      this.#maker(),
+      specKey,
+      this.#clock.now() - STALE_MAKING_MS,
+    )) {
+      await this.#removeLeftover(row);
+    }
+    const sourceId = this.#idGenerator.generate();
+    this.#sources.insertMaking({
+      createdAt: this.#clock.now(),
+      deviceTypeId: resolved.deviceType.identifier,
+      kind: "seed",
+      maker: this.#maker(),
+      model: resolved.spec.model,
+      osVersion: resolved.spec.osVersion,
+      runtimeBuild: resolved.runtime.build,
+      runtimeId: resolved.runtime.identifier,
+      setPath: this.#sourcesSet,
+      sourceId,
+      specKey,
+    });
+    try {
+      await this.#ensureSourcesSet();
+      const created = await this.#simctl(
+        [
+          "create",
+          `simlock-seed-${sourceId}`,
+          resolved.deviceType.identifier,
+          resolved.runtime.identifier,
+        ],
+        COMMAND_TIMEOUT_MS,
+        this.#sourcesSet,
+      );
+      const udid = created.stdout.trim();
+      this.#sources.setUdid(sourceId, udid);
+      try {
+        await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
+      } catch (error: unknown) {
+        await this.#deleteSeedSimulator(udid);
+        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+      }
+      try {
+        await this.#shutdown(udid, this.#sourcesSet);
+      } catch (error: unknown) {
+        await this.#deleteSeedSimulator(udid);
+        throw error;
+      }
+      this.#sources.markReady(sourceId, await this.#sizeOf(udid));
+      return { sourceId, udid, runtimeBuild: resolved.runtime.build };
+    } catch (error: unknown) {
+      this.#sources.deleteRow(sourceId);
+      throw error;
+    }
+  }
+
+  /**
+   * why: ADR 0061 §1: a `making` row another process left is a seed that process never finished, so
+   * its simulator (if `create` answered) and row go at the first source read of this process. A
+   * simulator no row names is left in place: `doctor` reports it.
+   */
+  async #sweepLeftovers(): Promise<void> {
+    if (this.#swept) return;
+    this.#swept = true;
+    for (const row of this.#sources.makingRowsNotMadeBy(this.#maker())) {
+      await this.#removeLeftover(row);
+    }
+  }
+
+  async #removeLeftover(row: SourceRow): Promise<void> {
+    try {
+      if (row.udid !== undefined) await this.#deleteSeedSimulator(row.udid);
+      this.#sources.deleteRow(row.sourceId);
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not remove leftover source ${row.udid ?? row.sourceId}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  #maker(): string {
+    this.#sourceMaker ??= this.#idGenerator.generate();
+    return this.#sourceMaker;
+  }
+
+  /** why: ADR 0060 §1: the slim file is in place before the copy's first boot, so the copy boots with what the seed was given. */
+  async #copyOverrides(seedUdid: string, copyUdid: string): Promise<void> {
+    const from = join(this.#overridesFolder(seedUdid), OVERRIDES_FILE_NAME);
+    try {
+      if (!(await this.#filesystem.exists(from))) return;
+      await this.#filesystem.mkdirp(this.#overridesFolder(copyUdid), { mode: 0o700 });
+      await this.#filesystem.copyFile(
+        from,
+        join(this.#overridesFolder(copyUdid), OVERRIDES_FILE_NAME),
+      );
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not copy the launchd overrides of seed ${seedUdid} to ${copyUdid}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /**
+   * why: `simctl clone` keeps the LaunchServices database, which records each app (system apps
+   * included) by its absolute path under the original device's folder; a copy then uses the
+   * original's data, or fails once that folder is gone. Dropped from every clone before its first
+   * boot, LaunchServices rebuilds it from the clone's own container folders (ADR 0061 §3).
+   */
+  async #dropLaunchServicesDatabase(setPath: string, udid: string): Promise<void> {
+    const folder = join(setPath, udid, "data", "var", "db", "lsd");
+    if (!(await this.#filesystem.exists(folder))) return;
+    for (const entry of await this.#filesystem.readdir(folder)) {
+      if (LAUNCH_SERVICES_DATABASE.test(entry)) await this.#filesystem.rm(join(folder, entry));
+    }
+  }
+
+  async #destroySeed(seed: ReadySeed): Promise<void> {
+    await this.#deleteSeedSimulator(seed.udid);
+    this.#sources.deleteRow(seed.sourceId);
+  }
+
+  async #deleteSeedSimulator(udid: string): Promise<void> {
+    await this.#bestEffortShutdown(udid, this.#sourcesSet);
+    await this.#simctl(["delete", udid], COMMAND_TIMEOUT_MS, this.#sourcesSet);
+  }
+
+  async #ensureSourcesSet(): Promise<void> {
+    if (this.#rootOptions !== undefined) {
+      await this.#filesystem.mkdirp(this.#sourcesSet, { mode: 0o700 });
+      return;
+    }
+    await ensureOwnedRoot({
+      filesystem: this.#filesystem,
+      idGenerator: this.#idGenerator,
+      instanceId: this.#instanceId,
+      path: this.#sourcesSet,
+      platform: "ios",
+    });
+  }
+
+  async #sizeOf(udid: string): Promise<number | undefined> {
+    try {
+      return await this.#filesystem.directorySize(join(this.#sourcesSet, udid));
+    } catch {
+      // why: a size that cannot be counted leaves the seed `ready` with no size; `doctor` then leaves it out.
+      return undefined;
+    }
+  }
+
   async makeReady(
     device: DriverDevice,
     options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
     const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
+    const write =
+      plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+    if (this.#silent) {
+      await this.#silence(data.udid, device.deviceId);
+    }
 
     if (plan.kind === "skip") {
       this.#onSlimSkipped?.({
@@ -806,11 +1156,43 @@ export class IosSimctlDriver implements Driver {
       });
     }
 
-    if (plan.kind !== "apply") {
+    if (write === undefined) {
       return this.#asIs(device, data, "full");
     }
+    if (write.kind === "no-categories") {
+      return this.#skipApply(device, data, write.detail, "full");
+    }
 
-    return this.#applySlimAndReboot(device, data, plan.slim, bootstatusTimeoutMs);
+    return this.#readBack(device, data, write);
+  }
+
+  async #silence(udid: string, deviceId: string): Promise<void> {
+    const commands = [
+      ["-s", VOLUME_STATE_KEY, "0"],
+      ["-p", VOLUME_STATE_KEY],
+    ];
+    for (const command of commands) {
+      const detail = await this.#runNotifyutil(udid, command);
+      if (detail !== undefined) {
+        // why: the device stays in use; the volume is a courtesy to the host's speakers, not a lease condition.
+        this.#onSilenceFailed?.({ deviceId, detail });
+        return;
+      }
+    }
+  }
+
+  /** why: answers the failure detail, or undefined when the command exited 0; it never throws. */
+  async #runNotifyutil(udid: string, command: readonly string[]): Promise<string | undefined> {
+    try {
+      const outcome = await this.#invokeSimctl(
+        ["spawn", udid, "notifyutil", ...command],
+        COMMAND_TIMEOUT_MS,
+      );
+      if (outcome.kind === "timed-out") return "timed out";
+      return outcome.result.code === 0 ? undefined : outcome.result.stderr;
+    } catch (error: unknown) {
+      return errorMessage(error);
+    }
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
@@ -822,8 +1204,13 @@ export class IosSimctlDriver implements Driver {
     };
   }
 
-  async #bootAndWait(udid: string, deviceId: string, bootstatusTimeoutMs: number): Promise<void> {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS);
+  async #bootAndWait(
+    udid: string,
+    deviceId: string,
+    bootstatusTimeoutMs: number,
+    set?: string,
+  ): Promise<void> {
+    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
     if (boot.kind === "timed-out") {
       throw new BootTimeoutError(deviceId);
     }
@@ -831,23 +1218,24 @@ export class IosSimctlDriver implements Driver {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
     const deadline = this.#clock.now() + bootstatusTimeoutMs;
-    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs);
+    const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs, set);
 
     if (outcome.kind === "finished") {
       this.#assertSuccessful(["bootstatus", udid, "-b"], outcome.result);
-      if (await this.#waitForInstaller(udid, deadline)) return;
+      if (await this.#waitForInstaller(udid, deadline, set)) return;
     }
 
-    await this.#bestEffortShutdown(udid);
+    await this.#bestEffortShutdown(udid, set);
     throw new BootTimeoutError(deviceId);
   }
 
-  async #waitForInstaller(udid: string, deadline: number): Promise<boolean> {
+  async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {
     // why: bootstatus can finish before the installer accepts requests after an erase (#547).
     while (this.#clock.now() < deadline) {
       const outcome = await this.#invokeSimctl(
         ["listapps", udid],
         Math.min(COMMAND_TIMEOUT_MS, deadline - this.#clock.now()),
+        set,
       );
       if (outcome.kind === "finished" && outcome.result.code === 0) {
         return this.#clock.now() < deadline;
@@ -861,109 +1249,92 @@ export class IosSimctlDriver implements Driver {
     return false;
   }
 
-  async #applySlimAndReboot(
-    device: DriverDevice,
-    data: IosDriverData,
-    slim: SlimOptions,
-    bootstatusTimeoutMs: number,
-  ): Promise<DriverDevice> {
+  async #writeOverrides(udid: string, slim: SlimOptions): Promise<SlimWrite> {
     const resolved = resolveSlimCategories(slim.categories);
     if (resolved.categories.length === 0) {
-      return this.#skipApply(
-        device,
-        data,
-        `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
-        "full",
-      );
+      return {
+        detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
+        kind: "no-categories",
+      };
     }
 
-    const signature = slimSignature(resolved.categories);
-    const idempotence = await this.#checkAlreadySlimmed(data, signature);
-    if (idempotence.alreadySlimmed) {
-      return this.#asIs(device, data, "slim");
-    }
-
-    const labels = labelsFor(resolved.categories);
     const startedAt = this.#clock.now();
-    const applyOutcome = await this.#applySlimLabels(data.udid, labels);
-    if (applyOutcome.kind === "failed") {
-      return this.#skipApply(device, data, applyOutcome.detail, "full");
-    }
-
-    // why: The reboot below is what makes the disable entries take effect; never write the
-    // idempotence marker or report `device.slimmed` on a device that hasn't actually rebooted
-    // with them applied. `makeReady`'s own contract ("a failed or skipped slim never fails the
-    // lease") holds here too: a hiccup here must downgrade to the skip path rather than fail a
-    // lease that would otherwise have worked -- but the shutdown call's own outcome is never a
-    // reliable signal of what the device is actually doing (see below), so it is captured, not
-    // acted on directly.
-    let shutdownError: unknown;
+    const wanted = overridesFor(resolved.categories);
+    let writeError: string | undefined;
     try {
-      await this.#shutdown(data.udid);
+      const folder = this.#overridesFolder(udid);
+      const file = join(folder, OVERRIDES_FILE_NAME);
+      const existing = await this.#readOverrides(file);
+      const merged = new Map([...existing, ...wanted]);
+      if (!sameEntries(existing, merged)) {
+        await this.#filesystem.mkdirp(folder, { mode: 0o700 });
+        await this.#filesystem.writeFileAtomic(file, renderOverridesPlist(merged), { mode: 0o644 });
+      }
     } catch (error: unknown) {
-      shutdownError = error;
-    }
-    // why: Always re-establish a known-good running device, whether or not the shutdown above actually
-    // completed. `#shutdown` throws on a *timeout* of `simctl shutdown`, which is exactly the
-    // moment the shutdown is most likely to still be in progress or to have already finished --
-    // there is no reliable way to tell which from the exception alone, so this stops guessing:
-    // `boot` already tolerates an already-booted device, so the boot below reaches a known-good
-    // running device either way. A genuine inability to get it running again propagates as
-    // `BootTimeoutError` / `DriverCrashError`, as it should -- that case really does mean the
-    // device is left shut down, not "ready" as returning it would falsely claim.
-    await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
-
-    if (shutdownError !== undefined) {
-      // why: The shutdown call itself failed, so whether the labels' reboot actually took effect is
-      // unknown -- this is an uncertain apply, not a confirmed one. Never write the idempotence
-      // marker on it (same reasoning as the partial-apply case below), and report "slim" (not
-      // "full") under that uncertainty: telling a caller a device is slim when it is not is
-      // benign -- it just avoids features it could have used -- while telling it a device is full
-      // when it is not makes push / Spotlight / StoreKit fail with no explanation, exactly the
-      // confusion the `slim` flag exists to prevent.
-      return this.#skipApply(
-        device,
-        data,
-        `slim shutdown failed: ${errorMessage(shutdownError)}`,
-        "slim",
-      );
+      writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
-    if (applyOutcome.unattemptedLabels.length > 0) {
-      // why: Partial apply: at least one chunk failed to run outright, so those labels were never even
-      // attempted. The reboot above already happened -- the labels that did apply are worth
-      // keeping -- but the idempotence marker must NOT be written: writing it here would
-      // permanently mark this device "slim" (see `#checkAlreadySlimmed`) even though part of the
-      // disable list never took effect, and every later boot would then trust the marker and
-      // never retry the labels that were never attempted, with no way back short of
-      // `reclaim`/`erase`. So a partial apply deliberately costs a re-attempt of the *whole*
-      // label set on the next `makeReady` instead -- applying an already-disabled label again is
-      // harmless (same comment on `#checkAlreadySlimmed`). "slim" because the labels that did
-      // apply really are gone.
-      return this.#skipApply(
-        device,
-        data,
-        `${String(applyOutcome.unattemptedLabels.length)} of ${String(labels.length)} labels were never attempted (a chunk failed to run)`,
-        "slim",
-      );
-    }
+    return { kind: "written", resolved, startedAt, wanted, writeError };
+  }
 
-    // why: Every chunk ran (individual labels may still have been rejected by the script itself, or
-    // filtered by `sanitizeSlimLabels` -- `rejectedLabels`, which is permanent, ADR point 8's
-    // "log and continue" case). That is not grounds to withhold the marker: doing so would make a
-    // runtime with one permanently-unknown daemon re-apply the whole label set on every boot,
-    // forever, and never converge. The rejected labels travel in `SlimmedFact.unknownLabels`
-    // instead.
-    return this.#commitSlim(
-      device,
-      data,
-      resolved,
-      labels,
-      signature,
-      idempotence.currentToken,
-      startedAt,
-      applyOutcome,
+  async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
+    if (!(await this.#filesystem.exists(file))) return new Map();
+    const parsed = parseOverridesPlist(await this.#filesystem.readFile(file));
+    if (parsed === undefined)
+      throw new Error("the existing file is not a property list dictionary");
+    return parsed;
+  }
+
+  #overridesFolder(udid: string): string {
+    return join(this.#overridesRoot, `${OVERRIDES_FOLDER_PREFIX}${udid}`);
+  }
+
+  async #readBack(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): Promise<DriverDevice> {
+    const outcome = await this.#invokeSimctl(
+      ["spawn", data.udid, "launchctl", "print-disabled", "system"],
+      READBACK_TIMEOUT_MS,
     );
+    const details = write.writeError === undefined ? [] : [write.writeError];
+
+    if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
+      const reason =
+        outcome.kind === "timed-out"
+          ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
+          : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
+      details.push(`could not read back the launchd overrides: ${reason}`);
+      return this.#skipApply(device, data, details.join("; "), "slim");
+    }
+
+    const read = parsePrintDisabled(outcome.result.stdout);
+    const mismatched = [...write.wanted.keys()]
+      .sort()
+      .filter((label) => (read.get(label) ?? false) !== write.wanted.get(label));
+    if (mismatched.length > 0) {
+      details.push(
+        `${String(mismatched.length)} of ${String(write.wanted.size)} managed labels did not read back as written at boot; first: ${mismatched[0] ?? ""}`,
+      );
+      return this.#skipApply(device, data, details.join("; "), "full");
+    }
+    if (details.length > 0) {
+      return this.#skipApply(device, data, details.join("; "), "slim");
+    }
+
+    const labelCount = [...write.wanted.values()].filter(Boolean).length;
+    this.#onSlimmed?.({
+      address: data.udid,
+      categories: write.resolved.categories.map((category) => category.name),
+      deviceId: device.deviceId,
+      durationMs: this.#clock.now() - write.startedAt,
+      labelCount,
+      signature: slimSignature(write.resolved.categories),
+      unknownLabels: [...write.resolved.unknown],
+    });
+
+    return this.#asIs(device, data, "slim");
   }
 
   #skipApply(
@@ -976,136 +1347,20 @@ export class IosSimctlDriver implements Driver {
     return this.#asIs(device, data, mode);
   }
 
-  async #checkAlreadySlimmed(
-    data: IosDriverData,
-    signature: string,
-  ): Promise<{ readonly alreadySlimmed: boolean; readonly currentToken: string | undefined }> {
-    // why: Derived from the owned device set rather than looked up, so unlike the pre-ADR-0001
-    // `simctl list` path it can never come back undefined -- only the token read can.
-    const currentToken = await this.#readToken(join(this.#dataPathFor(data.udid), MARK_FILE_NAME));
-
-    const alreadySlimmed =
-      data.slimSignature !== undefined &&
-      currentToken !== undefined &&
-      data.slimMarkToken !== undefined &&
-      data.slimSignature === signature &&
-      data.slimMarkToken === currentToken;
-
-    return { alreadySlimmed, currentToken };
-  }
-
-  #commitSlim(
-    device: DriverDevice,
-    data: IosDriverData,
-    resolved: ReturnType<typeof resolveSlimCategories>,
-    labels: readonly string[],
-    signature: string,
-    currentToken: string | undefined,
-    startedAt: number,
-    applyOutcome: Extract<SlimApplyOutcome, { readonly kind: "applied" }>,
-  ): DriverDevice {
-    const newDriverData: Record<string, unknown> = {
-      ...(isRecord(device.driverData) ? device.driverData : {}),
-      slimSignature: signature,
-      // why: `currentToken` was read from the erasable mark *before* this reboot -- a reboot alone
-      // never touches the mark (only `provision`/`reclaim` rewrite it), so re-reading afterward
-      // would just repeat the same value at the cost of another filesystem round trip.
-      ...(currentToken === undefined ? {} : { slimMarkToken: currentToken }),
-    };
-
-    this.#onSlimmed?.({
-      address: data.udid,
-      categories: resolved.categories.map((category) => category.name),
-      deviceId: device.deviceId,
-      durationMs: this.#clock.now() - startedAt,
-      labelCount: labels.length,
-      signature,
-      unknownLabels: [...resolved.unknown, ...applyOutcome.rejectedLabels],
-    });
-
-    return {
-      address: data.udid,
-      deviceId: device.deviceId,
-      driverData: newDriverData,
-      mode: "slim",
-    };
-  }
-
-  async #applySlimLabels(udid: string, labels: readonly string[]): Promise<SlimApplyOutcome> {
-    const { safe, rejected } = sanitizeSlimLabels(labels);
-    if (safe.length === 0) {
-      return { detail: "no labels passed the shell-safety filter", kind: "failed" };
-    }
-
-    const chunks = chunk(safe, SLIM_CHUNK_SIZE);
-    // why: `sanitizeSlimLabels`-filtered labels never reached any chunk, so they were rejected the
-    // same way an individual `simlock-slim-failed` line is -- not merely "unattempted" (that's
-    // reserved for a whole chunk that failed to run).
-    const rejectedLabels: string[] = [...rejected];
-    const unattemptedLabels: string[] = [];
-    let anyChunkSucceeded = false;
-    // why: Why the most recent failed chunk failed, so a skip that drops the whole slim pass says
-    // what simctl actually reported rather than only that something went wrong.
-    let lastChunkFailure = "";
-
-    for (const chunkLabels of chunks) {
-      // why: `DYLD_ROOT_PATH` is what makes a bare `launchctl` inside the simulator load the
-      // *simulator's* dyld shared cache; `simctl spawn` sets it for the process it starts, but
-      // dyld strips `DYLD_*` from the environment of a platform binary such as `/bin/sh`, so
-      // every child `launchctl` the script runs would otherwise die with an abort trap
-      // (verified on iOS 26.4 and 27.0 simulators). Re-exporting it from `SIMULATOR_ROOT`
-      // (which survives) is exactly what simslim's own batch script does first.
-      const script =
-        `${SLIM_SCRIPT_PRELUDE} for l in ${chunkLabels.join(" ")}; do launchctl disable "system/$l" ` +
-        `>/dev/null 2>&1 || echo "${SLIM_FAILED_MARKER} $l"; done`;
-      const outcome = await this.#invokeSimctl(
-        ["spawn", udid, "/bin/sh", "-c", script],
-        SLIM_CHUNK_TIMEOUT_MS,
-      );
-
-      if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-        unattemptedLabels.push(...chunkLabels);
-        lastChunkFailure = describeFailedChunk(outcome);
-        continue;
-      }
-
-      anyChunkSucceeded = true;
-      for (const line of outcome.result.stdout.split("\n")) {
-        const match = SLIM_FAILED_MARKER_PATTERN.exec(line.trim());
-        if (match?.[1] !== undefined) {
-          rejectedLabels.push(match[1]);
-        }
-      }
-    }
-
-    if (!anyChunkSucceeded) {
-      return {
-        detail: `all ${String(chunks.length)} chunk(s) failed to run; last: ${lastChunkFailure}`,
-        kind: "failed",
-      };
-    }
-
-    return { kind: "applied", rejectedLabels, unattemptedLabels };
-  }
-
   async reclaim(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
   ): Promise<ReclaimResult> {
     if (isPhysicalDriverDevice(device)) return this.#physical.reclaim(device);
-    const data = iosDriverData(device);
-    await this.#shutdown(data.udid);
-    await this.#simctl(["erase", data.udid], COMMAND_TIMEOUT_MS);
-    await this.#writeMark(data.udid);
-
-    return { state: "shutdown", strategy: "erase" };
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   reclaimStrategy(
     device: DriverDevice,
     _options: { readonly clean: "standard" | "full" },
-  ): "erase" | "uninstall" {
-    return isPhysicalDriverDevice(device) ? "uninstall" : "erase";
+  ): "uninstall" {
+    if (isPhysicalDriverDevice(device)) return "uninstall";
+    throw new DriverCrashError("virtual devices are not reclaimed");
   }
 
   async shutdown(device: DriverDevice): Promise<void> {
@@ -1116,6 +1371,19 @@ export class IosSimctlDriver implements Driver {
     const data = iosDriverData(device);
     await this.#shutdown(data.udid);
     await this.#simctl(["delete", data.udid], COMMAND_TIMEOUT_MS);
+    await this.#removeOverrides(data.udid);
+  }
+
+  // why: simctl delete leaves the folder behind; a failed removal must not fail a destroy that
+  // already deleted the simulator.
+  async #removeOverrides(udid: string): Promise<void> {
+    try {
+      await this.#filesystem.rm(this.#overridesFolder(udid));
+    } catch (error: unknown) {
+      this.#logger?.warn(
+        `could not remove the launchd overrides folder of ${udid}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   async findLegacy(driverDeviceId: string): Promise<LegacyDevice | undefined> {
@@ -1150,6 +1418,7 @@ export class IosSimctlDriver implements Driver {
     // why: Best effort: a device that is already shut down reports a failure unrelated to the delete.
     await this.#invokeLegacySimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
     await this.#legacySimctl(["delete", udid], COMMAND_TIMEOUT_MS);
+    await this.#removeOverrides(udid);
   }
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
@@ -1225,13 +1494,7 @@ export class IosSimctlDriver implements Driver {
       case "provision":
         return PROVISION_ESTIMATE_MS;
       case "boot":
-        // why: A slim device pays for a second boot plus a launchctl-disable pass on top of the usual
-        // one -- quoting the plain cold-boot number here would make `doctor` flag every slim
-        // device as stalled. A full spec never slims, so quoting the slim number to it would
-        // make `doctor` flag a perfectly on-time full boot as stalled instead.
-        return this.#slim !== undefined && spec.mode === "slim"
-          ? SLIM_BOOT_ESTIMATE_MS
-          : COLD_BOOT_ESTIMATE_MS;
+        return COLD_BOOT_ESTIMATE_MS;
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
         return ERASE_ESTIMATE_MS;
@@ -1617,8 +1880,8 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
-  async #shutdown(udid: string): Promise<void> {
-    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS);
+  async #shutdown(udid: string, set?: string): Promise<void> {
+    const outcome = await this.#invokeSimctl(["shutdown", udid], COMMAND_TIMEOUT_MS, set);
 
     if (outcome.kind === "timed-out") {
       throw new DriverCrashError(`simctl shutdown ${udid} timed out after ${COMMAND_TIMEOUT_MS}ms`);
@@ -1628,16 +1891,16 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
-  async #bestEffortShutdown(udid: string): Promise<void> {
+  async #bestEffortShutdown(udid: string, set?: string): Promise<void> {
     try {
-      await this.#shutdown(udid);
+      await this.#shutdown(udid, set);
     } catch {
       // why: Boot failure cleanup must not obscure the timeout that triggered it.
     }
   }
 
-  async #simctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
-    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs));
+  async #simctl(args: readonly string[], timeoutMs: number, set?: string): Promise<ProcessResult> {
+    return this.#checked(args, timeoutMs, await this.#invokeSimctl(args, timeoutMs, set));
   }
 
   async #legacySimctl(args: readonly string[], timeoutMs: number): Promise<ProcessResult> {
@@ -1653,14 +1916,19 @@ export class IosSimctlDriver implements Driver {
     return outcome.result;
   }
 
-  #scopedSimctlArgv(args: readonly string[]): string[] {
+  #scopedSimctlArgv(args: readonly string[], set?: string): string[] {
+    if (set !== undefined) return ["simctl", "--set", set, ...args];
     // why: Xcode's own set is simctl's default, so a call there carries no `--set`.
     if (this.#rootOptions === undefined) return ["simctl", ...args];
     return ["simctl", "--set", this.#deviceRoot, ...args];
   }
 
-  async #invokeSimctl(args: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
-    return this.#invokeXcrun(this.#scopedSimctlArgv(args), timeoutMs);
+  async #invokeSimctl(
+    args: readonly string[],
+    timeoutMs: number,
+    set?: string,
+  ): Promise<ProcessOutcome> {
+    return this.#invokeXcrun(this.#scopedSimctlArgv(args, set), timeoutMs);
   }
 
   /**
@@ -2325,31 +2593,30 @@ function planSlimBoot(
   return { bootstatusTimeoutMs: slim.bootTimeoutMs, plan: { kind: "apply", slim } };
 }
 
-export function sanitizeSlimLabels(labels: readonly string[]): {
-  readonly safe: readonly string[];
-  readonly rejected: readonly string[];
-} {
-  const safe: string[] = [];
-  const rejected: string[] = [];
-  for (const label of labels) {
-    (SLIM_LABEL_SAFE_PATTERN.test(label) ? safe : rejected).push(label);
-  }
-  return { rejected, safe };
+function createScreenCaptureFor(
+  options: IosSimctlDriverOptions,
+  deviceRoot: string,
+  ownsDeviceSet: boolean,
+  deviceOsVersion: (udid: string) => Promise<string | undefined>,
+): ScreenCapture | undefined {
+  const capture = options.screenCapture;
+  if (capture === undefined) return undefined;
+  const deviceCommand = configuredDeviceCaptureCommand(options) ?? capture.deviceCommand;
+  return createIosScreenCapture({
+    baseEnvironment: capture.baseEnvironment,
+    clock: options.clock,
+    command: configuredScreenCaptureCommand(options) ?? capture.command,
+    ...(deviceCommand === undefined ? {} : { deviceCommand }),
+    deviceOsVersion,
+    ...(ownsDeviceSet ? { deviceSet: deviceRoot } : {}),
+    filesystem: options.filesystem,
+    launcher: capture.launcher,
+    ...(capture.onLog === undefined ? {} : { onLog: capture.onLog }),
+  });
 }
 
-function describeFailedChunk(outcome: ProcessOutcome): string {
-  if (outcome.kind === "timed-out") {
-    return `timed out after ${String(SLIM_CHUNK_TIMEOUT_MS)}ms`;
-  }
-  return `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
-}
-
-function chunk<T>(items: readonly T[], size: number): readonly (readonly T[])[] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
+function sameEntries(a: ReadonlyMap<string, boolean>, b: ReadonlyMap<string, boolean>): boolean {
+  return a.size === b.size && [...a].every(([label, disabled]) => b.get(label) === disabled);
 }
 
 function alreadyShutdown(stderr: string): boolean {
@@ -2358,6 +2625,33 @@ function alreadyShutdown(stderr: string): boolean {
 
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
+}
+
+/** why: a seed built on a runtime whose build changed no longer matches it; with no build on either side only the runtime's presence is checked, and a provision always has the runtime. */
+function seedIsStale(seed: ReadySeed, resolved: ResolvedIosSpec): boolean {
+  const current = resolved.runtime.build;
+  return seed.runtimeBuild !== undefined && current !== undefined && seed.runtimeBuild !== current;
+}
+
+/** why: the phrase reads after "is stale:" in `doctor`, and is what a person acts on, so it names the runtime or device type by id. */
+function sourceStaleReason(row: SourceRow, catalog: SimctlCatalog): string | undefined {
+  const runtime = catalog.runtimes.find((entry) => entry.identifier === row.runtimeId);
+  if (runtime === undefined) return `runtime ${row.runtimeId} is not installed`;
+  if (
+    row.runtimeBuild !== undefined &&
+    runtime.build !== undefined &&
+    row.runtimeBuild !== runtime.build
+  ) {
+    return `runtime ${row.runtimeId} changed from build ${row.runtimeBuild} to ${runtime.build}`;
+  }
+  if (!catalog.deviceTypes.some((entry) => entry.identifier === row.deviceTypeId)) {
+    return `device type ${row.deviceTypeId} is not available`;
+  }
+  return undefined;
+}
+
+function seedSpecKey(resolved: ResolvedIosSpec): string {
+  return `${resolved.deviceType.identifier}\u0000${resolved.runtime.identifier}`;
 }
 
 function specKey(spec: VirtualSpec): string {
@@ -2372,5 +2666,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 export { iosDeviceDataTable } from "./device-data.js";
+export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
 export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";

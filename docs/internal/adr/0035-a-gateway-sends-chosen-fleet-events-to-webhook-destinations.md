@@ -220,8 +220,9 @@ names a format. A message names the worker by
 
 - `redactConfig` masks every destination's `url` and `secret`, so
   `daemon.log`, the `daemon.started` payload and `events.jsonl` never hold
-  them. `config.get` keeps answering admins with the config as written, as
-  it does for `gateway.token`.
+  them. `config.get` redacts the same keys, and `gateway.token`, by
+  default; `showSecrets: true` (CLI `--show-secrets`) answers admins with
+  the config as written (#1097).
 - `alerts.test`: an admin operation a gateway serves and a worker refuses
   with `UNSUPPORTED_IN_WORKER_MODE`. It sends one sample message to one
   destination, once, with no retry and outside its queue, and answers the

@@ -1,5 +1,6 @@
 import { deviceClassSchema } from "../../contract/index.js";
 import { connectDaemonClient } from "../connect.js";
+import { escapeControl as esc } from "../escape.js";
 import { commandArgs, UsageError, writeResult } from "../args.js";
 import type { CatalogGetOutput } from "../../admin/index.js";
 import type { CommandContext } from "../tree.js";
@@ -46,8 +47,8 @@ function formatCatalog(response: CatalogGetOutput): string {
         const aliases =
           (Object.hasOwn(entry.modelAliases, model) ? entry.modelAliases[model] : undefined) ?? [];
         return [
-          `      ${model}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? paired.join(", ") : "(no paired runtime)"}`,
-          ...(aliases.length > 0 ? [`        Other names: ${aliases.join(", ")}`] : []),
+          `      ${esc(model)}${custom.has(model) ? " (custom)" : ""}: ${paired.length > 0 ? esc(paired.join(", ")) : "(no paired runtime)"}`,
+          ...(aliases.length > 0 ? [`        Other names: ${esc(aliases.join(", "))}`] : []),
         ];
       };
       const classOf = (model: string): string | undefined =>
@@ -57,18 +58,18 @@ function formatCatalog(response: CatalogGetOutput): string {
         const model = Object.hasOwn(entry.classDefaults, deviceClass)
           ? entry.classDefaults[deviceClass as keyof typeof entry.classDefaults]
           : undefined;
-        return `    ${deviceClass} (default: ${model ?? "none"}):`;
+        return `    ${esc(deviceClass)} (default: ${esc(model ?? "none")}):`;
       };
       const models = [...DEVICE_CLASS_ORDER, undefined].flatMap((deviceClass) => {
         const members = entry.models.filter((model) => classOf(model) === deviceClass);
         return members.length === 0 ? [] : [classLine(deviceClass), ...members.flatMap(modelLine)];
       });
       const images = (entry.images ?? []).map(
-        (image) => `    ${image.runtime} ${image.tag} ${image.abi}`,
+        (image) => `    ${esc(`${image.runtime} ${image.tag} ${image.abi}`)}`,
       );
       return [
         `Platform: ${entry.platform}`,
-        `  Runtimes: ${entry.runtimes.length > 0 ? entry.runtimes.join(", ") : "(none)"} (default: ${defaultRuntime})`,
+        `  Runtimes: ${entry.runtimes.length > 0 ? esc(entry.runtimes.join(", ")) : "(none)"} (default: ${esc(defaultRuntime)})`,
         models.length > 0 ? "  Models:" : "  Models: (none)",
         ...models,
         ...(entry.images === undefined

@@ -11,7 +11,7 @@ A device is something an agent can run an app on. Simlock manages three kinds:
 - **Android emulators**, on macOS or Linux.
 - **Physical devices**: an iPhone, iPad or Android phone that an admin plugged in and enrolled with `simlock device add`.
 
-Simlock creates, boots, wipes and deletes the simulators and emulators it manages. It keeps them apart from your own: by default they live in a separate iOS device set (`drivers.ios.deviceSet` `simlock`) and use a separate adb server, so Xcode's device list and your usual `adb devices` do not show them. An admin can set `drivers.ios.deviceSet` to `default` to keep iOS simulators in Xcode's own device set, so build tools reach them by UDID. Under either setting Simlock never changes a simulator or emulator it did not create.
+Simlock creates, boots and deletes the simulators and emulators it manages. It keeps them apart from your own: by default they live in a separate iOS device set (`drivers.ios.deviceSet` `simlock`) and use a separate adb server, so Xcode's device list and your usual `adb devices` do not show them. An admin can set `drivers.ios.deviceSet` to `default` to keep iOS simulators in Xcode's own device set, so build tools reach them by UDID. Under either setting Simlock never changes a simulator or emulator it did not create.
 
 Simlock never creates, erases or deletes a physical device. See [Physical devices](/simlock/docs/using-devices/physical-devices).
 
@@ -29,7 +29,7 @@ You end a lease in one of three ways:
 
 `simlock lease` and the MCP server renew the lease for you while they run, and release it when they stop. If your agent crashes, the device comes back when the TTL runs out.
 
-After a lease ends, Simlock wipes the simulator or emulator before anyone else gets it. On a physical device it uninstalls every app that was not on the device when it was enrolled.
+Every simulator and emulator serves one lease and is deleted when it ends; the next lease gets a new one. A lease that names a baseline starts from a copy of it. On a physical device it uninstalls every app that was not on the device when it was enrolled.
 
 If a leased simulator or emulator crashes, Simlock reboots it under the same lease. Apps you launched and log streams you opened on it are gone, but the lease stays yours.
 
@@ -63,7 +63,7 @@ Simlock creates a device only on a runtime or system image that is already insta
 
 The warm pool keeps devices booted and unleased so the next lease does not wait for a boot. It is on by default.
 
-- After a lease ends and the device is wiped, Simlock boots it again and keeps it ready, when there is room.
+- A device that is deleted when its lease ends is not kept: the pool boots new devices to keep each kind ready, when there is room.
 - Simlock remembers which kinds of device were leased in the last 24 hours, and keeps up to as many of each kind ready as were in use at the busiest moment.
 - An operator can also name kinds of device to keep ready at all times.
 

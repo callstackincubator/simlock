@@ -1,12 +1,18 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT, type TestEnv, waitFor, withDaemon } from "./helpers/index.js";
+import {
+  freeLoopbackPort,
+  holdLoopbackPort,
+  REPO_ROOT,
+  type TestEnv,
+  waitFor,
+  withDaemon,
+} from "./helpers/index.js";
 
 // why: an env's teardown stops only the worker's socket, so a test stops a gateway it started in its own `finally`.
 
@@ -136,26 +142,21 @@ describe("daemon folders (ADR 0034)", () => {
     expect(await readFile(env.configPath, "utf8")).toBe('{"http":{"port":4999}}\n');
   });
 
-  it("a daemon started from a config that still sets mode does not start, and the CLI prints the mode message with exit 1", async () => {
+  it("a daemon started from a config that still sets mode does not start, and the CLI prints the mode message with exit 2", async () => {
     const env = await withDaemon({ mode: "auto" });
     await writeFile(env.configPath, '{"mode":"worker"}\n', "utf8");
 
     const result = await env.cli(["daemon", "start"]);
 
-    expect(result.code).toBe(1);
-    expect(result.error).toEqual({ code: "INTERNAL", message: MODE_REMOVED });
+    expect(result.code).toBe(2);
+    expect(result.error).toEqual({ code: "USAGE", message: MODE_REMOVED });
     expect(existsSync(env.socketPath)).toBe(false);
   });
 
   it("a gateway that fails to start logs the reason to <root>/gateway/daemon.log, not <root>/daemon.log", async () => {
     const env = await withDaemon({ mode: "auto" });
-    const holder = createServer();
-    const port = await new Promise<number>((resolve) => {
-      holder.listen(0, "127.0.0.1", () => {
-        const address = holder.address();
-        resolve(typeof address === "object" && address !== null ? address.port : 0);
-      });
-    });
+    const holder = await holdLoopbackPort();
+    const port = holder.port;
 
     try {
       const set = await env.cli(["--gateway", "config", "set", "http.port", String(port)]);
@@ -173,7 +174,7 @@ describe("daemon folders (ADR 0034)", () => {
       expect(existsSync(join(env.home, "daemon.log"))).toBe(false);
     } finally {
       await stopGateway(env);
-      await new Promise<void>((resolve) => holder.close(() => resolve()));
+      await holder.release();
     }
   });
 
@@ -350,7 +351,10 @@ describe("daemon folders (ADR 0034)", () => {
             expect.objectContaining({ platform: "ios", models: ["iPhone 16"] }),
           ]),
         });
-        expect(gatewayCatalog.structuredContent).toEqual({ platforms: [] });
+        expect(gatewayCatalog.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
       } finally {
         await stopGateway(env);
       }
@@ -392,7 +396,10 @@ describe("daemon folders (ADR 0034)", () => {
         const catalog = await mcp.client.callTool({ name: "list_devices", arguments: {} });
 
         expect(catalog.isError).toBeFalsy();
-        expect(catalog.structuredContent).toEqual({ platforms: [] });
+        expect(catalog.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
         expect(existsSync(join(env.home, "instance.json"))).toBe(false);
       } finally {
         await stopGateway(env);
@@ -425,7 +432,10 @@ describe("daemon folders (ADR 0034)", () => {
         const after = await mcp.client.callTool({ name: "list_devices", arguments: {} });
 
         expect(after.isError).toBeFalsy();
-        expect(after.structuredContent).toEqual({ platforms: [] });
+        expect(after.structuredContent).toEqual({
+          platforms: [],
+          physicalDevices: [],
+        });
       } finally {
         await stopGateway(env);
       }

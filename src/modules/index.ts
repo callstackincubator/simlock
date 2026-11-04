@@ -8,11 +8,12 @@ export type {
   GatewayContext,
   GatewayModule,
   ModuleCapabilitySource,
+  ModuleDeviceTcp,
   ModuleDispatch,
   ModuleEndedLease,
   ModuleFinding,
   ModuleHttpResponse,
-  ModuleIdentity,
+  LeaseInputHandle,
   ModuleInputs,
   ModuleLease,
   ModuleLeaseEndParticipant,
@@ -23,7 +24,6 @@ export type {
   ModuleRegistryView,
   ModuleRelayTarget,
   ModuleRelayTwoWayTarget,
-  ModuleTwoWayPipe,
   ModuleTwoWayRelay,
   ModuleTokenRecord,
   ModuleTokens,
@@ -34,3 +34,10 @@ export type {
   WorkerView,
 } from "./types.js";
 export { createModuleHost } from "./host.js";
+export {
+  createGatewayChannelLink,
+  type GatewayChannelLinkOptions,
+  channelSocket,
+  unknownLease,
+  upgradeRequired,
+} from "./relay-channel.js";

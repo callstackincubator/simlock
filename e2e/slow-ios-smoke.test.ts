@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
@@ -91,7 +92,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release keeps it warm, and nuke empties the set",
+      "catalog agrees with simctl, a cold lease boots a real Booted simulator inside Simlock's own device set with matching provenance, release deletes it from the set, and nuke empties the set",
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -168,6 +169,17 @@ describe.skipIf(process.platform !== "darwin")(
           "a Simlock simulator must be invisible in the machine's default device set",
         ).toBe(false);
 
+        // why: a copy of the seed keeps no LaunchServices database naming the seed's folder, so a system app's data lives under the lease's own UDID.
+        const safariData = await env.cli([
+          "simctl",
+          "get_app_container",
+          udid,
+          "com.apple.mobilesafari",
+          "data",
+        ]);
+        expect(safariData.code, `get_app_container failed: ${safariData.stderr}`).toBe(0);
+        expect(safariData.stdout.trim()).toContain(`/${udid}/`);
+
         // Provenance: both marks exist with the same token. `doctor` is the
         // documented way to observe this -- a foreign-provenance-change finding
         // for this device would mean the marks disagree or are missing.
@@ -195,20 +207,18 @@ describe.skipIf(process.platform !== "darwin")(
         const release = await env.cli(["release", grant.lease.id]);
         expect(release.code, `release failed: ${release.stderr}`).toBe(0);
 
-        // Still Booted: the warm pool only demotes after idle.shutdownAfterMs,
-        // which defaults far longer than this test.
+        // why: a released simulator is deleted, never wiped and kept; the pool may boot another of the kind, never this one.
         await waitFor(
           async () => {
             const rows = (await env.cli(["list", "--devices"])).json as {
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
+            return rows.some((row) => row.driverDeviceId === udid && row.state === "deleted");
           },
-          { timeout: 60_000, label: "device returns to ready after release" },
+          { timeout: 60_000, label: "device is deleted after release" },
         );
-        const stillBooted = await setDevices(deviceSet);
-        expect(stillBooted.find((device) => device.udid === udid)?.state).toBe("Booted");
+        expect((await setDevices(deviceSet)).some((device) => device.udid === udid)).toBe(false);
 
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });
         expect(nuke.code).toBe(0);
@@ -221,17 +231,21 @@ describe.skipIf(process.platform !== "darwin")(
     );
 
     it(
-      "a platform-only lease grants the first listed phone model and accepts an immediate install, including after erase and reuse",
+      "a platform-only lease grants the first listed phone model and accepts an immediate install, including on the new simulator after a release",
       { timeout: 300_000 },
       async () => {
         await sweepStaleDeviceSets();
-        const env = await withDaemon({ driver: "real" });
+        const env = await withDaemon({
+          driver: "real",
+          // why: the pool would refill the released kind, so the device set would hold more than the copy.
+          configOverrides: { warmPool: { enabled: false } },
+        });
         const deviceSet = iosDeviceSet(env.home);
         const phone = await iosPhoneDefault(env);
         expect(phone, "the catalog lists no default phone for iOS").toBeDefined();
         const request = ["lease", "--platform", "ios", "--agent-id", "ios-class", "--detach"];
         type Grant = {
-          device: { driverDeviceId: string; spec: { model: string } };
+          device: { id: string; driverDeviceId: string; spec: { model: string } };
           lease: { id: string };
         };
 
@@ -253,9 +267,9 @@ describe.skipIf(process.platform !== "darwin")(
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === udid && row.state === "ready");
+            return rows.some((row) => row.driverDeviceId === udid && row.state === "deleted");
           },
-          { timeout: 60_000, label: "device returns to ready after release" },
+          { timeout: 60_000, label: "device is deleted after release" },
         );
 
         const second = await env.cli(request, { timeout: 120_000 });
@@ -267,13 +281,45 @@ describe.skipIf(process.platform !== "darwin")(
           secondGrant.device.driverDeviceId,
           IOS.app,
         ]);
-        expect(secondInstall.code, `install after erase failed: ${secondInstall.stderr}`).toBe(0);
+        expect(
+          secondInstall.code,
+          `install on the new simulator failed: ${secondInstall.stderr}`,
+        ).toBe(0);
         expect(
           secondGrant.device.driverDeviceId,
-          "the same request must reuse the idle device",
-        ).toBe(udid);
-        // Reused, not recreated: Simlock's set holds one simulator, still the one that booted first.
-        expect(await setDevices(deviceSet)).toHaveLength(1);
+          "a released simulator is never granted again",
+        ).not.toBe(udid);
+        const copies = await setDevices(deviceSet);
+        expect(copies.some((device) => device.udid === udid)).toBe(false);
+        expect(
+          copies.map((device) => device.udid),
+          "the device set holds the copy only",
+        ).toEqual([secondGrant.device.driverDeviceId]);
+        const seeds = await setDevices(join(deviceSet, "sources"));
+        expect(
+          seeds.map((seed) => seed.state),
+          "the sources set holds the seed shut down",
+        ).toEqual(["Shutdown"]);
+
+        const doctorReport = await env.cli(["doctor"]);
+        expect(doctorReport.code, doctorReport.stderr).toBe(0);
+        const iosSeeds = (
+          doctorReport.json as {
+            sources: { platform: string; kind: string; sizeBytes?: number }[];
+          }
+        ).sources.filter((source) => source.platform === "ios" && source.kind === "seed");
+        expect(iosSeeds, "doctor lists one iOS seed").toHaveLength(1);
+        expect(iosSeeds[0]?.sizeBytes ?? 0).toBeGreaterThan(0);
+
+        const ready = (await env.events()).find(
+          (entry) =>
+            entry.event === "device.ready" &&
+            (entry.payload as { deviceId?: string }).deviceId === secondGrant.device.id,
+        );
+        expect(
+          (ready?.payload as { bootDuration?: number } | undefined)?.bootDuration,
+          "the second device is a copy of the seed, booted in under 30 s",
+        ).toBeLessThan(30_000);
 
         await env.cli(["release", secondGrant.lease.id]);
         const nuke = await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 60_000 });

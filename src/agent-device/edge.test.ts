@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { NodeSqliteOpener } from "../ports/index.js";
@@ -415,6 +415,11 @@ async function waiting(
   rig: Rig,
 ): Promise<readonly { readonly id: string; readonly requesterId: string }[]> {
   return (await rig.daemon.dispatch("list.get", { kind: "requests" }, adminSession)) as never;
+}
+
+// why: a released device is deleted and its record stays listed, so only live devices count.
+async function liveStates(rig: Rig): Promise<readonly string[]> {
+  return (await devices(rig)).map((device) => device.state).filter((state) => state !== "deleted");
 }
 
 async function devices(rig: Rig): Promise<
@@ -888,6 +893,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
         "physical",
       );
       expect(allocatesReceived(rig)).toEqual([]);
+      if (platform === "ios") {
+        // why: a physical iPhone has no `device.rotate`, so its `orientation auto` must reach agent-device, not be refused as an unknown name.
+        await command(rig, "orientation", 1, {}, { positionals: ["auto"] });
+        expect(rig.phone.rpcRequests("agent_device.command")).toMatchObject([
+          { params: { command: "orientation", positionals: ["auto"] } },
+        ]);
+      }
     }
   });
 
@@ -1465,6 +1477,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await expect.poll(async () => (await leases(rig)).length).toBe(0);
 
     expect(allocatesReceived(rig, 1)).toEqual([]);
+    // why: the released device is deleted and the pool boots another on the fake clock, which the daemon's stop waits for.
+    await advance(rig, 12_000);
 
     const failing = await setUp({ drivers: slowDevice });
     failing.driver.failOn("makeReady", 1, new Error("boot failed"));
@@ -1708,9 +1722,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(released.result).toMatchObject({ ok: true, released: true });
     expect(heldAtDaemonRelease).toEqual([hex(1)]);
     expect(await leases(rig)).toEqual([]);
-    await expect
-      .poll(async () => (await devices(rig)).map((device) => device.state))
-      .toEqual(["ready"]);
+    await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
 
     await granted(rig, 2);
     await command(rig, "close", 2);
@@ -1720,9 +1732,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(afterClose.result).toMatchObject({ ok: true, released: false });
     expect(heldAtDaemonRelease).toEqual([]);
     expect(await leases(rig)).toEqual([]);
-    await expect
-      .poll(async () => (await devices(rig)).map((device) => device.state))
-      .toEqual(["ready"]);
+    await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
   });
 
   const ended = [{ leaseId: hex(1), outcome: "released" }];
@@ -1753,9 +1763,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
       expect(await envelopeOf(await send(rig))).toMatchObject(reply);
       await expect.poll(async () => listed(rig)).toEqual([]);
-      await expect
-        .poll(async () => (await devices(rig)).map((device) => device.state))
-        .toEqual(["ready"]);
+      await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
       expectLeaseGone(await envelopeOf(await heartbeat(rig, 1)), "LEASE_NOT_FOUND");
     },
   );
@@ -1781,9 +1789,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
 
     expect(await streamed.text()).toBe(chunks.join(""));
     await expect.poll(async () => listed(rig), { timeout: 3_000 }).toEqual([]);
-    await expect
-      .poll(async () => (await devices(rig)).map((device) => device.state))
-      .toEqual(["ready"]);
+    await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
   });
 
   it("a release the agent-device daemon fails keeps the simlock lease and answers the daemon's error", async () => {
@@ -2812,7 +2818,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     await second.promise;
   });
 
-  it("once the reclaim ends, a second agent's open is granted that device", async () => {
+  it("once the release ends the device, a second agent's open is granted a new device", async () => {
     const rig = await setUp({ maxRunning: 1 });
     await granted(rig, 1);
     const device = await grantedDevice(rig);
@@ -2827,7 +2833,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     const answer = await envelopeOf(await second.promise);
 
     expect(answer.result).toMatchObject({ ok: true });
-    expect(receivedAllocate(rig, 2)["udid"]).toBe(device.address);
+    expect(receivedAllocate(rig, 2)["udid"]).not.toBe(device.address);
   });
 
   it("a simlock lease that expires, one an operator releases with `lease.release`, and one whose device is lost each send agent-device the same release before the reclaim starts", async () => {
@@ -2881,9 +2887,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     await granted(rig, 1);
 
     expect((await envelopeOf(await release(rig, 1))).result).toMatchObject({ released: true });
-    await expect
-      .poll(async () => (await devices(rig)).map((device) => device.state))
-      .toEqual(["ready"]);
+    await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
     await sleep(50);
 
     expect(releasesReceived(rig)).toHaveLength(1);
@@ -3146,9 +3150,10 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
     expect(releasesReceived(rig)).toEqual([]);
   });
 
-  it("a command held past lease.endWaitMs: the reclaim starts at the ceiling and the host's release request is aborted; a second agent's open of that device answers DEVICE_IN_USE and leaves no simlock lease until the command is let go, then is granted", async () => {
+  it("a command held past lease.endWaitMs: the deletion starts at the ceiling and the host's release request is aborted; a second agent's open is granted a new device, not the one the held command ran on", async () => {
     const rig = await setUp({ endWaitMs: 30_000, maxRunning: 1 });
     await granted(rig, 1);
+    const device = await grantedDevice(rig);
     await runningCommand(rig, 1);
     const before = wipes(rig);
     await releaseAll(rig);
@@ -3158,20 +3163,12 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
 
     await expect.poll(() => wipes(rig)).toBeGreaterThan(before);
     expect(rig.fake.abortedReleases).toEqual([hex(1)]);
-    await expect
-      .poll(async () => (await devices(rig)).map((device) => device.state))
-      .toEqual(["ready"]);
-    const refused = await envelopeOf(await allocate(rig, 2, {}, { token: secrets.two }));
-    expect(refused.error?.data?.code).toBe("DEVICE_IN_USE");
-    await expect.poll(async () => await listed(rig)).toEqual([]);
+    await expect.poll(async () => liveStates(rig)).toEqual(["ready"]);
+    const second = await envelopeOf(await allocate(rig, 2, {}, { token: secrets.two }));
+    expect(second.result).toMatchObject({ ok: true });
+    expect(receivedAllocate(rig, 2)["udid"]).not.toBe(device.address);
 
     rig.fake.releaseCommand();
-    await expect
-      .poll(async () => {
-        const retry = await envelopeOf(await allocate(rig, 3, {}, { token: secrets.two }));
-        return retry.result === undefined ? "refused" : "granted";
-      })
-      .toBe("granted");
   });
 
   it("a daemon stop while the host waits for a release, with the held command set to outlive its HTTP request, aborts the participant's request and the stop finishes before the command is let go", async () => {
@@ -3524,6 +3521,56 @@ describe("the agent-device front's request rules", () => {
         expect(commandsReceived(rig)).toHaveLength(1);
       },
     );
+  });
+
+  describe("batch caps", () => {
+    const leaf = { command: "snapshot" };
+    const nest = (levels: number, leaves = 1): Record<string, unknown>[] => {
+      let steps: Record<string, unknown>[] = Array.from({ length: leaves }, () => leaf);
+      for (let level = 1; level < levels; level += 1) {
+        steps = [{ command: "batch", flags: { batchSteps: steps } }];
+      }
+      return steps;
+    };
+
+    it("a batch nested deeper than 8 levels or with more than 1000 steps is refused before any step reaches agent-device, and flattening copies each step a bounded number of times", async () => {
+      const rig = await setUp();
+      await forwarded(rig, () => batch(rig, undefined, nest(8)));
+      await forwarded(rig, () => batch(rig, undefined, nest(1, 1000)));
+
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(9)),
+        "refused: a batch nests more than 8 levels deep",
+      );
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(1, 1001)),
+        "refused: a batch has more than 1000 steps",
+      );
+      await refused(
+        rig,
+        () => batch(rig, undefined, nest(2, 1000)),
+        "refused: a batch has more than 1000 steps",
+      );
+
+      const original = Array.prototype.flatMap;
+      let copied = 0;
+      const spy = vi.spyOn(Array.prototype, "flatMap").mockImplementation(function (
+        this: unknown[],
+        ...args: Parameters<typeof original>
+      ) {
+        const result = original.apply(this, args) as unknown[];
+        copied += result.length;
+        return result;
+      });
+      try {
+        await forwarded(rig, () => batch(rig, undefined, nest(8, 500)));
+      } finally {
+        spy.mockRestore();
+      }
+      expect(copied).toBeLessThanOrEqual(2 * 507);
+    });
   });
 
   describe("rule 6, device selectors", () => {

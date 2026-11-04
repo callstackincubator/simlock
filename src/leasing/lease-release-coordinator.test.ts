@@ -239,6 +239,61 @@ describe("LeaseReleaseCoordinator", () => {
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
 
+  it("releaseToSave ends the lease as an explicit release, hands the save the device, claims it for the save's duration, and holds maintenance and a later save back", async () => {
+    const harness = await createHarness();
+    const first = await grant(harness);
+    const second = await grant(harness);
+    let unblockSave!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      unblockSave = resolve;
+    });
+    const seen: { deviceId: string; claimed: boolean; leases: number }[] = [];
+
+    const saving = harness.coordinator.releaseToSave(first.lease.id, async (released) => {
+      seen.push({
+        claimed: harness.claims.operationFor(released.device.id) === "reclaim",
+        deviceId: released.device.id,
+        leases: harness.registry.snapshot.leases.length,
+      });
+      await blocked;
+      return "saved";
+    });
+    await flush();
+    let maintenanceOpen = false;
+    const maintenance = harness.coordinator.beginMaintenance().then(() => {
+      maintenanceOpen = true;
+    });
+    let secondSettled = false;
+    const queued = harness.coordinator
+      .releaseToSave(second.lease.id, async () => "second")
+      .then((value) => {
+        secondSettled = true;
+        return value;
+      });
+    await flush();
+
+    expect(seen).toEqual([{ claimed: true, deviceId: first.device.id, leases: 1 }]);
+    expect(harness.eventBus.replay()).toContainEqual(
+      expect.objectContaining({
+        event: "lease.released",
+        payload: expect.objectContaining({ leaseId: first.lease.id, reason: "explicit" }),
+      }),
+    );
+    expect(maintenanceOpen).toBe(false);
+    expect(secondSettled).toBe(false);
+    expect(harness.reclaims).toEqual([]);
+
+    unblockSave();
+    await expect(saving).resolves.toBe("saved");
+    await maintenance;
+    expect(harness.claims.isClaimed(first.device.id)).toBe(false);
+    await flush();
+    expect(secondSettled).toBe(false);
+
+    await harness.coordinator.endMaintenance();
+    await expect(queued).resolves.toBe("second");
+  });
+
   it("awaits the reclaim inline for a maintenance-authorized release", async () => {
     const harness = await createHarness();
     const granted = await grant(harness);

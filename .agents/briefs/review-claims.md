@@ -5,7 +5,8 @@ have no other context and have not seen the issue the diff implements.
 
 In the inputs directory: `rules/`, every rule file but `delivery.md`;
 `diff.patch`; `stale-refs.txt`, lines anywhere in the repository that still
-name a path, declaration or quoted string the diff removed; `briefs/calibration.md`,
+name a path, declaration or quoted string the diff removed, or a word the
+spec's Retired words section names; `briefs/calibration.md`,
 when it exists, findings like yours that were rejected lately: read it
 first. Repository: the worktree you were given, checked out at the reviewed
 commit. Read and search it; edit nothing and run no tests.
