@@ -109,3 +109,26 @@ export class InstallReflectingProcessRunner extends ScriptedProcessRunner {
     return handle;
   }
 }
+
+export const pixelDevices = `Available devices:\nid: 0 or "pixel_5"\n    Name: Pixel 5\n    OEM : Google\n`;
+export const twoPixelDevices =
+  `Available devices:\nid: 0 or "pixel_5"\n    Name: Pixel 5\n    OEM : Google\n` +
+  `---------\nid: 1 or "pixel_9"\n    Name: Pixel 9\n    OEM : Google\n`;
+
+export async function writeDevicesXml(
+  filesystem: MemoryFilesystem,
+  deviceBodies: string,
+): Promise<void> {
+  await filesystem.mkdirp(`${ANDROID_HOME_DIRECTORY}/.android`);
+  await filesystem.writeFileAtomic(
+    `${ANDROID_HOME_DIRECTORY}/.android/devices.xml`,
+    `<?xml version="1.0"?><d:devices xmlns:d="http://schemas.android.com/sdk/devices/7">${deviceBodies}</d:devices>`,
+  );
+}
+
+export function customDeviceXml(name: string, ramMiB: number): string {
+  return (
+    `<d:device><d:name>${name}</d:name><d:hardware>` +
+    `<d:ram unit="MiB">${ramMiB}</d:ram></d:hardware></d:device>`
+  );
+}
