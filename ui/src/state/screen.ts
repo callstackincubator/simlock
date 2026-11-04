@@ -18,11 +18,12 @@ import {
   type StreamOffer,
   streamsDevice,
 } from "../model/screen";
+import type { AcquireCapture } from "../model/screens";
 import { useApi } from "./services";
 
 export type { Readout, StreamOffer } from "../model/screen";
 
-export type AcquireCapture = (signal: AbortSignal) => Promise<(() => void) | undefined>;
+export type { AcquireCapture } from "../model/screens";
 
 const EMPTY: StreamStats = {
   dropped: 0,

@@ -143,7 +143,10 @@ export function deviceScreen(input: {
   if (!offer.offered) return { kind: "sentence", text: offer.reason ?? "" };
   if (STREAMING_STATES.has(state)) {
     if (input.queued)
-      return { kind: "sentence", text: "Paused: four screens are already capturing." };
+      return {
+        kind: "sentence",
+        text: `Paused: ${SCREEN_CAPTURE_LIMIT} screens are already capturing.`,
+      };
     return conflict === undefined ? { kind: "picture" } : { kind: "sentence", text: conflict };
   }
   return {

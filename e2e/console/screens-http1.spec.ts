@@ -147,7 +147,7 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     await expect.poll(() => workerReads).toBeGreaterThan(beforePoll);
     expect([...versions]).toEqual(["1.1"]);
     await expect(
-      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+      page.getByText("Paused: 4 screens are already capturing.", { exact: true }),
     ).toHaveCount(2);
     await expect.poll(() => captures.size).toBe(4);
     expect(await page.locator("canvas").count()).toBe(4);
@@ -214,18 +214,30 @@ test("keeps HTTP/1 reads moving with excess screens and promotes waiting capture
     await expect.poll(() => captures.size).toBe(0);
     expect(duplicates).toBe(0);
   } finally {
-    const record = testInfo.outputPath("http1-ownership-history.json");
-    await writeFile(
-      record,
-      JSON.stringify({ versions: [...versions], history, workerReads, duplicates }, null, 2),
-    );
-    await testInfo.attach("http1-ownership-history", {
-      path: record,
-      contentType: "application/json",
-    });
-    await page.close();
-    for (const response of held) response.destroy();
-    server.closeAllConnections();
-    await new Promise<void>((done) => server.close(() => done()));
+    try {
+      const record = testInfo.outputPath("http1-ownership-history.json");
+      await writeFile(
+        record,
+        JSON.stringify({ versions: [...versions], history, workerReads, duplicates }, null, 2),
+      );
+      await testInfo.attach("http1-ownership-history", {
+        path: record,
+        contentType: "application/json",
+      });
+    } finally {
+      try {
+        await page.close();
+      } finally {
+        try {
+          for (const response of held) response.destroy();
+        } finally {
+          try {
+            server.closeAllConnections();
+          } finally {
+            await new Promise<void>((done) => server.close(() => done()));
+          }
+        }
+      }
+    }
   }
 });

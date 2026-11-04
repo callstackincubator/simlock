@@ -111,7 +111,7 @@ describe("what a device's Screen tab shows", () => {
     const input = { state: "ready", offer: { offered: true }, conflict: undefined, queued: true };
     expect(deviceScreen(input)).toEqual({
       kind: "sentence",
-      text: "Paused: four screens are already capturing.",
+      text: "Paused: 4 screens are already capturing.",
     });
     expect(deviceScreen({ ...input, offer: { offered: false, reason: "Unavailable." } })).toEqual({
       kind: "sentence",

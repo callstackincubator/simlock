@@ -1,7 +1,7 @@
 import { platformName } from "../../../src/contract/inbox";
 
 import { devicePath } from "./paths";
-import { streamOffer, streamsDevice, type StreamOffer } from "./screen";
+import { SCREEN_CAPTURE_LIMIT, streamOffer, streamsDevice, type StreamOffer } from "./screen";
 import { type WorkerView, workerName } from "./workers";
 
 export interface ScreenTile {
@@ -52,4 +52,41 @@ export function screenNotice(input: {
   if (!input.connected) return "Disconnected from the daemon.";
   if (!input.offer.offered) return input.offer.reason ?? "Streaming is unavailable.";
   return input.active ? undefined : "Paused while out of view.";
+}
+
+export type AcquireCapture = (signal: AbortSignal) => Promise<(() => void) | undefined>;
+
+// why: the page leaves room for data reads beside its event stream on HTTP/1. Aborting an owner
+// removes its picture, but only completion of its reader's cleanup gives its place to another tile.
+export function createCaptureBudget(): AcquireCapture {
+  let owners = 0;
+  const waiting = new Set<() => void>();
+  return (signal) =>
+    new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve(undefined);
+        return;
+      }
+      const cancel = () => {
+        waiting.delete(admit);
+        signal.removeEventListener("abort", cancel);
+        resolve(undefined);
+      };
+      const admit = () => {
+        if (owners >= SCREEN_CAPTURE_LIMIT) return;
+        waiting.delete(admit);
+        signal.removeEventListener("abort", cancel);
+        owners++;
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          owners--;
+          for (const next of waiting) next();
+        });
+      };
+      waiting.add(admit);
+      signal.addEventListener("abort", cancel, { once: true });
+      admit();
+    });
 }

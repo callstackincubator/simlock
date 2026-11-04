@@ -450,7 +450,7 @@ test("adds a running device without page reload after an event, a poll, or retur
     await expect(page.locator('a[href="/fleet/synthetic/five?drawer=screen"]')).toBeVisible();
     await expect.poll(() => active(page)).toHaveLength(4);
     await expect(
-      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+      page.getByText("Paused: 4 screens are already capturing.", { exact: true }),
     ).toHaveCount(1);
     expect(
       await page.evaluate(
@@ -558,14 +558,14 @@ test("retains a capture's slot while its reader cancellation is still pending", 
     await page.clock.runFor(350);
     await expect(page.locator(".screens-tile")).toHaveCount(5);
     await expect(
-      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+      page.getByText("Paused: 4 screens are already capturing.", { exact: true }),
     ).toHaveCount(1);
     await page.evaluate(() => (window as unknown as { wallTest: Controls }).wallTest.end("one"));
     await expect(page.getByText("The lease was released.", { exact: true })).toBeVisible();
     await page.clock.runFor(15_001);
     expect(await active(page)).toEqual(["four", "one", "three", "two"]);
     await expect(
-      page.getByText("Paused: four screens are already capturing.", { exact: true }),
+      page.getByText("Paused: 4 screens are already capturing.", { exact: true }),
     ).toHaveCount(1);
     if (outcome === "hidden")
       await page.evaluate(() =>
