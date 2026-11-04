@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // `node .agents/scripts/delivery-counters.mjs --since YYYY-MM-DD`: the counters that judge the
-// delivery changes in PROCESS-REVIEW-2026-10-21.md (items 4 to 12), one row per PR merged since
+// delivery changes of the 2026-10-21 process review (#794, items 4 to 12), one row per PR merged since
 // the date, from the PR's tagged runs on this machine and its files on GitHub:
 //
 //   ci lines      `ci:` lines the orchestrator put into fix prompts (CI failures sent to a fix run)

@@ -251,6 +251,9 @@ Also:
   lets an agent run; one that needs the slow lane says so and names its
   test.
 - Nothing `always-in-scope.md` covers.
+- A task that removes or renames a behaviour lists the words that
+  described it under Retired words ("wiped", "reclaimed"), so the audit's
+  sweep finds the docs and comments that still say them.
 
 **Self-check before posting.** For each task, in a scratch file, not in
 the body:

@@ -3,7 +3,13 @@
 # the diff: a deleted or moved path, a declaration that no longer exists, a quoted string no code
 # file contains any more. Each hit is a claim to check; the script judges nothing. Uses only git.
 #
-#   .agents/scripts/stale-refs.sh [<base>] [<head>]      defaults: origin/main, HEAD
+#   .agents/scripts/stale-refs.sh [<base>] [<head>] [<spec>...]      defaults: origin/main, HEAD
+#
+# Each <spec> is an issue body saved to a file. Its `Retired words` section (any heading level)
+# lists, one bullet each, a backticked word or phrase whose old meaning the change ends (a
+# behaviour removed or renamed, such as `wiped` once a device is deleted instead). Every line
+# that still holds one, as a whole word in any case, is listed: a name the branch keeps but
+# whose meaning changed is one the other searches cannot see.
 #
 # Prints nothing when there is no hit. ADRs and CHANGELOG.md are history and are not searched;
 # STALE_REFS_EXCLUDE (git pathspecs, space-separated) replaces that list. STALE_REFS_MAX caps the
@@ -13,6 +19,7 @@ export LC_ALL=C
 
 base=${1:-origin/main}
 head=${2:-HEAD}
+if [ $# -ge 2 ]; then shift 2; else shift $#; fi
 max=${STALE_REFS_MAX:-20}
 exclude=${STALE_REFS_EXCLUDE:-":(exclude)docs/internal/adr/ :(exclude)CHANGELOG.md"}
 fork=$(git merge-base "$base" "$head")
@@ -101,4 +108,20 @@ if [ -s "$tmp/strings" ]; then
     search "*.md *.mdx" -n -F -f "$tmp/dropped" >"$tmp/string-hits"
     group "$tmp/dropped" "$tmp/string-hits" any string "(no code file has it)"
   fi
+fi
+
+# why: a word the branch keeps but whose meaning it changed is in no diff line the searches above read.
+if [ $# -gt 0 ]; then
+  cat "$@" | tr -d '\r' | awk '
+    /^#+[ \t]/ { inside = ($0 ~ /^#+[ \t]+Retired words[ \t]*$/); next }
+    inside && /^[ \t]*[-*][ \t]/ && match($0, /`[^`]+`/) { print substr($0, RSTART + 1, RLENGTH - 2) }
+  ' | sort -u >"$tmp/retired"
+  while IFS= read -r word; do
+    search . -n -i -w -F -e "$word" >"$tmp/word-hits"
+    [ -s "$tmp/word-hits" ] || continue
+    printf 'word %s (retired by the spec)\n' "$word"
+    head -n "$max" "$tmp/word-hits" | cut -c1-200 | sed 's/^/  /'
+    total=$(wc -l <"$tmp/word-hits" | tr -d ' ')
+    [ "$total" -le "$max" ] || printf '  ... %d more\n' "$((total - max))"
+  done <"$tmp/retired"
 fi
