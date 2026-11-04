@@ -88,7 +88,11 @@ cases stay, only the seam moves down.
 ### 3. Size limits, kept by a unit test
 
 A tracked code file may be at most 1,400 lines and a test file at most
-2,500. A unit test in `pnpm check` enforces this. It keeps a list of the
+2,500, counted as `wc -l` counts them. The test scans tracked files under
+`src/`, `ui/`, `e2e/`, `scripts/` and `.agents/scripts/`; `vendor/` and
+`website/` are not scanned. A test file is one whose name matches `.test.`
+or `.spec.`, or whose basename is `test-*` or `testing.ts`; every other
+`.ts`, `.tsx`, `.mts`, `.mjs`, `.js` or `.cjs` file is code. A unit test in `pnpm check` enforces this. It keeps a list of the
 files already over their limit when it landed, each with its length. A
 listed file may not grow past its listed length. A PR that has to grow one
 raises its listed length in the same PR, so the growth is a visible line in
@@ -154,7 +158,7 @@ own just to have one.
 
 ## Consequences
 
-- Every file an agent opens fits one read. A change to how an emulator
+- Every file a feature splits, and every new file, fits the limits. A change to how an emulator
   starts reads `emulator.ts`, and a change to the boot order reads the
   root's `makeReady`, not 12,000 lines.
 - The Android driver is rebuilt in about ten PRs, leaf parts first. Open
