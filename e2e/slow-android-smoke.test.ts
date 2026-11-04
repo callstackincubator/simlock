@@ -98,7 +98,7 @@ describe.skipIf(ANDROID_SDK === undefined)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and, on macOS, leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
         const sdk = requireAndroidSdk();
@@ -111,26 +111,32 @@ describe.skipIf(ANDROID_SDK === undefined)(
         if (adbServerPort === undefined) {
           throw new Error("the real-SDK lane must allocate its own adb server port");
         }
-        const completedDir = await sharedCrashCompletedDir(sdk);
+        // why: the planted dump needs crashpad's database xattrs, which only macOS's `xattr` writes; elsewhere the rest of the smoke test still runs.
+        const completedDir =
+          process.platform === "darwin" ? await sharedCrashCompletedDir(sdk) : undefined;
         // why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted.
         const dumpId = randomUUID();
-        const planted = join(completedDir, `${dumpId}.dmp`);
-        const createdRoot = firstMissingAncestor(completedDir);
+        const planted =
+          completedDir === undefined ? undefined : join(completedDir, `${dumpId}.dmp`);
+        const createdRoot =
+          completedDir === undefined ? undefined : firstMissingAncestor(completedDir);
         try {
-          await mkdir(completedDir, { recursive: true });
-          await writeFile(planted, "simlock slow-lane crash dump marker");
-          await execFileAsync("xattr", [
-            "-w",
-            "org.chromium.crashpad.database.uuid",
-            dumpId,
-            planted,
-          ]);
-          await execFileAsync("xattr", [
-            "-w",
-            "org.chromium.crashpad.database.creation_time",
-            String(Math.floor(Date.now() / 1000)),
-            planted,
-          ]);
+          if (completedDir !== undefined && planted !== undefined) {
+            await mkdir(completedDir, { recursive: true });
+            await writeFile(planted, "simlock slow-lane crash dump marker");
+            await execFileAsync("xattr", [
+              "-w",
+              "org.chromium.crashpad.database.uuid",
+              dumpId,
+              planted,
+            ]);
+            await execFileAsync("xattr", [
+              "-w",
+              "org.chromium.crashpad.database.creation_time",
+              String(Math.floor(Date.now() / 1000)),
+              planted,
+            ]);
+          }
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
           checkCatalog(sdk, catalog.json as AndroidCatalogOutput);
@@ -176,10 +182,12 @@ describe.skipIf(ANDROID_SDK === undefined)(
           expect(density.stdout).toContain("Physical density: 420");
 
           // why: the lease is up, so no dialog blocked the boot, and the launch must have left the user's shared crash database alone.
-          expect(
-            existsSync(planted),
-            "the lease deleted a dump in the user's shared crash db",
-          ).toBe(true);
+          if (planted !== undefined) {
+            expect(
+              existsSync(planted),
+              "the lease deleted a dump in the user's shared crash db",
+            ).toBe(true);
+          }
 
           const refused = await env.cli(["adb", "kill-server"]);
           expect(refused.code, "simlock adb kill-server must be refused, not run").toBe(2);
@@ -264,7 +272,9 @@ describe.skipIf(ANDROID_SDK === undefined)(
             label: "daemon stop left the worker lock behind",
           });
         } finally {
-          await rm(planted, { force: true });
+          if (planted !== undefined) {
+            await rm(planted, { force: true });
+          }
           if (createdRoot !== undefined) {
             await rm(createdRoot, { recursive: true, force: true });
           }
