@@ -24,6 +24,7 @@ import { events, expectEvents, type RecordedEvent } from "./events.js";
 import { emptyDeviceSet, iosDeviceSet } from "./ios-device-set.js";
 import { mcpClient, type McpClientHandle, type McpClientOptions } from "./mcp.js";
 import { freeLoopbackPort } from "./port.js";
+import { removeHome } from "./remove-home.js";
 import { REPO_ROOT } from "./repo-root.js";
 import { waitFor } from "./wait.js";
 
@@ -530,7 +531,7 @@ async function teardown(state: TeardownState): Promise<void> {
   // why: a timed-out test may still be running and writing into its simulator home
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
   await keepDaemonLogs(dataDirectory, home);
-  await rm(home, { force: true, recursive: true });
+  await removeHome(home);
 
   if (stopResult.stopError !== undefined) throw stopResult.stopError;
   if (strayPids.length > 0) {
