@@ -1,7 +1,8 @@
 # Agent rules: toolchain
 
 This project's commands and project-only checks. Agents and skills name no
-command of their own: they take every command from here.
+command of their own: they take every command from here. `implementer.md`
+copies "Tests agents run"; change both together (a repo test compares them).
 
 ## Tests agents run
 

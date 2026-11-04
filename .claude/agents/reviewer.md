@@ -33,10 +33,11 @@ SHA after round 1, prior resolution ledger, and optional `pilot: sonnet`.
    objections, actual fix impacts), never author narration, the PR body or
    commit messages.
 2. **Lenses.** Choose them and their models as REVIEW.md "Routing" says,
-   overriding a lens agent's frontmatter only for those routes. Each code
-   lens gets its own detached worktree at `commit`, prepared with
-   `.agents/scripts/worktree.sh --prepare <path>`; spec and claims get
-   read-only worktrees. Spawn the selected `spec-reviewer`,
+   overriding a lens agent's frontmatter only for those routes. Each lens
+   gets its own new worktree at `commit`, from
+   `.agents/scripts/worktree.sh --detach <commit>` (add `--prepare` for a
+   code lens); it prints the path. Never reuse a folder from an earlier
+   round. Spec and claims treat theirs as read-only. Spawn the selected `spec-reviewer`,
    `code-reviewer` and `claims-reviewer` together in the foreground
    (`run_in_background: false`), each
    prompt the ledger tag line (`toolchain.md`, "Review measurement"), then
