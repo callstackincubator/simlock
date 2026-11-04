@@ -5852,8 +5852,14 @@ describe("IosSimctlDriver simulator audio", () => {
         c.options,
       );
       if (c.volume === "hangs") {
+        const state = promiseState(ready);
         await waitForCalls(runner, c.expected.length);
-        clock.advance(30_000);
+        clock.advance(29_999);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+        clock.advance(1);
+        await flushMicrotasks221();
+        expect(state.state).toBe("fulfilled");
       }
       const device = await ready;
 
