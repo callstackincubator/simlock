@@ -3,6 +3,8 @@ import {
   NodeSqliteOpener,
   ScriptedProcessRunner,
   type ProcessHandle,
+  type ProcessResult,
+  type ProcessRunner,
   type ProcessRunOptions,
   type ScriptedProcessExpectation,
   type SqliteDatabase,
@@ -220,4 +222,20 @@ export function userListing(
       )
       .join("")
   );
+}
+
+/** why: answers every `adb -s <serial> emu avd path` with `answer` and leaves each other call to `inner`, so a test lies about where an emulator runs. */
+export function answeringAvdPath(
+  adb: string,
+  inner: ProcessRunner,
+  answer: ProcessResult,
+): ProcessRunner {
+  return {
+    run: async (command, args, options) =>
+      command === adb && args[0] === "-s" && args.slice(2).join(" ") === "emu avd path"
+        ? answer
+        : inner.run(command, args, options),
+    spawn: (command, args, options) => inner.spawn(command, args, options),
+    spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
+  };
 }

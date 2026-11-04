@@ -45,6 +45,7 @@ import { LIBRARY_PROFILES, type LibraryDeviceProfile } from "./profiles/index.js
 import {
   ANDROID_HOME_DIRECTORY,
   ANDROID_SDK_ROOT,
+  answeringAvdPath,
   customDeviceXml,
   customFitXml,
   type FitImage,
@@ -466,7 +467,7 @@ describe("AndroidDriver", () => {
    * why: The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
    * release the event loop -- the ChildProcess handle does -- so without the `unref` a
    * `daemon stop` logged "Daemon stopped" and then sat there for as long as any emulator ran.
-   * An emulator is meant to outlive the daemon (`#reattachRunningEmulators` adopts it after a
+   * An emulator is meant to outlive the daemon (`DeviceTable#reattachRunningEmulators` adopts it after a
    * restart) and is reaped through adb and by pid, never by awaiting its exit.
    */
   it("releases the event loop for the emulator it starts, so a stopped daemon can exit", async () => {
@@ -855,121 +856,6 @@ describe("AndroidDriver", () => {
     );
   });
 
-  it("reports one running root AVD, one stopped root AVD and the running AVD's process", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_running.avd`);
-    await filesystem.mkdirp(`${avdDirectory}/simlock_stopped.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      processResult(
-        binaries.adb,
-        [
-          "-s",
-          "emulator-5586",
-          "shell",
-          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
-        ],
-        "simlock_running\n",
-      ),
-      avdPathExpectation("emulator-5586", "simlock_running"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    expect(
-      [...reality.devices]
-        .map((device) => ({ deviceId: device.deviceId, runState: device.runState }))
-        .sort((left, right) => left.deviceId.localeCompare(right.deviceId)),
-    ).toEqual([
-      { deviceId: "simlock_running", runState: "running" },
-      { deviceId: "simlock_stopped", runState: "stopped" },
-    ]);
-    expect(reality.processes).toEqual([expect.objectContaining({ deviceId: "simlock_running" })]);
-  });
-
-  it("listManaged settles after the timeout when one serial's mark read never answers, reports that serial unreadable, and still finds another serial in the same pass", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
-    await filesystem.mkdirp(`${avdDirectory}/simlock_two.avd`);
-    const clock = new FakeClock();
-    const runner = new ClockDeadlineRunner(
-      [
-        processResult(
-          binaries.adb,
-          ["devices"],
-          "List of devices attached\nemulator-5586\tdevice\nemulator-5588\tdevice\n",
-        ),
-        {
-          hangs: true,
-          match: {
-            args: ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-            command: binaries.adb,
-          },
-        },
-        processResult(
-          binaries.adb,
-          ["-s", "emulator-5588", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-          "simlock_two\n",
-        ),
-        avdPathExpectation("emulator-5588", "simlock_two"),
-      ],
-      clock,
-    );
-    const driver = await createDriver(filesystem, runner, { clock });
-
-    let settled: Awaited<ReturnType<typeof driver.listManaged>> | undefined;
-    void driver.listManaged().then((reality) => {
-      settled = reality;
-    });
-    for (let step = 0; step < 20 && settled === undefined; step += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-      clock.advance(1_000);
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(
-      settled?.devices.map((device) => ({ deviceId: device.deviceId, runState: device.runState })),
-    ).toEqual(
-      expect.arrayContaining([
-        { deviceId: "simlock_two", runState: "running" },
-        { deviceId: "simlock_one", runState: "transitioning" },
-      ]),
-    );
-    expect(settled?.processes).toEqual([expect.objectContaining({ deviceId: "simlock_two" })]);
-  });
-
-  it("reads the erasable mark with head -c 4096, and a mark cut at that cap is read as no mark", async () => {
-    const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
-    });
-    const cutAtCap = `{"token":"tok-123","pad":"${"x".repeat(5000)}"}`.slice(0, 4096);
-    const runner = new ScriptedProcessRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      processResult(
-        binaries.adb,
-        [
-          "-s",
-          "emulator-5586",
-          "shell",
-          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
-        ],
-        `simlock_one\n${cutAtCap}`,
-      ),
-      avdPathExpectation("emulator-5586"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
-    expect(device?.mark).toEqual({
-      durable: "tok-123",
-      erasable: undefined,
-      erasableReadable: true,
-    });
-  });
-
   it("answers virtualLeaseEnvironment with simlock's adb port, and leaseEnvironment for a virtual device equals it", async () => {
     const driver = await createDriver(await androidFilesystem(), new EmulatorExitingRunner([]));
 
@@ -996,57 +882,6 @@ describe("AndroidDriver", () => {
     );
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "standard" })).toBe("uninstall");
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "full" })).toBe("uninstall");
-  });
-
-  it("listManaged passes a 30-second timeout to adb devices", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    await driver.listManaged();
-
-    const listing = runner.calls.find((call) => call.args[0] === "devices");
-    expect(listing?.options.timeoutMs).toBe(30_000);
-  });
-
-  it("treats an otherwise-stopped AVD as transitioning when an unattributable transitional serial is present", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(
-        binaries.adb,
-        ["devices"],
-        "List of devices attached\nemulator-5588\toffline\n",
-      ),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    expect(reality.devices).toEqual([
-      expect.objectContaining({ deviceId: "simlock_idle", runState: "transitioning" }),
-    ]);
-    // why: Only settled `device`-state serials are counted as running processes; the
-    // unattributable offline serial never appears here regardless of the AVD fallback above.
-    expect(reality.processes).toEqual([]);
-  });
-
-  it("still resolves a stopped AVD as stopped when adb reports no serials at all", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_idle.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    expect(reality.devices).toEqual([
-      expect.objectContaining({ deviceId: "simlock_idle", runState: "stopped" }),
-    ]);
   });
 
   it("rewrites the mark on makeReady's early-return branch without duplicating the config.ini line", async () => {
@@ -1107,136 +942,6 @@ describe("AndroidDriver", () => {
     expect((withoutMark.device.driverData as { configHash: string }).configHash).toBe(
       (withMark.device.driverData as { configHash: string }).configHash,
     );
-  });
-
-  it("listManaged reports matching durable and erasable marks for a running device", async () => {
-    const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
-    });
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      processResult(
-        binaries.adb,
-        [
-          "-s",
-          "emulator-5586",
-          "shell",
-          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
-        ],
-        'simlock_one\n{"token":"tok-123"}',
-      ),
-      avdPathExpectation("emulator-5586"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
-    expect(device?.mark).toEqual({
-      durable: "tok-123",
-      erasable: "tok-123",
-      erasableReadable: true,
-    });
-  });
-
-  it("listManaged reports an erased running device when the erasable mark file is gone", async () => {
-    const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
-    });
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      processResult(
-        binaries.adb,
-        [
-          "-s",
-          "emulator-5586",
-          "shell",
-          "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
-        ],
-        "simlock_one\n",
-      ),
-      avdPathExpectation("emulator-5586"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
-    expect(device?.mark).toEqual({
-      durable: "tok-123",
-      erasable: undefined,
-      erasableReadable: true,
-    });
-  });
-
-  it("keeps listManaged alive when a serial dies between the scan and the read", async () => {
-    const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
-    });
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      {
-        match: {
-          args: [
-            "-s",
-            "emulator-5586",
-            "shell",
-            "getprop ro.boot.qemu.avd_name; head -c 4096 /data/local/tmp/simlock-mark.json 2>/dev/null || true",
-          ],
-          command: binaries.adb,
-        },
-        result: { code: 1, stderr: "device 'emulator-5586' not found", stdout: "" },
-      },
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    // why: An emulator can vanish between `adb devices` and the read. Losing the whole
-    // reality view over one dead serial would strand every other managed device.
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
-    expect(device?.runState).toBe("transitioning");
-    // why: The durable half is a host file and stays readable; the erasable half genuinely
-    // was not read, so it must report unreadable rather than absent -- absent would
-    // classify as a foreign erase.
-    expect(device?.mark).toEqual({
-      durable: "tok-123",
-      erasable: undefined,
-      erasableReadable: false,
-    });
-  });
-
-  it("listManaged reports erasableReadable: false for a stopped, marked device", async () => {
-    const filesystem = await androidFilesystem({
-      config: "hw.ramSize=2048\nsimlock.mark=tok-123\n",
-    });
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_one");
-    expect(device?.mark).toEqual({
-      durable: "tok-123",
-      erasable: undefined,
-      erasableReadable: false,
-    });
-  });
-
-  it("listManaged reports no mark for a stopped, pre-existing AVD with no durable key (upgrade path)", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_legacy.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    const device = reality.devices.find((candidate) => candidate.deviceId === "simlock_legacy");
-    expect(device?.mark).toBeUndefined();
   });
 
   describe("device-profile-hidden advisories", () => {
@@ -1823,39 +1528,6 @@ describe("AndroidDriver", () => {
     });
   });
 });
-
-/**
- * why: Honours `timeoutMs` the way `NodeProcessRunner` does -- the child is killed once it
- * passes -- but on the driver's fake clock, so a deadline given to `run` is visible to a test
- * that moves that clock. A bare `ScriptedProcessRunner` ignores `timeoutMs`.
- */
-class ClockDeadlineRunner extends ScriptedProcessRunner {
-  readonly #clock: FakeClock;
-
-  constructor(expectations: readonly ScriptedProcessExpectation[], clock: FakeClock) {
-    super(expectations);
-    this.#clock = clock;
-  }
-
-  override async run(
-    command: string,
-    args: readonly string[],
-    options: ProcessRunOptions = {},
-  ): Promise<ProcessResult> {
-    const handle = this.spawn(command, args, options);
-    const timer =
-      options.timeoutMs === undefined
-        ? undefined
-        : this.#clock.setTimer(options.timeoutMs, () => {
-            handle.kill("SIGKILL");
-          });
-    try {
-      return await handle.wait();
-    } finally {
-      if (timer !== undefined) this.#clock.cancel(timer);
-    }
-  }
-}
 
 /**
  * why: A scripted emulator stays up until it is told to stop, as a real one does, so a boot that
@@ -2767,72 +2439,6 @@ describe("AndroidDriver ownership", () => {
     },
   );
 
-  it("does not attribute an outside-root emulator to a root AVD with the same name (#261)", async () => {
-    const filesystem = await androidFilesystem();
-    const ownedPath = `${avdDirectory}/simlock_mine.avd`;
-    const foreignPath = `${home}/.android/avd/simlock_mine.avd`;
-    await filesystem.mkdirp(ownedPath);
-    await filesystem.writeFileAtomic(`${ownedPath}/config.ini`, "simlock.mark=owned-token\n");
-    await filesystem.mkdirp(foreignPath);
-
-    for (const path of [ownedPath, foreignPath]) {
-      const runner = answeringAvdPath(
-        new EmulatorExitingRunner([
-          processResult(
-            binaries.adb,
-            ["devices"],
-            "List of devices attached\nemulator-5586\tdevice\n",
-          ),
-          processResult(
-            binaries.adb,
-            ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-            'simlock_mine\n{"token":"owned-token"}',
-          ),
-        ]),
-        ok(`${path}\r\nOK\r\n`),
-      );
-      const driver = await createDriver(filesystem, runner);
-
-      const reality = await driver.listManaged();
-
-      expect
-        .soft(reality.processes, path)
-        .toEqual(
-          path === ownedPath
-            ? [expect.objectContaining({ address: "emulator-5586", deviceId: "simlock_mine" })]
-            : [],
-        );
-      expect.soft(reality.devices, path).toEqual([
-        expect.objectContaining({
-          deviceId: "simlock_mine",
-          runState: path === ownedPath ? "running" : "stopped",
-          mark: {
-            durable: "owned-token",
-            erasable: path === ownedPath ? "owned-token" : undefined,
-            erasableReadable: path === ownedPath,
-          },
-        }),
-      ]);
-    }
-  });
-
-  it("manages every AVD in its root, whatever the AVD is called", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/a-name-nobody-prefixed.avd`);
-    await filesystem.mkdirp(`${avdDirectory}/Odd.Name_3.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    expect(reality.devices.map((device) => device.deviceId).sort()).toEqual([
-      "Odd.Name_3",
-      "a-name-nobody-prefixed",
-    ]);
-  });
-
   it("tells two running copies of one seed apart by each one's own AVD folder, still attributes an old-layout AVD, and lists no seed folder nor attributes its emulator", async () => {
     const filesystem = await androidFilesystem();
     for (const folder of [
@@ -2877,30 +2483,6 @@ describe("AndroidDriver ownership", () => {
       ["simlock_a", "emulator-5556"],
       ["simlock_b", "emulator-5554"],
       ["simlock_old", "emulator-5558"],
-    ]);
-  });
-
-  it("ignores a running emulator whose AVD does not live in its root", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${avdDirectory}/simlock_mine.avd`);
-    const runner = new EmulatorExitingRunner([
-      processResult(binaries.adb, ["devices"], "List of devices attached\nemulator-5586\tdevice\n"),
-      processResult(
-        binaries.adb,
-        ["-s", "emulator-5586", "shell", /getprop ro\.boot\.qemu\.avd_name/],
-        // why: Named exactly like one of Simlock's, and still not Simlock's: the AVD is not in
-        // the root, and ownership is proven from the root rather than from the name or from
-        // the fact that Simlock's own server can see it.
-        "simlock_impostor\n",
-      ),
-    ]);
-    const driver = await createDriver(filesystem, runner);
-
-    const reality = await driver.listManaged();
-
-    expect(reality.processes).toEqual([]);
-    expect(reality.devices).toEqual([
-      expect.objectContaining({ deviceId: "simlock_mine", runState: "stopped" }),
     ]);
   });
 });
@@ -3198,7 +2780,11 @@ describe("AndroidDriver console ports across a restart", () => {
     const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
     const running = await before.makeReady(await before.provision(spec));
     const calls: { args: readonly string[]; timeoutMs: number | undefined }[] = [];
-    const inner = answeringAvdPath(host.runner(), { code: 1, stderr: "error", stdout: "" });
+    const inner = answeringAvdPath(binaries.adb, host.runner(), {
+      code: 1,
+      stderr: "error",
+      stdout: "",
+    });
     const runner: ProcessRunner = {
       ...inner,
       run: async (command, args, options) => {
@@ -3226,7 +2812,11 @@ describe("AndroidDriver console ports across a restart", () => {
     const spec = await before.resolveSpec({ model: "Pixel 5", platform: "android" });
     const running = await before.makeReady(await before.provision(spec));
     const kills: string[] = [];
-    const inner = answeringAvdPath(host.runner(), ok(`${avdDirectory}/simlock_other.avd\nOK\n`));
+    const inner = answeringAvdPath(
+      binaries.adb,
+      host.runner(),
+      ok(`${avdDirectory}/simlock_other.avd\nOK\n`),
+    );
     const runner: ProcessRunner = {
       ...inner,
       run: async (command, args, options) => {
@@ -3441,35 +3031,31 @@ describe("AndroidDriver pre-root devices", () => {
     });
   });
 
-  it("finds an AVD stranded in the pre-root AVD home", async () => {
+  it("hands the device table its device root, its legacy AVD home, its environment and its avdmanager", async () => {
+    const legacyHome = "/legacy/avd";
     const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd`);
-    const driver = await createDriver(filesystem, new EmulatorExitingRunner([]));
-
-    await expect(driver.findLegacy("simlock_old")).resolves.toMatchObject({
-      device: { deviceId: "simlock_old" },
-      path: `${home}/.android/avd/simlock_old.avd`,
-    });
-    await expect(driver.findLegacy("simlock_never_existed")).resolves.toBeUndefined();
-  });
-
-  it("deletes a stranded AVD against the legacy AVD home, not Simlock's root", async () => {
-    const filesystem = await androidFilesystem();
-    await filesystem.mkdirp(`${home}/.android/avd/simlock_old.avd`);
+    await filesystem.mkdirp(`${avdDirectory}/simlock_new.avd`);
+    await filesystem.mkdirp(`${legacyHome}/simlock_old.avd`);
     const runner = new EmulatorExitingRunner([
+      processResult(binaries.adb, ["devices"], "List of devices attached\n"),
       processResult(binaries.avdmanager, ["delete", "avd", "-n", "simlock_old"]),
     ]);
-    const driver = await createDriver(filesystem, runner);
-    const legacy = await driver.findLegacy("simlock_old");
+    const driver = await createDriver(filesystem, runner, {
+      avdHome: legacyHome,
+      extraEnv: { SIMLOCK_MARKER: "kept" },
+    });
 
+    const reality = await driver.listManaged();
+    const legacy = await driver.findLegacy("simlock_old");
     await driver.destroyLegacy(legacy!.device);
 
-    // why: Pointed at the home the AVD is actually in, and deliberately carrying no
-    // `ANDROID_ADB_SERVER_PORT`: a device this old is not on Simlock's server, and the
-    // user's is not one Simlock may drive.
-    expect(runner.calls.at(-1)?.options?.env).toEqual({
-      ANDROID_AVD_HOME: `${home}/.android/avd`,
-      ANDROID_HOME: sdk,
+    expect(reality.devices.map((device) => device.deviceId)).toEqual(["simlock_new"]);
+    expect(legacy?.path).toBe(`${legacyHome}/simlock_old.avd`);
+    expect(runner.calls.at(-1)).toMatchObject({
+      command: binaries.avdmanager,
+      options: {
+        env: { ANDROID_AVD_HOME: legacyHome, ANDROID_HOME: sdk, SIMLOCK_MARKER: "kept" },
+      },
     });
   });
 });
@@ -6032,17 +5618,6 @@ class PortTakingMachine {
     if (command === "shell getprop ro.boot.qemu.avd_name") return ok(`${name}\n`);
     return undefined;
   }
-}
-
-function answeringAvdPath(inner: ProcessRunner, answer: ProcessResult): ProcessRunner {
-  return {
-    run: async (command, args, options) =>
-      command === binaries.adb && args[0] === "-s" && args.slice(2).join(" ") === "emu avd path"
-        ? answer
-        : inner.run(command, args, options),
-    spawn: (command, args, options) => inner.spawn(command, args, options),
-    spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
-  };
 }
 
 /** why: `emu avd path` answers truthfully until the test sets an answer, so a seed is made first and only the copy's boot is lied to. */
