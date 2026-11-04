@@ -917,6 +917,12 @@ export class Dispatcher {
   #baselineRemove: Handler<"baseline.remove"> = async (input, session) => {
     if (this.options.baselines === undefined)
       throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    if (input.workerId !== undefined) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        "workerId names a gateway's worker, and this daemon is not a gateway; remove without --worker",
+      );
+    }
     try {
       const removed = await this.options.baselines.remove({
         name: input.name,
@@ -979,19 +985,23 @@ export class Dispatcher {
   #workerList: Handler<"worker.list"> = async (_input, session) => {
     // why: taken as status resolves, not after the slower catalog read, so the load is not made to look fresher.
     let receivedAt = this.options.clock.now();
-    const [status, devices, catalog] = await Promise.all([
+    const [status, devices, catalog, baselines] = await Promise.all([
       Promise.resolve(this.#statusGet({}, session)).then((answer) => {
         receivedAt = this.options.clock.now();
         return answer;
       }),
       this.#listGet({ kind: "devices" }, session),
       this.#keptViewCatalog(session),
+      this.options.baselines === undefined ? undefined : this.#baselineList({}, session),
     ]);
     const label = this.options.config.gateway.label;
     return {
       workers: [
         {
           ...workerViewFields({
+            ...(baselines === undefined
+              ? {}
+              : { baselines: OPERATIONS["baseline.list"].output.parse(baselines) }),
             catalog: OPERATIONS["catalog.get"].output.parse(catalog),
             config: OPERATIONS["config.get"].output.parse(this.#configGet({}, session)),
             devices: OPERATIONS["list.get"].output.parse(devices),

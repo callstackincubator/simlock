@@ -982,6 +982,38 @@ describe("the worker view's load", () => {
   });
 });
 
+describe("the worker view's baselines", () => {
+  const view = {
+    connection: "connected" as const,
+    drained: false,
+    id: "wrk_1",
+    lastSeenAt: 1,
+  };
+  const entry = {
+    mode: "full" as const,
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "36",
+    platform: "android" as const,
+    savedAt: "2026-11-02T13:10:00Z",
+    version: 2,
+  };
+
+  it("the worker view schema takes 1000 baselines and refuses 1001, and an entry's workerId of 1 to 128 characters and refuses an empty or 129-character one", () => {
+    const parse = (baselines: unknown[]) => workerViewSchema.parse({ ...view, baselines });
+
+    expect(parse([])).toEqual({ ...view, baselines: [] });
+    expect(parse(Array.from({ length: 1000 }, () => entry))).toHaveProperty("baselines.999");
+    expect(() => parse(Array.from({ length: 1001 }, () => entry))).toThrow();
+    expect(parse([{ ...entry, workerId: "x".repeat(128) }])).toHaveProperty(
+      "baselines.0.workerId",
+      "x".repeat(128),
+    );
+    expect(() => parse([{ ...entry, workerId: "" }])).toThrow();
+    expect(() => parse([{ ...entry, workerId: "x".repeat(129) }])).toThrow();
+  });
+});
+
 describe("waitingRequestSchema's reason", () => {
   const reasons = [
     "behind-earlier-request",

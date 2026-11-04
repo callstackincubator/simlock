@@ -1,3 +1,4 @@
+import type { SimlockAdminClient } from "../../admin/index.js";
 import { commandArgs, subcommandOrUsage, UsageError, withHelpHint, writeResult } from "../args.js";
 import { connectDaemonClient } from "../connect.js";
 import { baselineRemovedLine, baselineSavedLine, baselineTable } from "../format.js";
@@ -6,7 +7,7 @@ import type { CommandContext } from "../tree.js";
 const BASELINE_USAGE =
   "Usage: simlock baseline save <name> --lease <id> [--note <text>]\n" +
   "       simlock baseline list [--json]\n" +
-  "       simlock baseline remove <name> [--yes]\n";
+  "       simlock baseline remove <name> [--yes] [--worker <id>]\n";
 
 async function run(argv: readonly string[], context: CommandContext): Promise<number> {
   const { environment, token } = context;
@@ -40,7 +41,10 @@ async function runList(
   try {
     const listed = await client.listBaselines();
     if (values.json) writeResult((value) => environment.stdout.write(value), listed);
-    else environment.stdout.write(baselineTable(listed.baselines));
+    else {
+      const gateway = environment.daemonHome.role === "gateway";
+      environment.stdout.write(baselineTable(listed.baselines, { gateway }));
+    }
     return 0;
   } finally {
     await client.close();
@@ -54,6 +58,7 @@ async function runRemove(
 ): Promise<number> {
   const values = commandArgs(argv, {
     help: { type: "boolean", short: "h" },
+    worker: { type: "string" },
     yes: { type: "boolean" },
   });
   if (values.help) {
@@ -64,26 +69,43 @@ async function runRemove(
   if (name === undefined || extra.length > 0) {
     throw new UsageError(withHelpHint("baseline remove takes one <name>"));
   }
+  const workerId = typeof values.worker === "string" ? values.worker : undefined;
+  // why: a gateway needs the worker that holds the baseline; without one the CLI asks nothing and sends the remove, so the gateway's BAD_REQUEST is the answer.
+  const unnamedOnGateway = environment.daemonHome.role === "gateway" && workerId === undefined;
   const client = await connectDaemonClient(environment, token);
   try {
-    if (values.yes !== true) {
-      // why: the question names the version the operator is about to lose; a name nobody holds is not asked about, since the daemon answers it.
-      const { baselines } = await client.listBaselines();
-      const held = baselines.find((baseline) => baseline.name === name);
-      if (held !== undefined) {
-        const confirmed = await environment.confirm?.(
-          `Remove baseline ${name} v${String(held.version)}? [y/N] `,
-        );
-        if (confirmed !== true) {
-          throw new UsageError("baseline remove requires confirmation or --yes");
-        }
-      }
+    if (values.yes !== true && !unnamedOnGateway) {
+      await confirmRemoval(client, environment, name, workerId);
     }
-    environment.stdout.write(baselineRemovedLine(await client.removeBaseline({ name })));
+    const removed = await client.removeBaseline({
+      name,
+      ...(workerId === undefined ? {} : { workerId }),
+    });
+    environment.stdout.write(baselineRemovedLine(removed, workerId));
     return 0;
   } finally {
     await client.close();
   }
+}
+
+// why: the question names the version the operator is about to lose; a name nobody holds is not asked about, since the daemon answers it.
+async function confirmRemoval(
+  client: SimlockAdminClient,
+  environment: CommandContext["environment"],
+  name: string,
+  workerId: string | undefined,
+): Promise<void> {
+  const { baselines } = await client.listBaselines();
+  const held = baselines.find(
+    (baseline) =>
+      baseline.name === name && (workerId === undefined || baseline.workerId === workerId),
+  );
+  if (held === undefined) return;
+  const from = workerId === undefined ? "" : ` from ${workerId}`;
+  const confirmed = await environment.confirm?.(
+    `Remove baseline ${name} v${String(held.version)}${from}? [y/N] `,
+  );
+  if (confirmed !== true) throw new UsageError("baseline remove requires confirmation or --yes");
 }
 
 async function runSave(

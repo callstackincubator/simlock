@@ -244,6 +244,8 @@ async function buildDispatcher(
     readonly eventHistory?: Pick<EventHistoryHandle, "replay" | "replayPage" | "status">;
     readonly historyPath?: string;
     readonly withoutTokens?: boolean;
+    /** why: a daemon wired without the baseline service. */
+    readonly withoutBaselines?: boolean;
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
@@ -366,7 +368,7 @@ async function buildDispatcher(
       : { capabilitySources: overrides.capabilitySources }),
     capacity: engine,
     warmPool: engine,
-    baselines: engine.core.baselines,
+    ...(overrides.withoutBaselines === true ? {} : { baselines: engine.core.baselines }),
     deviceModes: engine,
     catalog: overrides.catalog ?? engine,
     clock,
@@ -1926,6 +1928,47 @@ function seedBaselineRows(state: StateDatabase): void {
     )
     .run();
 }
+
+describe("Dispatcher: baselines beside a gateway's worker view", () => {
+  it("answers worker.list with the baselines its own baseline.list gives, and with none when no baseline service is wired", async () => {
+    const { dispatcher, driver, registry } = await buildDispatcher();
+    const admin = session({ role: "admin" });
+    const grant = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" },
+      session(),
+    );
+    const held = registry.snapshot.virtualDevices.find((device) => device.id === grant.device.id);
+    driver.writeDeviceFile(held?.driverDeviceId ?? "", "data/state", "signed in");
+    await dispatcher.dispatch("baseline.save", { leaseId: grant.lease.id, name: "login" }, admin);
+
+    const { baselines } = await dispatcher.dispatch("baseline.list", {}, admin);
+    const { workers } = await dispatcher.dispatch("worker.list", {}, admin);
+
+    expect(baselines.map((baseline) => baseline.name)).toEqual(["login"]);
+    expect(workers[0]?.baselines).toEqual(baselines);
+
+    const bare = await buildDispatcher({ withoutBaselines: true });
+    const listed = await bare.dispatcher.dispatch("worker.list", {}, admin);
+    expect(listed.workers[0]).not.toHaveProperty("baselines");
+  });
+
+  it("refuses baseline.remove with a workerId, which names a gateway's worker", async () => {
+    const { dispatcher } = await buildDispatcher();
+
+    await expect(
+      dispatcher.dispatch(
+        "baseline.remove",
+        { name: "login", workerId: "wrk_a" },
+        session({ role: "admin" }),
+      ),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message:
+        "workerId names a gateway's worker, and this daemon is not a gateway; remove without --worker",
+    });
+  });
+});
 
 describe("Dispatcher: baseline.remove", () => {
   it("removes an unused baseline with its source and the idle devices made from it, refuses one a lease uses, an unknown name and an agent", async () => {

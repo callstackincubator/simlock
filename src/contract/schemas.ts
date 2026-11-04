@@ -107,6 +107,9 @@ export const baselineNoteSchema = z
   .max(200)
   .regex(NO_CONTROL_CHARACTERS, "baseline note may not contain control characters");
 
+/** why: the bound a worker id has on the wire, shared by the events page, a baseline entry and `baseline.remove`. */
+export const WORKER_ID_MAX = 128;
+
 /** why: one baseline as `baseline.save` and `baseline.list` answer it; `sizeBytes` is absent when the source's size could not be counted. */
 export const baselineEntrySchema = z.object({
   name: baselineNameSchema,
@@ -120,6 +123,8 @@ export const baselineEntrySchema = z.object({
   sizeBytes: z.number().int().min(0).optional(),
   savedAt: z.string().max(64),
   staleReason: z.string().max(300).optional(),
+  /** why: set only by a gateway's `baseline.list`: the worker that holds the baseline, what `--worker` takes. */
+  workerId: z.string().min(1).max(WORKER_ID_MAX).optional(),
 });
 
 export type BaselineEntry = z.infer<typeof baselineEntrySchema>;
@@ -416,6 +421,9 @@ const gatewayWaitingReasonSchema = z.enum([
   "no-driver",
   "unknown-model",
   "runtime-missing",
+  "no-baseline",
+  "baseline-mismatch",
+  "baseline-stale",
   "capability-missing",
   "full",
   "no-free-physical",
@@ -1282,6 +1290,8 @@ export const workerViewSchema = z.object({
   leases: z.array(leaseRecordSchema).optional(),
   devices: z.array(statusDeviceSchema).optional(),
   catalog: z.array(platformCatalogSchema).optional(),
+  /** why: absent while a worker is starting, `[]` when it holds none: the worker's own `baseline.list`, read with the catalog. */
+  baselines: z.array(baselineEntrySchema).max(1000).optional(),
   /** why: Cleared on connect, so a just-connected worker has none: it tells a catalog read and found empty from one not yet arrived. */
   catalogReadAt: z.number().optional(),
   host: hostFactsSchema.optional(),
@@ -1302,7 +1312,7 @@ const inboxGroupSchema = z.enum(["Broken", "Needs a look", "Heads-up"]);
 
 // why: an Inbox item names the worker it is about by the view's fields that the page does not read from the worker list, plus two counts the view's lists would otherwise have to be sent for.
 const inboxWorkerSchema = workerViewSchema
-  .omit({ catalog: true, devices: true, downloads: true, leases: true })
+  .omit({ baselines: true, catalog: true, devices: true, downloads: true, leases: true })
   .extend({
     heldLeases: z.number().int().nonnegative(),
     leasedDevices: z.number().int().nonnegative(),

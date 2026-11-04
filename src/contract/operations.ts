@@ -673,7 +673,13 @@ export const baselineRemove = defineOperation({
   name: "baseline.remove",
   role: "admin",
   effect: "write",
-  input: z.object({ name: baselineNameSchema }).strict(),
+  // why: `workerId` names the worker a gateway forwards the remove to; a gateway requires it and strips it, a worker refuses it.
+  input: z
+    .object({
+      name: baselineNameSchema,
+      workerId: z.string().min(1).max(EVENTS_WORKER_MAX).optional(),
+    })
+    .strict(),
   output: z.object({
     name: baselineNameSchema,
     versions: z.array(z.number().int().min(1)).max(1000),

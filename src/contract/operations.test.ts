@@ -1220,6 +1220,24 @@ describe("operation input/output round trips", () => {
     }
   });
 
+  it("baseline.remove: accepts a workerId of 1 to 128 characters, and refuses an empty or 129-character one, a non-string and an unknown key", () => {
+    const parse = (input: object) => OPERATIONS["baseline.remove"].input.parse(input);
+    const base = { name: "checkout" };
+
+    expect(parse(base)).toEqual(base);
+    for (const workerId of ["w", "x".repeat(128)]) {
+      expect(parse({ ...base, workerId })).toEqual({ ...base, workerId });
+    }
+    for (const refused of [
+      { ...base, workerId: "" },
+      { ...base, workerId: "x".repeat(129) },
+      { ...base, workerId: 7 },
+      { ...base, worker: "wrk_a" },
+    ]) {
+      expect(() => parse(refused)).toThrow();
+    }
+  });
+
   it("the output push carries a frame id, a stream, and a chunk", () => {
     expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
       chunk: "hello",

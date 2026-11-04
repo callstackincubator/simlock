@@ -8,6 +8,8 @@ import { type DeviceClass, noPhysicalMatch } from "../../core/index.js";
 import type { WorkerView } from "../worker-registry.js";
 import type { RoutableRequest } from "./pipeline.js";
 import {
+  baselineEntry,
+  baselineMismatchOf,
   hasPlatform,
   listsModel,
   matchRequest,
@@ -22,7 +24,10 @@ export type RejectionCode =
   | "NO_DRIVER"
   | "UNKNOWN_MODEL"
   | "RUNTIME_MISSING"
-  | "CAPABILITY_MISSING";
+  | "CAPABILITY_MISSING"
+  | "UNKNOWN_BASELINE"
+  | "BASELINE_MISMATCH"
+  | "BASELINE_STALE";
 
 /** What a request the fleet cannot serve is told: the code and details a worker gives the same
  * request, and the `lease.rejected` reason the gateway records it under. */
@@ -38,13 +43,72 @@ export interface Rejection {
         readonly osVersion?: string;
         readonly downloadable?: false;
       }
-    | { readonly capabilities: readonly string[] };
+    | { readonly capabilities: readonly string[] }
+    | { readonly name: string }
+    | { readonly baseline: string; readonly field: string }
+    | { readonly baseline: string; readonly reason: string };
   readonly reason: "no-worker" | "unresolvable-spec";
 }
 
 export type Assessment = { readonly kind: "route-or-wait" } | Rejection;
 
 export function assess(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
+  if (request.baseline === undefined) return assessFleet(request, views);
+  const holders = baselineHolders(request, views);
+  return holders.kind === "reject" ? holders : assessFleet(request, holders.views);
+}
+
+type Holders = { readonly kind: "holders"; readonly views: readonly WorkerView[] } | Rejection;
+
+/**
+ * why: ADR 0061 §6: before the table, a request naming a baseline is checked against the workers
+ * that hold it: none holds it, none fits it, or no fitting one is fresh. The first holder in
+ * worker id order gives the message. The table then runs over the fitting, fresh holders.
+ */
+function baselineHolders(request: RoutableRequest, views: readonly WorkerView[]): Holders {
+  const name = request.baseline ?? "";
+  const holders = views
+    .filter((worker) => isKnown(worker) && baselineEntry(worker, request) !== undefined)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (holders.length === 0) {
+    return {
+      code: "UNKNOWN_BASELINE",
+      details: { name },
+      kind: "reject",
+      message: `no worker holds a baseline named "${name}"`,
+      reason: "unresolvable-spec",
+    };
+  }
+  const mismatches = holders.map((worker) => baselineMismatchOf(worker, request));
+  const fitting = holders.filter((_worker, index) => mismatches[index] === undefined);
+  const firstMismatch = mismatches[0];
+  if (fitting.length === 0 && firstMismatch !== undefined) {
+    return {
+      code: "BASELINE_MISMATCH",
+      details: { baseline: name, field: firstMismatch.field },
+      kind: "reject",
+      message: firstMismatch.message,
+      reason: "unresolvable-spec",
+    };
+  }
+  const fresh = fitting.filter(
+    (worker) => baselineEntry(worker, request)?.staleReason === undefined,
+  );
+  if (fresh.length === 0) {
+    const first = fitting[0];
+    const reason = (first && baselineEntry(first, request)?.staleReason) ?? "";
+    return {
+      code: "BASELINE_STALE",
+      details: { baseline: name, reason },
+      kind: "reject",
+      message: `baseline ${name} is stale: ${reason}`,
+      reason: "unresolvable-spec",
+    };
+  }
+  return { kind: "holders", views: fresh };
+}
+
+function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
   const answer = assessTable(request, views);
   const requires = request.requires;
   if (answer.kind === "reject" || requires === undefined || requires.length === 0) return answer;

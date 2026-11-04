@@ -264,6 +264,9 @@ describe("the waiting table on a gateway", () => {
     ["full", "global-running-limit", "Full: running limit"],
     ["no-free-physical", undefined, "Every matching device is leased or absent"],
     ["not-chosen", undefined, "Not chosen this time"],
+    ["no-baseline", undefined, "Does not hold the baseline"],
+    ["baseline-stale", undefined, "Baseline is stale"],
+    ["baseline-mismatch", undefined, "Baseline is for another device"],
   ] as const)("writes %s with capacity reason %s as '%s'", (reason, capacityReason, text) => {
     const entry = { ...(capacityReason === undefined ? {} : { capacityReason }), reason };
 
@@ -279,7 +282,7 @@ describe("the waiting table on a gateway", () => {
       field as { unwrap(): { element: { shape: { reason: { options: readonly string[] } } } } }
     ).unwrap().element.shape.reason.options;
 
-    expect(listed).toHaveLength(14);
+    expect(listed).toHaveLength(17);
     for (const reason of listed) {
       const text = rowOf({ workers: [{ reason, workerId: "wrk_1" } as never] }).workers?.[0]?.text;
       expect(text).toMatch(/^[A-Z]/);

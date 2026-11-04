@@ -1,6 +1,6 @@
 import type { FittableSpec } from "../../../core/index.js";
 import type { WorkerView } from "../../worker-registry.js";
-import { deviceFit, physicalMatch } from "../request-match.js";
+import { deviceFit, physicalMatch, withBaseline } from "../request-match.js";
 import type { RankStage } from "../pipeline.js";
 
 export const warmHit: RankStage = {
@@ -12,11 +12,12 @@ export const warmHit: RankStage = {
     if (request.physical === true) return physicalMatch(worker, request, "pickable") ? 1 : 0;
     const fitsRequest = deviceFit(worker, request);
     if (fitsRequest === undefined) return 0;
+    const { mode } = withBaseline(worker, request);
     const warm = (worker.devices ?? []).some(
       (device) =>
         device.state === "ready" &&
         fitsRequest(deviceSpec(device.spec)) &&
-        (request.mode === undefined ? device.servesDefaultMode : device.mode === request.mode),
+        (mode === undefined ? device.servesDefaultMode : device.mode === mode),
     );
     return warm ? 1 : 0;
   },

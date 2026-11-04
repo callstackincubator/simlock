@@ -1,4 +1,4 @@
-import { EVENT_ID_PATTERN } from "./schemas.js";
+import { EVENT_ID_PATTERN, WORKER_ID_MAX } from "./schemas.js";
 
 export const EVENTS_PAGE_MAX = 500;
 export const EVENTS_PAGE_DEFAULT = 100;
@@ -22,7 +22,7 @@ export type EventsPageAnswer =
 
 const LIMIT_DIGITS = /^[1-9]\d{0,2}$/;
 
-export const EVENTS_WORKER_MAX = 128;
+export const EVENTS_WORKER_MAX = WORKER_ID_MAX;
 
 export function eventsPageQuery(ask: EventsPageAsk): EventsPageAnswer {
   if (ask.worker !== undefined && (ask.worker === "" || ask.worker.length > EVENTS_WORKER_MAX)) {

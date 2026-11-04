@@ -418,6 +418,7 @@ describe("GatewayService", () => {
     await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.lease).toBeDefined());
 
     expect(harness.service.workers.view("wrk_1")).toEqual({
+      baselines: [],
       capacity,
       catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
         .platforms,
@@ -1090,6 +1091,33 @@ describe("GatewayService", () => {
       );
       await harness.service.stop();
     });
+
+    it.each(["baseline.saved", "baseline.removed", "baseline.stale"])(
+      "lists the worker's baselines in its view, and reads them again after %s, without waiting for the periodic refresh",
+      async (event) => {
+        const entry = {
+          mode: "full" as const,
+          model: "Pixel 9",
+          name: "checkout",
+          osVersion: "36",
+          platform: "android" as const,
+          savedAt: "2026-11-02T13:10:00Z",
+          version: 1,
+        };
+        const worker = new ScriptedWorkerClient();
+        worker.baselines = [entry];
+        const harness = await joined(worker);
+        expect(harness.service.workers.view("wrk_1")?.baselines).toEqual([entry]);
+
+        worker.baselines = [{ ...entry, version: 2 }];
+        worker.pushEvent({ event });
+
+        await vi.waitFor(() =>
+          expect(harness.service.workers.view("wrk_1")?.baselines?.[0]?.version).toBe(2),
+        );
+        await harness.service.stop();
+      },
+    );
 
     it("re-reads the catalog for a component.installed that queues behind a refresh in flight, and keeps it when another event queues after it", async () => {
       const worker = new ScriptedWorkerClient();
