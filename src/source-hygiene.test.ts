@@ -52,8 +52,22 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/leasing/lease-acquisition-coordinator.ts": 1622,
 };
 
-// why: a stub until the size test's code lands; it reports no file.
-const sizeFailures = (_files: SizedFile[], _shrinkOnly: Record<string, number>): string[] => [];
+const CODE_LIMIT = 1400;
+const TEST_LIMIT = 2500;
+
+const TEST_FILE_NAME = /(?:\.test\.|\.spec\.)|^test-|^testing\./;
+
+const sizeFailures = (files: SizedFile[], shrinkOnly: Record<string, number>): string[] =>
+  files.flatMap(({ path, lines }) => {
+    if (path in shrinkOnly) return [];
+    const isTest = TEST_FILE_NAME.test(basename(path));
+    const limit = isTest ? TEST_LIMIT : CODE_LIMIT;
+    return lines > limit
+      ? [
+          `${path}: ${lines} lines; a ${isTest ? "test" : "code"} file may have at most ${limit}. Split it (ADR 0063).`,
+        ]
+      : [];
+  });
 
 /**
  * why: a vendored artifact lands untracked -- the directory is complete, at the right checksum,
