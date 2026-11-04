@@ -41,7 +41,7 @@ import {
   type AndroidEmulatorLaunchOptions,
 } from "./index.js";
 import type { DeviceProfileSource } from "./device-profile-source.js";
-import { LIBRARY_PROFILES, type LibraryDeviceProfile } from "./profiles/index.js";
+import { type LibraryDeviceProfile } from "./profiles/index.js";
 import {
   ANDROID_HOME_DIRECTORY,
   ANDROID_SDK_ROOT,
@@ -50,7 +50,16 @@ import {
   avdDirectory,
   binaries,
   bootingAt,
-  defaultSeedHome,
+  bootProbes,
+  type BuildProvisioner,
+  copyBootExpectations,
+  createdFromPackage,
+  fitHarness as fitHarnessWith,
+  libraryHarness as libraryHarnessWith,
+  makingASeedFrom,
+  markWriteExpectation,
+  seedConfig,
+  taggedHarness as taggedHarnessWith,
   EmulatorExitingRunner,
   instanceId,
   makingTheSeed,
@@ -61,13 +70,10 @@ import {
   customDeviceXml,
   customFitXml,
   type FitImage,
-  HOST_IMAGES,
   InstallReflectingProcessRunner,
   memoryAndroidSourceDatabase,
-  fitDevices,
   pixelDevices,
   processResult,
-  type Refusal,
   testLibraryProfile,
   twoPixelDevices,
   userAvd,
@@ -105,6 +111,18 @@ const PHYSICAL_DEVICE = {
   enrolledApps: ["com.example.kept"],
   physical: true,
 } as const;
+
+/** why: the harnesses the seed tests share with `seeds.test.ts` build whatever makes the seed; here it is the whole driver. */
+const buildDriver: BuildProvisioner = (filesystem, processRunner, options) =>
+  createDriver(filesystem, processRunner, options);
+const fitHarness = (
+  ...args: Parameters<typeof fitHarnessWith> extends [unknown, ...infer Rest] ? Rest : never
+) => fitHarnessWith(buildDriver, ...args);
+const libraryHarness = (options?: Parameters<typeof libraryHarnessWith>[1]) =>
+  libraryHarnessWith(buildDriver, options);
+const taggedHarness = (
+  ...args: Parameters<typeof taggedHarnessWith> extends [unknown, ...infer Rest] ? Rest : never
+) => taggedHarnessWith(buildDriver, ...args);
 
 describe("AndroidDriver", () => {
   it("discovers ANDROID_HOME before the other SDK locations and rejects a missing SDK", async () => {
@@ -177,29 +195,6 @@ describe("AndroidDriver", () => {
   });
 
   describe("image tag", () => {
-    async function taggedHarness(
-      images: readonly (readonly [string, string, string])[],
-      hostAbi = "arm64-v8a",
-    ) {
-      const filesystem = await androidFilesystem({ images });
-      await writeSeedFiles(filesystem, defaultSeedHome);
-      const runner = new EmulatorExitingRunner([
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        ...makingASeedFrom(defaultSeedHome, "pixel_5"),
-        ...copyBootExpectations({ copyHome: `${avdDirectory}/simlock_one` }),
-        markWriteExpectation("emulator-5586", "device-3"),
-      ]);
-      const driver = await createDriver(filesystem, runner, { hostAbi, ids: ["one", "two"] });
-      return { driver, filesystem, runner };
-    }
-
-    function createdFromPackage(runner: ScriptedProcessRunner): string | undefined {
-      const create = runner.calls.find(
-        (call) => call.command === binaries.avdmanager && call.args[0] === "create",
-      );
-      return create?.args[create.args.indexOf("-k") + 1];
-    }
-
     it("resolves a request naming an installed tag to a spec with that tag, and creates the device from that image", async () => {
       const { driver, runner } = await taggedHarness([
         ["34", "google_apis", "arm64-v8a"],
@@ -243,73 +238,6 @@ describe("AndroidDriver", () => {
         platform: "android",
       });
       expect(createdFromPackage(runner)).toBe("system-images;android-34;google_apis;arm64-v8a");
-    });
-
-    it("creates a tagged device from the host ABI's image when the tag is installed for two ABIs", async () => {
-      // why: On an x86_64 host the foreign arm64-v8a image is listed first, so taking the first image
-      // of the tag would pick it.
-      const { driver, runner } = await taggedHarness(
-        [
-          ["34", "google_apis_playstore", "arm64-v8a"],
-          ["34", "google_apis_playstore", "x86_64"],
-        ],
-        "x86_64",
-      );
-
-      const spec = await driver.resolveSpec({
-        imageTag: "google_apis_playstore",
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      });
-      await driver.provision(spec);
-
-      expect(createdFromPackage(runner)).toBe(
-        "system-images;android-34;google_apis_playstore;x86_64",
-      );
-    });
-
-    it("creates a tagged device from a foreign ABI's image when that is the only image of the tag", async () => {
-      const { driver, runner } = await taggedHarness([
-        ["34", "google_apis", "arm64-v8a"],
-        ["34", "google_apis_playstore", "x86_64"],
-      ]);
-
-      const spec = await driver.resolveSpec({
-        imageTag: "google_apis_playstore",
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      });
-      await driver.provision(spec);
-
-      expect(createdFromPackage(runner)).toBe(
-        "system-images;android-34;google_apis_playstore;x86_64",
-      );
-    });
-
-    it("fails provisioning a tagged spec whose image went missing after it resolved, offering no download", async () => {
-      const { driver, filesystem, runner } = await taggedHarness([
-        ["34", "google_apis", "arm64-v8a"],
-        ["34", "google_apis_playstore", "arm64-v8a"],
-      ]);
-      const spec = await driver.resolveSpec({
-        imageTag: "google_apis_playstore",
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      });
-      await filesystem.rm(`${sdk}/system-images/android-34/google_apis_playstore`);
-
-      const failure = await driver.provision(spec).catch((error: unknown) => error);
-
-      expect(failure).toMatchObject({
-        component: undefined,
-        downloadable: false,
-        name: "RuntimeMissingError",
-      });
-      expect((failure as Error).message).toContain("google_apis_playstore");
-      expect(createdFromPackage(runner)).toBeUndefined();
     });
   });
 
@@ -936,17 +864,6 @@ describe("AndroidDriver", () => {
     await expect(harness.filesystem.readFile(configPath)).resolves.toBe("hw.ramSize=2048\n");
   });
 
-  it("does not change the config hash when simlock.mark is present in config.ini", async () => {
-    const withoutMark = await provisionedHarness({ config: "hw.ramSize=2048\n" });
-    const withMark = await provisionedHarness({
-      config: "hw.ramSize=2048\nsimlock.mark=some-token\n",
-    });
-
-    expect((withoutMark.device.driverData as { configHash: string }).configHash).toBe(
-      (withMark.device.driverData as { configHash: string }).configHash,
-    );
-  });
-
   describe("device-profile-hidden advisories", () => {
     const hiddenMessage = (xmlName: string, libraryName: string) =>
       `"${xmlName}" in devices.xml is not used: Simlock's own ${libraryName} profile answers to that name`;
@@ -1096,58 +1013,6 @@ describe("AndroidDriver", () => {
       expect(config).not.toContain("pixel_5");
       expect(device.driverData).toMatchObject({ avdName: "simlock" });
     });
-
-    it("captures differing hardware properties in the config hash, proving they land before it is computed", async () => {
-      const hashWith = async (ramMiB: number) => {
-        const harness = await libraryHarness({ devicesXml: customDeviceXml("Custom A", ramMiB) });
-        const device = await harness.provision("Custom A");
-        return (device.driverData as { configHash: string }).configHash;
-      };
-
-      expect(await hashWith(2048)).not.toBe(await hashWith(4096));
-    });
-
-    it("shadows a devices.xml profile with a built-in one of the same name and never applies properties", async () => {
-      // why: same name as the built-in fixture's "Pixel 5" -- the built-in source is registered
-      // first, so it must win and the devices.xml properties must never be touched.
-      const harness = await libraryHarness({ devicesXml: customDeviceXml("Pixel 5", 4096) });
-      const seeded = await harness.filesystem.readFile(harness.configPath);
-
-      await harness.provision("Pixel 5");
-
-      await expect(harness.filesystem.readFile(harness.configPath)).resolves.toBe(seeded);
-    });
-
-    it("rejects a hardware-property value with an embedded line break, defense in depth beyond the devices.xml parser", async () => {
-      // why: `UserDeviceProfileSource`/`parseDevicesXml` already reject this at the devices.xml parse
-      // boundary (see device-profile-source.test.ts), but `DeviceProfileSource` is a documented
-      // extension point (see the interface's own doc comment) -- a future or third-party source
-      // could hand the driver a multiline value directly, bypassing that parser entirely. This
-      // exercises `#mergeConfigIniLines`'s own independent guard by going around the parser with
-      // a custom source, standing in for `<d:manufacturer>Google\ndisk.dataPartition.path=/evil
-      // </d:manufacturer>`.
-      const maliciousSource = {
-        async profiles() {
-          return [
-            {
-              hardwareProperties: {
-                "hw.device.manufacturer": "Acme\ndisk.dataPartition.path=/evil",
-                "hw.device.name": "Evil Phone",
-              },
-              kind: "properties" as const,
-              name: "Evil Phone",
-              names: ["Evil Phone"],
-            },
-          ];
-        },
-      };
-      const harness = await libraryHarness({ sources: [maliciousSource] });
-
-      await expect(harness.provision("Evil Phone")).rejects.toThrow(/line break/);
-
-      // why: a failed seed make removes its folder, so none of the rejected value stays on disk.
-      await expect(harness.filesystem.exists(harness.configPath)).resolves.toBe(false);
-    });
   });
 
   describe("library device profiles", () => {
@@ -1207,131 +1072,6 @@ describe("AndroidDriver", () => {
       expect((await userHarness.config()).get("hw.ramSize")).toBe("4096");
     });
 
-    it("provisions a library device with every `hardware` value of the profile in `config.ini`", async () => {
-      const harness = await libraryHarness({ listing: pixelDevices });
-
-      await harness.provision("Pixel 9");
-
-      const config = await harness.config();
-      const hardware = Object.entries(libraryPixel9().hardware);
-      expect(hardware.length).toBeGreaterThan(100);
-      expect(hardware.filter(([key, value]) => config.get(key) !== value)).toEqual([]);
-    });
-
-    it("provisions identical `hw.*` and `vm.heapSize` lines whether `avdmanager list device` lists `pixel_9` or not", async () => {
-      const without = await libraryHarness({ listing: pixelDevices });
-      const withListed = await libraryHarness({
-        listing: twoPixelDevices,
-        seed: seedConfig(["hw.gpu.mode=host", "hw.lcd.density=480", "hw.ramSize=8G"]),
-      });
-
-      await without.provision("Pixel 9");
-      await withListed.provision("Pixel 9");
-
-      const hardwareLines = async (harness: typeof without) =>
-        (await harness.lines()).filter((line) => /^(hw\.|vm\.heapSize=)/.test(line)).sort();
-      const expected = await hardwareLines(without);
-      expect(expected.length).toBeGreaterThan(100);
-      expect(await hardwareLines(withListed)).toEqual(expected);
-    });
-
-    it("removes every `hw.*` (except `hw.cpu.arch`), `vm.heapSize` and `skin.*` line the seed wrote that the profile does not set", async () => {
-      const harness = await libraryHarness({
-        profiles: [testLibraryProfile({ hardware: { "hw.lcd.height": "100" } })],
-        seed: seedConfig(["hw.seedOnly=yes", "skin.dynamic=yes"]),
-      });
-
-      await harness.provision("Test Phone");
-
-      const lines = await harness.lines();
-      expect(lines.filter((line) => line.startsWith("skin."))).toEqual([]);
-      expect(lines.filter((line) => line.startsWith("vm.heapSize"))).toEqual([]);
-      expect(lines.filter((line) => line.startsWith("hw.")).sort()).toEqual([
-        "hw.cpu.arch=arm64",
-        "hw.lcd.height=100",
-      ]);
-    });
-
-    it("keeps `image.sysdir.1`, `tag.id`, `abi.type`, `target`, `hw.cpu.arch`, `disk.dataPartition.size` and `showDeviceFrame` as `avdmanager` wrote them", async () => {
-      const harness = await libraryHarness({ listing: pixelDevices });
-
-      await harness.provision("Pixel 9");
-
-      const config = await harness.config();
-      expect(
-        [
-          "image.sysdir.1",
-          "tag.id",
-          "abi.type",
-          "target",
-          "hw.cpu.arch",
-          "disk.dataPartition.size",
-          "showDeviceFrame",
-        ].map((key) => `${key}=${config.get(key)}`),
-      ).toEqual([
-        "image.sysdir.1=system-images/android-35/google_apis/arm64-v8a/",
-        "tag.id=google_apis",
-        "abi.type=arm64-v8a",
-        "target=android-35",
-        "hw.cpu.arch=arm64",
-        "disk.dataPartition.size=6G",
-        "showDeviceFrame=yes",
-      ]);
-    });
-
-    it("sets `PlayStore.enabled=yes` on a Play Store image when the profile allows Play Store, and `no` on a `google_apis` image", async () => {
-      const playStore = { imageTag: "google_apis_playstore" };
-      const allowed = await libraryHarness({ ...playStore, listing: pixelDevices });
-      await allowed.provision("Pixel 9");
-      expect((await allowed.config()).get("PlayStore.enabled")).toBe("yes");
-
-      const googleApis = await libraryHarness({
-        listing: pixelDevices,
-        seed: seedConfig(["PlayStore.enabled=yes"]),
-      });
-      await googleApis.provision("Pixel 9");
-      expect((await googleApis.config()).get("PlayStore.enabled")).toBe("no");
-    });
-
-    it("reads an image's tags from `SystemImage.TagId`, and from the folder name when it has none", async () => {
-      const playStoreOf = async (imageTag: string, imageProperties: string) => {
-        const harness = await libraryHarness({ imageProperties, imageTag, listing: pixelDevices });
-        await harness.provision("Pixel 9");
-        return (await harness.config()).get("PlayStore.enabled");
-      };
-
-      expect(await playStoreOf("custom-folder", "SystemImage.TagId=google_apis_playstore\n")).toBe(
-        "yes",
-      );
-      expect(await playStoreOf("google_apis_playstore", "")).toBe("yes");
-      expect(await playStoreOf("google_apis_playstore", "Pkg.Revision=1\n")).toBe("yes");
-      expect(await playStoreOf("google_apis_playstore", "SystemImage.TagId=google_apis\n")).toBe(
-        "no",
-      );
-    });
-
-    it("writes the profile's boot properties to `boot.prop`, and removes a seed's `boot.prop` when the profile has none", async () => {
-      const withProperties = await libraryHarness({
-        profiles: [
-          testLibraryProfile({ bootProperties: { "persist.x": "y", "ro.simlock.test": "1" } }),
-        ],
-        seedBootProp: "ro.seed=1\n",
-      });
-      await withProperties.provision("Test Phone");
-      const written = await withProperties.filesystem.readFile(withProperties.bootPropPath);
-      expect(
-        written
-          .split("\n")
-          .filter((line) => line !== "")
-          .sort(),
-      ).toEqual(["persist.x=y", "ro.simlock.test=1"]);
-
-      const without = await libraryHarness({ listing: pixelDevices, seedBootProp: "ro.seed=1\n" });
-      await expect(without.filesystem.exists(without.bootPropPath)).resolves.toBe(true);
-      await without.provision("Pixel 9");
-      await expect(without.filesystem.exists(without.bootPropPath)).resolves.toBe(false);
-    });
-
     it("captures the config hash after the library's keys are written", async () => {
       const hashOf = async (profile: LibraryDeviceProfile, seed: string) => {
         const harness = await libraryHarness({ profiles: [profile], seed });
@@ -1347,60 +1087,6 @@ describe("AndroidDriver", () => {
 
       expect(small).not.toBe(large);
       expect(largeOverOtherSeed).toBe(large);
-    });
-
-    it.each([
-      ["a hardware value", "\r"],
-      ["a hardware value", "\n"],
-      ["a hardware value", "\u0000"],
-      ["a hardware key", "\r"],
-      ["a hardware key", "\n"],
-      ["a hardware key", "\u0000"],
-      ["a boot property value", "\r"],
-      ["a boot property value", "\n"],
-      ["a boot property value", "\u0000"],
-    ] as const)(
-      "refuses %s with %j before `avdmanager create avd` runs",
-      async (where, character) => {
-        const profileWith = (inserted: string) =>
-          testLibraryProfile(
-            where === "a hardware value"
-              ? { hardware: { "hw.ramSize": `2${inserted}G` } }
-              : where === "a hardware key"
-                ? { hardware: { [`hw.bad${inserted}key`]: "1" } }
-                : { bootProperties: { "ro.x": `a${inserted}b` } },
-          );
-        const accepted = await libraryHarness({ profiles: [profileWith("-")] });
-        await accepted.provision("Test Phone");
-        expect(accepted.createCalls()).toHaveLength(1);
-
-        const refused = await libraryHarness({ profiles: [profileWith(character)] });
-
-        await expect(refused.provision("Test Phone")).rejects.toThrow();
-        expect(refused.createCalls()).toEqual([]);
-      },
-    );
-
-    it("refuses NUL in a `devices.xml` value, through the one shared check", async () => {
-      const profileNamed = (name: string): DeviceProfileSource => ({
-        async profiles() {
-          return [
-            {
-              hardwareProperties: { "hw.device.name": name },
-              kind: "properties" as const,
-              name: "Custom A",
-              names: ["Custom A"],
-            },
-          ];
-        },
-      });
-      const accepted = await libraryHarness({ sources: [profileNamed("Custom A")] });
-      await accepted.provision("Custom A");
-      expect((await accepted.config()).get("hw.device.name")).toBe("Custom A");
-
-      const refused = await libraryHarness({ sources: [profileNamed("Custom\u0000A")] });
-
-      await expect(refused.provision("Custom A")).rejects.toThrow(/Refusing to merge/);
     });
 
     it("refuses NUL in a `simlock.mark` value, through the one shared check", async () => {
@@ -1420,31 +1106,6 @@ describe("AndroidDriver", () => {
 
       await expect(refused.driver.makeReady(refused.device)).rejects.toThrow(/Refusing to merge/);
       expect(await markedConfig(refused)).not.toContain("simlock.mark=");
-    });
-
-    it("rethrows and runs no `avdmanager delete` when a write after `avdmanager create avd` fails", async () => {
-      const filesystem = new WriteFailureFilesystem(
-        `${avdDirectory}/sources/seed_two/simlock.avd/config.ini`,
-        new Error("disk full"),
-      );
-      const harness = await libraryHarness({ filesystem, listing: pixelDevices });
-      filesystem.armed = true;
-
-      await expect(harness.provision("Pixel 9")).rejects.toThrow("disk full");
-
-      expect(harness.createCalls()).toHaveLength(1);
-      expect(harness.runner.calls.some((call) => call.args.includes("delete"))).toBe(false);
-    });
-
-    it("seeds `avdmanager create avd` with the first profile `avdmanager list device` prints, also when it lists `pixel_9`", async () => {
-      const listsPixel9 = await libraryHarness({ listing: twoPixelDevices });
-      await listsPixel9.provision("Pixel 9");
-
-      const lacksPixel9 = await libraryHarness({ listing: pixelDevices });
-      await lacksPixel9.provision("Pixel 9");
-
-      expect(listsPixel9.seedDeviceId()).toBe("pixel_5");
-      expect(lacksPixel9.seedDeviceId()).toBe("pixel_5");
     });
   });
 
@@ -3201,10 +2862,6 @@ async function settledValue(promise: Promise<unknown>): Promise<unknown> {
   return state.value;
 }
 
-function bootProbes(runner: ScriptedProcessRunner): number {
-  return runner.calls.filter((call) => call.args.includes("sys.boot_completed")).length;
-}
-
 const live = process.env.SIMLOCK_LIVE_ANDROID === "1" ? it : it.skip;
 
 live(
@@ -3257,93 +2914,6 @@ function emulatorLaunchArgs(runner: ScriptedProcessRunner): (readonly string[])[
 }
 
 const seedLaunch = ["-avd", "simlock", ...seedEmulatorLine];
-
-/** why: making a seed from whichever image and device profile the test's request resolves to; `device` pins the profile when the test cares. */
-function makingASeedFrom(
-  home = defaultSeedHome,
-  device: string | RegExp = /.+/,
-): ScriptedProcessExpectation[] {
-  const making = makingTheSeed(home);
-  making[1] = processResult(binaries.avdmanager, [
-    "create",
-    "avd",
-    "-n",
-    "simlock",
-    "-k",
-    /.+/,
-    "-d",
-    device,
-  ]);
-  return making;
-}
-
-/**
- * why: the boot of a copy, as the driver asks the emulator for it: `adb devices` for the port,
- * the launch, then the readiness polls. `launch` is `-snapshot simlock_boot` for a prepare boot.
- */
-function copyBootExpectations(options: {
-  readonly bootCompleted?: string | undefined;
-  readonly copyHome: string;
-  readonly emulatorFlags?: readonly string[] | undefined;
-  readonly initialAdbFailures?: number | undefined;
-  readonly launch?: readonly string[];
-  readonly unsettledPmAnswers?: readonly ProcessResult[] | undefined;
-}): ScriptedProcessExpectation[] {
-  const bootCompleted = options.bootCompleted ?? "1\n";
-  const serial = "emulator-5586";
-  const poll = (property: string, answer: string) =>
-    processResult(binaries.adb, ["-s", serial, "shell", "getprop", property], answer);
-  const path = processResult(
-    binaries.adb,
-    ["-s", serial, "emu", "avd", "path"],
-    `${options.copyHome}/simlock.avd\r\nOK\r\n`,
-  );
-  const pm = (answer: ProcessResult): ScriptedProcessExpectation => ({
-    match: { args: ["-s", serial, "shell", "pm", "path", "android"], command: binaries.adb },
-    result: answer,
-  });
-  const expectations: ScriptedProcessExpectation[] = [
-    processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    {
-      hangs: true,
-      match: {
-        args: [
-          "-avd",
-          "simlock",
-          ...seedEmulatorLine,
-          ...(options.emulatorFlags ?? []),
-          ...(options.launch ?? ["-snapshot", "simlock_boot"]),
-        ],
-        command: binaries.emulator,
-      },
-    },
-  ];
-  for (let failure = 0; failure < (options.initialAdbFailures ?? 0); failure += 1) {
-    expectations.push({
-      match: {
-        args: ["-s", serial, "shell", "getprop", "sys.boot_completed"],
-        command: binaries.adb,
-      },
-      result: { code: 1, stderr: "connection refused", stdout: "" },
-    });
-  }
-  expectations.push(poll("sys.boot_completed", bootCompleted));
-  if (bootCompleted.trim() !== "1") return expectations;
-  for (const answer of options.unsettledPmAnswers ?? []) {
-    expectations.push(
-      poll("init.svc.bootanim", ""),
-      path,
-      pm(answer),
-      poll("sys.boot_completed", "1\n"),
-    );
-  }
-  expectations.push(
-    poll("init.svc.bootanim", ""),
-    path,
-    pm({ code: 0, stderr: "", stdout: "package:/system/framework/framework-res.apk\n" }),
-  );
-  return expectations;
-}
 
 /**
  * why: a driver and the copy it provisioned: the seed is made (scripted) and copied, so what a test
@@ -3427,165 +2997,7 @@ describe("AndroidDriver defaultModels", () => {
   });
 });
 
-class ListingRunner extends EmulatorExitingRunner {
-  constructor(
-    private readonly listing: string,
-    expectations: readonly ScriptedProcessExpectation[],
-  ) {
-    super(expectations);
-  }
-
-  override spawn(
-    command: string,
-    args: readonly string[],
-    options: ProcessRunOptions = {},
-  ): ProcessHandle {
-    if (command === binaries.avdmanager && args[0] === "list") {
-      return new EmulatorExitingRunner([processResult(command, args, this.listing)]).spawn(
-        command,
-        args,
-        options,
-      );
-    }
-    return super.spawn(command, args, options);
-  }
-}
-
-async function fitHarness(
-  images: readonly FitImage[],
-  options: {
-    readonly devicesXml?: string;
-    readonly extraEnv?: Readonly<Record<string, string>>;
-    readonly hostAbi?: string;
-    readonly listing?: string;
-    readonly profiles?: readonly LibraryDeviceProfile[];
-  } = {},
-) {
-  const filesystem = await androidFilesystem({
-    images: images.map(([api, tag, abi]) => [api, tag, abi]),
-  });
-  for (const [api, tag, abi, properties] of images) {
-    if (properties !== undefined) {
-      await filesystem.writeFileAtomic(
-        `${sdk}/system-images/android-${api}/${tag}/${abi}/source.properties`,
-        properties,
-      );
-    }
-  }
-  if (options.devicesXml !== undefined) await writeDevicesXml(filesystem, options.devicesXml);
-  await writeSeedFiles(filesystem, defaultSeedHome);
-  const runner = new ListingRunner(options.listing ?? fitDevices, makingASeedFrom());
-  const driver = await createDriver(filesystem, runner, {
-    hostAbi: options.hostAbi ?? "arm64-v8a",
-    ids: ["one", "two"],
-    ...(options.extraEnv === undefined ? {} : { extraEnv: options.extraEnv }),
-    ...(options.profiles === undefined
-      ? {}
-      : { deviceProfileSources: [{ profiles: async () => options.profiles ?? [] }] }),
-  });
-  const resolve = (model: string, osVersion?: string, imageTag?: string) =>
-    driver.resolveSpec({
-      model,
-      platform: "android",
-      ...(osVersion === undefined ? {} : { osVersion }),
-      ...(imageTag === undefined ? {} : { imageTag }),
-    });
-  const refusal = (model: string, osVersion?: string, imageTag?: string) =>
-    resolve(model, osVersion, imageTag).then(
-      () => {
-        throw new Error(`${model} ${osVersion ?? ""} ${imageTag ?? ""} resolved`);
-      },
-      (error: unknown) => error as Refusal,
-    );
-  const createdPackage = () => {
-    const create = runner.calls.find((call) => call.args[0] === "create");
-    return create?.args[create.args.indexOf("-k") + 1];
-  };
-  return { createdPackage, driver, filesystem, refusal, resolve, runner };
-}
-
 describe("AndroidDriver image fit", () => {
-  describe("each row of the In short table", () => {
-    it("creates a phone from the Play Store image at the newest level, and the TV from the android-tv image", async () => {
-      const phone = await fitHarness(HOST_IMAGES);
-      await phone.driver.provision(await phone.resolve("Pixel 5"));
-      const tv = await fitHarness(HOST_IMAGES);
-      await tv.driver.provision(await tv.resolve("Television (720p)"));
-
-      expect(phone.createdPackage()).toBe(
-        "system-images;android-36;google_apis_playstore;arm64-v8a",
-      );
-      expect(tv.createdPackage()).toBe("system-images;android-34;android-tv;arm64-v8a");
-    });
-  });
-
-  describe("provision", () => {
-    it("creates the device from a fitting image, never a misfit one that sorts first", async () => {
-      const { createdPackage, driver, resolve } = await fitHarness(
-        [
-          ["34", "google_apis", "arm64-v8a"],
-          ["34", "google-tv", "arm64-v8a"],
-          ["34", "android-tv", "x86_64"],
-        ],
-        { hostAbi: "arm64-v8a" },
-      );
-
-      await driver.provision(await resolve("Television (720p)"));
-
-      expect(createdPackage()).toBe("system-images;android-34;google-tv;arm64-v8a");
-    });
-
-    it.each([
-      [
-        "host-native google_apis",
-        [
-          ["35", "default", "arm64-v8a"],
-          ["35", "google_apis", "x86_64"],
-          ["35", "google_apis", "arm64-v8a"],
-        ] as const,
-        "system-images;android-35;google_apis;arm64-v8a",
-      ],
-      [
-        "host-native",
-        [
-          ["35", "google_apis", "x86_64"],
-          ["35", "default", "arm64-v8a"],
-        ] as const,
-        "system-images;android-35;default;arm64-v8a",
-      ],
-      [
-        "google_apis",
-        [
-          ["35", "default", "x86_64"],
-          ["35", "google_apis", "x86_64"],
-        ] as const,
-        "system-images;android-35;google_apis;x86_64",
-      ],
-      ["any", [["35", "default", "x86_64"]] as const, "system-images;android-35;default;x86_64"],
-    ])("follows today's order among fitting images: %s first", async (_name, images, expected) => {
-      const { createdPackage, driver, resolve } = await fitHarness(images);
-
-      await driver.provision(await resolve("Pixel 5", "35"));
-
-      expect(createdPackage()).toBe(expected);
-    });
-
-    it("throws RUNTIME_MISSING when no fitting image is left, and creates nothing from a misfit one", async () => {
-      const { driver, filesystem, resolve, runner } = await fitHarness([
-        ["34", "google_apis", "arm64-v8a"],
-        ["34", "android-tv", "arm64-v8a"],
-      ]);
-      const spec = await resolve("Television (720p)");
-      await filesystem.rm(`${sdk}/system-images/android-34/android-tv`);
-
-      await expect(driver.provision(spec)).rejects.toMatchObject({
-        downloadable: false,
-        name: "RuntimeMissingError",
-      });
-      expect(runner.calls.some((call) => call.args[0] === "create")).toBe(false);
-    });
-  });
-
   describe("seeds and copies", () => {
     const sources = `${avdDirectory}/sources`;
     const copyHome = `${avdDirectory}/simlock_one`;
@@ -3724,89 +3136,6 @@ describe("AndroidDriver image fit", () => {
         );
         expect(harness.runner.calls.flatMap((call) => call.args)).not.toContain("-wipe-data");
       }
-    });
-
-    it("tells why a seed is stale, cut to 300 characters, and clears the reason when the image and emulator match again", async () => {
-      const imagePath = `${sdk}/system-images/android-34/google_apis/arm64-v8a`;
-      const packageName = "system-images;android-34;google_apis;arm64-v8a";
-      const revision = (number: string) => `Pkg.Revision=${number}\n`;
-      const original = "Android emulator version 36.1.9";
-      const cases = [
-        {
-          change: async (filesystem: MemoryFilesystem) =>
-            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("2")),
-          emulatorVersion: original,
-          mend: async (filesystem: MemoryFilesystem) =>
-            filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1")),
-          reason: `system image ${packageName} changed from revision 1 to 2`,
-        },
-        {
-          change: async (filesystem: MemoryFilesystem) => filesystem.rm(imagePath),
-          emulatorVersion: original,
-          mend: async (filesystem: MemoryFilesystem) => {
-            await filesystem.mkdirp(imagePath);
-            await filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1"));
-          },
-          reason: `system image ${packageName} is not installed`,
-        },
-        {
-          emulatorVersion: "Android emulator version 36.2.0",
-          reason: `emulator changed from ${original} to Android emulator version 36.2.0`,
-        },
-        {
-          emulatorVersion: "v".repeat(400),
-          reason: `emulator changed from ${original} to ${"v".repeat(400)}`.slice(0, 300),
-        },
-        {
-          emulator: { audio: true, bootAnimation: true, gpu: "auto", headless: true },
-          emulatorVersion: original,
-          reason: "android.emulator launch settings changed",
-        },
-      ] as const;
-
-      for (const stale of cases) {
-        const harness = await seedHarness(makingTheSeed());
-        await harness.filesystem.writeFileAtomic(`${imagePath}/source.properties`, revision("1"));
-        await harness.driver.provision(harness.spec);
-        if ("change" in stale) await stale.change(harness.filesystem);
-
-        const changed = await reopened(
-          harness,
-          [processResult(binaries.emulator, ["-version"], stale.emulatorVersion)],
-          "emulator" in stale ? { emulator: stale.emulator } : {},
-        );
-        await expect(changed.driver.listSources()).resolves.toMatchObject([
-          { id: "seed_two", staleReason: stale.reason },
-        ]);
-
-        if ("mend" in stale) await stale.mend(harness.filesystem);
-        const mended = await reopened(harness, [
-          processResult(binaries.emulator, ["-version"], original),
-        ]);
-        const [source] = await mended.driver.listSources();
-        expect(source).toMatchObject({ id: "seed_two" });
-        expect(source).not.toHaveProperty("staleReason");
-      }
-    });
-
-    it("destroys a stale seed and makes it again at the next provision", async () => {
-      const harness = await seedHarness(makingTheSeed());
-      await harness.driver.provision(harness.spec);
-      const newHome = `${sources}/seed_five`;
-      await writeSeedFiles(harness.filesystem, newHome);
-      const newer = "Android emulator version 36.2.0";
-      const later = await reopened(harness, [
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.emulator, ["-version"], newer),
-        ...makingTheSeed(newHome, newer),
-        processResult(binaries.emulator, ["-version"], newer),
-      ]);
-
-      await later.driver.provision(harness.spec);
-
-      expect(await harness.filesystem.exists(seedHome)).toBe(false);
-      expect(later.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
-      await expect(later.driver.listSources()).resolves.toMatchObject([{ id: "seed_five" }]);
     });
 
     describe("saveSource", () => {
@@ -4103,200 +3432,6 @@ describe("AndroidDriver image fit", () => {
       });
     });
 
-    it("removes a seed's folder and row and throws when making it fails at any step", async () => {
-      const stage = seedStages();
-      const serial = "emulator-5586";
-      const neverReady = [
-        stage.devices,
-        bootingAt(seedHome, ["-no-snapshot-load"], true)[0],
-        processResult(
-          binaries.adb,
-          ["-s", serial, "shell", "getprop", "sys.boot_completed"],
-          "0\n",
-        ),
-      ] as ScriptedProcessExpectation[];
-      const stuckOff = [
-        stage.devices,
-        ...bootingAt(seedHome, ["-no-snapshot-load"], true),
-        stage.sync,
-        stage.powerOff,
-        stage.probe,
-        stage.kill,
-      ];
-      const cases = [
-        {
-          expectations: [
-            stage.version,
-            { ...stage.create, result: { code: 1, stderr: "no such package", stdout: "" } },
-          ],
-          message: "no such package",
-        },
-        {
-          advance: 180_000,
-          expectations: [stage.version, stage.create, ...neverReady],
-          message: "Timed out waiting for device to boot",
-        },
-        {
-          advance: 60_000,
-          expectations: [stage.version, stage.create, ...stuckOff],
-          killsEmulator: true,
-          message: "Android seed seed_two did not power off within 60000ms",
-        },
-        {
-          expectations: [
-            stage.version,
-            stage.create,
-            stage.devices,
-            ...stage.firstBoot,
-            stage.sync,
-            stage.powerOff,
-            ...bootingAt(seedHome, ["-no-snapshot-load"], true),
-            { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
-          ],
-          message: "Android seed seed_two: boot snapshot simlock_boot was not saved",
-        },
-        {
-          expectations: [
-            stage.version,
-            stage.create,
-            stage.devices,
-            ...stage.firstBoot,
-            stage.sync,
-            stage.powerOff,
-            ...bootingAt(seedHome, ["-no-snapshot-load"], true),
-            stage.save,
-            processResult(binaries.adb, ["-s", serial, "emu", "avd", "snapshot", "list"], "\n"),
-            stage.probe,
-            stage.kill,
-          ],
-          message: "Android seed seed_two: boot snapshot simlock_boot was not saved",
-        },
-      ] as const;
-
-      for (const failing of cases) {
-        const clock = new FakeClock();
-        const harness = await seedHarness(failing.expectations, { clock });
-        // why: the stuck seed's emulator ignores `reboot -p`; only the 60 s deadline ends the wait.
-        harness.runner.ignoresEmuKill = "killsEmulator" in failing;
-        const provisioning = harness.driver.provision(harness.spec);
-        const outcome = expect(provisioning).rejects.toThrow(failing.message);
-        if ("advance" in failing) {
-          await vi.waitFor(() =>
-            expect(
-              harness.runner.calls.some(
-                (call) => call.args.includes("sys.boot_completed") || call.args.includes("reboot"),
-              ),
-            ).toBe(true),
-          );
-          clock.advance(failing.advance);
-        }
-        await outcome;
-
-        if ("killsEmulator" in failing) {
-          expect(
-            harness.runner.calls.some((call) => call.args.includes("kill")),
-            "the seed's emulator was asked to quit by its path",
-          ).toBe(true);
-        }
-        const emulators = harness.runner.calls.flatMap((call, index) =>
-          call.args.includes("-avd") ? [index] : [],
-        );
-        for (const emulator of emulators) {
-          let exited = false;
-          void harness.runner.handles[emulator]?.wait().then(() => {
-            exited = true;
-          });
-          await vi.waitFor(() => expect(exited, "the seed's emulator was killed").toBe(true));
-        }
-        expect(await harness.filesystem.exists(seedHome)).toBe(false);
-        await expect(harness.driver.listSources()).resolves.toEqual([]);
-        expect(harness.database.prepare("SELECT 1 FROM android_source_data").all()).toEqual([]);
-      }
-    });
-
-    it("removes the device's folder and throws when copying the seed fails", async () => {
-      const harness = await seedHarness(makingTheSeed(), {
-        filesystem: new CopyFailureFilesystem("cp: no space left on device"),
-      });
-
-      await expect(harness.driver.provision(harness.spec)).rejects.toThrow(
-        "copying Android seed seed_two to simlock_one failed: cp: no space left on device",
-      );
-
-      expect(await harness.filesystem.exists(copyHome)).toBe(false);
-      expect(await harness.filesystem.exists(seedHome)).toBe(true);
-    });
-
-    it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
-      const makingHome = `${sources}/seed_device-4`;
-      const harness = await seedHarness([
-        ...makingTheSeed(),
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        // why: the other kind's make never gets past its first boot: its emulator never says it booted.
-        ...makingASeedFrom(makingHome).slice(0, 3),
-        {
-          hangs: true,
-          match: {
-            args: ["-avd", "simlock", ...seedEmulatorLine, "-no-snapshot-load"],
-            command: binaries.emulator,
-          },
-        },
-        {
-          hangs: true,
-          match: {
-            args: ["-s", "emulator-5586", "shell", "getprop", "sys.boot_completed"],
-            command: binaries.adb,
-          },
-        },
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      ]);
-      await harness.driver.provision(harness.spec);
-      await harness.filesystem.mkdirp(
-        `${sdk}/system-images/android-34/google_apis_playstore/arm64-v8a`,
-      );
-      await writeSeedFiles(harness.filesystem, makingHome);
-      const otherKind = await harness.driver.resolveSpec({
-        imageTag: "google_apis_playstore",
-        model: "Pixel 5",
-        osVersion: "34",
-        platform: "android",
-      });
-      void harness.driver.provision(otherKind).catch(() => undefined);
-      await vi.waitFor(() => expect(bootProbes(harness.runner)).toBeGreaterThan(2));
-
-      let settled = false;
-      const provisioning = harness.driver.provision(harness.spec).finally(() => {
-        settled = true;
-      });
-      await vi.waitFor(() =>
-        expect(settled, "the kind with a ready seed waited for the other kind's make").toBe(true),
-      );
-      const second = await provisioning;
-
-      expect(second.driverData).toMatchObject({ avdHome: expect.stringContaining("/simlock_") });
-      expect(
-        harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
-      ).toEqual([{ state: "making" }, { state: "ready" }]);
-      expect(await harness.filesystem.exists(makingHome)).toBe(true);
-
-      // why: after a restart that row is another process's leftover, which only its own kind's make or a listing sweeps.
-      const restarted = await reopened(harness, [
-        processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      ]);
-      await restarted.driver.provision(
-        await restarted.driver.resolveSpec({
-          model: "Pixel 5",
-          osVersion: "34",
-          platform: "android",
-        }),
-      );
-      expect(
-        harness.database.prepare("SELECT state FROM android_source_data ORDER BY state").all(),
-      ).toEqual([{ state: "making" }, { state: "ready" }]);
-      expect(await harness.filesystem.exists(makingHome)).toBe(true);
-    });
-
     it("quotes a provision at 1 s with a fresh seed and 150 s without one, and a prepare boot at 4 s for a copy and 70 s otherwise", async () => {
       const harness = await seedHarness([
         ...makingTheSeed(),
@@ -4334,140 +3469,6 @@ describe("AndroidDriver image fit", () => {
       ]);
       await staled.driver.listSources();
       expect(staled.driver.estimate(provision, spec)).toBe(150_000);
-    });
-
-    it("lists each ready seed with its size, reports a sources folder no row names as an orphan, and destroys a source by id after stopping its emulator by path", async () => {
-      const serial = "emulator-5586";
-      const orphanHome = `${sources}/seed_orphan`;
-      const harness = await seedHarness([
-        ...makingTheSeed(),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-        processResult(binaries.adb, ["devices"], `List of devices attached\n${serial}\tdevice\n`),
-        seedStages().probe,
-        seedStages().kill,
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-      ]);
-      await harness.driver.provision(harness.spec);
-      await writeSeedFiles(harness.filesystem, orphanHome);
-
-      await expect(harness.driver.listSources()).resolves.toEqual([
-        {
-          id: "seed_two",
-          imageTag: "google_apis",
-          kind: "seed",
-          model: "Pixel 5",
-          osVersion: "34",
-          sizeBytes: 16,
-        },
-        { id: "seed_orphan", kind: "seed", model: "unknown", orphan: true, osVersion: "unknown" },
-      ]);
-      expect(await harness.filesystem.exists(orphanHome)).toBe(true);
-
-      await harness.driver.destroySource("seed_orphan");
-      await harness.driver.destroySource("seed_two");
-
-      expect(await harness.filesystem.exists(`${sources}/seed_two`)).toBe(false);
-      expect(await harness.filesystem.exists(orphanHome)).toBe(false);
-      await expect(harness.driver.destroySource("seed_two")).rejects.toThrow(
-        "Android keeps no source seed_two",
-      );
-    });
-
-    it("lists no size for a seed whose size cannot be counted", async () => {
-      const filesystem = new SizeFailureFilesystem();
-      const harness = await seedHarness(
-        [
-          ...makingTheSeed(),
-          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        ],
-        { filesystem },
-      );
-      await harness.driver.provision(harness.spec);
-
-      const [seed] = await harness.driver.listSources();
-
-      expect(seed).toMatchObject({ id: "seed_two" });
-      expect(seed).not.toHaveProperty("sizeBytes");
-    });
-
-    it("sweeps a making row an earlier process left, stopping its emulator by path, and one this process has been making for over 900 s, and leaves any other this process is making", async () => {
-      const serial = "emulator-5586";
-      const clock = new FakeClock();
-      const stage = seedStages();
-      const harness = await seedHarness(
-        [
-          stage.version,
-          stage.create,
-          stage.devices,
-          stage.firstBoot[0] as ScriptedProcessExpectation,
-          processResult(
-            binaries.adb,
-            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
-            "0\n",
-          ),
-        ],
-        { clock },
-      );
-      const making = harness.driver.provision(harness.spec);
-      const failed = expect(making).rejects.toThrow("Timed out waiting for device to boot");
-      await vi.waitFor(() =>
-        expect(harness.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
-          true,
-        ),
-      );
-
-      await expect(harness.driver.listSources()).resolves.toEqual([]);
-      expect(await harness.filesystem.exists(seedHome)).toBe(true);
-
-      const restarted = await reopened(harness, [
-        processResult(binaries.adb, ["devices"], `List of devices attached\n${serial}\tdevice\n`),
-        stage.probe,
-        stage.kill,
-        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-      ]);
-      await expect(restarted.driver.listSources()).resolves.toEqual([]);
-      expect(await harness.filesystem.exists(seedHome)).toBe(false);
-      clock.advance(180_000);
-      await failed;
-
-      const slowClock = new FakeClock();
-      const slow = await seedHarness(
-        [
-          stage.version,
-          stage.create,
-          stage.devices,
-          stage.firstBoot[0] as ScriptedProcessExpectation,
-          processResult(
-            binaries.adb,
-            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
-            "0\n",
-          ),
-          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-        ],
-        { clock: slowClock },
-      );
-      const slowMaking = slow.driver.provision(slow.spec);
-      const slowFailed = expect(slowMaking).rejects.toThrow();
-      await vi.waitFor(() =>
-        expect(slow.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
-          true,
-        ),
-      );
-      const ageTo = (ageMs: number) =>
-        slow.database
-          .prepare("UPDATE android_source_data SET created_at = ?")
-          .run(slowClock.now() - ageMs);
-
-      ageTo(900_000);
-      await slow.driver.listSources();
-      expect(await slow.filesystem.exists(seedHome)).toBe(true);
-
-      ageTo(900_001);
-      await slow.driver.listSources();
-      expect(await slow.filesystem.exists(seedHome)).toBe(false);
-      slowClock.advance(180_000);
-      await slowFailed;
     });
 
     it("destroys the seeds made from a system image when it is removed, and a seed it cannot destroy stays listed as stale", async () => {
@@ -4882,53 +3883,6 @@ async function recordRunningAdbServer(filesystem: Filesystem, port = adbServerPo
   );
 }
 
-const SEED_LINES = [
-  "avd.ini.encoding=UTF-8",
-  "hw.cpu.arch=arm64",
-  "hw.ramSize=1G",
-  "hw.lcd.density=1",
-  "hw.seedOnly=yes",
-  "image.sysdir.1=system-images/android-35/google_apis/arm64-v8a/",
-  "tag.id=google_apis",
-  "abi.type=arm64-v8a",
-  "target=android-35",
-  "disk.dataPartition.size=6G",
-  "showDeviceFrame=yes",
-  "skin.name=pixel_8",
-  "skin.path=skins/pixel_8",
-  "vm.heapSize=64M",
-  "PlayStore.enabled=no",
-];
-
-function seedConfig(extra: readonly string[]): string {
-  return `${[...SEED_LINES.filter((line) => !extra.some((added) => added.split("=")[0] === line.split("=")[0])), ...extra].join("\n")}\n`;
-}
-
-function libraryPixel9(): LibraryDeviceProfile {
-  const profile = LIBRARY_PROFILES.find((candidate) => candidate.id === "pixel_9");
-  if (profile === undefined) throw new Error("the library has no profile with id pixel_9");
-  return profile;
-}
-
-class SizeFailureFilesystem extends MemoryFilesystem {
-  override directorySize(): Promise<number> {
-    return Promise.reject(new Error("EIO"));
-  }
-}
-
-class CopyFailureFilesystem extends MemoryFilesystem {
-  readonly #message: string;
-
-  constructor(message: string) {
-    super();
-    this.#message = message;
-  }
-
-  override copyTree(): Promise<void> {
-    return Promise.reject(new Error(this.#message));
-  }
-}
-
 /** why: copies work until a test arms the failure, so a device can be provisioned from a seed first. */
 class ArmedCopyFailureFilesystem extends MemoryFilesystem {
   armed = false;
@@ -4954,107 +3908,6 @@ class RemovalObservingFilesystem extends MemoryFilesystem {
     this.onRemove(path);
     await super.rm(path);
   }
-}
-
-class WriteFailureFilesystem extends MemoryFilesystem {
-  armed = false;
-
-  constructor(
-    private readonly failingPath: string,
-    private readonly error: Error,
-  ) {
-    super();
-  }
-
-  override async writeFileAtomic(
-    ...args: Parameters<MemoryFilesystem["writeFileAtomic"]>
-  ): Promise<void> {
-    if (this.armed && args[0] === this.failingPath) {
-      throw this.error;
-    }
-    return super.writeFileAtomic(...args);
-  }
-}
-
-// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
-async function libraryHarness(
-  options: {
-    readonly devicesXml?: string;
-    readonly extraImages?: readonly (readonly [string, string, string])[];
-    readonly filesystem?: MemoryFilesystem;
-    readonly imageProperties?: string;
-    readonly imageTag?: string;
-    readonly listing?: string;
-    readonly profiles?: readonly LibraryDeviceProfile[];
-    readonly seed?: string;
-    readonly seedBootProp?: string;
-    readonly sources?: readonly DeviceProfileSource[];
-  } = {},
-) {
-  const tag = options.imageTag ?? "google_apis";
-  const filesystem = options.filesystem ?? new MemoryFilesystem();
-  await androidFilesystem(
-    { images: [["35", tag, "arm64-v8a"], ...(options.extraImages ?? [])] },
-    filesystem,
-  );
-  const imageProperties = options.imageProperties ?? `Pkg.Revision=1\nSystemImage.TagId=${tag}\n`;
-  if (imageProperties !== "") {
-    await filesystem.writeFileAtomic(
-      `${sdk}/system-images/android-35/${tag}/arm64-v8a/source.properties`,
-      imageProperties,
-    );
-  }
-  if (options.devicesXml !== undefined) {
-    await writeDevicesXml(filesystem, options.devicesXml);
-  }
-  // why: the profile is applied to the seed's AVD, which `avdmanager create` writes in the seed's own folder.
-  const seedFolder = `${avdDirectory}/sources/seed_two`;
-  const avd = `${seedFolder}/simlock.avd`;
-  const configPath = `${avd}/config.ini`;
-  const bootPropPath = `${avd}/boot.prop`;
-  await writeSeedFiles(filesystem, seedFolder, options.seed ?? seedConfig([]));
-  if (options.seedBootProp !== undefined) {
-    await filesystem.writeFileAtomic(bootPropPath, options.seedBootProp);
-  }
-  const listing = options.listing ?? pixelDevices;
-  const runner = new EmulatorExitingRunner([
-    processResult(binaries.avdmanager, ["list", "device"], listing),
-    ...makingASeedFrom(seedFolder),
-  ]);
-  const sources =
-    options.profiles === undefined
-      ? options.sources
-      : [{ profiles: async () => options.profiles ?? [] }];
-  const driver = await createDriver(filesystem, runner, {
-    ids: ["one", "two"],
-    ...(sources === undefined ? {} : { deviceProfileSources: sources }),
-  });
-  const resolve = (model: string) =>
-    driver.resolveSpec({ model, osVersion: "35", platform: "android" });
-  const readLines = async () =>
-    (await filesystem.readFile(configPath)).split("\n").filter((line) => line !== "");
-  return {
-    bootPropPath,
-    config: async () =>
-      new Map(
-        (await readLines()).map((line) => [
-          line.slice(0, line.indexOf("=")),
-          line.slice(line.indexOf("=") + 1),
-        ]),
-      ),
-    configPath,
-    createCalls: () => runner.calls.filter((call) => call.args[0] === "create"),
-    driver,
-    filesystem,
-    lines: readLines,
-    provision: async (model: string) => driver.provision(await resolve(model)),
-    resolve,
-    runner,
-    seedDeviceId: () => {
-      const create = runner.calls.find((call) => call.args[0] === "create");
-      return create?.args[create.args.indexOf("-d") + 1];
-    },
-  };
 }
 
 /**
@@ -5294,16 +4147,6 @@ function avdPathExpectation(serial: string, avdName = "simlock_one"): ScriptedPr
   );
 }
 
-// why: the erasable mark a boot writes into the running device.
-function markWriteExpectation(serial: string, token: string): ScriptedProcessExpectation {
-  return processResult(binaries.adb, [
-    "-s",
-    serial,
-    "shell",
-    `echo '${JSON.stringify({ token })}' > /data/local/tmp/simlock-mark.json`,
-  ]);
-}
-
 /**
  * why: An `EmulatorHost` on which another emulator takes a device's console port just before the
  * device's own emulator is spawned on it, and which answers the queries that tell emulators
@@ -5490,45 +4333,5 @@ describe("AndroidDriver custom profile fit from devices.xml", () => {
       }),
     ).rejects.toMatchObject({ name: "RuntimeMissingError" });
     expect(createdPackage()).toBeUndefined();
-  });
-
-  it("writes the same config.ini keys for a rich devices.xml profile as for a plain one", async () => {
-    const keysOf = async (xml: string) => {
-      const harness = await libraryHarness({
-        devicesXml: xml,
-        extraImages: [["35", "android-tv", "arm64-v8a"]],
-      });
-      await harness.provision("Keyed");
-      return [...(await harness.config()).keys()].sort();
-    };
-    const plain = customDeviceXml("Keyed", 4096);
-    const rich = customFitXml({
-      apiLevel: "31-",
-      diagonal: "10.1",
-      name: "Keyed",
-      playStore: "false",
-      tagId: "android-tv",
-    }).replace("</d:hardware>", '<d:ram unit="MiB">4096</d:ram></d:hardware>');
-
-    const plainKeys = await keysOf(plain);
-    expect(plainKeys).toEqual([
-      "PlayStore.enabled",
-      "abi.type",
-      "avd.ini.encoding",
-      "disk.dataPartition.size",
-      "hw.cpu.arch",
-      "hw.device.name",
-      "hw.lcd.density",
-      "hw.ramSize",
-      "hw.seedOnly",
-      "image.sysdir.1",
-      "showDeviceFrame",
-      "skin.name",
-      "skin.path",
-      "tag.id",
-      "target",
-      "vm.heapSize",
-    ]);
-    expect(await keysOf(rich)).toEqual(plainKeys);
   });
 });
