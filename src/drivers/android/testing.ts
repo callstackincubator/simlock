@@ -5,7 +5,7 @@ import {
   OWNED_ROOT_MARKER_FILE,
   type VirtualSpec,
 } from "../../core/index.js";
-import type { DeviceProfileSource } from "./device-profile-source.js";
+import { type DeviceProfileSource } from "./device-profile-source.js";
 import {
   MemoryFilesystem,
   NodeSqliteOpener,
@@ -16,12 +16,26 @@ import {
   type ProcessRunOptions,
   type ScriptedProcessExpectation,
   type SqliteDatabase,
+  FakeClock,
+  FakeProcessSupervisor,
+  FakeTcpListenerFactory,
+  FakeTcpProbe,
+  FakeTcpStreamConnector,
+  type Filesystem,
 } from "../../ports/index.js";
-import type { LibraryDeviceProfile } from "./profiles/index.js";
+import { type LibraryDeviceProfile } from "./profiles/index.js";
 import { androidSourceDataOwner } from "./source-data.js";
+import { basename } from "node:path";
+import {
+  AndroidDriver,
+  type AndroidDriverDiagnostic,
+  type AndroidEmulatorLaunchOptions,
+} from "./index.js";
 
 export const ANDROID_SDK_ROOT = "/android-sdk";
 export const ANDROID_HOME_DIRECTORY = "/home/simlock";
+const sdk = ANDROID_SDK_ROOT;
+const home = ANDROID_HOME_DIRECTORY;
 
 export async function memoryAndroidSourceDatabase(): Promise<SqliteDatabase> {
   const database = await new NodeSqliteOpener().open(":memory:", { readOnly: false });
@@ -774,4 +788,395 @@ export async function taggedHarness(
 
 export function bootProbes(runner: ScriptedProcessRunner): number {
   return runner.calls.filter((call) => call.args.includes("sys.boot_completed")).length;
+}
+
+export const adbServerPort = 5038;
+
+export const adbServerPid = 4242;
+
+export const adbRecordPath = `${simlockHome}/adb-server.json`;
+
+export const scopedEnv = {
+  ANDROID_ADB_SERVER_PORT: String(adbServerPort),
+  ANDROID_AVD_HOME: avdDirectory,
+  ANDROID_HOME: sdk,
+} as const;
+
+export const PHYSICAL_DEVICE = {
+  address: "R58M123ABC",
+  deviceId: "R58M123ABC",
+  driverData: {},
+  enrolledApps: ["com.example.kept"],
+  physical: true,
+} as const;
+
+/** why: the arguments of every emulator start, in order. */
+export function emulatorLaunchArgs(runner: ScriptedProcessRunner): (readonly string[])[] {
+  return runner.calls
+    .filter((call) => call.command === binaries.emulator && call.args.includes("-avd"))
+    .map((call) => call.args);
+}
+
+/**
+ * why: a driver and the copy it provisioned: the seed is made (scripted) and copied, so what a test
+ * scripts after `afterwards` is about that copy. The seed's id is the second the generator gives
+ * and the copy's the first, so a copy's folder is `<root>/simlock_one/` and the mark token of its
+ * first boot is the third id, `device-3`.
+ */
+// fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
+export async function provisionedHarness(
+  options: {
+    readonly bootCompleted?: string;
+    readonly config?: string;
+    readonly emulator?: AndroidEmulatorLaunchOptions;
+    readonly filesystem?: MemoryFilesystem;
+    readonly emulatorFlags?: readonly string[];
+    readonly ids?: readonly string[];
+    readonly initialAdbFailures?: number;
+    readonly tcpListener?: FakeTcpListenerFactory;
+    readonly unsettledPmAnswers?: readonly ProcessResult[];
+    readonly readinessTimeoutMs?: number;
+    readonly firstMarkToken?: string;
+    readonly afterwards?: readonly ScriptedProcessExpectation[];
+  } = {},
+) {
+  const filesystem = await androidFilesystem({}, options.filesystem);
+  const ids = options.ids ?? ["one", "two"];
+  const seedHome = `${avdDirectory}/sources/seed_${ids[1] ?? "two"}`;
+  const copyHome = `${avdDirectory}/simlock_${ids[0] ?? "one"}`;
+  await writeSeedFiles(filesystem, seedHome, options.config);
+  const tcpProbe = new FakeTcpProbe([adbServerPort]);
+  const clock = new FakeClock();
+  const expectations: ScriptedProcessExpectation[] = [
+    processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
+    ...makingTheSeed(seedHome, "Android emulator version 36.1.9", options.emulatorFlags),
+    ...copyBootExpectations({ ...options, copyHome }),
+  ];
+  if ((options.bootCompleted ?? "1\n").trim() === "1") {
+    expectations.push(markWriteExpectation("emulator-5586", options.firstMarkToken ?? "device-3"));
+  }
+  expectations.push(...(options.afterwards ?? []));
+  const runner = new EmulatorExitingRunner(expectations);
+  const driver = await createDriver(filesystem, runner, {
+    clock,
+    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+    ids,
+    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
+    ...(options.readinessTimeoutMs === undefined
+      ? {}
+      : { readinessTimeoutMs: options.readinessTimeoutMs }),
+    tcpProbe,
+  });
+  const spec = await driver.resolveSpec({
+    model: "Pixel 5",
+    osVersion: "34",
+    platform: "android",
+  });
+  const device = await driver.provision(spec);
+
+  return { clock, copyHome, device, driver, filesystem, runner, seedHome, tcpProbe };
+}
+
+export async function createDriver(
+  filesystem: Filesystem,
+  processRunner: ProcessRunner,
+  options: {
+    readonly acceptAndroidLicenses?: boolean;
+    /** why: `ANDROID_AVD_HOME` in the environment the daemon started with; unset by default. */
+    readonly avdHome?: string;
+    readonly clock?: FakeClock;
+    /** why: a second driver over the same table is the daemon after a restart. */
+    readonly database?: Awaited<ReturnType<typeof memoryAndroidSourceDatabase>>;
+    readonly deviceProfileSources?: readonly DeviceProfileSource[];
+    readonly driverConfig?: Readonly<Record<string, string | number | boolean>>;
+    readonly emulator?: AndroidEmulatorLaunchOptions;
+    readonly extraEnv?: Readonly<Record<string, string>>;
+    /** why: the ABI this host runs natively; `arm64-v8a` unless a test says otherwise. */
+    readonly hostAbi?: string;
+    readonly ids?: readonly string[];
+    readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
+    readonly readinessTimeoutMs?: number;
+    readonly scrcpyServerPath?: string;
+    readonly tcpListener?: FakeTcpListenerFactory;
+    readonly tcpProbe?: FakeTcpProbe;
+    readonly tcpStreamConnector?: FakeTcpStreamConnector;
+  } = {},
+) {
+  let nextId = 0;
+  const driverConfig = options.driverConfig ?? {};
+  const configuredPort =
+    typeof driverConfig["adbServerPort"] === "number"
+      ? driverConfig["adbServerPort"]
+      : adbServerPort;
+  await recordRunningAdbServer(filesystem, configuredPort);
+  return AndroidDriver.create({
+    ...onlyProvided(options),
+    clock: options.clock ?? new FakeClock(),
+    database: options.database ?? (await memoryAndroidSourceDatabase()),
+    driverConfig,
+    env: {
+      ANDROID_HOME: sdk,
+      ...options.extraEnv,
+      ...(options.avdHome === undefined ? {} : { ANDROID_AVD_HOME: options.avdHome }),
+    },
+    filesystem,
+    homeDirectory: home,
+    hostAbi: options.hostAbi ?? "arm64-v8a",
+    idGenerator: {
+      generate: () => options.ids?.[nextId++] ?? `device-${nextId}`,
+    },
+    instanceId,
+    processRunner,
+    processSupervisor: new FakeProcessSupervisor([adbServerPid]),
+    simlockHome,
+    tcpProbe: options.tcpProbe ?? new FakeTcpProbe([configuredPort]),
+  });
+}
+
+/** why: the options this helper only forwards when a test actually set one -- `AndroidDriver.create`
+ * declares them optional under `exactOptionalPropertyTypes`, so an absent one must be absent
+ * rather than `undefined`. Split out of `createDriver` so that the list can keep growing
+ * without the helper itself turning into a pile of conditionals. */
+export function onlyProvided(options: {
+  readonly acceptAndroidLicenses?: boolean;
+  readonly deviceProfileSources?: readonly DeviceProfileSource[];
+  readonly emulator?: AndroidEmulatorLaunchOptions;
+  readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
+  readonly readinessTimeoutMs?: number;
+  readonly scrcpyServerPath?: string;
+  readonly tcpListener?: FakeTcpListenerFactory;
+  readonly tcpStreamConnector?: FakeTcpStreamConnector;
+}) {
+  return {
+    ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
+    ...(options.scrcpyServerPath === undefined
+      ? {}
+      : { scrcpyServerPath: options.scrcpyServerPath }),
+    ...(options.tcpStreamConnector === undefined
+      ? {}
+      : { tcpStreamConnector: options.tcpStreamConnector }),
+    ...(options.acceptAndroidLicenses === undefined
+      ? {}
+      : { acceptAndroidLicenses: options.acceptAndroidLicenses }),
+    ...(options.deviceProfileSources === undefined
+      ? {}
+      : { deviceProfileSources: options.deviceProfileSources }),
+    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+    ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
+    ...(options.readinessTimeoutMs === undefined
+      ? {}
+      : { readinessTimeoutMs: options.readinessTimeoutMs }),
+  };
+}
+
+export async function recordRunningAdbServer(
+  filesystem: Filesystem,
+  port = adbServerPort,
+): Promise<void> {
+  await filesystem.mkdirp(simlockHome);
+  await filesystem.writeFileAtomic(
+    adbRecordPath,
+    JSON.stringify({ pid: adbServerPid, port, startedAt: 1 }),
+  );
+}
+
+/**
+ * why: The emulators on one machine, which outlive any one daemon: as much of `avdmanager`,
+ * `emulator` and `adb` as provisioning, booting, saving a snapshot and stopping use. Each
+ * `runner()` is one daemon process's view of it -- the driver keeps its port reservations per
+ * runner, as a real daemon keeps them per process.
+ *
+ * Two behaviours are the real tools', not Simlock's. An emulator told to take a console port
+ * another one holds exits at once: `emulator -help` (36.1.9) says that "if any of these ports
+ * is already used, the emulator will fail to start". And a serial is answered by whichever
+ * emulator is listening on its port.
+ */
+export class EmulatorHost {
+  /** why: the AVD folder each console port's emulator runs, as its `emu avd path` answers it. */
+  readonly #listening = new Map<number, string>();
+  readonly #exits = new Map<number, () => void>();
+  #nextPid = 1;
+
+  constructor(private readonly filesystem: MemoryFilesystem) {}
+
+  pathAnswering(serial: string | undefined): string | undefined {
+    return this.#listening.get(consolePortOf(serial));
+  }
+
+  /** why: the id of the device whose AVD answers: a copy's folder name, or an old-layout AVD's name. */
+  avdAnswering(serial: string | undefined): string | undefined {
+    const folder = this.#listening.get(consolePortOf(serial));
+    if (folder === undefined) return undefined;
+    const home = folder.slice(0, folder.lastIndexOf("/"));
+    return home === avdDirectory ? basename(folder, ".avd") : basename(home);
+  }
+
+  runner(): ProcessRunner {
+    return {
+      run: (command, args, options) => this.#run(command, args, options?.env),
+      spawn: (command, args, options) => this.#spawn(command, args, options?.env),
+      spawnStreaming: (command, args) => {
+        throw new Error(`Unexpected streaming invocation: ${command} ${args.join(" ")}`);
+      },
+    };
+  }
+
+  async #run(
+    command: string,
+    args: readonly string[],
+    env: NodeJS.ProcessEnv | undefined,
+  ): Promise<ProcessResult> {
+    const result =
+      command === binaries.avdmanager
+        ? await this.#avdmanager(args, env?.["ANDROID_AVD_HOME"] ?? avdDirectory)
+        : command === binaries.adb
+          ? this.#adb(args)
+          : command === binaries.emulator && args[0] === "-version"
+            ? ok("Android emulator version 36.1.9")
+            : undefined;
+    if (result === undefined) {
+      throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
+    }
+    return result;
+  }
+
+  async #avdmanager(args: readonly string[], home: string): Promise<ProcessResult | undefined> {
+    if (args[0] === "list") return ok(pixelDevices);
+    const avdName = args[args.indexOf("-n") + 1] ?? "";
+    if (args[0] === "delete") {
+      await this.filesystem.rm(`${home}/${avdName}.avd`);
+      return ok();
+    }
+    if (args[0] !== "create") return undefined;
+    await writeSeedFiles(this.filesystem, home, "hw.ramSize=2048\n", avdName);
+    return ok();
+  }
+
+  // fallow-ignore-next-line complexity -- one fake adb: each branch answers one command of the table.
+  #adb(args: readonly string[]): ProcessResult | undefined {
+    if (args[0] === "devices") {
+      const lines = [...this.#listening.keys()].map((port) => `emulator-${port}\tdevice\n`);
+      return ok(`List of devices attached\n${lines.join("")}`);
+    }
+    if (args[0] !== "-s") return undefined;
+    const port = consolePortOf(args[1]);
+    if (!this.#listening.has(port)) {
+      return { code: 1, stderr: `adb: device '${args[1]}' not found`, stdout: "" };
+    }
+    const rest = args.slice(2).join(" ");
+    if (rest === "emu kill" || rest === "shell reboot -p") {
+      this.#exit(port);
+      return ok("OK: killing emulator, bye bye\n");
+    }
+    if (rest.startsWith("shell echo ")) return ok();
+    if (rest.startsWith("shell getprop ro.boot.qemu.avd_name; head -c ")) {
+      return ok(`${basename(this.#listening.get(port) ?? "", ".avd")}\n`);
+    }
+    if (rest === "emu avd path") {
+      return ok(`${this.#listening.get(port) ?? ""}\r\nOK\r\n`);
+    }
+    const answer = ADB_ANSWERS.get(rest);
+    return answer === undefined ? undefined : ok(answer);
+  }
+
+  #spawn(
+    command: string,
+    args: readonly string[],
+    env: NodeJS.ProcessEnv | undefined,
+  ): ProcessHandle {
+    if (command !== binaries.emulator || args[0] !== "-avd") {
+      throw new Error(`Unexpected spawn: ${command} ${args.join(" ")}`);
+    }
+    const avdName = `${env?.["ANDROID_AVD_HOME"] ?? avdDirectory}/${args[1] ?? ""}.avd`;
+    const port = Number(args[args.indexOf("-port") + 1]);
+    let exit!: (result: ProcessResult) => void;
+    const exited = new Promise<ProcessResult>((resolve) => {
+      exit = resolve;
+    });
+    const bound = !this.#listening.has(port);
+    if (bound) {
+      this.#listening.set(port, avdName);
+      this.#exits.set(port, () => exit({ code: 0, stderr: "", stdout: "" }));
+    } else {
+      exit({ code: 1, stderr: `console port ${port} is already used`, stdout: "" });
+    }
+    return {
+      // why: Killing an emulator that never bound must not stop the one that did.
+      kill: () => {
+        if (bound && this.#listening.get(port) === avdName) this.#exit(port);
+      },
+      pid: this.#nextPid++,
+      stderr: emptyLines(),
+      stdout: emptyLines(),
+      unref: () => undefined,
+      wait: () => exited,
+    };
+  }
+
+  #exit(port: number): void {
+    this.#listening.delete(port);
+    this.#exits.get(port)?.();
+    this.#exits.delete(port);
+  }
+}
+
+export class RecordingRunner implements ProcessRunner {
+  readonly calls: { args: readonly string[]; command: string; options: ProcessRunOptions }[] = [];
+
+  constructor(private readonly inner: ProcessRunner) {}
+
+  run(command: string, args: readonly string[], options: ProcessRunOptions = {}) {
+    this.calls.push({ args, command, options });
+    return this.inner.run(command, args, options);
+  }
+
+  spawn(command: string, args: readonly string[], options: ProcessRunOptions = {}) {
+    this.calls.push({ args, command, options });
+    return this.inner.spawn(command, args, options);
+  }
+
+  spawnStreaming(...args: Parameters<ProcessRunner["spawnStreaming"]>) {
+    return this.inner.spawnStreaming(...args);
+  }
+}
+
+export const ADB_ANSWERS = new Map([
+  ["shell getprop sys.boot_completed", "1\n"],
+  ["shell getprop init.svc.bootanim", "stopped\n"],
+  ["shell pm path android", "package:/system/framework/framework-res.apk\n"],
+  ["shell sync", ""],
+  ["emu avd snapshot save simlock_boot", "OK\n"],
+  ["emu avd snapshot list", "simlock_boot\n"],
+]);
+
+export function consolePortOf(serial: string | undefined): number {
+  return Number(/^emulator-(\d+)$/.exec(serial ?? "")?.[1]);
+}
+
+export function ok(stdout = ""): ProcessResult {
+  return { code: 0, stderr: "", stdout };
+}
+
+export async function* emptyLines(): AsyncIterable<string> {}
+
+/** why: what a running copy answers to `emu avd path`: the AVD inside its own folder. */
+export function copyPathExpectation(
+  serial: string,
+  folder = "simlock_one",
+): ScriptedProcessExpectation {
+  return processResult(
+    binaries.adb,
+    ["-s", serial, "emu", "avd", "path"],
+    `${avdDirectory}/${folder}/simlock.avd\r\nOK\r\n`,
+  );
+}
+
+export class WorkingDirectoryFilesystem extends MemoryFilesystem {
+  constructor(private readonly workingDirectory: string) {
+    super();
+  }
+
+  override async realpath(path: string): Promise<string> {
+    return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
+  }
 }
