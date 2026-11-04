@@ -152,7 +152,7 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: malformed physical` | `physical` was not true or false. |
 | `refused: unknown --target <value>; use mobile, tv or desktop` | `--target` named a device class Simlock does not map. |
 | `refused: malformed osVersion`, `refused: malformed imageTag` | `--os` or `--image-tag` was not a string. |
-| `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know, an OS range it cannot read, an image tag on iOS, or a `deviceMode` other than `slim` or `full`. |
+| `refused by simlock: <message>` | Simlock refused the lease, for example a model it does not know, an OS range it cannot read, an image tag on iOS, or a `deviceMode` other than `slim` or `full` (`null` means absent). |
 | `refused: this agent-device is too old to use through a gateway; update it` | Upgrade the agent's agent-device. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
 | `agent-device is not available on this simlock: phone daemon: <message>` | `open --physical`, or a command on a phone lease, found the phone daemon starting or down. Simulator leases keep working; `simlock doctor` prints the phone daemon's finding. |
