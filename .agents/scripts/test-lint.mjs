@@ -34,7 +34,7 @@ const MESSAGES = {
   vacuous:
     "this assertion also passes on a failure; assert the exact value, or the named error and its code (testing 10)",
   internal:
-    'a test of an internal file says which reason holds in a "why:" comment above its first describe (pure logic with many cases, or an ordering the surface cannot force), or tests through index.ts (testing 6)',
+    'a test of an internal file says which reason holds in a "why:" comment above its first describe (pure logic with many cases, an ordering the surface cannot force, or a part of a decomposed module), or tests through index.ts (testing 6)',
   bound:
     'bound this wire input with .max(), .length() or .regex(), or say why it needs none in a "why:" comment right above (always-in-scope 8)',
 };
