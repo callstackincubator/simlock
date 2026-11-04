@@ -55,9 +55,8 @@ export class AdbTools {
     args: readonly string[],
     options: { readonly timeoutMs?: number; readonly env?: NodeJS.ProcessEnv } = {},
   ): Promise<ProcessResult> {
-    // why: The scoped environment unless a caller supplies its own, which only the two legacy
-    // methods do -- pointing a command at a root this driver does not own is the whole of
-    // what they are for, and nothing else here may.
+    // why: The scoped environment unless a caller supplies its own: destroyLegacy points avdmanager
+    // at the legacy AVD home, and the seed avdmanager call at its scratch folder.
     const result = await this.#options.processRunner.run(command, args, {
       ...options,
       env: options.env ?? this.env(),
