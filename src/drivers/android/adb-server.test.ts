@@ -164,8 +164,12 @@ describe("AdbServerSupervisor.start", () => {
     ]);
   });
 
-  it.each([["/usr/bin/vim /etc/hosts"], [String.raw`C:\tools\notadb.exe -P 5038 nodaemon server`]])(
-    "never signals a recorded pid that is no longer an adb process: %s",
+  it.each([
+    ["/usr/bin/vim /etc/hosts"],
+    [String.raw`C:\tools\notadb.exe -P 5038 nodaemon server`],
+    ["/usr/local/bin/adb -P 5037 fork-server server"],
+  ])(
+    "never signals a recorded pid that is not the adb server this daemon started, a stranger or the shared adb server: %s",
     async (commandLine) => {
       // why: the recycled-pid case: the number is alive, but it belongs to a stranger now, and a
       // record is not a licence to kill whatever answers to its pid.
@@ -203,23 +207,6 @@ describe("AdbServerSupervisor.start", () => {
     expect(harness.supervisor.signals).toEqual([]);
     expect(harness.supervisor.commandLineReads).toEqual([]);
     expect(harness.runner.calls).toHaveLength(1);
-  });
-
-  it("never signals another adb server that inherited the recorded pid", async () => {
-    // The dangerous half of the recycled-pid case: the machine's shared adb server is
-    // exactly the population a recycled pid most often lands in, and `adb` alone is not
-    // evidence of ownership -- `-P <our port>` and `nodaemon` are.
-    const harness = await start({
-      commandLines: [[recordedPid, ["/usr/local/bin/adb -P 5037 fork-server server"]]],
-      expectations: [serverSpawn()],
-      livePids: [recordedPid],
-      record: { pid: recordedPid, port, startedAt: 1 },
-      spawnStartsListening: true,
-    });
-
-    await harness.started;
-
-    expect(harness.supervisor.signals).toEqual([]);
   });
 
   it("records the pid before waiting for the port, so a crash in that window is recoverable", async () => {

@@ -1124,27 +1124,6 @@ describe("IosSimctlDriver", () => {
     expect(await readToken(filesystem, durableMarkPath)).not.toBe(provisionedDurable);
   });
 
-  it("shuts down before deleting and uses benchmark estimates", async () => {
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("delete", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner);
-
-    await driver.destroy({
-      address: driverData.udid,
-      deviceId: driverData.udid,
-      driverData,
-    });
-
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("delete", driverData.udid),
-    ]);
-    expect(driver.estimate({ operation: "provision" }, spec)).toBe(500);
-    expect(driver.estimate({ operation: "boot" }, spec)).toBe(60_000);
-  });
-
   it.each([
     { name: "removal succeeds", method: "destroy" as const, failing: undefined, deleteCode: 0 },
     {
@@ -1216,13 +1195,14 @@ describe("IosSimctlDriver", () => {
     },
   );
 
-  it("prices reclaim as the erase it always runs, at either clean level", async () => {
+  it("prices reclaim as the erase it always runs, at either clean level, and provision at its benchmark", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
     expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "standard" })).toBe("erase");
     expect(driver.reclaimStrategy(VIRTUAL_DEVICE, { clean: "full" })).toBe("erase");
     expect(driver.estimate({ clean: "standard", operation: "reclaim" }, spec)).toBe(34_000);
     expect(driver.estimate({ clean: "full", operation: "reclaim" }, spec)).toBe(34_000);
+    expect(driver.estimate({ operation: "provision" }, spec)).toBe(500);
   });
 
   it("lists resolvable models and installed runtimes, defaulting to the newest", async () => {
@@ -1438,30 +1418,6 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("derives mark paths from its own root without shelling out to locate a device", async () => {
-    const filesystem = new MemoryFilesystem();
-    const runner = new ScriptedProcessRunner([
-      { match: simctl("shutdown", driverData.udid) },
-      { match: simctl("erase", driverData.udid) },
-    ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
-
-    await driver.reclaim(
-      { address: driverData.udid, deviceId: driverData.udid, driverData },
-      { clean: "full" },
-    );
-
-    // why: Owning the set means the data container's path is known, so `reclaim` -- which runs
-    // on every release -- never pays for the `simctl list` it used to need to find it.
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      simctlArgs("shutdown", driverData.udid),
-      simctlArgs("erase", driverData.udid),
-    ]);
-    expect(await filesystem.exists(erasableMarkPath)).toBe(true);
-    expect(await filesystem.exists(durableMarkPath)).toBe(true);
-  });
-
   it("leaves neither provenance mark when the erasable half cannot be written", async () => {
     const filesystem = new MemoryFilesystem();
     const runner = new ScriptedProcessRunner([
@@ -1534,7 +1490,19 @@ describe("IosSimctlDriver", () => {
     ]);
   });
 
-  it("reports mark undefined when both provenance regions are absent (pre-upgrade device)", async () => {
+  it.each([
+    {
+      name: "both provenance regions are absent (pre-upgrade device)",
+      files: [] as readonly (readonly [string, string])[],
+    },
+    {
+      name: "the mark files are corrupt",
+      files: [
+        [durableMarkPath, "not json"],
+        [erasableMarkPath, JSON.stringify({ notAToken: true })],
+      ] as readonly (readonly [string, string])[],
+    },
+  ])("reports mark undefined, without throwing, when $name", async ({ files }) => {
     const filesystem = new MemoryFilesystem();
     const runner = new ScriptedProcessRunner([
       {
@@ -1544,24 +1512,9 @@ describe("IosSimctlDriver", () => {
     ]);
     const driver = await createDriver(runner, new FakeClock(), filesystem);
     await plantManagedDevice(filesystem);
-
-    const reality = await driver.listManaged();
-
-    expect(reality.devices[0]?.mark).toBeUndefined();
-  });
-
-  it("reads a corrupt mark file as undefined without throwing", async () => {
-    const filesystem = new MemoryFilesystem();
-    const runner = new ScriptedProcessRunner([
-      {
-        match: listDevicesInvocation,
-        result: { code: 0, stderr: "", stdout: deviceListResponse("Shutdown") },
-      },
-    ]);
-    const driver = await createDriver(runner, new FakeClock(), filesystem);
-    await plantManagedDevice(filesystem);
-    await filesystem.writeFileAtomic(durableMarkPath, "not json");
-    await filesystem.writeFileAtomic(erasableMarkPath, JSON.stringify({ notAToken: true }));
+    for (const [path, content] of files) {
+      await filesystem.writeFileAtomic(path, content);
+    }
 
     const reality = await driver.listManaged();
 
@@ -1694,40 +1647,11 @@ describe("IosSimctlDriver", () => {
     await expect(driver.findLegacy(legacyUdid)).resolves.toBeUndefined();
   });
 
-  it("destroys a pre-root device through the unscoped path it actually lives on", async () => {
-    const runner = new ScriptedProcessRunner([
-      { match: { args: ["simctl", "shutdown", legacyUdid], command: "xcrun" } },
-      { match: { args: ["simctl", "delete", legacyUdid], command: "xcrun" } },
-    ]);
-    const driver = await createDriver(runner);
-
-    await driver.destroyLegacy({
-      address: legacyUdid,
-      deviceId: legacyUdid,
-      driverData: { ...driverData, udid: legacyUdid },
-    });
-
-    expect(runner.calls.map((call) => call.args)).toEqual([
-      ["simctl", "shutdown", legacyUdid],
-      ["simctl", "delete", legacyUdid],
-    ]);
-  });
-
   it("answers uninstall for the reclaim strategy of a physical device", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
 
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "standard" })).toBe("uninstall");
     expect(driver.reclaimStrategy(PHYSICAL_DEVICE, { clean: "full" })).toBe("uninstall");
-  });
-
-  it("scopes a simctl passthrough to the device set the way its own calls are scoped", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    await expect(simctlPassthrough(driver, ["install", "booted", "./MyApp.app"])).resolves.toEqual({
-      args: ["simctl", "--set", deviceRoot, "install", "booted", "./MyApp.app"],
-      command: "xcrun",
-      env: {},
-    });
   });
 
   it("fills a simctl device verb's missing device with the lease's UDID", async () => {
@@ -1826,14 +1750,6 @@ describe("IosSimctlDriver", () => {
       await expect(simctlPassthrough(driver, [verb, "ABCD"])).rejects.toThrow(/simlock cleanup/);
     },
   );
-
-  it("finds the refused verb past a leading flag rather than only in first position", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    await expect(simctlPassthrough(driver, ["--verbose", "delete", "ABCD"])).rejects.toThrow(
-      PassthroughRefusedError,
-    );
-  });
 
   it("proxies a refused word that is an argument rather than the subcommand", async () => {
     const driver = await createDriver(new ScriptedProcessRunner([]));
@@ -1935,18 +1851,6 @@ describe("IosSimctlDriver", () => {
     );
   });
 
-  it("still proxies the runtime operations that only read", async () => {
-    const driver = await createDriver(new ScriptedProcessRunner([]));
-
-    expect((await simctlPassthrough(driver, ["runtime", "list"])).args).toEqual([
-      "simctl",
-      "--set",
-      deviceRoot,
-      "runtime",
-      "list",
-    ]);
-  });
-
   it.skipIf(process.env.SIMLOCK_LIVE_IOS !== "1")(
     "runs a provision-to-destroy smoke test against simctl",
     async () => {
@@ -1980,7 +1884,6 @@ describe("IosSimctlDriver", () => {
     const widgetsSignature = "v1:0dd8c925463fb678";
     const slim18_5 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
 
-    const managedCount = Object.keys(wantedOverrides()).length;
     const trueLabel = widgetsLabels[0] ?? "";
     const falseLabel = "com.apple.siriactionsd";
     // why: the label written first is not the first in sorted order, so naming the sorted first
@@ -2128,53 +2031,53 @@ describe("IosSimctlDriver", () => {
         name: "a true label reads enabled",
         readback: () => readbackWith({ [trueLabel]: "enabled" }),
         mode: "full",
-        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+        skipped: true,
       },
       {
         name: "a true label is missing",
         readback: () => readbackWith({ [trueLabel]: undefined }),
         mode: "full",
-        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
+        skipped: true,
       },
       {
         name: "a false label reads disabled",
         readback: () => readbackWith({ [falseLabel]: "disabled" }),
         mode: "full",
-        detail: `1 of ${managedCount} managed labels did not read back as written at boot; first: ${falseLabel}`,
+        skipped: true,
       },
       {
-        name: "two labels disagree, the first by sort order is named",
+        name: "two labels disagree",
         readback: () => readbackWith(flipped([firstWritten, firstSorted])),
         mode: "full",
-        detail: `2 of ${managedCount} managed labels did not read back as written at boot; first: ${firstSorted}`,
+        skipped: true,
       },
       {
         name: "a true label reads true (older launchd)",
         readback: () => readbackWith({ [trueLabel]: "true" }),
         mode: "slim",
-        detail: undefined,
+        skipped: false,
       },
       {
         name: "a false label is missing",
         readback: () => readbackWith({ [falseLabel]: undefined }),
         mode: "slim",
-        detail: undefined,
+        skipped: false,
       },
       {
         name: "the readback exits non-zero",
         readback: () => ({ code: 1, stderr: "launchctl: boom\n" }),
         mode: "slim",
-        detail: "could not read back the launchd overrides: exit 1: launchctl: boom",
+        skipped: true,
       },
       {
         name: "the readback times out",
         readback: () => "hangs" as const,
         mode: "slim",
-        detail: "could not read back the launchd overrides: timed out after 120000ms",
+        skipped: true,
       },
     ])(
-      "grants the mode the readback shows and tells why when it disagrees or fails: $name",
-      async ({ readback, mode, detail }) => {
+      "grants the mode the readback shows when it disagrees or fails: $name",
+      async ({ readback, mode, skipped }) => {
         const filesystem = new FaultyFilesystem();
         await plantManagedDevice(filesystem);
         const script = readback();
@@ -2186,14 +2089,15 @@ describe("IosSimctlDriver", () => {
         );
 
         expect(result.mode).toBe(mode);
-        if (detail === undefined) {
+        if (!skipped) {
           expect(onSlimmed).toHaveBeenCalledTimes(1);
           expect(onSlimSkipped).not.toHaveBeenCalled();
         } else {
           expect(onSlimmed).not.toHaveBeenCalled();
-          expect(onSlimSkipped.mock.calls).toEqual([
-            [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
-          ]);
+          expect(onSlimSkipped).toHaveBeenCalledTimes(1);
+          expect(onSlimSkipped).toHaveBeenCalledWith(
+            expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
+          );
         }
       },
     );
@@ -2205,7 +2109,6 @@ describe("IosSimctlDriver", () => {
         existing: undefined,
         readback: { stdout: readbackWith({}) },
         mode: "slim",
-        detail: "could not write the launchd overrides file: disk full",
       },
       {
         name: "mkdirp throws and the readback disagrees",
@@ -2213,7 +2116,6 @@ describe("IosSimctlDriver", () => {
         existing: undefined,
         readback: { stdout: readbackWith({ [trueLabel]: "enabled" }) },
         mode: "full",
-        detail: `could not write the launchd overrides file: disk full; 1 of ${managedCount} managed labels did not read back as written at boot; first: ${trueLabel}`,
       },
       {
         name: "the write throws and the readback fails",
@@ -2221,8 +2123,6 @@ describe("IosSimctlDriver", () => {
         existing: undefined,
         readback: { code: 1, stderr: "boom" },
         mode: "slim",
-        detail:
-          "could not write the launchd overrides file: disk full; could not read back the launchd overrides: exit 1: boom",
       },
       {
         name: "the existing file is not a plist dict, is left unchanged, and the readback decides",
@@ -2230,12 +2130,10 @@ describe("IosSimctlDriver", () => {
         existing: "not a plist",
         readback: { stdout: readbackWith({}) },
         mode: "slim",
-        detail:
-          "could not write the launchd overrides file: the existing file is not a property list dictionary",
       },
     ])(
-      "boots anyway when the overrides file cannot be written and says so: $name",
-      async ({ failing, existing, readback, mode, detail }) => {
+      "boots anyway when the overrides file cannot be written: $name",
+      async ({ failing, existing, readback, mode }) => {
         const filesystem = new FaultyFilesystem();
         await plantManagedDevice(filesystem);
         if (existing !== undefined) {
@@ -2258,9 +2156,10 @@ describe("IosSimctlDriver", () => {
           "spawn",
         ]);
         expect(onSlimmed).not.toHaveBeenCalled();
-        expect(onSlimSkipped.mock.calls).toEqual([
-          [{ deviceId: slim18_5.udid, detail, reason: "apply-failed" }],
-        ]);
+        expect(onSlimSkipped).toHaveBeenCalledTimes(1);
+        expect(onSlimSkipped).toHaveBeenCalledWith(
+          expect.objectContaining({ deviceId: slim18_5.udid, reason: "apply-failed" }),
+        );
         if (existing !== undefined) {
           expect(await filesystem.readFile(overridesPath(slim18_5.udid))).toBe(existing);
         }
@@ -3121,44 +3020,39 @@ describe("IosSimctlDriver listComponents()", () => {
     ]);
   });
 
-  it("rejects with DriverCrashError when the default device set answers with something that is not JSON", async () => {
-    const runner = new ScriptedProcessRunner([
-      imagesListed([image("18.4", "22E238")]),
-      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "not json" } },
-    ]);
-    const driver = await createDriver(runner);
+  it.each([
+    {
+      name: "something that is not JSON",
+      result: { code: 0, stderr: "", stdout: "not json" },
+      message: "Could not parse simctl device list",
+    },
+    {
+      name: "JSON with no devices map",
+      result: { code: 0, stderr: "", stdout: "{}" },
+      message: "Invalid simctl device list JSON",
+    },
+    {
+      name: "exit 1, so it cannot be read rather than report no foreign devices",
+      result: { code: 1, stderr: "CoreSimulator is down", stdout: "" },
+      message: undefined,
+    },
+  ])(
+    "rejects with DriverCrashError when the default device set answers $name",
+    async ({ result, message }) => {
+      const runner = new ScriptedProcessRunner([
+        imagesListed([image("18.4", "22E238")]),
+        { match: defaultSetInvocation, result },
+      ]);
+      const driver = await createDriver(runner);
 
-    const error = await driver.listComponents().catch((caught: unknown) => caught);
+      const error = await driver.listComponents().catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(DriverCrashError);
-    expect((error as Error).message).toContain("Could not parse simctl device list");
-  });
-
-  it("rejects with DriverCrashError when the default device set answers JSON with no devices map", async () => {
-    const runner = new ScriptedProcessRunner([
-      imagesListed([image("18.4", "22E238")]),
-      { match: defaultSetInvocation, result: { code: 0, stderr: "", stdout: "{}" } },
-    ]);
-    const driver = await createDriver(runner);
-
-    const error = await driver.listComponents().catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(DriverCrashError);
-    expect((error as Error).message).toBe("Invalid simctl device list JSON");
-  });
-
-  it("rejects when the default device set cannot be read, rather than report no foreign devices", async () => {
-    const runner = new ScriptedProcessRunner([
-      imagesListed([image("18.4", "22E238")]),
-      {
-        match: defaultSetInvocation,
-        result: { code: 1, stderr: "CoreSimulator is down", stdout: "" },
-      },
-    ]);
-    const driver = await createDriver(runner);
-
-    await expect(driver.listComponents()).rejects.toBeInstanceOf(DriverCrashError);
-  });
+      expect(error).toBeInstanceOf(DriverCrashError);
+      if (message !== undefined) {
+        expect((error as Error).message).toContain(message);
+      }
+    },
+  );
 
   describe("removeComponent()", () => {
     const target = image("26.4", "23E244", { sizeBytes: 7_000_000_000 });

@@ -157,7 +157,9 @@ describe("readLogFile", () => {
   it("propagates the read failure when neither file exists", async () => {
     const filesystem = new MemoryFilesystem();
 
-    await expect(readLogFile(filesystem, "/simlock/daemon.log")).rejects.toThrow();
+    await expect(readLogFile(filesystem, "/simlock/daemon.log")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 });
 
@@ -1387,7 +1389,7 @@ describe("CLI: exit codes", () => {
     expect(output.stdout).toContain("adb <args...>");
   });
 
-  it("releases and exits when the watched parent process dies, via the same path as a signal", async () => {
+  it("releases and exits when the watched parent process dies", async () => {
     const output = outputCapture();
     const parentWatch = new FakeParentWatch();
     const heldGrant: LeaseGrant = {
@@ -3052,19 +3054,26 @@ describe("CLI: daemon status (ADR 0003 §11)", () => {
   });
 
   it.each([
-    ["declined", async () => false],
+    ["doctor --purge-orphans", ["doctor", "--purge-orphans"], "declined", async () => false],
     // why: Explicitly absent: the shared harness defaults `confirm` to an auto-yes, so leaving it
     // out would test the default rather than the no-terminal case.
-    ["unavailable", undefined],
+    ["doctor --purge-orphans", ["doctor", "--purge-orphans"], "unavailable", undefined],
+    [
+      "component remove ios 26.4",
+      ["component", "remove", "ios", "26.4"],
+      "declined",
+      async () => false,
+    ],
+    ["component remove ios 26.4", ["component", "remove", "ios", "26.4"], "unavailable", undefined],
   ] as const)(
-    "refuses --purge-orphans and contacts nobody when confirmation is %s",
-    async (_case, confirm) => {
+    "refuses %s without --yes and contacts nobody when confirmation is %s",
+    async (_command, argv, _case, confirm) => {
       const output = outputCapture();
       let connected = false;
 
       await expect(
         runCli(
-          ["doctor", "--purge-orphans"],
+          [...argv],
           output.environmentWith({
             // why: `exactOptionalPropertyTypes`: an explicitly-absent confirm has to be spread in,
             // not passed as `undefined`.
@@ -3320,37 +3329,6 @@ describe("CLI: component remove (ADR 0010 §8)", () => {
     expect(asked).toEqual([{ platform: "android", version: "35" }]);
   });
 
-  it.each([
-    ["declined", async () => false],
-    // why: No terminal to ask on: the CLI's own `confirmTerminal` is not installed, so this is the
-    // no-terminal case rather than the default.
-    ["unavailable", undefined],
-  ] as const)(
-    "refuses without --yes when confirmation is %s, and contacts nobody",
-    async (_case, confirm) => {
-      const output = outputCapture();
-      let connected = false;
-
-      await expect(
-        runCli(
-          ["component", "remove", "ios", "26.4"],
-          output.environmentWith({
-            ...(confirm === undefined ? { confirm: undefined } : { confirm }),
-            connectAdmin: async () => {
-              connected = true;
-              return fakeClient();
-            },
-          }),
-        ),
-      ).resolves.toBe(2);
-
-      expect(connected).toBe(false);
-      expect(JSON.parse(output.stderr)).toEqual({
-        error: { code: "USAGE", message: expect.stringContaining("--yes") },
-      });
-    },
-  );
-
   it("does not ask under --dry-run, and asks the daemon for a dry run", async () => {
     const output = outputCapture();
     const asked: unknown[] = [];
@@ -3424,6 +3402,8 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
   it.each([
     ["an unknown key", "capacty.limits.ios.maxDevices", "2"],
     ["a key missing the Ms suffix", "lease.defaultTtl", "60000"],
+    ["a zero eventLog.retention", "eventLog.retention", "0"],
+    ["a fractional eventLog.retention", "eventLog.retention", "1.5"],
   ])(
     "rejects %s instead of silently dropping it or validating clean",
     async (_name, key, value) => {
@@ -3441,6 +3421,7 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       expect(exitCode).toBe(2);
       expect(wrote).toBe(false);
       expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+      expect(output.stderr).toContain(key);
     },
   );
 
@@ -3579,25 +3560,6 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
           'Invalid config value for "http.enabled": expected false when gateway.url is set (joined workers are reached through the gateway)',
       });
     });
-  });
-
-  it("simlock config set eventLog.retention rejects a non-positive value, naming the key", async () => {
-    for (const value of ["0", "1.5"]) {
-      const output = outputCapture(realCliEnvironmentPorts());
-      let wrote = false;
-      const exitCode = await runCli(
-        ["config", "set", "eventLog.retention", value],
-        output.environmentWith({
-          readConfigFile: async () => ({}),
-          writeConfigFile: async () => {
-            wrote = true;
-          },
-        }),
-      );
-      expect(exitCode).toBe(2);
-      expect(wrote).toBe(false);
-      expect(output.stderr).toContain("eventLog.retention");
-    }
   });
 
   it("still writes a genuinely valid key", async () => {
@@ -3815,47 +3777,32 @@ describe("CLI: --json shape is the contract, as-is (ADR 0003 §11)", () => {
 });
 
 describe("CLI: --yes / confirm guards (safety rule 5)", () => {
-  it("release --all without --yes and a confirm that declines refuses with exit 2 and releases nothing", async () => {
-    const output = outputCapture();
-    let released = false;
-    await expect(
-      runCli(
-        ["release", "--all"],
-        output.environmentWith({
-          confirm: async () => false,
-          connectAdmin: async () =>
-            fakeClient({
-              releaseAllLeases: () => {
-                released = true;
-                return Promise.resolve({ leaseIds: [] });
-              },
-            }),
-        }),
-      ),
-    ).resolves.toBe(2);
-    expect(released).toBe(false);
-  });
-
-  it("release --all --yes bypasses the interactive confirm", async () => {
-    const output = outputCapture();
-    let released = false;
-    await expect(
-      runCli(
-        ["release", "--all", "--yes"],
-        output.environmentWith({
-          confirm: async () => false,
-          connectAdmin: async () =>
-            fakeClient({
-              releaseAllLeases: () => {
-                released = true;
-                return Promise.resolve({ leaseIds: ["lse_1"] });
-              },
-            }),
-        }),
-      ),
-    ).resolves.toBe(0);
-    expect(released).toBe(true);
-  });
+  it.each([
+    ["without --yes and a confirm that declines refuses with exit 2", ["release", "--all"], 2, false],
+    ["--yes bypasses the interactive confirm and exits 0", ["release", "--all", "--yes"], 0, true],
+  ] as const)(
+    "release --all %s, releasing exactly when it is not refused",
+    async (_name, argv, exitCode, expectedReleased) => {
+      const output = outputCapture();
+      let released = false;
+      await expect(
+        runCli(
+          [...argv],
+          output.environmentWith({
+            confirm: async () => false,
+            connectAdmin: async () =>
+              fakeClient({
+                releaseAllLeases: () => {
+                  released = true;
+                  return Promise.resolve({ leaseIds: ["lse_1"] });
+                },
+              }),
+          }),
+        ),
+      ).resolves.toBe(exitCode);
+      expect(released).toBe(expectedReleased);
+    },
+  );
 
   it("nuke without confirmation or --yes refuses before connecting", async () => {
     const output = outputCapture();
@@ -4545,6 +4492,17 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
                     ],
                   },
                 },
+                {
+                  ...connectedWorker,
+                  id: "wrk_2",
+                  label: "linux-box-2",
+                  host: {
+                    arch: "x64",
+                    os: "Linux",
+                    osVersion: "6.8",
+                    tools: [{ name: "adb", platform: "android" as const, version: "35.0.2" }],
+                  },
+                },
               ],
             }),
         }),
@@ -4552,8 +4510,12 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await runCli(["worker", "list"], environment);
 
-    expect(output.stdout).toContain(
+    const lines = output.stdout.trimEnd().split("\n");
+    expect(lines.find((line) => line.startsWith("wrk_1 "))).toContain(
       "1 lease(s) -- macOS 15.5 arm64; xcode 16.4 (16F6), emulator 35.4.9",
+    );
+    expect(lines.find((line) => line.startsWith("wrk_2 "))).toContain(
+      "1 lease(s) -- Linux 6.8 x64; adb 35.0.2",
     );
   });
 
@@ -4648,20 +4610,13 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
       expect(loadAfter("wrk_c")).toBeUndefined();
     });
 
-    it("simlock worker list prints `read 0s ago` for a readAt ahead of its clock", async () => {
-      const stdout = await printWorkers([
-        { ...connectedWorker, load: { ...PARTS, readAt: NOW + 9_000 } },
-      ]);
+    it.each([
+      ["prints `read 0s ago` for a readAt ahead of its clock", NOW + 9_000, "0s"],
+      ["rounds a reading's age up to whole seconds", NOW - 1_001, "2s"],
+    ])("simlock worker list %s", async (_name, readAt, age) => {
+      const stdout = await printWorkers([{ ...connectedWorker, load: { ...PARTS, readAt } }]);
 
-      expect(stdout).toContain(`  Load: ${READING} · read 0s ago\n`);
-    });
-
-    it("simlock worker list rounds a reading's age up to whole seconds", async () => {
-      const stdout = await printWorkers([
-        { ...connectedWorker, load: { ...PARTS, readAt: NOW - 1_001 } },
-      ]);
-
-      expect(stdout).toContain(`  Load: ${READING} · read 2s ago\n`);
+      expect(stdout).toContain(`  Load: ${READING} · read ${age} ago\n`);
     });
 
     it("simlock status against a gateway prints the gateway's own Load line, and each worker's Load line aged from the status time", async () => {
@@ -4889,7 +4844,7 @@ describe("CLI: worker commands (ADR 0005 §8/§23)", () => {
 
     await runCli(["worker", "list", "--json"], environment);
 
-    expect(JSON.parse(output.stdout)).toMatchObject({ workers: [{ id: "wrk_1" }] });
+    expect(JSON.parse(output.stdout)).toEqual({ workers: [connectedWorker] });
   });
 
   it("drains, undrains and removes by id", async () => {
@@ -5029,35 +4984,37 @@ describe("CLI: alerts test (ADR 0035 §1)", () => {
     }
   });
 
-  it("simlock alerts test exits 1 on ALERT_SEND_FAILED and 12 on UNKNOWN_ALERT_DESTINATION with the error line", async () => {
-    const failed = await runAlerts(["alerts", "test", "ops-slack"], {
-      testAlertDestination: () =>
-        Promise.reject(
-          new SimlockError("ALERT_SEND_FAILED", "transport", "ops-slack answered HTTP 404", {
-            destination: "ops-slack",
-            status: 404,
-          }),
-        ),
-    });
-    expect([failed.code, failed.stdout, errorLine(failed.stderr)]).toEqual([
-      1,
-      "",
-      { error: { code: "ALERT_SEND_FAILED", message: "ops-slack answered HTTP 404" } },
-    ]);
-
-    const unknown = await runAlerts(["alerts", "test", "nope"], {
-      testAlertDestination: () =>
-        Promise.reject(
-          new SimlockError("UNKNOWN_ALERT_DESTINATION", "domain", "No alert destination named", {
-            destination: "nope",
-          }),
-        ),
-    });
-    expect([unknown.code, errorLine(unknown.stderr)]).toEqual([
-      12,
-      { error: { code: "UNKNOWN_ALERT_DESTINATION", message: "No alert destination named" } },
-    ]);
-  });
+  it.each([
+    {
+      code: "ALERT_SEND_FAILED",
+      category: "transport",
+      destination: "ops-slack",
+      message: "ops-slack answered HTTP 404",
+      details: { destination: "ops-slack", status: 404 },
+      exit: 1,
+    },
+    {
+      code: "UNKNOWN_ALERT_DESTINATION",
+      category: "domain",
+      destination: "nope",
+      message: "No alert destination named",
+      details: { destination: "nope" },
+      exit: 12,
+    },
+  ] as const)(
+    "simlock alerts test exits $exit on $code with the error line and nothing on stdout",
+    async ({ code, category, destination, message, details, exit }) => {
+      const result = await runAlerts(["alerts", "test", destination], {
+        testAlertDestination: () =>
+          Promise.reject(new SimlockError(code, category, message, details)),
+      });
+      expect([result.code, result.stdout, errorLine(result.stderr)]).toEqual([
+        exit,
+        "",
+        { error: { code, message } },
+      ]);
+    },
+  );
 });
 
 describe("CLI: warm forget", () => {
@@ -5339,7 +5296,7 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       const off = {
         enabled: false,
         reserveRunning: { android: 0, ios: 0 },
-        targets: warmPool.targets.slice(0, 1).map((target) => ({
+        targets: warmPool.targets.map((target) => ({
           ...target,
           booting: 0,
           ready: 0,
@@ -5354,7 +5311,9 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
 
       expect(output.stdout).toContain(
         "warm pool: disabled, reserve ios 0 android 0\n" +
-          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 0  booting 0  short: disabled\n",
+          "  iPhone 17 / 26.0 / full   configured   wanted 2  ready 0  booting 0  short: disabled\n" +
+          "  iPhone 17 / 27.0 / full   learned   wanted 1  ready 0  booting 0  short: disabled\n" +
+          "  Pixel 8 / 35 / full / google_apis_playstore   learned   wanted 1  ready 0  booting 0  short: disabled\n",
       );
     });
 
@@ -6088,68 +6047,52 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     expect(lines).toContain(`Device dev_none: ${head})`);
   });
 
-  it("status prints absent (<reason>) as the state of an absent device", async () => {
-    const physical = (id: string, state: string, absentReason?: string) => ({
-      class: "phone",
-      id,
-      physical: true,
-      servesDefaultMode: false,
-      spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
-      state,
-      ...(absentReason === undefined ? {} : { absentReason }),
-    });
-    const status = {
-      ...EMPTY_STATUS,
-      devices: [
-        physical("dev_ready", "ready"),
-        physical("dev_locked", "absent", "locked"),
-        physical("dev_untrusted", "absent", "untrusted"),
-        physical("dev_gone", "absent", "not-present"),
-      ],
-    } as unknown as StatusGetOutput;
-    const output = outputCapture();
+  it.each([
+    ["ready", "ready", undefined, "Device dev_x: ready, physical phone"],
+    ["absent (locked)", "absent", "locked", "Device dev_x: absent (locked), physical phone"],
+    [
+      "absent (untrusted)",
+      "absent",
+      "untrusted",
+      "Device dev_x: absent (untrusted), physical phone",
+    ],
+    [
+      "absent (not-present)",
+      "absent",
+      "not-present",
+      "Device dev_x: absent (not-present), physical phone",
+    ],
+    ["a bare absent for an absent device with no reason", "absent", undefined, "Device dev_x: absent, physical phone"],
+    ["a bare ready for a device that is not absent but carries a reason", "ready", "locked", "Device dev_x: ready, physical phone"],
+  ] as const)(
+    "status prints a physical device's state as %s",
+    async (_name, state, absentReason, expected) => {
+      const status = {
+        ...EMPTY_STATUS,
+        devices: [
+          {
+            class: "phone",
+            id: "dev_x",
+            physical: true,
+            servesDefaultMode: false,
+            spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
+            state,
+            ...(absentReason === undefined ? {} : { absentReason }),
+          },
+        ],
+      } as unknown as StatusGetOutput;
+      const output = outputCapture();
 
-    await runCli(
-      ["status"],
-      output.environmentWith({
-        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
-      }),
-    );
+      await runCli(
+        ["status"],
+        output.environmentWith({
+          connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
+        }),
+      );
 
-    const lines = output.stdout.split("\n");
-    expect(lines).toContain("Device dev_ready: ready, physical phone");
-    expect(lines).toContain("Device dev_locked: absent (locked), physical phone");
-    expect(lines).toContain("Device dev_untrusted: absent (untrusted), physical phone");
-    expect(lines).toContain("Device dev_gone: absent (not-present), physical phone");
-  });
-
-  it("status prints a bare state for an absent device with no reason and for a device that is not absent", async () => {
-    const physical = (id: string, state: string, absentReason?: string) => ({
-      class: "phone",
-      id,
-      physical: true,
-      servesDefaultMode: false,
-      spec: { model: "iPhone 15 Pro", osVersion: "18.4", physical: true, platform: "ios" },
-      state,
-      ...(absentReason === undefined ? {} : { absentReason }),
-    });
-    const status = {
-      ...EMPTY_STATUS,
-      devices: [physical("dev_bare", "absent"), physical("dev_stray", "ready", "locked")],
-    } as unknown as StatusGetOutput;
-    const output = outputCapture();
-
-    await runCli(
-      ["status"],
-      output.environmentWith({
-        connectAdmin: async () => fakeClient({ getStatus: () => Promise.resolve(status) }),
-      }),
-    );
-
-    const lines = output.stdout.split("\n");
-    expect(lines).toContain("Device dev_bare: absent, physical phone");
-    expect(lines).toContain("Device dev_stray: ready, physical phone");
-  });
+      expect(output.stdout.split("\n")).toContain(expected);
+    },
+  );
 
   it("simlock status marks a stalled device", async () => {
     const device = (id: string, extra: object) => ({
@@ -6355,6 +6298,15 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       value: true,
       lease: ["lease", "--platform", "ios", "--detach"],
       flagArgs: ["--physical"],
+    },
+    {
+      flag: "--ttl",
+      field: "ttlMs",
+      value: 1_800_000,
+      lease: ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
+      // why: ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends
+      // no TTL at all, so the daemon's own default applies rather than a number the CLI invented.
+      flagArgs: ["--ttl", "30m"],
     },
   ])(
     "maps $flag onto the contract's $field input field, and sends none without it",
@@ -6676,35 +6628,6 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     expect(errorLines).toHaveLength(1);
     expect(errorLines[0]?.error?.code).toBe("DAEMON_CONNECTION_LOST");
     expect(errorLines[0]?.error?.message).toContain("lse_1");
-  });
-
-  it("sends --ttl as the request's own ttlMs, and nothing when it is not given", async () => {
-    const output = outputCapture();
-    const signals = new EventEmitter();
-    const requested: Array<number | undefined> = [];
-    const environment = output.environmentWith({
-      clock: new FakeClock(0),
-      connectAdmin: async () =>
-        fakeClient({
-          requestLease: (input) => {
-            requested.push(input.ttlMs);
-            return Promise.resolve(detachedGrant);
-          },
-        }),
-      signals: signals as unknown as CliEnvironment["signals"],
-    });
-    await runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach", "--ttl", "30m"],
-      environment,
-    );
-    await runCli(
-      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--detach"],
-      environment,
-    );
-
-    // why: ADR 0004 §4: `--ttl` replaces `lease.defaultTtlMs` for this lease; omitting it sends no
-    // TTL at all, so the daemon's own default applies rather than a number the CLI invented.
-    expect(requested).toEqual([30 * 60_000, undefined]);
   });
 
   it("the CLI --lease-id flag sends leaseId and exits 13 on LEASE_ID_TAKEN", async () => {
@@ -7047,6 +6970,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     const output = outputCapture();
     let renewed = 0;
     const client = fakeClient({
+      requestLease: () => Promise.resolve(detachedGrant),
       renewLease: () => {
         renewed += 1;
         return Promise.reject(new Error("--detach must not renew"));
@@ -7058,6 +6982,7 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     );
 
     expect(exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ lease: { id: detachedGrant.lease.id } });
     expect(clock.pendingTimerCount).toBe(0);
     clock.advance(600_000);
     expect(renewed).toBe(0);
@@ -7827,18 +7752,19 @@ describe("CLI: requester id from the agent session", () => {
 });
 
 describe("CLI: pure helpers", () => {
-  it("parseDuration parses units and rejects garbage", () => {
-    expect(parseDuration("500")).toBe(500);
-    expect(parseDuration("500ms")).toBe(500);
-    expect(parseDuration("2s")).toBe(2_000);
-    expect(parseDuration("3m")).toBe(180_000);
-    expect(parseDuration("1h")).toBe(3_600_000);
-    expect(() => parseDuration("banana")).toThrow("Invalid duration");
+  it.each([
+    ["500", 500],
+    ["500ms", 500],
+    ["2s", 2_000],
+    ["3m", 180_000],
+    ["1h", 3_600_000],
+    ["2d", 2 * 24 * 60 * 60 * 1000],
+  ])("parseDuration accepts %s as %d ms", (input, expected) => {
+    expect(parseDuration(input)).toBe(expected);
   });
 
-  it("parseDuration accepts the d unit and rejects an unknown one", () => {
-    expect(parseDuration("2d")).toBe(2 * 24 * 60 * 60 * 1000);
-    expect(() => parseDuration("2w")).toThrow("Invalid duration");
+  it.each(["banana", "2w"])("parseDuration rejects %s", (input) => {
+    expect(() => parseDuration(input)).toThrow("Invalid duration");
   });
 });
 
@@ -7848,34 +7774,21 @@ describe("readPipedStdin", () => {
     return Object.assign(stream, { isTTY }) as unknown as typeof process.stdin;
   }
 
-  it("reads a terminal stdin to its end, joining its chunks", async () => {
-    const stdin = fakeStdin(["typed ", "text\n"], true);
+  it.each([
+    ["a terminal stdin, joining its chunks", ["typed ", "text\n"], true, "typed text\n"],
+    [
+      "a piped stdin to EOF, concatenating every chunk in order",
+      ["piped ", "pay", "load\n"],
+      false,
+      "piped payload\n",
+    ],
+    ["a piped stdin that carries nothing as an empty string", [], false, ""],
+  ] as const)("reads %s", async (_name, chunks, isTTY, expected) => {
+    const stdin = fakeStdin(chunks, isTTY);
     const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
 
     try {
-      await expect(readPipedStdin()).resolves.toBe("typed text\n");
-    } finally {
-      stdinGetter.mockRestore();
-    }
-  });
-
-  it("reads a piped stdin to EOF, concatenating every chunk in order", async () => {
-    const stdin = fakeStdin(["piped ", "pay", "load\n"], false);
-    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
-
-    try {
-      await expect(readPipedStdin()).resolves.toBe("piped payload\n");
-    } finally {
-      stdinGetter.mockRestore();
-    }
-  });
-
-  it("returns an empty string for a piped stdin that carries nothing", async () => {
-    const stdin = fakeStdin([], false);
-    const stdinGetter = vi.spyOn(process, "stdin", "get").mockReturnValue(stdin);
-
-    try {
-      await expect(readPipedStdin()).resolves.toBe("");
+      await expect(readPipedStdin()).resolves.toBe(expected);
     } finally {
       stdinGetter.mockRestore();
     }
@@ -8062,6 +7975,7 @@ describe("simlock update and simlock status", () => {
       readonly stdout: string;
       readonly calls?: readonly unknown[];
       readonly reconnects?: number;
+      readonly errorLine?: { readonly code: string; readonly message: string };
     }[] = [
       {
         name: "follows to running",
@@ -8159,6 +8073,7 @@ describe("simlock update and simlock status", () => {
         },
         code: 1,
         stdout: `${header}Installing simlock@0.4.0\n`,
+        errorLine: { code: "UPDATE_RESOLVE_FAILED", message: "npm is down" },
       },
       {
         name: "prints its usage for --help and asks the daemon nothing",
@@ -8241,7 +8156,16 @@ describe("simlock update and simlock status", () => {
         calls: [{}, { query: true }],
       },
     ];
-    for (const { name, argv, script, code, stdout, calls, reconnects: expected } of cases) {
+    for (const {
+      name,
+      argv,
+      script,
+      code,
+      stdout,
+      calls,
+      reconnects: expected,
+      errorLine,
+    } of cases) {
       reconnects = 0;
       const result = await runUpdate(argv, script);
       if (expected !== undefined) expect(reconnects, name).toBe(expected);
@@ -8251,6 +8175,11 @@ describe("simlock update and simlock status", () => {
         stdout,
       });
       if (calls !== undefined) expect(result.calls, name).toEqual(calls);
+      if (errorLine !== undefined) {
+        expect(JSON.parse(result.stderr.trim().split("\n").at(-1) ?? ""), name).toEqual({
+          error: errorLine,
+        });
+      }
       expect(result.closed, `${name}: every client opened is closed`).toBe(result.opened);
     }
 
@@ -10414,6 +10343,14 @@ describe("CLI: a start through a service that fails (#830)", () => {
         const logPath = join(directory, "daemon.log");
         await writeFile(logPath, "older line\n");
         const clock = new FakeClock(0);
+        // why: The 20 s deadline starts when the first connection attempt fails, after the launch's own
+        // awaits, so the test reads that instant from the first 50 ms retry timer rather than assuming 0.
+        let attemptsBeganAt: number | undefined;
+        const setTimer = clock.setTimer.bind(clock);
+        clock.setTimer = (milliseconds, callback) => {
+          if (milliseconds === 50) attemptsBeganAt ??= clock.now();
+          return setTimer(milliseconds, callback);
+        };
         const serviceManager = new FakeServiceManager({
           state: { state: "installed", path: "/Users/me/Library/LaunchAgents/x.plist" },
           onStart: async () => {
@@ -10450,12 +10387,19 @@ describe("CLI: a start through a service that fails (#830)", () => {
             return code;
           },
         );
-        for (let tick = 0; tick < 500 && !settled; tick += 1) {
+        for (let tick = 0; tick < 1_000 && !settled; tick += 1) {
+          await settle();
+          if (attemptsBeganAt !== undefined && clock.now() >= attemptsBeganAt + 19_950) break;
           clock.advance(50);
           await settle();
-          await settle();
         }
-        expect(settled, `${testCase.label}: not settled at ${String(clock.now())}ms`).toBe(true);
+        expect(attemptsBeganAt, testCase.label).toBeDefined();
+        expect(clock.now() - (attemptsBeganAt ?? 0), testCase.label).toBe(19_950);
+        expect(settled, `${testCase.label}: still starting at 19.95 s`).toBe(false);
+        clock.advance(50);
+        // why: Reading the log back is real file I/O, so the failure settles a few turns after the deadline.
+        for (let turn = 0; turn < 200 && !settled; turn += 1) await settle();
+        expect(settled, `${testCase.label}: failed by 20 s`).toBe(true);
         expect(await exitCode, testCase.label).toBe(1);
         const error = (
           JSON.parse(output.stderr.trim().split("\n").at(-1) ?? "") as {

@@ -699,7 +699,10 @@ describe("a worker's tunnel socket", () => {
       });
     await vi.waitFor(() => expect(hung.device.closed).toBe(true));
     expect(hungReturned).toBe(false);
-    hung.clock.advance(10_000);
+    hung.clock.advance(9_999);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(hungReturned).toBe(false);
+    hung.clock.advance(1);
     await vi.waitFor(() => expect(hungReturned).toBe(true));
 
     const reclaimed = await open();

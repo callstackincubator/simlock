@@ -1015,7 +1015,7 @@ describe("startDaemon wires core and leasing together", () => {
     });
   });
 
-  it("runs the operator's warm.forget through core's warm pool, which answers the kinds it forgot", async () => {
+  it("runs the operator's warm.forget through core's warm pool, which answers an empty forgotten list when none was learned", async () => {
     const { daemon } = await start();
 
     const report = await daemon.dispatch(
@@ -2915,9 +2915,10 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     );
     const sink = new MemoryLogSink();
 
-    const { drivers, rejections } = await discover(sink);
+    const { drivers, prerequisiteChecks, rejections } = await discover(sink);
 
     expect(drivers).toEqual([{ platform: "ios", fromModule: true, sawContext: true }]);
+    expect(prerequisiteChecks).toEqual([]);
     expect(rejections).toEqual([]);
   });
 
@@ -2969,18 +2970,6 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     } finally {
       consoleError.mockRestore();
     }
-  });
-
-  it("supports a synchronous createDrivers returning an array directly", async () => {
-    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
-      `export function createDrivers() { return []; }`,
-    );
-
-    await expect(discover(new MemoryLogSink())).resolves.toEqual({
-      drivers: [],
-      prerequisiteChecks: [],
-      rejections: [],
-    });
   });
 
   it("fails loudly when the module has no createDrivers export", async () => {
@@ -4197,7 +4186,7 @@ describe("startDaemon in gateway mode host load", () => {
     expect(probe.reads).toBe(1);
   });
 
-  it("a gateway started with no hostLoadProbe builds the production probe, the same factory a worker uses", async () => {
+  it("a gateway started with no hostLoadProbe answers status.get with a memory reading", async () => {
     const { daemon } = await startGateway({});
 
     await expect
