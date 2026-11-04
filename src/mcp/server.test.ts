@@ -226,7 +226,7 @@ describe("MCP server (smoke)", () => {
     ["release_simulator", { leaseId: "lease-1" }, { leaseId: 7 }, "releaseLease"],
     ["lease_status", {}, undefined, "listLeases"],
   ] as const)(
-    "%s reaches the client with a valid input, and a wrong-type input is refused through the registered schema before touching the client",
+    "%s reaches the client with a valid input, and where the tool takes input a wrong-type input is refused through the registered schema before touching the client",
     async (tool, valid, wrong, ...methods) => {
       const client = new FakeSimlockClient();
       client.requestLeaseImpl = () => Promise.resolve(sampleGrant());
@@ -401,14 +401,13 @@ describe("MCP server (smoke)", () => {
         );
 
       const granted = await call("google_apis_playstore");
-      const refused = await call("google apis").catch((error: unknown) => error);
+      const refused = await call("google apis");
 
       expect(granted.isError).not.toBe(true);
       expect(inputs).toEqual([expect.objectContaining({ imageTag: "google_apis_playstore" })]);
-      expect(refused).toSatisfy(
-        (result: unknown) =>
-          result instanceof Error || (result as { isError?: boolean }).isError === true,
-      );
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toContain("Input validation error");
+      expect(inputs).toHaveLength(1);
     } finally {
       await close();
     }
@@ -1007,7 +1006,7 @@ describe("MCP list_devices physicalDevices", () => {
     })),
   ];
 
-  it("lists the catalog plus each enrolled phone's worker, platform, model, OS version, class, state and absent reason, and no holder", async () => {
+  it("lists each enrolled phone's worker, platform, model, OS version, class, state and absent reason, and no holder", async () => {
     for (const { name, devices, workers, expected } of cases) {
       const client = new FakeSimlockClient();
       client.getCatalogImpl = () => Promise.resolve({ platforms: [] });
