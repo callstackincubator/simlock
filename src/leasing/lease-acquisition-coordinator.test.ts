@@ -84,7 +84,12 @@ function config(maxDevices = 1, maxRunning = 1): Config {
     downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
     eventBuffer: { capacity: 100 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    ios: {
+      defaultMode: "full",
+      defaultModels: {},
+      slim: { bootTimeoutMs: 600_000 },
+      simulator: { audio: true },
+    },
     android: {
       defaultModels: {},
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },

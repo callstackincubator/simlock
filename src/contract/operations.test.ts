@@ -1329,14 +1329,19 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: false },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({ audio: false });
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1395,7 +1400,12 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: true },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },

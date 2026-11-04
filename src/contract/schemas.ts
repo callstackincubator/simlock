@@ -1099,6 +1099,7 @@ export const configSchema = z.object({
       categories: z.array(z.string()).optional(),
       bootTimeoutMs: z.number(),
     }),
+    simulator: z.object({ audio: z.boolean() }),
   }),
   android: z.object({
     defaultModels: defaultModelsSchema,
