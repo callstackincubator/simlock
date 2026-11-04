@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 
 import { DriverCrashError, type VirtualDriverDevice } from "../../core/index.js";
 import type { Filesystem } from "../../ports/index.js";
-import type { AdbTools } from "./adb-tools.js";
+import { deviceIdOf, type AdbTools } from "./adb-tools.js";
 import type { AndroidDriverData } from "./data.js";
 
 export const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
@@ -64,6 +64,27 @@ export class Ownership {
     throw new DriverCrashError(
       `Refusing to ready ${data.avdName}: the emulator answering on ${data.serial} runs ${JSON.stringify(answered)}, not ${expected} -- another emulator holds its console port`,
     );
+  }
+
+  /** why: A destroy after a restart has no handle, so each serial is asked which AVD it runs; one that cannot answer refuses the delete. */
+  async serialsRunningAvd(data: AndroidDriverData, serials: readonly string[]): Promise<string[]> {
+    const expected = this.#options.adbTools.avdFolder(data);
+    const own: string[] = [];
+    for (const serial of serials) {
+      let answered: string | undefined;
+      try {
+        answered = await this.avdPathOf(serial);
+      } catch {
+        answered = undefined;
+      }
+      if (answered === undefined || answered === "") {
+        throw new DriverCrashError(
+          `Refusing to delete ${deviceIdOf(data)}: could not tell which AVD the emulator on ${serial} runs`,
+        );
+      }
+      if (await this.isOwnPath(answered, expected)) own.push(serial);
+    }
+    return own;
   }
 
   async avdPathOf(serial: string): Promise<string> {
