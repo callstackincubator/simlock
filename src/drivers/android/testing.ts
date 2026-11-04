@@ -1,5 +1,6 @@
+import { OWNED_ROOT_MARKER_FILE } from "../../core/index.js";
 import {
-  type MemoryFilesystem,
+  MemoryFilesystem,
   NodeSqliteOpener,
   ScriptedProcessRunner,
   type ProcessHandle,
@@ -238,4 +239,207 @@ export function answeringAvdPath(
     spawn: (command, args, options) => inner.spawn(command, args, options),
     spawnStreaming: (command, args, options) => inner.spawnStreaming(command, args, options),
   };
+}
+
+export const simlockHome = "/home/simlock/.simlock";
+
+export const instanceId = "instance-1";
+
+export const avdDirectory = `${simlockHome}/devices/android`;
+
+export const binaries = {
+  adb: `${ANDROID_SDK_ROOT}/platform-tools/adb`,
+  avdmanager: `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/avdmanager`,
+  emulator: `${ANDROID_SDK_ROOT}/emulator/emulator`,
+  sdkmanager: `${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager`,
+} as const;
+
+/**
+ * why: A scripted emulator stays up until it is told to stop, as a real one does, so a boot that
+ * sees it exit has failed; `emu kill` and the seed's `reboot -p` are what stop it.
+ */
+export class EmulatorExitingRunner extends ScriptedProcessRunner {
+  /** why: a test of an emulator that ignores `emu kill` sets this. */
+  ignoresEmuKill = false;
+
+  override spawn(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): ProcessHandle {
+    const handle = super.spawn(command, args, options);
+    const stopsTheEmulator = /(?:emu kill|shell reboot -p)$/.test(args.join(" "));
+    if (!this.ignoresEmuKill && stopsTheEmulator) {
+      for (const [index, call] of this.calls.entries()) {
+        if (call.command === binaries.emulator && call.args.includes("-avd")) {
+          this.handles[index]?.kill("SIGKILL");
+        }
+      }
+    }
+    return handle;
+  }
+}
+
+export const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
+
+/** why: the calls of making and booting a seed, shared by the seed tests and the harness every driver test starts from. */
+export const seedEmulatorLine = [
+  "-port",
+  "5586",
+  "-no-snapshot-save",
+  "-grpc",
+  "8586",
+  "-grpc-use-token",
+  "-crash-report-mode",
+  "never",
+];
+
+export function bootingAt(
+  folder: string,
+  launch: readonly string[],
+  hangs: boolean,
+  notReadyPolls = 0,
+  flags: readonly string[] = [],
+) {
+  const serial = "emulator-5586";
+  const notReady = Array.from({ length: notReadyPolls }, () =>
+    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "sys.boot_completed"], "0\n"),
+  );
+  return [
+    {
+      hangs,
+      match: {
+        args: ["-avd", "simlock", ...seedEmulatorLine, ...flags, ...launch],
+        command: binaries.emulator,
+      },
+    },
+    ...notReady,
+    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "sys.boot_completed"], "1\n"),
+    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "init.svc.bootanim"], ""),
+    processResult(
+      binaries.adb,
+      ["-s", serial, "emu", "avd", "path"],
+      `${folder}/simlock.avd\r\nOK\r\n`,
+    ),
+    processResult(
+      binaries.adb,
+      ["-s", serial, "shell", "pm", "path", "android"],
+      "package:/system/framework/framework-res.apk\n",
+    ),
+  ] satisfies ScriptedProcessExpectation[];
+}
+
+/** why: the calls of making a seed, by stage, so a test can stop it at the step that fails. */
+export function seedStages(
+  home = defaultSeedHome,
+  emulatorVersion = "Android emulator version 36.1.9",
+  flags: readonly string[] = [],
+) {
+  const serial = "emulator-5586";
+  return {
+    create: processResult(binaries.avdmanager, [
+      "create",
+      "avd",
+      "-n",
+      "simlock",
+      "-k",
+      "system-images;android-34;google_apis;arm64-v8a",
+      "-d",
+      "pixel_5",
+    ]),
+    devices: processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+    firstBoot: bootingAt(home, ["-no-snapshot-load"], true, 0, flags),
+    kill: processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+    list: processResult(
+      binaries.adb,
+      ["-s", serial, "emu", "avd", "snapshot", "list"],
+      "simlock_boot\n",
+    ),
+    powerOff: processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+    probe: processResult(
+      binaries.adb,
+      ["-s", serial, "emu", "avd", "path"],
+      `${home}/simlock.avd\r\nOK\r\n`,
+    ),
+    save: processResult(binaries.adb, [
+      "-s",
+      serial,
+      "emu",
+      "avd",
+      "snapshot",
+      "save",
+      "simlock_boot",
+    ]),
+    secondBoot: bootingAt(home, ["-no-snapshot-load"], true, 0, flags),
+    sync: processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
+    version: processResult(binaries.emulator, ["-version"], emulatorVersion),
+  };
+}
+
+export function makingTheSeed(
+  home = defaultSeedHome,
+  emulatorVersion = "Android emulator version 36.1.9",
+  flags: readonly string[] = [],
+): ScriptedProcessExpectation[] {
+  const stage = seedStages(home, emulatorVersion, flags);
+  return [
+    stage.version,
+    stage.create,
+    stage.devices,
+    ...stage.firstBoot,
+    stage.sync,
+    stage.powerOff,
+    ...stage.secondBoot,
+    stage.save,
+    stage.list,
+    stage.probe,
+    stage.kill,
+  ];
+}
+
+export async function writeSeedFiles(
+  filesystem: MemoryFilesystem,
+  home: string,
+  config = "hw.ramSize=2048\n",
+  avdName = "simlock",
+): Promise<void> {
+  await filesystem.mkdirp(`${home}/${avdName}.avd`);
+  await filesystem.writeFileAtomic(`${home}/${avdName}.avd/config.ini`, config);
+  await filesystem.writeFileAtomic(
+    `${home}/${avdName}.ini`,
+    `avd.ini.encoding=UTF-8\npath=${home}/${avdName}.avd\ntarget=android-34\n`,
+  );
+}
+
+export async function androidFilesystem(
+  options: {
+    readonly config?: string;
+    readonly freeDiskBytes?: number;
+    readonly images?: readonly (readonly [string, string, string])[];
+    readonly withDeviceRoot?: boolean;
+  } = {},
+  filesystem: MemoryFilesystem = new MemoryFilesystem(options.freeDiskBytes),
+): Promise<MemoryFilesystem> {
+  for (const binary of Object.values(binaries)) {
+    await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
+    await filesystem.writeFileAtomic(binary, "binary");
+  }
+  // why: Marked, so `ensureOwnedRoot` adopts it rather than creating one -- a root Simlock
+  // created in an earlier run is the ordinary case, and it keeps the id generator's first
+  // value available for the AVD name the tests assert on.
+  if (options.withDeviceRoot !== false) {
+    await filesystem.mkdirp(avdDirectory);
+    await filesystem.writeFileAtomic(
+      `${avdDirectory}/${OWNED_ROOT_MARKER_FILE}`,
+      JSON.stringify({ instanceId, owner: "simlock", platform: "android", schemaVersion: 1 }),
+    );
+  }
+  for (const [api, tag, abi] of options.images ?? [["34", "google_apis", "arm64-v8a"]]) {
+    await filesystem.mkdirp(`${ANDROID_SDK_ROOT}/system-images/android-${api}/${tag}/${abi}`);
+  }
+  if (options.config !== undefined) {
+    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
+    await filesystem.writeFileAtomic(`${avdDirectory}/simlock_one.avd/config.ini`, options.config);
+  }
+  return filesystem;
 }

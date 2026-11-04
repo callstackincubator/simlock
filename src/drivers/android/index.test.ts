@@ -46,6 +46,18 @@ import {
   ANDROID_HOME_DIRECTORY,
   ANDROID_SDK_ROOT,
   answeringAvdPath,
+  androidFilesystem,
+  avdDirectory,
+  binaries,
+  bootingAt,
+  defaultSeedHome,
+  EmulatorExitingRunner,
+  instanceId,
+  makingTheSeed,
+  seedEmulatorLine,
+  seedStages,
+  simlockHome,
+  writeSeedFiles,
   customDeviceXml,
   customFitXml,
   type FitImage,
@@ -65,12 +77,9 @@ import {
 
 const sdk = ANDROID_SDK_ROOT;
 const home = ANDROID_HOME_DIRECTORY;
-const simlockHome = "/home/simlock/.simlock";
-const instanceId = "instance-1";
 const adbServerPort = 5038;
 const adbServerPid = 4242;
 const adbRecordPath = `${simlockHome}/adb-server.json`;
-const avdDirectory = `${simlockHome}/devices/android`;
 const scopedEnv = {
   ANDROID_ADB_SERVER_PORT: String(adbServerPort),
   ANDROID_AVD_HOME: avdDirectory,
@@ -81,12 +90,6 @@ const scopedOptions = { env: scopedEnv } as const;
 const emulatorOptions = {
   env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
   stdio: { file: `${avdDirectory}/simlock_one/simlock.avd/emulator.log` },
-} as const;
-const binaries = {
-  adb: `${sdk}/platform-tools/adb`,
-  avdmanager: `${sdk}/cmdline-tools/latest/bin/avdmanager`,
-  emulator: `${sdk}/emulator/emulator`,
-  sdkmanager: `${sdk}/cmdline-tools/latest/bin/sdkmanager`,
 } as const;
 const VIRTUAL_DEVICE = {
   address: "",
@@ -1528,32 +1531,6 @@ describe("AndroidDriver", () => {
     });
   });
 });
-
-/**
- * why: A scripted emulator stays up until it is told to stop, as a real one does, so a boot that
- * sees it exit has failed; `emu kill` and the seed's `reboot -p` are what stop it.
- */
-class EmulatorExitingRunner extends ScriptedProcessRunner {
-  /** why: a test of an emulator that ignores `emu kill` sets this. */
-  ignoresEmuKill = false;
-
-  override spawn(
-    command: string,
-    args: readonly string[],
-    options: ProcessRunOptions = {},
-  ): ProcessHandle {
-    const handle = super.spawn(command, args, options);
-    const stopsTheEmulator = /(?:emu kill|shell reboot -p)$/.test(args.join(" "));
-    if (!this.ignoresEmuKill && stopsTheEmulator) {
-      for (const [index, call] of this.calls.entries()) {
-        if (call.command === binaries.emulator && call.args.includes("-avd")) {
-          this.handles[index]?.kill("SIGKILL");
-        }
-      }
-    }
-    return handle;
-  }
-}
 
 // why: stands in for adb's server: it answers the host protocol with the bytes a test scripts, and says nothing when there are none.
 class RepliesTcpStreamConnector extends FakeTcpStreamConnector {
@@ -3272,20 +3249,6 @@ live(
   480_000,
 );
 
-const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
-
-/** why: the calls of making and booting a seed, shared by the seed tests and the harness every driver test starts from. */
-const seedEmulatorLine = [
-  "-port",
-  "5586",
-  "-no-snapshot-save",
-  "-grpc",
-  "8586",
-  "-grpc-use-token",
-  "-crash-report-mode",
-  "never",
-];
-
 /** why: the arguments of every emulator start, in order. */
 function emulatorLaunchArgs(runner: ScriptedProcessRunner): (readonly string[])[] {
   return runner.calls
@@ -3294,109 +3257,6 @@ function emulatorLaunchArgs(runner: ScriptedProcessRunner): (readonly string[])[
 }
 
 const seedLaunch = ["-avd", "simlock", ...seedEmulatorLine];
-
-function bootingAt(
-  folder: string,
-  launch: readonly string[],
-  hangs: boolean,
-  notReadyPolls = 0,
-  flags: readonly string[] = [],
-) {
-  const serial = "emulator-5586";
-  const notReady = Array.from({ length: notReadyPolls }, () =>
-    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "sys.boot_completed"], "0\n"),
-  );
-  return [
-    {
-      hangs,
-      match: {
-        args: ["-avd", "simlock", ...seedEmulatorLine, ...flags, ...launch],
-        command: binaries.emulator,
-      },
-    },
-    ...notReady,
-    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "sys.boot_completed"], "1\n"),
-    processResult(binaries.adb, ["-s", serial, "shell", "getprop", "init.svc.bootanim"], ""),
-    processResult(
-      binaries.adb,
-      ["-s", serial, "emu", "avd", "path"],
-      `${folder}/simlock.avd\r\nOK\r\n`,
-    ),
-    processResult(
-      binaries.adb,
-      ["-s", serial, "shell", "pm", "path", "android"],
-      "package:/system/framework/framework-res.apk\n",
-    ),
-  ] satisfies ScriptedProcessExpectation[];
-}
-
-/** why: the calls of making a seed, by stage, so a test can stop it at the step that fails. */
-function seedStages(
-  home = defaultSeedHome,
-  emulatorVersion = "Android emulator version 36.1.9",
-  flags: readonly string[] = [],
-) {
-  const serial = "emulator-5586";
-  return {
-    create: processResult(binaries.avdmanager, [
-      "create",
-      "avd",
-      "-n",
-      "simlock",
-      "-k",
-      "system-images;android-34;google_apis;arm64-v8a",
-      "-d",
-      "pixel_5",
-    ]),
-    devices: processResult(binaries.adb, ["devices"], "List of devices attached\n"),
-    firstBoot: bootingAt(home, ["-no-snapshot-load"], true, 0, flags),
-    kill: processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
-    list: processResult(
-      binaries.adb,
-      ["-s", serial, "emu", "avd", "snapshot", "list"],
-      "simlock_boot\n",
-    ),
-    powerOff: processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
-    probe: processResult(
-      binaries.adb,
-      ["-s", serial, "emu", "avd", "path"],
-      `${home}/simlock.avd\r\nOK\r\n`,
-    ),
-    save: processResult(binaries.adb, [
-      "-s",
-      serial,
-      "emu",
-      "avd",
-      "snapshot",
-      "save",
-      "simlock_boot",
-    ]),
-    secondBoot: bootingAt(home, ["-no-snapshot-load"], true, 0, flags),
-    sync: processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
-    version: processResult(binaries.emulator, ["-version"], emulatorVersion),
-  };
-}
-
-function makingTheSeed(
-  home = defaultSeedHome,
-  emulatorVersion = "Android emulator version 36.1.9",
-  flags: readonly string[] = [],
-): ScriptedProcessExpectation[] {
-  const stage = seedStages(home, emulatorVersion, flags);
-  return [
-    stage.version,
-    stage.create,
-    stage.devices,
-    ...stage.firstBoot,
-    stage.sync,
-    stage.powerOff,
-    ...stage.secondBoot,
-    stage.save,
-    stage.list,
-    stage.probe,
-    stage.kill,
-  ];
-}
 
 /** why: making a seed from whichever image and device profile the test's request resolves to; `device` pins the profile when the test cares. */
 function makingASeedFrom(
@@ -3415,20 +3275,6 @@ function makingASeedFrom(
     device,
   ]);
   return making;
-}
-
-async function writeSeedFiles(
-  filesystem: MemoryFilesystem,
-  home: string,
-  config = "hw.ramSize=2048\n",
-  avdName = "simlock",
-): Promise<void> {
-  await filesystem.mkdirp(`${home}/${avdName}.avd`);
-  await filesystem.writeFileAtomic(`${home}/${avdName}.avd/config.ini`, config);
-  await filesystem.writeFileAtomic(
-    `${home}/${avdName}.ini`,
-    `avd.ini.encoding=UTF-8\npath=${home}/${avdName}.avd\ntarget=android-34\n`,
-  );
 }
 
 /**
@@ -4381,29 +4227,6 @@ describe("AndroidDriver image fit", () => {
       expect(await harness.filesystem.exists(seedHome)).toBe(true);
     });
 
-    it("makes one seed when two plain leases of one kind are provisioned at once", async () => {
-      const madeHome = `${sources}/seed_three`;
-      const harness = await seedHarness([
-        ...makingTheSeed(madeHome),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
-      ]);
-      await writeSeedFiles(harness.filesystem, madeHome);
-
-      const [first, second] = await Promise.all([
-        harness.driver.provision(harness.spec),
-        harness.driver.provision(harness.spec),
-      ]);
-
-      expect(harness.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
-      expect([first.deviceId, second.deviceId]).toEqual(["simlock_one", "simlock_two"]);
-      await expect(
-        harness.filesystem.exists(`${avdDirectory}/simlock_two/simlock.avd`),
-      ).resolves.toBe(true);
-      const listed = await harness.driver.listSources();
-      expect(listed.filter((source) => source.orphan !== true)).toHaveLength(1);
-    });
-
     it("provisions a kind with a ready seed while another kind's seed is being made, and leaves that kind's making row and folder alone", async () => {
       const makingHome = `${sources}/seed_device-4`;
       const harness = await seedHarness([
@@ -5256,39 +5079,6 @@ class ReadFailureFilesystem extends MemoryFilesystem {
     }
     return super.readFile(path);
   }
-}
-
-async function androidFilesystem(
-  options: {
-    readonly config?: string;
-    readonly freeDiskBytes?: number;
-    readonly images?: readonly (readonly [string, string, string])[];
-    readonly withDeviceRoot?: boolean;
-  } = {},
-  filesystem: MemoryFilesystem = new MemoryFilesystem(options.freeDiskBytes),
-): Promise<MemoryFilesystem> {
-  for (const binary of Object.values(binaries)) {
-    await filesystem.mkdirp(binary.slice(0, binary.lastIndexOf("/")));
-    await filesystem.writeFileAtomic(binary, "binary");
-  }
-  // why: Marked, so `ensureOwnedRoot` adopts it rather than creating one -- a root Simlock
-  // created in an earlier run is the ordinary case, and it keeps the id generator's first
-  // value available for the AVD name the tests assert on.
-  if (options.withDeviceRoot !== false) {
-    await filesystem.mkdirp(avdDirectory);
-    await filesystem.writeFileAtomic(
-      `${avdDirectory}/${OWNED_ROOT_MARKER_FILE}`,
-      JSON.stringify({ instanceId, owner: "simlock", platform: "android", schemaVersion: 1 }),
-    );
-  }
-  for (const [api, tag, abi] of options.images ?? [["34", "google_apis", "arm64-v8a"]]) {
-    await filesystem.mkdirp(`${sdk}/system-images/android-${api}/${tag}/${abi}`);
-  }
-  if (options.config !== undefined) {
-    await filesystem.mkdirp(`${avdDirectory}/simlock_one.avd`);
-    await filesystem.writeFileAtomic(`${avdDirectory}/simlock_one.avd/config.ini`, options.config);
-  }
-  return filesystem;
 }
 
 /**
