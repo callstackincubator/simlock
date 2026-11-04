@@ -9,7 +9,6 @@ import {
   type DeviceSpec,
   type DriverAdvisory,
   type VirtualSpec,
-  BootTimeoutError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
@@ -53,7 +52,6 @@ import {
   type Filesystem,
   type IdGenerator,
   type Logger,
-  type ProcessHandle,
   type ProcessResult,
   type ProcessRunner,
   type ProcessSupervisor,
@@ -61,15 +59,20 @@ import {
   type TcpListenerFactory,
   type TcpProbe,
   type TcpStreamConnector,
-  type TimerHandle,
 } from "../../ports/index.js";
 import { createAndroidDeviceTcp, type AndroidDeviceTcp } from "./device-tcp.js";
-import { AdbRegistrar } from "./adb-registrar.js";
-import { ADB_DEVICES_TIMEOUT_MS, AdbTools, deviceIdOf, SEED_AVD_NAME } from "./adb-tools.js";
+import {
+  COLD_BOOT_ESTIMATE_MS,
+  DEFAULT_EMULATOR_LAUNCH,
+  Emulator,
+  SIGKILL_REAP_TIMEOUT_MS,
+  type AndroidEmulatorLaunchOptions,
+  type SnapshotColdBootDiagnostic,
+} from "./emulator.js";
+import { ADB_DEVICES_TIMEOUT_MS, AdbTools, SEED_AVD_NAME } from "./adb-tools.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
 import {
   ConsolePorts,
-  GRPC_PORT_OFFSET,
   PORT_MAX,
   PORT_MIN,
   portAllocatorFor,
@@ -105,6 +108,7 @@ import { createAndroidScreenCapture, type ScreenTarget } from "./screen/index.js
 import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
+export type { AndroidEmulatorLaunchOptions } from "./emulator.js";
 export {
   ANDROID_PASSTHROUGH_TOOLS,
   REFUSED_ADB_SEQUENCES,
@@ -112,33 +116,15 @@ export {
 } from "./passthrough-rules.js";
 
 const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
-// why: Measured at 60-71s for a cold boot to `sys.boot_completed` on an M-series Mac against
-// Pixel 8 / API 35 (ADR-era hardware verification), against the 31s this first quoted.
-// Under-quoting matters more than over-quoting: `Doctor` derives its stalled-transition
-// threshold from this number, so a low estimate flags healthy boots on a slower machine.
-const COLD_BOOT_ESTIMATE_MS = 70_000;
-const PORT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
-// why: After this long without an answer from a serial, the emulator's own registration is
-// assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
-// already attached, short enough that a lost announcement costs seconds, not the whole
-// readiness timeout.
-const REGISTRATION_RETRY_AFTER_MS = 5_000;
 // why: `sdkmanager --licenses` prompts once per outstanding license with a bare `y/N`. Answering
 // more times than there are real licenses is harmless -- the extra `y`s land after the prompt
 // loop has already exited and sdkmanager simply never reads them -- so this just needs to be
 // comfortably above the largest real Android SDK license count rather than exact.
 const LICENSE_ACCEPT_ANSWERS = 100;
-// why: A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
-// already settles shortly after `exit`, but this keeps a pathologically slow reap
-// from ever turning a "we already killed it" cleanup into an unbounded await.
-const SIGKILL_REAP_TIMEOUT_MS = 5_000;
-const EMULATOR_LOG_TAIL_BYTES = 8_192;
-const EMULATOR_LOG_TAIL_LINES = 10;
 // why: Saving the boot snapshot writes the whole guest RAM and disk to the host, far slower than
 // the console's other commands; past this the emulator's console is taken as hung (#1138).
 const SNAPSHOT_SAVE_TIMEOUT_MS = 60_000;
-const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 // why: Conservative estimate for a system-image download+install -- reserved by `ComponentInstaller`
 // before `sdkmanager --install` ever starts, so a full disk fails fast instead of filling up
 // mid-download.
@@ -164,26 +150,6 @@ const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 const SAVE_EXIT_POLL_INTERVAL_MS = 1_000;
 // why: adb shell sync and reboot -p have no limit of their own; a wedged adbd would hold the kind's lock.
 const SEED_SHELL_TIMEOUT_MS = 60_000;
-
-/**
- * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
- * reaches the driver at construction and never from a lease request. Only these four settings
- * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
- * `-port`, a different AVD home, or any other argument that would break containment.
- */
-export interface AndroidEmulatorLaunchOptions {
-  readonly headless: boolean;
-  readonly gpu: string;
-  readonly audio: boolean;
-  readonly bootAnimation: boolean;
-}
-
-const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
-  audio: true,
-  bootAnimation: true,
-  gpu: "auto",
-  headless: false,
-};
 
 export interface AndroidDriverOptions {
   /**
@@ -227,13 +193,7 @@ export interface AndroidDriverOptions {
   readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
 }
 
-export type AndroidDriverDiagnostic =
-  | {
-      readonly deviceId: string;
-      readonly kind: "snapshot-cold-boot";
-      readonly readyAfterMs: number;
-    }
-  | DeviceProfileSourceDiagnostic;
+export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
 
 export class SdkMissingError extends Error {
   constructor(readonly searchedPaths: readonly string[]) {
@@ -326,15 +286,13 @@ export class AndroidDriver implements Driver {
   readonly #hostAbi: string;
   readonly #idGenerator: IdGenerator;
   readonly #legacyAvdHome: string;
-  readonly #emulatorFlags: readonly string[];
   readonly #locks = new Map<string, Promise<void>>();
   readonly #onDiagnostic: ((diagnostic: AndroidDriverDiagnostic) => void) | undefined;
   readonly #consolePorts: ConsolePorts;
   readonly #processRunner: ProcessRunner;
   readonly #physical: AndroidPhysicalHandler;
   readonly #resolvedProfiles = new Map<string, DeviceProfile>();
-  readonly #readinessTimeoutMs: number;
-  readonly #registrar: AdbRegistrar;
+  readonly #emulator: Emulator;
   readonly #rootOptions: EnsureOwnedRootOptions;
   readonly #sdk: AndroidSdkPaths;
   readonly #sources: AndroidSourceTable;
@@ -380,7 +338,6 @@ export class AndroidDriver implements Driver {
     this.#baseEnv = options.env;
     this.#clock = options.clock;
     this.#deviceRoot = deviceRoot;
-    this.#emulatorFlags = emulatorLaunchFlags(options.emulator);
     this.#filesystem = options.filesystem;
     this.#hostAbi = options.hostAbi;
     this.#idGenerator = options.idGenerator ?? new SequentialIdGenerator();
@@ -405,8 +362,21 @@ export class AndroidDriver implements Driver {
       platform: this.platform,
       processRunner: options.processRunner,
     });
-    this.#readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
-    this.#registrar = new AdbRegistrar({ serverPort: adbServerPort, tcp: options.tcpProbe });
+    this.#emulator = new Emulator({
+      adb: sdk.adb,
+      adbServerPort,
+      adbTools: this.#adbTools,
+      clock: options.clock,
+      deviceRoot,
+      emulator: sdk.emulator,
+      emulatorLaunch: options.emulator,
+      filesystem: options.filesystem,
+      onDiagnostic: options.onDiagnostic,
+      ownership: this.#ownership,
+      processRunner: options.processRunner,
+      readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
+      tcpProbe: options.tcpProbe,
+    });
     this.#rootOptions = rootOptions;
     this.#sdk = sdk;
     this.#sources = new AndroidSourceTable(options.database);
@@ -686,19 +656,6 @@ export class AndroidDriver implements Driver {
   }
 
   /**
-   * why: `-crash-report-mode never` deletes every dump in the crash database the emulator reads, and
-   * by default that is `/tmp/android-<user>/emu-crash-<version>.db`, shared with Android Studio and
-   * the user's own emulators. A database inside Simlock's own root keeps those dumps untouched.
-   */
-  #emulatorEnv(data: AndroidDriverData): NodeJS.ProcessEnv {
-    return {
-      ...this.#adbTools.env(),
-      ...(data.avdHome === undefined ? {} : { ANDROID_AVD_HOME: data.avdHome }),
-      ANDROID_EMU_CRASH_REPORTING_DATABASE: join(this.#deviceRoot, "emu-crash.db"),
-    };
-  }
-
-  /**
    * why: Announces every console port Simlock may have an emulator on to the server that was
    * just started or adopted -- deliberately doing, for Simlock's own range only, what adb's
    * scanner would do for everyone's.
@@ -722,19 +679,7 @@ export class AndroidDriver implements Driver {
     }
 
     // why: `#register` swallows its own failures, so one unreachable port cannot end the sweep.
-    await Promise.all(ports.map((consolePort) => this.#register(consolePort)));
-  }
-
-  /**
-   * why: Announces an emulator to Simlock's adb server, which with the scanner off is what
-   * attaches it (see `AdbRegistrar`). Always best-effort: the emulator announces itself
-   * too, so a failure here is usually a duplicate of something that already worked, and
-   * failing a boot over it would trade a working device for a redundant message.
-   */
-  async #register(consolePort: number): Promise<void> {
-    try {
-      await this.#registrar.register(consolePort + 1);
-    } catch {}
+    await Promise.all(ports.map((consolePort) => this.#emulator.register(consolePort)));
   }
 
   async resolveSpec(request: ExactDeviceRequest): Promise<VirtualSpec> {
@@ -864,7 +809,7 @@ export class AndroidDriver implements Driver {
 
   /** why: the emulator running a source's AVD is found by its path and stopped before the folder goes, so nothing is deleted under a live process. */
   async #removeSource(sourceId: string, folder: string, avdName: string): Promise<void> {
-    await this.#stopUnownedEmulator({
+    await this.#emulator.stopUnowned({
       avdHome: folder,
       avdName,
       configHash: "",
@@ -1040,7 +985,7 @@ export class AndroidDriver implements Driver {
       if (!(await this.#exitedWithin(data, state, SEED_POWER_OFF_TIMEOUT_MS))) {
         state.handle?.kill("SIGKILL");
         if (state.handle !== undefined)
-          await this.#waitForExit(state.handle, SIGKILL_REAP_TIMEOUT_MS);
+          await this.#emulator.waitForExit(state.handle, SIGKILL_REAP_TIMEOUT_MS);
       }
     }
     state.handle = undefined;
@@ -1054,7 +999,7 @@ export class AndroidDriver implements Driver {
     state: DeviceState,
     timeoutMs: number,
   ): Promise<boolean> {
-    if (state.handle !== undefined) return this.#waitForExit(state.handle, timeoutMs);
+    if (state.handle !== undefined) return this.#emulator.waitForExit(state.handle, timeoutMs);
     const startedAt = this.#clock.now();
     while (true) {
       const attached = await this.#adbTools.runOrThrow(this.#sdk.adb, ["devices"], {
@@ -1251,7 +1196,7 @@ export class AndroidDriver implements Driver {
     const state = this.#coldState(seed);
     const booted = await this.#consolePorts.withReservedPort(seed, state);
     try {
-      await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
+      state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
       await this.#adbTools.runOrThrow(this.#sdk.adb, ["-s", booted.serial, "shell", "sync"], {
         timeoutMs: SEED_SHELL_TIMEOUT_MS,
       });
@@ -1291,9 +1236,10 @@ export class AndroidDriver implements Driver {
     booted: AndroidDriverData,
     state: DeviceState,
   ): Promise<void> {
-    await this.#startEmulator(booted, state, ["-no-snapshot-load"], false);
+    state.handle = await this.#emulator.start(booted, ["-no-snapshot-load"], false);
     await this.#saveBootSnapshot(sourceId, booted);
-    await this.#shutdown(booted, state);
+    await this.#emulator.shutdown(booted, state.handle);
+    state.handle = undefined;
   }
 
   async #awaitSeedPowerOff(
@@ -1303,7 +1249,7 @@ export class AndroidDriver implements Driver {
   ): Promise<void> {
     const running = state.handle;
     if (running === undefined) return;
-    if (await this.#waitForExit(running, SEED_POWER_OFF_TIMEOUT_MS)) {
+    if (await this.#emulator.waitForExit(running, SEED_POWER_OFF_TIMEOUT_MS)) {
       state.handle = undefined;
       return;
     }
@@ -1314,7 +1260,7 @@ export class AndroidDriver implements Driver {
       });
     }
     running.kill("SIGKILL");
-    await this.#waitForExit(running, SIGKILL_REAP_TIMEOUT_MS);
+    await this.#emulator.waitForExit(running, SIGKILL_REAP_TIMEOUT_MS);
     state.handle = undefined;
     throw new DriverCrashError(
       `Android seed ${sourceId} did not power off within ${String(SEED_POWER_OFF_TIMEOUT_MS)}ms`,
@@ -1392,7 +1338,7 @@ export class AndroidDriver implements Driver {
       const state = this.#stateFor(data);
       if (state.handle !== undefined) {
         const running = this.#consolePorts.onReservedPort(data, state);
-        await this.#waitForReadiness(running, this.#clock.now());
+        await this.#emulator.waitForReadiness(running, this.#clock.now());
         // why: The device was already running (or booting) under this driver instance, so its mark
         // can't have gone stale. Re-mark anyway: this is the
         // single readiness transition that lets a caller re-lease an already-ready device
@@ -1402,21 +1348,21 @@ export class AndroidDriver implements Driver {
       }
 
       if (options?.purpose === "recover") {
-        await this.#startEmulator(data, state, ["-no-snapshot-load"], false);
+        state.handle = await this.#emulator.start(data, ["-no-snapshot-load"], false);
         await this.#avdConfigPart.writeMark(data);
         return { address: data.serial, deviceId: device.deviceId, driverData: data };
       }
 
       if (data.avdHome !== undefined) {
         const copy = await this.#consolePorts.withReservedPort(data, state);
-        await this.#startEmulator(copy, state, ["-snapshot", BOOT_SNAPSHOT], true);
+        state.handle = await this.#emulator.start(copy, ["-snapshot", BOOT_SNAPSHOT], true);
         await this.#avdConfigPart.writeMark(copy);
         return { address: copy.serial, deviceId: device.deviceId, driverData: copy };
       }
 
       // why: a device made before copies has no boot snapshot: it boots once with a wipe and is destroyed at its release.
       const booted = await this.#consolePorts.withReservedPort(data, state);
-      await this.#startEmulator(booted, state, ["-wipe-data", "-no-snapshot-load"], false);
+      state.handle = await this.#emulator.start(booted, ["-wipe-data", "-no-snapshot-load"], false);
       await this.#avdConfigPart.writeMark(booted);
       return { address: booted.serial, deviceId: device.deviceId, driverData: booted };
     });
@@ -1453,7 +1399,9 @@ export class AndroidDriver implements Driver {
   async shutdown(device: DriverDevice): Promise<void> {
     const data = this.#adbTools.dataFor(device);
     await this.#withDeviceLock(this.#adbTools.avdFolder(data), async () => {
-      await this.#shutdown(data, this.#stateFor(data));
+      const state = this.#stateFor(data);
+      await this.#emulator.shutdown(data, state.handle);
+      state.handle = undefined;
     });
   }
 
@@ -1464,9 +1412,10 @@ export class AndroidDriver implements Driver {
       // why: After a restart a stopped device's recorded port may be another device's (#52), so a
       // handle-less device is sent a kill only on a serial whose own answer names its AVD directory.
       if (state.handle !== undefined) {
-        await this.#shutdown(this.#consolePorts.onReservedPort(data, state), state);
+        await this.#emulator.shutdown(this.#consolePorts.onReservedPort(data, state), state.handle);
+        state.handle = undefined;
       } else if (state.restored === true) {
-        await this.#stopUnownedEmulator(data);
+        await this.#emulator.stopUnowned(data);
       }
       if (data.avdHome === undefined) {
         await this.#adbTools.runOrThrow(this.#sdk.avdmanager, [
@@ -1484,39 +1433,6 @@ export class AndroidDriver implements Driver {
       }
       await this.deviceTcp?.release({ ...device, physical: false as const });
     });
-  }
-
-  /**
-   * why: An orphan found after a restart has no handle and no usable serial, so the emulator
-   * running its AVD is found by asking each attached one which AVD folder it runs. Deletion is
-   * refused when that emulator does not exit in time, never done under a live process.
-   */
-  async #stopUnownedEmulator(data: AndroidDriverData): Promise<void> {
-    const { settledSerials } = await this.#adbTools.scanSerials();
-    const serials = await this.#ownership.serialsRunningAvd(data, settledSerials);
-    for (const serial of serials) {
-      await this.#processRunner.run(this.#sdk.adb, ["-s", serial, "emu", "kill"], {
-        env: this.#adbTools.env(),
-        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
-      });
-    }
-    await this.#waitForEmulatorsToExit(data, serials);
-  }
-
-  async #waitForEmulatorsToExit(data: AndroidDriverData, serials: string[]): Promise<void> {
-    const startedAt = this.#clock.now();
-    let remaining = serials;
-    while (remaining.length > 0) {
-      const attached = (await this.#adbTools.scanSerials()).settledSerials;
-      remaining = remaining.filter((serial) => attached.includes(serial));
-      if (remaining.length === 0) return;
-      if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
-        throw new DriverCrashError(
-          `Refusing to delete ${deviceIdOf(data)}: its emulator on ${remaining.join(", ")} did not exit`,
-        );
-      }
-      await this.#adbTools.delay(PORT_POLL_INTERVAL_MS);
-    }
   }
 
   async listPresentPhysical(enrolledIds: readonly string[]): Promise<readonly PresentPhysical[]> {
@@ -1758,7 +1674,7 @@ export class AndroidDriver implements Driver {
           : SEED_MAKE_ESTIMATE_MS;
       case "boot":
         if (estimate.device === undefined) return COLD_BOOT_ESTIMATE_MS;
-        return this.#bootEstimate(estimate.device, estimate.purpose, spec);
+        return this.#emulator.bootEstimate(estimate.device, estimate.purpose, spec);
       case "reclaim":
         if (spec.physical) return PHYSICAL_RECLAIM_ESTIMATE_MS;
         // why: the two clean levels price differently (the wipe strategy about five times the snapshot one);
@@ -2162,213 +2078,6 @@ export class AndroidDriver implements Driver {
     return apiLevel;
   }
 
-  #emulatorLogPath(data: AndroidDriverData): string {
-    return `${this.#adbTools.avdFolder(data)}/emulator.log`;
-  }
-
-  /** why: bounded, since an emulator that ran a while may have written a lot before it exited. */
-  async #emulatorLogTail(logPath: string): Promise<string> {
-    try {
-      const { size } = await this.#filesystem.stat(logPath);
-      const text = await this.#filesystem.readFileFrom(
-        logPath,
-        Math.max(0, size - EMULATOR_LOG_TAIL_BYTES),
-      );
-      return text
-        .split(/\r?\n/)
-        .filter((line) => line.trim() !== "")
-        .slice(-EMULATOR_LOG_TAIL_LINES)
-        .join("\n");
-    } catch {
-      return "(the emulator's log could not be read)";
-    }
-  }
-
-  async #waitForReadiness(
-    data: AndroidDriverData,
-    startedAt: number,
-    abandoned: () => boolean = () => false,
-  ): Promise<void> {
-    while (!abandoned()) {
-      if (this.#clock.now() - startedAt >= this.#readinessTimeoutMs) {
-        throw new BootTimeoutError(data.avdName);
-      }
-
-      const completed = await this.#processRunner.run(
-        this.#sdk.adb,
-        ["-s", data.serial, "shell", "getprop", "sys.boot_completed"],
-        { env: this.#adbTools.env() },
-      );
-      if (completed.code !== 0) {
-        // why: A serial that will not answer is a serial the server has no transport for, which
-        // is the same evidence "absent from `adb devices`" would give and costs no extra
-        // round trip. Past the grace period, assume the emulator's own announcement was
-        // lost -- with the scanner off nothing else will ever re-send it -- and re-announce.
-        if (this.#clock.now() - startedAt >= REGISTRATION_RETRY_AFTER_MS) {
-          await this.#register(data.port);
-        }
-        await this.#adbTools.delay(
-          Math.min(
-            PORT_POLL_INTERVAL_MS,
-            this.#readinessTimeoutMs - (this.#clock.now() - startedAt),
-          ),
-        );
-        continue;
-      }
-      if (completed.stdout.trim() === "1") {
-        if (await this.#bootSettled(data)) return;
-      }
-
-      await this.#adbTools.delay(
-        Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)),
-      );
-    }
-  }
-
-  /**
-   * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted
-   * then fails its first install or package query.
-   */
-  async #bootSettled(data: AndroidDriverData): Promise<boolean> {
-    const bootAnimation = await this.#adbTools.runOrThrow(this.#sdk.adb, [
-      "-s",
-      data.serial,
-      "shell",
-      "getprop",
-      "init.svc.bootanim",
-    ]);
-    const stopped = bootAnimation.stdout.trim();
-    if (stopped !== "" && stopped !== "stopped") return false;
-    await this.#ownership.confirmAvdAnswers(data);
-    const answer = await this.#processRunner.run(
-      this.#sdk.adb,
-      ["-s", data.serial, "shell", "pm", "path", "android"],
-      { env: this.#adbTools.env() },
-    );
-    return answer.code === 0 && answer.stdout.includes("package:");
-  }
-
-  async #startEmulator(
-    data: AndroidDriverData,
-    state: DeviceState,
-    launchArgs: readonly string[],
-    fromSnapshot: boolean,
-  ): Promise<void> {
-    const startedAt = this.#clock.now();
-    const logPath = this.#emulatorLogPath(data);
-    await this.#filesystem.writeFileAtomic(logPath, "", { mode: 0o600 });
-    // why: the output goes to a file so a launch that dies at once leaves its own error line to quote (#1199); `unref()` because an emulator outlives the daemon by design
-    // (`#reattachRunningEmulators` adopts it after a restart) and is reaped through adb and
-    // by pid, never by awaiting its exit. Left referenced, its handle and stdio pipes would hold
-    // the event loop open, and a `daemon stop` that had logged "Daemon stopped" would leave
-    // the process alive for as long as any emulator ran.
-    const handle = this.#processRunner.spawn(
-      this.#sdk.emulator,
-      [
-        "-avd",
-        data.avdName,
-        "-port",
-        String(data.port),
-        "-no-snapshot-save",
-        "-grpc",
-        String(data.port + GRPC_PORT_OFFSET),
-        "-grpc-use-token",
-        // why: a dump an earlier crash left in a crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and deletes the dumps in the database it reads, so `#emulatorEnv` points that at Simlock's own root and never at the user's shared one.
-        "-crash-report-mode",
-        "never",
-        ...this.#emulatorFlags,
-        ...launchArgs,
-      ],
-      { env: this.#emulatorEnv(data), stdio: { file: logPath } },
-    );
-    handle.unref();
-    state.handle = handle;
-    // why: No announcement here, deliberately. adb answers `host:emulator:<port>` by connecting
-    // *out* to that port, and the emulator has not opened it yet a millisecond after the
-    // spawn -- so a call here could only ever fail, and with the scanner off nothing drains
-    // adb's retry queue afterwards. The announcement that can land is the one in
-    // `#waitForReadiness`, once the serial has stayed silent past the grace period.
-
-    // why: an emulator that exits before it boots never will; waiting out the boot timeout for it hides the reason it left in its log.
-    let waiting = true;
-    const exited = handle.wait().then(async (result): Promise<never> => {
-      if (!waiting) return new Promise<never>(() => undefined);
-      throw new DriverCrashError(
-        `The emulator for ${data.avdName} exited (code ${result.code ?? "none"}) before it booted:\n${await this.#emulatorLogTail(logPath)}`,
-      );
-    });
-    exited.catch(() => undefined);
-    const readiness = this.#waitForReadiness(data, startedAt, () => !waiting);
-    readiness.catch(() => undefined);
-    try {
-      await Promise.race([readiness, exited]);
-    } catch (error: unknown) {
-      waiting = false;
-      handle.kill("SIGKILL");
-      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
-      state.handle = undefined;
-      throw error;
-    }
-    waiting = false;
-
-    const readyAfterMs = this.#clock.now() - startedAt;
-    if (fromSnapshot && readyAfterMs > SNAPSHOT_BOOT_ESTIMATE_MS * 3) {
-      this.#onDiagnostic?.({
-        deviceId: deviceIdOf(data),
-        kind: "snapshot-cold-boot",
-        readyAfterMs,
-      });
-    }
-  }
-
-  async #bootEstimate(
-    device: DriverDevice,
-    purpose: "prepare" | "recover" | undefined,
-    spec: DeviceSpec,
-  ): Promise<number> {
-    if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
-    return this.#adbTools.dataFor(device).avdHome === undefined
-      ? COLD_BOOT_ESTIMATE_MS
-      : SNAPSHOT_BOOT_ESTIMATE_MS;
-  }
-
-  async #shutdown(data: AndroidDriverData, state: DeviceState): Promise<void> {
-    if (data.port > 0 && (await this.#ownership.serialIsOwn(data))) {
-      await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "emu", "kill"], {
-        env: this.#adbTools.env(),
-        timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS,
-      });
-    }
-    const handle = state.handle;
-    if (handle === undefined) {
-      return;
-    }
-
-    const exited = await this.#waitForExit(handle, this.#readinessTimeoutMs);
-    if (!exited) {
-      handle.kill("SIGKILL");
-      await this.#waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);
-    }
-    state.handle = undefined;
-  }
-
-  async #waitForExit(handle: ProcessHandle, timeoutMs: number): Promise<boolean> {
-    let timer: TimerHandle | undefined;
-    try {
-      return await Promise.race([
-        handle.wait().then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = this.#clock.setTimer(timeoutMs, () => resolve(false));
-        }),
-      ]);
-    } finally {
-      // why: An armed timer holds the event loop open, so a stopped daemon would outlive it (#237).
-      if (timer !== undefined) {
-        this.#clock.cancel(timer);
-      }
-    }
-  }
-
   #stateFor(data: AndroidDriverData): DeviceState {
     const existing = this.#devices.get(this.#adbTools.avdFolder(data));
     if (existing !== undefined) {
@@ -2631,17 +2340,6 @@ function systemImageTags(properties: string | undefined, folder: string): readon
     .map((tag) => tag.trim())
     .filter((tag) => tag !== "");
   return tags.length > 0 ? tags : [folder];
-}
-
-function emulatorLaunchFlags(
-  launch: AndroidEmulatorLaunchOptions = DEFAULT_EMULATOR_LAUNCH,
-): string[] {
-  return [
-    ...(launch.headless ? ["-no-window"] : []),
-    ...(launch.gpu === DEFAULT_EMULATOR_LAUNCH.gpu ? [] : ["-gpu", launch.gpu]),
-    ...(launch.audio ? [] : ["-no-audio"]),
-    ...(launch.bootAnimation ? [] : ["-no-boot-anim"]),
-  ];
 }
 
 /**
