@@ -250,6 +250,10 @@ describe("PassthroughRules", () => {
         ["reconnect", "offline"],
         ["reconnect", "offline"],
       ],
+      [
+        ["forward", "tcp:8080", "tcp:8080"],
+        ["-s", "emulator-5554", "forward", "tcp:8080", "tcp:8080"],
+      ],
     ];
 
     for (const [args, expected] of cases) {
@@ -326,9 +330,11 @@ describe("PassthroughRules", () => {
     const driver = rulesFor();
 
     // why: Every other case passes it first, so an `args[0] === "kill-server"` rule would pass
-    // them all; this is the one that holds the documented "anywhere in the arguments".
-    await expect(passthroughOf(driver, ["-P", "1", "kill-server"])).rejects.toThrow(
-      PassthroughRefusedError,
+    // them all; this is the one that holds the documented "anywhere in the arguments". The
+    // global is `-s`, which the globals walk allows: `-P` would be refused as a scope flag
+    // with or without the kill-server rule, so it could not tell the two refusals apart.
+    await expect(passthroughOf(driver, ["-s", "emulator-5554", "kill-server"])).rejects.toThrow(
+      /detach every leased emulator/,
     );
   });
 
