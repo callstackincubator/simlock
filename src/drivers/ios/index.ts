@@ -83,7 +83,6 @@ const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
 const BOOTSTATUS_TIMEOUT_MS = 120_000;
 const INSTALLER_POLL_MS = 1_000;
-const SILENCE_SETTLE_MS = 3_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
 // being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
@@ -1175,13 +1174,7 @@ export class IosSimctlDriver implements Driver {
       ["-s", VOLUME_STATE_KEY, "0"],
       ["-p", VOLUME_STATE_KEY],
     ];
-    for (const [index, command] of commands.entries()) {
-      if (index === 2) {
-        // why: the simulator reads the state when it handles the post; a 0 set before then reads as no change (#1238).
-        await new Promise<void>((resolve) => {
-          this.#clock.setTimer(SILENCE_SETTLE_MS, resolve);
-        });
-      }
+    for (const command of commands) {
       const detail = await this.#runNotifyutil(udid, command);
       if (detail !== undefined) {
         // why: the device stays in use; the volume is a courtesy to the host's speakers, not a lease condition.
