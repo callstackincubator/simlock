@@ -93,7 +93,7 @@ under leasing's signal (`lease.endWaitMs`).
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
 2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, a `physical` that is not a boolean, or a `--target` it does not map.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `--device-mode` (`deviceMode`) → `mode`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
+   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `deviceMode` → `mode`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
    `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceMode`/`physical` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).

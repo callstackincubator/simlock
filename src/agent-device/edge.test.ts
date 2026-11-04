@@ -97,8 +97,9 @@ const phoneModels = {
   modelClasses: { "iPhone 16": "phone" },
 } as const;
 
-function iosDriver(clock: FakeClock): FakeDriver {
+function iosDriver(clock: FakeClock, slimmableOsVersions?: readonly string[]): FakeDriver {
   return new FakeDriver({
+    ...(slimmableOsVersions === undefined ? {} : { slimmableOsVersions }),
     availableOsVersions: ["26.5"],
     clock,
     defaultModels: { desktop: ["Mac"], phone: ["iPhone 16"], tv: ["Apple TV 4K"] },
@@ -423,6 +424,7 @@ async function devices(rig: Rig): Promise<
     readonly state: string;
     readonly address?: string;
     readonly driverDeviceId?: string;
+    readonly mode?: string;
   }[]
 > {
   return (await rig.daemon.dispatch("list.get", { kind: "devices" }, adminSession)) as never;
@@ -751,8 +753,15 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it('allocate with `deviceMode` "full" or "slim" makes a lease request whose `mode` is it and an allocate the agent-device daemon receives without it; `deviceMode: null` is absent; any other `deviceMode` answers `refused by simlock:` with simlock\'s `BAD_REQUEST` message and no lease', async () => {
-    const rig = await setUp({ maxRunning: 8 });
+  it('allocate with `deviceMode` "full" or "slim" makes a lease request whose `mode` is it, grants a device of that mode, and sends an allocate the agent-device daemon receives without it; `deviceMode: null` is absent; any other `deviceMode` answers `refused by simlock:` with simlock\'s `BAD_REQUEST` message and no lease', async () => {
+    const rig = await setUp({
+      drivers: (clock) => [iosDriver(clock, ["26.5"])],
+      maxRunning: 8,
+    });
+    const grantedMode = async (n: number) => {
+      const lease = (await leases(rig)).find((entry) => entry.id === hex(n));
+      return (await devices(rig)).find((device) => device.id === lease?.deviceId)?.mode;
+    };
 
     await granted(rig, 1, { deviceMode: "full" });
     await granted(rig, 2, { deviceMode: "slim" });
@@ -769,6 +778,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await requestedSpecs(rig, hex(1))).toEqual([{ mode: "full", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(2))).toEqual([{ mode: "slim", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(3))).toEqual([{ platform: "ios" }]);
+    expect(await grantedMode(1)).toBe("full");
+    expect(await grantedMode(2)).toBe("slim");
     expect(receivedAllocate(rig, 1)).not.toHaveProperty("deviceMode");
     expect(receivedAllocate(rig, 2)).not.toHaveProperty("deviceMode");
     expect(await listed(rig)).toEqual([hex(1), hex(2), hex(3)]);
