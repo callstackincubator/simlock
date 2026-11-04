@@ -164,7 +164,12 @@ as `refs/replay/<PR>/...` on origin, `review-replay.sh` builds the blind
 inputs for that snapshot and prints the reviewer's prompt (tagged
 `stage=replay`, or one lens with `--lens`), and `review-score.mjs` scores
 the findings against the ledger and appends to `.agents/replay/results.jsonl`.
-`PROCESS-REVIEW-2026-10-21.md` section 4 says how a change is judged.
+A change to the review is judged by replaying each variant on every
+snapshot, three runs each. It is adopted when, against the current agents
+on the same snapshots, recall over fixed findings does not drop, unmatched
+findings (after adjudication) do not rise, and the number it targets
+(minutes, USD, open rate, rule-cited findings) moves by the amount it
+claims. Unknown data does not count as improvement.
 
 The design follows [Anthropic's review convergence findings](https://claude.dev/blog/solving-code-review-at-anthropic/),
 [Addy Osmani's risk-focused review](https://addyosmani.com/blog/agentic-code-review/),

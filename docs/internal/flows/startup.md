@@ -10,7 +10,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
-   `refuseWhenDaemonAnswers` (`src/daemon/main.ts:241`) first connects to the socket: a daemon
+   `refuseWhenDaemonAnswers` (`src/daemon/main.ts`) first connects to the socket: a daemon
    that answers makes this one fail with `DaemonAlreadyRunningError`, before any `state.db` is opened.
    `openStateDatabase` then opens the role's `state.db` (both roles) in this order, each failure
    being the daemon's start error: an old file of the role's former state refuses, then
