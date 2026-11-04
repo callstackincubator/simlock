@@ -77,6 +77,7 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -189,6 +190,11 @@ export interface SlimSkippedFact {
   readonly detail: string;
 }
 
+export interface SilenceFailedFact {
+  readonly deviceId: string;
+  readonly detail: string;
+}
+
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
   readonly database: SqliteDatabase;
@@ -206,6 +212,9 @@ export interface IosSimctlDriverOptions {
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
+  /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
+  readonly simulatorAudio?: boolean;
+  readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
   readonly slim?: {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
@@ -300,6 +309,8 @@ export class IosSimctlDriver implements Driver {
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
+  readonly #silent: boolean;
+  readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
@@ -335,6 +346,8 @@ export class IosSimctlDriver implements Driver {
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
+    this.#silent = options.simulatorAudio === false;
+    this.#onSilenceFailed = options.onSilenceFailed;
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet =
@@ -1131,6 +1144,9 @@ export class IosSimctlDriver implements Driver {
       plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+    if (this.#silent) {
+      await this.#silence(data.udid, device.deviceId);
+    }
 
     if (plan.kind === "skip") {
       this.#onSlimSkipped?.({
@@ -1148,6 +1164,35 @@ export class IosSimctlDriver implements Driver {
     }
 
     return this.#readBack(device, data, write);
+  }
+
+  async #silence(udid: string, deviceId: string): Promise<void> {
+    const commands = [
+      ["-s", VOLUME_STATE_KEY, "0"],
+      ["-p", VOLUME_STATE_KEY],
+    ];
+    for (const command of commands) {
+      const detail = await this.#runNotifyutil(udid, command);
+      if (detail !== undefined) {
+        // why: the device stays in use; the volume is a courtesy to the host's speakers, not a lease condition.
+        this.#onSilenceFailed?.({ deviceId, detail });
+        return;
+      }
+    }
+  }
+
+  /** why: answers the failure detail, or undefined when the command exited 0; it never throws. */
+  async #runNotifyutil(udid: string, command: readonly string[]): Promise<string | undefined> {
+    try {
+      const outcome = await this.#invokeSimctl(
+        ["spawn", udid, "notifyutil", ...command],
+        COMMAND_TIMEOUT_MS,
+      );
+      if (outcome.kind === "timed-out") return "timed out";
+      return outcome.result.code === 0 ? undefined : outcome.result.stderr;
+    } catch (error: unknown) {
+      return errorMessage(error);
+    }
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {

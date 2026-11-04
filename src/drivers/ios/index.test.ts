@@ -26,6 +26,7 @@ import {
   SystemClock,
   type Filesystem,
   type Logger,
+  type ProcessResult,
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
@@ -34,6 +35,7 @@ import {
   iosRuntimeVersionFromId,
   SLIM_CATEGORIES,
   supportsPersistentSlim,
+  type SilenceFailedFact,
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
@@ -5744,4 +5746,128 @@ describe("IosSimctlDriver device set", () => {
       );
     }
   });
+});
+
+describe("IosSimctlDriver simulator audio", () => {
+  const volumeState = "com.apple.springboard.volumestate";
+  const udid = driverData.udid;
+  const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
+
+  const silence = [
+    simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
+    simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
+  ];
+  const bootCalls = [
+    simctlArgs("boot", udid),
+    simctlArgs("bootstatus", udid, "-b"),
+    simctlArgs("listapps", udid),
+  ];
+  const readbackCall = simctlArgs("spawn", udid, "launchctl", "print-disabled", "system");
+
+  it.each([
+    {
+      name: "prepare",
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "recover",
+      options: { mode: "full", purpose: "recover" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "a slim prepare, silenced before the readback",
+      data: slimData,
+      options: { mode: "slim", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence, readbackCall],
+    },
+    {
+      name: "the setting true",
+      audio: true,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: bootCalls,
+    },
+    {
+      name: "a volume command that fails",
+      volume: { code: 1, stderr: "boom", stdout: "" },
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "boom",
+    },
+    {
+      name: "a volume command that times out",
+      volume: "hangs" as const,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "timed out",
+    },
+  ])(
+    "sets a simulator's volume to 0 before handing it on when ios.simulator.audio is false: $name",
+    async (c) => {
+      const data = c.data ?? driverData;
+      const silenceCall = (index: number, result?: ProcessResult) => ({
+        match: { args: silence[index]!, command: "xcrun" },
+        ...(result === undefined ? {} : { result }),
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", udid) },
+        { match: simctl("bootstatus", udid, "-b") },
+        { match: simctl("listapps", udid) },
+        ...(c.audio === true
+          ? []
+          : c.volume === "hangs"
+            ? [{ ...silenceCall(0), hangs: true }]
+            : c.volume !== undefined
+              ? [silenceCall(0, c.volume)]
+              : [silenceCall(0), silenceCall(1)]),
+        ...(c.options.mode === "slim"
+          ? [
+              {
+                match: simctl("spawn", udid, "launchctl", "print-disabled", "system"),
+                result: { code: 0, stderr: "", stdout: wantedReadback() },
+              },
+            ]
+          : []),
+      ]);
+      scopedRunners.push(runner);
+      const clock = new FakeClock();
+      const failures: SilenceFailedFact[] = [];
+      const driver = await IosSimctlDriver.create({
+        clock,
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceRoot },
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        onSilenceFailed: (fact) => failures.push(fact),
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+        simulatorAudio: c.audio ?? false,
+        slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+      });
+
+      const ready = driver.makeReady(
+        { address: udid, deviceId: udid, driverData: data },
+        c.options,
+      );
+      if (c.volume === "hangs") {
+        const state = promiseState(ready);
+        await waitForCalls(runner, c.expected.length);
+        clock.advance(29_999);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+        clock.advance(1);
+        await flushMicrotasks221();
+        expect(state.state).toBe("fulfilled");
+      }
+      const device = await ready;
+
+      expect(device.address).toBe(udid);
+      expect(runner.calls.map((call) => call.args)).toEqual(c.expected);
+      expect(failures).toEqual(
+        c.failure === undefined ? [] : [{ deviceId: udid, detail: c.failure }],
+      );
+    },
+  );
 });

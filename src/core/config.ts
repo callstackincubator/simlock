@@ -377,6 +377,10 @@ export interface Config {
       /** why: a slim device gets its own boot deadline, because CI runners are slow. */
       readonly bootTimeoutMs: number;
     };
+    readonly simulator: {
+      /** why: `false` sets each simulator's volume to 0 after every boot; the core only validates the boolean (the iOS driver reads it). */
+      readonly audio: boolean;
+    };
   };
   /**
    * How this machine's Android emulators are launched. Operator configuration of the Android
@@ -1001,6 +1005,7 @@ function defaultConfig(
       slim: {
         bootTimeoutMs: 600_000,
       },
+      simulator: { audio: true },
     },
     android: {
       defaultModels: {},
@@ -1165,6 +1170,9 @@ export function configValidators(
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
+      }),
+      simulator: objectValidator({
+        audio: booleanValue,
       }),
     }),
     android: objectValidator({
