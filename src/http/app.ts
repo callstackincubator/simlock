@@ -189,8 +189,15 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
-    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
+    ...leaseRequestImageFields(body),
+  };
+}
+
+function leaseRequestImageFields(body: z.infer<typeof leaseRequestBodySchema>) {
+  return {
+    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
   };
 }
 

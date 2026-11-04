@@ -77,6 +77,8 @@ export interface CliEnvironment {
   /** why: a daemon stopping refuses connections while it still holds its socket; the endpoint going away is the proof it is gone. */
   readonly daemonEndpointPresent: () => Promise<boolean>;
   readonly adminTokenFromEnv?: string;
+  /** why: `SIMLOCK_BASELINE` names the baseline a lease asks for when `--baseline` is absent. */
+  readonly baselineFromEnv?: string;
   readonly readAdminTokenFile: () => Promise<string | undefined>;
   readonly sleep: (milliseconds: number) => Promise<void>;
   readonly readConfigFile: () => Promise<Record<string, unknown>>;

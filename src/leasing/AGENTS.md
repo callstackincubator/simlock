@@ -43,11 +43,17 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
 2. **Resolve** (no lock) — request → spec: default mode, class or OS range →
    exact model and runtime, `driver.resolveSpec`. May install a runtime when
    `allowDownload`. Physical requests skip this. See device selection.
+   A request naming a baseline resolves against `core.baselines` instead: unknown,
+   mismatch (`baselineMismatch`) or stale fails at once, and the spec is the
+   baseline's, with its name and version; no download is attempted.
 3. **Plan** (lock) — `AcquisitionPlanner.plan`; first that applies wins:
    grant a ready fitting device → wait for one the warm pool is booting →
    boot a shut-down one → provision → evict an
    idle device (device or running limit) → wait, or `NO_CAPACITY` under `noWait`.
    Only the head of the virtual line plans; every physical waiter plans.
+   Each plan first moves a waiting baseline request to the baseline's newest version. A device
+   made from an older version is never granted: a copy that finishes after a save is deleted at the
+   grant check and its waiter plans again.
    A blocked plan carries a reason (a capacity refusal, `behind-earlier-request`,
    `waiting-for-device` or `no-free-physical`). The waiter keeps it,
    in memory only, from its latest enqueue; `waitingRequests()` lists it on a `queued`

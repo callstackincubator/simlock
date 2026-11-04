@@ -31,6 +31,7 @@ import {
   type VirtualSpec,
   type Platform,
   specMode,
+  type BaselineService,
   type CatalogReader,
   ManagedDeviceLifecycle,
   type Registry,
@@ -143,6 +144,8 @@ function config(maxDevices = 1, maxRunning = 1): Config {
 // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 async function createHarness(
   options: {
+    /** why: stands in for the baselines a request names, when a test scripts the versions. */
+    readonly baselines?: Pick<BaselineService, "current">;
     /** Stands in for the installer, when a test needs to see whether it was reached at all. */
     readonly components?: Pick<ComponentInstaller, "install">;
     readonly defaultModes?: Readonly<Partial<Record<Platform, DeviceMode>>>;
@@ -210,6 +213,7 @@ async function createHarness(
       registry,
     });
   const provisioner = new DeviceProvisioner({
+    baselines: () => ({ current: () => undefined, hold: () => () => undefined }),
     catalog,
     claims,
     clock,
@@ -267,6 +271,7 @@ async function createHarness(
       timeoutMs: 1_200_000,
     });
   coordinator = new LeaseAcquisitionCoordinator({
+    baselines: options.baselines ?? { current: () => undefined },
     catalog: options.catalogReader ?? catalog,
     claims,
     components,
@@ -3617,5 +3622,65 @@ describe("LeaseAcquisitionCoordinator: levels a model no longer pairs with", () 
     );
 
     expect(granted.device.id).toBe(idle.id);
+  });
+});
+
+describe("LeaseAcquisitionCoordinator: a request naming a baseline", () => {
+  it("plans against the version current at its decision, so a save between the resolve and the plan grants an idle device of the new version", async () => {
+    const current = (version: number) => ({
+      mode: "full" as const,
+      model: request.model,
+      name: "checkout",
+      osVersion: request.osVersion,
+      platform: request.platform,
+      sourceId: `source-${version}`,
+      version,
+    });
+    const reads = [current(1)];
+    const harness = await createHarness({
+      baselines: { current: () => reads.shift() ?? current(2) },
+      maxDevices: 2,
+    });
+    const idleV2 = await seedReady(harness, {
+      ...request,
+      baseline: { name: "checkout", version: 2 },
+    });
+
+    const granted = await harness.coordinator.request(
+      { baseline: "checkout", platform: "ios" },
+      { ownerId: "agent", requesterId: "agent" },
+    );
+
+    expect(granted.device.id).toBe(idleV2.id);
+    expect(granted.device.spec.baseline).toEqual({ name: "checkout", version: 2 });
+  });
+
+  it("ends a request whose baseline was removed while it waited as UnknownBaselineError at once, without a retry", async () => {
+    const harness = await createHarness({
+      baselines: {
+        current: () => ({
+          mode: "full" as const,
+          model: request.model,
+          name: "checkout",
+          osVersion: request.osVersion,
+          platform: request.platform,
+          sourceId: "source-1",
+          version: 1,
+        }),
+      },
+      maxDevices: 1,
+    });
+
+    const outcome = await harness.coordinator
+      .request(
+        { baseline: "checkout", platform: "ios" },
+        { ownerId: "agent", requesterId: "agent" },
+      )
+      .then(
+        () => "granted",
+        (error: unknown) => (error as Error).name,
+      );
+
+    expect(outcome).toBe("UnknownBaselineError");
   });
 });

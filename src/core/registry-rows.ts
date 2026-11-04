@@ -196,6 +196,7 @@ const REQUEST_COLUMNS = [
   "os_version",
   "mode",
   "image_tag",
+  "baseline",
   "class",
   "physical",
   "created_at",
@@ -251,7 +252,7 @@ function physicalColumns(device: DeviceRecord): SqliteValue[] {
 
 function baselineColumns(device: DeviceRecord): SqliteValue[] {
   if (device.physical) return [null, null];
-  return [device.baseline?.name ?? null, device.baseline?.version ?? null];
+  return [device.spec.baseline?.name ?? null, device.spec.baseline?.version ?? null];
 }
 
 function deviceValues(device: DeviceRecord): SqliteValue[] {
@@ -341,6 +342,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       request.osVersion ?? null,
       request.mode ?? null,
       request.imageTag ?? null,
+      request.baseline ?? null,
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -495,9 +497,9 @@ function deviceFromRow(
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
     mode: reader.oneOf("mode", DEVICE_MODES),
-    ...baselineOf(reader),
     physical: false,
     spec: {
+      ...baselineOf(reader),
       ...present("imageTag", reader.optText("image_tag")),
       ...present("mode", reader.optOneOf("spec_mode", ["slim"] as const)),
       model,
@@ -617,6 +619,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("osVersion", reader.optText("os_version")),
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
+    ...present("baseline", reader.optText("baseline")),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };

@@ -194,6 +194,7 @@ describe("LeaseRequestBook", () => {
     ["no osVersion where one was named", { model: request.model, platform: request.platform }],
     ["a mode where none was named", { ...request, mode: "full" as const }],
     ["an image tag where none was named", { ...request, imageTag: "google_apis" }],
+    ["a baseline where none was named", { ...request, baseline: "checkout" }],
   ])("refuses a repeat naming %s as an idempotency conflict", async (_label, different) => {
     const book = bookOver(memoryStore());
     await book.admit(request, keyed, () => granted("lse_1"));

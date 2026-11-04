@@ -100,6 +100,8 @@ export {
   RuntimeMissingError,
   sameReceipt,
   UnknownModelError,
+  BaselineMismatchError,
+  BaselineStaleError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 export {
@@ -168,6 +170,7 @@ export {
   BaselineInUseError,
   BaselineSaveFailedError,
   BaselineService,
+  type CurrentBaseline,
   UnknownBaselineError,
 } from "./baselines.js";
 export { baselinesOwner } from "./baselines-schema.js";
@@ -223,6 +226,7 @@ export {
 } from "./physical-enrollment.js";
 export { DeviceProvisioner } from "./device-provisioner.js";
 export {
+  baselineMismatch,
   exactRequirement,
   isSettled,
   type LeaseProgress,

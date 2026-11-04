@@ -87,7 +87,7 @@ simlock release lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3
 {"leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3"}
 ```
 
-The command returns as soon as the lease ends. Simlock then deletes the device in the background. A physical device is wiped and kept instead. Anything you left on the device (apps, files, settings) is gone for the next holder.
+The command returns as soon as the lease ends. Simlock then deletes the device in the background. A physical device is wiped and kept instead. Anything you left on the device (apps, files, settings) is gone for the next holder. A lease that names a baseline starts from a copy of that baseline, so the next lease naming it starts from the baseline again, not from your changes.
 
 <Aside type="caution">
 `simlock release --all` ends every lease on the machine, including other agents' leases. It asks for confirmation, and without a terminal it refuses unless you pass `--yes`. Agents should release their own lease by id.

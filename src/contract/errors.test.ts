@@ -88,6 +88,27 @@ describe("SimlockError", () => {
     });
   });
 
+  it("answers the two baseline request codes as domain errors with HTTP 422: a mismatch with exit 2, a stale baseline with exit 12, each with its declared details", () => {
+    expect(ERROR_TABLE.BASELINE_MISMATCH).toEqual({
+      cliExitCode: 2,
+      code: "BASELINE_MISMATCH",
+      httpStatus: 422,
+      kind: "domain",
+    });
+    expect(ERROR_TABLE.BASELINE_STALE).toEqual({
+      cliExitCode: 12,
+      code: "BASELINE_STALE",
+      httpStatus: 422,
+      kind: "domain",
+    });
+    const stale = fromWireError("BASELINE_STALE", "stale", {
+      baseline: "checkout",
+      reason: "gone",
+    });
+    if (stale.code !== "BASELINE_STALE") throw new Error("expected BASELINE_STALE");
+    expect(stale.details).toEqual({ baseline: "checkout", reason: "gone" });
+  });
+
   it("isSimlockError rejects a plain Error", () => {
     expect(isSimlockError(new Error("boom"))).toBe(false);
   });

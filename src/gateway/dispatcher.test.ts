@@ -1866,7 +1866,7 @@ describe("GatewayDispatcher", () => {
       },
     );
 
-    it("forwards a lease.request's image tag to the worker unchanged", async () => {
+    it("forwards a lease.request's image tag and baseline to the worker unchanged", async () => {
       const { directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
       directory.add("wrk_1", client);
@@ -1889,11 +1889,20 @@ describe("GatewayDispatcher", () => {
 
       await dispatcher.dispatch(
         "lease.request",
-        { imageTag: "google_apis_playstore", model: "Pixel 8", noWait: true, platform: "android" },
+        {
+          baseline: "checkout",
+          imageTag: "google_apis_playstore",
+          model: "Pixel 8",
+          noWait: true,
+          platform: "android",
+        },
         session({ role: "agent" }),
       );
 
-      expect(client.lastRequestLeaseInput).toMatchObject({ imageTag: "google_apis_playstore" });
+      expect(client.lastRequestLeaseInput).toMatchObject({
+        baseline: "checkout",
+        imageTag: "google_apis_playstore",
+      });
     });
 
     it("forwards a lease.request's leaseId to the worker, and answers the grant under that ID with no worker in front of it", async () => {

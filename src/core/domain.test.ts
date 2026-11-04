@@ -9,6 +9,7 @@ import {
   type PhysicalState,
   type DeviceRequirement,
   type VirtualSpec,
+  baselineMismatch,
   fits,
   fitsPhysical,
   mayBeGranted,
@@ -570,5 +571,109 @@ describe("a physical device's absent state (ADR 0022 §2, §8)", () => {
     ]) {
       expect(settle(baseDevice, from, absent), `virtual ${from} -> absent`).toBe("illegal");
     }
+  });
+});
+
+describe("baselineMismatch", () => {
+  const facts = {
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "35",
+    platform: "android",
+  } as const;
+  const catalog = { modelAliases: { "Pixel 9": ["p9"] }, models: ["Pixel 9", "Pixel 8"] };
+
+  it.each([
+    ["an empty request but the platform", { platform: "android" }, undefined],
+    ["a model by another letter case", { model: "pixel 9", platform: "android" }, undefined],
+    ["a model by an alias", { model: "P9", platform: "android" }, undefined],
+    ["an OS range the baseline satisfies", { osVersion: ">=34", platform: "android" }, undefined],
+    ["the baseline's own mode", { mode: "full", platform: "android" }, undefined],
+    [
+      "another platform",
+      { platform: "ios" },
+      { field: "platform", message: "baseline checkout is android, the request asks for ios" },
+    ],
+    [
+      "another model",
+      { model: "Pixel 8", platform: "android" },
+      { field: "model", message: "baseline checkout is Pixel 9, the request asks for Pixel 8" },
+    ],
+    [
+      "an OS the baseline does not satisfy",
+      { osVersion: ">=36", platform: "android" },
+      { field: "osVersion", message: "baseline checkout is Android 35, the request asks for >=36" },
+    ],
+    [
+      "an OS range that does not parse",
+      { osVersion: ">=abc", platform: "android" },
+      {
+        field: "osVersion",
+        message: "baseline checkout is Android 35, the request asks for >=abc",
+      },
+    ],
+    [
+      "another mode",
+      { mode: "slim", platform: "android" },
+      { field: "mode", message: "baseline checkout is full, the request asks for slim" },
+    ],
+    [
+      "an image tag the baseline lacks",
+      { imageTag: "google_apis", platform: "android" },
+      {
+        field: "imageTag",
+        message: "baseline checkout is image tag none, the request asks for google_apis",
+      },
+    ],
+    [
+      "every field wrong: the platform first",
+      { imageTag: "x", mode: "slim", model: "Pixel 8", osVersion: "1", platform: "ios" },
+      { field: "platform", message: "baseline checkout is android, the request asks for ios" },
+    ],
+    [
+      "every field but the platform wrong: the model first",
+      { imageTag: "x", mode: "slim", model: "Pixel 8", osVersion: "1", platform: "android" },
+      { field: "model", message: "baseline checkout is Pixel 9, the request asks for Pixel 8" },
+    ],
+    [
+      "an OS and an image tag wrong: the OS first",
+      { imageTag: "x", osVersion: "1", platform: "android" },
+      { field: "osVersion", message: "baseline checkout is Android 35, the request asks for 1" },
+    ],
+    [
+      "an OS and a mode wrong: the OS first",
+      { mode: "slim", osVersion: "1", platform: "android" },
+      { field: "osVersion", message: "baseline checkout is Android 35, the request asks for 1" },
+    ],
+    [
+      "a mode and an image tag wrong: the mode first",
+      { imageTag: "x", mode: "slim", platform: "android" },
+      { field: "mode", message: "baseline checkout is full, the request asks for slim" },
+    ],
+  ] as const)("names the first field a request differs in: %s", (_label, request, expected) => {
+    expect(baselineMismatch(facts, request, catalog)).toEqual(expected);
+  });
+
+  it("accepts a request that names no image tag for a baseline with one, and one that names it", () => {
+    const tagged = { ...facts, imageTag: "google_apis" };
+
+    expect(baselineMismatch(tagged, { platform: "android" }, catalog)).toBeUndefined();
+    expect(
+      baselineMismatch(tagged, { imageTag: "google_apis", platform: "android" }, catalog),
+    ).toBeUndefined();
+    expect(
+      baselineMismatch(tagged, { imageTag: "other", platform: "android" }, catalog),
+    ).toMatchObject({ field: "imageTag" });
+  });
+
+  it("calls an iOS baseline's runtime iOS", () => {
+    expect(
+      baselineMismatch(
+        { ...facts, model: "iPhone 16", osVersion: "26.5", platform: "ios" },
+        { osVersion: "25.0", platform: "ios" },
+        { modelAliases: {}, models: [] },
+      )?.message,
+    ).toBe("baseline checkout is iOS 26.5, the request asks for 25.0");
   });
 });

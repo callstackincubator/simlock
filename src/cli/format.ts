@@ -316,7 +316,11 @@ function stateLabel(device: NonNullable<StatusGetOutput["devices"]>[number]): st
 
 function deviceKind(device: NonNullable<StatusGetOutput["devices"]>[number]): string {
   if (device.physical) return `physical ${String(device.class)}`;
-  return `mode ${esc(String(device.mode))}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}`;
+  const baseline =
+    device.spec.baseline === undefined
+      ? ""
+      : `, baseline ${esc(device.spec.baseline.name)} v${device.spec.baseline.version}`;
+  return `mode ${esc(String(device.mode))}, serves default mode: ${device.servesDefaultMode ? "yes" : "no"}${baseline}`;
 }
 
 function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): string[] {
@@ -325,7 +329,13 @@ function formatWarmPool(warmPool: NonNullable<StatusGetOutput["warmPool"]>): str
     `warm pool: ${enabled ? "enabled" : "disabled"}, reserve ios ${reserveRunning.ios} android ${reserveRunning.android}`,
     ...targets.map((target) => {
       const name = esc(
-        [target.model, target.osVersion, target.mode, target.imageTag]
+        [
+          target.model,
+          target.osVersion,
+          target.mode,
+          target.imageTag,
+          target.baseline === undefined ? undefined : `baseline ${target.baseline}`,
+        ]
           .filter((part) => part !== undefined)
           .join(" / "),
       );

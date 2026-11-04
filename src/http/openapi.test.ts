@@ -58,7 +58,7 @@ describe("buildOpenApiDocument", () => {
     });
   });
 
-  it("an integrator reads the lease routes in the document, each with its own codes and every SSE event's data schema", () => {
+  it("an integrator reads the lease routes in the document, each with its own tag and codes", () => {
     const paths = buildOpenApiDocument([]).paths ?? {};
     const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     const post = operation("/v1/lease-requests", "post");
@@ -103,12 +103,22 @@ describe("buildOpenApiDocument", () => {
     ]);
     expect(Object.keys(responseOf(post, "201").headers ?? {})).toEqual(["Location"]);
     expect(
-      Object.fromEntries(["409", "422", "503"].map((status) => [status, errorCodes(post, status)])),
+      Object.fromEntries(
+        ["404", "409", "422", "503"].map((status) => [status, errorCodes(post, status)]),
+      ),
     ).toEqual({
+      "404": ["UNKNOWN_BASELINE"],
       "409": ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
-      "422": ["UNKNOWN_MODEL"],
+      "422": ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
       "503": ["NO_CAPACITY", "DAEMON_STOPPING", "DAEMON_STARTUP_FAILED"],
     });
+    const leaseShape = replySchema(operation("/v1/leases/{id}", "get"), "200").properties
+      ?.lease as {
+      properties?: object;
+    };
+    expect(Object.keys(leaseShape.properties ?? {})).toEqual(
+      expect.arrayContaining(["imageTag", "baseline"]),
+    );
     expect(Object.keys(replySchema(release, "202").properties ?? {})).toEqual([
       "device",
       "released",
@@ -161,7 +171,11 @@ describe("buildOpenApiDocument", () => {
       leaseId: ["code", "message", "leaseId"],
       retryAfter: [["Retry-After", false]],
     });
+  });
 
+  it("an integrator reads every lease SSE event's name and data schema in the document", () => {
+    const paths = buildOpenApiDocument([]).paths ?? {};
+    const operation = (path: string, method: "get" | "post" | "delete") => paths[path]?.[method];
     expect({
       exec: streamEvents(operation("/v1/leases/{id}/exec", "post")),
       lease: streamEvents(operation("/v1/leases/{id}/events", "get")),

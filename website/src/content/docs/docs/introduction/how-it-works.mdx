@@ -29,7 +29,7 @@ You end a lease in one of three ways:
 
 `simlock lease` and the MCP server renew the lease for you while they run, and release it when they stop. If your agent crashes, the device comes back when the TTL runs out.
 
-Every simulator and emulator serves one lease and is deleted when it ends; the next lease gets a new one. On a physical device it uninstalls every app that was not on the device when it was enrolled.
+Every simulator and emulator serves one lease and is deleted when it ends; the next lease gets a new one. A lease that names a baseline starts from a copy of it. On a physical device it uninstalls every app that was not on the device when it was enrolled.
 
 If a leased simulator or emulator crashes, Simlock reboots it under the same lease. Apps you launched and log streams you opened on it are gone, but the lease stays yours.
 

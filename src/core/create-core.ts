@@ -206,16 +206,6 @@ export function createCore(options: CoreOptions): Core {
     claims,
     options.clock,
   );
-  const provisioner = new DeviceProvisioner({
-    catalog: drivers,
-    claims,
-    clock: options.clock,
-    components: options.components,
-    decisions,
-    lifecycle: deviceLifecycle,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-    registry,
-  });
   const quarantine = new QuarantineCoordinator({
     claims,
     clock: options.clock,
@@ -253,6 +243,17 @@ export function createCore(options: CoreOptions): Core {
     registry,
     state: options.state,
   });
+  const provisioner = new DeviceProvisioner({
+    baselines: () => baselines,
+    catalog: drivers,
+    claims,
+    clock: options.clock,
+    components: options.components,
+    decisions,
+    lifecycle: deviceLifecycle,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    registry,
+  });
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
@@ -260,6 +261,16 @@ export function createCore(options: CoreOptions): Core {
         `could not check baselines after a component was removed: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
+  });
+  const dropReplacedBaselines = (): Promise<void> =>
+    baselines.dropReplaced().catch((error: unknown) => {
+      options.logger?.warn(
+        `could not drop a replaced baseline version: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  // why: the last device of a replaced version leaving, by any path, is what lets its source go.
+  options.eventBus.subscribe("device.deleted", () => {
+    void dropReplacedBaselines();
   });
   const enrollment = new PhysicalEnrollment({
     claims,
@@ -275,6 +286,7 @@ export function createCore(options: CoreOptions): Core {
     registry,
   });
   const warmPool = new WarmPool({
+    baselines,
     acquisition: {
       kick: notifyAvailability,
       get maintenanceActive() {
@@ -396,6 +408,7 @@ export function createCore(options: CoreOptions): Core {
       readStartup({ clock: options.clock, drivers: options.drivers, logger: options.logger }),
     async converge(read) {
       await startup.converge(read);
+      await dropReplacedBaselines();
       await listStartupSources(options.drivers, options.logger);
       warmPool.start();
       capacityObserver.start();

@@ -34,6 +34,7 @@ async function createTracked(
     readonly ttlMs?: number;
     readonly mode?: "slim" | "full";
     readonly imageTag?: string;
+    readonly baseline?: string;
     readonly physical?: boolean;
   } = body,
   nth = 0,
@@ -319,6 +320,7 @@ describe("LeaseRequestTracker.submit with an optional request field", () => {
   it.each([
     ["mode", { mode: "slim" }],
     ["imageTag", { imageTag: "google_apis_playstore" }],
+    ["baseline", { baseline: "checkout" }],
     ["physical", { physical: true }],
   ] as const)(
     "passes %s through onto the dispatch input, and omits it when the body names none",
@@ -382,7 +384,7 @@ describe("LeaseRequestTracker granted lease payload", () => {
     expect(state.lease).not.toHaveProperty("mode");
   });
 
-  it("shows the granted device's image tag on the lease, and none for a device without one", async () => {
+  it("shows the granted device's image tag and baseline on the lease, and none for a device without one", async () => {
     const granted = async (spec: VirtualDevice["spec"]) => {
       const { dispatcher, tracker } = buildTracker();
       const { view, callIndex } = await createTracked(tracker, dispatcher);
@@ -403,7 +405,11 @@ describe("LeaseRequestTracker granted lease payload", () => {
     expect(await granted({ ...spec, imageTag: "google_apis_playstore" })).toMatchObject({
       imageTag: "google_apis_playstore",
     });
+    expect(await granted({ ...spec, baseline: { name: "checkout", version: 2 } })).toMatchObject({
+      baseline: { name: "checkout", version: 2 },
+    });
     expect(await granted(spec)).not.toHaveProperty("imageTag");
+    expect(await granted(spec)).not.toHaveProperty("baseline");
   });
 });
 

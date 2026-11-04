@@ -29,6 +29,7 @@ export interface EventMap {
     readonly fleetRequestId?: string;
     // why: events stored before this field existed lack it and a rebuild replays them, so the projector reads it as optional.
     readonly platform: "ios" | "android";
+    readonly baseline?: { readonly name: string; readonly version: number };
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {

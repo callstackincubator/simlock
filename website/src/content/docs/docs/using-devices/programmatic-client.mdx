@@ -110,7 +110,7 @@ What the calls do:
 | `onLeaseLost`, `onDeviceUnhealthy`, `onDeviceRecovered` | Tell you what happens to a lease this client took. Each returns a function that stops listening. |
 | `close()` | Closes the connection. It does not release your leases. |
 
-`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+`requestLease` takes the same choices as `simlock lease`, under these names: `platform`, `model` or `class`, `osVersion` (an exact version or a range), `mode`, `imageTag`, `baseline`, `physical`, `ttlMs`, `timeoutMs`, `noWait`, `allowDownload` and `leaseId`. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
 
 `exec` arguments are passed to the tool as written, with the lease's device filled in: leave the device out of a `simctl`, `adb` or `devicectl` command. A command that names a different device is refused with `PASSTHROUGH_REFUSED` before it runs. Use absolute paths: the command runs in the daemon's process, not in your program's working directory.
 
@@ -178,7 +178,7 @@ The admin credential lets a program release every agent's lease and stop the dae
 
 A missing or wrong credential fails the connection with `ADMIN_AUTHENTICATION_FAILED`. An admin client has every method of the agent client too.
 
-`admin.forgetWarmKind({ platform, model, osVersion?, mode?, imageTag? })` is what `simlock warm forget` calls. It forgets every kind of the model the warm pool learned, narrowed by each field you give, and answers `{ forgotten: [{ platform, model, osVersion, mode, imageTag? }] }`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
+`admin.forgetWarmKind({ platform, model, osVersion?, mode?, imageTag? })` is what `simlock warm forget` calls. It forgets every kind of the model the warm pool learned, narrowed by each field you give, and answers `{ forgotten: [{ platform, model, osVersion, mode, imageTag?, baseline? }] }`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
 
 `admin.saveBaseline({ leaseId, name, note? })` is what `simlock baseline save` calls. It ends the lease, keeps a copy of its simulator or emulator under the name and answers `{ baseline, leaseId }`, where `baseline` is `{ name, version, platform, model, osVersion, mode, imageTag?, note?, sizeBytes?, savedAt, staleReason? }`. `admin.listBaselines()` answers `{ baselines }`, the newest version of each name, and `admin.removeBaseline({ name })` answers `{ name, versions, deletedDevices }`. They throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE` as [Baselines](/simlock/docs/worker/baselines) describes, and a gateway refuses all three with `UNSUPPORTED_IN_GATEWAY_MODE`.
 
