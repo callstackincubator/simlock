@@ -63,6 +63,7 @@ import {
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
+  type SilenceFailedFact,
   type SlimmedFact,
   iosDeviceDataTable,
   iosSourceDataOwner,
@@ -1476,6 +1477,10 @@ async function discoverIosDriver(
     });
     return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOLS) };
   }
+}
+
+export function logSilenceFailure(_logger: Logger): (fact: SilenceFailedFact) => void {
+  return () => undefined;
 }
 
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
