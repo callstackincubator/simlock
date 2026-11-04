@@ -124,6 +124,42 @@ describe("stale-refs.sh", () => {
     expect(output).not.toContain("lease.granted");
   });
 
+  it("lists every line that still holds a word the spec retires, in any case, as a whole word, from an LF or CRLF body", () => {
+    const dir = repo(
+      {
+        "src/core/reclaim.ts": "export function reclaim() {}\n",
+        "website/docs/lease.mdx":
+          "After release the device is Wiped.\nA physical phone is wiped too.\n",
+        "docs/internal/adr/0001-reclaim.md": "The device is wiped.\n",
+        "src/core/notes.ts": "// why: unwiped stays\n",
+      },
+      { "src/core/reclaim.ts": "export function reclaim() { return 1; }\n" },
+    );
+    writeFileSync(
+      join(dir, "issue.md"),
+      "## Scope\n\n- `scope word` is not retired\n\n### Retired words\n\n- `wiped` (a virtual device is deleted now)\n\n## Done when\n",
+    );
+
+    const output = execFileSync("sh", [SCRIPT, "base", "HEAD", "issue.md"], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+
+    expect(hitsUnder(output, "word wiped (retired by the spec)")).toEqual([
+      "website/docs/lease.mdx:1:After release the device is Wiped.",
+      "website/docs/lease.mdx:2:A physical phone is wiped too.",
+    ]);
+    expect(output).not.toContain("scope word");
+    expect(sweep(dir)).not.toContain("word wiped");
+
+    writeFileSync(join(dir, "crlf.md"), "### Retired words\r\n\r\n- `wiped`: deleted now\r\n");
+    const crlf = execFileSync("sh", [SCRIPT, "base", "HEAD", "crlf.md"], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    expect(hitsUnder(crlf, "word wiped (retired by the spec)")).toHaveLength(2);
+  });
+
   it("prints nothing when nothing the branch removed is still named", () => {
     const dir = repo({ "src/a.ts": "export class Old {}\n" }, { "src/a.ts": null });
 

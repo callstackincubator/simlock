@@ -134,6 +134,17 @@ describe("review-inputs.sh over repo-scoped REST", { timeout: 30_000 }, () => {
     expect(inputs(BUG, []).read("feature.md")).toBeNull();
   });
 
+  it("lists in stale-refs.txt the lines holding a word the issue's Retired words section names", () => {
+    const retiring = { ...BUG, body: "The bug.\n\n### Retired words\n\n- `test`: renamed\n" };
+
+    expect(inputs(retiring, []).read("stale-refs.txt")).toBe(
+      "word test (retired by the spec)\n  src/a.test.ts:1:test\n",
+    );
+    expect(inputs(BUG, []).read("stale-refs.txt")).toBe(
+      "(the sweep found no line naming anything the diff removed)\n",
+    );
+  });
+
   it("takes the last triage report across pages of comments, page 2 included", () => {
     const comments = [
       ...plain(99),

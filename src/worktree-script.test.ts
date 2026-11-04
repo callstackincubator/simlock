@@ -70,4 +70,20 @@ describe("worktree.sh", () => {
     expect(run(main, "task/1")).toBe(stage);
     expect(git(stage, "rev-parse", "HEAD")).toBe(local);
   });
+
+  it("--detach puts each call in a new folder checked out at the commit asked for", () => {
+    const { main } = fixture();
+    const first = git(main, "rev-parse", "HEAD");
+    const second = commit(main, "next");
+
+    const a = run(main, "--detach", first);
+    const b = run(main, "--detach", second);
+    const c = run(main, "--detach", second);
+
+    expect(git(a, "rev-parse", "HEAD")).toBe(first);
+    expect(git(b, "rev-parse", "HEAD")).toBe(second);
+    expect(c).not.toBe(b);
+    expect(git(c, "rev-parse", "HEAD")).toBe(second);
+    expect(() => run(main, "--detach", "0000000")).toThrow();
+  });
 });
