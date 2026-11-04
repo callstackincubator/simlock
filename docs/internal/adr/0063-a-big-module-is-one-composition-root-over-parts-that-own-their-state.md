@@ -87,10 +87,12 @@ cases stay, only the seam moves down.
 ### 3. Size limits, kept by a unit test
 
 A tracked code file may be at most 1,400 lines and a test file at most
-2,500. A unit test in `pnpm check` enforces this. Its list of files that
-were already over the limit when it landed may only shrink. A listed file
-may not grow past its listed length, and a listed file that is now under
-the limit must be removed from the list.
+2,500. A unit test in `pnpm check` enforces this. It keeps a list of the
+files already over their limit when it landed, each with its length. A
+listed file may not grow past its listed length. A PR that has to grow one
+raises its listed length in the same PR, so the growth is a visible line in
+the diff for its reviewers; nothing grows silently. A listed file that is
+now under its limit, or no longer tracked, must leave the list.
 
 ### 4. The Android driver is the first module
 
@@ -106,6 +108,9 @@ flowchart TD
   R --> DT[device-table.ts]
   R --> SI[system-images.ts]
   R --> PR[passthrough-rules.ts]
+  R --> CA[catalog.ts]
+  CA --> SI
+  SD --> CA
   SD --> EM[emulator.ts]
   SD --> AC[avd-config.ts]
   SD --> CP[console-ports.ts]
@@ -115,12 +120,14 @@ flowchart TD
   OW --> T[adb-tools.ts]
   EM --> T
   DT --> T
+  DT --> AC
   AC --> T
 ```
 
 | Part | Owns | Does |
 | --- | --- | --- |
-| `index.ts` (root) | the built parts | `create`, every `Driver` verb, screen, input and tunnel wiring, catalog verbs |
+| `index.ts` (root) | the built parts | `create`, every `Driver` verb, screen, input and tunnel wiring |
+| `catalog.ts` | the profile registry, the resolved-profile cache, the `avdmanager list device` answer | profiles, which model fits which image, `resolveSpec`'s choice, the catalog and default models |
 | `seeds.ts` | the sources table, the set of seeds being made | make a seed, copy it into a device, save and destroy sources |
 | `device-table.ts` | device states, per-device locks | list managed devices, reattach after a restart, register serials |
 | `system-images.ts` | none | installed images, component install and remove, licenses, API levels |
@@ -128,22 +135,26 @@ flowchart TD
 | `emulator.ts` | none | start an emulator, wait until ready, shut down, read its log |
 | `avd-config.ts` | none | `config.ini`, the config hash, ownership marks |
 | `console-ports.ts` | port reservations, shared per process runner | hand out and free console ports |
-| `ownership.ts` | none | the `emu avd path` check before any kill, snapshot load or destroy |
+| `ownership.ts` | none | every `emu avd path` query, and whether its answer names a device's own folder |
 | `adb-tools.ts` | none | environment, running a command, a device's AVD folder and driver data |
 
-The ownership check stays one check: every caller that stops, loads or
-destroys an emulator goes through `ownership.ts`.
+Every `emu avd path` query goes through `ownership.ts`. It answers one of
+three things: the device's own folder, another folder (with the path it
+answered), or no answer. Each caller keeps today's handling of each answer:
+a stop sends nothing unless the answer is its own folder, and a delete
+after a restart refuses when an emulator gives no answer.
 
 ## Consequences
 
 - Every file an agent opens fits one read. A change to boot reads
   `emulator.ts` and its tests, not 12,000 lines.
-- The Android driver is rebuilt in about nine PRs, leaf parts first. Open
+- The Android driver is rebuilt in about ten PRs, leaf parts first. Open
   PRs that touch `android/index.ts` resolve their conflicts by hand, since
   git does not follow code moved into a new file.
-- A feature that grows a file past the limit has to split it in the same
-  PR. The 22 files already over stay on the list until their feature
-  lands.
+- A feature that grows an unlisted file past the limit has to split it in
+  the same PR. One that grows a listed file raises its length in the list,
+  in plain view. The files already over stay on the list until their
+  feature lands.
 - Module manuals name the new files, and grow by one row each.
 
 ## Alternatives considered
@@ -157,6 +168,9 @@ destroys an emulator goes through `ownership.ts`.
   part made of several files.
 - **Fallow as the size guard.** It has no file-length rule (Context).
   Rejected.
+- **A list that never grows.** Every open feature that adds lines to a
+  listed file (the Android driver, the iOS driver, `main.ts`, the schemas)
+  would first have to split it, stalling unrelated work. Rejected.
 - **The size guard last, after every module is split.** Files would keep
   growing meanwhile: the Android driver grew 500 lines in the week before
   this ADR. Rejected.
