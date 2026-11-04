@@ -57,17 +57,35 @@ const TEST_LIMIT = 2500;
 
 const TEST_FILE_NAME = /(?:\.test\.|\.spec\.)|^test-|^testing\./;
 
-const sizeFailures = (files: SizedFile[], shrinkOnly: Record<string, number>): string[] =>
-  files.flatMap(({ path, lines }) => {
-    if (path in shrinkOnly) return [];
+const sizeFailures = (files: SizedFile[], shrinkOnly: Record<string, number>): string[] => {
+  const tracked = new Set(files.map((file) => file.path));
+  const fileFailures = files.flatMap(({ path, lines }) => {
     const isTest = TEST_FILE_NAME.test(basename(path));
     const limit = isTest ? TEST_LIMIT : CODE_LIMIT;
-    return lines > limit
+    const listed = shrinkOnly[path];
+    if (listed === undefined) {
+      return lines > limit
+        ? [
+            `${path}: ${lines} lines; a ${isTest ? "test" : "code"} file may have at most ${limit}. Split it (ADR 0063).`,
+          ]
+        : [];
+    }
+    if (lines <= limit) {
+      return [
+        `${path}: ${lines} lines, within its limit now. Remove it from the shrink-only list.`,
+      ];
+    }
+    return lines > listed
       ? [
-          `${path}: ${lines} lines; a ${isTest ? "test" : "code"} file may have at most ${limit}. Split it (ADR 0063).`,
+          `${path}: ${lines} lines, longer than its listed ${listed}. A listed file may only shrink (ADR 0063).`,
         ]
       : [];
   });
+  const goneFailures = Object.keys(shrinkOnly)
+    .filter((path) => !tracked.has(path))
+    .map((path) => `${path}: listed but not tracked. Remove it from the shrink-only list.`);
+  return [...fileFailures, ...goneFailures];
+};
 
 /**
  * why: a vendored artifact lands untracked -- the directory is complete, at the right checksum,
