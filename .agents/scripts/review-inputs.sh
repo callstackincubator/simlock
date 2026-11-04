@@ -22,7 +22,8 @@
 #                          reviews run
 #   fix.patch              with a previous commit: the diff from it to the head
 #   stale-refs.txt         what .agents/scripts/stale-refs.sh finds for the PR: lines anywhere in
-#                          the repo that still name something the diff removed
+#                          the repo that still name something the diff removed, or a word the
+#                          Retired words section of issue.md or feature.md names
 #   briefs/                every file in .agents/briefs/ as the base has it: each reviewer's
 #                          brief, and calibration.md, the findings reviews raised lately that
 #                          were rejected, which every reviewer reads first
@@ -154,9 +155,6 @@ node "$(dirname "$0")/diff-kind.mjs" "$fork" "$head" >"$out/kind"
 if [ -n "$previous" ]; then
   git diff "$previous" "$head" >"$out/fix.patch"
 fi
-"$(dirname "$0")/stale-refs.sh" "$fork" "$head" >"$out/stale-refs.txt"
-# Always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
-[ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 mkdir "$out/briefs"
 for f in $(git ls-tree --name-only "$rules_ref" .agents/briefs/); do
   git show "$rules_ref:$f" >"$out/briefs/$(basename "$f")"
@@ -252,6 +250,13 @@ if [ -n "$issue" ]; then
 else
   say "PR #$pr closes no issue (branch $head_ref, no 'Closes #n' in the body)"
 fi
+
+# why: after the issue bodies, so the sweep also lists the words their Retired words sections name.
+set --
+for f in "$out/issue.md" "$out/feature.md"; do [ ! -f "$f" ] || set -- "$@" "$f"; done
+"$(dirname "$0")/stale-refs.sh" "$fork" "$head" "$@" >"$out/stale-refs.txt"
+# why: always written, so a reviewer can tell "the sweep found nothing" from "the sweep did not run".
+[ -s "$out/stale-refs.txt" ] || echo "(the sweep found no line naming anything the diff removed)" >"$out/stale-refs.txt"
 
 # ADRs by number, wherever the spec names them, or wherever the record an ADR diff adds or edits
 # names them: "ADR 0014", "ADR-0014", "ADRs 0004 and 0005", or a link to adr/0014-....md. Each

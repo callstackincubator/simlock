@@ -104,6 +104,18 @@ task crosses no boundary and writes no state. -->
 <!-- Each rule and ADR section the task touches, one line each: the
 rule or section, a few quoted words of it, and how the task complies. -->
 
+### Retired words
+
+<!-- Only when the task ends what a word means today: a behaviour it
+removes or renames ("wiped" once a device is deleted instead, "reclaim"
+once nothing is reclaimed). One bullet per word or phrase, backticked
+first, then what replaces it, as in "- `wiped`: a virtual device is
+deleted after its lease; only a physical device is wiped".
+`stale-refs.sh` lists every line that still holds one, for the audit and
+the claims review. Delete this section when nothing is retired. -->
+
+- ...
+
 ### Tests
 
 <!-- First, one line: the seam the tests drive (the highest existing entry

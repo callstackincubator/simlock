@@ -133,6 +133,20 @@ describe("spec-lint.mjs on a task", () => {
     expect(lintTask(TASK)).toEqual({ status: 0, lines: ["spec-lint: 0 blocking, 0 notes"] });
   });
 
+  it("takes an optional Retired words section between Rules in play and Tests, and only there", () => {
+    const section = "### Retired words\n\n- `wiped`: a virtual device is deleted instead\n\n";
+    const before = swap("### Tests\n", `${section}### Tests\n`);
+    const after = swap("## Done when\n", `${section}## Done when\n`);
+
+    expect(lintTask(before(TASK))).toEqual({
+      status: 0,
+      lines: ["spec-lint: 0 blocking, 0 notes"],
+    });
+    expect(lintTask(after(TASK)).lines).toContain(
+      "B 100 Technical spec: `### Tests` is out of template order; move it",
+    );
+  });
+
   it.each([
     [
       "a missing section",
