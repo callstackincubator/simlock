@@ -68,7 +68,10 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
 7. **End** — explicit release, TTL expiry, `device-lost` (health monitor or
    physical watcher), release-all (nuke), or startup. All go through
    `LeaseReleaseCoordinator`: one commit puts the device in `reclaiming` and
-   emits `lease.released` or `lease.expired`.
+   emits `lease.released` or `lease.expired`. `releaseToSave(leaseId, save)` (core's
+   `leaseSave` port, for `baseline.save`) ends the lease `explicit` the same way, then runs
+   `save` in the reclaim's place under the `reclaim` claim, as a normal release workflow
+   that nuke's maintenance waits for.
 8. **Lease-end participants** — called after that commit, outside the lock,
    with an `AbortSignal` bounded by `lease.endWaitMs`. Today: agent-device's
    `AgentDeviceLeaseEnd` and the stream's `createStreamLeaseEnd`. Reclaim waits for them.

@@ -12,6 +12,7 @@ type RouteTag =
   | "Leases"
   | "Workers"
   | "Components"
+  | "Baselines"
   | "Tokens"
   | "Events";
 type SuccessStatus = 200 | 201 | 202 | 204;

@@ -33,6 +33,11 @@ import type {
   CatalogGetInput,
   CatalogGetOutput,
   CleanupRunInput,
+  BaselineListOutput,
+  BaselineRemoveInput,
+  BaselineRemoveOutput,
+  BaselineSaveInput,
+  BaselineSaveOutput,
   CleanupRunOutput,
   ComponentInstallInput,
   ComponentInstallOutput,
@@ -104,6 +109,11 @@ import type {
 } from "./types.js";
 
 export type {
+  BaselineListOutput,
+  BaselineRemoveInput,
+  BaselineRemoveOutput,
+  BaselineSaveInput,
+  BaselineSaveOutput,
   CatalogGetInput,
   CatalogGetOutput,
   CleanupRunInput,
@@ -337,6 +347,15 @@ export interface SimlockAdminClient extends SimlockClient {
    */
   removeComponent(input: ComponentRemoveInput): Promise<ComponentRemoveOutput>;
 
+  /** why: ADR 0061 §4: ends the held lease and keeps its device as a named baseline; admin only. */
+  saveBaseline(input: BaselineSaveInput): Promise<BaselineSaveOutput>;
+
+  /** why: the newest version of each baseline on the worker, with its stale reason. */
+  listBaselines(): Promise<BaselineListOutput>;
+
+  /** why: deletes every version of a baseline and the idle devices made from it; refused while a lease uses it. */
+  removeBaseline(input: BaselineRemoveInput): Promise<BaselineRemoveOutput>;
+
   /**
    * Enrols the physical device plugged into the host this daemon runs on, named by
    * any ID the platform's driver reads. A device it cannot enrol is `DEVICE_NOT_ENROLLABLE` with
@@ -480,6 +499,9 @@ function buildDegradedClient(
     installComponent: () => rejected(),
     installComponentOnWorkers: () => rejected(),
     removeComponent: () => rejected(),
+    saveBaseline: () => rejected(),
+    listBaselines: () => rejected(),
+    removeBaseline: () => rejected(),
     addDevice: () => rejected(),
     removeDevice: () => rejected(),
     relayRequest: () => rejected(),
@@ -816,6 +838,18 @@ class SimlockClientImpl {
 
   removeComponent(input: ComponentRemoveInput): Promise<ComponentRemoveOutput> {
     return this.#call("component.remove", input);
+  }
+
+  saveBaseline(input: BaselineSaveInput): Promise<BaselineSaveOutput> {
+    return this.#call("baseline.save", input);
+  }
+
+  listBaselines(): Promise<BaselineListOutput> {
+    return this.#call("baseline.list", {});
+  }
+
+  removeBaseline(input: BaselineRemoveInput): Promise<BaselineRemoveOutput> {
+    return this.#call("baseline.remove", input);
   }
 
   addDevice(input: DeviceAddInput): Promise<DeviceAddOutput> {

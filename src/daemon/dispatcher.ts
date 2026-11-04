@@ -30,6 +30,10 @@ import {
   toDriverDevice,
   UnknownLeaseError,
   type CapacityReader,
+  BaselineInUseError,
+  BaselineSaveFailedError,
+  UnknownBaselineError,
+  type BaselineService,
   type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
@@ -146,6 +150,8 @@ export interface DispatcherOptions {
   readonly nuke?: Nuke;
   /** why: `warm.forget`'s one way into the warm pool's learned record; optional so tests that never forget need no pool. */
   readonly warmKinds?: WarmKindForgetter;
+  /** why: the baselines' one way in; optional so tests that never save need none. */
+  readonly baselines?: Pick<BaselineService, "list" | "remove" | "save">;
   readonly enrollment?: Pick<PhysicalEnrollment, "add" | "remove">;
   readonly passthrough?: PassthroughResolver;
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
@@ -277,6 +283,9 @@ export class Dispatcher {
       "cleanup.run": this.#cleanupRun,
       "nuke.run": this.#nukeRun,
       "warm.forget": this.#warmForget,
+      "baseline.save": this.#baselineSave,
+      "baseline.list": this.#baselineList,
+      "baseline.remove": this.#baselineRemove,
       "config.get": this.#configGet,
       "events.replay": this.#eventsReplay,
       "usage.get": this.#usageGet,
@@ -845,6 +854,73 @@ export class Dispatcher {
         ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
       })),
     };
+  };
+
+  #baselineSave: Handler<"baseline.save"> = async (input, session) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    const lease = this.options.registry.snapshot.leases.find(
+      (candidate) => candidate.id === input.leaseId,
+    );
+    if (lease === undefined) throw new UnknownLeaseError(input.leaseId);
+    const held = this.options.registry.snapshot.devices.find(
+      (candidate) => candidate.id === lease.deviceId,
+    );
+    if (held?.physical === true) {
+      throw new DispatchError(
+        "BAD_REQUEST",
+        `lease ${lease.id} is on a physical device; only a simulator or emulator can be saved as a baseline`,
+      );
+    }
+    try {
+      return await this.options.baselines.save({
+        leaseId: input.leaseId,
+        name: input.name,
+        ...(input.note === undefined ? {} : { note: input.note }),
+        requesterId: session.principal,
+      });
+    } catch (error: unknown) {
+      if (error instanceof BaselineSaveFailedError) {
+        throw new DispatchError("BASELINE_SAVE_FAILED", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
+      throw error;
+    }
+  };
+
+  #baselineList: Handler<"baseline.list"> = async () => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    return { baselines: [...(await this.options.baselines.list())] };
+  };
+
+  #baselineRemove: Handler<"baseline.remove"> = async (input, session) => {
+    if (this.options.baselines === undefined)
+      throw new DispatchError("INTERNAL", "Baselines are unavailable");
+    try {
+      const removed = await this.options.baselines.remove({
+        name: input.name,
+        requesterId: session.principal,
+      });
+      return {
+        deletedDevices: [...removed.deletedDevices],
+        name: removed.name,
+        versions: [...removed.versions],
+      };
+    } catch (error: unknown) {
+      if (error instanceof BaselineInUseError) {
+        throw new DispatchError("BASELINE_IN_USE", error.message, {
+          leaseId: error.leaseId,
+          name: error.baselineName,
+        });
+      }
+      if (error instanceof UnknownBaselineError) {
+        throw new DispatchError("UNKNOWN_BASELINE", error.message, { name: error.baselineName });
+      }
+      throw error;
+    }
   };
 
   #usageGet: Handler<"usage.get"> = (input) => usageAnswer(this.#usage.get(input));

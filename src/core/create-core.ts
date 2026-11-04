@@ -30,11 +30,12 @@ import { type AcquisitionMaintenance, type LeaseMaintenance, NukeService } from 
 import { PhysicalEnrollment } from "./physical-enrollment.js";
 import { QuarantineCoordinator } from "./quarantine-coordinator.js";
 import { ReclaimCoordinator } from "./reclaim-coordinator.js";
-import type { Registry } from "./registry.js";
+import type { Registry, ReleasedLease } from "./registry.js";
 import type { SerializedDecision } from "./serialized-decision.js";
 import { StartupConverger } from "./startup-converger.js";
 import { stableError } from "./stable-error.js";
 import { readStartup, type StartupRead } from "./startup-read.js";
+import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
 
 interface CoreOptions {
@@ -79,6 +80,13 @@ export interface CorePorts {
     readonly leases: LeaseMaintenance;
   };
   readonly leaseExpirer: LeaseExpirer;
+  /** why: ends a lease for a baseline save; core never imports leasing, so leasing supplies the verb. */
+  readonly leaseSave: {
+    releaseToSave<Result>(
+      leaseId: string,
+      save: (released: ReleasedLease) => Promise<Result>,
+    ): Promise<Result>;
+  };
   readonly warmPoolDemand: {
     readonly maintenanceActive: boolean;
     waitingDemand(): readonly WaitingDemand[];
@@ -101,6 +109,7 @@ export interface Core {
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
   readonly warmKinds: WarmKindForgetter;
+  readonly baselines: BaselineService;
   readonly catalog: CatalogReader & PassthroughResolver;
   readonly claims: DeviceOperationClaims;
   readonly claimReader: Pick<DeviceOperationClaims, "isClaimed">;
@@ -232,6 +241,26 @@ export function createCore(options: CoreOptions): Core {
     quarantine,
     registry,
   });
+  const baselines = new BaselineService({
+    claims,
+    clock: options.clock,
+    decisions,
+    drivers,
+    eventBus: options.eventBus,
+    leaseSave: () => port("leaseSave"),
+    lifecycle: deviceLifecycle,
+    reclaim,
+    registry,
+    state: options.state,
+  });
+  // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
+  options.eventBus.subscribe("component.removed", () => {
+    baselines.checkStale().catch((error: unknown) => {
+      options.logger?.warn(
+        `could not check baselines after a component was removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  });
   const enrollment = new PhysicalEnrollment({
     claims,
     decisions,
@@ -283,6 +312,7 @@ export function createCore(options: CoreOptions): Core {
       },
       endMaintenance: async () => leaseMaintenance.acquisition.endMaintenance(),
     },
+    baselines: { removeAll: () => baselines.removeAll() },
     devices: deviceLifecycle,
     drivers: options.drivers,
     leases: leaseMaintenance.leases,
@@ -291,6 +321,7 @@ export function createCore(options: CoreOptions): Core {
     warmPool: { forget: () => warmPool.forget() },
   });
   const doctor = new Doctor({
+    baselines,
     // Without this, a backgrounded reclaim -- which holds its device in `reclaiming` for a full
     // erase, and is now how every release purges -- reads as a stalled transition.
     claims,
@@ -343,6 +374,7 @@ export function createCore(options: CoreOptions): Core {
     capacityReader,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
+    baselines,
     catalog: drivers,
     claims,
     claimReader: claims,

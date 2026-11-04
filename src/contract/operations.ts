@@ -29,6 +29,9 @@ import {
   requesterIdSchema,
   historyStatusSchema,
   hostLoadSchema,
+  baselineEntrySchema,
+  baselineNameSchema,
+  baselineNoteSchema,
   imageTagSchema,
   leaseGrantSchema,
   leaseRecordSchema,
@@ -618,6 +621,43 @@ export const warmForget = defineOperation({
 });
 
 // fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineSave = defineOperation({
+  name: "baseline.save",
+  role: "admin",
+  effect: "write",
+  input: z
+    .object({
+      leaseId: z.string().min(1).max(256),
+      name: baselineNameSchema,
+      note: baselineNoteSchema.optional(),
+    })
+    .strict(),
+  output: z.object({ baseline: baselineEntrySchema, leaseId: z.string().max(256) }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineList = defineOperation({
+  name: "baseline.list",
+  role: "agent",
+  effect: "read",
+  input: z.object({}).strict(),
+  output: z.object({ baselines: z.array(baselineEntrySchema).max(1000) }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
+export const baselineRemove = defineOperation({
+  name: "baseline.remove",
+  role: "admin",
+  effect: "write",
+  input: z.object({ name: baselineNameSchema }).strict(),
+  output: z.object({
+    name: baselineNameSchema,
+    versions: z.array(z.number().int().min(1)).max(1000),
+    deletedDevices: z.array(z.string().max(256)).max(1000),
+  }),
+});
+
+// fallow-ignore-next-line unused-export -- consumed only through the OPERATIONS registry, not by name; still public contract surface.
 export const configGet = defineOperation({
   name: "config.get",
   role: "admin",
@@ -1125,6 +1165,9 @@ export const OPERATIONS = {
   "cleanup.run": cleanupRun,
   "nuke.run": nukeRun,
   "warm.forget": warmForget,
+  "baseline.save": baselineSave,
+  "baseline.list": baselineList,
+  "baseline.remove": baselineRemove,
   "config.get": configGet,
   "daemon.stop": daemonStop,
   "daemon.update": daemonUpdate,

@@ -168,6 +168,8 @@ const DEVICE_COLUMNS = [
   "address",
   "reclaiming_since",
   "absent_reason",
+  "baseline_name",
+  "baseline_version",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -247,6 +249,11 @@ function physicalColumns(device: DeviceRecord): SqliteValue[] {
   return [device.reclaimingSince ?? null, device.absentReason ?? null];
 }
 
+function baselineColumns(device: DeviceRecord): SqliteValue[] {
+  if (device.physical) return [null, null];
+  return [device.baseline?.name ?? null, device.baseline?.version ?? null];
+}
+
 function deviceValues(device: DeviceRecord): SqliteValue[] {
   return [
     device.id,
@@ -265,6 +272,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     ...causeColumns(device.quarantineCause),
     device.address ?? null,
     ...physicalColumns(device),
+    ...baselineColumns(device),
   ];
 }
 
@@ -487,6 +495,7 @@ function deviceFromRow(
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
     mode: reader.oneOf("mode", DEVICE_MODES),
+    ...baselineOf(reader),
     physical: false,
     spec: {
       ...present("imageTag", reader.optText("image_tag")),
@@ -499,6 +508,12 @@ function deviceFromRow(
     state: reader.oneOf("state", VIRTUAL_STATES),
   };
   return virtual;
+}
+
+function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {
+  const name = reader.optText("baseline_name");
+  const version = reader.optInt("baseline_version");
+  return name === undefined || version === undefined ? {} : { baseline: { name, version } };
 }
 
 function quarantineCause(reader: RowReader): QuarantineCause | undefined {

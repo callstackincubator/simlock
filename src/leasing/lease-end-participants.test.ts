@@ -827,7 +827,11 @@ describe("lease-end participants (#469)", () => {
   });
 
   it.each([
-    ["nuke", (harness: Harness) => harness.engine.nuke(false), { releasedLeaseIds: [] }],
+    [
+      "nuke",
+      (harness: Harness) => harness.engine.nuke(false),
+      { releasedLeaseIds: [], removedBaselines: [] },
+    ],
     ["settle()", (harness: Harness) => harness.engine.settle(), undefined],
   ] as const)(
     "%s while a participant has not returned aborts its signal, starts the destroy at once, and completes without the clock advancing",

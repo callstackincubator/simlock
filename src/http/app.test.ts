@@ -572,6 +572,73 @@ describe("POST /v1/devices and DELETE /v1/devices/{id}", () => {
   });
 });
 
+describe("/v1/baselines", () => {
+  const entry = {
+    mode: "full",
+    model: "Pixel 9",
+    name: "checkout",
+    osVersion: "36",
+    platform: "android",
+    savedAt: "2026-11-02T13:40:00.000Z",
+    version: 1,
+  };
+
+  it("POST dispatches baseline.save with the body, GET baseline.list and DELETE baseline.remove with the path's name, each as the caller's role, and answers the result as JSON", async () => {
+    const { app, dispatcher } = buildHarness();
+    const seen: { input: unknown; operation: string; role: string }[] = [];
+    const answers = {
+      "baseline.list": { baselines: [entry] },
+      "baseline.remove": { deletedDevices: [], name: "checkout", versions: [1] },
+      "baseline.save": { baseline: entry, leaseId: "L1" },
+    } as const;
+    for (const operation of Object.keys(answers) as (keyof typeof answers)[]) {
+      dispatcher.handlers[operation] = (input, session) => {
+        seen.push({ input, operation, role: session.role });
+        return answers[operation];
+      };
+    }
+
+    const saved = await app.request("/v1/baselines", {
+      body: JSON.stringify({ leaseId: "L1", name: "checkout", note: "app 4.2" }),
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+    });
+    const listed = await app.request("/v1/baselines", { headers: agentAuth });
+    const removed = await app.request("/v1/baselines/checkout", {
+      headers: operatorAuth,
+      method: "DELETE",
+    });
+    const agentSave = await app.request("/v1/baselines", {
+      body: JSON.stringify({ leaseId: "L2", name: "mine" }),
+      headers: { ...agentAuth, "content-type": "application/json" },
+      method: "POST",
+    });
+    const stray = await app.request("/v1/baselines", {
+      body: JSON.stringify({ leaseId: "L1", name: "checkout", workerId: "w1" }),
+      headers: { ...operatorAuth, "content-type": "application/json" },
+      method: "POST",
+    });
+
+    expect([saved.status, listed.status, removed.status, agentSave.status]).toEqual([
+      200, 200, 200, 200,
+    ]);
+    expect(await saved.json()).toEqual(answers["baseline.save"]);
+    expect(await listed.json()).toEqual(answers["baseline.list"]);
+    expect(await removed.json()).toEqual(answers["baseline.remove"]);
+    expect(stray.status).toBe(400);
+    expect(seen).toEqual([
+      {
+        input: { leaseId: "L1", name: "checkout", note: "app 4.2" },
+        operation: "baseline.save",
+        role: "admin",
+      },
+      { input: {}, operation: "baseline.list", role: "agent" },
+      { input: { name: "checkout" }, operation: "baseline.remove", role: "admin" },
+      { input: { leaseId: "L2", name: "mine" }, operation: "baseline.save", role: "agent" },
+    ]);
+  });
+});
+
 describe("DELETE /v1/components/{platform}/{version}", () => {
   it("dispatches component.remove with the path's platform and version, and answers its result as JSON", async () => {
     const { app, dispatcher } = buildHarness();

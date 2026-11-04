@@ -138,6 +138,17 @@ export interface DoctorReport {
 
 export interface DoctorSource extends Omit<DriverSource, "id"> {
   readonly platform: Platform;
+  readonly baselineName?: string;
+  readonly baselineVersion?: number;
+}
+
+/** why: the baselines the worker holds name their sources and are checked for staleness before a report. */
+export interface DoctorBaselines {
+  checkStale(): Promise<void>;
+  nameSources(sources: readonly DriverSource[]): readonly (DriverSource & {
+    readonly baselineName?: string;
+    readonly baselineVersion?: number;
+  })[];
 }
 
 export interface DoctorQuarantine {
@@ -151,6 +162,7 @@ export interface DoctorOptions {
    * why: The decision section every registry write of this daemon is made in. A write made outside it
    * can land on top of a concurrent one that read the registry before it, and undo it.
    */
+  readonly baselines?: DoctorBaselines;
   readonly decisions: Pick<SerializedDecision, "run">;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;
@@ -269,10 +281,11 @@ export class Doctor {
 
   /** why: a platform whose source read fails lists none; one failure must not hide the rest of the report. */
   async #sources(purgeOrphans: boolean): Promise<readonly DoctorSource[]> {
+    await this.#checkBaselines();
     const lists = await Promise.all(
       this.options.drivers.map(async (driver) => {
         try {
-          const listed = await driver.listSources();
+          const listed = this.#named(await driver.listSources());
           const kept: DriverSource[] = [];
           for (const source of listed) {
             if (
@@ -297,6 +310,21 @@ export class Doctor {
       }),
     );
     return lists.flat();
+  }
+
+  /** why: a stale check that fails must not hide the rest of the report. */
+  async #checkBaselines(): Promise<void> {
+    try {
+      await this.options.baselines?.checkStale();
+    } catch (error: unknown) {
+      this.#logger.warn(
+        `could not check baselines for staleness: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  #named(sources: readonly DriverSource[]): readonly DriverSource[] {
+    return this.options.baselines?.nameSources(sources) ?? sources;
   }
 
   async #purgeSource(driver: Driver, source: DriverSource): Promise<boolean> {

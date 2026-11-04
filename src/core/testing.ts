@@ -16,6 +16,7 @@ import { fakeDeviceDataTable } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import type { Platform } from "./domain.js";
 import { Registry, type RegistryOptions } from "./registry.js";
+import { baselinesOwner } from "./baselines-schema.js";
 import { registryOwner } from "./registry-schema.js";
 import { warmPoolOwner } from "./warm-pool/index.js";
 import { SerializedDecision } from "./serialized-decision.js";
@@ -91,7 +92,7 @@ export function openMemoryState(owners: readonly SqliteSchemaOwner[]): Promise<S
 }
 
 export function openTestState(): Promise<StateDatabase> {
-  return openMemoryState([registryOwner, warmPoolOwner, fakeDeviceDataTable]);
+  return openMemoryState([registryOwner, warmPoolOwner, baselinesOwner, fakeDeviceDataTable]);
 }
 
 export function describeDeviceDataTable(

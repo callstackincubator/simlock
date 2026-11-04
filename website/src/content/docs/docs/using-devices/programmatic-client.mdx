@@ -180,6 +180,8 @@ A missing or wrong credential fails the connection with `ADMIN_AUTHENTICATION_FA
 
 `admin.forgetWarmKind({ platform, model, osVersion?, mode?, imageTag? })` is what `simlock warm forget` calls. It forgets every kind of the model the warm pool learned, narrowed by each field you give, and answers `{ forgotten: [{ platform, model, osVersion, mode, imageTag? }] }`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE`.
 
+`admin.saveBaseline({ leaseId, name, note? })` is what `simlock baseline save` calls. It ends the lease, keeps a copy of its simulator or emulator under the name and answers `{ baseline, leaseId }`, where `baseline` is `{ name, version, platform, model, osVersion, mode, imageTag?, note?, sizeBytes?, savedAt, staleReason? }`. `admin.listBaselines()` answers `{ baselines }`, the newest version of each name, and `admin.removeBaseline({ name })` answers `{ name, versions, deletedDevices }`. They throw `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `UNKNOWN_BASELINE` and `BASELINE_IN_USE` as [Baselines](/simlock/docs/worker/baselines) describes, and a gateway refuses all three with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
 ### Update the daemon
 
 `admin.updateDaemon({ version?, force?, query? })` is what `simlock update` calls. It resolves the version with npm, starts the update and answers at once; the daemon then takes no new leases, waits for its leases to end (unless `force`), installs and restarts.

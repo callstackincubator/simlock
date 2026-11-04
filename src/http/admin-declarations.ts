@@ -144,6 +144,51 @@ export const componentRemoveRoute = declareRoute({
   errors: { 501: ["UNSUPPORTED_IN_GATEWAY_MODE"] },
 });
 
+export const baselineListRoute = declareRoute({
+  method: "get",
+  path: "/v1/baselines",
+  tag: "Baselines",
+  summary: "The baselines on this machine: the newest version of each, with its stale reason",
+  role: "agent",
+  notes: "Worker only: a gateway answers 501 UNSUPPORTED_IN_GATEWAY_MODE.",
+  reply: OPERATIONS["baseline.list"].output,
+  errors: { 501: ["UNSUPPORTED_IN_GATEWAY_MODE"] },
+});
+
+export const baselineSaveRoute = declareRoute({
+  method: "post",
+  path: "/v1/baselines",
+  tag: "Baselines",
+  summary: "Save a held simulator or emulator as a baseline, ending its lease",
+  role: "admin",
+  notes:
+    "Worker only: a gateway answers 501 UNSUPPORTED_IN_GATEWAY_MODE. A lease on a physical device is refused with 400. The lease has ended when the answer is 500 BASELINE_SAVE_FAILED.",
+  request: { json: OPERATIONS["baseline.save"].input },
+  reply: OPERATIONS["baseline.save"].output,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    500: ["BASELINE_SAVE_FAILED"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+  },
+});
+
+export const baselineRemoveRoute = declareRoute({
+  method: "delete",
+  path: "/v1/baselines/{name}",
+  tag: "Baselines",
+  summary: "Remove a baseline and the idle devices made from it",
+  role: "admin",
+  notes:
+    "Worker only: a gateway answers 501 UNSUPPORTED_IN_GATEWAY_MODE. The name is checked by the daemon; a baseline a lease uses is refused with 409.",
+  request: { params: z.object({ name: z.string() }) },
+  reply: OPERATIONS["baseline.remove"].output,
+  errors: {
+    404: ["UNKNOWN_BASELINE"],
+    409: ["BASELINE_IN_USE"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+  },
+});
+
 export const tokenListRoute = declareRoute({
   method: "get",
   path: "/v1/tokens",
@@ -242,6 +287,9 @@ export const ADMIN_ROUTES = [
   componentListRoute,
   componentRemoveRoute,
   componentInstallRoute,
+  baselineListRoute,
+  baselineSaveRoute,
+  baselineRemoveRoute,
   tokenListRoute,
   eventsRoute,
   eventsStreamRoute,

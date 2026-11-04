@@ -137,6 +137,9 @@ function ports(order: string[] = []): Parameters<Core["connect"]>[0] {
         },
       },
     },
+    leaseSave: {
+      releaseToSave: async (_leaseId, save) => save(await Promise.reject(new Error("unused"))),
+    },
     notifyAvailability: () => void order.push("notifyAvailability"),
     warmPoolDemand: {
       maintenanceActive: false,
@@ -193,7 +196,7 @@ describe("createCore", () => {
 
     const result = await core.nuke.nuke(false);
 
-    expect(result).toEqual({ releasedLeaseIds: ["lse_1"] });
+    expect(result).toEqual({ releasedLeaseIds: ["lse_1"], removedBaselines: [] });
     expect(order).toEqual([
       "acquisition.begin",
       "leases.begin",

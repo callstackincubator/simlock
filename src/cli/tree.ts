@@ -54,6 +54,7 @@ const leaseModule = () => import("./commands/lease.js");
 const tokenModule = () => import("./commands/token.js");
 const workerModule = () => import("./commands/worker.js");
 const componentModule = () => import("./commands/component.js");
+const baselineModule = () => import("./commands/baseline.js");
 const alertsModule = () => import("./commands/alerts.js");
 const warmModule = () => import("./commands/warm.js");
 
@@ -118,6 +119,15 @@ export const COMMANDS: readonly CommandNode[] = [
       { name: "install", load: componentModule },
       { name: "list", load: componentModule },
       { name: "remove", load: componentModule },
+    ],
+  },
+  {
+    name: "baseline",
+    load: baselineModule,
+    children: [
+      { name: "save", load: baselineModule },
+      { name: "list", load: baselineModule },
+      { name: "remove", load: baselineModule },
     ],
   },
   {

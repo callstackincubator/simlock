@@ -6163,12 +6163,14 @@ describe("AndroidDriver image fit", () => {
       expectations: readonly ScriptedProcessExpectation[],
       options: {
         readonly clock?: FakeClock;
+        readonly config?: string;
         readonly filesystem?: MemoryFilesystem;
+        readonly ids?: readonly string[];
         readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
       } = {},
     ) {
       const filesystem = await androidFilesystem({}, options.filesystem);
-      await writeSeedFiles(filesystem, seedHome);
+      await writeSeedFiles(filesystem, seedHome, options.config);
       const database = await memoryAndroidSourceDatabase();
       const runner = new EmulatorExitingRunner([
         processResult(binaries.avdmanager, ["list", "device"], pixelDevices),
@@ -6178,7 +6180,7 @@ describe("AndroidDriver image fit", () => {
         ...(options.clock === undefined ? {} : { clock: options.clock }),
         ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
         database,
-        ids: ["one", "two", "three"],
+        ids: options.ids ?? ["one", "two", "three"],
       });
       const spec = await driver.resolveSpec({
         model: "Pixel 5",
@@ -6192,7 +6194,10 @@ describe("AndroidDriver image fit", () => {
     async function reopened(
       harness: Awaited<ReturnType<typeof seedHarness>>,
       expectations: readonly ScriptedProcessExpectation[],
-      options: { readonly emulator?: AndroidEmulatorLaunchOptions } = {},
+      options: {
+        readonly clock?: FakeClock;
+        readonly emulator?: AndroidEmulatorLaunchOptions;
+      } = {},
     ) {
       const runner = new EmulatorExitingRunner([...expectations]);
       const driver = await createDriver(harness.filesystem, runner, {
@@ -6371,6 +6376,264 @@ describe("AndroidDriver image fit", () => {
       expect(await harness.filesystem.exists(seedHome)).toBe(false);
       expect(later.runner.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
       await expect(later.driver.listSources()).resolves.toMatchObject([{ id: "seed_five" }]);
+    });
+
+    describe("saveSource", () => {
+      const savedHome = `${sources}/baseline_four`;
+      const serial = "emulator-5586";
+      const config =
+        "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n";
+      const ids = ["one", "two", "three", "four"];
+      const adbShell = (command: string) =>
+        processResult(binaries.adb, ["-s", serial, "shell", command]);
+      const sourceBoot = () => {
+        const stage = seedStages(savedHome);
+        return [
+          stage.devices,
+          ...stage.secondBoot,
+          stage.save,
+          stage.list,
+          stage.probe,
+          stage.kill,
+          processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        ];
+      };
+      const leasing = (hangs: boolean) => [
+        ...makingTheSeed(),
+        processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], hangs),
+        markWriteExpectation(serial, "three"),
+      ];
+      const probe = processResult(
+        binaries.adb,
+        ["-s", serial, "emu", "avd", "path"],
+        `${copyHome}/simlock.avd\r\nOK\r\n`,
+      );
+      const savingSteps = [
+        processResult(binaries.emulator, ["-version"], "Android emulator version 36.1.9"),
+        probe,
+        adbShell("sync"),
+        processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+      ];
+
+      it("keeps a powered-off copy of the device as a ready baseline source with one boot snapshot, powering the emulator off first, or killing it when it will not leave in 60 s, or polling adb with no process handle", async () => {
+        const kept = async (harness: Awaited<ReturnType<typeof seedHarness>>) => {
+          expect(await harness.filesystem.exists(`${savedHome}/simlock.avd/config.ini`)).toBe(true);
+          await expect(harness.filesystem.readFile(`${savedHome}/simlock.ini`)).resolves.toContain(
+            `path=${savedHome}/simlock.avd`,
+          );
+          expect(await harness.filesystem.exists(copyHome)).toBe(true);
+          const listed = await harness.driver.listSources();
+          expect(listed.find((source) => source.id === "baseline_four")).toMatchObject({
+            imageTag: "google_apis",
+            kind: "baseline",
+            model: "pixel_5",
+            osVersion: "34",
+          });
+          expect(
+            harness.database
+              .prepare("SELECT state FROM android_source_data WHERE source_id = 'baseline_four'")
+              .all(),
+          ).toEqual([{ state: "ready" }]);
+        };
+        const sent = (harness: Awaited<ReturnType<typeof seedHarness>>): string[] =>
+          harness.runner.calls
+            .filter((call) => call.command === binaries.adb && call.args[0] === "-s")
+            .map((call) => call.args.slice(2).join(" "));
+        const saveLaunch = (harness: Awaited<ReturnType<typeof seedHarness>>) =>
+          harness.runner.calls
+            .filter((call) => call.args.includes("-avd"))
+            .map((call) => [call.options.env?.["ANDROID_AVD_HOME"], call.args.at(-1)]);
+
+        const powered = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
+          config,
+          ids,
+        });
+        const poweredReady = await powered.driver.makeReady(
+          await powered.driver.provision(powered.spec),
+        );
+        const poweredSaved = await powered.driver.saveSource({
+          ...poweredReady,
+          physical: false as const,
+        });
+        expect(poweredSaved).toEqual({ sizeBytes: 121, sourceId: "baseline_four" });
+        await kept(powered);
+        expect(sent(powered)).toEqual(
+          expect.arrayContaining([
+            "shell sync",
+            "shell reboot -p",
+            "emu avd snapshot save simlock_boot",
+          ]),
+        );
+        expect(sent(powered).indexOf("shell reboot -p")).toBeLessThan(
+          sent(powered).lastIndexOf("emu avd snapshot save simlock_boot"),
+        );
+        expect(saveLaunch(powered).at(-1)).toEqual([savedHome, "-no-snapshot-load"]);
+
+        const clock = new FakeClock();
+        const stuck = await seedHarness(
+          [
+            ...leasing(true),
+            ...savingSteps,
+            processResult(
+              binaries.adb,
+              ["-s", serial, "emu", "avd", "path"],
+              `${copyHome}/simlock.avd\r\nOK\r\n`,
+            ),
+            processResult(binaries.adb, ["-s", serial, "emu", "kill"]),
+            ...sourceBoot(),
+          ],
+          { clock, config, ids },
+        );
+        const stuckReady = await stuck.driver.makeReady(await stuck.driver.provision(stuck.spec));
+        // why: the stuck emulator ignores `reboot -p` and `emu kill`; only the deadlines and a SIGKILL end it.
+        stuck.runner.ignoresEmuKill = true;
+        const stuckSaving = stuck.driver.saveSource({ ...stuckReady, physical: false as const });
+        await vi.waitFor(() =>
+          expect(stuck.runner.calls.filter((call) => call.args.includes("reboot"))).toHaveLength(2),
+        );
+        clock.advance(60_000);
+        await vi.waitFor(() =>
+          expect(stuck.runner.calls.filter((call) => call.args.includes("kill"))).toHaveLength(2),
+        );
+        stuck.runner.ignoresEmuKill = false;
+        let stuckDone = false;
+        void stuckSaving.then(
+          () => (stuckDone = true),
+          () => (stuckDone = true),
+        );
+        await vi.waitFor(() => {
+          clock.advance(60_000);
+          expect(stuckDone).toBe(true);
+        });
+        await expect(stuckSaving).resolves.toMatchObject({ sourceId: "baseline_four" });
+        await kept(stuck);
+        expect(sent(stuck).slice(sent(stuck).indexOf("shell reboot -p"))).toEqual(
+          expect.arrayContaining(["emu avd path", "emu kill"]),
+        );
+
+        const restarted = await seedHarness(leasing(true), { config, ids });
+        const restartedReady = await restarted.driver.makeReady(
+          await restarted.driver.provision(restarted.spec),
+        );
+        const clockAfter = new FakeClock();
+        const adopted = await reopened(
+          restarted,
+          [
+            ...savingSteps,
+            processResult(
+              binaries.adb,
+              ["devices"],
+              `List of devices attached\n${serial}\tdevice\n`,
+            ),
+            processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+            ...sourceBoot(),
+          ],
+          { clock: clockAfter },
+        );
+        const adoptedSaving = adopted.driver.saveSource({
+          ...restartedReady,
+          physical: false as const,
+        });
+        await vi.waitFor(() =>
+          expect(adopted.runner.calls.filter((call) => call.args[0] === "devices")).toHaveLength(1),
+        );
+        clockAfter.advance(1_000);
+        await expect(adoptedSaving).resolves.toMatchObject({ sourceId: "baseline_four" });
+        await kept({ ...restarted, driver: adopted.driver });
+      });
+    });
+
+    describe("saveSource failures", () => {
+      const savedHome = `${sources}/baseline_four`;
+      const serial = "emulator-5586";
+      const config =
+        "hw.device.name=pixel_5\nimage.sysdir.1=system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize=2048\n";
+      const version = processResult(
+        binaries.emulator,
+        ["-version"],
+        "Android emulator version 36.1.9",
+      );
+      const probe = (path = `${copyHome}/simlock.avd`) =>
+        processResult(binaries.adb, ["-s", serial, "emu", "avd", "path"], `${path}\r\nOK\r\n`);
+      const poweredOff = [
+        version,
+        probe(),
+        processResult(binaries.adb, ["-s", serial, "shell", "sync"]),
+        processResult(binaries.adb, ["-s", serial, "shell", "reboot", "-p"]),
+      ];
+      const stage = seedStages(savedHome);
+
+      it("deletes the source's folder and row and throws when the ownership check fails, the copy fails or the boot snapshot is not saved, leaving the device as it was", async () => {
+        const cases = [
+          {
+            expectations: [version, probe(`${avdDirectory}/other.avd`)],
+            message: "emulator-5586 is not its emulator",
+            sent: false,
+          },
+          {
+            copyFails: true,
+            expectations: poweredOff,
+            message: "copying Android device simlock_one to source baseline_four failed: no space",
+          },
+          {
+            expectations: [
+              ...poweredOff,
+              stage.devices,
+              ...stage.secondBoot,
+              { ...stage.save, result: { code: 1, stderr: "emulator gone", stdout: "" } },
+            ],
+            message: "Android seed baseline_four: boot snapshot simlock_boot was not saved",
+          },
+        ] as const;
+
+        for (const failing of cases) {
+          const filesystem = new ArmedCopyFailureFilesystem("no space");
+          const harness = await seedHarness(
+            [
+              ...makingTheSeed(),
+              processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+              ...bootingAt(copyHome, ["-snapshot", "simlock_boot"], true),
+              markWriteExpectation(serial, "three"),
+              ...failing.expectations,
+            ],
+            { config, filesystem, ids: ["one", "two", "three", "four"] },
+          );
+          const ready = await harness.driver.makeReady(
+            await harness.driver.provision(harness.spec),
+          );
+          filesystem.armed = "copyFails" in failing;
+          const before = harness.runner.calls.length;
+
+          await expect(
+            harness.driver.saveSource({ ...ready, physical: false as const }),
+          ).rejects.toThrow(failing.message);
+
+          const sentToDevice = harness.runner.calls
+            .slice(before)
+            .filter((call) => call.args.includes("sync") || call.args.includes("reboot"));
+          expect(sentToDevice.length > 0, failing.message).toBe(!("sent" in failing));
+          expect(await harness.filesystem.exists(savedHome), failing.message).toBe(false);
+          expect(await harness.filesystem.exists(copyHome), failing.message).toBe(true);
+          expect(
+            harness.database
+              .prepare("SELECT source_id FROM android_source_data WHERE kind = 'baseline'")
+              .all(),
+            failing.message,
+          ).toEqual([]);
+          const emulators = harness.runner.calls.flatMap((call, index) =>
+            call.args.includes("-avd") ? [index] : [],
+          );
+          // why: the first two launches make the seed and the third is the device's own, which a failure before `reboot -p` leaves running; what follows is the source's boot.
+          for (const emulator of emulators.slice(3)) {
+            let exited = false;
+            void harness.runner.handles[emulator]?.wait().then(() => {
+              exited = true;
+            });
+            await vi.waitFor(() => expect(exited, "the source's emulator was stopped").toBe(true));
+          }
+        }
+      });
     });
 
     it("removes a seed's folder and row and throws when making it fails at any step", async () => {
@@ -7169,6 +7432,23 @@ class CopyFailureFilesystem extends MemoryFilesystem {
 
   override copyTree(): Promise<void> {
     return Promise.reject(new Error(this.#message));
+  }
+}
+
+/** why: copies work until a test arms the failure, so a device can be provisioned from a seed first. */
+class ArmedCopyFailureFilesystem extends MemoryFilesystem {
+  armed = false;
+
+  constructor(private readonly message: string) {
+    super();
+  }
+
+  override copyTree(
+    from: string,
+    to: string,
+    options: { readonly timeoutMs: number },
+  ): Promise<void> {
+    return this.armed ? Promise.reject(new Error(this.message)) : super.copyTree(from, to, options);
   }
 }
 

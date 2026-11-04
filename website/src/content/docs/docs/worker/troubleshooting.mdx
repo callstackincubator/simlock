@@ -186,12 +186,12 @@ Then retry the request. [Runtimes and images](/simlock/docs/worker/runtimes-and-
 
 **Symptom.** `simlock doctor` reports `orphan-device` findings.
 
-**Cause.** A device sits inside Simlock's own device folder, but Simlock has no record of it. This happens when the daemon stopped between creating a device and recording it, or after you moved `state.db` away. Orphans use disk and are never leased. A seed simulator with no record is the same case: `simlock doctor` lists it in `sources` with `orphan: true`.
+**Cause.** A device sits inside Simlock's own device folder, but Simlock has no record of it. This happens when the daemon stopped between creating a device and recording it, or after you moved `state.db` away. Orphans use disk and are never leased. A seed simulator, or a baseline's copy no baseline names, is the same case: `simlock doctor` lists it in `sources` with `orphan: true`.
 
 **Fix.** Delete them:
 
 <Aside type="caution">
-`--purge-orphans` permanently deletes every orphaned device and orphan seed it finds, with everything installed on it. It only reaches into Simlock's own device folders, and it stops without deleting anything if it can no longer prove a folder is Simlock's.
+`--purge-orphans` permanently deletes every orphaned device and orphan source it finds, with everything installed on it. It only reaches into Simlock's own device folders, and it stops without deleting anything if it can no longer prove a folder is Simlock's.
 </Aside>
 
 ```sh

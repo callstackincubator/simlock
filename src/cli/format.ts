@@ -1,7 +1,13 @@
 // why: only command modules import this -- the router never does, so `--help` and a usage
 // error never load the human renderers.
 import { isNewerVersion } from "../contract/index.js";
-import type { StatusGetOutput, WorkerView } from "../admin/index.js";
+import type {
+  BaselineRemoveOutput,
+  BaselineSaveOutput,
+  StatusGetOutput,
+  WorkerView,
+} from "../admin/index.js";
+import type { BaselineEntry } from "../contract/index.js";
 import type { ServiceManagerName, ServiceState } from "../ports/index.js";
 import { escapeControl as esc } from "./escape.js";
 
@@ -347,4 +353,76 @@ function quarantineCauseText(cause: {
   if (cause.kind === "stalled") return `stalled while ${esc(cause.stalledState ?? "")}`;
   const text = cause.kind.replace("-", " ");
   return cause.message === undefined ? text : `${text}: ${esc(cause.message)}`;
+}
+
+/** why: sizes in the baseline lines are decimal, the way a disk is sold: GB from 10^9 bytes, MB below. */
+function baselineSize(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function baselineSpec(baseline: BaselineEntry): string {
+  const system = baseline.platform === "ios" ? "iOS" : "Android";
+  const tag = baseline.imageTag === undefined ? "" : ` (${baseline.imageTag})`;
+  const size = baseline.sizeBytes === undefined ? "" : `, ${baselineSize(baseline.sizeBytes)}`;
+  return `${baseline.platform} ${baseline.model}, ${system} ${baseline.osVersion}${tag}, ${baseline.mode}${size}`;
+}
+
+export function baselineSavedLine(saved: BaselineSaveOutput): string {
+  const { baseline } = saved;
+  return `Saved baseline ${baseline.name} v${String(baseline.version)}: ${baselineSpec(baseline)}. Lease ${saved.leaseId} ended.\n`;
+}
+
+const BASELINE_COLUMNS = [
+  "NAME",
+  "VERSION",
+  "PLATFORM",
+  "MODEL",
+  "OS",
+  "MODE",
+  "IMAGE",
+  "SIZE",
+  "SAVED",
+  "NOTE",
+] as const;
+
+/** why: the list an operator reads: one row per baseline, its stale reason on its own line under it. */
+export function baselineTable(baselines: readonly BaselineEntry[]): string {
+  if (baselines.length === 0) return "No baselines on this worker.\n";
+  const rows = baselines.map((baseline) => [
+    baseline.name,
+    String(baseline.version),
+    baseline.platform,
+    baseline.model,
+    baseline.osVersion,
+    baseline.mode,
+    baseline.imageTag ?? "-",
+    baseline.sizeBytes === undefined ? "-" : baselineSize(baseline.sizeBytes),
+    formatLocalMinute(Date.parse(baseline.savedAt)),
+    baseline.note ?? "",
+  ]);
+  const widths = BASELINE_COLUMNS.map((header, column) =>
+    Math.max(header.length, ...rows.map((row) => row[column]?.length ?? 0)),
+  );
+  const line = (cells: readonly string[]): string =>
+    cells
+      .map((cell, column) => cell.padEnd(widths[column] ?? 0))
+      .join("  ")
+      .trimEnd();
+  const lines = [line(BASELINE_COLUMNS)];
+  for (const [index, row] of rows.entries()) {
+    lines.push(line(row));
+    const reason = baselines[index]?.staleReason;
+    if (reason !== undefined) lines.push(`  stale: ${reason}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function baselineRemovedLine(removed: BaselineRemoveOutput): string {
+  const versions = removed.versions.map((version) => `v${String(version)}`).join(", ");
+  const count = removed.deletedDevices.length;
+  const devices =
+    count === 0
+      ? ""
+      : ` Deleted ${String(count)} idle ${count === 1 ? "device" : "devices"} made from it.`;
+  return `Removed baseline ${removed.name} ${versions}.${devices}\n`;
 }

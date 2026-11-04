@@ -39,10 +39,19 @@ export interface NukeDeviceLifecycle {
   ): Promise<VirtualDevice | undefined>;
 }
 
+export interface NukeReport {
+  readonly releasedLeaseIds: readonly string[];
+  readonly removedBaselines: readonly string[];
+}
+
 export interface NukeServiceOptions {
   readonly devices: NukeDeviceLifecycle;
   readonly acquisition: AcquisitionMaintenance;
   readonly leases: LeaseMaintenance;
+  /** why: nuke --delete-devices removes every baseline and answers their names. */
+  readonly baselines: {
+    removeAll(): Promise<{ readonly failure?: unknown; readonly names: readonly string[] }>;
+  };
   readonly registry: NukeRegistryView;
   /** why: nuke --delete-devices also deletes the seeds the drivers keep; it names no other source (ADR 0061 §1). */
   readonly drivers: readonly Pick<Driver, "platform" | "listSources" | "destroySource">[];
@@ -66,7 +75,7 @@ export class NukeService implements NukeExecutor {
     this.#logger = options.logger?.child("nuke") ?? new NoopLogger();
   }
 
-  async nuke(deleteDevices: boolean): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
+  async nuke(deleteDevices: boolean): Promise<NukeReport> {
     let release!: () => void;
     const previous = this.#tail;
     this.#tail = new Promise<void>((resolve) => {
@@ -80,9 +89,7 @@ export class NukeService implements NukeExecutor {
     }
   }
 
-  async #runNuke(
-    deleteDevices: boolean,
-  ): Promise<{ readonly releasedLeaseIds: readonly string[] }> {
+  async #runNuke(deleteDevices: boolean): Promise<NukeReport> {
     await this.options.acquisition.beginMaintenance();
     let releaseMaintenanceStarted = false;
     try {
@@ -110,8 +117,9 @@ export class NukeService implements NukeExecutor {
       }
 
       if (deleteDevices) await this.#destroySeeds();
+      const removedBaselines = deleteDevices ? await this.#removeBaselines() : [];
 
-      return { releasedLeaseIds };
+      return { releasedLeaseIds, removedBaselines };
     } finally {
       try {
         if (releaseMaintenanceStarted) await this.options.leases.endMaintenance();
@@ -119,6 +127,15 @@ export class NukeService implements NukeExecutor {
         await this.options.acquisition.endMaintenance();
       }
     }
+  }
+
+  /** why: a baseline source that will not delete must not fail the reset; its row is already gone, so every name is reported, and `doctor` lists the source that stayed. */
+  async #removeBaselines(): Promise<readonly string[]> {
+    const { failure, names } = await this.options.baselines.removeAll();
+    if (failure !== undefined) {
+      this.#logger.error("nuke could not remove every baseline", { error: stableError(failure) });
+    }
+    return names;
   }
 
   /** why: one unreadable or stuck seed must not stop the rest of the reset; the seed stays and `doctor` lists it. */

@@ -114,6 +114,7 @@ export default defineConfig({
             doc("worker/configuration", "Configuration"),
             doc("worker/capacity", "Capacity and warm pool"),
             doc("worker/runtimes-and-images", "Runtimes and system images"),
+            doc("worker/baselines", "Baselines"),
             doc("worker/cleanup", "Cleanup and disk"),
             doc("worker/enrolling-physical-devices", "Enrol physical devices"),
             doc("worker/console", "Web console"),

@@ -33,6 +33,7 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock nuke`](#simlock-nuke) | Emergency reset of every lease and device | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
 | [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind) |
 | [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Runtimes and images](/simlock/docs/worker/runtimes-and-images) |
+| [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Baselines](/simlock/docs/worker/baselines) |
 | [`simlock device`](#simlock-device) | Enrol or forget a physical device | [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices) |
 | [`simlock token`](#simlock-token) | Create, list and revoke access tokens | [Access control](/simlock/docs/gateway/access-control) |
 | [`simlock worker`](#simlock-worker) | List and manage a gateway's workers | [Managing workers](/simlock/docs/gateway/managing-workers) |
@@ -443,10 +444,10 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--fix` | Apply the safe corrections to the records. Needs the admin role. Never installs a prerequisite. | Off: report only |
-| `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record. Needs the admin role. Asks for confirmation. | Off |
+| `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record, or a saved baseline's copy that no baseline names. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
 
-The report also lists the worker's seeds in `sources`: for each, `platform`, `kind` (`seed`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when the seed no longer matches the catalog. A seed is the simulator Simlock clones to make each iOS simulator a lease gets; it takes disk but is never leased. A seed simulator with no record shows with `orphan: true`; it is not a finding, and only `--purge-orphans` deletes it.
+The report also lists the worker's sources in `sources`: for each, `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when the source no longer matches the catalog or runtime. A baseline source also has `baselineName` and `baselineVersion`. A seed is the simulator Simlock clones to make each iOS simulator a lease gets; it takes disk but is never leased. A seed with no record, or a baseline source no baseline names, shows with `orphan: true`; it is not a finding, and only `--purge-orphans` deletes it.
 
 On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
@@ -505,7 +506,7 @@ simlock 0.4.0 is running
 Emergency reset: release every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
 
 <Aside type="danger">
-`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, and every seed. A seed with no record (an orphan source) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
+`nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
 </Aside>
 
 ```text
@@ -514,7 +515,7 @@ simlock nuke [--delete-devices] [--yes]
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--delete-devices` | Also delete every device and seed Simlock manages. | Off |
+| `--delete-devices` | Also delete every device, seed and baseline Simlock manages. | Off |
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 A gateway refuses `nuke` with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
@@ -587,6 +588,68 @@ Remove a runtime or system image that Simlock installed. Needs the admin role.
 | `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
 
 Simlock refuses to remove a component it did not install (`COMPONENT_NOT_OWNED`) or one a device still uses (`COMPONENT_IN_USE`). A gateway refuses `component list` and `component remove` with `UNSUPPORTED_IN_GATEWAY_MODE`.
+
+## simlock baseline
+
+Save a prepared simulator or emulator as a named baseline, list the baselines on this worker, and remove one. See [Baselines](/simlock/docs/worker/baselines).
+
+```text
+simlock baseline save <name> --lease <id> [--note <text>]
+simlock baseline list [--json]
+simlock baseline remove <name> [--yes]
+```
+
+### simlock baseline save
+
+Shut the leased simulator or emulator down cleanly, keep a copy of it under the name, end the lease and delete the device. Saving under a name that exists makes the next version and drops the older one. Needs the admin role.
+
+| Argument or flag | Meaning | Default |
+| --- | --- | --- |
+| `<name>` | The baseline's name: 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, starting with a letter or digit. Required. | — |
+| `--lease <id>` | The lease to save. Required; a missing flag is a usage error (exit 2). | — |
+| `--note <text>` | A note of up to 200 characters, on one line. | — |
+
+```text
+$ simlock baseline save checkout --lease L1 --note "app 4.2, test user"
+Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease L1 ended.
+```
+
+The size is the copy's bytes on disk, in GB (10^9 bytes) with one decimal, or MB below 1 GB; it is left out when it could not be counted. A lease on a physical device is refused with `BAD_REQUEST`, an unknown lease with `UNKNOWN_LEASE`. When the copy cannot be made the lease has still ended and the answer is `BASELINE_SAVE_FAILED`. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
+
+### simlock baseline list
+
+List the newest version of each baseline, by name. Works for any caller.
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--json` | Print `{ "baselines": [...] }` as one JSON line. | Off |
+
+```text
+$ simlock baseline list
+NAME      VERSION  PLATFORM  MODEL      OS    MODE  IMAGE        SIZE    SAVED             NOTE
+checkout  2        android   Pixel 9    36    full  google_apis  4.9 GB  2026-11-02 13:40
+login     1        ios       iPhone 17  27.0  slim  -            3.1 GB  2026-11-01 09:12  signed in
+  stale: runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed
+```
+
+A baseline is stale when the runtime, system image or emulator it was made with changed after the save; the reason is on its own line under the row. The size is `-` when it could not be counted, and the saved time is the worker's local time. With none it prints `No baselines on this worker.`
+
+### simlock baseline remove
+
+Delete every version of a baseline and the idle devices made from it. Needs the admin role.
+
+| Argument or flag | Meaning | Default |
+| --- | --- | --- |
+| `<name>` | The baseline to remove. Required. | — |
+| `--yes` | Skip the confirmation. Required when there is no terminal to ask in. | Off |
+
+```text
+$ simlock baseline remove login
+Remove baseline login v1? [y/N] y
+Removed baseline login v1.
+```
+
+When idle devices were made from it, the line ends with ` Deleted 2 idle devices made from it.` An unknown name is `UNKNOWN_BASELINE`; a baseline a lease uses is refused with `BASELINE_IN_USE` and nothing is deleted. A gateway refuses it with `UNSUPPORTED_IN_GATEWAY_MODE` (exit 2).
 
 ## simlock device
 

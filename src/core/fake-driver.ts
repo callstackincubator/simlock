@@ -64,7 +64,8 @@ export type FakeDriverOperation =
   | "findLegacy"
   | "destroyLegacy"
   | "listSources"
-  | "destroySource";
+  | "destroySource"
+  | "saveSource";
 
 export type DriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -161,6 +162,10 @@ export class FakeDriver implements Driver {
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
   #sources: readonly DriverSource[] = [];
+  readonly #deviceFiles = new Map<string, Map<string, string>>();
+  readonly #deviceSpecs = new Map<string, VirtualSpec>();
+  readonly #sourceFiles = new Map<string, ReadonlyMap<string, string>>();
+  #nextSourceNumber = 1;
   readonly #knownModels: Set<string> | undefined;
   readonly #modelRuntimes: FakeDriverOptions["modelRuntimes"];
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
@@ -410,12 +415,51 @@ export class FakeDriver implements Driver {
     this.#sources = this.#sources.filter((source) => source.id !== sourceId);
   }
 
+  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes: number }> {
+    await this.#beforeCall("saveSource", device);
+    this.#requireDevice(device);
+    const spec = this.#deviceSpecs.get(device.deviceId);
+    if (spec === undefined) throw new Error(`No spec recorded for ${device.deviceId}`);
+    this.#devices.set(device.deviceId, "shutdown");
+    this.#managedReality = removeManagedProcess(this.#managedReality, device.deviceId);
+    const files = new Map(this.#deviceFiles.get(device.deviceId));
+    const sizeBytes = [...files.values()].reduce((total, content) => total + content.length, 0);
+    const sourceId = `fake-source-${String(this.#nextSourceNumber)}`;
+    this.#nextSourceNumber += 1;
+    this.#sourceFiles.set(sourceId, files);
+    this.#sources = [
+      ...this.#sources,
+      {
+        id: sourceId,
+        kind: "baseline",
+        model: spec.model,
+        osVersion: spec.osVersion,
+        ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+        sizeBytes,
+      },
+    ];
+    return { sourceId, sizeBytes };
+  }
+
+  /** why: a test hook that puts a file on a device, so a saved source can be shown to carry it. */
+  writeDeviceFile(deviceId: string, path: string, content: string): void {
+    const files = this.#deviceFiles.get(deviceId) ?? new Map<string, string>();
+    files.set(path, content);
+    this.#deviceFiles.set(deviceId, files);
+  }
+
+  /** why: what a saved source holds, for a test to compare with what the device held. */
+  sourceFiles(sourceId: string): ReadonlyMap<string, string> | undefined {
+    return this.#sourceFiles.get(sourceId);
+  }
+
   async provision(spec: VirtualSpec): Promise<DriverDevice> {
     await this.#beforeCall("provision", spec);
     this.#assertMatchingPlatform(spec.platform);
 
     const deviceId = `fake-${this.platform}-${this.#nextDeviceNumber}`;
     this.#nextDeviceNumber += 1;
+    this.#deviceSpecs.set(deviceId, spec);
     this.#devices.set(deviceId, "provisioned");
 
     return {
@@ -493,6 +537,7 @@ export class FakeDriver implements Driver {
     await this.#beforeCall("destroy", device);
     this.#requireDevice(device);
     this.#devices.delete(device.deviceId);
+    this.#deviceFiles.delete(device.deviceId);
     this.#managedReality = removeManagedDevice(this.#managedReality, device.deviceId);
   }
 

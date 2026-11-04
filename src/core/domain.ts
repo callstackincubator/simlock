@@ -250,6 +250,8 @@ export interface VirtualDevice extends DeviceRecordFields {
   readonly mode: DeviceMode;
   /** why: a record written before this field existed loads as `reusable`. */
   readonly leaseIdentity?: LeaseIdentity;
+  /** why: the baseline version this device was copied from; #1207 writes it, a baseline remove reads it to find the devices made from it. */
+  readonly baseline?: { readonly name: string; readonly version: number };
 }
 
 /** why: `mode` and `leaseIdentity` are declared `undefined` so code that reads them compiles for both types. */

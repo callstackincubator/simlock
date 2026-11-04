@@ -16,7 +16,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                                                                                                                                                                                 |
 | `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                                                                                                                                                                       |
 | `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                                                                                                                                                                         |
-| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                                                                                                                                                                  |
+| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas, `CORE_ROUTE_SEGMENTS` (the first segment of each core HTTP route: `baselines`, `components`, …)                                                                                                 |
 | `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                                                                                                                                                                    |
 | `inbox.ts`         | The Inbox rules: `inboxItems` (what needs the operator, with each item's group, key and subject), `problemCount`, and the helpers they call (`holderOf`, `workerOfLease`, `isExpiring`, ...); no runtime import, so the console imports it by this path |
 | `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                                                                                            |
@@ -59,7 +59,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 70, max: 70 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 71, max: 71 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the

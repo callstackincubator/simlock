@@ -21,7 +21,8 @@ export type FakeDriverOperation =
   | "revalidateRoot"
   | "inspectPhysical"
   | "listPresentPhysical"
-  | "uninstall";
+  | "uninstall"
+  | "saveSource";
 
 export type FakeDriverEstimateOperation = "provision" | "boot" | "reclaim";
 
