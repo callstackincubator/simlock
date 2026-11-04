@@ -494,7 +494,7 @@ export class BaselineService {
       .get(request.name);
     const version = Number(next?.version);
     const savedAt = new Date(this.options.clock.now()).toISOString();
-    const { imageTag } = device.spec;
+    const imageTag = saved.imageTag ?? device.spec.imageTag;
     database
       .prepare(
         `INSERT INTO baselines

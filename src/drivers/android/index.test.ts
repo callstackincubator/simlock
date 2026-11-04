@@ -6506,7 +6506,11 @@ describe("AndroidDriver image fit", () => {
           ...poweredReady,
           physical: false as const,
         });
-        expect(poweredSaved).toEqual({ sizeBytes: 121, sourceId: "baseline_four" });
+        expect(poweredSaved).toEqual({
+          imageTag: "google_apis",
+          sizeBytes: 121,
+          sourceId: "baseline_four",
+        });
         await kept(powered);
         expect(sent(powered)).toEqual(
           expect.arrayContaining([

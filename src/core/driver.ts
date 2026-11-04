@@ -287,7 +287,9 @@ export interface Driver {
    * device down cleanly itself, makes the copy in its own sources area and sets the row `ready`.
    * `sizeBytes` is absent when it could not be counted.
    */
-  saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }>;
+  saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number; imageTag?: string }>;
   /**
    * why: Boots the device and returns it with a freshly read `address`. Never trust the address a
    * caller passed in or one captured at `provision` -- an Android console port is assigned per

@@ -1268,7 +1268,9 @@ export class AndroidDriver implements Driver {
    * sources area and booted once cold to save the boot snapshot every copy starts from. The row is
    * written `making` before any folder exists, so a crash leaves a row that names the folder to clean.
    */
-  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes?: number }> {
+  async saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number; imageTag?: string }> {
     const data = this.#dataFor(device);
     return this.#withDeviceLock(this.#avdFolder(data), async () => {
       const state = this.#stateFor(data);
@@ -1313,7 +1315,11 @@ export class AndroidDriver implements Driver {
         );
         const sizeBytes = await this.#filesystem.directorySize(avdFolder).catch(() => undefined);
         this.#sources.markReady(sourceId, configHash, sizeBytes);
-        return { sourceId, ...(sizeBytes === undefined ? {} : { sizeBytes }) };
+        return {
+          imageTag: kind.imageTag,
+          sourceId,
+          ...(sizeBytes === undefined ? {} : { sizeBytes }),
+        };
       } catch (error: unknown) {
         await this.#filesystem.rm(folder);
         this.#sources.remove(sourceId);

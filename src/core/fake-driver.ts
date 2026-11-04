@@ -85,6 +85,8 @@ export interface FakeDriverCall {
 
 export interface FakeDriverOptions {
   readonly availableOsVersions?: readonly string[];
+  /** why: the image tag a device made for a request naming none really carries, which a saved source reports. */
+  readonly defaultImageTag?: string;
   readonly clock: Clock;
   readonly componentFootprint?: { readonly path: string; readonly bytes: number };
   readonly installProgress?: readonly number[];
@@ -171,6 +173,7 @@ export class FakeDriver implements Driver {
   readonly #modelAliases: FakeDriverOptions["modelAliases"];
   readonly #modelClasses: FakeDriverOptions["modelClasses"];
   readonly #images: FakeDriverOptions["images"];
+  readonly #defaultImageTag: string | undefined;
   readonly #customModels: FakeDriverOptions["customModels"];
   readonly #latencyMs: FakeDriverOptions["latencyMs"];
   readonly #leaseEnvironment: Readonly<Record<string, string>>;
@@ -209,6 +212,7 @@ export class FakeDriver implements Driver {
     this.#modelClasses = options.modelClasses;
     this.#defaultModels = options.defaultModels;
     this.#images = options.images;
+    this.#defaultImageTag = options.defaultImageTag;
     this.#customModels = options.customModels;
     this.#latencyMs = options.latencyMs;
     this.#leaseEnvironment = options.leaseEnvironment ?? {};
@@ -416,7 +420,9 @@ export class FakeDriver implements Driver {
     this.#sourceFiles.delete(sourceId);
   }
 
-  async saveSource(device: VirtualDriverDevice): Promise<{ sourceId: string; sizeBytes: number }> {
+  async saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes: number; imageTag?: string }> {
     await this.#beforeCall("saveSource", device);
     this.#requireDevice(device);
     const spec = this.#deviceSpecs.get(device.deviceId);
@@ -425,6 +431,7 @@ export class FakeDriver implements Driver {
     this.#managedReality = removeManagedProcess(this.#managedReality, device.deviceId);
     const files = new Map(this.#deviceFiles.get(device.deviceId));
     const sizeBytes = [...files.values()].reduce((total, content) => total + content.length, 0);
+    const imageTag = spec.imageTag ?? this.#defaultImageTag;
     const sourceId = `fake-source-${String(this.#nextSourceNumber)}`;
     this.#nextSourceNumber += 1;
     this.#sourceFiles.set(sourceId, files);
@@ -435,11 +442,11 @@ export class FakeDriver implements Driver {
         kind: "baseline",
         model: spec.model,
         osVersion: spec.osVersion,
-        ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+        ...(imageTag === undefined ? {} : { imageTag }),
         sizeBytes,
       },
     ];
-    return { sourceId, sizeBytes };
+    return { sourceId, sizeBytes, ...(imageTag === undefined ? {} : { imageTag }) };
   }
 
   /** why: a test hook that puts a file on a device, so a saved source can be shown to carry it. */
