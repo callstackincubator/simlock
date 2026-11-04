@@ -77,6 +77,7 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -308,6 +309,7 @@ export class IosSimctlDriver implements Driver {
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
+  readonly #silent: boolean;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
@@ -343,6 +345,7 @@ export class IosSimctlDriver implements Driver {
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
+    this.#silent = options.simulatorAudio === false;
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet =
@@ -1139,6 +1142,9 @@ export class IosSimctlDriver implements Driver {
       plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
+    if (this.#silent) {
+      await this.#silence(data.udid);
+    }
 
     if (plan.kind === "skip") {
       this.#onSlimSkipped?.({
@@ -1156,6 +1162,15 @@ export class IosSimctlDriver implements Driver {
     }
 
     return this.#readBack(device, data, write);
+  }
+
+  async #silence(udid: string): Promise<void> {
+    for (const flag of ["-s", "-p"]) {
+      await this.#invokeSimctl(
+        ["spawn", udid, "notifyutil", flag, VOLUME_STATE_KEY, ...(flag === "-s" ? ["0"] : [])],
+        COMMAND_TIMEOUT_MS,
+      );
+    }
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
