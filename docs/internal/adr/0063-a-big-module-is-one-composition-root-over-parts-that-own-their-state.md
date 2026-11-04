@@ -26,8 +26,9 @@ sense.
 
 The folder already has parts built this way: `AdbRegistrar`,
 `AdbServerSupervisor`, `AndroidPhysicalHandler`, `DeviceProfileRegistry`.
-Each takes an options object, owns its own state, and has its own test
-file.
+Each takes its collaborators in its constructor (an options object, or
+for `DeviceProfileRegistry` its list of sources), owns its own state,
+and has its own test file.
 
 Fallow 3.36.0, which this repo runs, has no file-length limit. Its
 `health.maxUnitSize` caps one function, and `--max-file-size` only skips
@@ -102,52 +103,60 @@ for the other six code files (iOS driver, `daemon/main.ts`,
 coordinator, `contract/schemas.ts`), which later features design one by
 one.
 
+The parts are built in this order, and a part imports only parts before
+it. Types two parts share (`DeviceState`, `SystemImage`) live in the
+existing `data.ts`, beside `AndroidDriverData`.
+
 ```mermaid
 flowchart TD
   R["index.ts: AndroidDriver root"] --> SD[seeds.ts]
   R --> DT[device-table.ts]
-  R --> SI[system-images.ts]
-  R --> PR[passthrough-rules.ts]
   R --> CA[catalog.ts]
-  CA --> SI
+  SD --> DT
   SD --> CA
-  SD --> EM[emulator.ts]
-  SD --> AC[avd-config.ts]
-  SD --> CP[console-ports.ts]
-  SD --> OW[ownership.ts]
-  EM --> OW
-  DT --> OW
-  OW --> T[adb-tools.ts]
-  EM --> T
-  DT --> T
-  DT --> AC
+  DT --> EM[emulator.ts]
+  CA --> SI[system-images.ts]
+  SI --> AC[avd-config.ts]
+  EM --> L["ownership.ts, console-ports.ts"]
+  L --> T["adb-tools.ts, data.ts"]
   AC --> T
 ```
 
+The drawing shows the main edges; seeds and device-table also reach the
+lower parts directly. `passthrough-rules.ts` hangs off the root and
+imports only `adb-tools.ts`.
+
 | Part | Owns | Does |
 | --- | --- | --- |
-| `index.ts` (root) | the built parts | `create`, every `Driver` verb, screen, input and tunnel wiring |
-| `catalog.ts` | the profile registry, the resolved-profile cache, the `avdmanager list device` answer | profiles, which model fits which image, `resolveSpec`'s choice, the catalog and default models |
-| `seeds.ts` | the sources table, the set of seeds being made | make a seed, copy it into a device, save and destroy sources |
-| `device-table.ts` | device states, per-device locks | list managed devices, reattach after a restart, register serials |
-| `system-images.ts` | none | installed images, component install and remove, licenses, API levels |
-| `passthrough-rules.ts` | none | pure: which adb commands are refused or filled in |
-| `emulator.ts` | none | start an emulator, wait until ready, shut down, read its log |
-| `avd-config.ts` | none | `config.ini`, the config hash, ownership marks |
+| `index.ts` (root) | the built parts, the config and ports | `create`; every `Driver` verb, delegating; the verbs whose bodies span parts (`makeReady`, `shutdown`, `destroy`, `reclaim`, `estimate`, `removeComponent`, `advisories`); screen, input and tunnel wiring |
+| `adb-tools.ts` | none | the scoped environment, running a command, a device's AVD folder and driver data, the `adb devices` scan, a bounded `adb shell` read, the emulator's version, the wait |
+| `ownership.ts` | none | every `emu avd path` query and the folder comparison |
 | `console-ports.ts` | port reservations, shared per process runner | hand out and free console ports |
-| `ownership.ts` | none | every `emu avd path` query, and whether its answer names a device's own folder |
-| `adb-tools.ts` | none | environment, running a command, a device's AVD folder and driver data |
+| `passthrough-rules.ts` | none | the adb passthrough: refusals, filling in the device, running it |
+| `avd-config.ts` | none | `config.ini`, the config hash, ownership marks |
+| `emulator.ts` | the adb registrar | start an emulator, wait until ready, shut down, read its log, stop one that is not Simlock's |
+| `system-images.ts` | none | installed images, component install, find and list, licenses, tool versions |
+| `catalog.ts` | the profile registry, the resolved-profile cache, the `avdmanager list device` answer | profiles, which API levels fit a profile, `resolveSpec`, `listCatalog` |
+| `device-table.ts` | device states, per-device locks | list managed devices, pre-root devices, reattach after a restart |
+| `seeds.ts` | the sources table, the set of seeds being made | `provision`, make a seed, copy it, save and destroy sources |
 
-Every `emu avd path` query goes through `ownership.ts`. It answers one of
-three things: the device's own folder, another folder (with the path it
-answered), or no answer. Each caller keeps today's handling of each answer:
-a stop sends nothing unless the answer is its own folder, and a delete
-after a restart refuses when an emulator gives no answer.
+Every `emu avd path` query goes through `ownership.ts`. It returns the
+query's raw result: failed, with its error text, or the path it
+answered, which may be blank. Each caller keeps today's handling of each
+result: a stop sends nothing unless the answer is its own folder, a
+delete after a restart refuses on a failure or a blank path, and the
+listing treats a blank path as another folder.
+
+A test moves to a part's test file only when everything it asserts is
+made by that part. A part whose code is only seen through verbs that
+span parts keeps its tests on the root, and gets no test file of its
+own just to have one.
 
 ## Consequences
 
-- Every file an agent opens fits one read. A change to boot reads
-  `emulator.ts` and its tests, not 12,000 lines.
+- Every file an agent opens fits one read. A change to how an emulator
+  starts reads `emulator.ts`, and a change to the boot order reads the
+  root's `makeReady`, not 12,000 lines.
 - The Android driver is rebuilt in about ten PRs, leaf parts first. Open
   PRs that touch `android/index.ts` resolve their conflicts by hand, since
   git does not follow code moved into a new file.
@@ -155,7 +164,8 @@ after a restart refuses when an emulator gives no answer.
   the same PR. One that grows a listed file raises its length in the list,
   in plain view. The files already over stay on the list until their
   feature lands.
-- Module manuals name the new files, and grow by one row each.
+- A module manual names its parts in one Files row, so it stays within
+  its 150 lines.
 
 ## Alternatives considered
 
