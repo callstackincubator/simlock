@@ -308,11 +308,12 @@ export class Emulator {
     return handle;
   }
 
-  bootEstimate(
+  // why: async so a device id that does not match its AVD rejects the promise `AndroidDriver.estimate` returns, as it did before this part existed; the lease coordinator's fallback reads a rejection and never a throw.
+  async bootEstimate(
     device: DriverDevice,
     purpose: "prepare" | "recover" | undefined,
     spec: DeviceSpec,
-  ): number {
+  ): Promise<number> {
     if (spec.physical || purpose === "recover") return COLD_BOOT_ESTIMATE_MS;
     return this.#options.adbTools.dataFor(device).avdHome === undefined
       ? COLD_BOOT_ESTIMATE_MS

@@ -6552,6 +6552,10 @@ describe("AndroidDriver image fit", () => {
           harness.driver.estimate({ ...prepare, device: oldLayout }, spec),
         ]),
       ).toEqual([4_000, 70_000, 70_000]);
+      await expect(
+        harness.driver.estimate({ ...prepare, device: { ...copy, deviceId: "other" } }, spec),
+        "a device id that does not match its AVD rejects the returned promise: a throw would skip the caller's fallback",
+      ).rejects.toThrow("does not match AVD");
 
       const staled = await reopened(harness, [
         processResult(binaries.emulator, ["-version"], "Android emulator version 36.2.0"),
