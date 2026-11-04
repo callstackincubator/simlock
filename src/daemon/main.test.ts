@@ -2701,7 +2701,12 @@ describe("deviceModeWiring", () => {
     (defaultMode) => {
       expect(
         deviceModeWiring({
-          ios: { defaultMode, defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+          ios: {
+            defaultMode,
+            defaultModels: {},
+            slim: { bootTimeoutMs: 1 },
+            simulator: { audio: true },
+          },
         }),
       ).toEqual({
         defaultModes: { ios: defaultMode },
