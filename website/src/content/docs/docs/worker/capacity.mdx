@@ -118,7 +118,7 @@ simlock daemon start
 
 A slim iOS simulator has background services turned off that most agent work does not need, such as widgets, Siri, Spotlight, iCloud, the App Store, mail, Photos and telemetry. It uses much less RAM.
 
-An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full`. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `other`).
+An agent asks for one with `simlock lease --mode slim`. A lease that names no mode gets `ios.defaultMode`, which is `full`. To turn off only some groups of services, list them in `ios.slim.categories` (`widgets`, `siri`, `search`, `icloud`, `store`, `pim`, `web`, `family`, `health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`, `mdm`, `other`).
 
 What to expect:
 
