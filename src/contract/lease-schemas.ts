@@ -28,6 +28,11 @@ export const requesterIdSchema = z
     `requesterId may be at most ${String(REQUESTER_ID_MAX)} characters`,
   );
 
+/**
+ * why: `ttlMs` is the width this lease was granted with, or last renewed with when a renew named
+ * one -- what a body-less `lease.renew` re-applies, which is why it travels with the record
+ * instead of the caller having to remember it (ADR 0004).
+ */
 export const leaseRecordSchema = z.object({
   id: z.string(),
   deviceId: z.string(),
@@ -142,6 +147,10 @@ const waitingRequestShape = z.object({
     .optional(),
 });
 
+/**
+ * why: the request's idempotency key and owner are never part of it: a key lets its holder
+ * replay the request, and neither is the operator's.
+ */
 export const waitingRequestSchema = Object.assign(
   waitingRequestShape
     .refine((request) => request.reason === undefined || request.stage === "queued", {
@@ -165,6 +174,11 @@ export const waitingRequestSchema = Object.assign(
   { shape: waitingRequestShape.shape },
 );
 
+/**
+ * why: the command `simlock simctl` / `simlock adb` runs is spawned as-is, so the shape is
+ * validated at the boundary like every other output: an argument list that is not entirely
+ * strings would otherwise stringify into whatever the tool made of it.
+ */
 export const passthroughCommandSchema = z.object({
   args: z.array(z.string()),
   command: z.string().min(1),

@@ -175,6 +175,13 @@ export const configSchema = z.object({
   ),
 });
 
+/**
+ * why: `TokenRole` is deliberately a different vocabulary from the session `Role` (agent/admin,
+ * `roles.ts`): a `token.create --role operator` mints a credential that resolves to the admin
+ * session role at `hello` (ADR 0003 §5), it is not itself that role. `worker` (ADR 0005 §8/§25)
+ * is a join token that resolves to no session role at all, only an uplink, so it is a third value
+ * rather than a reuse of `agent`.
+ */
 export const tokenRoleSchema = z.enum(["agent", "operator", "worker"]);
 
 export const tokenRecordSchema = z.object({

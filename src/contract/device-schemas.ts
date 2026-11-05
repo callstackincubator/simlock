@@ -76,6 +76,10 @@ function checkDeviceType(
 
 const IMAGE_TAG_MAX = 64;
 
+/**
+ * why: an image tag is bounded here, before a driver sees it, because it arrives over the wire
+ * and is stored with the request and on the device.
+ */
 export const imageTagSchema = z
   .string()
   .min(1)
@@ -230,6 +234,11 @@ export const deviceRecordSchema = z
   })
   .superRefine((device, context) => checkDeviceType(device, context, true));
 
+/**
+ * why: `driverDeviceId` is here only for a physical device: its canonical ID is how an operator
+ * names it to `device remove`, so every role may see it; a virtual device's driver address is
+ * not actionable for a caller that does not hold it, so it is dropped.
+ */
 export const statusDeviceSchema = z
   .object({
     id: z.string(),

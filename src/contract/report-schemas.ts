@@ -211,6 +211,7 @@ export const inboxItemSchema = z.union([
 
 const USAGE_MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** why: `usage.get`'s input is wire input, so both ends are bounded before anything is read (safety rule 10). */
 export const usageWindowSchema = z
   .object({
     from: z.number().int().min(0).max(MAX_DATE_MS),

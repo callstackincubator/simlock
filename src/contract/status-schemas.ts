@@ -41,6 +41,7 @@ export const statusCapacitySchema = z.object({
     .optional(),
 });
 
+/** why: a gateway parses the warm pool block off the wire from every worker, so it is bounded. */
 /** why: the most configured targets the config load accepts (the block itself takes `WARM_POOL_ENTRIES_MAX`), and the longest model or OS version the block names. */
 export const WARM_POOL_TARGETS_MAX = 256;
 export const WARM_POOL_NAME_MAX = 256;
@@ -132,6 +133,10 @@ const CATALOG_IMAGE_FIELD_MAX = 128;
 const CATALOG_IMAGES_MAX = 1024;
 const CATALOG_CUSTOM_MODELS_MAX = CATALOG_ALIASED_MODELS_MAX;
 
+/**
+ * why: the list bounds above, for a producer that merges lists the schema checked one by one: a
+ * gateway's union of valid worker catalogs must itself fit, or its own clients refuse it.
+ */
 export const CATALOG_LIST_LIMITS = {
   aliasedModels: CATALOG_ALIASED_MODELS_MAX,
   aliasesPerModel: CATALOG_ALIASES_PER_MODEL_MAX,
@@ -172,6 +177,11 @@ interface HostFactsShape {
   readonly tools: readonly unknown[];
 }
 
+/**
+ * why: brings host facts a daemon read from its own machine within `hostFactsSchema`'s bounds, so
+ * an odd value cannot fail the daemon's own `status.get` output check and take its liveness probe
+ * down (ADR 0008 §7). Lives beside the schema so the bounds are written once.
+ */
 export function fitHostFacts<Host extends HostFactsShape>(host: Host): Host {
   const fit = (value: string) => value.slice(0, MAX_HOST_STRING_LENGTH);
   const tool = hostFactsSchema.shape.tools.element;
@@ -217,6 +227,10 @@ const workerLoadSchema = z.object({
 
 export type StatusLoad = z.infer<typeof hostLoadSchema>;
 
+/**
+ * why: brings a reading within `hostLoadSchema`'s bounds, so an odd figure cannot fail the
+ * daemon's own `status.get` output check (ADR 0029 §4).
+ */
 export function fitHostLoad<Load extends StatusLoad>(load: Load | undefined): Load | undefined {
   if (load === undefined) return undefined;
   const { cpu, memory, disk, ...rest } = load;
@@ -264,6 +278,11 @@ export const platformCatalogSchema = z.object({
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
 });
 
+/**
+ * why: brings a catalog entry a daemon built from its own machine within `customModels`' bounds,
+ * so a custom profile name the platform's tools never checked cannot fail the whole `catalog.get`
+ * answer. Lives beside the schema so the bounds are written once.
+ */
 export function fitPlatformCatalog<
   Entry extends {
     readonly customModels?: readonly string[];
@@ -327,6 +346,10 @@ export const statusInstallsSchema = boundedInstalls(
   installInProgressSchema.extend({ workerId: z.string().optional() }),
 );
 
+/**
+ * why: the bound above, for a producer that merges lists the schema checked one by one: a
+ * gateway's fleet list must itself fit, or the schema cuts it wherever the merge left it.
+ */
 export const INSTALL_LIST_LIMIT = MAX_LISTED_INSTALLS;
 
 const CAPABILITY_REASON_MAX = 500;
@@ -358,6 +381,12 @@ export function capabilityReason(text: string): string {
   return cut === "" ? "unknown" : cut;
 }
 
+/**
+ * why: the optional fields are absent rather than zeroed on purpose -- "no capacity reported" and
+ * "no capacity free" are different facts, and a console that dims one must not read the other as
+ * a full machine. A `starting` worker's view has `health` and `host` only, never empty fields,
+ * which would read as "nothing is leased" about a registry nobody has checked yet.
+ */
 export const workerViewSchema = z.object({
   capabilities: capabilityListSchema.optional(),
   load: workerLoadSchema.optional(),
