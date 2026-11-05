@@ -114,7 +114,8 @@ describe.skipIf(process.platform !== "darwin")(
           driver: "real",
         }));
         const programs = await mkdtemp(join(tmpdir(), "simlock-ios-tunnel-"));
-        const workerOnly = createServer((socket) => socket.end("worker-only"));
+        // why: a server socket that never reads never sees the peer's FIN, stays open, and `close()` waits on it forever; `resume()` drains what the tunnel sends.
+        const workerOnly = createServer((socket) => socket.resume().end("worker-only"));
         let listener: ReturnType<typeof spawn> | undefined;
         try {
           const listenerBinary = await buildForSimulator(programs, "listen", LISTENER_SOURCE);
@@ -187,7 +188,7 @@ describe.skipIf(process.platform !== "darwin")(
           );
           expect(await readFrom(workerCaller)).toBe("");
           const page = createServer((socket) =>
-            socket.end(`HTTP/1.0 200 OK\r\n\r\n${FROM_CALLER}`),
+            socket.resume().end(`HTTP/1.0 200 OK\r\n\r\n${FROM_CALLER}`),
           );
           await new Promise<void>((resolve) => page.listen(reverseCaller, "127.0.0.1", resolve));
           try {
