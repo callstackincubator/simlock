@@ -371,6 +371,66 @@ describe("AndroidDriver", () => {
     ]);
   });
 
+  it("starts the seed's boots and the copy's boot without -crash-report-mode when the installed emulator's -help does not list it, keeping every other launch flag (#1297)", async () => {
+    const filesystem = await androidFilesystem();
+    const host = new EmulatorHost(filesystem);
+    const launches: (readonly string[])[] = [];
+    const hostRunner = host.runner();
+    // why: emulator 36.1.9's `-help` lists every flag Simlock passes except -crash-report-mode, and it exits at `unknown option: -crash-report-mode` (#1199).
+    const usage = [
+      "Android Emulator usage: emulator [options] [-qemu args]",
+      "  options:",
+      "    -avd <name>                  use a specific android virtual device",
+      "    -port <port>                 TCP port that will be used for the console",
+      "    -no-snapshot-save            do not auto-save to snapshot on exit: abandon changed state",
+      "    -no-snapshot-load            do not auto-start from snapshot: perform a full boot",
+      "    -snapshot <name>             name of snapshot within storage file for auto-start and auto-save",
+      "    -grpc <port>                 TCP ports used for the gRPC bridge",
+      "    -grpc-use-token              Use the emulator console token for gRPC authentication.",
+      "",
+    ].join("\n");
+    const runner: ProcessRunner = {
+      ...hostRunner,
+      run: (command, args, options) =>
+        command === binaries.emulator && args[0] === "-help"
+          ? Promise.resolve({ code: 0, stderr: "", stdout: usage })
+          : hostRunner.run(command, args, options),
+      spawn: (command, args, options) => {
+        launches.push(args);
+        return hostRunner.spawn(command, args, options);
+      },
+    };
+    const driver = await createDriver(filesystem, runner, {
+      ids: ["one"],
+      tcpProbe: new FakeTcpProbe([adbServerPort]),
+    });
+    const spec = {
+      physical: false,
+      model: "Pixel 5",
+      osVersion: "34",
+      platform: "android",
+    } as const;
+    await driver.resolveSpec(spec);
+
+    await driver.makeReady(await driver.provision(spec));
+
+    expect(
+      launches.map((args) => ({
+        boot: args.at(-1),
+        crashReportMode: args.includes("-crash-report-mode"),
+      })),
+    ).toEqual([
+      { boot: "-no-snapshot-load", crashReportMode: false },
+      { boot: "-no-snapshot-load", crashReportMode: false },
+      { boot: "simlock_boot", crashReportMode: false },
+    ]);
+    for (const args of launches) {
+      expect(args).toEqual(
+        expect.arrayContaining(["-port", "-no-snapshot-save", "-grpc", "-grpc-use-token"]),
+      );
+    }
+  });
+
   /**
    * why: The half of the daemon-stop fix that argv cannot show. `stdio: "ignore"` alone does not
    * release the event loop -- the ChildProcess handle does -- so without the `unref` a

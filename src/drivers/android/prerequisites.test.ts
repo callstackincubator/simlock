@@ -134,6 +134,18 @@ describe("androidPrerequisites", () => {
     expect(complete).toEqual([]);
   });
 
+  it("reports nothing missing for an emulator whose -help lists every launch flag but -crash-report-mode, which Simlock passes only to an emulator that accepts it (#1297)", async () => {
+    const missing = await check(
+      await sdkFilesystem(),
+      new ScriptedProcessRunner([
+        SDKMANAGER_RUNS,
+        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-crash-report-mode")),
+      ]),
+    ).check();
+
+    expect(missing).toEqual([]);
+  });
+
   it("stops reporting a package on the next check once it is installed", async () => {
     const filesystem = await sdkFilesystem(["emulator"]);
     const prerequisites = check(
