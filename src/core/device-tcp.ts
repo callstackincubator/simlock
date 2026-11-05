@@ -21,6 +21,15 @@ export function unsupportedTunnelMessage(platform: string, physical: boolean): s
   return `the lease is on ${noun}; tunnels need an Android emulator or phone, or an iOS simulator`;
 }
 
+// why: one wording for a lease whose device opens no emulator port, so the holder's refusal names the port and what the lease is on; only an Android emulator opens one.
+export function unsupportedEmulatorPortMessage(
+  _name: string,
+  _platform: string,
+  _physical: boolean,
+): string {
+  return "";
+}
+
 // why: one device port reversed to a loopback listener on the worker; every connection the device
 // opens to that port arrives on `onConnection`, until `close` removes the rule and the listener.
 export interface DeviceReverse {

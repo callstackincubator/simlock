@@ -1009,3 +1009,89 @@ describe("a worker's tunnel socket with an emulator tunnel", () => {
     expect(unnamed.deviceTcp.emulatorConnections).toHaveLength(0);
   });
 });
+
+describe("a worker's HELLO with an emulator tunnel", () => {
+  const emulator = { kind: "emulator", emulatorPort: "adb" };
+  const send = (...tunnels: unknown[]): Uint8Array => frame(0x01, 0, JSON.stringify({ tunnels }));
+
+  it("checks a holder's emulator entry and answers it: READY echoing it, counted toward 8, BAD_REQUEST for another name, TUNNEL_UNSUPPORTED off an emulator", async () => {
+    const forward = (devicePort: number) => ({ kind: "forward", devicePort });
+    const { worker } = await setup();
+    const first = await attach(worker);
+    first.receive(send(emulator, forward(9229), forward(9230)));
+    await vi.waitFor(() =>
+      expect(frames(first)).toEqual([
+        {
+          body: JSON.stringify({ tunnels: [emulator, forward(9229), forward(9230)] }),
+          conn: 0,
+          tag: 0x81,
+        },
+      ]),
+    );
+    const second = await attach(worker);
+    second.receive(send(...[9231, 9232, 9233, 9234, 9235].map(forward)));
+    await vi.waitFor(() => expect(frames(second).map((sent) => sent.tag)).toEqual([0x81]));
+    const third = await attach(worker);
+    third.receive(send(emulator));
+    await vi.waitFor(() =>
+      expect(frames(third)).toEqual([
+        {
+          body: JSON.stringify({
+            code: "TUNNEL_LIMIT",
+            message: "the lease already has 8 tunnels; at most 8",
+          }),
+          conn: 0,
+          tag: 0x82,
+        },
+      ]),
+    );
+
+    const badName = "HELLO emulator tunnels must name the port adb";
+    const refusals = [
+      {
+        code: "BAD_REQUEST",
+        message: badName,
+        tunnel: { kind: "emulator", emulatorPort: "console" },
+      },
+      { code: "BAD_REQUEST", message: badName, tunnel: { kind: "emulator" } },
+      { code: "BAD_REQUEST", message: badName, tunnel: { kind: "emulator", emulatorPort: 5555 } },
+      {
+        code: "TUNNEL_UNSUPPORTED",
+        message:
+          "emulator adb: the lease is on an Android phone; emulator ports need an Android emulator",
+        physical: true,
+        platform: "android",
+        tunnel: emulator,
+      },
+      {
+        code: "TUNNEL_UNSUPPORTED",
+        message:
+          "emulator adb: the lease is on an iOS simulator; emulator ports need an Android emulator",
+        platform: "ios",
+        tunnel: emulator,
+      },
+      {
+        code: "TUNNEL_UNSUPPORTED",
+        message: "emulator adb: the lease is on an iPhone; emulator ports need an Android emulator",
+        physical: true,
+        platform: "ios",
+        tunnel: emulator,
+      },
+    ];
+    for (const refused of refusals) {
+      const { worker: other } = await setup(refused.platform, refused.physical);
+      const socket = await attach(other);
+      socket.receive(send(refused.tunnel));
+      await vi.waitFor(() =>
+        expect(socket.closed).toEqual({ code: 4003, reason: refused.message }),
+      );
+      expect(frames(socket)).toEqual([
+        {
+          body: JSON.stringify({ code: refused.code, message: refused.message }),
+          conn: 0,
+          tag: 0x82,
+        },
+      ]);
+    }
+  });
+});
