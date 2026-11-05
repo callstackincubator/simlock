@@ -146,6 +146,7 @@ export async function createHarness(
     catalog,
     claims,
     clock,
+    // why: never refuses: what a removal does to provisioning is `DeviceProvisioner`'s own test.
     components: { claimProvision: () => () => undefined },
     decisions,
     lifecycle,

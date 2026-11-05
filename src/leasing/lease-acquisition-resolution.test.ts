@@ -19,7 +19,8 @@ import {
   installs,
 } from "./test-lease-acquisition.js";
 
-// why: drives the coordinator on its own, so a test can order installs, catalog reads and the queue in ways the leasing surface cannot force.
+// why: a test of the coordinator, a part of the decomposed leasing module (ADR 0063 §2), split
+// from its own test file.
 describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
   it("installs once for two lease requests for the same missing runtime, and grants both", async () => {
     const clock = new FakeClock(1_000);
@@ -92,6 +93,7 @@ describe("LeaseAcquisitionCoordinator: missing runtimes", () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({ availableOsVersions: [], clock, platform: "ios" });
     const broken = new DriverCrashError("simctl list failed");
+    // why: the first resolve finds the runtime missing; the check at the front of the queue breaks.
     driver.failOn("resolveSpec", 2, broken);
     driver.failOn("resolveSpec", 3, broken);
     const harness = await createHarness({ drivers: [driver] });
@@ -230,6 +232,7 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
     });
     await flush();
 
+    // why: the driver is still holding, so this is the replay, not a later report.
     expect(joined).toEqual([
       { component: "26.5", percent: 41, stage: "downloading", waiting: false },
     ]);
@@ -336,6 +339,8 @@ describe("LeaseAcquisitionCoordinator: download progress", () => {
       ownerId: "a",
       requesterId: "a",
     });
+    // why: no version: the fake names its word for newest, a different component that waits its
+    // turn and finds, at the front, that the first install made its runtime available.
     const newest = harness.coordinator.request(
       { model: "iPhone 16", platform: "ios" },
       {
