@@ -111,6 +111,10 @@ export class FakeDeviceTcp implements DeviceTcp {
     return peer.stream;
   }
 
+  supportsEmulatorPort(): boolean {
+    return true;
+  }
+
   async connectEmulatorPort(
     _device: unknown,
     name: string,
