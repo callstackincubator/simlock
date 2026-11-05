@@ -172,14 +172,17 @@ export class LearnedKinds {
   }
 
   /** why: the operator's undo of a mistaken lease: forgets every kind of the model, narrowed by what the caller names; answers what it forgot. */
-  forgetMatching(match: LearnedKindMatch): VirtualSpec[] {
+  forgetMatching(
+    match: LearnedKindMatch,
+    view: (spec: VirtualSpec) => VirtualSpec = (spec) => spec,
+  ): VirtualSpec[] {
     return this.#state.transaction(() => {
       const forgotten = this.#state.database
         .prepare(
-          "SELECT platform, model, os_version, mode, image_tag, baseline FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+          "SELECT platform, model, os_version, mode, image_tag, baseline FROM warm_kinds WHERE learned = 1 ORDER BY last_leased_at DESC, id DESC",
         )
         .all()
-        .map(specOf)
+        .map((row) => view(specOf(row)))
         .filter((spec) => matches(spec, match));
       for (const spec of forgotten) this.#delete(spec);
       return forgotten;

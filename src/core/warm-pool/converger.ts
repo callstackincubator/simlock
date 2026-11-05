@@ -201,7 +201,7 @@ export class WarmPool {
    * Answers the kinds forgotten.
    */
   forgetKinds(match: LearnedKindMatch): VirtualSpec[] {
-    const forgotten = this.#learned.forgetMatching(match);
+    const forgotten = this.#learned.forgetMatching(match, (spec) => this.#newestVersion(spec));
     for (const spec of forgotten) {
       if (!this.#resolved.some((configured) => sameSpec(configured.spec, spec)))
         this.#schedule.succeeded(spec);
@@ -260,21 +260,18 @@ export class WarmPool {
   }
 
   /** why: a learned baseline kind stores only the name, so each pass warms it as the baseline's newest version; a baseline no longer there leaves the stored spec for the catalog check to forget. */
-  #atCurrentVersion(kind: LearnedKind): LearnedKind {
-    const named = kind.spec.baseline;
+  #newestVersion(spec: VirtualSpec): VirtualSpec {
+    const named = spec.baseline;
     const current = named === undefined ? undefined : this.options.baselines.current(named.name);
-    if (named === undefined || current === undefined) return kind;
+    if (named === undefined || current === undefined) return spec;
     return {
-      ...kind,
-      spec: {
-        model: current.model,
-        osVersion: current.osVersion,
-        physical: false,
-        platform: current.platform,
-        ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
-        ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
-        baseline: { name: named.name, version: current.version },
-      },
+      model: current.model,
+      osVersion: current.osVersion,
+      physical: false,
+      platform: current.platform,
+      ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+      ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+      baseline: { name: named.name, version: current.version },
     };
   }
 
@@ -284,7 +281,7 @@ export class WarmPool {
     try {
       return this.#learned
         .kinds(this.options.clock.now())
-        .map((kind) => this.#atCurrentVersion(kind));
+        .map((kind) => ({ ...kind, spec: this.#newestVersion(kind.spec) }));
     } catch (error: unknown) {
       if (!this.#readLogged) {
         this.#logger.warn("the warm pool's record could not be read", {
