@@ -431,6 +431,40 @@ async function warningsPerTunnel(): Promise<void> {
   expect(await quiet.exit).toBe(0);
 }
 
+async function forwardResetWarnings(): Promise<void> {
+  const cli = command(ENV);
+  const exit = cli.run(["tunnel", "forward", "9229:19229", "--lease", "L1"]);
+  await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+  const peer = firstPeer(cli);
+  peer.receive(READY);
+  const reason = "nothing on the lease's simulator listens on port 9229";
+  const warnings = () =>
+    cli.err
+      .join("")
+      .split("\n")
+      .filter((text) => text !== "");
+  const resetByWorker = async (conn: number) => {
+    cli.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(cli).at(-1)?.conn).toBe(conn));
+    peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, conn, JSON.stringify({ reason })));
+    await settle();
+  };
+  await resetByWorker(2);
+  expect(warnings()).toEqual([`warning: forward 9229: ${reason}`]);
+  cli.clock.advance(9_999);
+  await resetByWorker(4);
+  expect(warnings()).toHaveLength(1);
+  cli.clock.advance(1);
+  await resetByWorker(6);
+  expect(warnings()).toEqual([
+    `warning: forward 9229: ${reason}`,
+    `warning: forward 9229: ${reason}`,
+  ]);
+  expect(peer.closedWith).toBeUndefined();
+  cli.signals.emit("SIGINT");
+  expect(await exit).toBe(0);
+}
+
 async function responseThroughTheTunnel() {
   const page = await started(["reverse", "5173:5174"]);
   page.peer.receive(open(1, 5173));
@@ -554,8 +588,9 @@ async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<v
 }
 
 describe("simlock tunnel carrying connections", () => {
-  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole, a connection whose both halves ended is closed and dropped, and one with a single half ended keeps relaying the other", async () => {
+  it("warns once per 10 s per tunnel when nothing listens, or the worker resets a forward connection with its reason, keeps the tunnel open, and a 1 MiB response arrives whole, a connection whose both halves ended is closed and dropped, and one with a single half ended keeps relaying the other", async () => {
     await warningsPerTunnel();
+    await forwardResetWarnings();
     const { local, page } = await responseThroughTheTunnel();
     await writesToTheCaller(page, local);
     await brokenWrite(page);
