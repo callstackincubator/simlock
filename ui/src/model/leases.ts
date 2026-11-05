@@ -192,6 +192,7 @@ export interface LeaseInspection {
     readonly mode?: string;
     readonly imageTag?: string;
     readonly kind?: string;
+    readonly baseline?: string;
     readonly deviceId: string;
     readonly udid: string;
   };

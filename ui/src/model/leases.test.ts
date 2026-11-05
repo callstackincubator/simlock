@@ -250,6 +250,18 @@ describe("a lease's inspection", () => {
     expect(shown.percent).toBeCloseTo(50);
   });
 
+  it("names the baseline the lease was made from, and none when it was not", () => {
+    const [plain] = host().devices ?? [];
+    const based = host({
+      devices: [
+        { ...plain, spec: { ...plain?.spec, baseline: { name: "e2e-login", version: 1 } } },
+      ],
+    } as unknown as Partial<WorkerView>);
+
+    expect(inspect({ workers: [based] }).device.baseline).toBe("e2e-login v1");
+    expect(inspect().device.baseline).toBeUndefined();
+  });
+
   it("shows the grant time as a local HH:MM", () => {
     const at = new Date(2026, 9, 2, 7, 5, 59).getTime();
 
