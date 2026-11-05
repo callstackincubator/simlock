@@ -3,7 +3,7 @@
 Does: an Android emulator's or a leased physical phone's screen as core's screen frames, through the vendored scrcpy
 server and our own client.
 Entry: `index.ts` → `createAndroidScreenCapture(options)`, built by `AndroidDriver` as its `screenCapture` when `create`
-gets `scrcpyServerPath` and `tcpStreamConnector` (`daemon/main.ts` passes the jar `pnpm build` copies to dist/vendor/scrcpy).
+gets `scrcpyServerPath` and `tcpStreamConnector` (`daemon/driver-discovery.ts` passes the jar `pnpm build` copies to dist/vendor/scrcpy).
 Uses: core (`ScreenCapture`, frame encoder), ports (`Clock`, `Filesystem`), the device's `ScreenTarget` (below).
 Parent: [Android driver](../AGENTS.md). Consumer: [stream](../../../stream/AGENTS.md).
 
