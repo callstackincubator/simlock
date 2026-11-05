@@ -731,6 +731,12 @@ export interface ScriptedProcessExpectation {
    * sends the second signal would be dead and nothing would notice.
    */
   readonly ignoresSigterm?: boolean;
+  /**
+   * why: `hangs` ends only on a signal, so it cannot model a child that succeeds late, the case
+   * on the far side of every deadline. The child keeps running until this settles, then finishes
+   * with `result`.
+   */
+  readonly finishesOn?: Promise<void>;
   readonly onSpawn?: (args: readonly string[]) => void | Promise<void>;
 }
 
@@ -906,8 +912,13 @@ class ScriptedProcessHandle implements ProcessHandle {
       this.#writeChunks(expectation.chunks, lineEnd);
     }
 
-    if (!expectation.hangs) {
+    const finish = (): void => {
       this.#finish(expectation.result ?? defaultResult(expectation));
+    };
+    if (expectation.finishesOn !== undefined) {
+      void expectation.finishesOn.then(finish);
+    } else if (!expectation.hangs) {
+      finish();
     }
   }
 
