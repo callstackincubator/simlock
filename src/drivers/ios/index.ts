@@ -2616,7 +2616,7 @@ function alreadyShutdown(stderr: string): boolean {
 }
 
 function unknownDevice(result: ProcessResult): boolean {
-  return result.code === 148 && /^Invalid device:/m.test(result.stderr);
+  return /^Invalid device:/m.test(result.stderr);
 }
 
 function alreadyBooted(stderr: string): boolean {
