@@ -1,6 +1,6 @@
 # 0062. The warm pool learns a baseline after repeated leases, and follows its newest version
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-04
 - **Issue:** #1257 (request #1255)
 - **Narrows:** [ADR 0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md)
