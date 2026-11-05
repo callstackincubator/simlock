@@ -1,7 +1,7 @@
 import { asDaemonRefusal, UsageError } from "../errors.js";
 import { connectDaemonClient } from "../connect.js";
 import { escapeControl, escapeControlLines } from "../escape.js";
-import { stopRunningDaemon, waitForDaemonGone } from "../daemon-service.js";
+import { stopRunningDaemon } from "../daemon-service.js";
 import { commandArgs, isHelp, subcommand, writeResult } from "../args.js";
 import { consoleLines, formatStatus, serviceLine, type ServiceReport } from "../format.js";
 import type { StatusGetOutput } from "../../admin/index.js";
@@ -192,16 +192,10 @@ async function run(argv: readonly string[], context: CommandContext): Promise<nu
     return 0;
   }
   if (command === "stop") {
-    const client = await connectDaemonClient(environment, token, { launch: false });
-    try {
-      await client.stopDaemon();
-    } finally {
-      await client.close();
-    }
-    await waitForDaemonGone(environment);
-    if (values.json)
-      writeResult((value) => environment.stdout.write(value), { status: "stopping" });
-    else environment.stdout.write("Daemon stopping\n");
+    const stopped = await stopRunningDaemon(environment, token);
+    const status = stopped ? "stopping" : "not-running";
+    if (values.json) writeResult((value) => environment.stdout.write(value), { status });
+    else environment.stdout.write(stopped ? "Daemon stopping\n" : "Daemon not running\n");
     return 0;
   }
   if (command === "status") return daemonStatus(context, values.json === true);
