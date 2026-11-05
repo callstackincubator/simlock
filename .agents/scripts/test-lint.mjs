@@ -237,10 +237,18 @@ function movedContractDeclarations(base, head) {
   return moved;
 }
 
-// why: every contract file the diff touches, deleted ones too, since a split may empty a file.
+// why: every contract file the diff touches, deleted ones too, since a split may empty a file;
+// `--no-renames`, so a source file git pairs with its biggest part still lists its removed side.
 function changedContractFiles(from, head) {
   const range = head === undefined ? [from] : [from, head];
-  const names = gitText(["diff", "--name-only", ...range, "--", "src/contract/"]).split("\n");
+  const names = gitText([
+    "diff",
+    "--name-only",
+    "--no-renames",
+    ...range,
+    "--",
+    "src/contract/",
+  ]).split("\n");
   if (head === undefined) {
     names.push(
       ...gitText(["ls-files", "--others", "--exclude-standard", "src/contract/"]).split("\n"),

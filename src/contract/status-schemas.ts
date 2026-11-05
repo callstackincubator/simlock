@@ -384,7 +384,7 @@ export function capabilityReason(text: string): string {
 /**
  * why: the optional fields are absent rather than zeroed on purpose -- "no capacity reported" and
  * "no capacity free" are different facts, and a console that dims one must not read the other as
- * a full machine. A `starting` worker's view has `health` and `host` only, never empty fields,
+ * a full machine. A `starting` worker's view has `health`, `host` and `load` only, never empty fields,
  * which would read as "nothing is leased" about a registry nobody has checked yet.
  */
 export const workerViewSchema = z.object({

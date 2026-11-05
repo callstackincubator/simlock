@@ -235,6 +235,25 @@ describe("test-lint.mjs", () => {
     });
   });
 
+  it("always-in-scope 8: passes declarations moved out of a source file the split deletes, which git would pair as a rename", () => {
+    const declaration = (name: string) =>
+      `export const ${name} = z.object({ name: z.string(), tags: z.array(z.string()) });`;
+    const dir = repo(
+      { "src/contract/schemas.ts": file(declaration("a"), declaration("b"), declaration("c")) },
+      { "src/contract/a-schemas.ts": file(declaration("a"), declaration("b")) },
+    );
+    execFileSync("git", ["rm", "-q", "src/contract/schemas.ts"], { cwd: dir });
+    execFileSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--no-edit"],
+      {
+        cwd: dir,
+      },
+    );
+
+    expect(lint(dir)).toEqual({ status: 0, lines: [] });
+  });
+
   it.each([
     {
       case: "a moved schema that loses a bound on a later line of its chain",
