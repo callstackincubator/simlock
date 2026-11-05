@@ -30,6 +30,7 @@ const CALLER_CONNECT_TIMEOUT_MS = 5_000;
 const CLOSE_NORMAL = 1000;
 const WARN_EVERY_MS = 10_000;
 const ADB_CONNECT_TIMEOUT_MS = 10_000;
+const ADB_DISCONNECT_TIMEOUT_MS = 2_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
 const MAX_LEASE_CHARS = 256;
@@ -412,45 +413,73 @@ function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFa
   );
 }
 
-// why: the caller's own adb is the one that lists the remote emulator, so the command runs it and not Simlock's; its output is read as text, the lines of a fresh server's startup (`* daemon ...`) dropped, and an adb that does not answer is killed after 10 s so it cannot hold the tunnel's output.
-async function connectCallerAdb(environment: CliEnvironment, callerPort: number): Promise<void> {
-  const target = `127.0.0.1:${String(callerPort)}`;
+// why: the caller's own adb is the one that lists the remote emulator, so the command runs it and not Simlock's. Its output is read as text, the lines of a fresh server's startup (`* daemon ...`) dropped; a connect that does not answer is killed after 10 s so it cannot hold the tunnel's output, and one still running when the command leaves is killed without a warning.
+function callerAdb(environment: CliEnvironment) {
+  let used: string | undefined;
+  let target = "";
+  let running: ProcessHandle | undefined;
+  let leaving = false;
   const warn = (what: string): void => {
     environment.stderr.write(`warning: emulator adb: ${what}; run: adb connect ${target}\n`);
   };
-  const runner = environment.processRunner;
-  for (const adb of environment.adbCandidates ?? ["adb"]) {
-    let handle: ProcessHandle;
-    try {
-      if (runner === undefined) break;
-      handle = runner.spawn(adb, ["connect", target]);
-    } catch (error) {
-      if (error instanceof ProcessSpawnError) continue;
-      throw error;
+  const start = (args: readonly string[]): ProcessHandle | undefined => {
+    const runner = environment.processRunner;
+    for (const adb of used === undefined ? (environment.adbCandidates ?? ["adb"]) : [used]) {
+      try {
+        if (runner === undefined) return undefined;
+        const handle = runner.spawn(adb, args);
+        used = adb;
+        return handle;
+      } catch (error) {
+        if (!(error instanceof ProcessSpawnError)) throw error;
+      }
     }
+    return undefined;
+  };
+  // why: a command that outlives its limit is killed, and the caller is told whether that happened.
+  const waitFor = async (handle: ProcessHandle, limitMs: number) => {
     let timedOut = false;
-    const timer = environment.clock.setTimer(ADB_CONNECT_TIMEOUT_MS, () => {
+    const timer = environment.clock.setTimer(limitMs, () => {
       timedOut = true;
       handle.kill();
     });
     const result = await handle.wait();
     environment.clock.cancel(timer);
-    if (timedOut) {
-      warn("adb did not answer in 10 s");
-      return;
-    }
-    const lines = `${result.stdout}\n${result.stderr}`
-      .split(/\r?\n/)
-      .map((text) => text.trim())
-      .filter((text) => text !== "" && !text.startsWith("*"));
-    if (lines.some((text) => /^(already )?connected to /.test(text))) {
-      environment.stdout.write(`adb: connected to ${target}\n`);
-    } else {
-      warn(`adb answered: ${escapeControl(lines[0] ?? "")}`);
-    }
-    return;
-  }
-  warn("adb was not found");
+    return { result, timedOut };
+  };
+  return {
+    async connect(callerPort: number): Promise<void> {
+      target = `127.0.0.1:${String(callerPort)}`;
+      running = start(["connect", target]);
+      if (running === undefined) {
+        warn("adb was not found");
+        return;
+      }
+      const { result, timedOut } = await waitFor(running, ADB_CONNECT_TIMEOUT_MS);
+      if (leaving) return;
+      if (timedOut) {
+        warn("adb did not answer in 10 s");
+        return;
+      }
+      const lines = `${result.stdout}\n${result.stderr}`
+        .split(/\r?\n/)
+        .map((text) => text.trim())
+        .filter((text) => text !== "" && !text.startsWith("*"));
+      if (lines.some((text) => /^(already )?connected to /.test(text))) {
+        environment.stdout.write(`adb: connected to ${target}\n`);
+      } else {
+        warn(`adb answered: ${escapeControl(lines[0] ?? "")}`);
+      }
+    },
+    // why: the disconnect removes the tunnel's device from the caller's adb, whatever its answer, and is bounded so a hung adb cannot hold the command's exit.
+    async disconnect(): Promise<void> {
+      leaving = true;
+      running?.kill();
+      if (used === undefined) return;
+      const handle = start(["disconnect", target]);
+      if (handle !== undefined) await waitFor(handle, ADB_DISCONNECT_TIMEOUT_MS);
+    },
+  };
 }
 
 // why: the words a tunnel is named by in a warning or a refusal; an emulator tunnel has no device port.
@@ -466,6 +495,10 @@ function serve(
   leaseId: string,
   base: string,
 ): Promise<number> {
+  const adb = callerAdb(environment);
+  // why: the disconnect starts when the exit does, and the command ends when it has.
+  let leaving: Promise<void> | undefined;
+  const leave = (): Promise<void> => (leaving ??= adb.disconnect().catch(() => undefined));
   const warned = new Map<number, number>();
   const warnedForward = new Map<string, number>();
   const relay = relayConnections(
@@ -525,6 +558,7 @@ function serve(
     function end(failure: TunnelFailure | undefined, unresponsive = false): void {
       if (finished) return;
       finished = true;
+      void leave();
       environment.signals.off("SIGINT", stop);
       environment.signals.off("SIGTERM", stop);
       environment.clock.cancel(helloTimer);
@@ -537,12 +571,15 @@ function serve(
         // why: a worker that never answers the close would leave the socket holding the process open for 30 s past the bound.
         if (unresponsive) socket.terminate();
       }
-      if (failure === undefined) resolve(0);
-      else reject(failure);
+      void leave().then(() => {
+        if (failure === undefined) resolve(0);
+        else reject(failure);
+      });
     }
     function stop(): void {
       if (finished) return;
       stopping = true;
+      void leave();
       closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined, true));
       socket.close(CLOSE_NORMAL, "");
     }
@@ -586,7 +623,7 @@ function serve(
             route = `emulator localhost:${String(callerPort)} -> emulator:adb`;
           }
           environment.stdout.write(`${route} (lease ${escapeControl(leaseId)})\n`);
-          if (kind === "emulator") void connectCallerAdb(environment, callerPort);
+          if (kind === "emulator") void adb.connect(callerPort);
         }
         return;
       }
