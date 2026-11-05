@@ -1175,6 +1175,7 @@ export function configValidators(
       }),
       simulator: objectValidator({
         audio: booleanValue,
+        headless: booleanValue,
       }),
     }),
     android: objectValidator({
