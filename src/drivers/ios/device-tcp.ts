@@ -1,7 +1,13 @@
-import { DeviceTcpError, type DeviceReverse, type DeviceTcp } from "../../core/index.js";
 import {
-  FakeTcpPeer,
+  DeviceTcpError,
+  type DeviceReverse,
+  type DeviceTcp,
+  type PhysicalDriverDevice,
+  type VirtualDriverDevice,
+} from "../../core/index.js";
+import {
   type Clock,
+  type LoopbackHost,
   type ProcessRunner,
   type TcpListenerFactory,
   type TcpProbe,
@@ -17,9 +23,115 @@ export interface IosDeviceTcpOptions {
   readonly runner: ProcessRunner;
 }
 
-export function createIosDeviceTcp(_options: IosDeviceTcpOptions): DeviceTcp {
+type Target = VirtualDriverDevice | PhysicalDriverDevice;
+
+const LOOKUP_TIMEOUT_MS = 5_000;
+const CONNECT_TIMEOUT_MS = 5_000;
+const MESSAGE_LIMIT = 200;
+const LOOPBACKS: readonly LoopbackHost[] = ["127.0.0.1", "::1"];
+
+// why: a simulator's processes are the only ones whose environment names its UDID, so the udid is the lease's identity on the worker's loopback.
+function udidOf(device: Target): string {
+  const data = device.driverData;
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    "udid" in data &&
+    typeof data.udid === "string"
+  ) {
+    return data.udid;
+  }
+  throw new DeviceTcpError("TUNNEL_FAILED", `device ${device.deviceId} has no simulator UDID`);
+}
+
+interface Listener {
+  readonly pid: number;
+  readonly addresses: ReadonlySet<string>;
+}
+
+function cut(message: string): string {
+  return message.length > MESSAGE_LIMIT ? message.slice(0, MESSAGE_LIMIT) : message;
+}
+
+// why: `lsof -Fpn` prints `p<pid>` then an `n<address>:<port>` per socket; `*` is every interface, `[::1]` and `127.0.0.1` the loopbacks, anything else is not reachable through a loopback connect.
+function parseListeners(output: string): Listener[] | undefined {
+  const listeners: { pid: number; addresses: Set<string> }[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (line === "") continue;
+    const field = line.slice(1);
+    if (line.startsWith("p")) {
+      listeners.push({ addresses: new Set(), pid: Number(field) });
+    } else if (line.startsWith("n")) {
+      const current = listeners.at(-1);
+      if (current === undefined) return undefined;
+      const address = field.slice(0, field.lastIndexOf(":"));
+      current.addresses.add(address === "[::1]" ? "::1" : address);
+    }
+  }
+  return listeners.length === 0 || listeners.some(({ pid }) => !Number.isInteger(pid))
+    ? undefined
+    : listeners;
+}
+
+export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
+  const nothingListens = (port: number) =>
+    new DeviceTcpError(
+      "TUNNEL_FAILED",
+      `nothing on the lease's simulator listens on port ${String(port)}`,
+    );
+
+  async function listenersOn(port: number): Promise<Listener[]> {
+    const result = await options.runner.run(
+      "lsof",
+      ["-nP", `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fpn"],
+      { timeoutMs: LOOKUP_TIMEOUT_MS },
+    );
+    if (result.code === 1 && result.stdout.trim() === "") return [];
+    const parsed = result.code === 0 ? parseListeners(result.stdout) : undefined;
+    if (parsed === undefined) {
+      const reason = result.code === 0 ? "unparsable output" : result.stderr.trim().split("\n")[0];
+      throw new DeviceTcpError(
+        "TUNNEL_FAILED",
+        `could not check the port's owner: ${cut(reason ?? "")}`,
+      );
+    }
+    return parsed;
+  }
+
+  async function holdsUdid(pid: number, udid: string): Promise<boolean> {
+    const result = await options.runner.run("ps", ["eww", "-p", String(pid)], {
+      timeoutMs: LOOKUP_TIMEOUT_MS,
+    });
+    return result.code === 0 && result.stdout.split(/\s+/).includes(`SIMULATOR_UDID=${udid}`);
+  }
+
+  // why: a loopback connect reaches the most specific bind, so an address is dialled only when no other process holds it more specifically than the lease's own.
+  function dialAddresses(listeners: readonly Listener[], leasePids: ReadonlySet<number>) {
+    const lease = listeners.filter(({ pid }) => leasePids.has(pid));
+    const others = listeners.filter(({ pid }) => !leasePids.has(pid));
+    return LOOPBACKS.filter(
+      (host) =>
+        lease.some(({ addresses }) => addresses.has(host)) ||
+        (lease.some(({ addresses }) => addresses.has("*")) &&
+          !others.some(({ addresses }) => addresses.has(host))),
+    );
+  }
+
   return {
-    connect: (): Promise<TcpStream> => Promise.resolve(new FakeTcpPeer().stream),
+    async connect(device, devicePort): Promise<TcpStream> {
+      const udid = udidOf(device);
+      const listeners = await listenersOn(devicePort);
+      const leasePids = new Set<number>();
+      for (const { pid } of listeners) if (await holdsUdid(pid, udid)) leasePids.add(pid);
+      for (const host of dialAddresses(listeners, leasePids)) {
+        try {
+          return await options.connector.connect(devicePort, CONNECT_TIMEOUT_MS, host);
+        } catch {
+          // why: the next loopback address may still answer; when none does the holder is told nothing listens.
+        }
+      }
+      throw nothingListens(devicePort);
+    },
     reverse: (): Promise<DeviceReverse> =>
       Promise.reject(new DeviceTcpError("TUNNEL_FAILED", "not built")),
     supports: () => false,
