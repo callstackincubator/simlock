@@ -265,7 +265,7 @@ forward localhost:${String(closedPort)} -> device:9230 (lease ${lone.leaseId})
 
     cli.signals.emit("SIGINT");
     expect(await exit).toBe(0);
-    expect(cli.err.join("")).toBe("");
+    expect(cli.err.join("")).toBe("warning: forward 9230: closed\n");
     await expect(callerClient(callerPort, [])).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 });
