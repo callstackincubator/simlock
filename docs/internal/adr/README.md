@@ -99,4 +99,4 @@ the status is stale.
 | [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
-| [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted — not yet implemented; narrows 0007 §9, 0009 §4 and 0060 §1, §6 |
+| [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted — not yet implemented; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |

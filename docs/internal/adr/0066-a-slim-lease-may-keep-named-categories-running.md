@@ -3,7 +3,7 @@
 - **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-05
 - **Issue:** [#1326](https://github.com/callstackincubator/simlock/issues/1326) (request [#1244](https://github.com/callstackincubator/simlock/issues/1244))
-- **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the categories written come from the request too) and §6 (the label list moves to simslim v0.14.0, and gains one category); [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §9 (a device reports `except` beside `mode`); [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §4 (the fast-fail table gains a `BAD_REQUEST` row).
+- **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the categories written come from the request too), §2 (a boot of a lease with `except` fails on a failed write, an unrunnable readback or an enabled kept label, where 0060 grants `slim` or `full`) and §6 (the label list moves to simslim v0.14.0, and gains one category); [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §8 (the same failures grant `slim` there) and §9 (a device reports `except` beside `mode`); [ADR 0008](0008-the-catalog-reports-what-the-host-can-run.md) §4 (a gateway's `slimCategories` is the union of its workers', and it reports no `defaultMode`) and §9 (two config-derived fields join the catalog); [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §2 (a filter, `cannot-keep-except`, can leave a request with no worker that could ever serve it) and §4 (the fast-fail table gains a `BAD_REQUEST` row).
 
 ## Context
 
@@ -96,9 +96,11 @@ wins). The never-disable labels stay `false`.
   and booted again with `prepare`, before the grant.
 
 The readback after that boot is ADR 0060 §2's, over the smaller list, with
-one change for such a boot: a kept label not read back `false` (enabled),
-a write that failed, or a readback that could not run fails the boot (§3)
-instead of granting. Any other label not as written grants `full`, as
+one change for such a boot, which narrows ADR 0060 §2 and ADR 0007 §8: a kept
+label not read back `false` (enabled), a write that failed, or a readback
+that could not run fails the boot (§3) instead of granting `slim` or `full`.
+A lease that asked to keep a category must not be granted a device that may
+have it slimmed. Any other label not as written grants `full`, as
 today. A device granted `full` reports no `except`. On a runtime below
 18.5 the request is granted `full` as today (every category runs) and
 reports no `except`. The boot deadline is the slim boot's
@@ -125,12 +127,24 @@ A recovery boot under the lease writes nothing and reads nothing back (ADR
 
 A worker's `catalog.get` carries, for iOS, `slimCategories` (the names its
 slim set resolves to) and `defaultMode`. The catalog is what a gateway keeps
-for a restarting worker, so both stay known. A gateway forwards `except` and
-routes a request with it only to a worker whose `slimCategories` holds every
-name and whose effective mode for it (§1, with the baseline narrowed first,
-as every stage does) is `slim`. `assess` answers `BAD_REQUEST` when no known
-worker is such a worker; a waiting request shows a dropped worker as
-`cannot-keep-except`.
+for a restarting worker, so both stay known. This narrows ADR 0008 §9: two
+config-derived fields join the catalog. A gateway's own `catalog.get` reports
+`slimCategories` as the union of its workers' (ADR 0008 §4) and no
+`defaultMode`, as a fleet has no default mode (ADR 0007).
+
+A gateway forwards `except` and routes a request with it only to a worker
+whose `slimCategories` holds every name and whose effective mode for it (§1,
+with the baseline narrowed first, as every stage does) is `slim`. This is the
+`cannot-keep-except` filter, a waiting request shows a dropped worker as
+`cannot-keep-except`, and it narrows ADR 0009 §2, which lets only stages 1
+and 2 decide whether a request can be served at all.
+
+The fast-fail table (ADR 0009 §4) gains a row right after its model and
+runtime rows (3 and 4), before `NO_CAPACITY` for a worker that cannot take
+requests: `assess` answers `BAD_REQUEST` when no known worker both serves the
+model and the runtime and is such a worker. It is judged per worker, so a
+worker with the model but not the category plus another with the category but
+not the model fails at once and never waits behind the filter.
 
 ### 6. The label list follows simslim v0.14.0
 
