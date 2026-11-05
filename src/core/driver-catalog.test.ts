@@ -61,15 +61,15 @@ describe("DriverCatalog", () => {
     expect(catalog.supportsDeviceTcp("ios", simulator)).toBe(false);
     await catalog.reverseDevicePort("android", simulator, 5173, signal);
     expect(deviceTcp.reversed).toEqual([5173]);
-    for (const [device, noun] of [
-      [simulator, "an iOS simulator"],
-      [phone, "an iPhone"],
+    for (const [device, message] of [
+      [simulator, "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels"],
+      [
+        phone,
+        "the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator",
+      ],
     ] as const) {
       await expect(catalog.reverseDevicePort("ios", device, 5173, signal)).rejects.toEqual(
-        expect.objectContaining({
-          code: "TUNNEL_UNSUPPORTED",
-          message: `the lease is on ${noun}; tunnels need an Android emulator or phone`,
-        }),
+        expect.objectContaining({ code: "TUNNEL_UNSUPPORTED", message }),
       );
     }
   });

@@ -13,9 +13,12 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function listen(onConnection: (socket: Socket) => void): Promise<number> {
+async function listen(
+  onConnection: (socket: Socket) => void,
+  host: "127.0.0.1" | "::1" = "127.0.0.1",
+): Promise<number> {
   server = createServer(onConnection);
-  await new Promise<void>((resolve) => server?.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server?.listen(0, host, resolve));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("no port");
   return address.port;
@@ -23,17 +26,21 @@ async function listen(onConnection: (socket: Socket) => void): Promise<number> {
 
 // why: an adapter over node:net, proven by what a real loopback socket does, which the fake cannot show.
 describe("NodeTcpStreamConnector", () => {
-  it("carries bytes both ways until the peer hangs up", async () => {
-    const port = await listen((socket) => {
-      socket.once("data", (request: Buffer) => {
-        socket.end(Buffer.concat([Buffer.from("echo:"), request]));
-      });
-    });
-    const stream = await new NodeTcpStreamConnector().connect(port, 1000);
-    await stream.write("ping");
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of stream.readable) chunks.push(chunk);
-    expect(Buffer.concat(chunks).toString()).toBe("echo:ping");
+  it("carries bytes both ways until the peer hangs up, on 127.0.0.1 and on ::1 when asked", async () => {
+    for (const host of ["127.0.0.1", "::1"] as const) {
+      const port = await listen((socket) => {
+        socket.once("data", (request: Buffer) => {
+          socket.end(Buffer.concat([Buffer.from("echo:"), request]));
+        });
+      }, host);
+      const stream = await new NodeTcpStreamConnector().connect(port, 1000, host);
+      await stream.write("ping");
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of stream.readable) chunks.push(chunk);
+      expect(Buffer.concat(chunks).toString(), host).toBe("echo:ping");
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = undefined;
+    }
   });
 
   it("rejects a port nothing listens on", async () => {

@@ -103,7 +103,7 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
      and `--token`/`SIMLOCK_TOKEN`. Without `--lease`, `GET /v1/identity` and `/v1/leases` pick an agent token's only
      lease (`selectOnlyLease`; an operator token must name one). One line per tunnel on `READY`; each `OPEN` connects
      to the caller's loopback port (no listener: `RESET` and a stderr warning per tunnel every 10 s), and `CREDIT`
-     flows both ways. A `forward` tunnel binds its caller port (loopback, 1024 and up) through `tcpListeners` before anything else (busy: exit 1 `TUNNEL_CALLER_PORT_IN_USE`), holds accepted connections until `READY` (closed on `REFUSED`), opens each with an even-id `OPEN`, and closes every listener when the command ends. Failures print one JSON line itself: a refused upgrade or `REFUSED` frame with the worker's code,
+     flows both ways. A `forward` tunnel binds its caller port (loopback, 1024 and up) through `tcpListeners` before anything else (busy: exit 1 `TUNNEL_CALLER_PORT_IN_USE`), holds accepted connections until `READY` (closed on `REFUSED`), opens each with an even-id `OPEN`, and closes every listener when the command ends. A `RESET {reason}` of a forward connection prints `warning: forward <device-port>: <reason>` on stderr, at most once per 10 s per tunnel, and the tunnel stays. Failures print one JSON line itself: a refused upgrade or `REFUSED` frame with the worker's code,
      close 4001 exit 14 `TUNNEL_LEASE_ENDED`, a lost socket, 45 s of silence or 90 s without `READY` `TUNNEL_DISCONNECTED`.
      Ctrl-C and SIGTERM close the socket, wait at most 2 s, exit 0. `ws` loads on the first connect, for this command only.
 6. **`simlock events --follow`** — subscribe, then replay, then print buffered pushes not

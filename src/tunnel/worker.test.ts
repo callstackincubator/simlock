@@ -266,19 +266,20 @@ describe("a worker's tunnel socket", () => {
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [{ devicePort: 9229, kind: "forward" }],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [reverse(5173)],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iPhone; tunnels need an Android emulator or phone",
+        message:
+          "the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator",
         physical: true,
         platform: "ios",
         tunnels: [reverse(5173)],
@@ -755,6 +756,27 @@ describe("a worker's tunnel socket", () => {
     await vi.waitFor(() => expect(abortedRace.deviceTcp.reverseLog).toEqual([5173]));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(abortedRace.deviceTcp.reversed).toEqual([5173]);
+  });
+
+  it("closes at an aborted lease end the reverses whose close needs no reclaim and leaves the others to it", async () => {
+    const tunnel = { devicePort: 5173, kind: "reverse" };
+    for (const [holdsDeviceRule, reversedAfter] of [
+      [false, []],
+      [true, [5173]],
+    ] as const) {
+      const { deviceTcp, worker } = await setup();
+      deviceTcp.holdsDeviceRule = holdsDeviceRule;
+      const socket = await attach(worker);
+      socket.receive(hello(tunnel));
+      await vi.waitFor(() => expect(deviceTcp.reversed).toEqual([5173]));
+      const aborted = new AbortController();
+      aborted.abort();
+      await worker.hooks?.beforeDeviceReclaim?.(ending("device-lost"), aborted.signal);
+      expect(socket.closed).toEqual({ code: 4001, reason: "device-lost" });
+      expect(deviceTcp.reversed, `holdsDeviceRule ${String(holdsDeviceRule)}`).toEqual(
+        reversedAfter,
+      );
+    }
   });
 
   it("keeps an idle relay alive with a heartbeat every 5 s and closes it with an 0xF1 {code, reason}", async () => {

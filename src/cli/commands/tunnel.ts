@@ -145,6 +145,7 @@ function relayConnections(
   socket: WebSocketClient,
   environment: CliEnvironment,
   warn: (devicePort: number, callerPort: number) => void,
+  warnForward: (devicePort: number, reason: string) => void,
 ) {
   interface Relayed {
     readonly stream: TcpStream;
@@ -153,6 +154,8 @@ function relayConnections(
     wake: (() => void) | undefined;
     sentEnd: boolean;
     receivedEnd: boolean;
+    // why: set on a forward connection, so the reason of a worker's reset is shown against the tunnel it belongs to.
+    readonly forwardPort: number | undefined;
   }
   const streams = new Map<number, Relayed>();
   // why: a connection is dropped only when both directions have ended; one half alone leaves the other still carrying data.
@@ -197,8 +200,9 @@ function relayConnections(
     new DataView(credit.buffer).setUint32(0, size);
     socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
   };
-  const adopt = (conn: number, stream: TcpStream): void => {
+  const adopt = (conn: number, stream: TcpStream, forwardPort?: number): void => {
     const relayed: Relayed = {
+      forwardPort,
       stream,
       receivedEnd: false,
       sentEnd: false,
@@ -245,6 +249,10 @@ function relayConnections(
         })
         .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
+      const reason = field(payloadJson(frame.payload), "reason");
+      if (connection.forwardPort !== undefined && typeof reason === "string") {
+        warnForward(connection.forwardPort, reason);
+      }
       connection.stream.close();
       streams.delete(frame.conn);
     }
@@ -399,15 +407,29 @@ function serve(
   base: string,
 ): Promise<number> {
   const warned = new Map<number, number>();
-  const relay = relayConnections(socket, environment, (devicePort, callerPort) => {
-    const now = environment.clock.now();
-    const last = warned.get(devicePort);
-    if (last !== undefined && now - last < WARN_EVERY_MS) return;
-    warned.set(devicePort, now);
-    environment.stderr.write(
-      `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
-    );
-  });
+  const warnedForward = new Map<number, number>();
+  const relay = relayConnections(
+    socket,
+    environment,
+    (devicePort, callerPort) => {
+      const now = environment.clock.now();
+      const last = warned.get(devicePort);
+      if (last !== undefined && now - last < WARN_EVERY_MS) return;
+      warned.set(devicePort, now);
+      environment.stderr.write(
+        `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
+      );
+    },
+    (devicePort, reason) => {
+      const now = environment.clock.now();
+      const last = warnedForward.get(devicePort);
+      if (last !== undefined && now - last < WARN_EVERY_MS) return;
+      warnedForward.set(devicePort, now);
+      environment.stderr.write(
+        `warning: forward ${String(devicePort)}: ${escapeControl(reason)}\n`,
+      );
+    },
+  );
   let nextCallerConnection = 2;
   const announce = (spec: TunnelSpec, stream: TcpStream): void => {
     const conn = nextCallerConnection;
@@ -419,7 +441,7 @@ function serve(
         JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
       ),
     );
-    relay.adopt(conn, stream);
+    relay.adopt(conn, stream, spec.devicePort);
   };
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();

@@ -1,13 +1,15 @@
 import { createConnection, type Socket } from "node:net";
 
+import type { LoopbackHost } from "./tcp-stream.js";
+
 /**
  * Asks whether a loopback port is in use. Simlock needs this to decide whether the port
  * it wants for its own server is already taken, which is a fail-closed decision rather
  * than a diagnostic one -- see ADR 0001.
  */
 export interface TcpProbe {
-  /** True when something is accepting connections on `127.0.0.1:<port>` right now. */
-  isListening(port: number, timeoutMs?: number): Promise<boolean>;
+  /** why: true when something is accepting connections on `<host>:<port>` right now; the host is `127.0.0.1` unless named. */
+  isListening(port: number, timeoutMs?: number, host?: LoopbackHost): Promise<boolean>;
   /**
    * Writes `payload` to `127.0.0.1:<port>` and resolves with whatever came back before the
    * peer closed or the timeout elapsed -- an empty string when it answered nothing.
@@ -29,11 +31,15 @@ export interface TcpProbe {
 const DEFAULT_TIMEOUT_MS = 250;
 
 export class NodeTcpProbe implements TcpProbe {
-  async isListening(port: number, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<boolean> {
+  async isListening(
+    port: number,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    host: LoopbackHost = "127.0.0.1",
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let socket: Socket;
       try {
-        socket = createConnection({ host: "127.0.0.1", port });
+        socket = createConnection({ host, port });
       } catch {
         // `createConnection` throws synchronously (`ERR_SOCKET_BAD_PORT`) for a port
         // outside 0-65535 or one that is not an integer. That has to answer like every
@@ -108,18 +114,22 @@ export interface FakeSend {
 export class FakeTcpProbe implements TcpProbe {
   /** Every `send` this probe was asked to make, in order. */
   readonly sends: FakeSend[] = [];
-  readonly #listening = new Set<number>();
+  readonly #listening = new Set<string>();
   #reply = "";
   #sendFailure: Error | undefined;
 
   constructor(listeningPorts: readonly number[] = []) {
     for (const port of listeningPorts) {
-      this.#listening.add(port);
+      this.startListening(port);
     }
   }
 
-  async isListening(port: number): Promise<boolean> {
-    return this.#listening.has(port);
+  async isListening(
+    port: number,
+    _timeoutMs?: number,
+    host: LoopbackHost = "127.0.0.1",
+  ): Promise<boolean> {
+    return this.#listening.has(`${host}:${String(port)}`);
   }
 
   async send(port: number, payload: string, timeoutMs?: number): Promise<string> {
@@ -140,7 +150,7 @@ export class FakeTcpProbe implements TcpProbe {
     this.#sendFailure = error;
   }
 
-  startListening(port: number): void {
-    this.#listening.add(port);
+  startListening(port: number, host: LoopbackHost = "127.0.0.1"): void {
+    this.#listening.add(`${host}:${String(port)}`);
   }
 }

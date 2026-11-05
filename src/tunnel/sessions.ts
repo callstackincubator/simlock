@@ -164,10 +164,11 @@ export function createTunnelSessions(options: {
         }
         connections.clear();
         try {
-          if (!removeRules) return;
-          // why: one after another, so on an emulator a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
+          // why: one after another, so on an emulator a lease-end signal that aborts mid-way stops the removals that reclaim is about to do; a reverse with no rule on the device is closed anyway, because no reclaim will.
           for (const reverse of reverses) {
-            if (signal?.aborted === true) return;
+            if (reverse.holdsDeviceRule !== false && (!removeRules || signal?.aborted === true)) {
+              continue;
+            }
             await bounded(removeRule(reverse));
           }
         } finally {
@@ -418,7 +419,10 @@ export function createTunnelSessions(options: {
         }
         // why: the socket can close while `reverse` is awaited, after `finish` read the list; a rule that arrives then is removed here.
         if (finished !== undefined) {
-          if (endedWith?.remove === true && endedWith.signal?.aborted !== true) {
+          if (
+            reverse.holdsDeviceRule === false ||
+            (endedWith?.remove === true && endedWith.signal?.aborted !== true)
+          ) {
             await bounded(removeRule(reverse));
           }
           return;

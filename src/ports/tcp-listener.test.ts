@@ -48,5 +48,14 @@ describe("NodeTcpListenerFactory", () => {
     const again = await factory.listen(port);
     expect(again?.port).toBe(port);
     await again?.close();
+
+    const v6 = await factory.listen(port, "::1");
+    expect(v6?.address).toBe("::1");
+    expect(await factory.listen(port, "::1")).toBeUndefined();
+    const arrived = new Promise<void>((resolve) => v6?.onConnection(() => resolve()));
+    const v6Client = await new NodeTcpStreamConnector().connect(port, 1000, "::1");
+    await arrived;
+    v6Client.close();
+    await v6?.close();
   });
 });
