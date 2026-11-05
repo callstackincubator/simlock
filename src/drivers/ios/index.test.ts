@@ -820,6 +820,49 @@ describe("IosSimctlDriver", () => {
     });
   });
 
+  it("a provision that makes a new iOS seed boots the seed within ios.full.bootTimeoutMs", async () => {
+    for (const { full, waitsMs } of [
+      { full: undefined, waitsMs: 300_000 },
+      { full: 400_000, waitsMs: 400_000 },
+    ]) {
+      const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+        },
+        { match: sourcesSimctl("boot", seedUdid) },
+        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+        { match: sourcesSimctl("listapps", seedUdid) },
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        filesystem,
+        undefined,
+        undefined,
+        full,
+      );
+      await plantManagedDevice(filesystem);
+
+      await driver.provision(spec);
+
+      expect(
+        runner.calls.find((call) => call.args.includes("bootstatus"))?.options,
+        `key ${String(full)}`,
+      ).toEqual({ timeoutMs: waitsMs });
+    }
+  });
+
   it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
     const database = await memorySourceDatabase();
@@ -4833,6 +4876,7 @@ async function createDriver(
   filesystem: Filesystem = new MemoryFilesystem(),
   database?: SqliteDatabase,
   logger?: Logger,
+  fullBootTimeoutMs?: number,
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
@@ -4842,6 +4886,7 @@ async function createDriver(
     filesystem,
     idGenerator: { generate: () => "device-1" },
     instanceId,
+    ...(fullBootTimeoutMs === undefined ? {} : { fullBootTimeoutMs }),
     ...(logger === undefined ? {} : { logger }),
     processRunner: runner,
     simlockHome: "/home/.simlock",
