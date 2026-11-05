@@ -122,9 +122,10 @@ Each agent-device session holds one device. To use a second device, open a secon
 - `--target mobile`, `tv` or `desktop` asks for a phone, a TV or a desktop device.
 - `--os` names an OS version or a range: `26.0`, `>=18 <27`, `18 - 26`. A range gets the newest installed version inside it.
 - On Android, `--image-tag` names a system image tag, such as `google_apis_playstore`.
+- `--device-baseline` (the `deviceBaseline` key of an allocate) leases a fresh copy of a saved Simlock baseline. It needs the agent-device release that adds the flag. `--target` is ignored beside it; Simlock refuses a baseline that is unknown, stale or doesn't match `--platform`, `--device` or `--os`, and `--physical` with one.
 - `--physical` leases an enrolled phone (see [Use a real phone](#use-a-real-phone)).
 
-The reply to `open` names the model, OS and image tag you got. If every matching device is taken, `open` waits for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
+The reply to `open` names the model, OS and image tag you got, and the baseline name and version when you asked for one. If every matching device is taken, `open` waits for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
 
 ### What to expect
 
@@ -210,7 +211,7 @@ Restarting a worker's daemon ends every agent-device lease on that worker, even 
 | `refused: lease <id> is not one of yours on this gateway` | The command named another session's or token's lease, often for the same reason. Give each agent its own `AGENT_DEVICE_SESSION`, then `open` again. |
 | `refused: malformed physical` | `physical` wasn't true or false. |
 | `refused: unknown --target <value>; use mobile, tv or desktop` | `--target` named a kind of device Simlock doesn't know. |
-| `refused: malformed osVersion`, `refused: malformed imageTag` | `--os` or `--image-tag` wasn't text. |
+| `refused: malformed osVersion`, `refused: malformed imageTag`, `refused: malformed deviceBaseline` | `--os`, `--image-tag` or `deviceBaseline` wasn't text. |
 | `refused by simlock: <message>` | Simlock refused the lease, for example for a model it doesn't know, an OS range it can't read, or an image tag on iOS. |
 | `refused: this agent-device is too old to use through a gateway; update it` | Update the agent's agent-device. |
 | `agent-device is not available on this simlock: <reason>` | agent-device is missing, too old, starting or crashed on the worker. |
