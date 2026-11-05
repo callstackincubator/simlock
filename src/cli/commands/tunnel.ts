@@ -55,7 +55,13 @@ function parseEmulator(text: string): TunnelSpec {
   const colon = text.indexOf(":");
   const name = colon === -1 ? text : text.slice(0, colon);
   if (name !== "adb") throw new UsageError(`Unknown emulator port "${name}": use adb`);
-  const callerPort = colon === -1 ? 0 : portOf(text.slice(colon + 1), "caller");
+  const callerText = text.slice(colon + 1);
+  const callerPort = colon === -1 ? 0 : portOf(callerText, "caller");
+  if (colon !== -1 && callerPort < FORWARD_CALLER_PORT_MIN) {
+    throw new UsageError(
+      `emulator caller port "${callerText}" is below ${String(FORWARD_CALLER_PORT_MIN)}`,
+    );
+  }
   return { callerPort, devicePort: 0, kind: "emulator" };
 }
 
@@ -63,7 +69,7 @@ function parseTunnel(words: readonly string[], index: number): TunnelSpec {
   const kind = words[index] as string;
   if (kind === "emulator") return parseEmulator(words[index + 1] ?? "");
   if (kind !== "reverse" && kind !== "forward") {
-    throw new UsageError(`Unknown tunnel kind "${kind}": use reverse or forward`);
+    throw new UsageError(`Unknown tunnel kind "${kind}": use reverse, forward or emulator`);
   }
   const text = words[index + 1] ?? "";
   const colon = text.indexOf(":");
@@ -87,6 +93,9 @@ function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
   for (let index = 0; index < words.length; index += 2) specs.push(parseTunnel(words, index));
   if (specs.length > TUNNEL_MAX_TUNNELS)
     throw new UsageError(`At most ${String(TUNNEL_MAX_TUNNELS)} tunnels`);
+  if (specs.filter(({ kind }) => kind === "emulator").length > 1) {
+    throw new UsageError("Name emulator adb once");
+  }
   const callerPorts = specs.map(({ callerPort }) => callerPort);
   const repeated = callerPorts.find((port, at) => callerPorts.indexOf(port) !== at);
   if (repeated !== undefined) {
@@ -664,7 +673,7 @@ async function run(
   });
   if (help) {
     environment.stdout.write(
-      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
+      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
     );
     return 0;
   }
