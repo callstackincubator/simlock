@@ -51,10 +51,18 @@ INSERT INTO warm_kind_leases SELECT * FROM warm_kind_leases_kept;
 DROP TABLE warm_kind_leases_kept;
 `;
 
+// why: a baseline kind is keyed on its name alone and is learned only once it has been leased enough, so rows written under the old key are dropped and `learned` marks a row the pool plans.
+const WARM_POOL_V3 = `
+DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE baseline <> '');
+DELETE FROM warm_kinds WHERE baseline <> '';
+ALTER TABLE warm_kinds ADD COLUMN learned INTEGER NOT NULL DEFAULT 1;
+CREATE UNIQUE INDEX warm_kinds_baseline_name ON warm_kinds (baseline) WHERE baseline <> '';
+`;
+
 export const warmPoolOwner: SqliteSchemaOwner = {
-  migrations: [WARM_POOL_V1, WARM_POOL_V2],
+  migrations: [WARM_POOL_V1, WARM_POOL_V2, WARM_POOL_V3],
   name: "warm-pool",
-  version: 2,
+  version: 3,
 };
 
 const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -77,31 +85,55 @@ export class LearnedKinds {
     this.#state = state;
   }
 
-  learn(spec: VirtualSpec, leaseId: string, at: number): void {
+  /** why: a plain kind is learned by its first lease; a baseline kind, whose one row is keyed on the name, once `learnAfter` of its grants fall in the last 24 hours. */
+  learn(spec: VirtualSpec, leaseId: string, at: number, learnAfter = 1): void {
     this.#state.transaction(() => {
       const database = this.#state.database;
-      const row = database
-        .prepare(
-          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
-           DO UPDATE SET last_leased_at = excluded.last_leased_at
-           RETURNING id`,
-        )
-        .get(
-          spec.platform,
-          spec.model,
-          spec.osVersion,
-          spec.mode ?? "full",
-          spec.imageTag ?? "",
-          spec.baseline?.name ?? "",
-          at,
-        );
+      const key = [
+        spec.platform,
+        spec.model,
+        spec.osVersion,
+        spec.mode ?? "full",
+        spec.imageTag ?? "",
+        spec.baseline?.name ?? "",
+      ];
+      const row =
+        spec.baseline === undefined
+          ? database
+              .prepare(
+                `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
+                 DO UPDATE SET last_leased_at = excluded.last_leased_at
+                 RETURNING id`,
+              )
+              .get(...key, at)
+          : database
+              .prepare(
+                `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at, learned)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                 ON CONFLICT (baseline) WHERE baseline <> ''
+                 DO UPDATE SET platform = excluded.platform, model = excluded.model,
+                   os_version = excluded.os_version, mode = excluded.mode,
+                   image_tag = excluded.image_tag, last_leased_at = excluded.last_leased_at
+                 RETURNING id`,
+              )
+              .get(...key, at);
       database
         .prepare(
           "INSERT OR REPLACE INTO warm_kind_leases (lease_id, kind_id, granted_at, ended_at) VALUES (?, ?, ?, NULL)",
         )
         .run(leaseId, Number(row?.id), at);
+      if (spec.baseline !== undefined) {
+        const grants = database
+          .prepare(
+            "SELECT COUNT(*) AS grants FROM warm_kind_leases WHERE kind_id = ? AND granted_at > ?",
+          )
+          .get(Number(row?.id), at - LEARNED_WINDOW_MS);
+        if (Number(grants?.grants) >= learnAfter) {
+          database.prepare("UPDATE warm_kinds SET learned = 1 WHERE id = ?").run(Number(row?.id));
+        }
+      }
       database
         .prepare("DELETE FROM warm_kind_leases WHERE ended_at < ?")
         .run(at - LEARNED_WINDOW_MS);
@@ -186,7 +218,7 @@ export class LearnedKinds {
     const windowStart = now - LEARNED_WINDOW_MS;
     return database
       .prepare(
-        "SELECT id, platform, model, os_version, mode, image_tag, baseline, last_leased_at FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+        "SELECT id, platform, model, os_version, mode, image_tag, baseline, last_leased_at FROM warm_kinds WHERE learned = 1 ORDER BY last_leased_at DESC, id DESC",
       )
       .all()
       .map((row) => {

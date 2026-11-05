@@ -27,6 +27,9 @@ export interface WarmTarget {
   readonly count: number;
 }
 
+/** why: the lease count that learns a baseline kind when `warmPool.baselineLearnAfter` is not set. */
+export const DEFAULT_BASELINE_LEARN_AFTER = 3;
+
 /** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
   /** `false` keeps nothing warm: every idle running device is shut down. */

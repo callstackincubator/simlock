@@ -302,7 +302,7 @@ describe("LearnedKinds", () => {
     second.close();
   });
 
-  it("warmPoolOwner version 2 creates both STRICT tables with their columns", async () => {
+  it("warmPoolOwner version 3 creates both STRICT tables with their columns", async () => {
     const { state } = await open();
     const table = (name: string) =>
       state.database.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(name)?.sql;
@@ -312,7 +312,7 @@ describe("LearnedKinds", () => {
         .all()
         .map((column) => [column.name, column.type, column.required]);
 
-    expect(warmPoolOwner.version).toBe(2);
+    expect(warmPoolOwner.version).toBe(3);
     expect(String(table("warm_kinds"))).toMatch(/STRICT/);
     expect(String(table("warm_kind_leases"))).toMatch(/STRICT/);
     expect(columns("warm_kinds")).toEqual([
@@ -324,6 +324,7 @@ describe("LearnedKinds", () => {
       ["image_tag", "TEXT", 1],
       ["baseline", "TEXT", 1],
       ["last_leased_at", "INTEGER", 1],
+      ["learned", "INTEGER", 1],
     ]);
     expect(columns("warm_kind_leases")).toEqual([
       ["lease_id", "TEXT", 1],

@@ -24,7 +24,7 @@ import type { DriverCatalog } from "../driver-catalog.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
-import type { WarmPoolConfig, WarmTarget } from "./config.js";
+import { DEFAULT_BASELINE_LEARN_AFTER, type WarmPoolConfig, type WarmTarget } from "./config.js";
 import {
   describeTarget,
   evaluate,
@@ -214,7 +214,12 @@ export class WarmPool {
         );
         if (device === undefined) return;
         this.#recording("learn a lease", () =>
-          this.#learned.learn(device.spec, payload.leaseId, clock.now()),
+          this.#learned.learn(
+            device.spec,
+            payload.leaseId,
+            clock.now(),
+            this.options.config.baselineLearnAfter ?? DEFAULT_BASELINE_LEARN_AFTER,
+          ),
         );
       }),
     );
