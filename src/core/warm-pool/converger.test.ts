@@ -2308,35 +2308,112 @@ describe("warm pool learned kinds", () => {
     expect(kindsOf(state)).toEqual([]);
   });
 
-  it("learns a baseline kind only on its Nth lease within 24 hours", async () => {
-    const plain = device("b1", "leased", 0);
-    const checkout = {
-      ...plain,
-      spec: { ...plain.spec, baseline: { name: "checkout", version: 1 } },
-    };
-    const state = await openMemoryState([warmPoolOwner]);
-    const rig = harness([checkout], {
-      baselineLearnAfter: 3,
-      baselines: { checkout: { version: 1 } },
-      catalog: async () => [iosListing],
-      limit: 0,
-      state,
+  it("learns a baseline kind only on its Nth lease within 24 hours, a plain kind on its first", async () => {
+    const hour = 60 * minute;
+    const phone = device("b1", "leased", 0);
+    const baselineDevice = (id: string, version: number): VirtualDevice => ({
+      ...phone,
+      id,
+      spec: { ...phone.spec, baseline: { name: "checkout", version } },
     });
-    rig.pool.start();
-    const learnedBaselines = async () => {
-      await rig.pool.pass();
-      await rig.pool.settle();
-      return rig.pool.figures().targets.flatMap((target) => target.baseline ?? []);
+    // why: each lease is [hours since the first, device]; the answer is whether its kind is listed after it.
+    const run = async (
+      leases: readonly (readonly [number, string])[],
+      baselineLearnAfter = 3,
+      forgetBefore?: number,
+    ) => {
+      const rig = harness(
+        [baselineDevice("v1", 1), baselineDevice("v2", 2), { ...phone, id: "plain" }],
+        {
+          baselineLearnAfter,
+          baselines: { checkout: { version: 2 } },
+          catalog: async () => [iosListing],
+          limit: 0,
+          state: await openMemoryState([warmPoolOwner]),
+        },
+      );
+      rig.pool.start();
+      const listed: boolean[] = [];
+      let elapsed = 0;
+      for (const [index, [at, deviceId]] of leases.entries()) {
+        rig.clock.advance(at * hour - elapsed);
+        elapsed = at * hour;
+        if (index === forgetBefore) rig.pool.forget();
+        granted(rig, `l${index}`, deviceId);
+        await rig.pool.pass();
+        await rig.pool.settle();
+        listed.push(
+          rig.pool
+            .figures()
+            .targets.some(
+              (target) =>
+                target.origin === "learned" &&
+                target.baseline === (deviceId === "plain" ? undefined : "checkout"),
+            ),
+        );
+      }
+      rig.pool.dispose();
+      return listed;
     };
-    const afterLeases: string[][] = [];
-    for (const lease of ["l1", "l2", "l3"]) {
-      granted(rig, lease, "b1");
-      afterLeases.push(await learnedBaselines());
-      rig.clock.advance(minute);
-    }
-    rig.pool.dispose();
 
-    expect(afterLeases).toEqual([[], [], ["checkout"]]);
+    expect(
+      await run([
+        [0, "v1"],
+        [1, "v1"],
+        [2, "v1"],
+      ]),
+    ).toEqual([false, false, true]);
+    expect(
+      await run([
+        [0, "v1"],
+        [1, "v1"],
+        [25, "v1"],
+        [26, "v1"],
+      ]),
+    ).toEqual([false, false, false, false]);
+    expect(
+      await run([
+        [0, "v1"],
+        [20, "v1"],
+        [23, "v1"],
+      ]),
+    ).toEqual([false, false, true]);
+    expect(
+      await run([
+        [0, "v1"],
+        [12, "v1"],
+        [24, "v1"],
+      ]),
+    ).toEqual([false, false, false]);
+    expect(
+      await run([
+        [0, "v1"],
+        [1, "v1"],
+        [2, "v1"],
+        [30, "v1"],
+      ]),
+    ).toEqual([false, false, true, true]);
+    expect(await run([[0, "v1"]], 1)).toEqual([true]);
+    expect(
+      await run([
+        [0, "v1"],
+        [1, "v1"],
+        [2, "v2"],
+      ]),
+    ).toEqual([false, false, true]);
+    expect(await run([[0, "plain"]])).toEqual([true]);
+    expect(
+      await run(
+        [
+          [0, "v1"],
+          [1, "v1"],
+          [2, "v1"],
+          [3, "v1"],
+        ],
+        3,
+        3,
+      ),
+    ).toEqual([false, false, true, false]);
   });
 
   it("closes at start() the lease rows the registry no longer holds, and the first pass boots the recorded kinds", async () => {
