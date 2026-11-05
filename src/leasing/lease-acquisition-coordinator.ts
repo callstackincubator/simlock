@@ -425,9 +425,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
       }
     });
-    while (this.#activeWorkflows.size > 0) {
-      await Promise.allSettled(this.#activeWorkflows);
-    }
+    await this.settleAcquisitions();
   }
 
   /** why: a stop waits for every request mid-provision or mid-boot, so the driver it then disposes is not under a boot still running (#1200). */
