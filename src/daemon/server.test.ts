@@ -21,6 +21,7 @@ import {
   ScriptedProcessRunner,
 } from "../ports/index.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
+import type { DaemonServer } from "./server.js";
 import { DaemonEndpointHost } from "./connection-host.js";
 import {
   BlockingConnection,
@@ -800,7 +801,8 @@ describe("DaemonServer", () => {
     const client = await createClient(socketPath);
     await hello(client);
     await client.close();
-    expect(first.daemon.socketPath).toBe(socketPath);
+    const firstDaemon: DaemonServer = first.daemon;
+    expect(firstDaemon.socketPath).toBe(socketPath);
   });
 
   // why: review finding S1: `AdminSecretManager`'s own doc (`src/auth`) asserts "a daemon
