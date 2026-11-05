@@ -1007,6 +1007,16 @@ describe("a worker's tunnel socket with an emulator tunnel", () => {
       }),
     );
     expect(unnamed.deviceTcp.emulatorConnections).toHaveLength(0);
+
+    const other = await ready();
+    other.socket.receive(open(2, { kind: "emulator", emulatorPort: "console" }));
+    await vi.waitFor(() =>
+      expect(other.socket.closed).toEqual({
+        code: 4003,
+        reason: "OPEN must name a forward tunnel of this socket",
+      }),
+    );
+    expect(other.deviceTcp.emulatorConnections).toHaveLength(0);
   });
 });
 

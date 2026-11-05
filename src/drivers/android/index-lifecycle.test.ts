@@ -340,6 +340,17 @@ describe("AndroidDriver deviceTcp", () => {
       }),
     );
 
+    const bare = await createDriver(await androidFilesystem(), new EmulatorExitingRunner([]), {
+      clock,
+      tcpListener: new FakeTcpListenerFactory(),
+    });
+    await expect(bare.deviceTcp?.connectEmulatorPort(emulator, "adb", signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: "the emulator has no adb port yet",
+      }),
+    );
+
     connector.refusedPorts.add(5587);
     await expect(tcp?.connectEmulatorPort(emulator, "adb", signal())).rejects.toEqual(
       expect.objectContaining({
