@@ -479,6 +479,7 @@ async function composeDaemon(
           processSupervisor,
           simlockHome: dataDirectory,
           simulatorAudio: config.ios.simulator.audio,
+          simulatorHeadless: config.ios.simulator.headless,
           slim: config.ios.slim,
           slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
@@ -1324,6 +1325,7 @@ export interface DriverDiscoveryContext {
   };
   readonly slimByDefault?: boolean;
   readonly simulatorAudio?: boolean;
+  readonly simulatorHeadless?: boolean;
   readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
@@ -1443,6 +1445,7 @@ async function discoverIosDriver(
       instanceId: options.instanceId,
       logger: logger.child("ios"),
       onSilenceFailed: logSilenceFailure(logger),
+      onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       screenCapture: {
         baseEnvironment: process.env,
@@ -1461,6 +1464,9 @@ async function discoverIosDriver(
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
       ...(options.simulatorAudio === undefined ? {} : { simulatorAudio: options.simulatorAudio }),
+      ...(options.simulatorHeadless === undefined
+        ? {}
+        : { simulatorHeadless: options.simulatorHeadless }),
       ...(options.slim === undefined ? {} : { slim: options.slim }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
@@ -1493,8 +1499,13 @@ export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => 
   };
 }
 
-export function logWindowFailure(_logger: Logger): (fact: WindowFailedFact) => void {
-  return () => undefined;
+export function logWindowFailure(logger: Logger): (fact: WindowFailedFact) => void {
+  return (fact) => {
+    logger.warn("Could not open a window for iOS simulator", {
+      deviceId: fact.deviceId,
+      detail: fact.detail,
+    });
+  };
 }
 
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
