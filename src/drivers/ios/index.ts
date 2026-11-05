@@ -7,6 +7,7 @@ import {
   type ComponentReceipt,
   type ComponentRemoval,
   type DeviceInputFactory,
+  type DeviceTcp,
   COMPONENT_REMOVAL_TIMEOUT_MS,
   type ExactDeviceRequest,
   type Driver,
@@ -56,6 +57,9 @@ import type {
   ProcessResult,
   ProcessRunner,
   SqliteDatabase,
+  TcpListenerFactory,
+  TcpProbe,
+  TcpStreamConnector,
 } from "../../ports/index.js";
 import {
   runAfterBoot,
@@ -72,6 +76,7 @@ import {
   refuseXcodeSetLeftovers,
   UDID_PATTERN,
 } from "./device-set-leftovers.js";
+import { createIosDeviceTcp } from "./device-tcp.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
@@ -222,6 +227,10 @@ export interface IosSimctlDriverOptions {
   readonly slimByDefault?: boolean;
   // why: the device input logs a Home press that did nothing; nothing else in the driver logs through it.
   readonly logger?: Logger;
+  // why: a simulator reaches the worker's loopback, so its tunnels need these three ports from the daemon; with any one missing the driver offers no `deviceTcp`.
+  readonly tcpListener?: TcpListenerFactory;
+  readonly tcpProbe?: TcpProbe;
+  readonly tcpStreamConnector?: TcpStreamConnector;
   // why: absent when this host has no way to run the capture program; the driver then offers no
   // screen at all rather than one that fails on every open.
   readonly screenCapture?: {
@@ -366,10 +375,24 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
+    if (
+      options.tcpListener !== undefined &&
+      options.tcpProbe !== undefined &&
+      options.tcpStreamConnector !== undefined
+    ) {
+      this.deviceTcp = createIosDeviceTcp({
+        clock: options.clock,
+        connector: options.tcpStreamConnector,
+        listeners: options.tcpListener,
+        probe: options.tcpProbe,
+        runner: options.processRunner,
+      });
+    }
   }
 
   readonly screenCapture: ScreenCapture | undefined;
   readonly input: DeviceInputFactory | undefined;
+  readonly deviceTcp: DeviceTcp | undefined;
 
   /**
    * why: Establishes the device set this driver owns before it can be asked to do anything,

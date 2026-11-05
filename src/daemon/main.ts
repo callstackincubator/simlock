@@ -1461,6 +1461,9 @@ async function discoverIosDriver(
       },
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
+      tcpListener: new NodeTcpListenerFactory(),
+      tcpProbe: options.tcpProbe,
+      tcpStreamConnector: new NodeTcpStreamConnector(),
       ...(options.iosConfig === undefined ? {} : { config: options.iosConfig }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
