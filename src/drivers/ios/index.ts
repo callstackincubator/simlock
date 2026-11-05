@@ -197,6 +197,11 @@ export interface SilenceFailedFact {
   readonly detail: string;
 }
 
+export interface WindowFailedFact {
+  readonly deviceId: string;
+  readonly detail: string;
+}
+
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
   readonly database: SqliteDatabase;
@@ -219,6 +224,7 @@ export interface IosSimctlDriverOptions {
   readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
   /** why: `ios.simulator.headless`; `false` opens a window for each simulator after every boot. */
   readonly simulatorHeadless?: boolean;
+  readonly onWindowFailed?: (fact: WindowFailedFact) => void;
   readonly slim?: {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;

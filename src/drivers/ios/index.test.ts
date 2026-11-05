@@ -36,6 +36,7 @@ import {
   SLIM_CATEGORIES,
   supportsPersistentSlim,
   type SilenceFailedFact,
+  type WindowFailedFact,
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
@@ -5957,6 +5958,77 @@ describe("IosSimctlDriver simulator window", () => {
 
       expect(device.address).toBe(udid);
       expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual(c.expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "select exits non-zero",
+      script: [
+        { match: deviceHub },
+        { match: select, result: { code: 1, stderr: " boom\n", stdout: "" } },
+      ],
+      detail: "boom",
+    },
+    {
+      name: "Simulator.app exits non-zero",
+      script: [
+        { match: deviceHub, result: notInstalled },
+        { match: simulatorApp, result: { code: 1, stderr: "no app", stdout: "" } },
+      ],
+      detail: "no app",
+    },
+    {
+      name: "a call times out",
+      script: [{ match: deviceHub }, { match: select, hangs: true }],
+      detail: "timed out",
+    },
+    {
+      name: "a call cannot start",
+      script: [{ match: deviceHub }],
+      detail: `Could not start -g devices://manage/select?id=${udid}: Unexpected process invocation: open -g devices://manage/select?id=${udid}`,
+    },
+  ])(
+    "makes the simulator ready and reports the failure when opening its window fails: $name",
+    async (c) => {
+      const runner = new ScriptedProcessRunner([
+        ...bootCalls.map((match) => ({ match })),
+        ...c.script,
+      ]);
+      const clock = new FakeClock();
+      const failures: WindowFailedFact[] = [];
+      const driver = await IosSimctlDriver.create({
+        clock,
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceSet: "default" },
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        onWindowFailed: (fact) => failures.push(fact),
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+        simulatorHeadless: false,
+      });
+
+      const ready = driver.makeReady(
+        { address: udid, deviceId: udid, driverData },
+        { mode: "full", purpose: "prepare" },
+      );
+      if (c.script.some((step) => "hangs" in step)) {
+        const state = promiseState(ready);
+        await waitForCalls(runner, bootCalls.length + c.script.length);
+        clock.advance(29_999);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+        clock.advance(1);
+        await flushMicrotasks221();
+        expect(state.state).toBe("fulfilled");
+      }
+      const device = await ready;
+
+      expect(device.address).toBe(udid);
+      expect(failures).toEqual([{ deviceId: udid, detail: c.detail }]);
     },
   );
 });
