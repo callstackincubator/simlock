@@ -3,6 +3,7 @@ import {
   type DriverConfigEntry,
   nonEmptyString,
   objectValidator,
+  positiveNumber,
 } from "../../core/index.js";
 
 /**
@@ -20,15 +21,19 @@ export interface AndroidEmulatorLaunchOptions {
 }
 
 export interface AndroidDriverConfig {
+  /** why: an emulator boot may take this long, counted from its spawn, before it is given up. */
+  readonly bootTimeoutMs: number;
   readonly emulator: AndroidEmulatorLaunchOptions;
 }
 
 export const androidDriverConfig: DriverConfigEntry<AndroidDriverConfig> = {
   platform: "android",
   defaults: {
+    bootTimeoutMs: 300_000,
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
   },
   validators: {
+    bootTimeoutMs: positiveNumber,
     emulator: objectValidator({
       headless: booleanValue,
       gpu: nonEmptyString,

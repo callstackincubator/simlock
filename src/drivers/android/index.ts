@@ -92,7 +92,7 @@ export {
   REFUSED_ADB_VERB,
 } from "./passthrough-rules.js";
 
-const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
+const DEFAULT_BOOT_TIMEOUT_MS = 300_000;
 const DEFAULT_ADB_SERVER_PORT = 5038;
 // why: the reclaim estimates below price the two strategies `virtualReclaimStrategy` still names; the Android driver
 // reclaims no virtual device (a released one is deleted), so they were measured on an M3 Pro against Pixel 8 / API 35
@@ -129,7 +129,6 @@ export interface AndroidDriverOptions {
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
   readonly processRunner: ProcessRunner;
   readonly processSupervisor: ProcessSupervisor;
-  readonly readinessTimeoutMs?: number;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
   // why: both are optional so a host that leaves either out gets a driver without screen streams
@@ -142,7 +141,7 @@ export interface AndroidDriverOptions {
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
   /** why: the driver's own keys of the `android` config section; without it emulators launch with the section's defaults. */
-  readonly config?: AndroidDriverConfig | undefined;
+  readonly config?: Partial<AndroidDriverConfig> | undefined;
 }
 
 export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
@@ -167,6 +166,7 @@ export class AndroidDriver implements Driver {
   readonly #avdConfigPart: AvdConfig;
   readonly #catalog: Catalog;
   readonly #ownership: Ownership;
+  readonly #bootTimeoutMs: number;
   readonly #passthroughRules: PassthroughRules;
   readonly #clock: Clock;
   readonly #deviceTable: DeviceTable;
@@ -213,6 +213,7 @@ export class AndroidDriver implements Driver {
       idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
       seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
     });
+    this.#bootTimeoutMs = options.config?.bootTimeoutMs ?? DEFAULT_BOOT_TIMEOUT_MS;
     this.#ownership = new Ownership({
       adb: sdk.adb,
       adbTools: this.#adbTools,
@@ -303,6 +304,7 @@ export class AndroidDriver implements Driver {
       avdmanager: sdk.avdmanager,
       catalog: this.#catalog,
       clock: options.clock,
+      bootTimeoutMs: this.#bootTimeoutMs,
       consolePorts: this.#consolePorts,
       database: options.database,
       deviceRoot,
@@ -334,7 +336,7 @@ export class AndroidDriver implements Driver {
       onDiagnostic: options.onDiagnostic,
       ownership: this.#ownership,
       processRunner: options.processRunner,
-      readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
+      bootTimeoutMs: this.#bootTimeoutMs,
       tcpProbe: options.tcpProbe,
     });
   }

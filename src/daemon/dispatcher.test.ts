@@ -250,6 +250,8 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
+    /** why: the two boot deadlines `config.get` reports. */
+    readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
     readonly components?: Pick<
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
@@ -305,6 +307,12 @@ async function buildDispatcher(
   const config: Config = {
     ...baseConfig,
     warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+    ...(overrides.bootTimeouts === undefined
+      ? {}
+      : {
+          android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
+          ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
+        }),
   };
   const wiring = testComponentWiring({
     clock: clock,
@@ -757,6 +765,19 @@ describe("Dispatcher: the fleet operations on a worker", () => {
 
     expect(calls).toBe(2);
     expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+  });
+
+  it("an admin reads the config and sees ios.full.bootTimeoutMs and android.bootTimeoutMs", async () => {
+    const configured = await buildDispatcher({
+      bootTimeouts: { android: 600_000, iosFull: 400_000 },
+    });
+
+    const config = await configured.dispatcher.dispatch("config.get", {}, admin);
+
+    expect([config.ios["full"], config.android["bootTimeoutMs"]]).toEqual([
+      { bootTimeoutMs: 400_000 },
+      600_000,
+    ]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {

@@ -217,7 +217,7 @@ warm pool: enabled, reserve ios 1 android 0
 | `unknown-model` | The model does not exist on this machine. Check `simlock catalog`. |
 | `unresolvable` | No device can be created for it. Check its OS version and mode. |
 | `no-driver` | The platform's tools are missing. Run `simlock doctor`. |
-| `boot-failed` | The last boot failed. Simlock tries again later. Check `simlock daemon logs`. |
+| `boot-failed` | The last boot failed, or did not finish within `ios.full.bootTimeoutMs`, `ios.slim.bootTimeoutMs` or `android.bootTimeoutMs`. Simlock tries again later. Check `simlock daemon logs`. |
 | `running-limit` | No running slot is free. Raise the running limits or lower `count`. |
 | `device-limit` | The platform is at its device limit. |
 | `reserve` | The slot is held back by `warmPool.reserveRunning`. |

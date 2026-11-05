@@ -22,17 +22,20 @@ async function load(file: unknown) {
 }
 
 const accepted = {
+  bootTimeoutMs: 600_000,
   emulator: { audio: false, bootAnimation: false, gpu: "swiftshader_indirect", headless: true },
 };
 const defaults = { audio: true, bootAnimation: true, gpu: "auto", headless: false };
 
 describe("the Android driver's keys of the android config section", () => {
-  it("default android.emulator to a windowed launch with the emulator's own GPU, audio and the boot animation, and take each value a config file sets", async () => {
+  it("default android.bootTimeoutMs to 5 minutes and android.emulator to a windowed launch with the emulator's own GPU, audio and the boot animation, and take each value a config file sets", async () => {
     const defaulted = await load({});
     const set = await load({ android: accepted });
 
+    expect(defaulted.section.bootTimeoutMs).toBe(300_000);
     expect(defaulted.section.emulator).toEqual(defaults);
     expect(defaulted.warn).not.toHaveBeenCalled();
+    expect(set.section.bootTimeoutMs).toBe(600_000);
     expect(set.section.emulator).toEqual(accepted.emulator);
     expect(set.warn).not.toHaveBeenCalled();
   });
@@ -50,6 +53,15 @@ describe("the Android driver's keys of the android config section", () => {
       `Invalid config value for "${key}"`,
     );
   });
+
+  it.each([0, -1, "300000"])(
+    "refuse a bad android.bootTimeoutMs, naming the key: %j",
+    async (bootTimeoutMs) => {
+      await expect(load({ android: { bootTimeoutMs } })).rejects.toThrow(
+        'Invalid config value for "android.bootTimeoutMs"',
+      );
+    },
+  );
 
   it("warn about an unknown key under android.emulator and drop it, keeping the defaults", async () => {
     const { section, warn } = await load({

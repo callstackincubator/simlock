@@ -2,6 +2,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DeviceTcpError } from "../../core/index.js";
+import { promiseState } from "../../test-support/promise-state.js";
 import {
   FakeClock,
   FakeTcpListenerFactory,
@@ -682,7 +683,7 @@ describe("AndroidDriver console ports across a restart", () => {
         runningAtDeletion.push(host.avdAnswering(running.address));
       }
     };
-    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const after = await createDriver(filesystem, runner);
     const reality = await after.listManaged();
     const orphan = reality.devices[0]!;
     expect(orphan).toMatchObject({ deviceId: running.deviceId, runState: "running" });
@@ -709,10 +710,24 @@ describe("AndroidDriver console ports across a restart", () => {
       run: async (command, args, options) =>
         args.includes("kill") ? ok() : inner.run(command, args, options),
     };
-    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const clock = new FakeClock();
+    const after = await createDriver(filesystem, runner, { bootTimeoutMs: 600_000, clock });
     const orphan = (await after.listManaged()).devices[0]!;
 
-    await expect(after.destroy(orphan)).rejects.toThrow("did not exit");
+    const destroyed = after.destroy(orphan);
+    const refused = expect(destroyed).rejects.toThrow("did not exit");
+    const state = promiseState(destroyed);
+    await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
+    // why: each poll arms the next delay only after the previous one fired, so the clock moves in steps.
+    for (let elapsed = 0; elapsed < 179_999; elapsed += 1_000) {
+      clock.advance(Math.min(1_000, 179_999 - elapsed));
+      for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+    }
+    expect(state.state, "still waiting just before 180 s, whatever the boot deadline").toBe(
+      "pending",
+    );
+    clock.advance(1);
+    await refused;
 
     expect(await filesystem.exists(`${avdDirectory}/${running.deviceId}`)).toBe(true);
   });
@@ -736,7 +751,7 @@ describe("AndroidDriver console ports across a restart", () => {
         return inner.run(command, args, options);
       },
     };
-    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const after = await createDriver(filesystem, runner);
     const orphan = (await after.listManaged()).devices[0]!;
 
     await expect(after.destroy(orphan)).rejects.toThrow("could not tell which AVD");
@@ -768,7 +783,7 @@ describe("AndroidDriver console ports across a restart", () => {
         return inner.run(command, args, options);
       },
     };
-    const after = await createDriver(filesystem, runner, { readinessTimeoutMs: 0 });
+    const after = await createDriver(filesystem, runner);
     const orphan = (await after.listManaged()).devices[0]!;
 
     await after.destroy(orphan);

@@ -55,7 +55,7 @@ To watch a simulator's screen in the console, you need macOS 14 or later.
 Before Simlock can install Android system images, you must accept the Android SDK licenses in Simlock's configuration. Until you do, an install fails with `LICENSE_NOT_ACCEPTED`. See [Runtimes and system images](/simlock/docs/worker/runtimes-and-images).
 
 <Aside type="caution" title="An old emulator exits at once">
-An emulator that is too old does not accept some of the options Simlock starts it with, and exits as soon as it starts. `simlock doctor` reports it. Run `sdkmanager --install emulator` to update it. The one exception is `-crash-report-mode never`: Simlock checks `emulator -help` and passes it only to an emulator that lists it, so an older emulator still runs Android leases without it. There a crash dump from an earlier run can open a dialog that holds the boot for 180 s.
+An emulator that is too old does not accept some of the options Simlock starts it with, and exits as soon as it starts. `simlock doctor` reports it. Run `sdkmanager --install emulator` to update it. The one exception is `-crash-report-mode never`: Simlock checks `emulator -help` and passes it only to an emulator that lists it, so an older emulator still runs Android leases without it. There a crash dump from an earlier run can open a dialog that holds the boot until `android.bootTimeoutMs` (5 minutes by default) runs out.
 </Aside>
 
 ## Use physical devices
