@@ -1,6 +1,6 @@
 # 0066. A slim lease may keep named categories running
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-05
 - **Issue:** [#1326](https://github.com/callstackincubator/simlock/issues/1326) (request [#1244](https://github.com/callstackincubator/simlock/issues/1244))
 - **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the categories written come from the request too) and §6 (the label list moves to simslim v0.14.0, and gains one category); [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §9 (a device reports `except` beside `mode`); [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §4 (the fast-fail table gains a `BAD_REQUEST` row).
