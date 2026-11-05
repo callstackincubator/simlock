@@ -10,6 +10,7 @@ import {
   type DeviceMode,
   type VirtualSpec,
   specMode,
+  type ManagedDeviceLifecycle,
 } from "../core/index.js";
 import { FakeDriver } from "../core/testing.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
@@ -673,7 +674,8 @@ describe("LeaseAcquisitionCoordinator", () => {
   it("performs no provisioning for a waiter the queue times out during its eviction", async () => {
     let deadlineDue = false;
     const harness = await createHarness({
-      lifecycle: (lifecycle) => ({
+      // why: Fallow does not follow the type through the imported harness, and reports dispose unused.
+      lifecycle: (lifecycle: ManagedDeviceLifecycle) => ({
         bootForLease: (...args) => lifecycle.bootForLease(...args),
         dispose: (...args) => {
           // why: an eviction is the waiter's own device work, so this is where a real one spends

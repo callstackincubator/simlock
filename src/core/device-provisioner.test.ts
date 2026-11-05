@@ -446,6 +446,8 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // doctor and registry tests split out of one file (ADR 0063).
       [join("core", "test-doctor.ts")]: 2,
       [join("core", "test-registry.ts")]: 1,
+      // why: the harness the lease-acquisition coordinator tests split out of one file share (ADR 0063).
+      [join("leasing", "test-lease-acquisition.ts")]: 1,
     });
     expect(callSites(/\.provision\(/g)).toEqual({
       // The driver call itself.
@@ -458,6 +460,8 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       // part, and its test helpers (never loaded in production) drive the driver to build fixtures.
       [join("drivers", "android", "index.ts")]: 1,
       [join("drivers", "android", "testing.ts")]: 2,
+      // why: the harness's fixture devices, as for registerDevice above.
+      [join("leasing", "test-lease-acquisition.ts")]: 1,
     });
   });
 
