@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
+import type { CurrentBaseline } from "../baselines.js";
 import type { RunningCapacity } from "../capacity/index.js";
 import { DeviceOperationClaims } from "../device-operation-claims.js";
 import {
@@ -102,6 +103,10 @@ function waiter(spec: VirtualSpec, inFlight = false): WaitingDemand {
   };
 }
 
+type BaselineFixture = Partial<
+  Pick<CurrentBaseline, "imageTag" | "mode" | "model" | "osVersion" | "platform" | "staleReason">
+> & { readonly version: number };
+
 function harness(
   initial: readonly VirtualDevice[],
   options: {
@@ -134,9 +139,7 @@ function harness(
     /** why: called with the id of each device the budget is asked to admit a boot of, while a pass proposes. */
     onAdmit?: (deviceId: string) => void;
     /** why: the current version of each baseline by name; a baseline not listed is removed. */
-    baselines?: Readonly<
-      Record<string, { readonly version: number; readonly staleReason?: string }>
-    >;
+    baselines?: Readonly<Record<string, BaselineFixture>>;
     /** why: what a platform's catalog read answers; by default a catalog that lists nothing. */
     catalog?: (platform?: Platform) => Promise<readonly PlatformCatalog[]>;
   } = {},
@@ -187,7 +190,14 @@ function harness(
     );
   };
   const poolOptions: WarmPoolOptions = {
-    baselines: { current: (name) => options.baselines?.[name] },
+    baselines: {
+      current: (name) => {
+        const entry = options.baselines?.[name];
+        return entry === undefined
+          ? undefined
+          : { mode: "full", model: "iPhone 15", osVersion: "26.0", platform: "ios", ...entry };
+      },
+    },
     acquisition: {
       kick,
       get maintenanceActive() {
@@ -2414,6 +2424,125 @@ describe("warm pool learned kinds", () => {
         3,
       ),
     ).toEqual([false, false, true, false]);
+  });
+
+  it("warms a learned baseline kind as the baseline's newest version: its model, OS, mode, image tag, platform and version, and forgets it on its third failed creation in a row", async () => {
+    const stored = { ...device("d1", "ready", 0).spec, baseline: { name: "checkout", version: 1 } };
+    const storedAndroid = {
+      ...device("d2", "ready", 0, "android").spec,
+      baseline: { name: "checkout", version: 1 },
+      imageTag: "google_apis",
+    };
+    const listing: PlatformCatalog = {
+      ...iosListing,
+      modelRuntimes: { "iPad Pro": ["26.0", "27.0"], "iPhone 15": ["26.0", "27.0"] },
+      runtimes: ["26.0", "27.0"],
+    };
+    const androidListing: PlatformCatalog = {
+      ...iosListing,
+      images: [
+        { abi: "arm64", runtime: "35", tag: "google_apis" },
+        { abi: "arm64", runtime: "35", tag: "google_apis_playstore" },
+      ],
+      modelRuntimes: { "Pixel 8": ["35"] },
+      models: ["Pixel 8"],
+      platform: "android",
+      runtimes: ["35"],
+    };
+    const run = async (learnedAs: VirtualSpec, newest: BaselineFixture) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(learnedAs, "l1", now - minute);
+      const rig = harness([], {
+        baselines: { checkout: newest },
+        catalog: async () => [listing, androidListing],
+        state,
+      });
+      await rig.pool.pass();
+      await rig.pool.settle();
+      return rig;
+    };
+    const warmed = (rig: Awaited<ReturnType<typeof run>>) =>
+      rig.provisionCalls.map((call) => ({
+        baseline: call.spec.baseline,
+        imageTag: call.spec.imageTag,
+        mode: call.spec.mode,
+        model: call.spec.model,
+        osVersion: call.spec.osVersion,
+        platform: call.spec.platform,
+      }));
+    const ipad = { model: "iPad Pro" };
+    const pixel = { model: "Pixel 8", osVersion: "35", platform: "android" } as const;
+
+    expect(warmed(await run(stored, { ...ipad, version: 2 }))).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        model: "iPad Pro",
+        osVersion: "26.0",
+        platform: "ios",
+      },
+    ]);
+    expect(warmed(await run(stored, { osVersion: "27.0", version: 2 }))).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        model: "iPhone 15",
+        osVersion: "27.0",
+        platform: "ios",
+      },
+    ]);
+    expect(warmed(await run(stored, { mode: "slim", version: 2 }))).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        mode: "slim",
+        model: "iPhone 15",
+        osVersion: "26.0",
+        platform: "ios",
+      },
+    ]);
+    expect(
+      warmed(await run(storedAndroid, { ...pixel, imageTag: "google_apis_playstore", version: 2 })),
+    ).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        imageTag: "google_apis_playstore",
+        model: "Pixel 8",
+        osVersion: "35",
+        platform: "android",
+      },
+    ]);
+    expect(warmed(await run(stored, { ...pixel, imageTag: "google_apis", version: 2 }))).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        imageTag: "google_apis",
+        model: "Pixel 8",
+        osVersion: "35",
+        platform: "android",
+      },
+    ]);
+    expect(warmed(await run(stored, { version: 2 }))).toEqual([
+      {
+        baseline: { name: "checkout", version: 2 },
+        model: "iPhone 15",
+        osVersion: "26.0",
+        platform: "ios",
+      },
+    ]);
+
+    const state = await openMemoryState([warmPoolOwner]);
+    new LearnedKinds(state).learn(stored, "l1", now - minute);
+    const failing = harness([], {
+      baselines: { checkout: { ...ipad, version: 2 } },
+      catalog: async () => [listing],
+      provision: async () => {
+        throw new Error("creation failed");
+      },
+      state,
+    });
+    for (let round = 0; round < 3; round += 1) {
+      await failing.pool.pass();
+      await failing.pool.settle();
+      failing.clock.advance(10 * minute);
+    }
+    expect(new LearnedKinds(state).kinds(failing.clock.now())).toEqual([]);
   });
 
   it("closes at start() the lease rows the registry no longer holds, and the first pass boots the recorded kinds", async () => {

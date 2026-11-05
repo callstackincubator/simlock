@@ -24,6 +24,7 @@ import type { DriverCatalog } from "../driver-catalog.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
+import type { CurrentBaseline } from "../baselines.js";
 import { DEFAULT_BASELINE_LEARN_AFTER, type WarmPoolConfig, type WarmTarget } from "./config.js";
 import {
   describeTarget,
@@ -43,7 +44,14 @@ import { RetrySchedule } from "./retry.js";
 export interface WarmPoolOptions {
   /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
   readonly baselines: {
-    current(name: string): { readonly version: number; readonly staleReason?: string } | undefined;
+    current(
+      name: string,
+    ):
+      | Pick<
+          CurrentBaseline,
+          "imageTag" | "mode" | "model" | "osVersion" | "platform" | "staleReason" | "version"
+        >
+      | undefined;
   };
   readonly acquisition: {
     kick(): void;
