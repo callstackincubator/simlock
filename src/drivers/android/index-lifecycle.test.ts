@@ -79,6 +79,13 @@ class RepliesTcpStreamConnector extends FakeTcpStreamConnector {
   }
 }
 
+// why: stands in for a loopback port that accepts nothing and refuses nothing, so a connect to it never answers.
+class HangingTcpStreamConnector extends FakeTcpStreamConnector {
+  override connect(): Promise<TcpStream> {
+    return new Promise<TcpStream>(() => undefined);
+  }
+}
+
 describe("AndroidDriver deviceTcp", () => {
   const emulator = {
     address: "emulator-5586",
@@ -293,6 +300,68 @@ describe("AndroidDriver deviceTcp", () => {
     expect(silent.connector.connections[0]?.peer.closed).toBe(false);
     silent.clock.advance(1);
     await expect(silent.connecting).rejects.toEqual(
+      expect.objectContaining({ code: "TUNNEL_FAILED", message: "timeout" }),
+    );
+  });
+
+  it("connects an emulator port to the worker port above the emulator's console port, refuses a phone, and rejects with the connector's reason when nothing listens and with \"timeout\" when nothing answers in 5 s", async () => {
+    const connector = new FakeTcpStreamConnector();
+    const clock = new FakeClock();
+    const driver = await createDriver(await androidFilesystem(), new EmulatorExitingRunner([]), {
+      clock,
+      tcpListener: new FakeTcpListenerFactory(),
+      tcpStreamConnector: connector,
+    });
+    const tcp = driver.deviceTcp;
+    const second = { ...emulator, address: "emulator-5682" };
+
+    expect(tcp?.supportsEmulatorPort(emulator)).toBe(true);
+    expect(tcp?.supportsEmulatorPort(PHYSICAL_DEVICE)).toBe(false);
+    await tcp?.connectEmulatorPort(emulator, "adb", signal());
+    await tcp?.connectEmulatorPort(second, "adb", signal());
+    expect(connector.connections.map(({ host, port }) => `${host}:${String(port)}`)).toEqual([
+      "127.0.0.1:5587",
+      "127.0.0.1:5683",
+    ]);
+
+    await expect(tcp?.connectEmulatorPort(PHYSICAL_DEVICE, "adb", signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_UNSUPPORTED",
+        message:
+          "emulator adb: the lease is on an Android phone; emulator ports need an Android emulator",
+      }),
+    );
+    await expect(
+      tcp?.connectEmulatorPort({ ...emulator, address: "" }, "adb", signal()),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: "the emulator has no adb port yet",
+      }),
+    );
+
+    connector.refusedPorts.add(5587);
+    await expect(tcp?.connectEmulatorPort(emulator, "adb", signal())).rejects.toEqual(
+      expect.objectContaining({
+        code: "TUNNEL_FAILED",
+        message: "connect ECONNREFUSED 127.0.0.1:5587",
+      }),
+    );
+
+    const silent = await createDriver(await androidFilesystem(), new EmulatorExitingRunner([]), {
+      clock,
+      tcpListener: new FakeTcpListenerFactory(),
+      tcpStreamConnector: new HangingTcpStreamConnector(),
+    });
+    const waiting = Promise.resolve(
+      silent.deviceTcp?.connectEmulatorPort(emulator, "adb", signal()),
+    );
+    const state = promiseState(waiting);
+    clock.advance(4_999);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(state.state).toBe("pending");
+    clock.advance(1);
+    await expect(waiting).rejects.toEqual(
       expect.objectContaining({ code: "TUNNEL_FAILED", message: "timeout" }),
     );
   });

@@ -141,6 +141,12 @@ interface HeldPort {
 }
 
 export interface AndroidDeviceTcp extends DeviceTcp {
+  supportsEmulatorPort(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  connectEmulatorPort(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
   // why: called by the driver's reclaim of a phone and its destroy of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
   release(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<void>;
 }
@@ -156,6 +162,8 @@ export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): Androi
     new Set([...held.values()].flatMap((mine) => [...mine].map((entry) => entry.port)));
   return {
     supports: () => true,
+    supportsEmulatorPort: () => false,
+    connectEmulatorPort: () => Promise.reject(new DeviceTcpError("TUNNEL_FAILED", "stub")),
     // why: the host protocol reaches a device port through the target's adb server with no `adb forward` rule, so a worker that dies leaves nothing listening; both answers share one 5 s limit.
     async connect(device, devicePort, signal): Promise<TcpStream> {
       if (options.target === undefined) {
