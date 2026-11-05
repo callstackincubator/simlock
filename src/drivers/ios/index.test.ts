@@ -5874,6 +5874,7 @@ describe("IosSimctlDriver simulator audio", () => {
 
 describe("IosSimctlDriver simulator window", () => {
   const udid = driverData.udid;
+  const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
   const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
   const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
   const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];
@@ -5885,11 +5886,56 @@ describe("IosSimctlDriver simulator window", () => {
     "NO",
   );
   const select = open(`devices://manage/select?id=${udid}`);
+  const simulatorApp = open(
+    "-b",
+    "com.apple.iphonesimulator",
+    "--args",
+    "-CurrentDeviceUDID",
+    udid,
+    "-DetachOnWindowClose",
+    "YES",
+    "-DetachOnAppQuit",
+    "YES",
+  );
+  const readback = xcrun("spawn", udid, "launchctl", "print-disabled", "system");
+  const notInstalled = {
+    code: 1,
+    stderr: "LSCopyApplicationURLsForBundleIdentifier() failed",
+    stdout: "",
+  };
 
-  it.each([{ name: "DeviceHub installed", expected: [...bootCalls, deviceHub, select] }])(
+  it.each([
+    { name: "DeviceHub installed", expected: [...bootCalls, deviceHub, select] },
+    {
+      name: "DeviceHub not installed",
+      deviceHubResult: notInstalled,
+      expected: [...bootCalls, deviceHub, simulatorApp],
+    },
+    {
+      name: "recover",
+      options: { mode: "full", purpose: "recover" } as const,
+      expected: [...bootCalls, deviceHub, select],
+    },
+    {
+      name: "slim, opened before the readback",
+      data: slimData,
+      options: { mode: "slim", purpose: "prepare" } as const,
+      expected: [...bootCalls, deviceHub, select, readback],
+    },
+    { name: "the setting true", headless: true, expected: bootCalls },
+  ])(
     "shows a simulator in a window without taking focus when ios.simulator.headless is false: $name",
     async (c) => {
-      const runner = new ScriptedProcessRunner(c.expected.map((match) => ({ match })));
+      const runner = new ScriptedProcessRunner(
+        c.expected.map((match) => ({
+          match,
+          ...(match === deviceHub && c.deviceHubResult !== undefined
+            ? { result: c.deviceHubResult }
+            : match === readback
+              ? { result: { code: 0, stderr: "", stdout: wantedReadback() } }
+              : {}),
+        })),
+      );
       const driver = await IosSimctlDriver.create({
         clock: new FakeClock(),
         database: await memorySourceDatabase(),
@@ -5900,12 +5946,13 @@ describe("IosSimctlDriver simulator window", () => {
         launchdOverridesRoot: overridesRoot,
         processRunner: runner,
         simlockHome: "/home/.simlock",
-        simulatorHeadless: false,
+        simulatorHeadless: c.headless ?? false,
+        slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
       });
 
       const device = await driver.makeReady(
-        { address: udid, deviceId: udid, driverData },
-        { mode: "full", purpose: "prepare" },
+        { address: udid, deviceId: udid, driverData: c.data ?? driverData },
+        c.options ?? { mode: "full", purpose: "prepare" },
       );
 
       expect(device.address).toBe(udid);
