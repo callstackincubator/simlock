@@ -10,7 +10,7 @@
 // package publishes dist/ and Apache-2.0 §4(a) asks that whoever gets a binary gets its license too.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,22 +44,19 @@ function copyScrcpyServer() {
 // why: one product per call, so a build that fails on one program is not what skips the other;
 // the caller decides what the pair of outcomes means.
 function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
-  const result = spawnSync(
-    "swift",
-    [
-      "build",
-      "-c",
-      "release",
-      "--product",
-      product,
-      "--package-path",
-      packagePath,
-      "--scratch-path",
-      scratch,
-      ...archs.flatMap((arch) => ["--arch", arch]),
-    ],
-    { stdio: "inherit" },
-  );
+  const args = [
+    "build",
+    "-c",
+    "release",
+    "--product",
+    product,
+    "--package-path",
+    packagePath,
+    "--scratch-path",
+    scratch,
+    ...archs.flatMap((arch) => ["--arch", arch]),
+  ];
+  const result = spawnSync("swift", args, { stdio: "inherit" });
   // why: a failed spawn (no `swift` on the PATH) leaves `status` null, which is not 0 either, so
   // this one test covers both the tool that is missing and the build that failed.
   if (result.status !== 0) {
@@ -70,12 +67,17 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
   }
   const target = join(dist, "bin", product);
   mkdirSync(dirname(target), { recursive: true });
-  // why: with more than one --arch, SwiftPM builds through Xcode's build system, which writes the
-  // universal binary under apple/Products/Release rather than release/.
-  const built =
-    archs.length > 1
-      ? join(scratch, "apple", "Products", "Release", product)
-      : join(scratch, "release", product);
+  // why: with more than one --arch, SwiftPM builds through Xcode's build system, and where that
+  // writes the binary differs between Xcode versions (26: apple/Products/Release, 27:
+  // out/Products/Release), so the folder comes from SwiftPM itself rather than a guess.
+  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
+  const built = join(binPath.stdout?.trim() ?? "", product);
+  if (binPath.status !== 0 || !existsSync(built)) {
+    console.warn(
+      `build-capture: built ${product} but could not find it (swift build --show-bin-path); ${what} will be unavailable`,
+    );
+    return false;
+  }
   copyFileSync(built, target);
   chmodSync(target, 0o755);
   return true;

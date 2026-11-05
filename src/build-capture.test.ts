@@ -46,7 +46,8 @@ function scratchRepo(server: string, digest: string): string {
   return root;
 }
 
-// why: a `swift` that writes the program where `swift build` would, so the claim about what ships
+// why: a `swift` that writes the program where `swift build` would, and names that folder for
+// `--show-bin-path`, so the claim about what ships
 // beside the iOS programs is checked without a Swift toolchain. It honours `--product` like the
 // real build does, and fails the products named in SIMLOCK_FAKE_SWIFT_FAIL so a test can have one
 // program build and the other not.
@@ -61,16 +62,21 @@ function fakeSwift(repo: string): string {
       'scratch=""',
       'archs=""',
       "count=0",
+      "show=0",
       'while [ "$#" -gt 0 ]; do',
       '  if [ "$1" = "--product" ]; then shift; product="$1"; fi',
       '  if [ "$1" = "--scratch-path" ]; then shift; scratch="$1"; fi',
       '  if [ "$1" = "--arch" ]; then shift; archs="$archs $1"; count=$((count + 1)); fi',
+      '  if [ "$1" = "--show-bin-path" ]; then show=1; fi',
       "  shift",
       "done",
-      'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in *",$product,"*) exit 1 ;; esac',
-      // why: SwiftPM writes a build with more than one --arch under apple/Products/Release.
+      // why: a folder no fixed path in the script would name, as Xcode 27 writes a universal build
+      // under out/Products/Release and Xcode 26 under apple/Products/Release; only
+      // --show-bin-path knows.
       'out="$scratch/release"',
-      'if [ "$count" -gt 1 ]; then out="$scratch/apple/Products/Release"; fi',
+      'if [ "$count" -gt 1 ]; then out="$scratch/xcode-$count/Products/Release"; fi',
+      'if [ "$show" = 1 ]; then echo "$out"; exit 0; fi',
+      'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in *",$product,"*) exit 1 ;; esac',
       '/bin/mkdir -p "$out"',
       'echo "program for:$archs" > "$out/$product"',
     ].join("\n"),
