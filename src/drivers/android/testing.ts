@@ -859,7 +859,7 @@ export async function provisionedHarness(
     readonly initialAdbFailures?: number;
     readonly tcpListener?: FakeTcpListenerFactory;
     readonly unsettledPmAnswers?: readonly ProcessResult[];
-    readonly readinessTimeoutMs?: number;
+    readonly bootTimeoutMs?: number;
     readonly firstMarkToken?: string;
     readonly afterwards?: readonly ScriptedProcessExpectation[];
   } = {},
@@ -886,9 +886,7 @@ export async function provisionedHarness(
     ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
     ids,
     ...(options.tcpListener === undefined ? {} : { tcpListener: options.tcpListener }),
-    ...(options.readinessTimeoutMs === undefined
-      ? {}
-      : { readinessTimeoutMs: options.readinessTimeoutMs }),
+    ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
     tcpProbe,
   });
   const spec = await driver.resolveSpec({
@@ -919,7 +917,7 @@ export async function createDriver(
     readonly hostAbi?: string;
     readonly ids?: readonly string[];
     readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
-    readonly readinessTimeoutMs?: number;
+    readonly bootTimeoutMs?: number;
     readonly scrcpyServerPath?: string;
     readonly tcpListener?: FakeTcpListenerFactory;
     readonly tcpProbe?: FakeTcpProbe;
@@ -966,7 +964,7 @@ function onlyProvided(options: {
   readonly deviceProfileSources?: readonly DeviceProfileSource[];
   readonly emulator?: AndroidEmulatorLaunchOptions;
   readonly onDiagnostic?: (diagnostic: AndroidDriverDiagnostic) => void;
-  readonly readinessTimeoutMs?: number;
+  readonly bootTimeoutMs?: number;
   readonly scrcpyServerPath?: string;
   readonly tcpListener?: FakeTcpListenerFactory;
   readonly tcpStreamConnector?: FakeTcpStreamConnector;
@@ -985,11 +983,11 @@ function onlyProvided(options: {
     ...(options.deviceProfileSources === undefined
       ? {}
       : { deviceProfileSources: options.deviceProfileSources }),
-    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+    config: {
+      ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+      ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
+    },
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
-    ...(options.readinessTimeoutMs === undefined
-      ? {}
-      : { readinessTimeoutMs: options.readinessTimeoutMs }),
   };
 }
 

@@ -20,7 +20,7 @@ import type { StateDatabase } from "../state/index.js";
 import { FakeClock, FakeSystemStats, JsonLinesLogger, MemoryLogSink } from "../ports/index.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import type { EndedLease, LeaseEndParticipant } from "./lease-ports.js";
-import { createTestEngine, type TestEngine } from "./testing.js";
+import { createTestEngine, type TestEngine, type TestEngineConfig } from "./testing.js";
 
 const gibibyte = 1024 ** 3;
 const END_WAIT_MS = 600_000;
@@ -109,34 +109,9 @@ interface EngineOptions {
   readonly world?: World;
 }
 
-function config(options: EngineOptions): Config {
+function config(options: EngineOptions): TestEngineConfig {
   const ios = options.ios ?? { maxDevices: 1, maxRunning: 1 };
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
-    eventBuffer: { capacity: 1_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -147,7 +122,6 @@ function config(options: EngineOptions): Config {
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 48 * 60 * 60_000, shutdownAfterMs: 24 * 60 * 60_000 },
-    update: { check: true },
     lease: {
       defaultTtlMs: 3_600_000,
       maxTtlMs: 14_400_000,
@@ -169,12 +143,6 @@ function config(options: EngineOptions): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

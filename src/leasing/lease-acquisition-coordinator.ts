@@ -236,6 +236,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   #admissionClosed = false;
   // why: apart from #admissionClosed, which also stops the warm pool; an update refuses leases and leaves the pool running.
   #updateHold = false;
+  // why: set only by a stop (`settleAcquisitions`), never cleared; unlike maintenance, which a nuke ends, nothing reopens planning after it.
+  #stopPlanning = false;
   #maintenanceDepth = 0;
   readonly #logger: Logger;
 
@@ -425,6 +427,18 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
       }
     });
+    await this.#waitForWorkflows();
+  }
+
+  /**
+   * why: a stop waits for every request mid-provision or mid-boot, so the driver it then disposes is not under a boot still running (#1200). It also stops planning for good, so a failed boot waking the queue does not start another device the stop would wait for; a queued request ends with the daemon.
+   */
+  async settleAcquisitions(): Promise<void> {
+    this.#stopPlanning = true;
+    await this.#waitForWorkflows();
+  }
+
+  async #waitForWorkflows(): Promise<void> {
     while (this.#activeWorkflows.size > 0) {
       await Promise.allSettled(this.#activeWorkflows);
     }
@@ -1003,29 +1017,10 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#reject(waiter, new NukeCancelledError(), "killed");
       return undefined;
     }
+    if (this.#stopPlanning) return undefined;
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
-    if (plan.kind === "grant-ready") {
-      waiter.timing = grantReadyTiming(
-        this.options.drivers.get(plan.device.spec.platform),
-        plan.device.spec,
-      );
-      // why: the queue's own rule is that a timeout firing mid-attempt does not reject
-      // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
-      // this mark the waiter is still `queued` while the lease is written, so a timeout that
-      // falls due in that window rejects the caller over a lease that is being stored.
-      if (!this.options.queue.markProcessing(waiter)) return undefined;
-      try {
-        await this.#grant(waiter, plan.device, plan.kind);
-        // why: the next request in line may already have a ready device waiting for it, and no
-        // other event will wake it.
-        this.#wakeQueue();
-      } catch (error: unknown) {
-        this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
-        this.#defer(waiter, "waiting-for-device");
-      }
-      return undefined;
-    }
+    if (plan.kind === "grant-ready") return this.#decideGrantReady(waiter, plan);
     const operation = operationPlan(plan);
     if (operation === undefined) {
       this.#defer(waiter, blockedReason(plan));
@@ -1042,10 +1037,36 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     return operation;
   }
 
+  async #decideGrantReady(
+    waiter: AcquisitionWaiter,
+    plan: Extract<AcquisitionPlan, { kind: "grant-ready" }>,
+  ): Promise<undefined> {
+    waiter.timing = grantReadyTiming(
+      this.options.drivers.get(plan.device.spec.platform),
+      plan.device.spec,
+    );
+    // why: the queue's own rule is that a timeout firing mid-attempt does not reject
+    // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
+    // this mark the waiter is still `queued` while the lease is written, so a timeout that
+    // falls due in that window rejects the caller over a lease that is being stored.
+    if (!this.options.queue.markProcessing(waiter)) return undefined;
+    try {
+      await this.#grant(waiter, plan.device, plan.kind);
+      // why: the next request in line may already have a ready device waiting for it, and no
+      // other event will wake it.
+      this.#wakeQueue();
+    } catch (error: unknown) {
+      this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
+      this.#defer(waiter, "waiting-for-device");
+    }
+    return undefined;
+  }
+
   #nextPlan(waiter: AcquisitionWaiter): AcquisitionPlan | undefined {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
+
     if (this.#refuseUnderHold(waiter)) return undefined;
     this.#followBaseline(waiter);
     const head = this.options.queue.head;

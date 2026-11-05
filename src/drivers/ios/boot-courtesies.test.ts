@@ -50,7 +50,7 @@ describe("IosSimctlDriver ios.simulator.headless refusal", () => {
         instanceId,
         processRunner: new ScriptedProcessRunner([]),
         simlockHome: "/home/.simlock",
-        simulatorHeadless: headless,
+        config: { simulator: { audio: true, headless } },
       })
         .then(() => undefined)
         .catch((error: unknown) => error);
@@ -147,8 +147,10 @@ describe("IosSimctlDriver simulator window", () => {
         launchdOverridesRoot: overridesRoot,
         processRunner: runner,
         simlockHome: "/home/.simlock",
-        simulatorHeadless: c.headless ?? false,
-        slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+        config: {
+          simulator: { audio: true, headless: c.headless ?? false },
+          slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+        },
       });
 
       const device = await driver.makeReady(
@@ -218,7 +220,7 @@ describe("IosSimctlDriver simulator window", () => {
         onWindowFailed: (fact) => failures.push(fact),
         processRunner: runner,
         simlockHome: "/home/.simlock",
-        simulatorHeadless: false,
+        config: { simulator: { audio: true, headless: false } },
       });
 
       const ready = driver.makeReady(

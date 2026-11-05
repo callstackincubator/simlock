@@ -131,8 +131,10 @@ platform runs the deferred reclaim (step 21.2).
    watcher and background reclaims; core drains the warm pool.
    Then core shuts down every ready device with no lease (`core.shutdownIdle`, initiator
    `daemon-stop`; leased devices keep running), before any driver is disposed.
-6. Dispose — core and leasing timers, `ComponentInstaller.close`, agent-device
-   stop, every driver's `dispose` (all tried; failures logged), then the worker lock is
+6. Dispose — core and leasing timers, `ComponentInstaller.close`, then leasing stops planning
+   and waits for every lease request already provisioning or booting (a failed boot destroys its
+   device; a queued request starts nothing and ends with the daemon), then the modules' stop
+   (`beforeDriversDispose`: agent-device stop), then every driver's `dispose` (all tried; failures logged), then the worker lock is
    released (after the drivers, so no other worker sweeps while this one still acts on devices),
    then the event history stops (cancels its prune timer, closes `history.db`), so the stop's own
    events are written. A start that fails in the build releases the lock in `startDaemon`.

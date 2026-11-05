@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { promiseState } from "../../test-support/promise-state.js";
 import {
   ComponentInUseError,
   ComponentNotOwnedError,
@@ -498,13 +499,13 @@ describe("AndroidDriver", () => {
     expect(harness.clock.pendingTimerCount, "timers still armed after shutdown").toBe(0);
   });
 
-  it("kills an emulator that has not exited within the readiness timeout of a shutdown", async () => {
+  it("kills an emulator that has not exited 180 s after a shutdown, whatever the boot timeout is", async () => {
     const harness = await provisionedHarness({
       afterwards: [
         copyPathExpectation("emulator-5586"),
         processResult(binaries.adb, ["-s", "emulator-5586", "emu", "kill"]),
       ],
-      readinessTimeoutMs: 2_000,
+      bootTimeoutMs: 600_000,
     });
     const ready = await harness.driver.makeReady(harness.device);
     const launch = harness.runner.calls.findLastIndex(
@@ -520,7 +521,7 @@ describe("AndroidDriver", () => {
     const shutdown = harness.driver.shutdown(ready);
     await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(armedBefore));
     expect(kill).not.toHaveBeenCalled();
-    harness.clock.advance(2_000);
+    harness.clock.advance(180_000);
     await shutdown;
 
     expect(kill).toHaveBeenCalledWith("SIGKILL");
@@ -614,33 +615,58 @@ describe("AndroidDriver", () => {
     expect((await harness.filesystem.lstat(logPath)).mode & 0o777).toBe(0o600);
   });
 
-  it("times out readiness and kills the emulator process", async () => {
-    const harness = await provisionedHarness({ bootCompleted: "0\n", readinessTimeoutMs: 2_000 });
-    const kills: string[] = [];
-    const originalSpawn = harness.runner.spawn.bind(harness.runner);
-    vi.spyOn(harness.runner, "spawn").mockImplementation((command, args, options) => {
-      const handle = originalSpawn(command, args, options);
-      const kill = handle.kill.bind(handle);
-      return {
-        pid: handle.pid,
-        stderr: handle.stderr,
-        stdout: handle.stdout,
-        kill(signal) {
-          kills.push(signal ?? "SIGTERM");
-          kill(signal);
-        },
-        unref: () => handle.unref(),
-        wait: () => handle.wait(),
-      };
-    });
+  it("an Android boot waits android.bootTimeoutMs, then kills the emulator and fails with BootTimeoutError", async () => {
+    for (const { key, waitsMs } of [
+      { key: undefined, waitsMs: 300_000 },
+      { key: 600_000, waitsMs: 600_000 },
+    ]) {
+      const harness = await provisionedHarness({
+        bootCompleted: "0\n",
+        ...(key === undefined ? {} : { bootTimeoutMs: key }),
+      });
+      const kills: string[] = [];
+      const originalSpawn = harness.runner.spawn.bind(harness.runner);
+      vi.spyOn(harness.runner, "spawn").mockImplementation((command, args, options) => {
+        const handle = originalSpawn(command, args, options);
+        const kill = handle.kill.bind(handle);
+        return {
+          pid: handle.pid,
+          stderr: handle.stderr,
+          stdout: handle.stdout,
+          kill(signal) {
+            kills.push(signal ?? "SIGTERM");
+            kill(signal);
+          },
+          unref: () => handle.unref(),
+          wait: () => handle.wait(),
+        };
+      });
 
-    const polledBefore = bootPolls(harness.runner);
-    const ready = harness.driver.makeReady(harness.device);
-    await vi.waitFor(() => expect(bootPolls(harness.runner)).toBeGreaterThan(polledBefore));
-    harness.clock.advance(2_000);
+      // why: the script answers one poll; a boot that outlasts minutes keeps being told it is not done.
+      const scripted = harness.runner.run.bind(harness.runner);
+      vi.spyOn(harness.runner, "run").mockImplementation((command, args, options) =>
+        args.at(-1) === "sys.boot_completed"
+          ? Promise.resolve({ code: 0, stderr: "", stdout: "0\n" })
+          : scripted(command, args, options),
+      );
 
-    await expect(ready).rejects.toMatchObject({ name: "BootTimeoutError" });
-    expect(kills).toContain("SIGKILL");
+      const ready = harness.driver.makeReady(harness.device);
+      const state = promiseState(ready);
+      const failed = expect(ready).rejects.toMatchObject({ name: "BootTimeoutError" });
+      // why: each poll arms the next delay only after the previous one fired, so the clock moves in steps.
+      for (let elapsed = 0; elapsed < waitsMs - 1; elapsed += 1_000) {
+        await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+        harness.clock.advance(Math.min(1_000, waitsMs - 1 - elapsed));
+        for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      }
+      expect(state.state, `still booting just before ${String(waitsMs)} ms`).toBe("pending");
+      expect(kills).toEqual([]);
+
+      await vi.waitFor(() => expect(harness.clock.pendingTimerCount).toBeGreaterThan(0));
+      harness.clock.advance(1);
+      await failed;
+      expect(kills).toContain("SIGKILL");
+    }
   });
 
   it("retries adb while the emulator is starting", async () => {

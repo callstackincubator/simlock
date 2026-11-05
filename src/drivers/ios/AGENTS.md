@@ -10,6 +10,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | File                      | Role                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `index.ts`                | `IosSimctlDriver`: every `Driver` verb, slim overrides write and readback, `simctl` passthrough rules                                                                                              |
+| `definition.ts`           | `iosDriverConfig`: the driver's keys of the `ios` config section (`full`, `slim`, `simulator`), their validators and defaults; `IosDriverConfig`, taken as `create`'s `config` option              |
 | `device-data.ts`          | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`, no longer written) |
 | `device-set-leftovers.ts` | `refuseOwnSetLeftovers`, `refuseXcodeSetLeftovers`: the file-only check for simulators left from the other `deviceSet`                                                                             |
 | `boot-courtesies.ts`      | `runAfterBoot`: the volume step (`ios.simulator.audio: false`) and the window step (`ios.simulator.headless: false`) that follow a boot; each only reports its failure                             |
@@ -101,17 +102,17 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 
 ## State and timers
 
-| What                          | Default                     | Key                      |
-| ----------------------------- | --------------------------- | ------------------------ |
-| Device root                   | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
-| Device set                    | `simlock`                   | `drivers.ios.deviceSet`  |
-| Default mode                  | `full`                      | `ios.defaultMode`        |
-| Slim categories               | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
-| Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
-| Bootstatus + installer (full) | 120 s                       | none                     |
-| Any other `simctl` call       | 30 s                        | none                     |
-| Slim readback                 | 120 s                       | none                     |
-| `devicectl` read / uninstall  | 30 s / 60 s                 | none                     |
+| What                                                   | Default                     | Key                      |
+| ------------------------------------------------------ | --------------------------- | ------------------------ |
+| Device root                                            | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
+| Device set                                             | `simlock`                   | `drivers.ios.deviceSet`  |
+| Default mode                                           | `full`                      | `ios.defaultMode`        |
+| Slim categories                                        | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
+| Slim boot deadline                                     | 10 min                      | `ios.slim.bootTimeoutMs` |
+| Bootstatus + installer (full), recovery and seed boots | 5 min                       | `ios.full.bootTimeoutMs` |
+| Any other `simctl` call                                | 30 s                        | none                     |
+| Slim readback                                          | 120 s                       | none                     |
+| `devicectl` read / uninstall                           | 30 s / 60 s                 | none                     |
 
 Writes: the device set (by `simctl`), the two mark files per device. The registry is the only
 record of a device's mode. Also writes, and deletes with the device, its folder in `/private/var/tmp` (`launchdOverridesRoot` option).

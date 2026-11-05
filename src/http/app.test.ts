@@ -47,13 +47,11 @@ import {
   makeGrant,
   makeLease,
   sequenceIdGenerator,
-  testConfig,
   waitForDispatch,
 } from "./test-fakes.js";
 
 function buildHarness(
   overrides: {
-    readonly config?: HttpGatewayDeps["config"];
     readonly leaseRequests?: HttpGatewayDeps["leaseRequests"];
     /** A gateway's device reader, in place of the fake worker registry. */
     readonly registry?: HttpGatewayDeps["registry"];
@@ -84,7 +82,6 @@ function buildHarness(
     );
   const logSink = new MemoryLogSink();
   const logger = new JsonLinesLogger({ clock, sink: logSink });
-  const config = overrides.config ?? testConfig();
 
   // Default `lease.list` behaviour mirrors the real dispatcher's handler (agent sees its own
   // leases by `ownerId`, admin sees all) -- most lease-detail routes go through it via
@@ -108,7 +105,6 @@ function buildHarness(
 
   const app = createHttpApp({
     clock,
-    config,
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),
@@ -123,7 +119,7 @@ function buildHarness(
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),
   });
 
-  return { app, clock, config, dispatcher, eventBus, logSink, registry };
+  return { app, clock, dispatcher, eventBus, logSink, registry };
 }
 
 type App = ReturnType<typeof buildHarness>["app"];
@@ -2757,7 +2753,7 @@ describe("POST /v1/workers/{id}/update", () => {
   });
 
   it("answers 202 when the call began the update and 200 when it followed one, dispatches worker.update with the id from the path and the body, refuses an agent and a bad body", async () => {
-    const { app, dispatcher } = buildHarness({ config: testConfig({}, "gateway") });
+    const { app, dispatcher } = buildHarness();
     let reply: Record<string, unknown> = answer({ started: true, resolved: "0.4.0" });
     dispatcher.handlers["worker.update"] = (input, session) =>
       runDispatch("worker.update", input, session, {
@@ -2816,12 +2812,11 @@ describe("POST /v1/workers/{id}/update", () => {
 
 describe("worker routes", () => {
   function gatewayHarness() {
-    return buildHarness({ config: testConfig({}, "gateway") });
+    return buildHarness();
   }
 
   it("are routes on a worker too (ADR 0012 §3), each dispatching its operation", async () => {
-    const { app, config, dispatcher } = buildHarness();
-    expect(config.mode).toBe("worker");
+    const { app, dispatcher } = buildHarness();
     dispatcher.handlers["worker.list"] = () => ({ workers: [] });
     for (const operation of ["worker.drain", "worker.undrain", "worker.remove"] as const) {
       dispatcher.handlers[operation] = () => {

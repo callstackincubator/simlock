@@ -270,9 +270,12 @@ describe("daemon lifecycle & recovery", () => {
           ],
         },
       },
-    });
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 15", "iPhone 16", "iPhone 17"], availableOsVersions: ["18.4"] },
+      driverScript: {
+        ios: {
+          knownModels: ["iPhone 15", "iPhone 16", "iPhone 17"],
+          availableOsVersions: ["18.4"],
+        },
+      },
     });
     const idle = [
       await waitForReadyDevice(env, "iPhone 16"),
@@ -309,9 +312,7 @@ describe("daemon lifecycle & recovery", () => {
           targets: [{ count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
         },
       },
-    });
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
     await waitForReadyDevice(env, "iPhone 16");
     await env.driverScript.merge({

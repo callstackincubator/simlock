@@ -35,10 +35,12 @@ import { LeaseStartup } from "./lease-startup.js";
 import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
+export type LeasingConfig = Pick<Config, "health" | "lease">;
+
 export interface LeasingOptions {
   readonly clock: Clock;
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: LeasingConfig;
   readonly core: Core;
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
@@ -84,6 +86,8 @@ export interface Leasing extends LeaseCommands, QueueControl, DeviceModeReader, 
    * timer, and cancelling first would strand it armed.
    */
   settle(): Promise<void>;
+  /** why: waits for every request provisioning or booting now; called in `dispose` after the components close and before any driver is disposed (#1200). */
+  settleAcquisitions(): Promise<void>;
   /**
    * why: cancelling expires nothing and releases nothing: `ttlDeadline` is persisted and
    * re-armed on the next start. Without this a lease's TTL timer keeps the process alive after
@@ -276,6 +280,7 @@ export function createLeasing(options: LeasingOptions): Leasing {
       await physicalDeviceWatcher.settle();
       await releaseCoordinator.settleBackgroundReclaims();
     },
+    settleAcquisitions: () => acquisition.settleAcquisitions(),
     dispose: () => {
       releaseCoordinator.dispose();
       physicalDeviceWatcher.dispose();

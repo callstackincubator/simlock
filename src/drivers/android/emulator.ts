@@ -18,6 +18,7 @@ import { AdbRegistrar } from "./adb-registrar.js";
 import { deviceIdOf, type AdbTools } from "./adb-tools.js";
 import { GRPC_PORT_OFFSET } from "./console-ports.js";
 import type { AndroidDriverData } from "./data.js";
+import { androidDriverConfig, type AndroidEmulatorLaunchOptions } from "./definition.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
 import { emulatorHelpLists } from "./sdk-paths.js";
 
@@ -27,10 +28,12 @@ import { emulatorHelpLists } from "./sdk-paths.js";
 // threshold from this number, so a low estimate flags healthy boots on a slower machine.
 export const COLD_BOOT_ESTIMATE_MS = 70_000;
 const PORT_POLL_INTERVAL_MS = 2_000;
+// why: how long an emulator that was asked to stop may take to exit, whatever the boot deadline is.
+const EMULATOR_EXIT_TIMEOUT_MS = 180_000;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
 // already attached, short enough that a lost announcement costs seconds, not the whole
-// readiness timeout.
+// boot deadline.
 const REGISTRATION_RETRY_AFTER_MS = 5_000;
 // why: A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
@@ -40,25 +43,7 @@ const EMULATOR_LOG_TAIL_BYTES = 8_192;
 const EMULATOR_LOG_TAIL_LINES = 10;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 
-/**
- * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
- * reaches the driver at construction and never from a lease request. Only these four settings
- * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
- * `-port`, a different AVD home, or any other argument that would break containment.
- */
-export interface AndroidEmulatorLaunchOptions {
-  readonly headless: boolean;
-  readonly gpu: string;
-  readonly audio: boolean;
-  readonly bootAnimation: boolean;
-}
-
-export const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
-  audio: true,
-  bootAnimation: true,
-  gpu: "auto",
-  headless: false,
-};
+export const DEFAULT_EMULATOR_LAUNCH = androidDriverConfig.defaults.emulator;
 
 const EMULATOR_HELP_TIMEOUT_MS = 30_000;
 
@@ -80,7 +65,7 @@ export interface EmulatorOptions {
   readonly onDiagnostic: ((diagnostic: SnapshotColdBootDiagnostic) => void) | undefined;
   readonly ownership: Ownership;
   readonly processRunner: ProcessRunner;
-  readonly readinessTimeoutMs: number;
+  readonly bootTimeoutMs: number;
   readonly tcpProbe: TcpProbe;
 }
 
@@ -163,7 +148,7 @@ export class Emulator {
       const attached = (await this.#options.adbTools.scanSerials()).settledSerials;
       remaining = remaining.filter((serial) => attached.includes(serial));
       if (remaining.length === 0) return;
-      if (this.#options.clock.now() - startedAt >= this.#options.readinessTimeoutMs) {
+      if (this.#options.clock.now() - startedAt >= EMULATOR_EXIT_TIMEOUT_MS) {
         throw new DriverCrashError(
           `Refusing to delete ${deviceIdOf(data)}: its emulator on ${remaining.join(", ")} did not exit`,
         );
@@ -199,9 +184,9 @@ export class Emulator {
     startedAt: number,
     abandoned: () => boolean = () => false,
   ): Promise<void> {
-    const { adbTools, clock, readinessTimeoutMs } = this.#options;
+    const { adbTools, clock, bootTimeoutMs } = this.#options;
     while (!abandoned()) {
-      if (clock.now() - startedAt >= readinessTimeoutMs) {
+      if (clock.now() - startedAt >= bootTimeoutMs) {
         throw new BootTimeoutError(data.avdName);
       }
 
@@ -219,7 +204,7 @@ export class Emulator {
           await this.register(data.port);
         }
         await adbTools.delay(
-          Math.min(PORT_POLL_INTERVAL_MS, readinessTimeoutMs - (clock.now() - startedAt)),
+          Math.min(PORT_POLL_INTERVAL_MS, bootTimeoutMs - (clock.now() - startedAt)),
         );
         continue;
       }
@@ -228,7 +213,7 @@ export class Emulator {
       }
 
       await adbTools.delay(
-        Math.min(PORT_POLL_INTERVAL_MS, readinessTimeoutMs - (clock.now() - startedAt)),
+        Math.min(PORT_POLL_INTERVAL_MS, bootTimeoutMs - (clock.now() - startedAt)),
       );
     }
   }
@@ -348,7 +333,7 @@ export class Emulator {
       return;
     }
 
-    const exited = await this.waitForExit(handle, this.#options.readinessTimeoutMs);
+    const exited = await this.waitForExit(handle, EMULATOR_EXIT_TIMEOUT_MS);
     if (!exited) {
       handle.kill("SIGKILL");
       await this.waitForExit(handle, SIGKILL_REAP_TIMEOUT_MS);

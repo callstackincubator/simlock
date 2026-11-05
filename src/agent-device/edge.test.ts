@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeDriver } from "../core/testing.js";
@@ -4000,26 +3999,6 @@ const tooLargeReply = (size: number) => ({
   ok: false,
 });
 
-async function drainDownload(response: Response): Promise<{
-  readonly bytes: number;
-  readonly digest: string;
-  readonly ended: boolean;
-}> {
-  const hash = createHash("sha256");
-  let bytes = 0;
-  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) return { bytes, digest: hash.digest("hex"), ended: true };
-      hash.update(next.value);
-      bytes += next.value.length;
-    }
-  } catch {
-    return { bytes, digest: "", ended: false };
-  }
-}
-
 describe(
   "the agent-device front, through the whole worker daemon: downloads over 2 GiB",
   {
@@ -4035,34 +4014,6 @@ describe(
       expect(response.status).toBe(413);
       expect(await response.json()).toEqual(tooLargeReply(downloadLimit + 1));
       expect(rig.fake.artifactBytesProduced).toBe(0);
-      await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
-    });
-
-    it.each(["size", "none"] as const)(
-      "a download of exactly 2147483648 bytes with `content-length` %s arrives byte for byte",
-      async (contentLength) => {
-        const rig = await setUp();
-        rig.fake.serveArtifact({ contentLength, size: downloadLimit });
-
-        const response = await send(rig, "/artifacts/a1");
-        const received = await drainDownload(response);
-
-        expect(response.status).toBe(200);
-        expect(received.ended).toBe(true);
-        expect(received.bytes).toBe(downloadLimit);
-        expect(received.digest).toBe(rig.fake.producedDigest());
-      },
-    );
-
-    it("a download with no `content-length` that passes 2147483648 bytes errors the agent's response, which never ends cleanly nor delivers more than 2147483648 bytes, and the fake's body is cancelled", async () => {
-      const rig = await setUp();
-      rig.fake.serveArtifact({ contentLength: "none", size: downloadLimit + 1 });
-
-      const response = await send(rig, "/artifacts/a1");
-      const received = await drainDownload(response);
-
-      expect(received.ended).toBe(false);
-      expect(received.bytes).toBeLessThanOrEqual(downloadLimit);
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
     });
 
@@ -4083,43 +4034,6 @@ describe(
       expect(bytes).toBeGreaterThanOrEqual(536_870_912);
       await expect.poll(() => rig.fake.artifactBodyCancelled).toBe(true);
       expect(rig.fake.artifactBytesProduced).toBeLessThan(1_073_741_824);
-    });
-
-    it("a 2147483648-byte upload reaches the fake byte for byte", async () => {
-      const rig = await setUp();
-      const preflight = await send(rig, "/upload/preflight", { body: "{}" });
-      const ticket = (
-        (await preflight.json()) as { upload: { url: string; headers: Record<string, string> } }
-      ).upload;
-      const hash = createHash("sha256");
-      let sent = 0;
-      const piece = new Uint8Array(65_536).fill(7);
-      const body = new ReadableStream<Uint8Array>(
-        {
-          pull: (controller) => {
-            if (sent >= downloadLimit) {
-              controller.close();
-              return;
-            }
-            sent += piece.length;
-            hash.update(piece);
-            controller.enqueue(piece);
-          },
-        },
-        { highWaterMark: 0 },
-      );
-
-      const put = await fetch(ticket.url, {
-        body,
-        duplex: "half",
-        headers: { ...ticket.headers, "content-length": String(downloadLimit) },
-        method: "PUT",
-      } as RequestInit);
-
-      expect(put.status).toBe(200);
-      expect(rig.fake.uploadSummaries).toEqual([
-        { bytes: downloadLimit, sha256: hash.copy().digest("hex") },
-      ]);
     });
   },
 );

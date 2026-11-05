@@ -55,6 +55,7 @@ function createPart(
   filesystem: MemoryFilesystem,
   processRunner: ProcessRunner,
   options: {
+    readonly bootTimeoutMs?: number;
     readonly clock?: FakeClock;
     readonly database: Awaited<ReturnType<typeof memoryAndroidSourceDatabase>>;
     readonly deviceProfileSources?: readonly DeviceProfileSource[];
@@ -97,7 +98,7 @@ function createPart(
     onDiagnostic: undefined,
     ownership,
     processRunner,
-    readinessTimeoutMs: 180_000,
+    bootTimeoutMs: options.bootTimeoutMs ?? 300_000,
     tcpProbe: new FakeTcpProbe([adbServerPort]),
   });
   const systemImages = new SystemImages({
@@ -132,6 +133,7 @@ function createPart(
     adbTools,
     avdConfig,
     avdmanager: binaries.avdmanager,
+    bootTimeoutMs: options.bootTimeoutMs ?? 300_000,
     catalog,
     clock,
     consolePorts: new ConsolePorts({
@@ -189,6 +191,7 @@ const seedHome = `${sources}/seed_two`;
 async function seedHarness(
   expectations: readonly ScriptedProcessExpectation[],
   options: {
+    readonly bootTimeoutMs?: number;
     readonly clock?: FakeClock;
     readonly config?: string;
     readonly filesystem?: MemoryFilesystem;
@@ -203,6 +206,7 @@ async function seedHarness(
     ...expectations,
   ]);
   const part = createPart(filesystem, runner, {
+    ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     database,
     ids: options.ids ?? ["one", "two", "three"],
@@ -874,7 +878,7 @@ describe("Seeds", () => {
           message: "no such package",
         },
         {
-          advance: 180_000,
+          advance: 300_000,
           expectations: [stage.version, stage.create, ...neverReady],
           message: "Timed out waiting for device to boot",
         },
@@ -1102,7 +1106,7 @@ describe("Seeds", () => {
       expect(seed).not.toHaveProperty("sizeBytes");
     });
 
-    it("sweeps a making row an earlier process left, stopping its emulator by path, and one this process has been making for over 900 s, and leaves any other this process is making", async () => {
+    it("sweeps a making row an earlier process left, stopping its emulator by path, and one this process has been making past the larger of 900 s and twice android.bootTimeoutMs plus 600 s, and leaves any other this process is making", async () => {
       const serial = "emulator-5586";
       const clock = new FakeClock();
       const stage = seedStages();
@@ -1139,7 +1143,7 @@ describe("Seeds", () => {
       ]);
       await expect(restarted.seeds.listSources()).resolves.toEqual([]);
       expect(await harness.filesystem.exists(seedHome)).toBe(false);
-      clock.advance(180_000);
+      clock.advance(300_000);
       await failed;
 
       const slowClock = new FakeClock();
@@ -1156,7 +1160,7 @@ describe("Seeds", () => {
           ),
           processResult(binaries.adb, ["devices"], "List of devices attached\n"),
         ],
-        { clock: slowClock },
+        { bootTimeoutMs: 600_000, clock: slowClock },
       );
       const slowMaking = slow.seeds.provision(slow.spec);
       const slowFailed = expect(slowMaking).rejects.toThrow();
@@ -1170,15 +1174,58 @@ describe("Seeds", () => {
           .prepare("UPDATE android_source_data SET created_at = ?")
           .run(slowClock.now() - ageMs);
 
-      ageTo(900_000);
+      ageTo(1_000_000);
       await slow.seeds.listSources();
       expect(await slow.filesystem.exists(seedHome)).toBe(true);
 
-      ageTo(900_001);
+      ageTo(1_800_000);
+      await slow.seeds.listSources();
+      expect(await slow.filesystem.exists(seedHome)).toBe(true);
+
+      ageTo(1_800_001);
       await slow.seeds.listSources();
       expect(await slow.filesystem.exists(seedHome)).toBe(false);
-      slowClock.advance(180_000);
+      slowClock.advance(600_000);
       await slowFailed;
+
+      const quickClock = new FakeClock();
+      const quick = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          stage.firstBoot[0] as ScriptedProcessExpectation,
+          processResult(
+            binaries.adb,
+            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+            "0\n",
+          ),
+          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ],
+        { bootTimeoutMs: 60_000, clock: quickClock },
+      );
+      const quickMaking = quick.seeds.provision(quick.spec);
+      const quickFailed = expect(quickMaking).rejects.toThrow();
+      await vi.waitFor(() =>
+        expect(quick.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
+          true,
+        ),
+      );
+      const quickAgeTo = (ageMs: number) =>
+        quick.database
+          .prepare("UPDATE android_source_data SET created_at = ?")
+          .run(quickClock.now() - ageMs);
+
+      // why: twice 60 s plus 600 s is 720 s, under the 900 s floor, which then decides.
+      quickAgeTo(900_000);
+      await quick.seeds.listSources();
+      expect(await quick.filesystem.exists(seedHome)).toBe(true);
+
+      quickAgeTo(900_001);
+      await quick.seeds.listSources();
+      expect(await quick.filesystem.exists(seedHome)).toBe(false);
+      quickClock.advance(60_000);
+      await quickFailed;
     });
   });
 });

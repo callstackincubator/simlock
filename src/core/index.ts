@@ -9,6 +9,8 @@ export {
   type DaemonMode,
   // fallow-ignore-next-line unused-type -- public Config surface (config.downloads.policy); no in-tree consumer names it directly yet
   type DownloadPolicy,
+  driverConfig,
+  type DriverConfigEntry,
   effectiveAllowDownload,
   loadConfig,
   loadConfigWithDefaults,
@@ -47,11 +49,14 @@ export {
 export { automaticCleanupRules, type CleanupRule, type RegistryView } from "./cleanup/index.js";
 export { CleanupReaper } from "./reaper.js";
 export {
+  booleanValue,
   ConfigError,
   integerInRange,
   invalidValue,
   nonEmptyString,
   objectValidator,
+  positiveNumber,
+  stringArray,
 } from "./validation.js";
 export {
   BootTimeoutError,
@@ -216,7 +221,7 @@ export {
   type PassthroughContext,
   type ReclaimResult,
 } from "./driver.js";
-export { type Core, type CorePorts, createCore } from "./create-core.js";
+export { type Core, type CoreConfig, type CorePorts, createCore } from "./create-core.js";
 export { DeviceOperationClaims, type DeviceOperationClaim } from "./device-operation-claims.js";
 export {
   DeviceBusyError,

@@ -10,7 +10,7 @@
 // package publishes dist/ and Apache-2.0 §4(a) asks that whoever gets a binary gets its license too.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,27 +41,37 @@ function copyScrcpyServer() {
   copyNotices("scrcpy");
 }
 
+// why: with more than one --arch, SwiftPM builds through Xcode's build system, and where that
+// writes the binary differs between Xcode versions (26: apple/Products/Release, 27:
+// out/Products/Release), so the folder comes from SwiftPM itself rather than a guess. Answers
+// undefined when SwiftPM names no folder holding the program.
+function builtProductPath(args, product) {
+  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
+  if (binPath.status !== 0) return undefined;
+  const built = join(binPath.stdout.trim(), product);
+  return existsSync(built) ? built : undefined;
+}
+
 // why: one product per call, so a build that fails on one program is not what skips the other;
 // the caller decides what the pair of outcomes means.
-function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
-  const result = spawnSync(
-    "swift",
-    [
-      "build",
-      "-c",
-      "release",
-      "--product",
-      product,
-      "--package-path",
-      packagePath,
-      "--scratch-path",
-      scratch,
-    ],
-    { stdio: "inherit" },
-  );
+function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
+  const args = [
+    "build",
+    "-c",
+    "release",
+    "--product",
+    product,
+    "--package-path",
+    packagePath,
+    "--scratch-path",
+    scratch,
+    ...archs.flatMap((arch) => ["--arch", arch]),
+  ];
+  const result = spawnSync("swift", args, { stdio: "inherit" });
   // why: a failed spawn (no `swift` on the PATH) leaves `status` null, which is not 0 either, so
   // this one test covers both the tool that is missing and the build that failed.
-  if (result.status !== 0) {
+  const built = result.status === 0 ? builtProductPath(args, product) : undefined;
+  if (built === undefined) {
     console.warn(
       `build-capture: could not build ${product} (is Xcode installed and selected?); ${what} will be unavailable`,
     );
@@ -69,7 +79,7 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch) {
   }
   const target = join(dist, "bin", product);
   mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(join(scratch, "release", product), target);
+  copyFileSync(built, target);
   chmodSync(target, 0o755);
   return true;
 }
@@ -82,13 +92,16 @@ function buildIosCapture() {
   const packagePath = join(root, "vendor/screen-capture");
   const scratch = join(packagePath, ".build/out");
   // why: each program builds on its own -- the device program links a private framework the
-  // simulator program never needs, so one failing must not take the other's streams with it.
+  // simulator program never needs, so one failing must not take the other's streams with it. The
+  // simulator program runs on the worker's own CPU, and an Intel Mac or an x86_64 macOS VM is a
+  // worker too, so it ships universal; the device program needs Xcode 27, which runs on Apple
+  // silicon only, so it builds for the host alone.
   const products = [
-    ["simlock-screen-capture", "iOS screen streams"],
-    ["simlock-device-capture", "physical iPhone streams"],
+    ["simlock-screen-capture", "iOS screen streams", ["arm64", "x86_64"]],
+    ["simlock-device-capture", "physical iPhone streams", []],
   ];
-  const copied = products.filter(([product, what]) =>
-    buildAndCopySwiftProduct(product, what, packagePath, scratch),
+  const copied = products.filter(([product, what, archs]) =>
+    buildAndCopySwiftProduct(product, what, packagePath, scratch, archs),
   );
   if (copied.length > 0) copyNotices("screen-capture");
 }

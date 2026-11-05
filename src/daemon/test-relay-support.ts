@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, type Hash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -463,48 +463,4 @@ export function startCountingProxy(targetPort: number): Promise<CountingProxy> {
       });
     });
   });
-}
-
-const CHECKPOINT = 64 * MIB;
-const checkpoints = new Map<string, Hash[]>();
-
-function checkpointsFor(total: number, seed: number): Hash[] {
-  const key = `${String(total)}:${String(seed)}`;
-  const known = checkpoints.get(key);
-  if (known !== undefined) return known;
-  const states: Hash[] = [];
-  const hash = createHash("sha256");
-  for (let offset = 0; offset < total; offset += CHECKPOINT) {
-    states.push(hash.copy());
-    hash.update(patternBytes(Math.min(CHECKPOINT, total - offset), seed, offset));
-  }
-  checkpoints.set(key, states);
-  return states;
-}
-
-/** why: the digest of the pattern with the chunk `[first, first + firstSize)` and the chunk `[second, second + secondSize)` exchanged, where `first + firstSize <= second`. */
-export function patternDigestSwapped(
-  total: number,
-  seed: number,
-  swap: {
-    readonly first: number;
-    readonly second: number;
-    readonly firstSize: number;
-    readonly secondSize: number;
-  },
-): string {
-  const states = checkpointsFor(total, seed);
-  const start = Math.floor(swap.first / CHECKPOINT) * CHECKPOINT;
-  const hash = (states[start / CHECKPOINT] as Hash).copy();
-  const feed = (from: number, to: number) => {
-    for (let offset = from; offset < to; offset += MIB) {
-      hash.update(patternBytes(Math.min(MIB, to - offset), seed, offset));
-    }
-  };
-  feed(start, swap.first);
-  hash.update(patternBytes(swap.secondSize, seed, swap.second));
-  feed(swap.first + swap.firstSize, swap.second);
-  hash.update(patternBytes(swap.firstSize, seed, swap.first));
-  feed(swap.second + swap.secondSize, total);
-  return hash.digest("hex");
 }

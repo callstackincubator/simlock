@@ -201,9 +201,9 @@ export default {
     {
       name: "definition-is-light",
       comment:
-        "a module's definition.ts imports its own module only for types or by dynamic import, so reading the registry loads no module code",
+        "a module's or a driver's definition.ts imports its own module only for types or by dynamic import, so reading a registry loads no module or driver code",
       severity: "error",
-      from: { path: "^src/([^/]+)/definition\\.ts$" },
+      from: { path: "^src/((?:drivers/)?[^/]+)/definition\\.ts$" },
       to: {
         dependencyTypesNot: ["type-only", "dynamic-import"],
         path: "^src/$1/",

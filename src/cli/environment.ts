@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { resolveRequesterId } from "../agent-identity/index.js";
 import type { SimlockAdminClient } from "../admin/index.js";
-import type { ConfigOverrides, ModuleConfigEntry } from "../core/index.js";
+import type { ConfigOverrides, DriverConfigEntry, ModuleConfigEntry } from "../core/index.js";
 import type {
   Clock,
   DaemonExit,
@@ -225,13 +225,23 @@ async function isUnavailable(error: unknown): Promise<boolean> {
   return isEndpointAbsent(error);
 }
 
-async function moduleConfigEntries(): Promise<readonly ModuleConfigEntry[]> {
-  const { optionalModules } = await import("../module-registry/index.js");
-  return optionalModules.map(({ config, enabledByDefault, name }) => ({
-    name,
-    ...config,
-    ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
-  }));
+// why: the same module and driver sections the daemon loads its config with, so the CLI accepts and refuses the same keys.
+async function configSections(): Promise<{
+  readonly driverSections: readonly DriverConfigEntry[];
+  readonly modules: readonly ModuleConfigEntry[];
+}> {
+  const [{ optionalModules }, { driverConfigEntries }] = await Promise.all([
+    import("../module-registry/index.js"),
+    import("../driver-registry/index.js"),
+  ]);
+  return {
+    driverSections: driverConfigEntries,
+    modules: optionalModules.map(({ config, enabledByDefault, name }) => ({
+      name,
+      ...config,
+      ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
+    })),
+  };
 }
 
 async function readAdminTokenFile(
@@ -318,7 +328,7 @@ export function buildCliEnvironment(
       await loadConfig({
         configPath,
         filesystem,
-        modules: await moduleConfigEntries(),
+        ...(await configSections()),
         role: daemonHome.role,
         systemStats,
       });
@@ -459,7 +469,7 @@ export function buildCliEnvironment(
       await loadConfig({
         configPath: "/config-set-validation.json",
         filesystem: new MemoryFilesystem(),
-        modules: await moduleConfigEntries(),
+        ...(await configSections()),
         overrides: merged as ConfigOverrides,
         role: daemonHome.role,
         systemStats,

@@ -21,7 +21,7 @@ import type { Registry } from "./registry.js";
 import { SerializedDecision } from "./serialized-decision.js";
 import { StartupRead } from "./startup-read.js";
 import { loadTestRegistry, openTestState, testComponentWiring, testStateOf } from "./testing.js";
-import { createTestEngine } from "../leasing/testing.js";
+import { createTestEngine, type TestEngineConfig } from "../leasing/testing.js";
 
 describe("Doctor", () => {
   it("reports all reconciliation drift classes without changing state", async () => {
@@ -3007,21 +3007,10 @@ function withAdvisories(
   return Object.assign(driver, { advisories: () => Promise.resolve(advisories) });
 }
 
-function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {}): Config {
+function config(
+  stalledTransitionOverrides: Partial<Config["stalledTransition"]> = {},
+): TestEngineConfig {
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 1 },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 10 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -3031,7 +3020,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       stableObservations: 2,
     },
     idle: { deleteAfterMs: 10, shutdownAfterMs: 5 },
-    update: { check: true },
     lease: {
       defaultTtlMs: 60_000,
       maxTtlMs: 3_600_000,
@@ -3052,12 +3040,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
         ramBudget: { androidBytesPerDevice: 1, iosBytesPerDevice: 1 },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -3074,18 +3056,6 @@ function config(stalledTransitionOverrides: Partial<Config["stalledTransition"]>
       thresholdMultiplier: 3,
       minimumThresholdMs: 1_000,
       ...stalledTransitionOverrides,
-    },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
   };
 }

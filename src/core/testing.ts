@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EventBus } from "../bus/index.js";
 import {
   type Clock,
+  FakeSystemStats,
   MemoryFilesystem,
   NodeSqliteOpener,
   NoopLogger,
@@ -11,6 +12,7 @@ import {
 } from "../ports/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
 import { ComponentInstaller } from "./component-installer.js";
+import { type Config, configFromLayers, type ConfigOverrides, type DaemonMode } from "./config.js";
 import { type DeviceDataTable, DiskSpaceGuard, type Driver } from "./driver.js";
 import { fakeDeviceDataTable } from "./fake-driver.js";
 import { DriverCatalog } from "./driver-catalog.js";
@@ -38,6 +40,20 @@ export { FakeInputFactory } from "./fake-device-input.js";
 export { FakeDriver, fakeDeviceDataTable } from "./fake-driver.js";
 export type { FakeDriverOptions } from "./fake-driver.js";
 export { QuarantineCoordinator } from "./quarantine-coordinator.js";
+
+const GIBIBYTE = 1024 ** 3;
+
+// why: built from the loader's own defaults, so a key added to the config reaches every fixture without an edit; a test names only the values it depends on.
+export function testConfig(overrides: ConfigOverrides = {}, role: DaemonMode = "worker"): Config {
+  return configFromLayers(
+    {},
+    {
+      overrides,
+      role,
+      systemStats: new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * GIBIBYTE }),
+    },
+  ).config;
+}
 
 export function testComponentWiring<
   Components extends Pick<ComponentInstaller, "claimProvision" | "install"> = ComponentInstaller,
