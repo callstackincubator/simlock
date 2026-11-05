@@ -142,6 +142,22 @@ export class DriverCatalog {
     return await deviceTcp.connect(device, devicePort, signal);
   }
 
+  supportsEmulatorPort(
+    _platform: Platform,
+    _device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean {
+    return false;
+  }
+
+  async connectEmulatorPort(
+    _platform: Platform,
+    _device: VirtualDriverDevice | PhysicalDriverDevice,
+    _name: string,
+    _signal: AbortSignal,
+  ): Promise<TcpStream> {
+    throw new DeviceTcpError("TUNNEL_FAILED", "stub");
+  }
+
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {
     return await Promise.all(
       [...this.#drivers.values()].flatMap((driver) =>

@@ -54,4 +54,12 @@ export interface DeviceTcp {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<TcpStream>;
+  // why: optional like the rest of the emulator port: a driver whose devices open no TCP port of their own (an iOS simulator) leaves both out and the lease is refused as unsupported.
+  supportsEmulatorPort?(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  // why: one connection from the worker to a port the emulator program opens for this device, chosen by name (`adb`), never by number; a port with nothing listening rejects with a `DeviceTcpError` whose message is the reason the holder's connection is reset.
+  connectEmulatorPort?(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }

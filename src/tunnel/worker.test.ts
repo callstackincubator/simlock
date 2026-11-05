@@ -5,7 +5,7 @@ import { DeviceTcpError } from "../core/index.js";
 import { FakeDeviceTcp } from "../core/testing.js";
 import type { WorkerModule } from "../modules/index.js";
 import { fakeWorkerContext } from "../modules/testing.js";
-import { type FakeClock, MemoryLeaseSocket } from "../ports/index.js";
+import { type FakeClock, type FakeTcpPeer, MemoryLeaseSocket } from "../ports/index.js";
 import { tunnelModule } from "./index.js";
 
 const IDENTITY = { principal: "tok_holder", role: "agent" } as const;
@@ -89,6 +89,9 @@ async function setup(
     deviceTcp: {
       connect: (_platform, device, port, signal) => deviceTcp.connect(device, port, signal),
       supports: (named) => named === "android",
+      supportsEmulatorPort: (named, device) => named === "android" && !device.physical,
+      connectEmulatorPort: (_platform, device, name, signal) =>
+        deviceTcp.connectEmulatorPort(device, name, signal),
       reverse: (_platform, device, port, signal) => deviceTcp.reverse(device, port, signal),
     },
     registry,
@@ -945,5 +948,64 @@ describe("a worker's tunnel socket with forward tunnels", () => {
     ended.socket.receive(open(2, 9229));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ended.deviceTcp.connections).toHaveLength(0);
+  });
+});
+
+describe("a worker's tunnel socket with an emulator tunnel", () => {
+  const emulatorHello = (): Uint8Array =>
+    frame(0x01, 0, JSON.stringify({ tunnels: [{ kind: "emulator", emulatorPort: "adb" }] }));
+  const open = (conn: number, body: unknown = { kind: "emulator", emulatorPort: "adb" }) =>
+    frame(0x02, conn, JSON.stringify(body));
+
+  async function ready(withEmulator = true) {
+    const { deviceTcp, worker } = await setup();
+    deviceTcp.emulatorPortsListening.add("adb");
+    const socket = await attach(worker);
+    socket.receive(withEmulator ? emulatorHello() : hello({ devicePort: 9229, kind: "forward" }));
+    await vi.waitFor(() => expect(frames(socket)).toHaveLength(1));
+    return { deviceTcp, socket };
+  }
+
+  it("carries a caller's emulator connection to the emulator's adb port, bytes both ways, and resets one the port refuses", async () => {
+    const accepted = await ready();
+    expect(frames(accepted.socket)).toEqual([
+      { body: '{"tunnels":[{"kind":"emulator","emulatorPort":"adb"}]}', conn: 0, tag: 0x81 },
+    ]);
+    accepted.socket.receive(open(2));
+    await vi.waitFor(() => expect(accepted.deviceTcp.emulatorConnections).toHaveLength(1));
+    const { name, peer } = accepted.deviceTcp.emulatorConnections[0] as {
+      name: string;
+      peer: FakeTcpPeer;
+    };
+    expect(name).toBe("adb");
+    accepted.socket.receive(frame(0x03, 2, "from the caller"));
+    await vi.waitFor(() => expect(peer.writtenText()).toBe("from the caller"));
+    peer.send("from adb");
+    await vi.waitFor(() =>
+      expect(frames(accepted.socket).at(-1)).toEqual({ body: "from adb", conn: 2, tag: 0x03 }),
+    );
+    expect(accepted.deviceTcp.connections).toHaveLength(0);
+
+    const refusing = await ready();
+    refusing.deviceTcp.emulatorPortsListening.delete("adb");
+    refusing.socket.receive(open(2));
+    await vi.waitFor(() =>
+      expect(frames(refusing.socket).at(-1)).toEqual({
+        body: '{"reason":"closed"}',
+        conn: 2,
+        tag: 0x06,
+      }),
+    );
+    expect(refusing.socket.closed).toBeUndefined();
+
+    const unnamed = await ready(false);
+    unnamed.socket.receive(open(2));
+    await vi.waitFor(() =>
+      expect(unnamed.socket.closed).toEqual({
+        code: 4003,
+        reason: "OPEN must name a forward tunnel of this socket",
+      }),
+    );
+    expect(unnamed.deviceTcp.emulatorConnections).toHaveLength(0);
   });
 });

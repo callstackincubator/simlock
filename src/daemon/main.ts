@@ -576,6 +576,9 @@ async function composeDaemon(
         connect: (platform, device, devicePort, signal) =>
           catalog.connectDevicePort(platform, device, devicePort, signal),
         supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
+        supportsEmulatorPort: (platform, device) => catalog.supportsEmulatorPort(platform, device),
+        connectEmulatorPort: (platform, device, name, signal) =>
+          catalog.connectEmulatorPort(platform, device, name, signal),
         reverse: (platform, device, devicePort, signal) =>
           catalog.reverseDevicePort(platform, device, devicePort, signal),
       },

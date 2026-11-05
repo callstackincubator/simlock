@@ -58,6 +58,9 @@ export class FakeDeviceTcp implements DeviceTcp {
   // why: a test sets this false to play a driver whose reverse sets no rule on the device, as the iOS simulator's does.
   holdsDeviceRule = true;
   readonly listening = new Set<number>();
+  // why: the emulator port names a `connectEmulatorPort` from the worker reaches, each answered by a peer in `emulatorConnections`.
+  readonly emulatorPortsListening = new Set<string>();
+  readonly emulatorConnections: { readonly name: string; readonly peer: FakeTcpPeer }[] = [];
   readonly connections: { readonly devicePort: number; readonly peer: FakeTcpPeer }[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
@@ -105,6 +108,17 @@ export class FakeDeviceTcp implements DeviceTcp {
     if (!this.listening.has(devicePort)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
     const peer = new FakeTcpPeer();
     this.connections.push({ devicePort, peer });
+    return peer.stream;
+  }
+
+  async connectEmulatorPort(
+    _device: unknown,
+    name: string,
+    _signal?: AbortSignal,
+  ): Promise<TcpStream> {
+    if (!this.emulatorPortsListening.has(name)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
+    const peer = new FakeTcpPeer();
+    this.emulatorConnections.push({ name, peer });
     return peer.stream;
   }
 
