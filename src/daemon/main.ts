@@ -63,9 +63,7 @@ import {
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
-  type SilenceFailedFact,
   type SlimmedFact,
-  type WindowFailedFact,
   iosDeviceDataTable,
   iosSourceDataOwner,
   iosPrerequisites,
@@ -147,6 +145,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
@@ -1488,24 +1487,6 @@ async function discoverIosDriver(
     });
     return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOLS) };
   }
-}
-
-export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => void {
-  return (fact) => {
-    logger.warn("Could not silence iOS simulator", {
-      deviceId: fact.deviceId,
-      detail: fact.detail,
-    });
-  };
-}
-
-export function logWindowFailure(logger: Logger): (fact: WindowFailedFact) => void {
-  return (fact) => {
-    logger.warn("Could not open a window for iOS simulator", {
-      deviceId: fact.deviceId,
-      detail: fact.detail,
-    });
-  };
 }
 
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {

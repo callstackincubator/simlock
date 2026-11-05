@@ -107,3 +107,13 @@ async function marksInstance(
 function errorCode(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
+
+/** why: the simlock set has no DeviceHub, so `ios.simulator.headless: false` has no window to open there. */
+export function headlessNeedsDefaultSet(root: string): OwnedRootError {
+  return new OwnedRootError(
+    'Refusing the ios device set: ios.simulator.headless is false, which needs drivers.ios.deviceSet "default". Set drivers.ios.deviceSet to "default", or ios.simulator.headless to true.',
+    "invalid-device-set",
+    root,
+    "ios",
+  );
+}

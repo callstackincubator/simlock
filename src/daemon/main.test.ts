@@ -67,8 +67,6 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   logAndroidDiagnostic,
-  logSilenceFailure,
-  logWindowFailure,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -2577,40 +2575,6 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       expect.objectContaining({
         fields: { deviceId: "simlock_one", readyAfterMs: 30_000 },
         level: "warn",
-      }),
-    ]);
-  });
-
-  it("logs one warning, with the device id and the detail, when an iOS simulator could not be silenced", () => {
-    const sink = new MemoryLogSink();
-
-    logSilenceFailure(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }))({
-      deviceId: "simlock-ios-1",
-      detail: "timed out",
-    });
-
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        fields: { deviceId: "simlock-ios-1", detail: "timed out" },
-        level: "warn",
-        message: "Could not silence iOS simulator",
-      }),
-    ]);
-  });
-
-  it("logs one warning, with the device id and the detail, when an iOS simulator's window could not be opened", () => {
-    const sink = new MemoryLogSink();
-
-    logWindowFailure(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }))({
-      deviceId: "simlock-ios-1",
-      detail: "timed out",
-    });
-
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        fields: { deviceId: "simlock-ios-1", detail: "timed out" },
-        level: "warn",
-        message: "Could not open a window for iOS simulator",
       }),
     ]);
   });
