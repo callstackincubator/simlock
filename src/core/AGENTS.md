@@ -42,7 +42,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 
 ## Wiring
 
-1. `src/daemon/main.ts` builds `Registry.load`, one `SerializedDecision`, one `ComponentInstaller`,
+1. `src/daemon/worker-composition.ts` builds `Registry.load`, one `SerializedDecision`, one `ComponentInstaller`,
    `createCore`, then `CleanupReaper`, `Nuke`, `HostFactsReader`. `createCore` builds the rest.
 2. `createLeasing` builds `corePorts`; the daemon calls `core.connect`. A port used before that
    throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor), `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue); `physicalDeviceReady` is optional, a no-op before `connect`.

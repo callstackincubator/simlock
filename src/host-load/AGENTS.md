@@ -3,11 +3,11 @@
 Does: samples this host's CPU, memory and disk every 15 s and keeps the latest reading.
 Entry: `index.ts` → `new HostLoadSampler({ clock, probe, logger })`; `start()`, `current()`, `firstReading()`, `dispose()`.
 Uses: ports (`HostLoadProbe`, `Clock`, `Logger`). Never imports: anything else (pinned in `boundary.test.ts`).
-Imported by: daemon (`daemon/main.ts`, for a worker and for a gateway).
+Imported by: daemon (`daemon/worker-composition.ts` for a worker, `daemon/main.ts` for a gateway).
 
 ## How it works
 
-1. `daemon/main.ts` builds the probe: `productionHostLoadProbe` in `ports/host-load.ts`
+1. `daemon/worker-composition.ts` (worker) or `daemon/main.ts` (gateway) builds the probe: `productionHostLoadProbe` in `ports/host-load.ts`
    (`DarwinHostLoadProbe` on macOS: `os.cpus()`, `sysctl`; `WindowsHostLoadProbe` on Windows: `os.cpus()`, `os.freemem()`, the page file from one PowerShell query kept 5 min; `LinuxHostLoadProbe` elsewhere).
    `hostLoadProbe: null` turns sampling off; no sampler, no `load` field.
 2. `DaemonServer` calls `start()` at start and `dispose()` at stop.

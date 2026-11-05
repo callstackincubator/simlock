@@ -164,7 +164,7 @@ export interface DaemonServerCommonOptions {
    */
   readonly dispose?: () => void | Promise<void>;
   /**
-   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, which `main.ts` starts
+   * why: Stops an auxiliary frontend (today: the HTTP gateway's listener, which `worker-composition.ts` or `main.ts` starts
    * from `onSocketClaimed`, partway through `start()`) before anything else in `stop()` runs, so
    * no request arriving through it can ever observe a stopping engine. A no-op default when
    * no auxiliary frontend is running.
@@ -320,7 +320,7 @@ export class DaemonServer {
     });
     // why: ADR §8: the same translation `ConnectionPushes`' `notifyLeaseLost`/`notifyDeviceUnhealthy`/
     // `notifyDeviceRecovered` route from is what the HTTP gateway's `LeaseNoticeBuffer`
-    // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
+    // consumes too (see `ownerRoutedFacts` getter, `worker-composition.ts` and `main.ts`) -- one bus subscription
     // per raw event, not one per consumer.
     if (options.dispatcher === undefined) {
       // why: Worker mode: build the engine-backed `Dispatcher` exactly as before. `options` narrows
@@ -357,7 +357,7 @@ export class DaemonServer {
     return this.#health;
   }
 
-  /** why: Shared with the HTTP gateway (`main.ts`) so its `LeaseNoticeBuffer` consumes the same
+  /** why: Shared with the HTTP gateway (`worker-composition.ts`, `main.ts`) so its `LeaseNoticeBuffer` consumes the same
    * owner-routed facts this class's own socket pushes do, instead of subscribing to the raw
    * event bus a second time -- see `owner-routed-facts.ts`'s module doc. */
   get ownerRoutedFacts(): OwnerRoutedFacts {

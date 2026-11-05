@@ -1181,7 +1181,7 @@ describe("lease routes", () => {
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
-      // directly in `dispatcher.test.ts` -- so this route now forwards `requesterId` exactly
+      // directly in `dispatcher-exec.test.ts` -- so this route now forwards `requesterId` exactly
       // the same way for either token and merely surfaces whatever the dispatcher answers.
       const { app, dispatcher } = buildHarness();
 

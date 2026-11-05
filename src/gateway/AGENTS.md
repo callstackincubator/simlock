@@ -32,7 +32,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 ## How it works
 
-**Uplink, worker side.** `../daemon/main.ts` builds `GatewayUplink` only when `gateway.url` and `gateway.token` are both set, and starts it after the socket is claimed and the first host load reading.
+**Uplink, worker side.** `../daemon/worker-composition.ts` builds `GatewayUplink` only when `gateway.url` and `gateway.token` are both set, and starts it after the socket is claimed and the first host load reading.
 
 1. Dial `<gateway.url>/v1/uplink` (`WebSocketUplinkConnector`): `Authorization: Bearer <join token>`,
    `x-simlock-worker-id` (the worker's `instance.json` id), `x-simlock-worker-label`.

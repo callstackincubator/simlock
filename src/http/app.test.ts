@@ -540,9 +540,9 @@ describe("DELETE /v1/components/{platform}/{version}", () => {
 });
 
 /**
- * ADR 0010 §6's HTTP frontend: one dispatched `component.install` turned into a stream of
+ * why: ADR 0010 §6's HTTP frontend: one dispatched `component.install` turned into a stream of
  * `progress` events and one terminal `result` or `error`. What the install does is the
- * dispatcher's and the installer's business (`daemon/dispatcher.test.ts`).
+ * dispatcher's and the installer's business (`daemon/dispatcher-components.test.ts`).
  */
 describe("POST /v1/components/install", () => {
   /** The response, which must arrive while the dispatched install is still unsettled. */

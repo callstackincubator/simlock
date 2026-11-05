@@ -1,7 +1,7 @@
 # HTTP frontend
 
 Does: the network API — `/v1` routes, bearer token → session, SSE, lease-request resources, console files.
-Entry: no index. `src/daemon/main.ts` takes `createHttpApp` (`app.ts`), `HttpGateway` (`server.ts`).
+Entry: no index. `src/daemon/main.ts` and `src/daemon/worker-composition.ts` take `createHttpApp` (`app.ts`), `HttpGateway` (`server.ts`).
 Uses: auth, contract, daemon (`DispatchSession`, `classifyError`, `OwnerRoutedFacts`), leasing (errors),
 bus, core (types), modules (types), ports. Never imports: drivers, gateway.
 Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/remote-agents.mdx), [console.mdx](../../website/src/content/docs/docs/worker/console.mdx).
