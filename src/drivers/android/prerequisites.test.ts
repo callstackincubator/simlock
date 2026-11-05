@@ -116,7 +116,7 @@ describe("androidPrerequisites", () => {
       await sdkFilesystem(),
       new ScriptedProcessRunner([
         SDKMANAGER_RUNS,
-        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-crash-report-mode")),
+        emulatorHelp(LAUNCH_FLAGS.filter((flag) => flag !== "-grpc-use-token")),
       ]),
     ).check();
     const complete = await check(
@@ -126,7 +126,7 @@ describe("androidPrerequisites", () => {
 
     expect(lacking).toEqual([
       expect.objectContaining({
-        message: expect.stringContaining("-crash-report-mode") as unknown,
+        message: expect.stringContaining("-grpc-use-token") as unknown,
         prerequisite: "android-emulator",
         remedy: expect.stringContaining("sdkmanager --install emulator") as unknown,
       }),

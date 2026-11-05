@@ -283,6 +283,18 @@ export class EmulatorExitingRunner extends ScriptedProcessRunner {
   /** why: a test of an emulator that ignores `emu kill` sets this. */
   ignoresEmuKill = false;
 
+  /** why: the flag probe is not one of the calls a boot test scripts, so it is answered here and never enters `calls` or the script's order. */
+  override run(
+    command: string,
+    args: readonly string[],
+    options: ProcessRunOptions = {},
+  ): Promise<ProcessResult> {
+    if (command === binaries.emulator && args[0] === "-help") {
+      return Promise.resolve(ok(emulatorHelpListing));
+    }
+    return super.run(command, args, options);
+  }
+
   override spawn(
     command: string,
     args: readonly string[],
@@ -300,6 +312,18 @@ export class EmulatorExitingRunner extends ScriptedProcessRunner {
     return handle;
   }
 }
+
+/** why: an emulator new enough to list every flag Simlock passes, `-crash-report-mode` included. */
+export const emulatorHelpListing = [
+  "-avd",
+  "-port",
+  "-no-snapshot-save",
+  "-grpc",
+  "-grpc-use-token",
+  "-crash-report-mode",
+]
+  .map((flag) => `  ${flag} <value>  described`)
+  .join("\n");
 
 const defaultSeedHome = `${avdDirectory}/sources/seed_two`;
 
@@ -1033,7 +1057,9 @@ export class EmulatorHost {
           ? this.#adb(args)
           : command === binaries.emulator && args[0] === "-version"
             ? ok("Android emulator version 36.1.9")
-            : undefined;
+            : command === binaries.emulator && args[0] === "-help"
+              ? ok(emulatorHelpListing)
+              : undefined;
     if (result === undefined) {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }

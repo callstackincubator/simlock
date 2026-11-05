@@ -2437,6 +2437,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
         result: { code: 0, stderr: "", stdout: "List of devices attached\n" },
       },
+      {
+        match: { args: ["-help"], command: "/android-sdk/emulator/emulator" },
+        result: { code: 0, stderr: "", stdout: "  -crash-report-mode <mode>  crash reporting\n" },
+      },
     ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
@@ -2465,6 +2469,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([
       ["devices"],
+      ["-help"],
       [
         "-avd",
         "simlock_one",
