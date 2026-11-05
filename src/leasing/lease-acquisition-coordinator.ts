@@ -236,6 +236,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   #admissionClosed = false;
   // why: apart from #admissionClosed, which also stops the warm pool; an update refuses leases and leaves the pool running.
   #updateHold = false;
+  // why: set only by a stop (`settleAcquisitions`), never cleared; unlike maintenance, which a nuke ends, nothing reopens planning after it.
+  #stopPlanning = false;
   #maintenanceDepth = 0;
   readonly #logger: Logger;
 
@@ -425,11 +427,18 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         );
       }
     });
-    await this.settleAcquisitions();
+    await this.#waitForWorkflows();
   }
 
-  /** why: a stop waits for every request mid-provision or mid-boot, so the driver it then disposes is not under a boot still running (#1200). */
+  /**
+   * why: a stop waits for every request mid-provision or mid-boot, so the driver it then disposes is not under a boot still running (#1200). It also stops planning for good, so a failed boot waking the queue does not start another device the stop would wait for; a queued request ends with the daemon.
+   */
   async settleAcquisitions(): Promise<void> {
+    this.#stopPlanning = true;
+    await this.#waitForWorkflows();
+  }
+
+  async #waitForWorkflows(): Promise<void> {
     while (this.#activeWorkflows.size > 0) {
       await Promise.allSettled(this.#activeWorkflows);
     }
@@ -1051,6 +1060,8 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (waiter.state === "rejected" || waiter.state === "granted" || waiter.spec === undefined) {
       return undefined;
     }
+
+    if (this.#stopPlanning) return undefined;
     if (this.#refuseUnderHold(waiter)) return undefined;
     this.#followBaseline(waiter);
     const head = this.options.queue.head;

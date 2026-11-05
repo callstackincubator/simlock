@@ -1750,7 +1750,7 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
 describe("startDaemon stop with a lease request booting its device (#1200)", () => {
   const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-  it("disposes the driver only after a lease request's boot has ended, and deletes the device that failed to boot", async () => {
+  it("disposes the driver only after a lease request's boot has ended, deletes the device that failed to boot, and boots nothing for a request still queued", async () => {
     // why: records the order of the driver's boot, destroy and disposal, and holds a new device's boot until the test fails it.
     class HeldBootDriver extends FakeDriver {
       readonly order: string[] = [];
@@ -1778,24 +1778,34 @@ describe("startDaemon stop with a lease request booting its device (#1200)", () 
     }
     const clock = new FakeClock(1_000);
     const driver = new HeldBootDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    const { daemon, directory } = await start({ clock, drivers: [driver] });
-    const leased = daemon.dispatch(
-      "lease.request",
-      { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId: "agent-1" },
-      {
-        manageEventSubscription: () => undefined,
-        via: "socket",
-        principal: "agent",
-        role: "agent",
-      },
-    );
-    const settled = leased.then(
-      () => "granted",
-      () => "failed",
-    );
+    // why: one running device, so the second requester queues behind the first one's boot and would boot its own device once that boot fails.
+    const { daemon, directory } = await start({
+      clock,
+      configOverrides: { capacity: { config: { maxRunning: 1 }, strategy: "fixed" } },
+      drivers: [driver],
+    });
+    const requestAs = (requesterId: string) =>
+      daemon
+        .dispatch(
+          "lease.request",
+          { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId },
+          {
+            manageEventSubscription: () => undefined,
+            via: "socket",
+            principal: "agent",
+            role: "agent",
+          },
+        )
+        .then(
+          () => "granted",
+          () => "failed",
+        );
+    const settled = requestAs("agent-1");
     for (let turn = 0; turn < 200 && driver.held.length === 0; turn += 1) {
       await turnOfTheEventLoop();
     }
+    void requestAs("agent-2");
+    for (let turn = 0; turn < 20; turn += 1) await turnOfTheEventLoop();
     expect(driver.order).toEqual(["boot started"]);
 
     const stopped = daemon.stop("test-stop");
