@@ -7,6 +7,7 @@ import {
 } from "../../core/index.js";
 import {
   type Clock,
+  type TimerHandle,
   type LoopbackHost,
   type ProcessRunner,
   type TcpListenerFactory,
@@ -117,20 +118,44 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
     );
   }
 
-  return {
-    async connect(device, devicePort): Promise<TcpStream> {
-      const udid = udidOf(device);
-      const listeners = await listenersOn(devicePort);
-      const leasePids = new Set<number>();
-      for (const { pid } of listeners) if (await holdsUdid(pid, udid)) leasePids.add(pid);
-      for (const host of dialAddresses(listeners, leasePids)) {
-        try {
-          return await options.connector.connect(devicePort, CONNECT_TIMEOUT_MS, host);
-        } catch {
-          // why: the next loopback address may still answer; when none does the holder is told nothing listens.
-        }
+  async function connectOwned(device: Target, devicePort: number): Promise<TcpStream> {
+    const udid = udidOf(device);
+    const listeners = await listenersOn(devicePort);
+    const leasePids = new Set<number>();
+    for (const { pid } of listeners) if (await holdsUdid(pid, udid)) leasePids.add(pid);
+    for (const host of dialAddresses(listeners, leasePids)) {
+      try {
+        return await options.connector.connect(devicePort, CONNECT_TIMEOUT_MS, host);
+      } catch {
+        // why: the next loopback address may still answer; when none does the holder is told nothing listens.
       }
-      throw nothingListens(devicePort);
+    }
+    throw nothingListens(devicePort);
+  }
+
+  return {
+    // why: the owner check and the connect share one 5 s limit, counted from the caller's `OPEN`; a stream that opens after it is closed.
+    async connect(device, devicePort): Promise<TcpStream> {
+      let timer: TimerHandle | undefined;
+      let timedOut = false;
+      const limit = new Promise<never>((_, reject) => {
+        timer = options.clock.setTimer(CONNECT_TIMEOUT_MS, () => {
+          timedOut = true;
+          reject(new DeviceTcpError("TUNNEL_FAILED", "timeout"));
+        });
+      });
+      const opening = connectOwned(device, devicePort);
+      void opening.then(
+        (stream) => {
+          if (timedOut) stream.close();
+        },
+        () => undefined,
+      );
+      try {
+        return await Promise.race([opening, limit]);
+      } finally {
+        if (timer !== undefined) options.clock.cancel(timer);
+      }
     },
     reverse: (): Promise<DeviceReverse> =>
       Promise.reject(new DeviceTcpError("TUNNEL_FAILED", "not built")),

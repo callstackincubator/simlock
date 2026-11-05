@@ -210,13 +210,14 @@ describe("iOS deviceTcp forward connections", () => {
       machine.runner.lookup = hanging === "lookup" ? "hangs" : ok(lsofOutput([10, "127.0.0.1"]));
       machine.runner.environments.set(10, environmentOf(UDID));
       const connecting = machine.connect();
+      const outcome = promiseState(connecting);
       await settle();
       machine.clock.advance(4_999);
       await settle();
-      expect(promiseState(connecting).state, `${hanging} at 4.9 s`).toBe("pending");
+      expect(outcome.state, `${hanging} at 4.9 s`).toBe("pending");
       machine.clock.advance(1);
       await settle();
-      expect(promiseState(connecting).state, `${hanging} at 5 s`).toBe("rejected");
+      expect(outcome.state, `${hanging} at 5 s`).toBe("rejected");
       await expect(connecting).rejects.toMatchObject({ message: "timeout" });
     }
 
