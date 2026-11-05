@@ -1207,12 +1207,13 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(2), hex(3)]);
   });
 
-  it('allocate with an unmapped `target`, "watch" or "", alone or beside `device: "iPhone 17 Pro"`, answers `refused: unknown --target <value>; use mobile, tv or desktop` and leaves no lease', async () => {
+  it('allocate with an unmapped `target`, "watch" or "", alone or beside `device: "iPhone 17 Pro"` or a `deviceBaseline`, answers `refused: unknown --target <value>; use mobile, tv or desktop` and leaves no lease', async () => {
     const rig = await setUp();
     const cases = [
       [{ target: "watch" }, "watch"],
       [{ target: "" }, ""],
       [{ device: "iPhone 17 Pro", target: "watch" }, "watch"],
+      [{ deviceBaseline: "logged-in", target: "watch" }, "watch"],
     ] as const;
 
     for (const [index, [extra, value]] of cases.entries()) {
@@ -3934,7 +3935,7 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` an `imageTag` that is an object with `refused: malformed imageTag` and a `physical` of `yes` or `1` with `refused: malformed physical` and no lease, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
+    it("a `udid` that is a number is refused with `refused: malformed udid`; a `shardAll` that is a string with `refused: malformed shardAll`; on an allocate an `osVersion` that is a number is refused with `refused: malformed osVersion` an `imageTag` that is an object with `refused: malformed imageTag`, a `deviceBaseline` that is a number with `refused: malformed deviceBaseline` and a `physical` of `yes` or `1` with `refused: malformed physical` and no lease, as is an `osVersion` number on a command's flags, while `osVersion: null` is absent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
       await forwarded(rig, () => runCommand(rig, "test", 1, { flags: { shardAll: 2 } }));
@@ -3951,6 +3952,11 @@ describe("the agent-device front's request rules", () => {
       );
       await refused(rig, () => allocate(rig, 2, { osVersion: 26 }), "refused: malformed osVersion");
       await refused(rig, () => allocate(rig, 2, { imageTag: {} }), "refused: malformed imageTag");
+      await refused(
+        rig,
+        () => allocate(rig, 2, { deviceBaseline: 7 }),
+        "refused: malformed deviceBaseline",
+      );
       for (const physical of ["yes", 1]) {
         await refused(rig, () => allocate(rig, 2, { physical }), "refused: malformed physical");
       }
