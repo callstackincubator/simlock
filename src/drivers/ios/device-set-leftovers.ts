@@ -42,7 +42,7 @@ export async function refuseDefaultSourcesLeftovers(
   if (udids.length === 0) return;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`.`,
+    `Refusing the ios device set: Simlock's sources set at ${sourcesSet} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${sourcesSet} delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
     "device-set-changed",
     sourcesSet,
     "ios",
