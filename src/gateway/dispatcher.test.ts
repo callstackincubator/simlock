@@ -56,6 +56,7 @@ type SentRequest = Parameters<WebhookPoster["post"]>[0];
 const gatewayConfig = {
   capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
+  drivers: {},
   diskPressure: { freeBytesThreshold: 1 },
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
   eventBuffer: { capacity: 100 },
@@ -2497,6 +2498,40 @@ describe("GatewayDispatcher", () => {
           session({ principal: "someone-else", role: "agent" }),
         ),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("refuses a device.exec whose stdin is longer than 8,388,608 characters with BAD_REQUEST and forwards nothing to the worker, and forwards one at 8,388,608", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      const exec = (stdin: string) =>
+        dispatcher.dispatch(
+          "device.exec",
+          { args: ["spawn", "booted", "untar"], leaseId: grant.lease.id, stdin, tool: "simctl" },
+          session({ principal: "agent-1", role: "agent" }),
+        );
+      const forwarded = () => client.calls.filter((call) => call.startsWith("device.exec:"));
+
+      client.execQueue.push({ exitCode: 0, kind: "ok" });
+      await expect(exec("A".repeat(8_388_608))).resolves.toEqual({ exitCode: 0 });
+      expect(forwarded()).toHaveLength(1);
+
+      await expect(exec("A".repeat(8_388_609))).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(forwarded()).toHaveLength(1);
     });
 
     it("calls onStarted for a silent device.exec from the worker's own started push (ADR §19a/§19b/§19e)", async () => {

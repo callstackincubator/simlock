@@ -10,6 +10,8 @@
 // unassigns the user again and refuses. The repo is GH_REPO, else the origin remote's owner/name.
 import { execFileSync } from "node:child_process";
 
+import { repository } from "./cli-args.mjs";
+
 const [number] = process.argv.slice(2);
 const triage = process.argv.includes("--triage");
 if (!/^\d+$/.test(number ?? "")) {
@@ -85,12 +87,4 @@ function api(method, at, ...extra) {
 function refuse(why) {
   console.error(`claim: #${number} ${why}. Not claimed.`);
   process.exit(1);
-}
-
-function repository() {
-  if (process.env.GH_REPO) return process.env.GH_REPO;
-  const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
-  if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
-  return `${match[1]}/${match[2]}`;
 }

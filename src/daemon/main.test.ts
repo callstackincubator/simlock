@@ -564,6 +564,25 @@ describe("startDaemon", () => {
     });
   });
 
+  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
+    const { daemon } = await start({
+      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
+    });
+
+    const config = (await daemon.dispatch(
+      "config.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
+    )) as { readonly drivers?: unknown };
+
+    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
+  });
+
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
     const { daemon, sink } = await start({
       configOverrides: {
@@ -2437,6 +2456,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
         result: { code: 0, stderr: "", stdout: "List of devices attached\n" },
       },
+      {
+        match: { args: ["-help"], command: "/android-sdk/emulator/emulator" },
+        result: { code: 0, stderr: "", stdout: "  -crash-report-mode <mode>  crash reporting\n" },
+      },
     ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
@@ -2465,6 +2488,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([
       ["devices"],
+      ["-help"],
       [
         "-avd",
         "simlock_one",

@@ -71,7 +71,7 @@ An agent-device lease and its simlock lease share one id (the CLI chooses
 it; ADR 0020 lets simlock keep it) and one lifetime.
 
 - `allocate` becomes `lease.request` as the agent's principal, with the
-  CLI's selectors mapped to `platform`, `model` or `class`, `osVersion` and `imageTag`. A request
+  CLI's selectors mapped to `platform`, `model` or `class`, `osVersion`, `imageTag` and `baseline` (its `deviceBaseline`). A request
   that waits in simlock's queue holds the CLI's request open. When the CLI
   hangs up, the front cancels it; a grant that lands after that is released
   at once.

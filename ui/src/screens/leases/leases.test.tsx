@@ -105,6 +105,17 @@ describe("a lease's drawer", () => {
     expect(text(html)).not.toContain("expiring");
   });
 
+  it("shows a Baseline fact only when the lease was made from a baseline", () => {
+    const withBaseline = inspection({
+      device: { ...inspection().device, baseline: "e2e-login v1" },
+    });
+
+    expect(text(inConsole(<LeaseDetail lease={withBaseline} />))).toContain(
+      "Baseline e2e-login v1",
+    );
+    expect(text(inConsole(<LeaseDetail lease={inspection()} />))).not.toContain("Baseline");
+  });
+
   it("shows an expiring status next to the title once the lease is under 5 minutes from its end", () => {
     const html = inConsole(<LeaseTitle lease={inspection({ expiring: true })} />);
 

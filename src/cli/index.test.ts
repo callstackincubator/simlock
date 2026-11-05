@@ -81,6 +81,7 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -7182,6 +7183,53 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     },
   );
 
+  it.each([
+    { trigger: "SIGINT", act: (signals: EventEmitter) => signals.emit("SIGINT") },
+    { trigger: "SIGTERM", act: (signals: EventEmitter) => signals.emit("SIGTERM") },
+    {
+      trigger: "the exit of the --bind-pid process",
+      act: (_signals: EventEmitter, parentWatch: FakeParentWatch) => parentWatch.exit(9876),
+    },
+  ])("cancels its waiting request and exits 0 on $trigger before a grant", async ({ act }) => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    let requestSignal: AbortSignal | undefined;
+    let requested = false;
+    const client = fakeClient({
+      // why: The request waits in the queue and never resolves on its own; like the client's
+      // documented abort, it rejects CANCELLED once its signal aborts.
+      requestLease: (_input, options) => {
+        requested = true;
+        requestSignal = options?.signal;
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {}));
+          });
+        });
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
+      output.environmentWith({
+        connectAdmin: async () => client,
+        parentPid: 4321,
+        parentWatch,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    const runState = promiseState(run);
+    await vi.waitFor(() => expect(requested).toBe(true));
+
+    act(signals, parentWatch);
+    await settle();
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(runState.state).toBe("fulfilled");
+    expect(await run).toBe(0);
+    expect(output.stdout).toBe("");
+  });
+
   it("reports a failed renewal on stderr and keeps holding the lease", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
@@ -10622,6 +10670,26 @@ describe("CLI: daemon install (#830)", () => {
     return { exitCode, output, stops, serviceManager, clock };
   }
 
+  it('daemon stop with no socket exits 0 and prints Daemon not running; with --json it prints {"status":"not-running"}', async () => {
+    const text = await runWithService({
+      argv: ["daemon", "stop"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(text.output.stderr).toBe("");
+    expect(text.exitCode).toBe(0);
+    expect(text.output.stdout).toBe("Daemon not running\n");
+
+    const json = await runWithService({
+      argv: ["daemon", "stop", "--json"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(json.output.stderr).toBe("");
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output.stdout)).toEqual({ status: "not-running" });
+  });
+
   it("daemon uninstall removes the service", async () => {
     const installedState: ServiceState = {
       state: "installed",
@@ -10734,7 +10802,7 @@ describe("CLI: daemon install (#830)", () => {
     expect(JSON.parse(stubborn.output.stderr)).toEqual({
       error: {
         code: "SERVICE_FAILED",
-        message: "The running daemon did not stop within 300 s; nothing was changed.",
+        message: "The running daemon did not stop within 300 s.",
       },
     });
     expect(stubborn.serviceManager.installs).toEqual([]);

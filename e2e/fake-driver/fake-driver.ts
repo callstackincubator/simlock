@@ -55,6 +55,7 @@ type VirtualDriverDevice = DriverDevice & { readonly physical: false };
 export interface FakeDriverClock {
   now(): number;
   setTimer(delayMs: number, callback: () => void): unknown;
+  cancel(handle: unknown): void;
 }
 
 export interface OutOfProcessFakeDriverOptions {
@@ -379,7 +380,7 @@ export class OutOfProcessFakeDriver implements Driver {
       readonly signal: AbortSignal;
     },
   ): Promise<ComponentInstallResult> {
-    const script = await this.#beforeCall("installComponent", [component]);
+    const script = await this.#beforeCall("installComponent", [component], options.signal);
     for (const percent of script.installProgress ?? []) {
       options.onProgress({ percent, stage: "downloading" });
     }
@@ -411,7 +412,7 @@ export class OutOfProcessFakeDriver implements Driver {
     receipt: ComponentReceipt,
     options: { readonly signal: AbortSignal },
   ): Promise<ComponentRemoval> {
-    const script = await this.#beforeCall("removeComponent", [receipt]);
+    const script = await this.#beforeCall("removeComponent", [receipt], options.signal);
     if (options.signal.aborted) throw new DriverCrashError("Fake removal aborted");
     return removeListedComponent({
       list: async () => this.#listed(script),
@@ -709,6 +710,7 @@ export class OutOfProcessFakeDriver implements Driver {
   async #beforeCall(
     operation: FakeDriverOperation,
     arguments_: readonly unknown[],
+    signal?: AbortSignal,
   ): Promise<FakeDriverPlatformScript> {
     const script = await this.#readScript();
     this.#lastKnownEstimateMs = script.estimateMs;
@@ -716,9 +718,19 @@ export class OutOfProcessFakeDriver implements Driver {
     await this.#appendLog(operation, arguments_);
 
     const latency = script.latencyMs?.[operation] ?? 0;
-    if (latency > 0) {
+    // why: an install's or removal's latency stands for a download or delete, which a stopping
+    // daemon aborts; a wait that ignored the signal would hold `daemon stop` for the whole latency.
+    if (latency > 0 && signal?.aborted !== true) {
       await new Promise<void>((resolve) => {
-        this.#clock.setTimer(latency, resolve);
+        const timer = this.#clock.setTimer(latency, resolve);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            this.#clock.cancel(timer);
+            resolve();
+          },
+          { once: true },
+        );
       });
     }
 
