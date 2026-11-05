@@ -1,12 +1,10 @@
 import type { z } from "zod";
 
 import type { Role } from "../contract/index.js";
-import { serializeFrame } from "../daemon-protocol/index.js";
+import { type RequestId, serializeFrame } from "../daemon-protocol/index.js";
 import type { LinkConnection } from "../link/index.js";
 import type { IpcConnection, Logger } from "../ports/index.js";
 import type { RelayConnection } from "./relay.js";
-
-export type RequestId = string | number;
 
 export interface Connection {
   readonly socket: IpcConnection;

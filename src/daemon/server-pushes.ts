@@ -1,8 +1,9 @@
 import type { EventBus, EventEnvelope } from "../bus/index.js";
 import { PUSH_SCHEMAS, type ComponentProgress } from "../contract/index.js";
 import type { LeaseProgress } from "../core/index.js";
+import type { RequestId } from "../daemon-protocol/index.js";
 import type { IpcConnection, Logger } from "../ports/index.js";
-import { type Connection, parseOutput, type RequestId, writeFrame } from "./server-connection.js";
+import { type Connection, parseOutput, writeFrame } from "./server-connection.js";
 
 interface ConnectionPushesOptions {
   readonly connections: ReadonlySet<Connection>;

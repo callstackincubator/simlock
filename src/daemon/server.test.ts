@@ -721,10 +721,10 @@ describe("DaemonServer", () => {
     await survivor.close();
   });
 
-  it("keeps #pushOutput's promise unresolved while a frame is still going out, resolving it once the write drains", async () => {
-    // why: ADR 0005 §19e on this transport: `#pushOutput`'s returned promise is what
-    // `device.exec` hands the process runner as a chunk's delivery, and it is that promise --
-    // not anything this test can observe about a real stream -- staying unresolved while a
+  it("keeps ConnectionPushes.output's promise unresolved while a frame is still going out, resolving it once the write drains", async () => {
+    // why: ADR 0005 §19e on this transport: `ConnectionPushes.output`'s returned promise is
+    // what `device.exec` hands the process runner as a chunk's delivery, and it is that promise
+    // -- not anything this test can observe about a real stream -- staying unresolved while a
     // client's socket has not drained that would eventually stop the command at its pipe.
     // `ControllableStreamingRunner` is a fake with no stream of its own to stop reading (its
     // `emit` calls `onChunk` directly), so this proves only the promise half of the contract;

@@ -99,7 +99,7 @@ export class SimlockWire {
   readonly #leaseScopedListeners = new Set<(push: LeaseScopedPush) => void>();
   readonly #eventListeners = new Set<(payload: unknown) => void>();
   readonly #closeListeners = new Set<(error: AnySimlockError) => void>();
-  /** Lease ids for which a `lease-lost` push has already been delivered -- kept forever
+  /** why: Lease ids for which a `lease-lost` push has already been delivered -- kept forever
    * because loss is terminal (ADR §8): a lease id is never reused, and the owner-routed
    * fan-out can in principle reach this connection twice for the same fact.
    *
@@ -107,12 +107,12 @@ export class SimlockWire {
    * "never fires onLeaseLost for a release the same client asked for") is the daemon's job,
    * not this class's: `DaemonServer` marks the lease id in its own per-connection
    * `selfInitiatedReleases` set right before dispatching `lease.release`/`lease.release-all`
-   * and clears it in a `finally` regardless of outcome (`daemon/server.ts` around
-   * `#notifyLeaseLost`), so the push is never sent to the releasing connection in the first
-   * place. Mirroring that bookkeeping here too was redundant on a successful release and
-   * actively harmful on a failed one: marked before the call and never rolled back, it
-   * permanently muted the real `lease-lost` push that arrives when the lease later expires
-   * for real. */
+   * and clears it in a `finally` regardless of outcome (`daemon/server.ts`;
+   * `daemon/server-pushes.ts`'s `notifyLeaseLost` reads it), so the push is never sent to the
+   * releasing connection in the first place. Mirroring that bookkeeping here too was redundant
+   * on a successful release and actively harmful on a failed one: marked before the call and
+   * never rolled back, it permanently muted the real `lease-lost` push that arrives when the
+   * lease later expires for real. */
   readonly #deliveredLeaseLost = new Set<string>();
   /** Last lease-scoped health kind delivered per lease id, so `device-unhealthy` and
    * `device-recovered` toggle: delivering one clears the other's suppression, so an

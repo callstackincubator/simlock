@@ -30,7 +30,7 @@ import {
 } from "../leasing/index.js";
 import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { parseRequestFrame, type RequestFrame } from "../daemon-protocol/index.js";
+import { parseRequestFrame, type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
 import {
   leaseRelease,
   normalizeProtocolVersion,
@@ -64,7 +64,6 @@ import {
   type Connection,
   errorMessage,
   errorStack,
-  type RequestId,
   respondError,
   writeFrame,
 } from "./server-connection.js";
