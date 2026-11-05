@@ -81,11 +81,13 @@ const gatewayConfig = {
   ios: {
     defaultMode: "full" as const,
     defaultModels: {},
+    full: { bootTimeoutMs: 300_000 },
     slim: { bootTimeoutMs: 1 },
     simulator: { audio: true, headless: true },
   },
   android: {
     defaultModels: {},
+    bootTimeoutMs: 300_000,
     emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
   },
   lease: {

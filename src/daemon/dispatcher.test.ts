@@ -249,6 +249,8 @@ async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
+    /** why: the two boot deadlines `config.get` reports. */
+    readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
     readonly components?: Pick<
       ComponentInstaller,
       "claimProvision" | "inProgress" | "install" | "list" | "remove"
@@ -304,6 +306,12 @@ async function buildDispatcher(
   const config: Config = {
     ...baseConfig,
     warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+    ...(overrides.bootTimeouts === undefined
+      ? {}
+      : {
+          android: { ...baseConfig.android, bootTimeoutMs: overrides.bootTimeouts.android },
+          ios: { ...baseConfig.ios, full: { bootTimeoutMs: overrides.bootTimeouts.iosFull } },
+        }),
   };
   const wiring = testComponentWiring({
     clock: clock,
@@ -750,6 +758,25 @@ describe("Dispatcher: the fleet operations on a worker", () => {
 
     expect(calls).toBe(2);
     expect(workers[0]?.catalog?.flatMap((entry) => entry.runtimes)).toEqual(["26.5"]);
+  });
+
+  it("an admin reads the config and sees ios.full.bootTimeoutMs and android.bootTimeoutMs", async () => {
+    const defaults = await buildDispatcher();
+    const configured = await buildDispatcher({
+      bootTimeouts: { android: 600_000, iosFull: 400_000 },
+    });
+
+    const before = await defaults.dispatcher.dispatch("config.get", {}, admin);
+    const after = await configured.dispatcher.dispatch("config.get", {}, admin);
+
+    expect([before.ios.full, before.android.bootTimeoutMs]).toEqual([
+      { bootTimeoutMs: 300_000 },
+      300_000,
+    ]);
+    expect([after.ios.full, after.android.bootTimeoutMs]).toEqual([
+      { bootTimeoutMs: 400_000 },
+      600_000,
+    ]);
   });
 
   it("worker.list on a worker reports the same capacity, devices, leases, catalog, host and installs as its own reads", async () => {
@@ -5389,11 +5416,13 @@ function testConfig(
     ios: {
       defaultMode: "full",
       defaultModels: {},
+      full: { bootTimeoutMs: 300_000 },
       slim: { bootTimeoutMs: 600_000 },
       simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},
+      bootTimeoutMs: 300_000,
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },

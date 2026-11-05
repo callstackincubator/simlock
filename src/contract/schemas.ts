@@ -1095,6 +1095,7 @@ export const configSchema = z.object({
   ios: z.object({
     defaultMode: deviceModeSchema,
     defaultModels: defaultModelsSchema,
+    full: z.object({ bootTimeoutMs: z.number() }),
     slim: z.object({
       categories: z.array(z.string()).optional(),
       bootTimeoutMs: z.number(),
@@ -1103,6 +1104,7 @@ export const configSchema = z.object({
   }),
   android: z.object({
     defaultModels: defaultModelsSchema,
+    bootTimeoutMs: z.number(),
     emulator: z.object({
       headless: z.boolean(),
       gpu: z.string().min(1),

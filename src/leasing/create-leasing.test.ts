@@ -85,11 +85,13 @@ function config(
     ios: {
       defaultMode: "full",
       defaultModels: {},
+      full: { bootTimeoutMs: 300_000 },
       slim: { bootTimeoutMs: 600_000 },
       simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},
+      bootTimeoutMs: 300_000,
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
     },
     health: {

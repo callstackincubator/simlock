@@ -138,6 +138,7 @@ describe("loadConfig", () => {
       ios: {
         defaultMode: "full",
         defaultModels: {},
+        full: { bootTimeoutMs: 300_000 },
         slim: { bootTimeoutMs: 600_000 },
         simulator: { audio: true, headless: true },
       },
@@ -1182,6 +1183,35 @@ describe("loadConfig", () => {
     expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.enabled"');
     expect(config.ios.defaultMode).toBe("full");
     expect(config.ios.slim).not.toHaveProperty("enabled");
+  });
+
+  it("an operator's config sets ios.full.bootTimeoutMs and android.bootTimeoutMs, or leaves them out", async () => {
+    async function load(contents: unknown) {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
+      return loadConfig({ configPath, filesystem, systemStats: createStats() });
+    }
+
+    const unset = await load({});
+    expect(unset.ios.full).toEqual({ bootTimeoutMs: 300_000 });
+    expect(unset.android.bootTimeoutMs).toBe(300_000);
+
+    const set = await load({
+      android: { bootTimeoutMs: 600_000 },
+      ios: { full: { bootTimeoutMs: 400_000 } },
+    });
+    expect(set.ios.full).toEqual({ bootTimeoutMs: 400_000 });
+    expect(set.android.bootTimeoutMs).toBe(600_000);
+
+    for (const bad of [0, -1, "300000"]) {
+      await expect(load({ ios: { full: { bootTimeoutMs: bad } } })).rejects.toThrow(
+        "ios.full.bootTimeoutMs",
+      );
+      await expect(load({ android: { bootTimeoutMs: bad } })).rejects.toThrow(
+        "android.bootTimeoutMs",
+      );
+    }
   });
 
   it.each([

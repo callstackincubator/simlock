@@ -2709,6 +2709,7 @@ describe("deviceModeWiring", () => {
           ios: {
             defaultMode,
             defaultModels: {},
+            full: { bootTimeoutMs: 300_000 },
             slim: { bootTimeoutMs: 1 },
             simulator: { audio: true, headless: true },
           },

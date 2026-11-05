@@ -370,6 +370,10 @@ export interface Config {
     readonly defaultMode: DeviceMode;
     /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
+    readonly full: {
+      /** why: a full simulator boot (and a recovery or seed boot) may take this long before it is given up. */
+      readonly bootTimeoutMs: number;
+    };
     /** How a slim device is made, whatever the default mode is. */
     readonly slim: {
       /** Which daemon categories to disable. Undefined means "every category the driver knows". */
@@ -394,6 +398,8 @@ export interface Config {
   readonly android: {
     /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
+    /** why: an emulator boot may take this long, counted from its spawn, before it is given up. */
+    readonly bootTimeoutMs: number;
     readonly emulator: {
       readonly headless: boolean;
       /** An emulator GPU mode; `"auto"` leaves the emulator's own default. */
@@ -1004,6 +1010,7 @@ function defaultConfig(
     ios: {
       defaultMode: "full",
       defaultModels: {},
+      full: { bootTimeoutMs: 300_000 },
       slim: {
         bootTimeoutMs: 600_000,
       },
@@ -1011,6 +1018,7 @@ function defaultConfig(
     },
     android: {
       defaultModels: {},
+      bootTimeoutMs: 300_000,
       emulator: {
         headless: false,
         gpu: "auto",
@@ -1169,6 +1177,7 @@ export function configValidators(
     ios: objectValidator({
       defaultMode: stringUnion(["slim", "full"]),
       defaultModels: defaultModelsValidator,
+      full: objectValidator({ bootTimeoutMs: positiveNumber }),
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
@@ -1180,6 +1189,7 @@ export function configValidators(
     }),
     android: objectValidator({
       defaultModels: defaultModelsValidator,
+      bootTimeoutMs: positiveNumber,
       emulator: objectValidator({
         headless: booleanValue,
         gpu: nonEmptyString,
