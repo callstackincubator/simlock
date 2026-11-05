@@ -329,7 +329,13 @@ describe.skipIf(!hasAndroidSdk)(
               "--lease",
               leaseId,
             ],
-            { env: { ANDROID_ADB_SERVER_PORT: String(callerServerPort), HOME: callerHome } },
+            {
+              env: {
+                ANDROID_ADB_SERVER_PORT: String(callerServerPort),
+                ANDROID_HOME,
+                HOME: callerHome,
+              },
+            },
           );
           try {
             const line = await driven.firstStdoutLine(60_000);
