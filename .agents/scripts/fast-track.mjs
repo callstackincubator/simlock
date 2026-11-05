@@ -26,7 +26,7 @@
 import { execFileSync } from "node:child_process";
 
 import { FAST_TRACK, fastTrackFacts, writtenByAgent } from "./body-rules.mjs";
-import { option } from "./cli-args.mjs";
+import { option, repository } from "./cli-args.mjs";
 
 const MAX_LINES = 250;
 const MAX_FILES = 8;
@@ -159,12 +159,4 @@ function api(method, at, ...extra) {
       stdio: ["ignore", "pipe", "pipe"],
     }),
   );
-}
-
-function repository() {
-  if (process.env.GH_REPO) return process.env.GH_REPO;
-  const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
-  if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
-  return `${match[1]}/${match[2]}`;
 }
