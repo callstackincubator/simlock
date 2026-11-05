@@ -5,15 +5,15 @@ description: Turn on the web console, sign in with an operator token, and read w
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The web console is a page in your browser that shows what your worker is doing: its devices, the leases on them, the requests waiting for a device, and anything that needs you. The daemon serves the console itself, so there is nothing to install and nothing is fetched from the internet.
+The web console shows, in your browser, what your worker is doing: its devices, the leases on them, the requests waiting for a device, and anything that needs your attention. The daemon serves it, so there is nothing to install.
 
-The console is for people who run the worker. It only shows; it does not lease, release or fix anything. Coding agents keep using the CLI, the MCP server, the client and the HTTP API.
+The console is for the people who run the worker. It only shows things: you cannot lease, release or fix anything from it. Agents keep using the CLI, the MCP server, the client and the HTTP API.
 
 On a gateway the same console shows every worker in the fleet. See [Fleet console](/simlock/docs/gateway/fleet-console).
 
 ## Turn on the console
 
-The console comes with the HTTP API. It is on whenever HTTP is on, and there is no separate switch. A standalone worker has HTTP on by default. A worker that has joined a gateway cannot turn it on: use the gateway's console instead.
+The console is on whenever HTTP is on, and HTTP is on by default on a standalone worker. There is no separate switch. A worker that has joined a gateway has no console of its own: use the gateway's console.
 
 <Aside type="caution">
 HTTP is a network listener, on by default on a standalone worker. By default it listens on `127.0.0.1:4701`, so only this machine can reach it. If you set `http.host` to `0.0.0.0` or another address, anyone who can reach that port can load the sign-in page and call the HTTP API with a token. Simlock does not do TLS: to reach the console from another machine, put a reverse proxy or a tunnel in front of it.
@@ -54,7 +54,7 @@ simlock token create --role operator --label alex-laptop
 {"secret":"slk_Qm9vdHN0cmFwIHRoZSBjb25zb2xlIGFuZCBzaWduIGl","token":{"id":"tok_3f9c2a1e-7b4d-4e8a-9c61-2d5f0b7a8e14","role":"operator","label":"alex-laptop","createdAt":1792569600000}}
 ```
 
-Copy the `secret`, paste it into the **Operator token** field and press **Sign in**. The secret is printed once; Simlock keeps only a hash of it. A token works only on the daemon that made it.
+Copy the `secret`, paste it into the **Operator token** field and press **Sign in**. The secret is printed only once, so keep it somewhere safe. A token works only on the daemon that made it.
 
 If the console does not accept the token, it says why:
 
@@ -72,11 +72,11 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Baselines**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
+The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Baselines**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway that is behind the latest release, a line above them says, for example, `simlock 0.3.0 · 0.4.0 available`.
 
 Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
 
-Every page keeps itself current: a lease being granted or a device booting shows within about a second, with no reload. Readings with no event of their own, such as host load, refresh within 15 seconds. The bottom of the sidebar says how the connection is:
+Pages update by themselves: a new lease or a booting device shows within about a second, and readings such as CPU load within 15 seconds. The bottom of the sidebar shows the connection:
 
 | It says | What it means |
 | --- | --- |
@@ -113,14 +113,14 @@ Select the worker to see its CPU, memory and disk, each with a bar, how many lea
 - **Devices**: every device, with its state, model, runtime, whether it is physical or virtual, and the lease holding it.
 - **Host**: the worker's id, health, operating system, CPU architecture, the version of each platform tool, each optional module (such as screen streaming) as `available`, `off` or `unavailable` with a reason, and the catalog of models and runtimes it can lease.
 - **Warm pool**: whether the worker keeps devices warm, the running slots it holds back, and per target and learned kind its origin (`configured` or `learned`), how many devices it wants, how many are ready and how many are booting. A target it cannot fill shows the reason, such as `runtime-missing`. Under it, **Installs in progress** lists runtimes and system images being downloaded. See [Capacity and the warm pool](/simlock/docs/worker/capacity).
-- **Events**: this worker's events, newest first, back to the start of its kept history or to the console's cap of events. Older events load as you scroll to the end of the list, and new ones appear at the top. With none, the tab says `No events for this worker yet.`
+- **Events**: this worker's events, newest first. Older events load as you scroll down, and new ones appear at the top.
 
 ### Open a device
 
 Select a device on the worker to open its drawer, which has two tabs:
 
 - **Details**: the model, runtime, state, the baseline and version the device was copied from (a device made from a baseline only), holder, lease and UDID. The drawer opens here.
-- **Screen**: the device's live picture, whether or not it is leased. The picture starts when you open the tab and stops when you leave it or close the drawer. The **Stream details** button (ⓘ) shows the stream's state, picture size, frames, rate, bandwidth and dropped frames. A device that is not running says why instead: for example "The device is shut down. Its screen shows while it runs." The picture starts by itself once the device is `ready` again. Where screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watching the screen](/simlock/docs/using-devices/watching-the-screen).
+- **Screen**: the device's live screen, whether or not it is leased. It plays while the tab is open. The **Stream details** button (ⓘ) shows the picture size, frame rate, bandwidth and dropped frames. A device that is not running says why instead, for example "The device is shut down. Its screen shows while it runs.", and the picture starts by itself once the device is `ready` again. If screen streaming is off for the worker, the tab says "Streaming is off on" and the worker's name. See [Watch the screen](/simlock/docs/using-devices/watching-the-screen).
 
 The address of the Screen tab ends in `?drawer=screen`, so a pasted link opens it. On a gateway the drawer works the same, for a device on any connected worker.
 
@@ -148,7 +148,7 @@ A lease taken with the CLI or MCP server on this machine shows the agent identit
 
 Select a lease to see:
 
-- **Expires in**: the time left, counting down, how long it has been held, when it was last renewed, and when it was granted.
+- **Expires in**: the time left, how long it has been held, when it was last renewed, and when it was granted.
 - **Device**: the model, runtime, mode, image tag, physical or virtual, the worker, the device id and the UDID.
 - **Lease**: the lease id, the request it came from, and the holder.
 - **Events**: the events of the last hour about the lease.
@@ -179,9 +179,9 @@ A request leaves the list as soon as it gets its device, fails or is cancelled. 
 
 ## Baselines
 
-**Baselines** lists every baseline the worker holds, one row each: its name, version, platform, model (with the image tag when it has one), OS version, mode, note, size, how long ago it was saved (hover for the exact time) and whether it is stale. A stale baseline shows `stale` and its reason, for example `stale · runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed`. Rows are ordered by name, and a baseline saved, removed or gone stale shows within about a second, with no reload. With none, the page says `No baselines.`
+**Baselines** lists every baseline the worker holds: its name, version, platform, model, OS version, mode, note, size, when it was saved, and whether it is stale. A stale baseline shows its reason, for example `stale · runtime com.apple.CoreSimulator.SimRuntime.iOS-27-0 is not installed`.
 
-The page only shows. Save and remove baselines from the command line with `simlock baseline save` and `simlock baseline remove`; see [Baselines](/simlock/docs/worker/baselines).
+To save or remove a baseline, use `simlock baseline save` and `simlock baseline remove` on the command line; see [Baselines](/simlock/docs/worker/baselines).
 
 ## Attention
 

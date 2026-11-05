@@ -5,13 +5,13 @@ description: See what a worker is doing now, what happened earlier, and how its 
 
 import { Aside } from '@astrojs/starlight/components';
 
-Three commands cover a worker:
+Three commands tell you what a worker is doing:
 
-- `simlock status` shows the machine right now: capacity, devices, leases and the queue.
-- `simlock events` shows what happened, as one JSON line per event.
-- `simlock stats` adds up how the devices were used over a time window.
+- `simlock status`: the machine right now (capacity, devices, leases and the queue).
+- `simlock events`: what happened, one JSON line per event.
+- `simlock stats`: how the devices were used over a period of time.
 
-Each command connects to the daemon on this machine and starts it if it is not running. The [web console](/simlock/docs/worker/console) shows the same information in a browser.
+Each command starts the daemon if it is not running. The [web console](/simlock/docs/worker/console) shows the same information in a browser.
 
 ## See the machine right now
 
@@ -154,14 +154,20 @@ The next command starts the daemon with the new value.
 
 ## Read the daemon log
 
-The daemon writes its own log, separate from the events, to `~/.simlock/daemon.log`. Each line is one JSON object with a time, a level, the part of the daemon that wrote it, and a message.
+The daemon writes its own log, separate from the events, to `~/.simlock/daemon.log`. Read it when something fails and the error message is not enough.
 
 ```sh
 simlock daemon logs            # the last 100 lines
 simlock daemon logs --follow   # keep printing new lines
 ```
 
-The log rolls over at `log.rotateBytes` (5 MiB by default). Simlock keeps one older file, `daemon.log.1`, and `simlock daemon logs` reads both.
+Each line is one JSON object with a time (milliseconds since 1970), a level, the part of the daemon that wrote it, and a message:
+
+```json
+{"timestamp":1761037402114,"level":"warn","module":"daemon","message":"Unknown config key: \"idle.shutdownAfter\""}
+```
+
+When the log reaches `log.rotateBytes` (5 MiB by default), it starts a new file. Simlock keeps one older file, `daemon.log.1`, and `simlock daemon logs` reads both.
 
 `log.level` sets how much the daemon writes: `debug`, `info` (the default), `warn` or `error`. Turn on `debug` while you chase a problem, then turn it back:
 

@@ -5,7 +5,7 @@ description: Every simlock command and subcommand, with its synopsis, every flag
 
 import { Aside } from '@astrojs/starlight/components';
 
-This page lists what each command accepts. For what a command is for and when to use it, follow the guide link in each section. For what an error code means, see the [errors reference](/simlock/docs/reference/errors).
+This page lists what each command accepts. For when and why to use a command, follow the guide link in its row. For what an error code means and what to do about it, see the [errors reference](/simlock/docs/reference/errors).
 
 ## Commands at a glance
 
@@ -16,21 +16,22 @@ This page lists what each command accepts. For what a command is for and when to
 | [`simlock simctl`](#simlock-simctl) | Run `xcrun simctl` against Simlock's simulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock adb`](#simlock-adb) | Run `adb` against Simlock's emulators | [Working with a device](/simlock/docs/using-devices/working-with-a-device) |
 | [`simlock rotate`](#simlock-rotate) | Turn your leased iOS simulator to portrait, portrait-upside-down, landscape-left or landscape-right | — |
+| [`simlock tunnel`](#simlock-tunnel) | Connect ports between your machine and a leased Android device on another machine | [Remote agents over HTTP](/simlock/docs/using-devices/remote-agents#tunnels) |
 | [`simlock catalog`](#simlock-catalog) | Show the models, runtimes and images you can lease | [Choosing a device](/simlock/docs/using-devices/choosing-a-device) |
 | [`simlock mcp`](#simlock-mcp) | Start the MCP server for an agent | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock instructions`](#simlock-instructions) | Print the rules an agent must follow, for its prompt | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock setup`](#simlock-setup) | Install the Simlock skill into Claude Code and Codex | [Connect your agent](/simlock/docs/getting-started/connect-your-agent) |
 | [`simlock status`](#simlock-status) | Show the daemon, its devices and its leases | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock list`](#simlock-list) | List devices, leases, cleanup rules or waiting requests | [Monitoring](/simlock/docs/worker/monitoring) |
-| [`simlock events`](#simlock-events) | Print business events | [Events reference](/simlock/docs/reference/events) |
+| [`simlock events`](#simlock-events) | Print what happened: leases, devices, workers, installs | [Events reference](/simlock/docs/reference/events) |
 | [`simlock stats`](#simlock-stats) | Show usage figures for a time window | [Monitoring](/simlock/docs/worker/monitoring) |
 | [`simlock update`](#simlock-update) | Install the newest Simlock (or a named version) and restart the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
 | [`simlock whoami`](#simlock-whoami) | Show who the daemon thinks you are | [Access control](/simlock/docs/gateway/access-control) |
 | [`simlock daemon`](#simlock-daemon) | Start, stop and inspect the daemon | [Running the daemon](/simlock/docs/worker/running-the-daemon) |
 | [`simlock config`](#simlock-config) | Read and change the daemon's configuration | [Configuration](/simlock/docs/worker/configuration) |
-| [`simlock doctor`](#simlock-doctor) | Check prerequisites and repair drift | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
+| [`simlock doctor`](#simlock-doctor) | Check the machine and fix Simlock's records | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
 | [`simlock cleanup`](#simlock-cleanup) | Run the cleanup rules now | [Cleanup](/simlock/docs/worker/cleanup) |
-| [`simlock nuke`](#simlock-nuke) | Emergency reset of every lease and device | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
+| [`simlock nuke`](#simlock-nuke) | End every lease and stop every device at once | [Troubleshooting](/simlock/docs/worker/troubleshooting) |
 | [`simlock warm`](#simlock-warm) | Forget a kind the warm pool learned from a lease | [Capacity and the warm pool](/simlock/docs/worker/capacity#forget-a-learned-kind) |
 | [`simlock component`](#simlock-component) | Install, list and remove runtimes and system images | [Runtimes and images](/simlock/docs/worker/runtimes-and-images) |
 | [`simlock baseline`](#simlock-baseline) | Save a held device as a named baseline, list baselines, remove one | [Baselines](/simlock/docs/worker/baselines) |
@@ -193,7 +194,7 @@ The command exits with `adb`'s own exit code. Through a gateway, stdin is sent o
 
 ## simlock rotate
 
-Turn your leased iOS simulator to an orientation, on a worker or through a gateway. It calls `device.rotate`, so only an iOS phone or tablet simulator turns.
+Turn your leased iOS simulator to an orientation, on a worker or through a gateway. Only an iPhone or iPad simulator turns.
 
 ```text
 simlock rotate <orientation> [--lease <lease-id>]
@@ -204,11 +205,11 @@ simlock rotate <orientation> [--lease <lease-id>]
 | `<orientation>` | `portrait`, `portrait-upside-down`, `landscape-left` or `landscape-right`. `left`, `right` and `upside-down` are short for the last three, case and surrounding spaces do not matter, and the underscore spellings (`landscape_left`) work too. | — |
 | `--lease <lease-id>` | The lease to turn, before or after the orientation. | Your only lease |
 
-It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12); an input helper that cannot start fails with `INPUT_UNAVAILABLE` (exit 1).
+It prints `Rotated lease <lease-id> to <orientation>`, with the orientation spelled `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. An orientation Simlock does not know, or several leases without `--lease`, is a usage error (exit 2). A lease on an Android emulator, a physical device or an Apple TV fails with `ROTATION_UNSUPPORTED` (exit 12). A simulator that cannot take input right now fails with `INPUT_UNAVAILABLE` (exit 1); run the command again.
 
 ## simlock tunnel
 
-Reach your leased Android emulator back to ports on your own machine, and ports on the device from your machine, from another machine, while the command runs. It talks to a lone worker or a gateway over HTTP and WebSocket, so it needs no local daemon.
+While the command runs, connect ports between your machine and a leased Android device that sits on another machine: `reverse` lets the device reach a server on your machine (such as Metro), `forward` lets your machine reach a port on the device. It talks to the worker or gateway over HTTP, so it needs no daemon on your machine.
 
 ```text
 simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ...] [--lease <lease-id>] [--url <url>]
@@ -217,7 +218,7 @@ simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ..
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `reverse <device-port>[:<caller-port>]` | Make the device's `localhost:<device-port>` reach `localhost:<caller-port>` on this machine. Both are integers 1 to 65535; the worker accepts device ports from 1024. Repeat the word `reverse` for up to 8 tunnels, counting `forward` ones; a caller port may appear once across both. | The caller port is the device port |
-| `forward <device-port>[:<caller-port>]` | Make `localhost:<caller-port>` on this machine reach `localhost:<device-port>` on the device, through adb's host protocol with no `adb forward` rule. The caller port is 1024 to 65535 and listens on loopback only; the command binds it before it asks the worker for anything. | The caller port is the device port |
+| `forward <device-port>[:<caller-port>]` | Make `localhost:<caller-port>` on this machine reach `localhost:<device-port>` on the device. It adds no `adb forward` rule. The caller port is 1024 to 65535 and listens on loopback only; the command binds it before it asks the worker for anything. | The caller port is the device port |
 | `--lease <lease-id>` | The lease to reach, 1 to 256 characters. | An agent token's only lease; an operator token must name one |
 | `--url <url>` | The worker or gateway: `https://`, or `http://` only for `127.0.0.1`, `[::1]` or `localhost`; the origin only, with no path, query or fragment (a trailing `/` is fine); at most 2048 characters. A `--url` that is not, is a usage error. | `SIMLOCK_URL` |
 | `--token <secret>` | The bearer token, 1 to 4096 characters. | `SIMLOCK_TOKEN` |
@@ -226,7 +227,7 @@ It prints one line per tunnel, `reverse device:<device-port> -> localhost:<calle
 
 ## simlock catalog
 
-Show what you can lease: per platform, the installed runtimes and the default, the models grouped by class with the default model of each class, and, on Android, the installed system images. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
+Show what you can lease on each platform: the installed OS versions and which one is the default, the models grouped by class with each class's default model, and, on Android, the installed system images. See [Choosing a device](/simlock/docs/using-devices/choosing-a-device).
 
 ```text
 simlock catalog [--platform <ios|android>] [--json]
@@ -449,7 +450,7 @@ simlock doctor [--fix] [--purge-orphans] [--yes]
 | `--purge-orphans` | Destroy every orphaned device: a device in Simlock's device folders with no record. Also destroy every orphan source: a seed simulator with no record, or a saved baseline's copy that no baseline names. Needs the admin role. Asks for confirmation. | Off |
 | `--yes` | Skip the confirmation for `--purge-orphans`. Required when there is no terminal to ask in. | Off |
 
-The report also lists the worker's sources in `sources`: for each, `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when the source no longer matches the catalog or runtime. A baseline source also has `baselineName` and `baselineVersion`. A seed is the simulator Simlock clones to make each iOS simulator a lease gets; it takes disk but is never leased. A seed with no record, or a baseline source no baseline names, shows with `orphan: true`; it is not a finding, and only `--purge-orphans` deletes it.
+The report also lists, under `sources`, the copies on disk that new devices are made from. Each has `platform`, `kind` (`seed` or `baseline`), `model`, `osVersion`, `sizeBytes` when known, and `staleReason` when it no longer matches the installed runtime. A baseline source also has `baselineName` and `baselineVersion`. A seed is a simulator Simlock copies to make each iOS simulator a lease gets: it takes disk space but is never leased. A seed with no record, or a baseline copy no baseline names, shows `orphan: true`. That is not a finding; only `--purge-orphans` deletes it.
 
 On a worker whose login service names a Node or `main.js` that is gone, the report holds a `service-broken` finding and stderr gets `Service broken: <name> (<manager>) names missing <path>. Run `simlock daemon install` again.` (`<path>, <path>` for two).
 
@@ -505,7 +506,7 @@ simlock 0.4.0 is running
 
 ## simlock nuke
 
-Emergency reset: release every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
+Emergency reset: end every lease, stop the simulators and emulators Simlock started, and clear the queue. Needs the admin role. See [Troubleshooting](/simlock/docs/worker/troubleshooting).
 
 <Aside type="danger">
 `nuke` ends every agent's lease on this machine at once. With `--delete-devices` it also deletes every device Simlock manages, every seed and every baseline. A source with no record (an orphan) is left for `simlock doctor --purge-orphans`. Devices Simlock does not manage are never touched, and an enrolled physical device stays enrolled.
@@ -745,7 +746,7 @@ On success it prints `Sent a test message to <destination>: HTTP <status>`. A na
 
 ## Output
 
-Simlock is built for agents, so most output is JSON lines.
+Most output is JSON lines, so agents and scripts can read it.
 
 | Stream | What goes there |
 | --- | --- |
@@ -780,7 +781,7 @@ Flags that take a duration (`--ttl`, `--timeout`, `--since`) accept a whole numb
 | 0 | Success. |
 | 1 | The command failed: an internal error, a lost or failed daemon connection, a refused credential, or another failure listed under 1 in the errors reference. |
 | 2 | The request was wrong: a usage error, an invalid request, or a command this daemon does not run. |
-| 10 | A deadline ran out: the queue wait, a passthrough command, or a download. |
+| 10 | A deadline ran out: the queue wait, a command run on a device, or a download. |
 | 11 | Busy: no capacity with `--no-wait`, or a device or component held by other work. Try again later. |
 | 12 | What you asked for does not exist here or cannot be provided: a model, a runtime, a worker, a device. |
 | 13 | You already hold a lease, or the lease ID is taken. |

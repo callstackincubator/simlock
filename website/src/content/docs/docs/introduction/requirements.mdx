@@ -5,83 +5,91 @@ description: What a machine needs to run iOS simulators, Android emulators, phys
 
 import { Aside } from '@astrojs/starlight/components';
 
-Simlock uses the platform tools already on your machine. It never installs Xcode, the Android SDK or a JDK for you. A platform whose tools are missing is not available on that machine; the other platform still works.
+Simlock uses the platform tools already on your machine. It never installs Xcode, the Android SDK or a JDK for you. If one platform's tools are missing, that platform is not available on that machine; the other one still works.
 
-## What each platform needs
+## At a glance
 
-| You want | Host | You need |
+| You want | Runs on | You need |
 | --- | --- | --- |
 | The `simlock` CLI | macOS or Linux | Node.js 22.13 or later |
 | iOS simulators | macOS only | Xcode, selected, with its license accepted and its first-launch setup done |
-| Android emulators | macOS or Linux | Android SDK with the command-line tools, `emulator` and `platform-tools` packages, and a JDK with `JAVA_HOME` set |
+| Android emulators | macOS or Linux | The Android SDK with the command-line tools, `emulator` and `platform-tools`, and a JDK with `JAVA_HOME` set |
 | A gateway | macOS or Linux | Node.js 22.13 or later. A gateway runs no devices, so it needs no Xcode or Android SDK. |
 
-### iOS simulators
+## Set up iOS simulators
 
-- Xcode, installed and selected as the developer directory:
+1. Install Xcode and select it:
 
-  ```sh
-  sudo xcode-select -s /Applications/Xcode.app
-  ```
+   ```sh
+   sudo xcode-select -s /Applications/Xcode.app
+   ```
 
-- The Xcode license accepted:
+2. Accept the Xcode license:
 
-  ```sh
-  sudo xcodebuild -license accept
-  ```
+   ```sh
+   sudo xcodebuild -license accept
+   ```
 
-- Xcode's first-launch setup done:
+3. Run Xcode's first-launch setup:
 
-  ```sh
-  sudo xcodebuild -runFirstLaunch
-  ```
+   ```sh
+   sudo xcodebuild -runFirstLaunch
+   ```
 
-- At least one iOS runtime installed. Simlock creates simulators only on runtimes that are already there, unless you allow a download. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+4. Install at least one iOS runtime. Simlock creates simulators only on runtimes that are already installed, unless you allow a download. See [Runtimes and system images](/simlock/docs/worker/runtimes-and-images).
 
-Watching a simulator's screen from the console needs macOS 14 or later.
+To watch a simulator's screen in the console, you need macOS 14 or later.
 
-### Android emulators
+## Set up Android emulators
 
-- An Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and uses the first one that has every tool it needs. On Linux there is no default location, so set `ANDROID_HOME`.
-- The SDK command-line tools (`sdkmanager` and `avdmanager`), from Android Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only). Unpack them to `$ANDROID_HOME/cmdline-tools/latest`.
-- The `emulator` and `platform-tools` packages:
+1. Install the Android SDK. Simlock looks in `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and uses the first one that has every tool it needs. Linux has no default location, so set `ANDROID_HOME` there.
+2. Install the SDK command-line tools (`sdkmanager` and `avdmanager`), from Android Studio or the [command-line tools download](https://developer.android.com/studio#command-line-tools-only). Unpack them to `$ANDROID_HOME/cmdline-tools/latest`.
+3. Install the `emulator` and `platform-tools` packages:
 
-  ```sh
-  sdkmanager --install emulator platform-tools
-  ```
+   ```sh
+   sdkmanager --install emulator platform-tools
+   ```
 
-  The emulator must be recent enough to accept every option Simlock launches it with. An older one (Android Emulator 36.1.9, for example) exits as soon as it starts. `simlock doctor` reports it, and `sdkmanager --install emulator` updates it.
+4. Install a JDK that `sdkmanager` can run on, and point `JAVA_HOME` at it.
 
-- A JDK that `sdkmanager` can run on, with `JAVA_HOME` pointing at it.
+Before Simlock can install Android system images, you must accept the Android SDK licenses in Simlock's configuration. Until you do, an install fails with `LICENSE_NOT_ACCEPTED`. See [Runtimes and system images](/simlock/docs/worker/runtimes-and-images).
 
-To install Android system images, you must also accept the Android SDK licenses in Simlock's configuration. Until you do, an install fails with `LICENSE_NOT_ACCEPTED`. See [Runtimes and images](/simlock/docs/worker/runtimes-and-images).
+<Aside type="caution" title="An old emulator exits at once">
+An emulator that is too old (Android Emulator 36.1.9, for example) does not accept the options Simlock starts it with, and exits as soon as it starts. `simlock doctor` reports it. Run `sdkmanager --install emulator` to update it.
+</Aside>
 
-### Physical devices
+## Use physical devices
 
 An iPhone or iPad needs:
 
 - iOS or iPadOS 17 or later.
-- A USB connection to the Mac. A device reachable only over the network cannot be enrolled.
-- Trust for this Mac ("Trust This Computer") and Developer Mode on.
-- To stay unlocked. A device that needs its passcode counts as not present.
+- A USB cable to the Mac. A device you can reach only over the network cannot be enrolled.
+- "Trust This Computer" accepted for this Mac, and Developer Mode on.
+- To stay unlocked. A device that asks for its passcode counts as not present.
 
-An Android phone needs a USB connection with USB debugging allowed for this machine.
+An Android phone needs a USB cable, with USB debugging allowed for this machine.
 
-See [Enrolling physical devices](/simlock/docs/worker/enrolling-physical-devices).
+See [Enrol physical devices](/simlock/docs/worker/enrolling-physical-devices).
 
 ## Check your machine
 
-Run `simlock doctor`. It starts the daemon if it is not running, checks each platform this machine can run, and prints one line on stderr for each missing tool, with the command that fixes it:
+Run:
+
+```sh
+simlock doctor
+```
+
+It prints one line on stderr for each missing tool, with the command that fixes it:
 
 ```text
 Missing [ios] xcode-license: The Xcode license is not accepted. Run `sudo xcodebuild -license accept`.
 Missing [android] android-emulator: The Android emulator package is not installed in /Users/dana/Library/Android/sdk. Run `sdkmanager --install emulator`.
 ```
 
-`simlock doctor` checks iOS only on macOS. It checks Android on every host.
+`simlock doctor` checks iOS only on macOS. It checks Android everywhere. If you only want one platform, ignore the lines for the other.
 
 <Aside type="caution" title="Restart the daemon after you install a tool">
-The daemon looks for each platform's tools once, when it starts. After you install a missing tool, stop the daemon so the next command starts it again with the platform available:
+Simlock looks for each platform's tools only when its daemon starts. After you install a missing tool, stop the daemon, then check again. The next command starts the daemon with the new tool:
 
 ```sh
 simlock daemon stop
@@ -89,4 +97,4 @@ simlock doctor
 ```
 </Aside>
 
-`simlock doctor --fix` does not install anything. It corrects Simlock's own records about its devices. See [Install and check your machine](/simlock/docs/getting-started).
+`simlock doctor --fix` does not install anything. See [Install and check your machine](/simlock/docs/getting-started) for what it does fix.

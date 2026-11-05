@@ -127,7 +127,7 @@ export default defineConfig({
           items: [
             doc("gateway", "When you need a gateway"),
             doc("gateway/setup", "Set up a gateway"),
-            doc("gateway/joining-workers", "Join workers"),
+            doc("gateway/joining-workers", "Add a worker"),
             doc("gateway/routing", "How requests are routed"),
             doc("gateway/managing-workers", "Manage workers"),
             doc("gateway/access-control", "Access control"),

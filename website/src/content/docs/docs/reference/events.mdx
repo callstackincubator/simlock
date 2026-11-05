@@ -5,13 +5,13 @@ description: Every event a worker or a gateway records, when it fires, what it c
 
 import { Aside } from '@astrojs/starlight/components';
 
-An event is a fact Simlock records after it happens: a lease was granted, a device booted, a worker
-disconnected. Events are for watching and auditing. They never change anything.
+An event is a record of something that happened: a lease was granted, a device booted, a worker
+disconnected. Use events to watch a machine or audit it after the fact. Reading them changes nothing.
 
 ## Watch events
 
-All three ways need admin rights: the CLI on the same machine as the daemon, or an operator token
-over HTTP.
+All three ways need admin rights: run the CLI on the machine where the daemon runs, or use an
+operator token over HTTP.
 
 ### From the CLI
 
@@ -65,10 +65,10 @@ Devices, Workers, Components or Other. See [Console](/simlock/docs/worker/consol
 | `timestamp` | When it happened, in milliseconds since the Unix epoch.                                                    |
 | `event`     | The event name from the tables below.                                                                      |
 | `payload`   | The fields listed for that event.                                                                          |
-| `module`    | The part of Simlock that recorded it.                                                                      |
+| `module`    | The part of Simlock that recorded it, such as `lease-lifecycle`.                                           |
 
-A payload may gain fields over time. A field list such as `reason` may gain values. Ignore what you
-do not know.
+Payloads can gain new fields, and fields such as `reason` can gain new values. Code that reads
+events should ignore fields and values it does not know.
 
 ## Where events are kept
 
@@ -133,10 +133,10 @@ release and records nothing.
 | --- | --- | --- | --- |
 | `device.provisioned` | A simulator or emulator was created. | `deviceId`, `spec` (with `baseline` when the device is a copy of a baseline), `driver`, `duration` | Relayed |
 | `device.ready` | A device finished booting and is ready to use. | `deviceId`, `bootDuration`, `platform` | Relayed |
-| `device.slimmed` | A slim iOS simulator booted with its chosen services turned off, and a readback confirmed it. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
+| `device.slimmed` | A slim iOS simulator booted with its chosen services turned off, and Simlock checked they are off. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
 | `device.reclaimed` | A physical device was cleaned after a lease and can be leased again. Never sent for a simulator or emulator: each is deleted when its lease ends (`device.deleted`, initiator `lease-end`). | `deviceId`, `strategy` (`uninstall`), `duration`, `missingApps` | Relayed |
 | `device.purge-failed` | Cleaning a device after a lease failed. `device.quarantined` follows. | `deviceId`, `leaseId`, `attemptedStrategy`, `duration`, `error` | Relayed |
-| `device.quarantined` | A device was set aside: it is not leased and cleanup is retried. | `deviceId`, `maxRetries`, `nextRetryAt`, `platform`, `kind` (`purge-failed`, `shutdown-failed`, `delete-failed`, `stalled`), `stalledState` or `message` | Relayed |
+| `device.quarantined` | A device was set aside after its cleanup failed: no one can lease it, and Simlock retries the cleanup. | `deviceId`, `maxRetries`, `nextRetryAt`, `platform`, `kind` (`purge-failed`, `shutdown-failed`, `delete-failed`, `stalled`), `stalledState` or `message` | Relayed |
 | `device.quarantine-recovered` | A retry cleaned a quarantined device; it is back in use. | `deviceId`, `attempts`, `strategy`, `platform`, `missingApps` for a physical device | Relayed |
 | `device.quarantine-abandoned` | A quarantined device ran out of retries and was deleted, or unenrolled if physical. | `deviceId`, `attempts`, `platform` | Relayed |
 | `device.quarantine-stranded` | A quarantined device ran out of retries and could not be deleted either. It needs a person. | `deviceId`, `attempts`, `error`, `platform` | Relayed |
@@ -192,15 +192,15 @@ as `incompatible` in `simlock --gateway worker list`.
 | `daemon.update-started` | An update began: the daemon resolved the version and now waits for its leases to end or installs. | `from`, `to`, `forced` | Relayed |
 | `daemon.update-failed` | An update ended without a new daemon: the install failed and this daemon serves again, or the new version did not start and the old one was started again. | `stage` (`installing` or `restarting`), `from`, `to`, `message` | Relayed |
 | `daemon.stopping` | The daemon began to stop. | `reason` (`signal` when the daemon process received SIGTERM) | Own and relayed |
-| `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
+| `doctor.reconciled` | Simlock compared its records with the devices that exist (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |
 | `disk.pressure-detected` | Free disk space fell below `diskPressure.freeBytesThreshold`. Once per crossing. | `freeBytes`, `threshold` | Relayed |
-| `driver.root-rejected` | A device folder failed its ownership check, or (iOS) `drivers.ios.deviceSet` was invalid, conflicted with `ios.simulator.headless: false`, or switched with simulators left over, so that platform did not start. Reasons include `invalid-device-set` and `device-set-changed`; `root` is then the configured value or the set that holds the leftovers. | `platform`, `root`, `reason` | Relayed |
-| `driver.adb-server-rejected` | Simlock's own adb server could not start, so Android did not start. | `port`, `reason` (`occupied`, `start-failed`, `invalid-port`) | Relayed |
+| `driver.root-rejected` | A platform did not start because of its device folder: the folder failed its ownership check, or (iOS) `drivers.ios.deviceSet` was invalid, conflicted with `ios.simulator.headless: false`, or was switched while simulators were left in the old set. `simlock doctor` says what to fix. Reasons include `invalid-device-set` and `device-set-changed`; `root` is then the configured value or the set that holds the leftovers. | `platform`, `root`, `reason` | Relayed |
+| `driver.adb-server-rejected` | The adb server Simlock runs for its emulators could not start (see `drivers.android.adbServerPort`), so Android did not start. | `port`, `reason` (`occupied`, `start-failed`, `invalid-port`) | Relayed |
 
 <Aside>
-Running a command on a device and watching its screen record no event. The daemon log records
-each stream.
+Running a command on a device and watching its screen record no event. Each screen stream shows in
+`simlock daemon logs`.
 </Aside>
 
 To have a gateway post some of these events to a webhook, see [Alerts](/simlock/docs/gateway/alerts).

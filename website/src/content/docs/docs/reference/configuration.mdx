@@ -77,7 +77,7 @@ gateway logs a warning when a worker's cap is lower.
 
 | Key                 | Type                    | Default    | Meaning                                                                                       | Applies to |
 | ------------------- | ----------------------- | ---------- | --------------------------------------------------------------------------------------------- | ---------- |
-| `capacity.strategy` | `resource` or `fixed`   | `resource` | `resource` derives limits from the machine and adds a RAM budget. `fixed` uses the numbers you write. | Worker     |
+| `capacity.strategy` | `resource` or `fixed`   | `resource` | `resource` sets the limits from the machine's CPU and RAM, and never creates a device the remaining RAM cannot hold. `fixed` uses the numbers you write. | Worker     |
 
 ### `resource` strategy
 
@@ -205,15 +205,15 @@ The warm pool never downloads. A gateway never asks a worker to download for a l
 | `android.emulator.bootAnimation`   | boolean                            | `true`                           | `false` skips the boot animation.                                                                         | Worker     |
 | `drivers.ios.deviceRoot`           | absolute path                      | `~/.simlock/devices/ios`         | Folder that holds Simlock's simulators. A relative path turns iOS off; `simlock doctor` says why.          | Worker     |
 | `drivers.ios.deviceSet`            | `simlock` or `default`             | `simlock`                        | Where iOS simulators live. `simlock` keeps them in `drivers.ios.deviceRoot`; `default` keeps them in Xcode's own device set, `~/Library/Developer/CoreSimulator/Devices`. Case-sensitive. Any other value, `default` together with `drivers.ios.deviceRoot`, `ios.simulator.headless: false` with `simlock`, or a switch with simulators left from the other setting turns iOS off; `simlock doctor` says why. See [Build and run your app](/simlock/docs/using-devices/build-and-run#switch-the-device-set). | Worker     |
-| `drivers.ios.screenCaptureCommand` | path                               | the program installed with Simlock | Program that captures a simulator's screen for streaming.                                              | Worker     |
-| `drivers.ios.deviceCaptureCommand` | path                               | the program installed with Simlock | Program that captures a physical iPhone's screen for streaming.                                        | Worker     |
+| `drivers.ios.screenCaptureCommand` | path                               | the program installed with Simlock | Program that captures a simulator's screen for streaming. Leave it unset unless you replace that program. | Worker     |
+| `drivers.ios.deviceCaptureCommand` | path                               | the program installed with Simlock | Program that captures a physical iPhone's screen for streaming. Leave it unset unless you replace that program. | Worker     |
 | `drivers.android.deviceRoot`       | absolute path                      | `~/.simlock/devices/android`     | Folder that holds Simlock's emulators. A relative path turns Android off; `simlock doctor` says why.       | Worker     |
-| `drivers.android.adbServerPort`    | TCP port number                    | `5038`                           | Port of Simlock's own adb server. Not `5037`, the shared server's port. If something else holds it, Android does not start. | Worker     |
+| `drivers.android.adbServerPort`    | TCP port number                    | `5038`                           | Port of the adb server Simlock runs for its emulators, kept apart from your own adb on `5037`. Not `5037`. If something else holds the port, Android does not start. | Worker     |
 | `exec.timeoutMs`                   | positive number                    | `600000` (10 min)                | How long one command run on a device through `simlock simctl` or `simlock adb` from a gateway or over HTTP may take before it is stopped with `EXEC_TIMEOUT`. | Worker     |
 
-`android.emulator.*` changes apply at each emulator's next boot. Changing `headless` or `gpu`
-makes the seed that devices are copied from stale: the next lease of that kind makes a new seed
-first, which takes longer once.
+`android.emulator.*` changes apply at each emulator's next boot. After you change `headless` or
+`gpu`, the first lease of each kind of emulator takes longer once, while Simlock prepares a new copy
+to make devices from.
 
 ## HTTP and sign-in
 
@@ -317,7 +317,7 @@ A name Simlock does not know is warned about and ignored.
 | `capabilities.agent-device.ios.provisioningProfile` | non-empty string             | not set          | Provisioning profile for manual signing of the iPhone runner. Setting it switches agent-device to manual signing. Passed to the phone daemon. | Worker     |
 | `capabilities.agent-device.ios.signingIdentity` | non-empty string                 | not set          | Code-signing identity for manual signing of the iPhone runner. Passed to the phone daemon.                  | Worker     |
 | `capabilities.input.enabled`                | boolean                              | `false`          | Let a lease's holder send taps and keys to its device over `WS /v1/leases/{id}/input`. On a gateway: pass each input socket through to the lease's worker, which needs it on too. | Both       |
-| `capabilities.tunnel.enabled` | boolean | `false` | Let a lease's holder open `WS /v1/leases/{id}/tunnel` and reverse device ports to its own machine. A gateway relays the socket to the lease's worker, so turn it on at both. The worker reserves loopback ports 47000-47999 for tunnels, and a rule that `adb reverse` points into that range is removed when the worker starts, or, on a device that is leased then, when its lease ends, so keep your own rules out of it. A phone's rules are never removed that way; see [Tunnels](/docs/using-devices/remote-agents/#tunnels) for what a tunnel's port is open to. | Both |
+| `capabilities.tunnel.enabled` | boolean | `false` | Let a lease's holder open `WS /v1/leases/{id}/tunnel` and reverse device ports to its own machine. A gateway relays the socket to the lease's worker, so turn it on at both. The worker reserves loopback ports 47000-47999 for tunnels, and a rule that `adb reverse` points into that range is removed when the worker starts, or, on a device that is leased then, when its lease ends, so keep your own rules out of it. A phone's rules are never removed that way; see [Tunnels](/simlock/docs/using-devices/remote-agents#tunnels) for what a tunnel's port is open to. | Both |
 | `capabilities.stream.enabled`               | boolean                              | `false`          | Let people watch a running device's screen. On a gateway: pass each stream through from the worker.           | Both       |
 | `capabilities.stream.fps`                   | integer `1`–`60`                     | `30`             | Highest frame rate. A still screen sends far fewer frames.                                                   | Worker     |
 | `capabilities.stream.maxDimension`          | integer `96`–`4096`                  | `720`            | Longest side of the picture, in pixels. The setting that changes bandwidth most.                             | Worker     |
@@ -327,7 +327,7 @@ A name Simlock does not know is warned about and ignored.
 
 | Key                  | Type             | Default                                         | Meaning                                                                                                                     | Applies to |
 | -------------------- | ---------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `log.level`          | `debug`, `info`, `warn` or `error` | `info`                        | Lowest level written to `daemon.log`. `debug` adds every read-only request and every device command Simlock runs.          | Both       |
+| `log.level`          | `debug`, `info`, `warn` or `error` | `info`                        | Lowest level written to `daemon.log`. `debug` also logs every read-only request and every device command Simlock runs.     | Both       |
 | `log.rotateBytes`    | positive integer | `5242880` (5 MiB)                               | Size at which `daemon.log` is rotated.                                                                                      | Both       |
 | `eventBuffer.capacity` | positive integer | `1000`                                        | Recent events kept in memory, which `simlock events` without `--since` shows.                                               | Both       |
 | `eventLog.retention` | positive integer | `604800000` (7 days)                            | How long events are kept in `history.db`, which `simlock events --since` reads.                                             | Both       |
