@@ -188,12 +188,12 @@ Send the same calls to the gateway, with a token created on the gateway. The gat
 
 ## Tunnels
 
-A tunnel connects ports between your machine and a leased Android device on another machine:
+A tunnel connects ports between your machine and a leased Android device or iOS simulator on another machine:
 
 - **`reverse`** lets the device reach a server on your machine, such as Metro.
 - **`forward`** lets your machine reach a port on the device.
 
-iOS leases can't use tunnels.
+iOS simulators take tunnels; an iPhone does not. A simulator has no network of its own: an app in it listens on the worker's loopback and reaches the worker's ports. So `reverse 8081` makes the worker listen on port 8081 itself, on `127.0.0.1` and `::1`, and two leases on one worker cannot reverse the same port. `reverse` is refused with `TUNNEL_PORT_IN_USE` when anything on the worker already listens on that port. `forward 9100` reaches port 9100 only when a process of your own lease's simulator listens there; a port that another simulator's app, the worker's own tools or nothing listens on is closed, and `simlock tunnel` prints the reason on stderr.
 
 ### Before you start
 
@@ -228,6 +228,7 @@ While a tunnel is open, its port on the worker can be reached by others on that 
 
 What else to know:
 
+- On an iOS simulator, a reverse port that any process on the worker already listens on is refused with `TUNNEL_PORT_IN_USE`, whichever lease it belongs to.
 - A port you already reversed yourself with `adb reverse` through `exec` is refused with `TUNNEL_PORT_IN_USE`. An `adb reverse` rule you set through `exec` after the tunnel opens replaces it, and the tunnel stops working.
 - On a phone, Simlock only removes the rules its own tunnels set. It never clears the phone's other `adb reverse` or `adb forward` rules.
 - If the worker crashes while a tunnel is open, the tunnel's rule stays on the phone until it reboots or you remove it with `adb reverse --remove`. Until then, that port can't be used for new tunnels.
@@ -255,7 +256,7 @@ What else to know:
 
 **Reverse connections.** Each connection the device makes to `localhost:<devicePort>` arrives as `OPEN`, with an odd connection number. Its bytes then flow as `DATA` both ways.
 
-**Forward connections.** You open them: send `OPEN` with an even connection number above your last one, and JSON `{"kind":"forward","devicePort":<port>}` naming a `forward` tunnel of this socket, then send `DATA` at once. The worker answers `RESET` when nothing listens on the device port, when the device doesn't answer within 5 seconds (reason `timeout`), or when 256 connections are already open on the socket (reason `too many connections`). An `OPEN` that breaks these rules is refused with `BAD_REQUEST`.
+**Forward connections.** You open them: send `OPEN` with an even connection number above your last one, and JSON `{"kind":"forward","devicePort":<port>}` naming a `forward` tunnel of this socket, then send `DATA` at once. The worker answers `RESET` when nothing listens on the device port (on an iOS simulator: when no process of the lease's simulator does), when the device doesn't answer within 5 seconds (reason `timeout`), or when 256 connections are already open on the socket (reason `too many connections`). An `OPEN` that breaks these rules is refused with `BAD_REQUEST`.
 
 **Flow control.** Each direction of a connection starts with a 262144-byte window. The reader grants more with `CREDIT`. A reader that grants none pauses that one connection and no other.
 
