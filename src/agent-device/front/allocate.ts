@@ -123,21 +123,28 @@ function stringFields(fields: ReturnType<typeof leaseCallFields>) {
   };
 }
 
+// why: a named model wins over a class, and a baseline names a device of its own, so it replaces the class and rides beside a model.
+function chosenDevice(fields: ReturnType<typeof leaseCallFields>) {
+  const model =
+    typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
+  const baseline = typeof fields.deviceBaseline === "string" ? fields.deviceBaseline : undefined;
+  const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(baseline === undefined ? {} : { baseline }),
+    ...(model === undefined && baseline === undefined && klass !== undefined
+      ? { class: klass }
+      : {}),
+  };
+}
+
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
-  const device =
-    typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
-  const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
-  const baseline = typeof fields.deviceBaseline === "string" ? fields.deviceBaseline : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
-    ...(device === undefined ? {} : { model: device }),
-    ...(device !== undefined || baseline !== undefined || klass === undefined
-      ? {}
-      : { class: klass }),
-    ...(baseline === undefined ? {} : { baseline }),
+    ...chosenDevice(fields),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),

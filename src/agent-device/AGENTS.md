@@ -140,7 +140,7 @@ Local profile: a standalone worker with HTTP and this module on keeps `<data dir
 - A pid is signalled only after its role's whole marker matches (`--simlock-home`, and `--simlock-role=phones` for the phone daemon).
 - The edge names no gateway type; the gateway side builds `FleetPort` from its gateway context.
 - A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
-- Tests: `edge.test.ts`, `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.
+- Tests: `edge.test.ts`, `baseline.test.ts` (both on the rig in `test-support.ts`), `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.
 
 ## Known gaps
 
