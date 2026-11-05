@@ -9,6 +9,7 @@ import {
   type Clock,
   type TimerHandle,
   type LoopbackHost,
+  type ProcessResult,
   type ProcessRunner,
   type TcpListener,
   type TcpListenerFactory,
@@ -23,6 +24,27 @@ export interface IosDeviceTcpOptions {
   readonly listeners: TcpListenerFactory;
   readonly probe: TcpProbe;
   readonly runner: ProcessRunner;
+}
+
+// why: the driver offers tunnels only when the daemon gave it all three ports.
+export function createIosDeviceTcpFor(options: {
+  readonly clock: Clock;
+  readonly processRunner: ProcessRunner;
+  readonly tcpListener?: TcpListenerFactory;
+  readonly tcpProbe?: TcpProbe;
+  readonly tcpStreamConnector?: TcpStreamConnector;
+}): DeviceTcp | undefined {
+  const { tcpListener, tcpProbe, tcpStreamConnector } = options;
+  if (tcpListener === undefined || tcpProbe === undefined || tcpStreamConnector === undefined) {
+    return undefined;
+  }
+  return createIosDeviceTcp({
+    clock: options.clock,
+    connector: tcpStreamConnector,
+    listeners: tcpListener,
+    probe: tcpProbe,
+    runner: options.processRunner,
+  });
 }
 
 type Target = VirtualDriverDevice | PhysicalDriverDevice;
@@ -82,12 +104,20 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
       `nothing on the lease's simulator listens on port ${String(port)}`,
     );
 
+  // why: a lookup that cannot start (`ProcessSpawnError`) is reported as the owner check failing, like one that exits non-zero.
+  async function lookup(command: string, args: readonly string[]): Promise<ProcessResult> {
+    try {
+      return await options.runner.run(command, args, { timeoutMs: LOOKUP_TIMEOUT_MS });
+    } catch (error) {
+      throw new DeviceTcpError(
+        "TUNNEL_FAILED",
+        `could not check the port's owner: ${cut(error instanceof Error ? error.message : String(error))}`,
+      );
+    }
+  }
+
   async function listenersOn(port: number): Promise<Listener[]> {
-    const result = await options.runner.run(
-      "lsof",
-      ["-nP", `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fpn"],
-      { timeoutMs: LOOKUP_TIMEOUT_MS },
-    );
+    const result = await lookup("lsof", ["-nP", `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fpn"]);
     if (result.code === 1 && result.stdout.trim() === "") return [];
     const parsed = result.code === 0 ? parseListeners(result.stdout) : undefined;
     if (parsed === undefined) {
@@ -101,9 +131,7 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
   }
 
   async function holdsUdid(pid: number, udid: string): Promise<boolean> {
-    const result = await options.runner.run("ps", ["eww", "-p", String(pid)], {
-      timeoutMs: LOOKUP_TIMEOUT_MS,
-    });
+    const result = await lookup("ps", ["eww", "-p", String(pid)]);
     return result.code === 0 && result.stdout.split(/\s+/).includes(`SIMULATOR_UDID=${udid}`);
   }
 

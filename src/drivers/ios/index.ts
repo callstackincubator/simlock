@@ -76,7 +76,7 @@ import {
   refuseXcodeSetLeftovers,
   UDID_PATTERN,
 } from "./device-set-leftovers.js";
-import { createIosDeviceTcp } from "./device-tcp.js";
+import { createIosDeviceTcpFor } from "./device-tcp.js";
 import { devicectlExecCommand } from "./devicectl-exec.js";
 import { fillSimctlDevice } from "./simctl-device.js";
 import { IosPhysicalHandler } from "./physical.js";
@@ -375,19 +375,7 @@ export class IosSimctlDriver implements Driver {
       (udid) => this.#physical.osVersion(udid),
     );
     this.input = createInputFor(options, deviceRoot, rootOptions !== undefined);
-    if (
-      options.tcpListener !== undefined &&
-      options.tcpProbe !== undefined &&
-      options.tcpStreamConnector !== undefined
-    ) {
-      this.deviceTcp = createIosDeviceTcp({
-        clock: options.clock,
-        connector: options.tcpStreamConnector,
-        listeners: options.tcpListener,
-        probe: options.tcpProbe,
-        runner: options.processRunner,
-      });
-    }
+    this.deviceTcp = createIosDeviceTcpFor(options);
   }
 
   readonly screenCapture: ScreenCapture | undefined;

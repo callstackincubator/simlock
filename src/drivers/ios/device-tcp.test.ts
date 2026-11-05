@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import { type VirtualDriverDevice } from "../../core/index.js";
 import {
   FakeClock,
+  FakeTcpPeer,
   FakeTcpListenerFactory,
   FakeTcpProbe,
   FakeTcpStreamConnector,
   type LoopbackHost,
   type ProcessResult,
+  ProcessSpawnError,
   type ProcessRunner,
   type TcpStream,
 } from "../../ports/index.js";
@@ -45,12 +47,13 @@ const ok = (stdout: string): ProcessResult => ({ code: 0, stderr: "", stdout });
 
 // why: stands in for `lsof` and `ps eww` by what they were asked, not by the order of the calls.
 class MachineRunner implements ProcessRunner {
-  lookup: ProcessResult | "hangs" = { code: 1, stderr: "", stdout: "" };
+  lookup: ProcessResult | Error | "hangs" = { code: 1, stderr: "", stdout: "" };
   readonly environments = new Map<number, string>();
 
   async run(command: string, args: readonly string[]): Promise<ProcessResult> {
     if (command === "lsof") {
       if (this.lookup === "hangs") return await new Promise<ProcessResult>(() => undefined);
+      if (this.lookup instanceof Error) throw this.lookup;
       return this.lookup;
     }
     const pid = Number(args.at(-1));
@@ -73,6 +76,18 @@ class FailingOnIpv6Listeners extends FakeTcpListenerFactory {
   override listen(port: number, host: LoopbackHost = "127.0.0.1") {
     if (host === "::1") return Promise.reject(new Error("listen EACCES"));
     return super.listen(port, host);
+  }
+}
+
+// why: a connect a test settles itself, so it can resolve after the caller's 5 s limit.
+class DeferredConnector extends FakeTcpStreamConnector {
+  readonly settle: { open?: () => void } = {};
+  readonly peer = new FakeTcpPeer();
+
+  override connect(): Promise<TcpStream> {
+    return new Promise<TcpStream>((resolve) => {
+      this.settle.open = () => resolve(this.peer.stream);
+    });
   }
 }
 
@@ -167,7 +182,7 @@ describe("iOS deviceTcp forward connections", () => {
 
     const refused: {
       readonly name: string;
-      readonly lookup: ProcessResult;
+      readonly lookup: ProcessResult | Error;
       readonly environments: Record<number, string>;
       readonly message: string;
     }[] = [
@@ -201,6 +216,12 @@ describe("iOS deviceTcp forward connections", () => {
         message: "could not check the port's owner: lsof: can't run",
         name: "lookup exit 2",
       },
+      {
+        environments: {},
+        lookup: new ProcessSpawnError("lsof", ["-nP"]),
+        message: "could not check the port's owner: Failed to spawn lsof -nP",
+        name: "lookup that cannot start",
+      },
     ];
     for (const { environments, lookup, message, name } of refused) {
       const machine = setup();
@@ -226,6 +247,20 @@ describe("iOS deviceTcp forward connections", () => {
       expect(outcome.state, `${hanging} at 5 s`).toBe("rejected");
       await expect(connecting).rejects.toMatchObject({ message: "timeout" });
     }
+
+    const late = new DeferredConnector();
+    const slow = setup(late);
+    slow.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
+    slow.runner.environments.set(10, environmentOf(UDID));
+    const slowOutcome = promiseState(slow.connect());
+    await settle();
+    slow.clock.advance(5_000);
+    await settle();
+    expect(slowOutcome.state, "5 s with the connect pending").toBe("rejected");
+    expect(late.peer.closed, "stream still open before the connect resolves").toBe(false);
+    late.settle.open?.();
+    await settle();
+    expect(late.peer.closed, "a stream that opens after the reset is closed").toBe(true);
 
     const moved = setup();
     moved.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
