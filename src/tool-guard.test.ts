@@ -290,6 +290,15 @@ describe("tool-guard.mjs", () => {
     expect(result.stderr).toContain("runs only through `scripts/slow-e2e.sh");
   });
 
+  it("refuses fast-track.mjs to the agents whose report or fix it checks, and lets the others run it", () => {
+    const command = "node .agents/scripts/fast-track.mjs 5";
+
+    expect(bash(command, "a1", "bug-triager").stderr).toContain("you never run it yourself");
+    expect(bash(`${command} --pr 9`, "a1", "implementer").status).toBe(2);
+    expect(bash(command, "a1", "general-purpose")).toEqual(OK);
+    expect(bash(command, null)).toEqual(OK);
+  });
+
   it("refuses the slow lane's pnpm scripts in a sub-agent, and slow-e2e.sh outside its two agents", () => {
     expect(bash("pnpm test:e2e:slow e2e/slow-ios.test.ts", "a1", "implementer").stderr).toContain(
       "runs only through `scripts/slow-e2e.sh",
@@ -416,6 +425,12 @@ describe("tool-guard.mjs", () => {
     "- a — no",
     "## Risk",
     "- b",
+    "## Fast track",
+    "- Defect: yes",
+    "- Fix tried: yes",
+    "- Nothing public added or broken: yes",
+    "- No ADR or rule changed: yes",
+    "- One fix: no — agent-device could carry the fix",
     "",
     FOOTER,
   ].join("\n");
@@ -453,6 +468,21 @@ describe("tool-guard.mjs", () => {
       "the budget is 300",
     ],
     [
+      "a triage report without Fast track",
+      triage.replace(/## Fast track\n(?:- .*\n)+/, ""),
+      "a triage report has the sections",
+    ],
+    [
+      "a Fast track line missing",
+      triage.replace("- Fix tried: yes\n", ""),
+      "holds these five lines",
+    ],
+    [
+      "a Fast track no without its reason",
+      triage.replace("no — agent-device could carry the fix", "no"),
+      "holds these five lines",
+    ],
+    [
       "a two-line Spec updated",
       `Spec updated: Scope.\nAnd Tests.\n\n${FOOTER}`,
       "one line and the footer",
@@ -472,6 +502,12 @@ describe("tool-guard.mjs", () => {
   it.each([
     ["a handoff", handoff("the maintainer's answer on the timeout")],
     ["a triage report", triage],
+    [
+      "a triage report whose Fast track reasons take it past 300 words",
+      triage
+        .replace("Keep it.", "word ".repeat(290))
+        .replace("could carry the fix", "word ".repeat(40)),
+    ],
     ["a superseding triage report", `Supersedes the report above.\n\n${triage}`],
     ["a Spec updated line", `Spec updated: Scope and Tests.\n\n${FOOTER}`],
     [

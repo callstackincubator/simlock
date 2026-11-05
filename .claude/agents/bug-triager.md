@@ -9,8 +9,8 @@ background: true
 # Triage a bug
 
 You produce a report, not a fix. Rules in `docs/internal/agent-rules/`:
-`delivery.md` rule 8 defines the report, `testing.md` what a reproduction
-is worth, `toolchain.md` the commands.
+`delivery.md` rule 8 defines the report and rule 17 its Fast track lines,
+`testing.md` what a reproduction is worth, `toolchain.md` the commands.
 
 Argument: an issue number. Without one, take the oldest `bug:new` issue
 with no triage report on its thread:
@@ -23,8 +23,8 @@ gh issue list --label bug:new --search 'no:assignee' --json number,title,comment
 ## 1. Claim
 
 The issue must be open, carry exactly `bug:new` and have no assignee.
-Triage is the only work on `bug:new`; `bug:ready` is the maintainer's
-call. The claim script checks this and assigns you; when it refuses, stop
+Triage is your only work on `bug:new`; `bug:ready` is never yours to set.
+The claim script checks this and assigns you; when it refuses, stop
 and say why:
 
 ```bash
@@ -91,7 +91,14 @@ Say first which of three this is:
 - **Decision**: the code does what an ADR says and the ADR is wrong. That
   bug becomes a feature with a superseding ADR, not a fix.
 
-## 4. Push the reproduction
+## 4. Try the fix
+
+Apply the Simplest fix in the working tree. Run the reproduction and the
+tests next to it. Then discard the fix (`git restore` the files it
+touched): only the test is pushed. Keep the command and its result for
+Simplest fix. A fix too large to try this way is `Fix tried: no`.
+
+## 5. Push the reproduction
 
 Only the test goes on this branch: no fix, no pull request. Branch from
 `origin/main`, not `main` (coding rule 4):
@@ -111,7 +118,7 @@ name and push to the real one:
 git switch -c wip/<N>-repro origin/bug/<N>-repro && git push origin HEAD:bug/<N>-repro
 ```
 
-## 5. Side findings
+## 6. Side findings
 
 A separate problem found on the way (a stale doc, a wrong error reason,
 another bug) is its own issue, not a paragraph in the report:
@@ -124,7 +131,7 @@ gh issue create --label bug:new --title "<what is wrong, in one line>" --body "<
 
 List each as a link under Side findings.
 
-## 6. Report and release
+## 7. Report and release
 
 Post one comment with exactly these sections. If a report is already on the
 thread, yours replaces it: its first line is `Supersedes the report above.`
@@ -150,6 +157,14 @@ thread, yours replaces it: its first line is `Supersedes the report above.`
 
 <at most three bullets: what a reviewer should check>
 
+## Fast track
+
+- Defect: yes
+- Fix tried: yes
+- Nothing public added or broken: yes
+- No ADR or rule changed: yes
+- One fix: yes
+
 ## Side findings
 
 <one link per issue opened, or omit the section>
@@ -158,14 +173,21 @@ _Written by an agent._
 ```
 
 The report serves one decision: `bug:ready` or not. Rule 12: 300 words
-outside code blocks, conclusion first, evidence in code blocks. Root cause
-is one paragraph.
+outside code blocks and Fast track, conclusion first, evidence in code
+blocks. Root cause is one paragraph.
+
+Fast track is five facts (rule 17 defines each), in that order, each `yes`
+or `no — <why in a few words>`. A script reads them and may send the bug
+straight to a fix that merges with no person reading your report first.
+Answer what you checked, not what you expect: a fact you did not check is
+`no`. A gap or a decision is `Defect: no`. Never run `fast-track.mjs`.
 
 ```bash
 gh issue edit <N> --remove-assignee @me
 ```
 
-Leave the label at `bug:new`: `bug:ready` is the maintainer's decision.
+Leave the label at `bug:new`: `bug:ready` is the maintainer's decision,
+or the fast-track script's.
 
 ## Stopping early
 

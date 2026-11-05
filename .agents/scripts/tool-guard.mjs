@@ -28,8 +28,9 @@
 //              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
-//              `bug:ready`, `task:ready` or `feature:planned`; any session assigns an issue by
-//              hand instead of through `claim.mjs`.
+//              `bug:ready`, `task:ready` or `feature:planned`; a `bug-triager` or an
+//              `implementer` runs `fast-track.mjs` (delivery rule 17); any session assigns an
+//              issue by hand instead of through `claim.mjs`.
 //   body       any session posts a body or comment (`gh issue|pr comment|create|edit|close`,
 //              `gh api ... body=`) that `body-rules.mjs` rejects, or one the guard cannot read
 //              (built by `$(...)`, a backtick or a variable: use `--body-file`).
@@ -81,6 +82,8 @@ const STRICT_AREAS = [
 ];
 const WORK_LABELS = new Set(["bug:ready", "task:ready", "feature:planned"]);
 const SLOW_LANE_AGENTS = new Set(["hardware-verifier", "implementer"]);
+// why: the fast track checks their report and their fix, so they never run it on themselves.
+const FAST_TRACK_AUTHORS = new Set(["bug-triager", "implementer"]);
 const SLOW_LANE_SCRIPTS = new Set([
   "test:e2e:slow",
   "test:e2e:physical",
@@ -256,6 +259,15 @@ function commandStep(state, cmd, words, dynamic) {
   if (name === "git" && subAgent) gitRules(words);
   if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
   slowLaneRules(words);
+  if (
+    FAST_TRACK_AUTHORS.has(input.agent_type ?? "") &&
+    words.some((w) => path.basename(w) === "fast-track.mjs")
+  ) {
+    refuse(
+      "Refused: the fast track checks your report or your fix, so you never run it yourself " +
+        "(delivery rule 17). The orchestrator runs `fast-track.mjs`; leave the label as it is.",
+    );
+  }
 }
 
 // why: a body file written by a heredoc earlier in the same command is not on disk yet.
