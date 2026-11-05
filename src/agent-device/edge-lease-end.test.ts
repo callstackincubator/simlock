@@ -29,6 +29,10 @@ import {
   allocatesReceived,
 } from "./test-support.js";
 
+// why: Fallow reads a `rig` binding's type only from an annotation in this file, not from an imported
+// setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
+// annotated `Rig`; without it Fallow reports the member as never referenced.
+
 const wipeOperations = new Set(["reclaim", "shutdown", "destroy"]);
 
 function wipes(rig: Rig): number {
@@ -71,7 +75,7 @@ async function plainLease(rig: Rig, requesterId: string): Promise<void> {
 
 describe("simlock ending a simlock lease ends the agent-device session first", () => {
   it("release-all while an agent holds a device sends agent-device a release with the agent's principal as tenant and the run ID, lease provider and client ID of the allocate reply, plus its device key when the reply names one", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("device-key-1");
     await granted(rig, 1);
 
@@ -99,7 +103,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
   });
 
   it("release-all while an agent holds a device whose allocate reply named an empty device key (under 1 character) sends agent-device a release without a `deviceKey`", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("");
     await granted(rig, 1);
 
@@ -114,7 +118,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
   });
 
   it("an allocate reply whose device key is `ios:mobile:<id>` is recorded, and release-all sends that device key in the release", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("ios:mobile:00008110-001A2B3C4D5E");
     await granted(rig, 1);
 
@@ -254,7 +258,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
   it.each(["an error", "a non-JSON body", "an unreachable daemon"])(
     "the agent's own release that agent-device answers with %s keeps the record: a later release-all sends the participant's release",
     async (failure) => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       await granted(rig, 1);
       if (failure === "an error") {
         rig.fake.failNextRelease({ code: "COMMAND_FAILED", message: "release failed" });
@@ -337,7 +341,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
   });
 
   it("release-all while the agent's own release hangs: at lease.endWaitMs the wait ends and the reclaim starts", async () => {
-    const rig = await setUp({ endWaitMs: 30_000 });
+    const rig: Rig = await setUp({ endWaitMs: 30_000 });
     await granted(rig, 1);
     const before = wipes(rig);
     rig.fake.hangNextRelease();
@@ -452,7 +456,7 @@ describe("simlock ending a simlock lease ends the agent-device session first", (
   );
 
   it("after the agent-device daemon restarts, release-all gets released false from it and the reclaim starts at once", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1);
     rig.fake.restart();
     const before = wipes(rig);

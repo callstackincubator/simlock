@@ -58,6 +58,10 @@ import {
   refused,
 } from "./test-support.js";
 
+// why: Fallow reads a `rig` binding's type only from an annotation in this file, not from an imported
+// setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
+// annotated `Rig`; without it Fallow reports the member as never referenced.
+
 const phoneModels = {
   defaultModels: { phone: ["iPhone 16"] },
   modelClasses: { "iPhone 16": "phone" },
@@ -187,7 +191,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("after the agent-device daemon restarts with a new base URL, token and generation, the next request reaches the new daemon", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     expect(await bodyOf(await send(rig, "/health"))).toMatchObject({
       upstream: { service: "agent-device-daemon" },
     });
@@ -302,7 +306,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, deviceMode, physical: false }`, `deviceMode` being the mode the device reports, on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
-    const rig = await setUp({
+    const rig: Rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
           availableOsVersions: ["18.4", "26.0", "27.0"],
@@ -1120,7 +1124,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("an agent-device allocate that answers an error, and a grant that names no device address, release the simlock lease, and the CLI gets the error", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.failNextAllocate({ code: "NO_DEVICE", message: "no such device" });
 
     const answer = await envelopeOf(await allocate(rig, 1));
@@ -1157,7 +1161,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("an agent-device allocate with no usable reply (an unreachable daemon, a non-JSON body) releases the simlock lease and answers `COMMAND_FAILED`; when agent-device answers the follow-up release with a scope error, the simlock lease stays until its TTL, and when it answers `LEASE_NOT_FOUND`, the simlock lease is released", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     expect((await envelopeOf(await allocate(rig, 1))).result).toMatchObject({ ok: true });
     rig.fake.setUnreachable(true);
     const unreachable = await envelopeOf(await allocate(rig, 2));
@@ -1194,7 +1198,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("the follow-up release after an allocate with no usable reply carries the allocate's runId, leaseProvider and clientId and not its deviceKey", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.answerNextAllocateWith("<html>bad gateway</html>");
 
     const answer = await envelopeOf(await allocate(rig, 1, { deviceKey: "saved-device" }));
@@ -1206,7 +1210,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a lease whose allocate reply names device key `ios:mobile:<id>` keeps it: a command naming that lease with that `deviceKey` reaches agent-device", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     const key = "ios:mobile:00008110-001A2B3C4D5E";
     rig.fake.nameDeviceKeyInNextReply(key);
     await granted(rig, 1);
@@ -1215,7 +1219,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("an allocate reply whose lease `deviceKey` is over 128 characters still succeeds and keeps the lease, with the device key left unset: no release is sent and a command naming the lease with a `deviceKey` is refused", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.nameDeviceKeyInNextReply("x".repeat(129));
 
     const answer = await envelopeOf(await allocate(rig, 1));
@@ -1231,7 +1235,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a CLI that hangs up while agent-device makes its lease leaves neither lease: the agent-device lease is released with the reply's scope, then the simlock lease; when that release fails, the simlock lease stays until its TTL", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     rig.fake.holdAllocate();
     rig.fake.nameDeviceKeyInNextReply("device-key-1");
     const hangUp = new AbortController();
@@ -1368,7 +1372,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a release from a second token naming the first token's lease ID leaves the first token's simlock lease in place", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1);
 
     const answer = await envelopeOf(await release(rig, 1, { token: secrets.two }));
@@ -1619,7 +1623,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a heartbeat the agent-device daemon cannot answer returns that error and leaves the simlock lease's deadline where it was", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1, { ttlMs: 60_000 });
     const before = await deadlineOf(rig, 1);
     await advance(rig, 10_000);
@@ -1730,7 +1734,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   it.each(["LEASE_NOT_FOUND", "LEASE_EXPIRED", "LEASE_REVOKED"] as const)(
     "a heartbeat the agent-device daemon answers `%s`, for a lease simlock holds and the agent did not release, releases the simlock lease and answers `LEASE_ENDED_BY_HOST`",
     async (reason) => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       await granted(rig, 1);
       rig.fake.loseLease(hex(1), reason);
       expect(await listed(rig)).toEqual([hex(1)]);
@@ -1747,7 +1751,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     await granted(first, 1);
     await granted(first, 2);
     await granted(first, 3);
-    const rig = await first.restart();
+    const rig: Rig = await first.restart();
     expect(await listed(rig)).toEqual([hex(1), hex(2), hex(3)]);
 
     rig.fake.loseLease(hex(1), "LEASE_EXPIRED");
@@ -1814,7 +1818,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a heartbeat for a lease the agent-device daemon lost, when simlock cannot release its lease, answers `COMMAND_FAILED` with simlock's message and marks nothing, and the next heartbeat releases it and answers `LEASE_ENDED_BY_HOST`", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1);
     rig.fake.loseLease(hex(1), "LEASE_EXPIRED");
     const tap = tapDispatch(rig);
@@ -1864,7 +1868,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a lease released through the front while a command runs stays ended by the agent: a renewal that fires between the simlock release and the end of the agent's release, and the command's final renewal, mark nothing, and the next heartbeat still answers `LEASE_NOT_FOUND`", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1, { ttlMs: 30_000 });
     const running = await runningCommand(rig, 1);
     const tap = tapDispatch(rig);
@@ -1906,7 +1910,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("after `simlock release --all` and the agent's release, a heartbeat answers `LEASE_ENDED_BY_HOST` without reaching the agent-device daemon, and a running command's renewals stop", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await rig.daemon.dispatch("lease.release-all", {}, adminSession);
@@ -1989,7 +1993,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a command agent-device answers with a 5xx reaches the CLI unchanged", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1);
     rig.fake.failNextCommandWithStatus(500, "snapshot runner crashed");
 
@@ -2123,7 +2127,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("a release through the front while a command runs stops that lease's renewals", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1, { ttlMs: 30_000 });
     await runningCommand(rig, 1);
     await advance(rig, 5_000, 5_000);
@@ -2153,7 +2157,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   });
 
   it("after the agent-device daemon restarts, the next heartbeat answers `LEASE_ENDED_BY_HOST` and releases the simlock lease", async () => {
-    const rig = await setUp();
+    const rig: Rig = await setUp();
     await granted(rig, 1);
     rig.fake.restart();
 
@@ -2192,7 +2196,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
   it("a release with no map entry from a second token, naming the first token's lease ID, answers the agent-device daemon's reply and leaves the first token's simlock lease in place", async () => {
     const first = await setUp();
     await granted(first, 1);
-    const rig = await first.restart();
+    const rig: Rig = await first.restart();
     rig.fake.letAnyTenantRelease();
 
     const answer = await envelopeOf(await release(rig, 1, { token: secrets.two }));

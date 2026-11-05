@@ -36,6 +36,10 @@ import {
   refused,
 } from "./test-support.js";
 
+// why: Fallow reads a `rig` binding's type only from an annotation in this file, not from an imported
+// setUp's return type, so a `rig` whose test calls a FakeAgentDevice member only these tests use is
+// annotated `Rig`; without it Fallow reports the member as never referenced.
+
 const onlyIosAndAndroid = "refused: only iOS and Android";
 const uploadOnly = "refused: send the app from your machine as an upload";
 const noDeviceLeased = "refused: no device leased; run open first";
@@ -294,7 +298,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("`--device` with the leased device's id, and its name with `_` for a space, extra spaces and other letter case, are forwarded unchanged", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
       await granted(rig, 1);
       const own = idOf(rig, 1);
@@ -375,7 +379,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("`test --device <own udid>,<own name>` is forwarded; for an agent holding two devices, `test --device \"<udid A>, ,<udid B>,\"` is forwarded; a list with an entry naming another token's device, or the leased device's model, is refused", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Sim Lock Phone" });
       await granted(rig, 1, { device: "iPhone 17 Pro" });
       await granted(rig, 2);
@@ -465,7 +469,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("a command naming its lease with that lease's `deviceKey` is forwarded; with another lease's `deviceKey`, in `meta` or only in `flags`, it is refused; with no lease named, a stale `deviceKey` is forwarded", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       rig.fake.nameDeviceKeyInNextReply("key-1");
       await granted(rig, 1);
       rig.fake.nameDeviceKeyInNextReply("key-2");
@@ -635,7 +639,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("`test --platform ios --shard-all 1` gets only the simulator's id, `--target tv` only the TV's id (a device whose reply named no target counts as `mobile`), and `--platform android` from a token holding only the simulator is refused", async () => {
-      const rig = await setUp({ drivers: bothDrivers });
+      const rig: Rig = await setUp({ drivers: bothDrivers });
       await granted(rig, 1);
       await granted(rig, 2, { device: "Pixel 8", platform: "android" });
       rig.fake.nameDeviceInNextReply({ target: "tv" });
@@ -663,7 +667,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("`test --shard-all 2` names a device by the name agent-device gave it, and by its id when that name holds a comma or neither the reply nor the inventory named one", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       rig.fake.nameDeviceInNextReply({ name: "Lab, left" });
       await granted(rig, 1);
       rig.fake.listDevices([]);
@@ -686,7 +690,7 @@ describe("the agent-device front's request rules", () => {
 
     // why: agent-device 0.21.28 answers an allocate with `{ lease }` and no device; only its `devices` inventory names a device, and its session check matches `--device` by that name alone (#971).
     it("`test --shard-all` with no `--device` names each of the token's leased devices by the name agent-device's inventory gives it when the allocate reply named no device, for an agent holding one device and one holding two", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       rig.fake.nameDeviceInNextReply("none");
       await granted(rig, 1);
       rig.fake.nameDeviceInNextReply("none");
@@ -824,7 +828,7 @@ describe("the agent-device front's request rules", () => {
     });
 
     it("a `devices` error answer from agent-device passes unchanged; a success with no list at `data.devices`, a body over 1 MiB, a non-JSON body and a list holding a non-object each answer `could not read the device list from the worker holding lease <id>`; `devices` with `meta.requestProgress` is refused", async () => {
-      const rig = await setUp();
+      const rig: Rig = await setUp();
       await granted(rig, 1);
       rig.fake.listDevices([{ id: idOf(rig, 1) }]);
       expect(await listedIds(await runCommand(rig, "devices", 1))).toEqual([idOf(rig, 1)]);
