@@ -31,7 +31,7 @@ export async function stopRunningDaemon(
 
 /** why: a stopping daemon holds its socket until it has drained, so a stop is done only when the
  * socket is gone; a new daemon started earlier would meet the closing one. */
-export async function waitForDaemonGone(environment: CliEnvironment): Promise<void> {
+async function waitForDaemonGone(environment: CliEnvironment): Promise<void> {
   const deadline = environment.clock.now() + STOP_LIMIT_MS;
   while (await environment.daemonEndpointPresent()) {
     if (environment.clock.now() >= deadline) {
