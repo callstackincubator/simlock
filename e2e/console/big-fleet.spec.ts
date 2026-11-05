@@ -41,37 +41,54 @@ function isCounted(request: Request): boolean {
 
 test.describe("big fleet", () => {
   test("an idle console on a big fleet stays quiet: for each of the eight pages, in the 60 s after its first reads, at most 40 requests to /v1 other than the event stream", async ({
+    browser,
     gateway,
-    page,
   }) => {
-    test.setTimeout(10 * 60_000);
+    test.setTimeout(3 * 60_000);
     const workers = fleet();
-    await answer(page, "/v1/workers", () => ({ workers }));
-    await answer(page, "/v1/leases", () => ({ leases: leases(LEASES) }));
-    let lastSentAt = Date.now();
-    const sent: string[] = [];
-    page.on("request", (request) => {
-      if (!isCounted(request)) return;
-      lastSentAt = Date.now();
-      sent.push(new URL(request.url()).pathname);
-    });
+    // why: the eight pages are watched at once, so the test lasts one window and not eight; each
+    // has its own browser context, as eight streams in one would wait on its six connections.
+    const counts = await Promise.all(
+      NAV.map(async ({ label }) => {
+        const context = await browser.newContext();
+        try {
+          const page = await context.newPage();
+          await answer(page, "/v1/workers", () => ({ workers }));
+          await answer(page, "/v1/leases", () => ({ leases: leases(LEASES) }));
+          let lastSentAt = Date.now();
+          const sent: string[] = [];
+          page.on("request", (request) => {
+            if (!isCounted(request)) return;
+            lastSentAt = Date.now();
+            sent.push(new URL(request.url()).pathname);
+          });
 
-    await page.goto(gateway.url);
-    await signIn(page, gateway.tokens.operator);
-    for (const { label } of NAV) {
-      if (label !== "Overview") await openFromNav(page, label);
-      await expect(page.locator("#main h1")).toHaveText(label);
-      const navigated = Date.now();
-      lastSentAt = navigated;
-      while (Date.now() - navigated < FIRST_READS_MAX_MS && Date.now() - lastSentAt < QUIET_MS) {
-        await page.waitForTimeout(250);
-      }
-      const before = sent.length;
-      await page.waitForTimeout(WINDOW_MS);
-      expect(
-        sent.length - before,
-        `requests to /v1 on ${label} in ${WINDOW_MS / 1000} s`,
-      ).toBeLessThanOrEqual(IDLE_CEILING);
+          await page.goto(gateway.url);
+          await signIn(page, gateway.tokens.operator);
+          if (label !== "Overview") await openFromNav(page, label);
+          await expect(page.locator("#main h1")).toHaveText(label);
+          const navigated = Date.now();
+          lastSentAt = navigated;
+          while (
+            Date.now() - navigated < FIRST_READS_MAX_MS &&
+            Date.now() - lastSentAt < QUIET_MS
+          ) {
+            await page.waitForTimeout(250);
+          }
+          const before = sent.length;
+          await page.waitForTimeout(WINDOW_MS);
+          // why: a hidden page reads nothing, so it would pass without having been watched.
+          expect(await page.evaluate(() => document.visibilityState), label).toBe("visible");
+          return { label, requests: sent.length - before };
+        } finally {
+          await context.close();
+        }
+      }),
+    );
+    for (const { label, requests } of counts) {
+      expect(requests, `requests to /v1 on ${label} in ${WINDOW_MS / 1000} s`).toBeLessThanOrEqual(
+        IDLE_CEILING,
+      );
     }
   });
 });
