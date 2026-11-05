@@ -62,7 +62,7 @@ export const helloRequestSchema = z
 /**
  * What the daemon replies with. `role` is declared now (every field a client will eventually
  * need to assert it got what it asked for, per ADR §5) but is a fixed value until PR 2 resolves
- * it from a real credential -- see `DaemonServer#handleHello`.
+ * it from a real credential -- see `Handshake.handle` (`src/daemon/server-hello.ts`).
  *
  * `principal` is the connection's resolved, fixed-for-its-lifetime identity (ADR §4): what a
  * `hello` request supplied, or the daemon's own default (today: `defaultRequesterId`) when it

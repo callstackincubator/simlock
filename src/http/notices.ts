@@ -6,7 +6,7 @@ export type LeaseNotice =
   | { readonly event: "lease_lost"; readonly reason: string };
 
 /**
- * Buffers per-lease health facts between renews and fans them out to any live SSE listener.
+ * why: Buffers per-lease health facts between renews and fans them out to any live SSE listener.
  * A notice that arrives while a stream is connected is buffered *and* pushed live, so a renew
  * and a stream watching the same lease may each deliver it (at-least-once across channels).
  * The one asymmetry: `subscribe`'s initial flush drains the buffer, so notices from before
@@ -16,7 +16,7 @@ export type LeaseNotice =
  * would be read again, so there is nothing left worth retaining.
  *
  * ADR 0003 §8: consumes `OwnerRoutedFacts` -- the same lease-scoped, owner-attributed fact
- * stream the socket path's push routing (`DaemonServer#notifyLeaseLost` and friends) is fed
+ * stream the socket path's push routing (`ConnectionPushes.notifyLeaseLost` and friends) is fed
  * from -- rather than subscribing to the raw event bus itself. This class only ever needed the
  * per-lease facts (it doesn't filter by owner; a lease's SSE stream is already gated to its
  * owner at the route level), so it drops the events wholesale-, keying only by `leaseId`.

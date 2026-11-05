@@ -1,11 +1,10 @@
 import { z } from "zod";
 
-import { type EventBus, type EventEnvelope } from "../bus/index.js";
+import { type EventBus } from "../bus/index.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   type ComponentInstaller,
   type Config,
-  type LeaseProgress,
   type Registry,
   type CleanupReaper,
   type Doctor,
@@ -31,18 +30,12 @@ import {
 } from "../leasing/index.js";
 import type { Clock, IpcConnection, Logger, ProcessRunner } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { parseRequestFrame, serializeFrame, type RequestFrame } from "../daemon-protocol/index.js";
+import { parseRequestFrame, type RequestFrame, type RequestId } from "../daemon-protocol/index.js";
 import {
-  describeSchemaIssues,
-  helloRequestSchema,
-  helloReplySchema,
   leaseRelease,
-  negotiateProtocolVersion,
   normalizeProtocolVersion,
   PROTOCOL_VERSION_RANGE,
-  PUSH_SCHEMAS,
   relayChannelSchema,
-  type ComponentProgress,
   type OperationName,
   type OPERATIONS,
   type ProtocolRange,
@@ -67,75 +60,16 @@ import {
 import { OwnerRoutedFactBus, type OwnerRoutedFacts } from "./owner-routed-facts.js";
 import { classifyError, StartupFailedError } from "./error-code.js";
 import { RelayConnection, type RelayTargets, type TwoWayRelayTargets } from "./relay.js";
+import {
+  type Connection,
+  errorMessage,
+  errorStack,
+  respondError,
+  writeFrame,
+} from "./server-connection.js";
+import { errorCode, Handshake, parseInput, ProtocolError } from "./server-hello.js";
+import { ConnectionPushes } from "./server-pushes.js";
 import type { UpdateCoordinator } from "./update-coordinator.js";
-
-type RequestId = string | number;
-
-interface Connection {
-  readonly socket: IpcConnection;
-  /**
-   * why: Detaches this connection's request-scoped pushes (`progress` for an in-flight
-   * `lease.request`, `output` for an in-flight `device.exec`) when the socket goes away, so a
-   * push callback that outlives the connection writes nothing instead of throwing into whatever
-   * operation is still running. One set for both families: they are disposed for the same
-   * reason and at the same moment.
-   */
-  readonly progressDisposers: Set<() => void>;
-  readonly relays: RelayConnection;
-  buffer: string;
-  helloReceived: boolean;
-  closed: boolean;
-  principal: string;
-  role: Role;
-  /**
-   * why: Set only for a connection accepted through `acceptUplink` (ADR 0005 §5): the role that
-   * connection gets, decided by *how it was accepted* rather than by anything in its `hello`.
-   * `#handleHello` uses it in place of `#resolveRole`, so no credential is consulted and none
-   * is required. See `acceptUplink`'s own comment for why that is the correct trust model
-   * here and nowhere else.
-   */
-  readonly forcedRole: Role | undefined;
-  /**
-   * why: H3 (round 3 review, narrowed further): set only by `acceptUplink`, and only there -- a
-   * dedicated fact about *how this connection was accepted*, not derived from `forcedRole`.
-   * Before this, `#session` read `forcedRole !== undefined` as the proxy for "this is the
-   * worker's own uplink to its configured gateway", which happened to be true only because
-   * `acceptUplink` is `#accept`'s one caller that ever sets `forcedRole` at all -- a future
-   * `#accept(socket, "agent")` (or any other forced role added for an unrelated reason) would
-   * silently satisfy that same check and reopen ADR §27a's `owner` gate to whatever forced that
-   * connection, with no test failing to say so. This field is set directly, once, at the one call
-   * site that is actually the uplink, so a future forced role elsewhere cannot be mistaken for it.
-   */
-  readonly isGatewayUplink: boolean;
-  // why: set with `isGatewayUplink`; the link accepts the byte channels a relay names (ADR 0028).
-  readonly link: LinkConnection | undefined;
-  /**
-   * why: Lease ids this connection is *currently* explicitly releasing (`lease.release`/
-   * `lease.release-all`), added right before the dispatched call and consumed by
-   * `#notifyLeaseLost`. ADR 0003 §8 says a client "never fires `onLeaseLost` for a release the
-   * same client asked for", and pushes are owner-routed to every connection sharing a
-   * principal, so the suppression has to be by connection identity: skipping by principal
-   * would wrongly skip every *other* live connection owning the lease. This is the only
-   * lease-shaped state a connection still keeps, and it lives for the duration of one
-   * dispatched call rather than for the lease's lifetime -- ADR 0004 §3 deletes the held set
-   * that used to sit beside it.
-   */
-  readonly selfInitiatedReleases: Set<string>;
-  /** why: Set by `#handleHello` only when this connection's `hello` failed protocol-version
-   * negotiation (ADR 0003 §6). `principal`/`role` are still resolved and fixed as normal --
-   * the frozen exception is scoped to the protocol-version gate, not to authentication or role
-   * (see the comment on `#dispatchLine`'s `daemon.stop` handling). While set, every operation on
-   * this connection except `daemon.stop` is refused by replaying this same error, so a client
-   * whose range does not overlap the daemon's still learns why on every attempt, not just the
-   * first. */
-  protocolMismatch: { readonly message: string; readonly details: unknown } | undefined;
-  unsubscribeEvents: (() => void) | undefined;
-  /** why: Set while this connection has an active `events.subscribe`; correlates `event` pushes
-   * (ADR 0003 §8). Minted per-subscription from `#eventSubscriptionSeq` rather than injected --
-   * `DaemonServer` has no `IdGenerator` dependency today, and this only needs to be unique per
-   * connection lifetime, not globally unpredictable. */
-  subscriptionId: string | undefined;
-}
 
 /**
  * why: kept in the type rather than making every field optional: a gateway passes `dispatcher` instead,
@@ -338,7 +272,6 @@ export class DaemonServer {
   readonly #protocolRange: ProtocolRange;
   readonly #unsubscribeLeaseLost: Array<() => void> = [];
   readonly #logger: Logger;
-  #eventSubscriptionSeq = 0;
   #stopping = false;
   #closingConnections = false;
   #stopPromise: Promise<void> | undefined;
@@ -356,7 +289,8 @@ export class DaemonServer {
   readonly #parkedDispatches = new Set<Promise<void>>();
   readonly #dispatcher: ContractDispatcher;
   readonly #workerDispatcher: Dispatcher | undefined;
-  readonly #resolveRole: SessionRoleResolver;
+  readonly #handshake: Handshake;
+  readonly #pushes: ConnectionPushes;
   /**
    * why: The worker engine, or `undefined` in gateway mode (ADR 0005 §33: a gateway has no
    * registry, capacity or lifecycle to hold). Every engine touchpoint below is written
@@ -372,9 +306,20 @@ export class DaemonServer {
         ? PROTOCOL_VERSION_RANGE
         : normalizeProtocolVersion(options.protocolVersion);
     this.#logger = options.logger ?? new NoopLogger();
-    this.#resolveRole = options.resolveRole ?? resolveAgentRole;
-    // why: ADR §8: the same translation `#notifyLeaseLost`/`#notifyDeviceUnhealthy`/
-    // `#notifyDeviceRecovered` below route from is what the HTTP gateway's `LeaseNoticeBuffer`
+    this.#handshake = new Handshake({
+      defaultRequesterId: options.defaultRequesterId,
+      logger: this.#logger,
+      protocolRange: this.#protocolRange,
+      resolveRole: options.resolveRole ?? resolveAgentRole,
+      version: options.version,
+    });
+    this.#pushes = new ConnectionPushes({
+      connections: this.#connections,
+      eventBus: options.eventBus,
+      logger: this.#logger,
+    });
+    // why: ADR §8: the same translation `ConnectionPushes`' `notifyLeaseLost`/`notifyDeviceUnhealthy`/
+    // `notifyDeviceRecovered` route from is what the HTTP gateway's `LeaseNoticeBuffer`
     // consumes too (see `ownerRoutedFacts` getter and `main.ts`) -- one bus subscription
     // per raw event, not one per consumer.
     if (options.dispatcher === undefined) {
@@ -553,13 +498,18 @@ export class DaemonServer {
       this.#ownerRoutedFacts.subscribe((fact) => {
         switch (fact.type) {
           case "lease-lost":
-            this.#notifyLeaseLost(fact.leaseId, fact.deviceId, fact.reason, fact.ownerId);
+            this.#pushes.notifyLeaseLost(fact.leaseId, fact.deviceId, fact.reason, fact.ownerId);
             return;
           case "device-unhealthy":
-            this.#notifyDeviceUnhealthy(fact.leaseId, fact.deviceId, fact.ownerId);
+            this.#pushes.notifyDeviceUnhealthy(fact.leaseId, fact.deviceId, fact.ownerId);
             return;
           case "device-recovered":
-            this.#notifyDeviceRecovered(fact.leaseId, fact.deviceId, fact.attempts, fact.ownerId);
+            this.#pushes.notifyDeviceRecovered(
+              fact.leaseId,
+              fact.deviceId,
+              fact.attempts,
+              fact.ownerId,
+            );
             return;
         }
       }),
@@ -751,9 +701,9 @@ export class DaemonServer {
       helloReceived: false,
       isGatewayUplink: link !== undefined,
       link,
-      // why: Overwritten by `#handleHello` before any dispatched request can read them -- every
+      // why: Overwritten by `Handshake.handle` before any dispatched request can read them -- every
       // path that reaches `#handleRequest` has `connection.helloReceived === true` by
-      // construction (`#dispatchLine` routes to `#handleHello` until then).
+      // construction (`#dispatchLine` routes to `Handshake.handle` until then).
       principal: "",
       role: "agent",
       progressDisposers: new Set(),
@@ -826,12 +776,12 @@ export class DaemonServer {
       }
       frame = parsed;
     } catch (error: unknown) {
-      await this.#respondError(connection.socket, null, "BAD_FRAME", errorMessage(error));
+      await respondError(connection.socket, null, "BAD_FRAME", errorMessage(error));
       return;
     }
 
     if (!connection.helloReceived) {
-      await this.#handleHello(connection, frame);
+      await this.#handshake.handle(connection, frame);
       return;
     }
 
@@ -845,7 +795,7 @@ export class DaemonServer {
     // section names exactly this gap ("Any local connection can release any lease, nuke, or
     // stop the daemon") as the defect being fixed. So this still requires a completed,
     // successfully authenticated handshake (guaranteed by `connection.helloReceived` above --
-    // a rejected credential never reaches here, see `#handleHello`) and the resolved role being
+    // a rejected credential never reaches here, see `Handshake.handle`) and the resolved role being
     // `admin`, but -- unlike every other operation -- it is checked here, ahead of the
     // `protocolMismatch` and `#stopping` gates below, so it stays reachable: during a version
     // mismatch (`npm upgrade` against a still-running old daemon with leases held -- see §6's
@@ -854,7 +804,7 @@ export class DaemonServer {
     // `#stopPromise`, so a second `daemon.stop` here just gets the same success reply again.
     if (frame.type === "daemon.stop") {
       if (connection.role !== "admin") {
-        await this.#respondError(
+        await respondError(
           connection.socket,
           frame.id,
           "FORBIDDEN",
@@ -870,7 +820,7 @@ export class DaemonServer {
     // why: `daemon.update` is the second frozen call (ADR 0042 §1): it skips the version gate but not the role check, which the dispatcher still runs, and readiness except for `query`.
     if (connection.protocolMismatch && frame.type !== "daemon.update") {
       relayChannel?.abort();
-      await this.#respondError(
+      await respondError(
         connection.socket,
         frame.id,
         "PROTOCOL_VERSION_UNSUPPORTED",
@@ -882,12 +832,7 @@ export class DaemonServer {
 
     if (this.#stopping) {
       relayChannel?.abort();
-      await this.#respondError(
-        connection.socket,
-        frame.id,
-        "DAEMON_STOPPING",
-        "Daemon is stopping",
-      );
+      await respondError(connection.socket, frame.id, "DAEMON_STOPPING", "Daemon is stopping");
       return;
     }
 
@@ -909,7 +854,7 @@ export class DaemonServer {
       // (today: the gateway's `WORKER_CONNECTED`/`UNKNOWN_WORKER`/`UNSUPPORTED_IN_GATEWAY_MODE`,
       // and a worker's `UNSUPPORTED_IN_WORKER_MODE`),
       // so a socket client can narrow on them exactly as an HTTP one does.
-      await this.#respondError(
+      await respondError(
         connection.socket,
         frame.id,
         code,
@@ -944,118 +889,6 @@ export class DaemonServer {
       );
     }
     return undefined;
-  }
-
-  // fallow-ignore-next-line complexity -- handshake validation, version negotiation, and role resolution are one sequential gate; splitting it would scatter the early-return contract.
-  async #handleHello(connection: Connection, frame: RequestFrame): Promise<void> {
-    if (frame.type !== "hello") {
-      await this.#respondError(
-        connection.socket,
-        frame.id,
-        "HANDSHAKE_REQUIRED",
-        "First message must be hello",
-      );
-      await connection.socket.close();
-      return;
-    }
-    const parsedHello = helloRequestSchema.safeParse(frame.payload);
-    if (!parsedHello.success) {
-      await this.#respondError(
-        connection.socket,
-        frame.id,
-        "BAD_REQUEST",
-        parsedHello.error.issues.map((issue) => issue.message).join("; "),
-      );
-      await connection.socket.close();
-      return;
-    }
-    const payload = parsedHello.data;
-    // why: ADR 0003 §6: the daemon prefers the client's `protocolRange` when present, and treats a
-    // bare `protocolVersion` as `{n, n}` only when it is not -- `helloRequestSchema` already
-    // guarantees at least one of the two is present.
-    const clientRange: ProtocolRange =
-      payload.protocolRange ?? normalizeProtocolVersion(payload.protocolVersion as number);
-    const negotiated = negotiateProtocolVersion(clientRange, this.#protocolRange);
-    // why: A resolver that rejects a bad credential throws here, before
-    // `connection.helloReceived` is ever set, which is why this
-    // whole block is wrapped: nothing after it should be able to run for a rejected `hello` --
-    // including the version-mismatch path just below. Credential verification and role
-    // resolution run *before* the version check, and independently of its outcome: ADR §6's
-    // frozen exception exempts `daemon.stop` from the protocol-version gate only, never from
-    // authentication, so a wrong credential must fail the handshake outright here regardless of
-    // whether the versions would otherwise have matched.
-    let role: Role;
-    try {
-      // why: ADR 0005 §5: an uplink connection's role comes from how it was accepted (this daemon
-      // dialled the gateway named in its own config), so no credential is consulted -- see
-      // `acceptUplink`. Every other connection resolves its role from `hello` exactly as
-      // before.
-      role =
-        connection.forcedRole ??
-        (await this.#resolveRole.resolve({
-          ...(payload.principal === undefined ? {} : { principal: payload.principal }),
-          ...(payload.credential === undefined ? {} : { credential: payload.credential }),
-        }));
-    } catch (error: unknown) {
-      await this.#respondError(connection.socket, frame.id, errorCode(error), errorMessage(error));
-      await connection.socket.close();
-      return;
-    }
-    connection.principal = payload.principal ?? this.options.defaultRequesterId;
-    connection.role = role;
-    if (negotiated === undefined) {
-      const details = {
-        client: clientRange,
-        daemon: this.#protocolRange,
-        daemonVersion: this.options.version,
-      };
-      const message = `No overlapping protocol version: client supports ${clientRange.min}-${clientRange.max}, daemon supports ${this.#protocolRange.min}-${this.#protocolRange.max}`;
-      // why: `helloReceived` is still set: the handshake completed (credential verified, role
-      // resolved) even though negotiation failed. `protocolMismatch` is what `#dispatchLine`
-      // checks to refuse every subsequent operation except `daemon.stop` with this same error
-      // (ADR §6). The socket is deliberately left open -- closing it here is what today's bug
-      // fixes: an admin client whose range does not overlap the daemon's must still be able to
-      // send `daemon.stop` on this connection instead of restarting the daemon (§6: "the client
-      // never restarts the daemon on mismatch").
-      connection.helloReceived = true;
-      connection.protocolMismatch = { message, details };
-      this.#logger.info("Connection opened with unsupported protocol version", {
-        clientVersion: payload.clientVersion,
-        principal: connection.principal,
-        role: connection.role,
-      });
-      await this.#respondError(
-        connection.socket,
-        frame.id,
-        "PROTOCOL_VERSION_UNSUPPORTED",
-        message,
-        details,
-      );
-      return;
-    }
-    connection.helloReceived = true;
-    this.#logger.info("Connection opened", {
-      clientVersion: payload.clientVersion,
-      principal: connection.principal,
-      protocolVersion: negotiated,
-      role: connection.role,
-    });
-    const reply = this.#parseOutput(
-      helloReplySchema,
-      {
-        protocolVersion: negotiated,
-        daemonProtocolRange: this.#protocolRange,
-        version: this.options.version,
-        role: connection.role,
-        // why: ADR §4: report the resolved principal back -- see `helloReplySchema`'s comment. Read
-        // from `connection.principal`, set a few lines above from `payload.principal` or the
-        // daemon's own default, so this is always the same value every subsequent dispatched
-        // request is authorized against.
-        principal: connection.principal,
-      },
-      "hello",
-    );
-    await writeFrame(connection.socket, { id: frame.id, ok: true, payload: reply });
   }
 
   // fallow-ignore-next-line complexity -- one case per request type; the switch is the transport's whole surface.
@@ -1340,31 +1173,13 @@ export class DaemonServer {
   #session(connection: Connection): DispatchSession {
     return {
       isGatewayUplink: connection.isGatewayUplink,
-      manageEventSubscription: (subscribe) => this.#manageEventSubscription(connection, subscribe),
+      manageEventSubscription: (subscribe) =>
+        this.#pushes.manageEventSubscription(connection, subscribe),
       principal: connection.principal,
       relays: connection.relays,
       role: connection.role,
       via: connection.isGatewayUplink === true ? "uplink" : "socket",
     };
-  }
-
-  /** why: Connection-scoped: tears down any existing `events.subscribe` unconditionally (matches
-   * the pre-dispatcher behaviour -- a second `subscribe` replaces the first), then, if asked,
-   * wires a fresh one that pushes every bus event to this connection. Kept in `DaemonServer`
-   * because event delivery is a push (ADR §2: pushes stay with the transport); the dispatcher's
-   * `events.subscribe`/`events.unsubscribe` handlers do nothing but call this. */
-  #manageEventSubscription(connection: Connection, subscribe: boolean): string | undefined {
-    connection.unsubscribeEvents?.();
-    connection.unsubscribeEvents = undefined;
-    connection.subscriptionId = undefined;
-    if (!subscribe) return undefined;
-    this.#eventSubscriptionSeq += 1;
-    const subscriptionId = `sub_${this.#eventSubscriptionSeq}`;
-    connection.subscriptionId = subscriptionId;
-    connection.unsubscribeEvents = this.options.eventBus.subscribeAll((event) => {
-      void this.#pushEvent(connection.socket, subscriptionId, event);
-    });
-    return subscriptionId;
   }
 
   /**
@@ -1396,7 +1211,7 @@ export class DaemonServer {
             // why: Progress is advisory: one that does not fit the push contract (a `downloading`
             // component the driver named past the contract's bound) or a socket that went away
             // is dropped, and the request carries on to its answer.
-            void this.#pushProgress(progressSocket, requestId, progress).catch(() => {
+            void this.#pushes.progress(progressSocket, requestId, progress).catch(() => {
               this.#logger.warn("A lease progress push was not sent", { stage: progress.stage });
             });
           }
@@ -1449,7 +1264,7 @@ export class DaemonServer {
         // wedge the child and, unhandled, take the daemon down over a client that hung up.
         onOutput: async (stream, chunk) => {
           if (outputSocket === undefined) return;
-          await this.#pushOutput(outputSocket, requestId, stream, chunk).catch(() => undefined);
+          await this.#pushes.output(outputSocket, requestId, stream, chunk).catch(() => undefined);
         },
         // why: ADR 0005 §19a: the process now exists. Fired and forgotten rather than awaited --
         // unlike `onOutput` this carries no backpressure meaning, and the dispatcher calls it
@@ -1457,7 +1272,7 @@ export class DaemonServer {
         // protocol 5 understands the frame (§31), so this is not a signal anyone opts out of.
         onStarted: () => {
           if (outputSocket === undefined) return;
-          void this.#pushStarted(outputSocket, requestId).catch(() => undefined);
+          void this.#pushes.started(outputSocket, requestId).catch(() => undefined);
         },
       });
     } finally {
@@ -1476,14 +1291,7 @@ export class DaemonServer {
       ...this.#session(connection),
       ...(relayChannel === undefined ? {} : { relayChannel }),
       onRelayHead: (status, headers) =>
-        writeFrame(connection.socket, {
-          push: "relay-head",
-          payload: this.#parseOutput(
-            PUSH_SCHEMAS["relay-head"],
-            { headers, requestId, status },
-            "push:relay-head",
-          ),
-        }),
+        this.#pushes.relayHead(connection.socket, requestId, status, headers),
     });
   }
 
@@ -1507,198 +1315,10 @@ export class DaemonServer {
     return this.#dispatcher.dispatch(operation, value ?? {}, {
       ...this.#session(connection),
       onComponentProgress: (progress, workerId) => {
-        void this.#pushComponentProgress(connection.socket, requestId, progress, workerId).catch(
-          () => undefined,
-        );
+        void this.#pushes
+          .componentProgress(connection.socket, requestId, progress, workerId)
+          .catch(() => undefined);
       },
-    });
-  }
-
-  async #pushComponentProgress(
-    socket: IpcConnection,
-    requestId: RequestId,
-    progress: ComponentProgress,
-    workerId: string | undefined,
-  ): Promise<void> {
-    return writeFrame(socket, {
-      push: "component-progress",
-      payload: this.#parseOutput(
-        PUSH_SCHEMAS["component-progress"],
-        { progress, requestId, ...(workerId === undefined ? {} : { workerId }) },
-        "push:component-progress",
-      ),
-    });
-  }
-
-  /**
-   * why: ADR 0005 §19a: `output` carries the originating request's frame id, exactly as `progress`
-   * does, so a connection running more than one command routes each chunk to its own call.
-   *
-   * The returned promise is the backpressure signal, so it has to mean "this frame is out":
-   * `IpcConnection.write` resolves on the socket's own write callback, which Node fires once
-   * the chunk has been flushed rather than merely queued -- so awaiting it is waiting for the
-   * drain a `write()` returning `false` would otherwise announce. `#execDevice` returns it to
-   * the dispatcher, which stops reading the child until then.
-   */
-  async #pushOutput(
-    socket: IpcConnection,
-    requestId: RequestId,
-    stream: "stdout" | "stderr",
-    chunk: string,
-  ): Promise<void> {
-    return writeFrame(socket, {
-      push: "output",
-      payload: this.#parseOutput(PUSH_SCHEMAS.output, { chunk, requestId, stream }, "push:output"),
-    });
-  }
-
-  /**
-   * why: ADR 0005 §19a: `started` carries the originating request's frame id, exactly as `output`
-   * does. It is the one fact a gateway forwarding this command cannot infer for itself -- see
-   * `startedPushSchema`'s own doc -- so the worker that knows it sends it.
-   */
-  async #pushStarted(socket: IpcConnection, requestId: RequestId): Promise<void> {
-    return writeFrame(socket, {
-      push: "started",
-      payload: this.#parseOutput(PUSH_SCHEMAS.started, { requestId }, "push:started"),
-    });
-  }
-
-  /**
-   * why: Validates a handler's return value against its contract output schema before it goes on
-   * the wire. A mismatch here is always a daemon-side bug (the schema or the mapping is wrong,
-   * per the PR brief -- never loosen the schema to whatever happens to be emitted), so it is
-   * logged at error level with the full issue list, then rethrown as a plain `Error` (maps to
-   * `INTERNAL` in `errorCode`). Two things follow from throwing rather than silently coercing:
-   * a unit test that asserts a happy-path response fails loudly the moment a handler and its
-   * schema drift, and a production caller gets a controlled `INTERNAL` response instead of
-   * either a malformed payload or an unhandled exception tearing down the connection. `.parse`
-   * (not `.strict()`) is deliberately non-strict here: an additive field a handler starts
-   * returning before its schema is updated to include it is silently dropped, not a failure --
-   * only a missing/mistyped *declared* field is a bug worth failing loudly over.
-   */
-  #parseOutput<Output>(schema: z.ZodType<Output>, value: unknown, operationName: string): Output {
-    const result = schema.safeParse(value);
-    if (result.success) return result.data;
-    this.#logger.error("Operation output failed contract validation", {
-      operation: operationName,
-      issues: result.error.issues,
-    });
-    throw new Error(
-      `Internal: ${operationName} produced a response that does not match its contract output schema`,
-    );
-  }
-
-  /** why: ADR §8: `progress` carries the originating request's frame id, so a client with more than
-   * one lease request in flight on the same connection can route each push to its own call. */
-  async #pushProgress(
-    socket: IpcConnection,
-    requestId: RequestId,
-    progress: LeaseProgress,
-  ): Promise<void> {
-    return writeFrame(socket, {
-      push: "progress",
-      payload: this.#parseOutput(PUSH_SCHEMAS.progress, { requestId, progress }, "push:progress"),
-    });
-  }
-
-  async #pushEvent(
-    socket: IpcConnection,
-    subscriptionId: string,
-    event: EventEnvelope,
-  ): Promise<void> {
-    await writeFrame(socket, {
-      push: "event",
-      payload: this.#parseOutput(PUSH_SCHEMAS.event, { subscriptionId, event }, "push:event"),
-    });
-  }
-
-  /**
-   * why: Pushes a lease-ended fact to every live connection whose principal owns `leaseId` (ADR
-   * 0003 §8, kept by ADR 0004 §5: these are facts about the device, not a liveness channel).
-   * Reacts to the existing post-commit lease.expired / lease.released facts (observer-only; no
-   * transaction waits on this). `ownerId` comes from the event payload, not a registry lookup:
-   * by the time this fires the lease has already been removed from the registry.
-   */
-  #notifyLeaseLost(leaseId: string, deviceId: string, reason: string, ownerId: string): void {
-    for (const connection of this.#connections) {
-      // why: Suppresses the push for exactly the connection that asked for this release itself
-      // (see `selfInitiatedReleases`'s comment) -- every other connection sharing the owner
-      // still gets pushed, which is the owner-routed fan-out this PR adds.
-      if (connection.selfInitiatedReleases.delete(leaseId)) continue;
-      if (connection.principal !== ownerId) continue;
-      void this.#pushLeaseLost(connection.socket, { deviceId, leaseId, reason });
-    }
-  }
-
-  async #pushLeaseLost(
-    socket: IpcConnection,
-    payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: string },
-  ): Promise<void> {
-    await writeFrame(socket, {
-      push: "lease-lost",
-      payload: this.#parseOutput(PUSH_SCHEMAS["lease-lost"], payload, "push:lease-lost"),
-    });
-  }
-
-  #notifyDeviceUnhealthy(leaseId: string, deviceId: string, ownerId: string): void {
-    for (const connection of this.#connections) {
-      if (connection.principal !== ownerId) continue;
-      void this.#pushDeviceUnhealthy(connection.socket, { deviceId, leaseId, reason: "crashed" });
-    }
-  }
-
-  async #pushDeviceUnhealthy(
-    socket: IpcConnection,
-    payload: { readonly deviceId: string; readonly leaseId: string; readonly reason: "crashed" },
-  ): Promise<void> {
-    await writeFrame(socket, {
-      push: "device-unhealthy",
-      payload: this.#parseOutput(
-        PUSH_SCHEMAS["device-unhealthy"],
-        payload,
-        "push:device-unhealthy",
-      ),
-    });
-  }
-
-  #notifyDeviceRecovered(
-    leaseId: string,
-    deviceId: string,
-    attempts: number,
-    ownerId: string,
-  ): void {
-    for (const connection of this.#connections) {
-      if (connection.principal !== ownerId) continue;
-      void this.#pushDeviceRecovered(connection.socket, { attempts, deviceId, leaseId });
-    }
-  }
-
-  async #pushDeviceRecovered(
-    socket: IpcConnection,
-    payload: { readonly attempts: number; readonly deviceId: string; readonly leaseId: string },
-  ): Promise<void> {
-    await writeFrame(socket, {
-      push: "device-recovered",
-      payload: this.#parseOutput(
-        PUSH_SCHEMAS["device-recovered"],
-        payload,
-        "push:device-recovered",
-      ),
-    });
-  }
-
-  async #respondError(
-    socket: IpcConnection,
-    id: RequestId | null,
-    code: string,
-    message: string,
-    details?: unknown,
-  ): Promise<void> {
-    await writeFrame(socket, {
-      error: { code, message, ...(details === undefined ? {} : { details }) },
-      id,
-      ok: false,
     });
   }
 
@@ -1749,58 +1369,4 @@ function inertOwnerRoutedFacts(): OwnerRoutedFacts & { dispose(): void } {
     subscribe: () => () => {},
     dispose: () => {},
   };
-}
-
-class ProtocolError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ProtocolError";
-  }
-}
-
-/** why: Parses a request payload through its contract input schema, translating a validation
- * failure into the daemon's own `ProtocolError("BAD_REQUEST", ...)` rather than letting a raw
- * `ZodError` escape (its shape is not part of the wire contract). */
-function parseInput<Output>(schema: z.ZodType<Output>, value: unknown): Output {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  throw new ProtocolError("BAD_REQUEST", describeSchemaIssues(result.error.issues));
-}
-
-/**
- * why: Resolves the wire `code` for a socket response. `ProtocolError` is this file's own
- * socket-framing error and carries the `code` the framing already decided (`BAD_FRAME`,
- * `BAD_REQUEST`, `UNKNOWN_REQUEST`), so it answers for itself and never reaches the shared
- * dispatcher; every other error this daemon can throw is classified by the one
- * shared table both transports read -- see `./error-code.js`'s module doc (ADR 0003 §7, review
- * finding B5: this used to be its own hand-written `instanceof` chain that silently drifted
- * from HTTP's).
- */
-function errorCode(error: unknown): string {
-  if (error instanceof ProtocolError) {
-    return error.code;
-  }
-  return classifyError(error) ?? "INTERNAL";
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function errorStack(error: unknown): string | undefined {
-  return error instanceof Error ? error.stack : undefined;
-}
-
-/**
- * why: A frame for a peer that has gone is dropped, never rejected. Once the peer's FIN arrives the
- * socket fails every write with EPIPE, but `closed` stays false until the socket is destroyed.
- * Most pushes are fired without a catch, so a write in that window would reject unhandled and
- * take the daemon down, failing every lease request still waiting.
- */
-function writeFrame(socket: IpcConnection, frame: unknown): Promise<void> {
-  if (socket.closed) return Promise.resolve();
-  return socket.write(serializeFrame(frame)).catch(() => undefined);
 }

@@ -409,13 +409,14 @@ export async function connectSimlockClient(
       ...(options.credential === undefined ? {} : { credential: options.credential }),
     });
   } catch (error: unknown) {
-    // ADR §6: a `PROTOCOL_VERSION_UNSUPPORTED` `hello` rejection is the one handshake failure
+    // why: ADR §6: a `PROTOCOL_VERSION_UNSUPPORTED` `hello` rejection is the one handshake failure
     // the daemon deliberately keeps the connection open for -- an admin client whose range
     // does not overlap the daemon's must still be able to send `daemon.stop` on *this*
     // connection instead of restarting it (see the comments around the mismatch reply in
-    // `daemon/server.ts#handleHello`, and `#dispatchLine`'s `daemon.stop`-ahead-of-the-mismatch-
-    // gate check). Closing here -- every other handshake failure, a bad credential
-    // (`ADMIN_AUTHENTICATION_FAILED`) included -- still closes and serves nothing.
+    // `daemon/server-hello.ts`'s `Handshake.handle`, and `daemon/server.ts`'s `#dispatchLine`'s
+    // `daemon.stop`-ahead-of-the-mismatch-gate check). Closing here -- every other handshake
+    // failure, a bad credential (`ADMIN_AUTHENTICATION_FAILED`) included -- still closes and
+    // serves nothing.
     if (isSimlockError(error) && error.code === "PROTOCOL_VERSION_UNSUPPORTED") {
       return buildDegradedClient(wire, error, options.principal ?? "", admin);
     }
