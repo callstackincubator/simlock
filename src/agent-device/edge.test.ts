@@ -793,7 +793,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, and with `imageTag` on Android with one, the daemon's `deviceKey` and `data.device` unchanged", async () => {
+  it("the relayed allocate reply carries `data.lease.device` as `{ model, osVersion, physical: false }` on iOS and on Android without a tag, with `imageTag` on Android with one, and with `baseline: { name, version }` for a grant from a baseline, the daemon's `deviceKey` and `data.device` unchanged", async () => {
     const rig = await setUp({
       drivers: (clock) => [
         new FakeDriver({
@@ -817,7 +817,19 @@ describe("the agent-device front, through the whole worker daemon", () => {
         { imageTag: "google_apis_playstore", model: "Pixel 8", osVersion: "34", physical: false },
       ],
       [4, { platform: "android" }, { model: "Pixel 8", osVersion: "35", physical: false }],
+      [
+        5,
+        { deviceBaseline: "logged-in" },
+        {
+          baseline: { name: "logged-in", version: 2 },
+          model: "iPhone 16",
+          osVersion: "27.0",
+          physical: false,
+        },
+      ],
     ] as const;
+    await saveBaseline(rig, "logged-in", { model: "iPhone 16", platform: "ios" });
+    await saveBaseline(rig, "logged-in", { model: "iPhone 16", platform: "ios" });
 
     for (const [n, extra, device] of cases) {
       rig.fake.nameDeviceKeyInNextReply(`key-${n}`);
