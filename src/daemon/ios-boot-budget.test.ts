@@ -69,8 +69,9 @@ const cloned: ScriptedProcessExpectation = {
 };
 
 const startedAt = 1_000;
+const seedCreate = seedSimctl("create", "simlock-seed-device-1", deviceTypeId, runtimeId);
 const seedCreated: ScriptedProcessExpectation = {
-  match: seedSimctl("create", "simlock-seed-device-1", deviceTypeId, runtimeId),
+  match: seedCreate,
   result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
 };
 
@@ -455,7 +456,7 @@ describe("an iOS boot under the real lease path", () => {
       );
       expect(harness.clock.now() - startedAt).toBe(121_400);
       expect(harness.registry.snapshot.devices).toEqual([]);
-      const attempt = [seedCreated.match, seedBoot, seedShutdown, seedDelete];
+      const attempt = [seedCreate, seedBoot, seedShutdown, seedDelete];
       expectCalls(harness, list, ...attempt, ...attempt);
     },
   );
