@@ -1047,5 +1047,103 @@ describe("simlock tunnel emulator adb", () => {
     cli.signals.emit("SIGINT");
     cli.clock.advance(2_000);
     expect(await exit).toBe(0);
+
+    const target = "127.0.0.1:49152";
+    const connect = (
+      command: string,
+      output: Partial<ScriptedProcessExpectation> = {},
+    ): ScriptedProcessExpectation => ({
+      match: { args: ["connect", target], command },
+      stdoutLines: [`connected to ${target}`],
+      ...output,
+    });
+    const rerun = `run: adb connect ${target}`;
+    const outputs = [
+      {
+        adb: new CallerAdb([
+          connect("adb", {
+            stdoutLines: [],
+            stderrLines: ["* daemon not running; starting now"],
+            result: {
+              code: 0,
+              stderr: "",
+              stdout: `* daemon started successfully\nconnected to ${target}\n`,
+            },
+          }),
+        ]),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb([connect("adb", { stdoutLines: [`already connected to ${target}`] })]),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb([
+          connect("adb", { stdoutLines: [`failed to authenticate to ${target}`] }),
+        ]),
+        err: `warning: emulator adb: adb answered: failed to authenticate to ${target}; ${rerun}\n`,
+        out: "",
+      },
+      {
+        adb: new CallerAdb([], []),
+        err: `warning: emulator adb: adb was not found; ${rerun}\n`,
+        out: "",
+      },
+      {
+        adb: new CallerAdb([connect("/sdk/platform-tools/adb")], ["/sdk/platform-tools/adb"]),
+        env: { ANDROID_HOME: "/sdk" },
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb(
+          [connect("/home/caller/Library/Android/sdk/platform-tools/adb")],
+          ["/home/caller/Library/Android/sdk/platform-tools/adb"],
+        ),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+    ];
+    for (const expected of outputs) {
+      const other = command({ ...ENV, ...expected.env }, expected.adb);
+      const otherExit = other.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+      await vi.waitFor(() => expect(other.webSocket.connections).toHaveLength(1));
+      firstPeer(other).receive(READY);
+      await vi.waitFor(() =>
+        expect(other.out.join("") + other.err.join("")).toContain(
+          expected.out === "" ? expected.err : expected.out,
+        ),
+      );
+      await settle();
+      expect(other.out.join("")).toBe(
+        `emulator localhost:49152 -> emulator:adb (lease L1)\n${expected.out}`,
+      );
+      expect(other.err.join("")).toBe(expected.err);
+      other.signals.emit("SIGINT");
+      other.clock.advance(2_000);
+      expect(await otherExit).toBe(0);
+    }
+
+    const hung = new CallerAdb([connect("adb", { hangs: true })]);
+    const slow = command(ENV, hung);
+    const slowExit = slow.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(slow.webSocket.connections).toHaveLength(1));
+    firstPeer(slow).receive(READY);
+    await vi.waitFor(() => expect(hung.calls).toHaveLength(1));
+    slow.clock.advance(9_999);
+    await settle();
+    expect(slow.err).toEqual([]);
+    slow.clock.advance(1);
+    await vi.waitFor(() =>
+      expect(slow.err.join("")).toBe(
+        `warning: emulator adb: adb did not answer in 10 s; ${rerun}\n`,
+      ),
+    );
+    expect((await hung.handles[0]?.wait())?.code).toBeNull();
+    slow.signals.emit("SIGINT");
+    slow.clock.advance(2_000);
+    expect(await slowExit).toBe(0);
   });
 });
