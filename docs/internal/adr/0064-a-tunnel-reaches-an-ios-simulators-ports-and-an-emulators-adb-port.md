@@ -59,9 +59,14 @@ adb 37.0.0) checked what this rests on:
    `HELLO` names one as `{kind: "emulator", emulatorPort: "adb"}`.
 
 2. **iOS simulator, forward.** Each caller connection makes the worker
-   connect to the device port only at an address (`127.0.0.1` first, then
-   `::1`) that a process carrying `SIMULATOR_UDID` equal to the lease's
-   simulator listens on, never at an address only another process holds. Any other listener, or none, resets that connection
+   list the processes listening on the device port and the address each
+   listens on, and connect only to an address that a process carrying
+   `SIMULATOR_UDID` equal to the lease's simulator holds. It dials
+   `127.0.0.1:<p>` when a lease process holds `127.0.0.1:<p>`, or holds
+   `*:<p>` while no other process holds `127.0.0.1:<p>`; otherwise
+   `[::1]:<p>` by the same rule. It never dials an address another process
+   holds more specifically, because a loopback connect reaches the most
+   specific bind. Any other listener, or none, resets that connection
    with a reason; the tunnel stays. The check runs per connection, because
    an app starts, stops and restarts while a tunnel is open. So a holder
    never reaches the daemon, its adb server, or another lease's app.
@@ -88,9 +93,9 @@ adb 37.0.0) checked what this rests on:
    adb then has the whole emulator, with none of `simlock adb`'s
    refusals: those guard the worker's shared adb server and the console,
    and this tunnel reaches neither. A reboot or a crash is a device lost
-   mid-lease, as today. ADR 0001 §4 now reads: no adb server on the
-   worker sees a Simlock emulator; a holder's own adb, through its own
-   tunnel, may. A Play Store image answers `unauthorized`; the docs say to
+   mid-lease, as today. ADR 0001 §4 now reads: the user's adb server and
+   Android Studio cannot see a Simlock emulator on the worker; a holder's
+   own adb, through its own tunnel, may. A Play Store image answers `unauthorized`; the docs say to
    lease a `google_apis` image.
 
 6. **CLI.** `simlock tunnel emulator adb[:<caller-port>]`. With no caller
