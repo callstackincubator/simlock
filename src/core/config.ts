@@ -539,15 +539,18 @@ export interface ModuleConfigEntry {
 const MODE_KEY_REMOVED =
   '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.';
 
-export interface LoadConfigOptions {
+interface ConfigLayerOptions {
   readonly authStrategies?: readonly AuthStrategyDefinition[];
   readonly modules?: readonly ModuleConfigEntry[];
-  readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
-  readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
   readonly role?: DaemonMode;
   readonly warn?: Warn;
+}
+
+export interface LoadConfigOptions extends ConfigLayerOptions {
+  readonly filesystem: Filesystem;
+  readonly configPath?: string;
 }
 
 type Layer = Record<string, unknown>;
@@ -556,20 +559,30 @@ export async function loadConfig(options: LoadConfigOptions): Promise<Config> {
   return (await loadConfigWithDefaults(options)).config;
 }
 
-export async function loadConfigWithDefaults({
-  authStrategies = registeredAuthStrategies,
-  configPath = DEFAULT_CONFIG_PATH,
-  filesystem,
-  modules = [],
-  overrides,
-  role = "worker",
-  systemStats,
-  warn = () => {},
-}: LoadConfigOptions): Promise<{
+interface LoadedConfig {
   readonly config: Config;
   readonly defaulted: ReadonlySet<string>;
-}> {
-  const fromFile = await readConfigFile(filesystem, configPath);
+}
+
+export async function loadConfigWithDefaults({
+  configPath = DEFAULT_CONFIG_PATH,
+  filesystem,
+  ...layerOptions
+}: LoadConfigOptions): Promise<LoadedConfig> {
+  return configFromLayers(await readConfigFile(filesystem, configPath), layerOptions);
+}
+
+export function configFromLayers(
+  fromFile: unknown,
+  {
+    authStrategies = registeredAuthStrategies,
+    modules = [],
+    overrides,
+    role = "worker",
+    systemStats,
+    warn = () => {},
+  }: ConfigLayerOptions,
+): LoadedConfig {
   const fromOverrides = overrides ?? {};
 
   // The strategy has to be known before anything else can be validated or

@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import type { AlertDestination } from "../core/index.js";
+import { testConfig } from "../core/testing.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
@@ -53,67 +54,13 @@ import { WorkerRegistry } from "./worker-registry.js";
 
 type SentRequest = Parameters<WebhookPoster["post"]>[0];
 
-const gatewayConfig = {
-  capabilities: {},
-  capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
-  drivers: {},
-  diskPressure: { freeBytesThreshold: 1 },
-  downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
-  eventBuffer: { capacity: 100 },
-  exec: { timeoutMs: 600_000 },
-  gateway: {
-    disconnectedRetentionMs: 24 * 60 * 60_000,
-    execTimeoutMs: 11 * 60_000,
-    leaseRequestTimeoutMs: 5 * 60_000,
-    routing: "warm-then-free" as const,
-    alerts: { destinations: [] },
+const gatewayConfig = testConfig(
+  {
+    capacity: { strategy: "fixed", config: { maxRunning: 4 } },
+    lease: { maxTtlMs: 3_600_000 },
   },
-  health: {
-    enabled: false,
-    maxConcurrentRecoveries: 1,
-    maxRecoveryAttempts: 1,
-    probeIntervalMs: 1,
-    recoveryBackoffMs: 1,
-    stableObservations: 1,
-  },
-  http: { enabled: true, host: "127.0.0.1", port: 4700 },
-  idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
-  update: { check: true },
-  ios: {
-    defaultMode: "full" as const,
-    defaultModels: {},
-    slim: { bootTimeoutMs: 1 },
-    simulator: { audio: true, headless: true },
-  },
-  android: {
-    defaultModels: {},
-    emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-  },
-  lease: {
-    defaultTtlMs: 900_000,
-    maxTtlMs: 3_600_000,
-    identity: { ios: "reusable" as const, android: "reusable" as const },
-    requestRetentionMs: 600_000,
-    maxRequestRecords: 10_000,
-    maxPerRequester: 1,
-    endWaitMs: 600_000,
-  },
-  log: { level: "info" as const, rotateBytes: 1 },
-  mode: "gateway" as const,
-  stalledTransition: { minimumThresholdMs: 1, thresholdMultiplier: 1 },
-  warmPool: {
-    enabled: true,
-    maxConcurrentBoots: 1,
-    reserveRunning: { android: 0, ios: 0 },
-    targets: [],
-    quarantine: {
-      maxRetries: 1,
-      maxRetryBackoffMs: 1,
-      retryBackoffMs: 1,
-      retryBackoffMultiplier: 1,
-    },
-  },
-};
+  "gateway",
+);
 
 class FakeTokens implements TokenOperations {
   constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}

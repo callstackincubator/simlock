@@ -883,7 +883,6 @@ async function composeDaemon(
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
-      config,
       dispatch,
       eventBus,
       idGenerator,
@@ -1209,7 +1208,6 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
-      config,
       dispatch,
       eventBus,
       idGenerator,

@@ -38,7 +38,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 | `component-installer.ts`                                  | `ComponentInstaller`: install, list, remove                                                                                                                                                                                                                                                                                                                                               |
 | `physical-enrollment.ts`, `physical-presence.ts`          | `device add`/`remove`; every presence read, `latestPresence`                                                                                                                                                                                                                                                                                                                              |
 | `device-root.ts`, `instance-identity.ts`                  | `ensureOwnedRoot`; `loadInstanceId`                                                                                                                                                                                                                                                                                                                                                       |
-| `stable-error.ts`, `testing.ts`, `fake-driver.ts`         | `stableError`; test-only wiring and `FakeDriver`                                                                                                                                                                                                                                                                                                                                          |
+| `stable-error.ts`, `testing.ts`, `fake-driver.ts`         | `stableError`; test-only wiring, `testConfig(overrides)` (a whole config from the loader's defaults) and `FakeDriver`                                                                                                                                                                                                                                                                     |
 
 ## Wiring
 
@@ -138,6 +138,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 - Grant paths select by exact state; `mayBeGranted` keeps a spent `fresh` device out.
 - A physical device is never destroyed and never counted against capacity.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
+- A part takes the config sections it reads, never the whole `Config`: `CoreConfig` (`createCore`), `DoctorConfig`, `CleanupConfig`. A test builds only that slice, or `testConfig` when it needs a whole config; it never writes a whole `Config` by hand.
 - Warm pool and startup never install. Instance id is never regenerated. Core imports no leasing or driver (dependency-cruiser `core-not-leasing`, `core-not-drivers`).
 
 ## Known gaps
