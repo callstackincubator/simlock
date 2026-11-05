@@ -224,6 +224,8 @@ export interface IosSimctlDriverOptions {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
   };
+  /** why: `ios.full.bootTimeoutMs`; how long a full boot may take. */
+  readonly fullBootTimeoutMs?: number;
   readonly slimByDefault?: boolean;
   // why: the device input logs a Home press that did nothing; nothing else in the driver logs through it.
   readonly logger?: Logger;

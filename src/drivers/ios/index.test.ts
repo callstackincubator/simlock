@@ -3103,6 +3103,60 @@ describe("IosSimctlDriver", () => {
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
     });
 
+    it("an operator's full iOS boot waits ios.full.bootTimeoutMs, then fails with BootTimeoutError", async () => {
+      const slim18_4 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" };
+      const cases = [
+        { data: driverData, full: undefined, options: prepareFull, waitsMs: 300_000 },
+        { data: driverData, full: 400_000, options: prepareFull, waitsMs: 400_000 },
+        { data: slim18_4, full: 400_000, options: prepareSlim, waitsMs: 400_000 },
+        { data: driverData, full: 400_000, options: recoverFull, waitsMs: 400_000 },
+        { data: driverData, full: 400_000, options: recoverSlim, waitsMs: 400_000 },
+        { data: slim18_5, full: 400_000, options: prepareSlim, waitsMs: 250_000 },
+      ];
+      for (const { data, full, options, waitsMs } of cases) {
+        const filesystem = new MemoryFilesystem();
+        await plantManagedDevice(filesystem);
+        const clock = new FakeClock();
+        const runner = new ScriptedProcessRunner([
+          { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
+          {
+            hangs: true,
+            match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") },
+          },
+          { match: { command: "xcrun", args: simctlArgs("shutdown", data.udid) } },
+        ]);
+        const driver = await IosSimctlDriver.create({
+          database: await memorySourceDatabase(),
+          driverConfig: { deviceRoot },
+          instanceId,
+          simlockHome: "/home/.simlock",
+          clock,
+          filesystem,
+          idGenerator: { generate: () => "device-1" },
+          launchdOverridesRoot: overridesRoot,
+          processRunner: runner,
+          slim: slimOptions(250_000),
+          ...(full === undefined ? {} : { fullBootTimeoutMs: full }),
+        });
+
+        const ready = driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
+        await waitForCalls(runner, 2);
+        const readyState = promiseState(ready);
+
+        clock.advance(waitsMs - 1);
+        await flushMicrotasks221();
+        expect(readyState.state, `${JSON.stringify({ full, options })} still waiting`).toBe(
+          "pending",
+        );
+
+        clock.advance(1);
+        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
+      }
+    });
+
     it.each([
       { name: "slim spec", spec: { ...spec, mode: "slim" } as const },
       { name: "full spec", spec },
@@ -5172,6 +5226,8 @@ function assetInfoPlist(simulatorVersion: string, build: string): string {
 
 const prepareFull = { mode: "full", purpose: "prepare" } as const;
 const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
+const recoverFull = { mode: "full", purpose: "recover" } as const;
+const recoverSlim = { mode: "slim", purpose: "recover" } as const;
 
 describe("IosSimctlDriver device set", () => {
   const coreSimulatorRoot = "/CoreSim";
