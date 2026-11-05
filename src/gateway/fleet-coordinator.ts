@@ -239,6 +239,7 @@ export class FleetLeaseCoordinator {
     });
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   ownerId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.ownerId(gatewayLeaseId);
   }
@@ -387,14 +388,17 @@ export class FleetLeaseCoordinator {
     return this.#forwarding.release(gatewayLeaseId);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   releaseAll(): Promise<readonly string[]> {
     return this.#forwarding.releaseAll();
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   exec(input: FleetExecInput, session: DispatchSession): Promise<{ readonly exitCode: number }> {
     return this.#forwarding.exec(input, session);
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   rotate(input: FleetRotateInput, session: DispatchSession): Promise<RotateOutput> {
     return this.#forwarding.rotate(input, session);
   }
