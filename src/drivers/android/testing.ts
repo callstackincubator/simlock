@@ -1055,11 +1055,9 @@ export class EmulatorHost {
         ? await this.#avdmanager(args, env?.["ANDROID_AVD_HOME"] ?? avdDirectory)
         : command === binaries.adb
           ? this.#adb(args)
-          : command === binaries.emulator && args[0] === "-version"
-            ? ok("Android emulator version 36.1.9")
-            : command === binaries.emulator && args[0] === "-help"
-              ? ok(emulatorHelpListing)
-              : undefined;
+          : command === binaries.emulator
+            ? emulatorQuery(args)
+            : undefined;
     if (result === undefined) {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
@@ -1205,4 +1203,11 @@ export class WorkingDirectoryFilesystem extends MemoryFilesystem {
   override async realpath(path: string): Promise<string> {
     return super.realpath(path.startsWith("/") ? path : `${this.workingDirectory}/${path}`);
   }
+}
+
+/** why: the two read-only `emulator` calls the fake answers; any other is unexpected. */
+function emulatorQuery(args: readonly string[]): ProcessResult | undefined {
+  if (args[0] === "-version") return ok("Android emulator version 36.1.9");
+  if (args[0] === "-help") return ok(emulatorHelpListing);
+  return undefined;
 }
