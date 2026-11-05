@@ -39,7 +39,6 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/gateway/fleet-coordinator.ts": 1659,
   "src/http/app.test.ts": 3488,
   "src/leasing/create-leasing.test.ts": 5276,
-  "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
   "src/leasing/lease-acquisition-coordinator.ts": 1643,
 };
 
