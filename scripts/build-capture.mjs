@@ -41,6 +41,17 @@ function copyScrcpyServer() {
   copyNotices("scrcpy");
 }
 
+// why: with more than one --arch, SwiftPM builds through Xcode's build system, and where that
+// writes the binary differs between Xcode versions (26: apple/Products/Release, 27:
+// out/Products/Release), so the folder comes from SwiftPM itself rather than a guess. Answers
+// undefined when SwiftPM names no folder holding the program.
+function builtProductPath(args, product) {
+  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
+  if (binPath.status !== 0) return undefined;
+  const built = join(binPath.stdout.trim(), product);
+  return existsSync(built) ? built : undefined;
+}
+
 // why: one product per call, so a build that fails on one program is not what skips the other;
 // the caller decides what the pair of outcomes means.
 function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
@@ -59,7 +70,8 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
   const result = spawnSync("swift", args, { stdio: "inherit" });
   // why: a failed spawn (no `swift` on the PATH) leaves `status` null, which is not 0 either, so
   // this one test covers both the tool that is missing and the build that failed.
-  if (result.status !== 0) {
+  const built = result.status === 0 ? builtProductPath(args, product) : undefined;
+  if (built === undefined) {
     console.warn(
       `build-capture: could not build ${product} (is Xcode installed and selected?); ${what} will be unavailable`,
     );
@@ -67,17 +79,6 @@ function buildAndCopySwiftProduct(product, what, packagePath, scratch, archs) {
   }
   const target = join(dist, "bin", product);
   mkdirSync(dirname(target), { recursive: true });
-  // why: with more than one --arch, SwiftPM builds through Xcode's build system, and where that
-  // writes the binary differs between Xcode versions (26: apple/Products/Release, 27:
-  // out/Products/Release), so the folder comes from SwiftPM itself rather than a guess.
-  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
-  const built = join(binPath.stdout?.trim() ?? "", product);
-  if (binPath.status !== 0 || !existsSync(built)) {
-    console.warn(
-      `build-capture: built ${product} but could not find it (swift build --show-bin-path); ${what} will be unavailable`,
-    );
-    return false;
-  }
   copyFileSync(built, target);
   chmodSync(target, 0o755);
   return true;
