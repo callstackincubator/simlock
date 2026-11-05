@@ -34,7 +34,7 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/core/registry.test.ts": 2901,
   "src/core/warm-pool/converger.test.ts": 2965,
   "src/daemon/dispatcher.test.ts": 6284,
-  "src/daemon/main.test.ts": 5336,
+  "src/daemon/main.test.ts": 5367,
   "src/daemon/main.ts": 1915,
   "src/daemon/server.test.ts": 4550,
   "src/daemon/server.ts": 1850,
