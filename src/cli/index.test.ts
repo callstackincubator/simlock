@@ -10622,6 +10622,26 @@ describe("CLI: daemon install (#830)", () => {
     return { exitCode, output, stops, serviceManager, clock };
   }
 
+  it('daemon stop with no socket exits 0 and prints Daemon not running; with --json it prints {"status":"not-running"}', async () => {
+    const text = await runWithService({
+      argv: ["daemon", "stop"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(text.output.stderr).toBe("");
+    expect(text.exitCode).toBe(0);
+    expect(text.output.stdout).toBe("Daemon not running\n");
+
+    const json = await runWithService({
+      argv: ["daemon", "stop", "--json"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(json.output.stderr).toBe("");
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output.stdout)).toEqual({ status: "not-running" });
+  });
+
   it("daemon uninstall removes the service", async () => {
     const installedState: ServiceState = {
       state: "installed",
