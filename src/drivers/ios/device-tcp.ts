@@ -202,7 +202,7 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
         },
       };
     },
-    supports: () => false,
+    supports: (device) => !device.physical,
     sweep: () => Promise.resolve(),
   };
 }
