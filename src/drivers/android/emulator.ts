@@ -19,6 +19,7 @@ import { deviceIdOf, type AdbTools } from "./adb-tools.js";
 import { GRPC_PORT_OFFSET } from "./console-ports.js";
 import type { AndroidDriverData } from "./data.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
+import { emulatorHelpLists } from "./sdk-paths.js";
 
 // why: Measured at 60-71s for a cold boot to `sys.boot_completed` on an M-series Mac against
 // Pixel 8 / API 35 (ADR-era hardware verification), against the 31s this first quoted.
@@ -59,6 +60,8 @@ export const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
   headless: false,
 };
 
+const EMULATOR_HELP_TIMEOUT_MS = 30_000;
+
 export interface SnapshotColdBootDiagnostic {
   readonly deviceId: string;
   readonly kind: "snapshot-cold-boot";
@@ -85,6 +88,7 @@ export class Emulator {
   readonly #options: EmulatorOptions;
   readonly #flags: readonly string[];
   readonly #registrar: AdbRegistrar;
+  #acceptsCrashReportMode: Promise<readonly string[]> | undefined;
 
   constructor(options: EmulatorOptions) {
     this.#options = options;
@@ -105,6 +109,21 @@ export class Emulator {
     try {
       await this.#registrar.register(consolePort + 1);
     } catch {}
+  }
+
+  /**
+   * why: a dump an earlier crash left in a crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and deletes the dumps in the database it reads, so `#env` points that at Simlock's own root and never at the user's shared one. An older emulator (36.1.9) exits at `unknown option` on the flag (#1297), so it is passed only when `-help` lists it; the answer is kept for the process, and a `-help` that fails leaves the flag out.
+   */
+  #crashReportFlags(): Promise<readonly string[]> {
+    this.#acceptsCrashReportMode ??= this.#options.processRunner
+      .run(this.#options.emulator, ["-help"], { timeoutMs: EMULATOR_HELP_TIMEOUT_MS })
+      .then((result) =>
+        emulatorHelpLists(`${result.stdout}\n${result.stderr}`, "-crash-report-mode")
+          ? ["-crash-report-mode", "never"]
+          : [],
+      )
+      .catch(() => []);
+    return this.#acceptsCrashReportMode;
   }
 
   /**
@@ -261,9 +280,7 @@ export class Emulator {
         "-grpc",
         String(data.port + GRPC_PORT_OFFSET),
         "-grpc-use-token",
-        // why: a dump an earlier crash left in a crash database makes the emulator open a modal consent dialog at launch, which blocks its main thread before any port opens; `never` skips the dialog and deletes the dumps in the database it reads, so `#env` points that at Simlock's own root and never at the user's shared one.
-        "-crash-report-mode",
-        "never",
+        ...(await this.#crashReportFlags()),
         ...this.#flags,
         ...launchArgs,
       ],
