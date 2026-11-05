@@ -937,7 +937,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(requests[1]?.input).toMatchObject({ baseline: "logged-in", requires: ["agent-device"] });
     const leaseOf = (reply: typeof answer) =>
       (reply.result as { data: { lease: Record<string, unknown> } }).data.lease;
-    expect(leaseOf(answer)["device"]).toMatchObject({ osVersion: "26.5" });
+    expect(leaseOf(answer)["device"]).toMatchObject({ deviceMode: "full", osVersion: "26.5" });
     expect(leaseOf(based)["device"]).toMatchObject({ baseline: { name: "logged-in", version: 1 } });
     expect(unknown.error?.message).toContain("refused by simlock: ");
   });
