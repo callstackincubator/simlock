@@ -1,2 +1,2 @@
 export { automaticCleanupRules } from "./rules.js";
-export type { CleanupRule, Proposal, RegistryView } from "./types.js";
+export type { CleanupConfig, CleanupRule, Proposal, RegistryView } from "./types.js";

@@ -985,7 +985,7 @@ function onlyProvided(options: {
     ...(options.deviceProfileSources === undefined
       ? {}
       : { deviceProfileSources: options.deviceProfileSources }),
-    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+    ...(options.emulator === undefined ? {} : { config: { emulator: options.emulator } }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.readinessTimeoutMs === undefined
       ? {}

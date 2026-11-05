@@ -18,6 +18,7 @@ import { AdbRegistrar } from "./adb-registrar.js";
 import { deviceIdOf, type AdbTools } from "./adb-tools.js";
 import { GRPC_PORT_OFFSET } from "./console-ports.js";
 import type { AndroidDriverData } from "./data.js";
+import { androidDriverConfig, type AndroidEmulatorLaunchOptions } from "./definition.js";
 import { OWNERSHIP_PROBE_TIMEOUT_MS, type Ownership } from "./ownership.js";
 import { emulatorHelpLists } from "./sdk-paths.js";
 
@@ -40,25 +41,7 @@ const EMULATOR_LOG_TAIL_BYTES = 8_192;
 const EMULATOR_LOG_TAIL_LINES = 10;
 const SNAPSHOT_BOOT_ESTIMATE_MS = 4_000;
 
-/**
- * why: How this machine's emulators are launched (`android.emulator` in config). Operator-only: it
- * reaches the driver at construction and never from a lease request. Only these four settings
- * exist, each mapped to one fixed emulator flag by `emulatorLaunchFlags`, so config cannot add
- * `-port`, a different AVD home, or any other argument that would break containment.
- */
-export interface AndroidEmulatorLaunchOptions {
-  readonly headless: boolean;
-  readonly gpu: string;
-  readonly audio: boolean;
-  readonly bootAnimation: boolean;
-}
-
-export const DEFAULT_EMULATOR_LAUNCH: AndroidEmulatorLaunchOptions = {
-  audio: true,
-  bootAnimation: true,
-  gpu: "auto",
-  headless: false,
-};
+export const DEFAULT_EMULATOR_LAUNCH = androidDriverConfig.defaults.emulator;
 
 const EMULATOR_HELP_TIMEOUT_MS = 30_000;
 

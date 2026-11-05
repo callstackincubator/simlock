@@ -1280,7 +1280,7 @@ describe("operation input/output round trips", () => {
     expect(parse(inside)).toBe(true);
   });
 
-  it("config.get: round-trips a representative config", () => {
+  it("config.get: round-trips a representative config, carries a driver's own keys under ios and android as sent, and refuses a platform section whose core keys are missing or wrong", () => {
     const config = {
       capabilities: {},
       mode: "worker",
@@ -1335,6 +1335,7 @@ describe("operation input/output round trips", () => {
         defaultModels: {},
         slim: { bootTimeoutMs: 1 },
         simulator: { audio: false, headless: false },
+        aKeyOfALaterDriver: { nested: [1, "two"] },
       },
       android: {
         defaultModels: {},
@@ -1342,10 +1343,13 @@ describe("operation input/output round trips", () => {
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({
-      audio: false,
-      headless: false,
-    });
+    const output = OPERATIONS["config.get"].output;
+    const parsed = output.parse(config);
+    expect([parsed.ios, parsed.android]).toEqual([config.ios, config.android]);
+    expect([
+      output.safeParse({ ...config, ios: { ...config.ios, defaultMode: "fast" } }).success,
+      output.safeParse({ ...config, android: { emulator: config.android.emulator } }).success,
+    ]).toEqual([false, false]);
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1405,16 +1409,8 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: {
-        defaultMode: "full",
-        defaultModels: {},
-        slim: { bootTimeoutMs: 1 },
-        simulator: { audio: true, headless: true },
-      },
-      android: {
-        defaultModels: {},
-        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
-      },
+      ios: { defaultMode: "full", defaultModels: {} },
+      android: { defaultModels: {} },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     const config = (pool: object) => ({

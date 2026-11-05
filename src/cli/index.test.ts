@@ -1,3 +1,4 @@
+import { testConfig as configWithDefaults } from "../core/testing.js";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -3445,6 +3446,36 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       expect(exitCode).toBe(2);
       expect(wrote).toBe(false);
       expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+    },
+  );
+
+  it.each([
+    ["ios.simulator.audio", "false", "loud"],
+    ["android.emulator.headless", "true", "yes"],
+  ])(
+    "writes a good value of %s, a key its driver declares, and refuses a bad one naming the key",
+    async (key, good, bad) => {
+      const run = async (value: string) => {
+        const output = outputCapture(realCliEnvironmentPorts());
+        let wrote = false;
+        const exitCode = await runCli(
+          ["config", "set", key, value],
+          output.environmentWith({
+            readConfigFile: async () => ({}),
+            writeConfigFile: async () => {
+              wrote = true;
+            },
+          }),
+        );
+        return { exitCode, stderr: output.stderr, wrote };
+      };
+
+      const accepted = await run(good);
+      const refused = await run(bad);
+
+      expect([accepted.exitCode, accepted.wrote]).toEqual([0, true]);
+      expect([refused.exitCode, refused.wrote]).toEqual([2, false]);
+      expect(refused.stderr).toContain(key);
     },
   );
 
@@ -9377,52 +9408,7 @@ async function startInMemoryDaemon(options: {
 }
 
 function testConfig(): Config {
-  return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 100 },
-    health: {
-      enabled: false,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    lease: {
-      defaultTtlMs: 60_000,
-      maxTtlMs: 3_600_000,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-    },
+  return configWithDefaults({
     capacity: {
       strategy: "resource",
       config: {
@@ -9434,25 +9420,13 @@ function testConfig(): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
-    warmPool: {
-      enabled: true,
-      maxConcurrentBoots: 1,
-      reserveRunning: { android: 0, ios: 0 },
-      targets: [],
-      quarantine: {
-        maxRetries: 3,
-        maxRetryBackoffMs: 300_000,
-        retryBackoffMs: 30_000,
-        retryBackoffMultiplier: 2,
-      },
-    },
-  };
+    eventBuffer: { capacity: 100 },
+    health: { enabled: false },
+    http: { enabled: false, port: 4700 },
+    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
+    warmPool: { maxConcurrentBoots: 1 },
+  });
 }
 
 describe("simlock list --requests", () => {

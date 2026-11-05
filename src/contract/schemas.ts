@@ -1092,24 +1092,11 @@ export const configSchema = z.object({
     recoveryBackoffMs: z.number(),
     maxConcurrentRecoveries: z.number(),
   }),
-  ios: z.object({
-    defaultMode: deviceModeSchema,
-    defaultModels: defaultModelsSchema,
-    slim: z.object({
-      categories: z.array(z.string()).optional(),
-      bootTimeoutMs: z.number(),
-    }),
-    simulator: z.object({ audio: z.boolean(), headless: z.boolean() }),
-  }),
-  android: z.object({
-    defaultModels: defaultModelsSchema,
-    emulator: z.object({
-      headless: z.boolean(),
-      gpu: z.string().min(1),
-      audio: z.boolean(),
-      bootAnimation: z.boolean(),
-    }),
-  }),
+  // why: a platform's section also holds its driver's own keys, which no client reads: they are carried as the worker's loader validated them, the way a module's `capabilities` section is, so a new driver key changes no wire shape.
+  ios: z
+    .object({ defaultMode: deviceModeSchema, defaultModels: defaultModelsSchema })
+    .catchall(z.unknown()),
+  android: z.object({ defaultModels: defaultModelsSchema }).catchall(z.unknown()),
   gateway: z.object({
     url: z.string().optional(),
     token: z.string().optional(),
