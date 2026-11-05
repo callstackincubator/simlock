@@ -304,6 +304,26 @@ describe("tool-guard.mjs", () => {
     expect(bash(command, null)).toEqual(OK);
   });
 
+  it.each([
+    "gh issue edit 5 --remove-label fast-track",
+    "gh issue edit 5 --add-label bug:blocked --remove-label bug:ready,fast-track",
+    "gh api -X DELETE repos/o/r/issues/5/labels/fast-track",
+    "gh api --method PUT repos/o/r/issues/5/labels -f labels[]=bug:blocked",
+  ])("refuses a sub-agent that takes a bug off the fast track: %s", (command) => {
+    const result = bash(command, "a1", "implementer");
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("only the maintainer takes a bug off the fast track");
+  });
+
+  it("lets the main session remove fast-track, and a sub-agent remove another label", () => {
+    expect(bash("gh issue edit 5 --remove-label fast-track", null)).toEqual(OK);
+    expect(bash("gh issue edit 5 --remove-label bug:new", "a1", "bug-triager")).toEqual(OK);
+    expect(bash("gh api -X DELETE repos/o/r/issues/5/labels/bug:new", "a1", "reviewer")).toEqual(
+      OK,
+    );
+  });
+
   it("refuses the slow lane's pnpm scripts in a sub-agent, and slow-e2e.sh outside its two agents", () => {
     expect(bash("pnpm test:e2e:slow e2e/slow-ios.test.ts", "a1", "implementer").stderr).toContain(
       "runs only through `scripts/slow-e2e.sh",

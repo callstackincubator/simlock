@@ -44,8 +44,11 @@ const HOLD_PATHS = [
   ["an ADR", /^docs\/internal\/adr\//],
 ];
 // why: a comment counts as an agent's, and a report as real, only from an account that can
-// write to the repo; anyone can type the footer or a report's headings into a comment.
-const WRITERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+// write to the repo; anyone can type the footer or a report's headings into a comment, and
+// `author_association` tells an organization's member from an outsider, not what either may
+// do in this repo.
+const WRITE = new Set(["admin", "write"]);
+const permissions = new Map();
 
 const [number] = process.argv.slice(2);
 const pr = option("--pr");
@@ -74,11 +77,11 @@ function entryCheck() {
   const comments = paged(`issues/${number}/comments`);
   const at = comments.findLastIndex((c) => fastTrackFacts(c.body) !== null);
   if (at === -1) holds.push("it has no triage report");
-  else if (!WRITERS.has(comments[at].author_association)) {
+  else if (!canWrite(comments[at])) {
     holds.push("its newest triage report is not from an account that can write to the repo");
   } else {
     holds.push(...factHolds(fastTrackFacts(comments[at].body)));
-    const agents = (c) => WRITERS.has(c.author_association) && writtenByAgent(c.body);
+    const agents = (c) => canWrite(c) && writtenByAgent(c.body);
     if (!comments.slice(at + 1).every(agents)) holds.push("a person commented after the report");
   }
   if (!exists(`branches/bug/${number}-repro`)) holds.push(`bug/${number}-repro does not exist`);
@@ -88,6 +91,16 @@ function entryCheck() {
   // gets a 404, which is the state both want.
   exists(`issues/${number}/labels/bug:new`, "DELETE");
   console.log(`fast-track: #${number} is bug:ready`);
+}
+
+function canWrite(comment) {
+  const login = comment.user?.login;
+  if (login === undefined) return false;
+  if (!permissions.has(login)) {
+    const at = `collaborators/${encodeURIComponent(login)}/permission`;
+    permissions.set(login, exists(at) ? api("GET", at).permission : "none");
+  }
+  return WRITE.has(permissions.get(login));
 }
 
 function factHolds(facts) {
@@ -137,7 +150,7 @@ function paged(at) {
   }
 }
 
-// why: a missing branch or label answers 404, which is an answer here, not a failure.
+// why: a missing branch, label or account answers 404, which is an answer here, not a failure.
 function exists(at, method = "GET") {
   try {
     execFileSync("gh", ["api", "-X", method, `repos/${nwo}/${at}`], {

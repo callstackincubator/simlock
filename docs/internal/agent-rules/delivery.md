@@ -287,7 +287,8 @@ is open, done means closed as completed.
     An `Assumption:` line is a minor decision and passes. A held PR stays
     open and ready: the maintainer merges it, or removes `fast-track` and
     lets the gate through. The orchestrator runs the script, never the
-    agent that wrote the report or the fix (the tool guard refuses them).
+    agent that wrote the report or the fix, and no sub-agent removes
+    `fast-track` (the tool guard refuses both).
 
 ## Procedures
 

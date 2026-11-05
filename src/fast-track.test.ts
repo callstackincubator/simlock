@@ -24,6 +24,7 @@ interface World {
   readonly pull?: { additions: number; deletions: number; changed_files: number };
   readonly files?: readonly string[];
   readonly prComments?: readonly string[];
+  readonly permissions?: Readonly<Record<string, string>>;
 }
 
 // why: the fake answers the REST calls the script makes on issue 5 and PR 9, and records every
@@ -39,7 +40,9 @@ const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); }
 const missing = () => { process.stderr.write("gh: Not Found (HTTP 404)\n"); process.exit(1); };
 const page = (items) => (args.includes("page=1") ? items : []);
 if (method === "GET" && at === "issues/5") out({ state: world.state, labels: world.labels.map((name) => ({ name })), assignees: world.assignees.map((login) => ({ login })) });
-if (method === "GET" && at === "issues/5/comments") out(page(world.comments.map((c) => (typeof c === "string" ? { body: c, author_association: "MEMBER" } : { body: c.body, author_association: c.by }))));
+if (method === "GET" && at === "issues/5/comments") out(page(world.comments.map((c) => (typeof c === "string" ? { body: c, user: { login: "ann" }, author_association: "MEMBER" } : { body: c.body, user: { login: c.by }, author_association: "MEMBER" }))));
+const who = /^collaborators\/(.+)\/permission$/.exec(at);
+if (method === "GET" && who !== null) world.permissions[who[1]] === undefined ? missing() : out({ permission: world.permissions[who[1]] });
 if (method === "GET" && at === "branches/bug/5-repro") world.repro ? out({ name: "bug/5-repro" }) : missing();
 if (method === "GET" && at === "pulls/9") out(world.pull);
 if (method === "GET" && at === "pulls/9/files") out(page(world.files.map((filename) => ({ filename }))));
@@ -87,6 +90,7 @@ function fastTrack(world: World, ...args: string[]) {
     pull: { additions: 60, deletions: 10, changed_files: 3 },
     files: ["src/leasing/a.ts", "src/leasing/a.test.ts"],
     prComments: [],
+    permissions: { ann: "write", bob: "admin", eve: "read" },
     ...world,
   };
   writeFileSync(join(dir, "world.json"), JSON.stringify(filled));
@@ -115,7 +119,7 @@ describe("fast-track.mjs entry check", { timeout: 30_000 }, () => {
       comments: [
         "It also happens on Android.",
         report({ Defect: "no — a gap" }),
-        `Supersedes the report above.\n\n${report()}`,
+        { body: `Supersedes the report above.\n\n${report()}`, by: "bob" },
         `Opened #6 for the stale doc.\n\n${FOOTER}`,
       ],
     });
@@ -145,13 +149,18 @@ describe("fast-track.mjs entry check", { timeout: 30_000 }, () => {
     ],
     [
       "a report from an account that cannot write to the repo",
-      { comments: [report({ Defect: "no — a gap" }), { body: report(), by: "NONE" }] },
+      { comments: [report({ Defect: "no — a gap" }), { body: report(), by: "eve" }] },
       "not from an account that can write to the repo",
     ],
     [
       "a comment with the agent footer from an account that cannot write to the repo",
-      { comments: [report(), { body: `Looks right.\n\n${FOOTER}`, by: "CONTRIBUTOR" }] },
+      { comments: [report(), { body: `Looks right.\n\n${FOOTER}`, by: "eve" }] },
       "a person commented after the report",
+    ],
+    [
+      "a report from an account the repo does not know",
+      { comments: [{ body: report(), by: "gone" }] },
+      "not from an account that can write to the repo",
     ],
     ["a missing reproduction branch", { repro: false }, "bug/5-repro does not exist"],
   ] satisfies [string, World, string][])("holds %s and changes no label", (_, world, why) => {
