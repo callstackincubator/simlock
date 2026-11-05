@@ -480,6 +480,8 @@ async function composeDaemon(
           simulatorAudio: config.ios.simulator.audio,
           simulatorHeadless: config.ios.simulator.headless,
           slim: config.ios.slim,
+          iosFullBootTimeoutMs: config.ios.full.bootTimeoutMs,
+          androidBootTimeoutMs: config.android.bootTimeoutMs,
           slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
           tcpProbe,
@@ -1322,6 +1324,8 @@ export interface DriverDiscoveryContext {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
   };
+  readonly iosFullBootTimeoutMs?: number;
+  readonly androidBootTimeoutMs?: number;
   readonly slimByDefault?: boolean;
   readonly simulatorAudio?: boolean;
   readonly simulatorHeadless?: boolean;
@@ -1467,6 +1471,9 @@ async function discoverIosDriver(
         ? {}
         : { simulatorHeadless: options.simulatorHeadless }),
       ...(options.slim === undefined ? {} : { slim: options.slim }),
+      ...(options.iosFullBootTimeoutMs === undefined
+        ? {}
+        : { fullBootTimeoutMs: options.iosFullBootTimeoutMs }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
@@ -1516,6 +1523,9 @@ async function discoverAndroidDriver(
   try {
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
+      ...(options.androidBootTimeoutMs === undefined
+        ? {}
+        : { bootTimeoutMs: options.androidBootTimeoutMs }),
       clock: options.clock,
       database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
