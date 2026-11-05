@@ -1907,8 +1907,8 @@ describe("loadConfig modes (ADR 0005)", () => {
   });
 
   it("rejects a non-positive lease-request timeout", async () => {
-    // P2 (round 2 review): bounds the one forwarded uplink call that used to have none of its
-    // own -- see FleetLeaseCoordinator#withLeaseRequestTimeout.
+    // why: P2 (round 2 review): bounds the one forwarded uplink call that used to have none of its
+    // own -- see FleetForwarding.withLeaseRequestTimeout.
     await expect(load({ gateway: { leaseRequestTimeoutMs: 0 } })).rejects.toThrow(
       "gateway.leaseRequestTimeoutMs",
     );
