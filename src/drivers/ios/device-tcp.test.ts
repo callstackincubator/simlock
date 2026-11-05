@@ -94,7 +94,7 @@ function setup(
   const connect = () => deviceTcp.connect(simulator, PORT, signal);
   const dialled = (): readonly LoopbackHost[] => connector.connections.map(({ host }) => host);
   const reverse = () => deviceTcp.reverse(simulator, PORT, signal);
-  return { clock, connect, connector, dialled, reverse, runner };
+  return { clock, connect, deviceTcp, connector, dialled, reverse, runner };
 }
 
 const environmentOf = (udid: string) =>
@@ -293,5 +293,14 @@ describe("iOS deviceTcp reverse", () => {
       message: `reverse ${String(PORT)}: listen EACCES`,
     });
     expect(failing.listeners.map(({ closed }) => closed)).toEqual([true]);
+  });
+});
+
+describe("iOS deviceTcp supports", () => {
+  it("takes tunnels for a simulator lease and none for an iPhone lease", () => {
+    const { deviceTcp } = setup();
+    const iPhone = { ...simulator, enrolledApps: [], physical: true } as const;
+    expect(deviceTcp.supports(simulator)).toBe(true);
+    expect(deviceTcp.supports(iPhone)).toBe(false);
   });
 });

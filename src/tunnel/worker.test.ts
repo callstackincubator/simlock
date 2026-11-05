@@ -266,19 +266,20 @@ describe("a worker's tunnel socket", () => {
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [{ devicePort: 9229, kind: "forward" }],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iOS simulator; tunnels need an Android emulator or phone",
+        message: "the lease is on an iOS simulator; this worker's iOS driver takes no tunnels",
         platform: "ios",
         tunnels: [reverse(5173)],
       },
       {
         code: "TUNNEL_UNSUPPORTED",
-        message: "the lease is on an iPhone; tunnels need an Android emulator or phone",
+        message:
+          "the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator",
         physical: true,
         platform: "ios",
         tunnels: [reverse(5173)],
