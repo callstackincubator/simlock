@@ -1137,6 +1137,12 @@ export const configSchema = z.object({
     thresholdMultiplier: z.number(),
     minimumThresholdMs: z.number(),
   }),
+  // why: Bounded like core's `drivers` leaves (strings, numbers and booleans only), since a gateway parses this from a worker.
+  drivers: z.record(
+    z.string().max(64),
+    // why: The number of keys is the worker's own config.json, which its loader already validated; a gateway holds one such answer per worker, the way it holds `capabilities`.
+    z.record(z.string().max(64), z.union([z.string().max(4096), z.number(), z.boolean()])),
+  ),
 });
 
 /**
