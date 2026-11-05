@@ -1,10 +1,9 @@
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
 import { type Alerts, createAlerts } from "../alerts/index.js";
 import { EventBus, type EventBusLogger } from "../bus/index.js";
-import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
+import { fitHostFacts, fitHostLoad } from "../contract/index.js";
 import { HostLoadSampler } from "../host-load/index.js";
 import {
   createEventHistory,
@@ -16,62 +15,18 @@ import {
   type Config,
   type ConfigOverrides,
   type DaemonMode,
-  type DeviceClass,
   type DeviceDataTable,
-  type DeviceMode,
-  type Driver,
-  type DriverRejection,
   type Platform,
-  type ModelPreferences,
-  type PrerequisiteCheck,
   type ServiceCheck,
-  CleanupReaper,
-  ComponentInstaller,
-  DEVICE_CLASSES,
-  driverConfig,
-  DiskSpaceGuard,
-  DriverCatalog,
-  HostFactsReader,
-  createCore,
   loadConfigWithDefaults,
-  latestPresence,
   loadInstanceId,
-  OwnedRootError,
-  Registry,
   registryOwner,
   warmPoolOwner,
   baselinesOwner,
-  Nuke,
-  SerializedDecision,
-  stableError,
-  sweepWriteLeftovers,
-  toDriverDevice,
 } from "../core/index.js";
-import { createLeasing } from "../leasing/index.js";
 import { openStateDatabase, type StateDatabase } from "../state/index.js";
-import {
-  AdbServerUnavailableError,
-  AndroidDriver,
-  ANDROID_PASSTHROUGH_TOOLS,
-  hostAbiFor,
-  SdkMissingError,
-  type AndroidDriverDiagnostic,
-  type AndroidDriverConfig,
-  androidDriverConfig,
-  androidDeviceDataTable,
-  androidSourceDataOwner,
-  androidPrerequisites,
-} from "../drivers/android/index.js";
-import {
-  IOS_PASSTHROUGH_TOOLS,
-  IosSimctlDriver,
-  type IosDriverConfig,
-  iosDriverConfig,
-  type SlimmedFact,
-  iosDeviceDataTable,
-  iosSourceDataOwner,
-  iosPrerequisites,
-} from "../drivers/ios/index.js";
+import { androidSourceDataOwner } from "../drivers/android/index.js";
+import { iosSourceDataOwner } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
@@ -80,10 +35,8 @@ import {
   CryptoIdGenerator,
   CryptoTokenSecrets,
   JsonLinesLogger,
-  LoggingProcessRunner,
   NodeFileLogSink,
   type Clock,
-  type DaemonRole,
   type Filesystem,
   type HostInfo,
   type HostLoadProbe,
@@ -93,7 +46,6 @@ import {
   type IpcConnector,
   type IpcListenerFactory,
   type Logger,
-  type LogLevel,
   NodeFilesystem,
   filterSqliteExperimentalWarning,
   NodeSqliteOpener,
@@ -102,18 +54,12 @@ import {
   NodeProcessRunner,
   productionServiceManager,
   serviceDefinition,
-  type ServiceDefinition,
-  type ServiceManager,
   NodeNpmCli,
   type NpmCli,
   NodeProcessSupervisor,
   NodeSystemStats,
-  NodeUpdaterLauncher,
   type UpdaterLauncher,
-  NodeBytePipeLauncher,
   NodeTcpProbe,
-  NodeTcpListenerFactory,
-  NodeTcpStreamConnector,
   daemonDataDirectory,
   resolveDaemonSocketPath,
   readPackageVersion,
@@ -126,10 +72,7 @@ import {
   type TcpProbe,
   FetchWebhookPoster,
   type WebhookPoster,
-  defaultWorkerLockPath,
-  NodeWorkerLock,
   type WorkerLockHandle,
-  type SqliteDatabase,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -149,14 +92,11 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
-import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
-import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { driverConfigEntries } from "../driver-registry/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
-import { socketHeld } from "../updater/index.js";
-import { createUpdateCoordinator, type UpdateCoordinatorOptions } from "./update-coordinator.js";
+import { createUpdateCoordinator } from "./update-coordinator.js";
 import { startVersionCheck, type VersionCheck } from "./version-check.js";
 import {
   DaemonAlreadyRunningError,
@@ -165,19 +105,28 @@ import {
   refuseWhenDaemonAnswers,
 } from "./connection-host.js";
 import { describeLeaseRequestFailure } from "./error-code.js";
-import { wakingQueueAfter } from "./enrollment-wake.js";
-import { execBaseEnvironment } from "./exec-env.js";
-import { GatewayUplink } from "./gateway-uplink.js";
-import type { RelayTargets, TwoWayRelayTargets } from "./relay.js";
+import { composeWorker, type WorkerOptions, processRunnerFor } from "./worker-composition.js";
+import { resolveDeviceDataTables } from "./driver-discovery.js";
+import {
+  parseDaemonArgv,
+  logAlreadyRunning,
+  logFatalStart,
+  serviceCheckFor,
+  type ServiceCheckHost,
+} from "./entry-support.js";
+import {
+  updateOptionsFor,
+  errorMessage,
+  startHistory,
+  stopForRefusedHistory,
+} from "./composition-support.js";
 
-export interface StartDaemonOptions {
+export interface StartDaemonOptions extends WorkerOptions {
   readonly clock?: Clock;
   readonly configOverrides?: ConfigOverrides;
   readonly configPath?: string;
   readonly dataDirectory?: string;
-  readonly defaultRequesterId?: string;
   readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
-  readonly drivers?: readonly Driver[];
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
@@ -185,14 +134,9 @@ export interface StartDaemonOptions {
   readonly onAdminSecretWritten?: (remove: () => Promise<void>) => void;
   /** why: test-only, replaces the registry of optional modules. */
   readonly optionalModules?: readonly OptionalModuleDefinition<unknown>[];
-  readonly relayTargets?: RelayTargets;
-  readonly relayTwoWayTargets?: TwoWayRelayTargets;
   readonly role?: DaemonMode;
-  readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
-  readonly serviceCheck?: ServiceCheck;
   readonly filesystem?: Filesystem;
   readonly hostInfo?: HostInfo;
-  readonly hostLoadProbe?: HostLoadProbe | null;
   readonly idGenerator?: IdGenerator;
   readonly ipc?: IpcConnector & IpcListenerFactory;
   readonly logger?: Logger;
@@ -205,58 +149,13 @@ export interface StartDaemonOptions {
     readonly otherRoleRunning: () => Promise<boolean>;
     readonly packageRoot: string;
   };
-  /** why: test-only, the protocol range the worker daemon announces. */
-  readonly protocolVersion?: number | ProtocolRange;
   readonly processSupervisor?: ProcessSupervisor;
   readonly socketPath?: string;
   readonly systemStats?: SystemStats;
   readonly tcpProbe?: TcpProbe;
   readonly version?: string;
-  /** why: test-only, moves the worker lock (never decides whether it is taken). */
-  readonly workerLockPath?: string;
   /** why: test-only, replaces the poster a gateway's alerts send through. */
   readonly webhookPoster?: WebhookPoster;
-}
-
-interface UpdateOptionsParts {
-  readonly clock: Clock;
-  readonly dataDirectory: string;
-  readonly eventBus: EventBus;
-  readonly filesystem: Filesystem;
-  readonly ipc: IpcConnector & IpcListenerFactory;
-  readonly npm: NpmCli;
-  readonly role: DaemonRole;
-  readonly version: string;
-  readonly versionCheck: VersionCheck;
-}
-
-// why: both roles share these; each adds what it holds leases with.
-function updateOptionsFor(
-  parts: UpdateOptionsParts,
-): Omit<UpdateCoordinatorOptions, "leasing" | "registry"> {
-  const { dataDirectory, ipc, role } = parts;
-  return {
-    clock: parts.clock,
-    dataDirectory,
-    eventBus: parts.eventBus,
-    filesystem: parts.filesystem,
-    latestVersion: () => parts.versionCheck.latest(),
-    launcher: new NodeUpdaterLauncher(),
-    logPath: join(dataDirectory, "daemon.log"),
-    npm: parts.npm,
-    otherRoleRunning: () =>
-      socketHeld(
-        ipc,
-        resolveDaemonSocketPath(
-          daemonDataDirectory(resolveSimlockHome(), role === "worker" ? "gateway" : "worker"),
-        ),
-      ),
-    packageRoot: fileURLToPath(new URL("../../", import.meta.url)),
-    pid: process.pid,
-    role,
-    simlockHome: resolveSimlockHome(),
-    version: parts.version,
-  };
 }
 
 export async function startDaemon(options: StartDaemonOptions = {}): Promise<DaemonServer> {
@@ -430,536 +329,38 @@ async function composeDaemon(
       ...(options.webhookPoster === undefined ? {} : { webhookPoster: options.webhookPoster }),
     });
   }
-  const registry = await Registry.load({
-    clock,
-    deviceData: deviceDataTables,
-    eventBus,
-    idGenerator,
-    leaseIdentity: config.lease.identity,
-    leaseRequestLimits: {
-      maxRecords: config.lease.maxRequestRecords,
-      retentionMs: config.lease.requestRetentionMs,
-    },
-    state,
-  });
-  // why: Before discovery, because every root a driver validates is checked against it, and it
-  // is written exactly once per home and never regenerated (ADR 0001, decision 2).
-  const instanceId = await loadInstanceId({
-    filesystem,
-    idGenerator,
-    path: join(dataDirectory, "instance.json"),
-  });
-  // why: only a worker whose drivers are discovered touches the machine's adb server, console ports and runtimes; substituted drivers touch none (ADR 0059 §1).
-  let workerLock: WorkerLockHandle | undefined;
-  if (options.drivers === undefined && process.env.SIMLOCK_DRIVERS_MODULE === undefined) {
-    workerLock = await new NodeWorkerLock({
-      filesystem,
-      path:
-        options.workerLockPath ??
-        defaultWorkerLockPath(process.platform, process.getuid?.() ?? 0, tmpdir()),
-      processSupervisor,
-      uid: process.platform === "win32" ? undefined : process.getuid?.(),
-    }).take({
-      folder: dataDirectory,
-      pid: process.pid,
-      startedAt: new Date(clock.now()).toISOString(),
-    });
-    onWorkerLock(workerLock);
-  }
-  const { drivers, prerequisiteChecks, rejections } =
-    options.drivers === undefined
-      ? await discoverDrivers({
-          acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
-          clock,
-          database: state.database,
-          driversConfig: config.drivers,
-          eventBus,
-          filesystem,
-          hostArch: hostSystem.arch,
-          hostPlatform: process.platform,
-          idGenerator,
-          instanceId,
-          logger,
-          processRunner,
-          processSupervisor,
-          simlockHome: dataDirectory,
-          iosConfig: driverConfig(config, iosDriverConfig),
-          slimByDefault: deviceModeWiring(config).slimByDefault,
-          androidConfig: driverConfig(config, androidDriverConfig),
-          tcpProbe,
-        })
-      : {
-          drivers: options.drivers,
-          prerequisiteChecks: options.prerequisiteChecks ?? [],
-          rejections: [],
-        };
-  const hostFacts = new HostFactsReader({
-    clock,
-    drivers,
-    logger: logger.child("host-facts"),
-    system: hostSystem,
-  });
-  void hostFacts.refresh();
-  const hostLoadProbe =
-    options.hostLoadProbe === undefined
-      ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
-      : options.hostLoadProbe;
-  const hostLoad =
-    hostLoadProbe === null
-      ? undefined
-      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
-  const decisions = new SerializedDecision();
-  const components = new ComponentInstaller({
-    clock,
-    decisions,
-    diskSpace: new DiskSpaceGuard(),
-    drivers: new DriverCatalog(drivers),
-    eventBus,
-    filesystem,
-    logger: logger.child("components"),
-    registry,
-    timeoutMs: config.downloads.timeoutMs,
-  });
-  const modelPreferences = modelPreferenceWiring(config, drivers);
-  const core = createCore({
-    clock,
-    components,
-    config,
-    decisions,
-    drivers,
-    driverRejections: rejections,
-    eventBus,
-    logger,
-    modelPreferences,
-    optionalModules: () => moduleHost.findings(),
-    prerequisiteChecks,
-    ...(options.serviceCheck === undefined ? {} : { serviceCheck: options.serviceCheck }),
-    registry,
-    state,
-    systemStats,
-  });
-  const leaseEnvironment: Record<string, string> = Object.assign(
-    {},
-    ...drivers.map((driver) => driver.virtualLeaseEnvironment()),
-  );
-  // why: a module's context is built before leasing exists, so `cancelPending` answers only once leasing does.
-  let cancelPendingRequest: ((requesterId: string) => Promise<unknown>) | undefined;
-  const catalog = new DriverCatalog(drivers);
-  const leaseInputs = createLeaseInputs({
-    openInput: (platform, device, signal) => catalog.openInput(platform, device, signal),
-  });
-  const moduleHost = await createModuleHost({
-    config,
-    defaulted,
-    context: {
-      cancelPending: (requesterId) => {
-        if (cancelPendingRequest === undefined) {
-          throw new Error("leasing is not ready yet");
-        }
-        return cancelPendingRequest(requesterId);
-      },
+  return composeWorker(
+    {
+      auth,
       clock,
+      config,
       dataDirectory,
-      environment: process.env,
-      events: { subscribe: (event, handler) => eventBus.subscribe(event, handler) },
+      defaulted,
+      deviceDataTables,
+      eventBus,
+      eventHistory,
       filesystem,
-      instanceId,
-      leaseEnvironment,
-      nodePath: process.execPath,
-      nodeVersion: process.versions.node,
-      hostPlatform: process.platform,
-      platforms: drivers.map((driver) => driver.platform),
+      hostSystem,
+      idGenerator,
+      ipc,
+      logger,
+      moduleDefinitions,
+      npm,
       processRunner,
       processSupervisor,
-      registry,
-      deviceTcp: {
-        connect: (platform, device, devicePort, signal) =>
-          catalog.connectDevicePort(platform, device, devicePort, signal),
-        supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
-        supportsEmulatorPort: (platform, device) => catalog.supportsEmulatorPort(platform, device),
-        connectEmulatorPort: (platform, device, name, signal) =>
-          catalog.connectEmulatorPort(platform, device, name, signal),
-        reverse: (platform, device, devicePort, signal) =>
-          catalog.reverseDevicePort(platform, device, devicePort, signal),
-      },
-      inputs: leaseInputs,
-      screens: catalog,
+      role,
+      socketPath,
+      state,
+      systemStats,
       tcpProbe,
+      upgradeRouter: createUpgradeRouter,
+      uplinkConnector: () => new WebSocketUplinkConnector(),
+      version,
+      versionCheck,
     },
-    definitions: moduleDefinitions,
-    logger,
-    tokens: auth.tokens,
-    role: "worker",
-  });
-  const leasing = createLeasing({
-    clock,
-    components,
-    config,
-    core,
-    defaultModes: deviceModeWiring(config).defaultModes,
-    describeFailure: describeLeaseRequestFailure,
-    eventBus,
-    idGenerator,
-    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
-    logger,
-    modelPreferences,
-  });
-  cancelPendingRequest = (requesterId) => leasing.cancelPending(requesterId);
-  // why: Core declared ports only leasing can implement; this is the one place they are handed over,
-  // before any request is admitted (ADR 0018 §2).
-  core.connect(leasing.corePorts);
-  const reaper = new CleanupReaper({
-    clock,
-    config,
-    eventBus,
-    executor: core.cleanup,
-    filesystem,
-    logger,
-    registry,
-    diskPath: dataDirectory,
-    targetedDevices: () => core.targetedDevices(),
-  });
-  const nuke = new Nuke({ executor: core.nuke, registry });
-  const gatewayUplink =
-    config.gateway.url === undefined || config.gateway.token === undefined
-      ? undefined
-      : new GatewayUplink({
-          accept: (connection) => daemon.acceptUplink(connection),
-          clock,
-          connector: new WebSocketUplinkConnector(),
-          logger: logger.child("uplink"),
-          token: config.gateway.token,
-          url: config.gateway.url,
-          workerId: instanceId,
-          ...(config.gateway.label === undefined ? {} : { label: config.gateway.label }),
-        });
-  // why: Reassigned once the HTTP frontend actually starts, but must exist as a stable closure now:
-  // `stopAuxiliary` is fixed at `DaemonServer` construction time, before the frontend itself
-  // exists.
-  let stopHttpGateway: (() => Promise<void>) | undefined;
-  // why: Settles once the HTTP gateway either finishes starting or fails to -- resolved/rejected from
-  // inside `onSocketClaimed`'s handler below. `startDaemon()` awaits this alongside
-  // `daemon.start()` itself (see the bottom of this function) so a bind failure (occupied port,
-  // invalid host) makes `startDaemon()` reject and the entrypoint report a non-zero exit code,
-  // the way it did before the gateway moved to firing concurrently with convergence. `stopAuxiliary`
-  // below *also* awaits this -- that is what closes review finding S5: without it, `stopAuxiliary`
-  // could return having stopped nothing (because `stopHttpGateway` isn't assigned yet, the
-  // gateway still being mid-`start()`), and `#stop()` would go on to settle and dispose while
-  // the gateway finishes binding and starts accepting requests against a daemon already being
-  // torn down -- see `server.ts`'s `stopAuxiliary` doc: it must be shut off before lease/queue
-  // teardown begins. When HTTP is disabled there is nothing to wait for, so this resolves
-  // immediately.
-  let resolveGatewayStarted: (() => void) | undefined;
-  let rejectGatewayStarted: ((error: unknown) => void) | undefined;
-  let socketClaimed = false;
-  let lockClaim: Promise<unknown> = Promise.resolve();
-  const gatewayStarted: Promise<void> = config.http.enabled
-    ? new Promise<void>((resolve, reject) => {
-        resolveGatewayStarted = resolve;
-        rejectGatewayStarted = reject;
-      })
-    : Promise.resolve();
-  // why: ADR 0019 §1, in this order: settle the open requests, read each platform once, doctor's
-  // startup pass on that read, end every lease whose device is not running and restore the
-  // timers of the rest, then core's device convergence, then the queue's first depth, which every
-  // run begins with. One after another: the reconciler needs the read, and convergence must not
-  // pick a device the reconciler is about to release.
-  // Set once a stop begins. A `daemon.stop` is accepted while startup runs, and the read takes up
-  // to a minute: every step after it would arm timers (expiry, quarantine retry, warm pool tick)
-  // on a daemon whose disposal has already run, and nothing would cancel them.
-  let stopping = false;
-  const convergeStartup = async (): Promise<void> => {
-    await sweepWriteLeftovers({
-      deviceRoots: deviceRoots(drivers),
-      directories: [dataDirectory],
-      filesystem,
-      logger,
-      processSupervisor,
-      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
-    });
-    // why: before any request is served, so a tunnel rule a stopped daemon left is gone before a lease uses its device; each driver proves a device its own first.
-    await Promise.all(
-      drivers.map(async (driver) => {
-        try {
-          await driver.deviceTcp?.sweep(
-            registry.snapshot.devices
-              .filter(
-                (device) => device.spec.platform === driver.platform && device.state !== "deleted",
-              )
-              .map((device) => ({
-                device: toDriverDevice(device),
-                leased: device.state === "leased",
-              })),
-          );
-        } catch (error) {
-          logger.warn("A driver's start sweep of tunnel rules failed", {
-            error: stableError(error),
-            platform: driver.platform,
-          });
-        }
-      }),
-    );
-    await leasing.settleRequests();
-    const read = await core.readStartup();
-    const steps = [
-      () => core.doctor.reconcile({ read }),
-      () => leasing.reconcile(read),
-      () => core.converge(read),
-    ];
-    for (const step of steps) {
-      if (stopping) return;
-      await step();
-    }
-    // why: startup is not done while the HTTP listener may still fail to bind: `running` is a promise that the console and API answer.
-    await gatewayStarted.catch((error: unknown) => {
-      void daemon.stop("http-start-failed").catch(() => undefined);
-      throw error;
-    });
-    leasing.announceQueueDepth();
-  };
-  const daemon = new DaemonServer({
-    // why: Closes the warm pool the moment a stop is asked for, ahead of every await in the stop.
-    beginStop: () => core.closeWarmPool(),
-    // why: the source's name is the config key's; the core names no module, so the composition supplies it.
-    capabilitySources: [...moduleHost.capabilitySources],
-    capacity: core.capacityReader,
-    warmPool: core.warmPoolReader,
-    catalog: core.catalog,
-    deviceModes: leasing,
-    clock,
-    components,
-    config,
-    doctor: core.doctor,
-    driverRejections: rejections,
-    defaultRequesterId:
-      options.defaultRequesterId ?? process.env.SIMLOCK_AGENT_ID ?? String(process.pid),
-    eventBus,
-    eventHistory,
-    historyPath: join(dataDirectory, HISTORY_DB_NAME),
-    healthMonitor: leasing.healthMonitor,
-    physicalDeviceWatcher: leasing.physicalDeviceWatcher,
-    hostFacts: () => fitHostFacts(hostFacts.current()),
-    ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
-    instanceId,
-    host: new DaemonEndpointHost({
-      connector: ipc,
-      endpoint: socketPath,
-      filesystem,
-      listenerFactory: ipc,
-      logger: logger.child("connection-host"),
-    }),
-    leases: leasing,
-    logger: logger.child("server"),
-    ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
-    passthrough: core.catalog,
-    inputs: leaseInputs,
-    processRunner,
-    execEnv: execBaseEnvironment(process.env),
-    queue: leasing,
-    presence: latestPresence,
-    reaper,
-    relayTargets: {
-      ...moduleHost.relayTargets,
-      ...options.relayTargets,
-    },
-    relayTwoWayTargets: {
-      ...moduleHost.relayTwoWayTargets,
-      ...options.relayTwoWayTargets,
-    },
-    enrollment: wakingQueueAfter(core.enrollment, () => leasing.corePorts.notifyAvailability()),
-    nuke,
-    registry,
-    warmKinds: core.warmKinds,
-    baselines: core.baselines,
-    stalls: { claims: core.claimReader, drivers },
-    resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
-    adminSecret: auth.adminSecret,
-    tokens: auth.tokens,
-    update: createUpdateCoordinator({
-      ...updateOptionsFor({
-        clock,
-        dataDirectory,
-        eventBus,
-        filesystem,
-        ipc,
-        npm,
-        role,
-        version,
-        versionCheck,
-      }),
-      leasing,
-      registry,
-    }),
-    version: version,
-    converge: convergeStartup,
-    settle: async () => {
-      stopping = true;
-      await leasing.settle();
-      await core.drain();
-      // why: after the reclaims settled, so a device that just came back ready is shut down too; before `dispose`, which stops adb.
-      await core.shutdownIdle();
-    },
-    // why: Every driver is tried even when another throws: Android's disposal is the only thing that can stop the adb server it started.
-    dispose: async () => {
-      versionCheck.dispose();
-      core.dispose();
-      leasing.dispose();
-      // why: Before the drivers: a running install is ended through its signal while its driver
-      // can still stop the installer process.
-      await components.close();
-      // why: a lease request still booting a device would otherwise fail against a disposed driver and leave its adb server and device behind (#1200).
-      await leasing.settleAcquisitions();
-      await moduleHost.beforeDriversDispose();
-      const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
-      for (const [index, disposal] of disposals.entries()) {
-        if (disposal.status === "rejected") {
-          logger.error("Driver disposal failed", {
-            platform: drivers[index]?.platform,
-            reason: disposal.reason instanceof Error ? disposal.reason.message : "unknown",
-          });
-        }
-      }
-      // why: ADR 0059: after the drivers are disposed, so no other worker sweeps while this one still acts on devices.
-      await workerLock?.release();
-      await eventHistory.stop();
-      state.close();
-    },
-    // why: Review finding S5: waits for the concurrently-started gateway to either finish binding
-    // (so `stopHttpGateway` is assigned and can actually be called) or fail to bind (nothing to
-    // stop) *before* returning -- `#stop()` awaits this call before settling and disposing
-    // (see `server.ts`; the leases themselves are left alone, ADR 0004 §3), so by the time
-    // either of those runs, the gateway is guaranteed to be either stopped or never listening
-    // in the first place. `gatewayStarted`'s rejection (a bind failure) is not this function's
-    // problem to surface -- the `Promise.allSettled` at the bottom of this function, or the
-    // standalone `daemon.stop()` call after it, already handle that -- so it is swallowed
-    // here.
-    stopAuxiliary: async () => {
-      await moduleHost.beforeDrain();
-      await gatewayStarted.catch(() => undefined);
-      await stopHttpGateway?.();
-      // why: Stopped with the other auxiliary frontends, and for the same reason: the uplink is a
-      // live connection into this daemon's dispatcher, so it must be shut before lease/queue
-      // teardown begins. Stopping it also stops the reconnect loop, so a shutting-down worker
-      // does not redial the gateway it just left.
-      await gatewayUplink?.stop();
-    },
-    // why: ADR 0003 §2: "an HTTP request during startup now waits like a socket request instead of
-    // being refused". Firing the gateway's own `start()` from here (not after `daemon.start()`
-    // resolves) is what makes that true: the gateway is listening, and every route calls
-    // `daemon.dispatch(...)`, which parks on the same startup-readiness gate a socket request
-    // does. A bind failure (occupied port, invalid host) is reported through `gatewayStarted`
-    // rather than acted on immediately here -- see the bottom of this function for why: calling
-    // `daemon.stop()` right away, while `daemon.start()` may still be awaiting convergence, is
-    // what let a stale "Daemon started" log/event follow "Daemon stopping" (review finding B6).
-    onSocketClaimed: () => {
-      socketClaimed = true;
-      lockClaim = (workerLock?.claimed() ?? Promise.resolve()).then(
-        () => undefined,
-        (error: unknown) => error ?? new Error("worker lock check failed"),
-      );
-      startHistory(
-        eventHistory,
-        logger,
-        stopForRefusedHistory({ stop: (reason) => daemon.stop(reason) }),
-      );
-      moduleHost.afterSocketClaimed();
-      // why: dialled here, once the socket is claimed and `#readyPromise` is set. The gateway's first
-      // `status.get` never parks (it still answers `starting` during convergence), but its
-      // `events.subscribe` does park on startup readiness, so the refresh that follows the
-      // subscribe reads `running` instead of keeping `starting`. A daemon that fails its
-      // claim never reaches this line, so its uplink is never dialled. Nothing awaits the
-      // uplink: a worker whose gateway is down must still come up and serve its local agents
-      // (`GatewayUplink` retries on its own backoff). The dial waits for the first host load reading,
-      // because the gateway reads `status.get` once on connect and next on its 30 s beat, so a dial that beats the first host load reading leaves the worker without a Load for that long.
-      if (gatewayUplink !== undefined) {
-        void (hostLoad?.firstReading() ?? Promise.resolve()).then(() => gatewayUplink.start());
-      }
-      const profilesPrepared = moduleHost.prepareLocalProfiles();
-      if (!config.http.enabled) return;
-      void profilesPrepared.then(startHttpGateway).then(
-        () => resolveGatewayStarted?.(),
-        (error: unknown) => {
-          logger.error("HTTP frontend failed to start", { message: errorMessage(error) });
-          rejectGatewayStarted?.(error);
-        },
-      );
-    },
-  });
-
-  async function startHttpGateway(): Promise<void> {
-    const httpLogger = logger.child("http");
-    const dispatch: HttpDispatch = (operation, input, session) =>
-      daemon.dispatch(operation, input, session);
-    const app = createHttpApp({
-      clock,
-      dispatch,
-      eventBus,
-      idGenerator,
-      leaseRequests: leasing.requests,
-      logger: httpLogger,
-      leaseRoutes: [...moduleHost.leaseRoutes()],
-      mounts: [...moduleHost.mounts({ dispatch })],
-      ownerRoutedFacts: daemon.ownerRoutedFacts,
-      registry,
-      auth,
-    });
-    const gateway = new HttpGateway(app, {
-      host: config.http.host,
-      logger: httpLogger,
-      onServerCreated: (server) =>
-        createUpgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(
-          server,
-        ),
-      port: config.http.port,
-    });
-    await gateway.start();
-    stopHttpGateway = async () => {
-      await gateway.stop();
-      app.dispose();
-    };
-    // why: No self-stop check here: `stopAuxiliary` above is the single place that decides whether
-    // to stop the gateway, and it does so by awaiting `gatewayStarted` (settled once this
-    // function's caller -- `onSocketClaimed`'s handler below -- resolves or rejects) before
-    // calling `stopHttpGateway`. Stopping here too would double-stop it.
-  }
-
-  // why: awaited together, not `daemon.start()` alone: `gatewayStarted` is the promise
-  // `onSocketClaimed`'s handler above settles once the concurrently-started HTTP gateway either
-  // finishes starting or fails to. Both are already running concurrently by the time this line
-  // is reached (the gateway since `onSocketClaimed` fired partway through `daemon.start()`), so
-  // this changes nothing about when either finishes -- only what `startDaemon()` itself reports.
-  // `gatewayStarted` is settled only from inside `onSocketClaimed`'s handler, and `start()`
-  // fires that callback only once the socket claim (and the admin secret write) has succeeded.
-  // A daemon that loses the start race therefore rejects without the callback ever running, so
-  // nothing would settle `gatewayStarted` and the join below would hang forever rather than
-  // reporting the failure. Release it here on that path -- resolving an already-settled promise
-  // is a no-op, so this cannot pre-empt a real bind result, and the `socketClaimed` guard keeps
-  // it from resolving early while a claimed daemon's gateway is still binding.
-  const daemonStarted = daemon.start().finally(() => {
-    if (!socketClaimed) resolveGatewayStarted?.();
-  });
-  const [daemonResult, gatewayResult] = await Promise.allSettled([daemonStarted, gatewayStarted]);
-  const lockFailure = await lockClaim;
-  if (lockFailure !== undefined) {
-    await daemon.stop().catch(() => undefined);
-    throw lockFailure;
-  }
-  if (gatewayResult.status === "rejected" && daemonResult.status === "fulfilled") {
-    // why: The daemon itself came all the way up -- convergence succeeded, `daemon.started` was
-    // already emitted -- but its HTTP gateway never bound. Tear the whole thing down now,
-    // *after* that success is a settled fact, so `daemon.stopping` never precedes (or follows
-    // out of order) `daemon.started`; see this function's own comment above `onSocketClaimed`
-    // and review finding B6. `stop()` is idempotent/dedups concurrent callers, so this is safe
-    // even if `stopAuxiliary`'s own path already ran one.
-    await daemon.stop("http-start-failed").catch(() => undefined);
-  }
-  if (daemonResult.status === "rejected") {
-    // why: a stop accepted before the start failed may still run, and `stopAuxiliary` above waits for the start, so the start rejects without it; waiting here keeps the entry's `process.exit` from cutting that teardown short.
-    await daemon.stop().catch(() => undefined);
-    throw daemonResult.reason;
-  }
-  if (gatewayResult.status === "rejected") throw gatewayResult.reason;
-  return daemon;
+    options,
+    onWorkerLock,
+  );
 }
 
 interface GatewayDaemonOptions {
@@ -1286,398 +687,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
   return daemon;
 }
 
-// why: `pnpm build` puts both capture artifacts beside the compiled daemon (scripts/build-capture.mjs),
-// so a checkout that built finds them without configuration; `drivers.ios.screenCaptureCommand`
-// names another iOS simulator program and `drivers.ios.deviceCaptureCommand` another physical iPhone one.
-const PACKAGED_SCREEN_CAPTURE = fileURLToPath(
-  new URL("../bin/simlock-screen-capture", import.meta.url),
-);
-const PACKAGED_DEVICE_CAPTURE = fileURLToPath(
-  new URL("../bin/simlock-device-capture", import.meta.url),
-);
-const PACKAGED_SCRCPY_SERVER = fileURLToPath(
-  new URL("../vendor/scrcpy/scrcpy-server-v5.0.1", import.meta.url),
-);
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export interface DriverDiscoveryContext {
-  readonly acceptAndroidLicenses?: boolean;
-  readonly clock: Clock;
-  readonly database: SqliteDatabase;
-  readonly driversConfig: Config["drivers"];
-  readonly eventBus: Pick<EventBus, "emit">;
-  readonly filesystem: Filesystem;
-  /**
-   * why: Which platform's tooling this host has, `process.platform` in production and supplied
-   * by the composition root rather than read here. Discovery's fail-closed branch -- the
-   * one that must cost a platform and never the daemon -- is otherwise reachable only on a
-   * Mac, and so is untestable everywhere Simlock's own CI runs.
-   */
-  readonly hostPlatform: NodeJS.Platform;
-  readonly hostArch: string;
-  readonly idGenerator: IdGenerator;
-  readonly instanceId: string;
-  readonly logger: Logger;
-  readonly processRunner: ProcessRunner;
-  readonly processSupervisor: ProcessSupervisor;
-  readonly simlockHome: string;
-  readonly tcpProbe: TcpProbe;
-  readonly iosConfig?: IosDriverConfig;
-  readonly slimByDefault?: boolean;
-  readonly androidConfig?: AndroidDriverConfig;
-}
-
-export interface DriverDiscovery {
-  readonly drivers: readonly Driver[];
-  readonly prerequisiteChecks: readonly PrerequisiteCheck[];
-  readonly rejections: readonly DriverRejection[];
-}
-
 const WORKER_UPGRADE_STEP =
   "with the older Simlock, release every lease and run `simlock nuke --delete-devices`; then remove <path> and start again.";
+
 const GATEWAY_UPGRADE_STEP =
   "remove <path> and start again; then create each worker's join token again with `simlock --gateway token create --role worker`, set it as that worker's `gateway.token`, and drain workers again.";
-
-/** why: both tables whatever the host's platform, so a device whose driver was refused still loads. */
-export function productionDeviceDataTables(): ReadonlyMap<Platform, DeviceDataTable> {
-  return new Map([
-    ["android", androidDeviceDataTable],
-    ["ios", iosDeviceDataTable],
-  ]);
-}
-
-/**
- * why: one function picks the map -- the option, else the `SIMLOCK_DRIVERS_MODULE` module's
- * `deviceDataTables` export, else the production tables -- so the state open and `Registry.load`
- * always see the same one.
- */
-export async function resolveDeviceDataTables(
-  options: Pick<StartDaemonOptions, "deviceDataTables">,
-): Promise<ReadonlyMap<Platform, DeviceDataTable>> {
-  if (options.deviceDataTables !== undefined) return options.deviceDataTables;
-  const modulePath = process.env.SIMLOCK_DRIVERS_MODULE;
-  if (modulePath === undefined) return productionDeviceDataTables();
-  const imported = (await import(pathToFileURL(resolve(modulePath)).href)) as {
-    deviceDataTables?: unknown;
-  };
-  if (!(imported.deviceDataTables instanceof Map)) {
-    throw new Error(
-      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export deviceDataTables, a Map from platform to its device-data table`,
-    );
-  }
-  return imported.deviceDataTables as ReadonlyMap<Platform, DeviceDataTable>;
-}
-
-export async function discoverDrivers(options: DriverDiscoveryContext): Promise<DriverDiscovery> {
-  const logger = options.logger.child("driver-discovery");
-  const driversModule = process.env.SIMLOCK_DRIVERS_MODULE;
-  if (driversModule !== undefined) {
-    // why: A substituted driver set owns whatever roots it wants, so there is nothing here to
-    // refuse on its behalf.
-    return { ...(await loadDriversModule(driversModule, options, logger)), rejections: [] };
-  }
-
-  const drivers: Driver[] = [];
-  const rejections: DriverRejection[] = [];
-  if (options.hostPlatform === "darwin") {
-    const ios = await discoverIosDriver(options, logger);
-    if (ios.driver !== undefined) drivers.push(ios.driver);
-    if (ios.rejection !== undefined) rejections.push(ios.rejection);
-  }
-  const android = await discoverAndroidDriver(options, logger);
-  if (android.driver !== undefined) drivers.push(android.driver);
-  if (android.rejection !== undefined) rejections.push(android.rejection);
-  return {
-    drivers,
-    prerequisiteChecks: platformPrerequisiteChecks({
-      env: process.env,
-      filesystem: options.filesystem,
-      homeDirectory: homedir(),
-      hostPlatform: options.hostPlatform,
-      processRunner: options.processRunner,
-    }),
-    rejections,
-  };
-}
-
-export function platformPrerequisiteChecks(options: {
-  readonly env: Readonly<Record<string, string | undefined>>;
-  readonly filesystem: Filesystem;
-  readonly homeDirectory: string;
-  readonly hostPlatform: NodeJS.Platform;
-  readonly processRunner: ProcessRunner;
-}): readonly PrerequisiteCheck[] {
-  const checks: PrerequisiteCheck[] = [];
-  if (options.hostPlatform === "darwin") {
-    checks.push(iosPrerequisites({ processRunner: options.processRunner }));
-  }
-  checks.push(
-    androidPrerequisites({
-      env: options.env,
-      filesystem: options.filesystem,
-      homeDirectory: options.homeDirectory,
-      processRunner: options.processRunner,
-    }),
-  );
-  return checks;
-}
-
-/**
- * why: A refused root costs the daemon one platform, never the whole daemon: the other platform
- * may be perfectly healthy, and a daemon that will not start is a daemon that cannot tell
- * anyone why (safety rule 9). Every other failure still fails startup -- an unreadable root
- * is already an `OwnedRootError`, so what is left is a genuine bug.
- */
-async function discoverIosDriver(
-  options: DriverDiscoveryContext,
-  logger: Logger,
-): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
-  try {
-    const driver = await IosSimctlDriver.create({
-      clock: options.clock,
-      coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
-      database: options.database,
-      driverConfig: options.driversConfig["ios"] ?? {},
-      filesystem: options.filesystem,
-      idGenerator: options.idGenerator,
-      instanceId: options.instanceId,
-      logger: logger.child("ios"),
-      onSilenceFailed: logSilenceFailure(logger),
-      onWindowFailed: logWindowFailure(logger),
-      onSlimmed: emitSlimDiagnostic(options.eventBus),
-      screenCapture: {
-        baseEnvironment: process.env,
-        command: PACKAGED_SCREEN_CAPTURE,
-        deviceCommand: PACKAGED_DEVICE_CAPTURE,
-        launcher: new NodeBytePipeLauncher(),
-        onLog: (line) => logger.debug("Screen capture", { line }),
-      },
-      onSlimSkipped: (fact) => {
-        logger.warn("Skipped iOS device slim", {
-          deviceId: fact.deviceId,
-          detail: fact.detail,
-          reason: fact.reason,
-        });
-      },
-      processRunner: options.processRunner,
-      simlockHome: options.simlockHome,
-      tcpListener: new NodeTcpListenerFactory(),
-      tcpProbe: options.tcpProbe,
-      tcpStreamConnector: new NodeTcpStreamConnector(),
-      ...(options.iosConfig === undefined ? {} : { config: options.iosConfig }),
-      ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
-      // why: Ambient like `homedir()` above, and read here rather than in the driver so the
-      // composition root stays the only place that touches process state.
-      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
-      pid: process.pid,
-    });
-    logger.info("Discovered driver", { platform: "ios" });
-    return { driver };
-  } catch (error: unknown) {
-    if (!(error instanceof OwnedRootError)) {
-      throw error;
-    }
-
-    logger.error("Skipped iOS driver: device root rejected", {
-      reason: error.reason,
-      root: error.path,
-      summary: error.message,
-    });
-    return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOLS) };
-  }
-}
-
-export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
-  if (diagnostic.kind === "snapshot-cold-boot") {
-    logger.warn("Android snapshot boot fell back to a cold boot", {
-      deviceId: diagnostic.deviceId,
-      readyAfterMs: diagnostic.readyAfterMs,
-    });
-    return;
-  }
-  logger.warn("Android device profile source could not be read", {
-    path: diagnostic.path,
-    reason: diagnostic.reason,
-  });
-}
-
-/**
- * why: Android refuses for one more reason than iOS does -- it needs a private adb server as
- * well as an owned root -- and both refusals cost the platform rather than the daemon.
- * A missing SDK is not a refusal at all: this host simply has no Android tooling, which is
- * ordinary and reported by the absence of the platform.
- */
-async function discoverAndroidDriver(
-  options: DriverDiscoveryContext,
-  logger: Logger,
-): Promise<{ readonly driver?: Driver; readonly rejection?: DriverRejection }> {
-  try {
-    const driver = await AndroidDriver.create({
-      acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
-      clock: options.clock,
-      database: options.database,
-      driverConfig: options.driversConfig["android"] ?? {},
-      config: options.androidConfig,
-      env: process.env,
-      filesystem: options.filesystem,
-      homeDirectory: homedir(),
-      hostAbi: hostAbiFor(options.hostArch),
-      idGenerator: options.idGenerator,
-      instanceId: options.instanceId,
-      logger: logger.child("android"),
-      onDiagnostic: (diagnostic) => logAndroidDiagnostic(logger, diagnostic),
-      processRunner: options.processRunner,
-      processSupervisor: options.processSupervisor,
-      scrcpyServerPath: PACKAGED_SCRCPY_SERVER,
-      simlockHome: options.simlockHome,
-      tcpListener: new NodeTcpListenerFactory(),
-      tcpProbe: options.tcpProbe,
-      tcpStreamConnector: new NodeTcpStreamConnector(),
-      // why: Ambient like `homedir()` above, and read here rather than in the driver so the
-      // composition root stays the only place that touches process state.
-      ...(process.getuid === undefined ? {} : { uid: process.getuid() }),
-      pid: process.pid,
-    });
-    logger.info("Discovered driver", { platform: "android" });
-    return { driver };
-  } catch (error: unknown) {
-    if (error instanceof SdkMissingError) {
-      logger.warn("Skipped Android driver: SDK missing", { reason: error.message });
-      return {};
-    }
-    if (error instanceof OwnedRootError) {
-      logger.error("Skipped Android driver: device root rejected", {
-        reason: error.reason,
-        root: error.path,
-        summary: error.message,
-      });
-      return { rejection: rootRejection(error, ANDROID_PASSTHROUGH_TOOLS) };
-    }
-    if (error instanceof AdbServerUnavailableError) {
-      logger.error("Skipped Android driver: adb server unavailable", {
-        port: error.port,
-        reason: error.reason,
-        summary: error.message,
-      });
-      return { rejection: adbServerRejection(error) };
-    }
-
-    throw error;
-  }
-}
-
-function adbServerRejection(error: AdbServerUnavailableError): DriverRejection {
-  return {
-    event: "driver.adb-server-rejected",
-    passthroughTools: ANDROID_PASSTHROUGH_TOOLS,
-    payload: { port: error.port, reason: error.reason },
-    platform: "android",
-    reason: error.reason,
-    summary: error.message,
-  };
-}
-
-/**
- * why: the tool names are passed in rather than derived from `error.platform`: which wrapper a
- * platform answers to is the driver module's business, and this file is the composition
- * root that already knows both driver classes (architecture rule 2).
- */
-function rootRejection(
-  error: OwnedRootError,
-  passthroughTools: readonly string[],
-): DriverRejection {
-  return {
-    event: "driver.root-rejected",
-    passthroughTools,
-    payload: { platform: error.platform, reason: error.reason, root: error.path },
-    platform: error.platform,
-    reason: error.reason,
-    summary: error.message,
-  };
-}
-
-async function loadDriversModule(
-  modulePath: string,
-  context: DriverDiscoveryContext,
-  logger: Logger,
-): Promise<Omit<DriverDiscovery, "rejections">> {
-  logger.info("Substituting driver discovery via SIMLOCK_DRIVERS_MODULE", {
-    module: modulePath,
-  });
-  const moduleUrl = pathToFileURL(resolve(modulePath)).href;
-  const imported = (await import(moduleUrl)) as {
-    createDrivers?: (
-      context: DriverDiscoveryContext,
-    ) => Promise<readonly Driver[]> | readonly Driver[];
-    prerequisiteChecks?: readonly PrerequisiteCheck[];
-  };
-  if (typeof imported.createDrivers !== "function") {
-    throw new Error(
-      `SIMLOCK_DRIVERS_MODULE ${modulePath} does not export a createDrivers(context) function`,
-    );
-  }
-  const drivers = await imported.createDrivers(context);
-  logger.info("Loaded drivers from SIMLOCK_DRIVERS_MODULE", {
-    count: drivers.length,
-    module: modulePath,
-    platforms: drivers.map((driver) => driver.platform),
-  });
-  return { drivers, prerequisiteChecks: imported.prerequisiteChecks ?? [] };
-}
-
-export function deviceModeWiring(config: Pick<Config, "ios">): {
-  readonly defaultModes: Readonly<Partial<Record<"ios" | "android", DeviceMode>>>;
-  readonly slimByDefault: boolean;
-} {
-  return {
-    defaultModes: { ios: config.ios.defaultMode },
-    slimByDefault: config.ios.defaultMode === "slim",
-  };
-}
-
-export function modelPreferenceWiring(
-  config: Pick<Config, "android" | "ios">,
-  drivers: readonly Pick<Driver, "defaultModels" | "platform">[],
-): ModelPreferences {
-  return Object.fromEntries(
-    drivers.map((driver) => {
-      const configured =
-        driver.platform === "ios" ? config.ios.defaultModels : config.android.defaultModels;
-      const merged: Partial<Record<DeviceClass, readonly string[]>> = {};
-      for (const deviceClass of DEVICE_CLASSES) {
-        const names = [
-          ...(configured[deviceClass] ?? []),
-          ...(driver.defaultModels[deviceClass] ?? []),
-        ];
-        if (names.length > 0) merged[deviceClass] = names;
-      }
-      return [driver.platform, merged];
-    }),
-  );
-}
-
-// why: the iOS driver never depends on the event bus directly (architecture rule 5); this is the one place that bridges its `onSlimmed` callback to a post-commit fact. A skipped slim is not bridged: `onSlimSkipped` in `discoverDrivers` logs it instead.
-export function emitSlimDiagnostic(eventBus: Pick<EventBus, "emit">): (fact: SlimmedFact) => void {
-  return (fact) => {
-    eventBus.emit(
-      "device.slimmed",
-      {
-        deviceId: fact.deviceId,
-        address: fact.address,
-        platform: "ios",
-        categories: fact.categories,
-        labelCount: fact.labelCount,
-        durationMs: fact.durationMs,
-        signature: fact.signature,
-        unknownLabels: fact.unknownLabels,
-      },
-      "driver-diagnostics",
-    );
-  };
-}
 
 function openEventHistory(options: {
   readonly clock: Clock;
@@ -1704,31 +718,6 @@ function openEventHistory(options: {
   });
 }
 
-/** why: a history that refuses to start is one a newer simlock wrote or a migration could not fix; the daemon stops rather than run without the figures it promises. */
-function startHistory(history: EventHistoryHandle, logger: Logger, refused: () => void): void {
-  void history.start().catch((error: unknown) => {
-    logger.error("The event history could not start", { message: errorMessage(error) });
-    refused();
-  });
-}
-
-function stopForRefusedHistory(daemon: { stop(reason: string): Promise<void> }): () => void {
-  return () => {
-    process.exitCode = 1;
-    void daemon.stop("history-refused").catch(() => undefined);
-  };
-}
-
-export function processRunnerFor(
-  level: LogLevel,
-  runner: ProcessRunner,
-  logger: Logger,
-  clock: Clock,
-): ProcessRunner {
-  if (level !== "debug") return runner;
-  return new LoggingProcessRunner({ clock, inner: runner, logger: logger.child("process") });
-}
-
 export function eventBusLogger(logger: Logger): EventBusLogger {
   const bus = logger.child("bus");
   return {
@@ -1741,80 +730,6 @@ export function eventBusLogger(logger: Logger): EventBusLogger {
       });
     },
   };
-}
-
-export function parseDaemonArgv(argv: readonly string[]): DaemonMode | undefined {
-  if (argv.length === 0) return "worker";
-  if (argv.length === 1 && argv[0] === "--gateway") return "gateway";
-  return undefined;
-}
-
-/**
- * why: best-effort logger for the fatal startup handler below. It cannot depend on the
- * daemon's own `Config` — that is exactly what may have failed to load — so it always
- * writes to the daemon's own folder at a fixed level.
- */
-function createFatalLogger(
-  role: DaemonMode | undefined,
-  level: "error" | "info" = "error",
-): Logger {
-  return new JsonLinesLogger({
-    clock: new SystemClock(),
-    level,
-    module: "daemon",
-    sink: new NodeFileLogSink({
-      path: join(daemonDataDirectory(resolveSimlockHome(), role ?? "worker"), "daemon.log"),
-    }),
-  });
-}
-
-function logAlreadyRunning(role: DaemonMode, error: DaemonAlreadyRunningError): void {
-  try {
-    createFatalLogger(role, "info").info("Daemon already running", { socket: error.endpoint });
-  } catch {
-    // why: logging itself failed, so the line goes to the console rather than being swallowed.
-    console.error(error.message);
-  }
-}
-
-function logFatalStart(role: DaemonMode | undefined, message: string, extra: object): void {
-  try {
-    createFatalLogger(role).error("Daemon failed to start", { message, ...extra });
-  } catch {
-    // why: logging itself failed (e.g. an unwritable data directory), so the failure goes to the console rather than being swallowed.
-    console.error(message);
-  }
-  process.exitCode = 1;
-}
-
-/** why: only a worker has a service check; a gateway and an unsupported platform (no manager) have none. */
-export function serviceCheckFor(
-  role: DaemonMode,
-  manager: ServiceManager | undefined,
-  definition: () => ServiceDefinition,
-): { readonly serviceCheck?: ServiceCheck } {
-  if (manager === undefined || role !== "worker") return {};
-  const { name } = definition();
-  return {
-    serviceCheck: {
-      manager: manager.manager,
-      name,
-      check: async () => {
-        const state = await manager.state(definition());
-        return state.state === "broken" ? state.missing : [];
-      },
-    },
-  };
-}
-
-/** why: the process facts the production service check reads, injectable so a test can prove the definition it builds. */
-export interface ServiceCheckHost {
-  readonly manager: ServiceManager | undefined;
-  readonly root: string;
-  readonly home: string;
-  readonly nodePath: string;
-  readonly mainPath: string;
-  readonly env: NodeJS.ProcessEnv;
 }
 
 function currentServiceCheckHost(): ServiceCheckHost {
@@ -1904,11 +819,4 @@ function reportingAdminSecret(
     },
     remove: () => secret.remove(),
   };
-}
-
-/** why: a root's staging directory sits beside it, so the sweep looks there for leftovers. */
-function deviceRoots(drivers: readonly Driver[]): string[] {
-  return drivers.flatMap((driver) =>
-    "deviceRoot" in driver && typeof driver.deviceRoot === "string" ? [driver.deviceRoot] : [],
-  );
 }

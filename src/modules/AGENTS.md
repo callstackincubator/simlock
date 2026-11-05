@@ -3,7 +3,7 @@
 Does: the contract an optional module implements, and the host that loads each turned-on module and plugs its handle into the daemon.
 Entry: `index.ts` → `createModuleHost` and the contract types; `testing.ts` → `fakeModule`, `fakeWorkerContext`.
 Uses: ports, contract, core; the bus for types only. Never imports: leasing, gateway, drivers, agent-device, `fs`.
-Imported by: `daemon/main.ts` (the factory and types); `input` and `tunnel` (the types and `relay-channel.ts`); on a gateway it is handed the gateway parts and binds each module's context to its name. Core, leasing, drivers, gateway and contract never import it.
+Imported by: `daemon/main.ts` and `daemon/worker-composition.ts` (the factory and types); `input` and `tunnel` (the types and `relay-channel.ts`); on a gateway it is handed the gateway parts and binds each module's context to its name. Core, leasing, drivers, gateway and contract never import it.
 
 ## Files
 
@@ -20,5 +20,5 @@ Imported by: `daemon/main.ts` (the factory and types); `input` and `tunnel` (the
 - Names: the capability name pattern, unique, not a core route segment or a core lease sub-route (`renew`, `exec`, `rotate`), at most 16 capabilities.
 - Creating starts nothing. A start that fails before the socket is claimed drops created modules; after it, the normal stop runs their stop hooks.
 - Hooks are direct calls. `afterSocketClaimed` is not awaited; `beforeDrain` and `beforeDriversDispose` share one 30 s budget per step; a throw is logged and the step goes on.
-- A definition with `localProfile` has a file in the data directory that the worker host keeps for local agents: `prepareLocalProfiles` (awaited by `daemon/main.ts` after the socket claim and before HTTP starts) writes it with one `agent` token labelled `localProfile.tokenLabel` when `http.enabled` and the module are on, and deletes it and revokes labelled tokens otherwise, for an off module too. A failure logs one `warn` and the start goes on.
+- A definition with `localProfile` has a file in the data directory that the worker host keeps for local agents: `prepareLocalProfiles` (awaited by `daemon/worker-composition.ts` after the socket claim and before HTTP starts) writes it with one `agent` token labelled `localProfile.tokenLabel` when `http.enabled` and the module are on, and deletes it and revokes labelled tokens otherwise, for an off module too. A failure logs one `warn` and the start goes on.
 - Each by-shape type (`Module*`) has a type test in `src/daemon/module-shapes.test.ts` against its original.

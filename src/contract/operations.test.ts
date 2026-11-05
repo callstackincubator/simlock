@@ -1370,7 +1370,7 @@ describe("operation input/output round trips", () => {
       },
       { count: 1, mode: "full", model: "Pixel 9", platform: "android" },
     ];
-    const warmPool = { targets, maxConcurrentBoots: 3 };
+    const warmPool = { targets, maxConcurrentBoots: 3, baselineLearnAfter: 5 };
     const output = OPERATIONS["config.get"].output;
     const base = {
       capabilities: {},

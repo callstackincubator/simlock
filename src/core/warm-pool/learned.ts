@@ -51,11 +51,34 @@ INSERT INTO warm_kind_leases SELECT * FROM warm_kind_leases_kept;
 DROP TABLE warm_kind_leases_kept;
 `;
 
+// why: a baseline kind is keyed on its name alone and is learned only once it has been leased enough, so rows written under the old key are dropped and `learned` marks a row the pool plans.
+const WARM_POOL_V3 = `
+DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE baseline <> '');
+DELETE FROM warm_kinds WHERE baseline <> '';
+ALTER TABLE warm_kinds ADD COLUMN learned INTEGER NOT NULL DEFAULT 1;
+CREATE UNIQUE INDEX warm_kinds_baseline_name ON warm_kinds (baseline) WHERE baseline <> '';
+`;
+
 export const warmPoolOwner: SqliteSchemaOwner = {
-  migrations: [WARM_POOL_V1, WARM_POOL_V2],
+  migrations: [WARM_POOL_V1, WARM_POOL_V2, WARM_POOL_V3],
   name: "warm-pool",
-  version: 2,
+  version: 3,
 };
+
+const UPSERT_PLAIN_KIND = `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
+  DO UPDATE SET last_leased_at = excluded.last_leased_at
+  RETURNING id`;
+
+// why: a baseline row is keyed on the name alone, so a lease of another model or platform rewrites the row's spec instead of adding a second row.
+const UPSERT_BASELINE_KIND = `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at, learned)
+  VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+  ON CONFLICT (baseline) WHERE baseline <> ''
+  DO UPDATE SET platform = excluded.platform, model = excluded.model,
+    os_version = excluded.os_version, mode = excluded.mode,
+    image_tag = excluded.image_tag, last_leased_at = excluded.last_leased_at
+  RETURNING id`;
 
 const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -77,44 +100,59 @@ export class LearnedKinds {
     this.#state = state;
   }
 
-  learn(spec: VirtualSpec, leaseId: string, at: number): void {
+  /** why: a plain kind is learned by its first lease; a baseline kind, whose one row is keyed on the name, once `learnAfter` of its grants fall in the last 24 hours. */
+  learn(spec: VirtualSpec, leaseId: string, at: number, learnAfter = 1): void {
     this.#state.transaction(() => {
       const database = this.#state.database;
+      const key = [
+        spec.platform,
+        spec.model,
+        spec.osVersion,
+        spec.mode ?? "full",
+        spec.imageTag ?? "",
+        spec.baseline?.name ?? "",
+        at,
+      ];
       const row = database
-        .prepare(
-          `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
-           DO UPDATE SET last_leased_at = excluded.last_leased_at
-           RETURNING id`,
-        )
-        .get(
-          spec.platform,
-          spec.model,
-          spec.osVersion,
-          spec.mode ?? "full",
-          spec.imageTag ?? "",
-          spec.baseline?.name ?? "",
-          at,
-        );
+        .prepare(spec.baseline === undefined ? UPSERT_PLAIN_KIND : UPSERT_BASELINE_KIND)
+        .get(...key);
+      const kindId = Number(row?.id);
       database
         .prepare(
           "INSERT OR REPLACE INTO warm_kind_leases (lease_id, kind_id, granted_at, ended_at) VALUES (?, ?, ?, NULL)",
         )
-        .run(leaseId, Number(row?.id), at);
+        .run(leaseId, kindId, at);
+      if (spec.baseline !== undefined) this.#learnWhenLeasedEnough(kindId, at, learnAfter);
       database
         .prepare("DELETE FROM warm_kind_leases WHERE ended_at < ?")
         .run(at - LEARNED_WINDOW_MS);
-      const surplus = database
-        .prepare(
-          "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
-        )
-        .all(spec.platform, WARM_POOL_LEARNED_KINDS_MAX);
-      for (const { id } of surplus) {
-        database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
-        database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
-      }
+      this.#dropSurplus(spec.platform);
     });
+  }
+
+  #learnWhenLeasedEnough(kindId: number, at: number, learnAfter: number): void {
+    const database = this.#state.database;
+    const grants = database
+      .prepare(
+        "SELECT COUNT(*) AS grants FROM warm_kind_leases WHERE kind_id = ? AND granted_at > ?",
+      )
+      .get(kindId, at - LEARNED_WINDOW_MS);
+    if (Number(grants?.grants) >= learnAfter) {
+      database.prepare("UPDATE warm_kinds SET learned = 1 WHERE id = ?").run(kindId);
+    }
+  }
+
+  #dropSurplus(platform: Platform): void {
+    const database = this.#state.database;
+    const surplus = database
+      .prepare(
+        "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
+      )
+      .all(platform, WARM_POOL_LEARNED_KINDS_MAX);
+    for (const { id } of surplus) {
+      database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
+      database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
+    }
   }
 
   ended(leaseId: string, at: number): void {
@@ -140,32 +178,34 @@ export class LearnedKinds {
   }
 
   /** why: the operator's undo of a mistaken lease: forgets every kind of the model, narrowed by what the caller names; answers what it forgot. */
-  forgetMatching(match: LearnedKindMatch): VirtualSpec[] {
+  forgetMatching(
+    match: LearnedKindMatch,
+    view: (spec: VirtualSpec) => VirtualSpec = (spec) => spec,
+  ): VirtualSpec[] {
     return this.#state.transaction(() => {
       const forgotten = this.#state.database
         .prepare(
-          "SELECT platform, model, os_version, mode, image_tag, baseline FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+          "SELECT platform, model, os_version, mode, image_tag, baseline FROM warm_kinds WHERE learned = 1 ORDER BY last_leased_at DESC, id DESC",
         )
         .all()
-        .map(specOf)
+        .map((row) => view(specOf(row)))
         .filter((spec) => matches(spec, match));
       for (const spec of forgotten) this.#delete(spec);
       return forgotten;
     });
   }
 
+  /** why: a baseline kind is one row per name, whatever model its latest lease or newest version has. */
   #delete(spec: VirtualSpec): void {
     const database = this.#state.database;
     const where =
-      "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ? AND baseline = ?";
-    const key = [
-      spec.platform,
-      spec.model,
-      spec.osVersion,
-      spec.mode ?? "full",
-      spec.imageTag ?? "",
-      spec.baseline?.name ?? "",
-    ];
+      spec.baseline === undefined
+        ? "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ? AND baseline = ''"
+        : "baseline = ?";
+    const key =
+      spec.baseline === undefined
+        ? [spec.platform, spec.model, spec.osVersion, spec.mode ?? "full", spec.imageTag ?? ""]
+        : [spec.baseline.name];
     database
       .prepare(
         `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE ${where})`,
@@ -186,7 +226,7 @@ export class LearnedKinds {
     const windowStart = now - LEARNED_WINDOW_MS;
     return database
       .prepare(
-        "SELECT id, platform, model, os_version, mode, image_tag, baseline, last_leased_at FROM warm_kinds ORDER BY last_leased_at DESC, id DESC",
+        "SELECT id, platform, model, os_version, mode, image_tag, baseline, last_leased_at FROM warm_kinds WHERE learned = 1 ORDER BY last_leased_at DESC, id DESC",
       )
       .all()
       .map((row) => {

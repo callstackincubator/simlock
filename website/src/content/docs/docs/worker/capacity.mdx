@@ -153,7 +153,8 @@ A device counts at the full size until it has booted and been checked as slim. S
 
 The warm pool keeps idle devices booted, so a lease starts without waiting for a boot. It is on by default and needs no setup: it learns from your leases.
 
-- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode, and baseline if any), it keeps as many booted as were leased at the same time at the busiest moment of the last 24 hours, at least one. What it learned survives a daemon restart.
+- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps as many booted as were leased at the same time at the busiest moment of the last 24 hours, at least one. What it learned survives a daemon restart.
+- **A baseline is learned on its Nth lease within 24 hours.** N is `warmPool.baselineLearnAfter` (3 by default). Until then a lease of it leaves nothing booted. Once learned, it stays learned and is kept warm like any other kind, as the baseline's newest version: if you save a version from another model, the next pass warms that model.
 - **You can add targets.** `warmPool.targets` names devices to keep booted before anyone asks:
 
 ```json title="~/.simlock/config.json"
@@ -180,6 +181,7 @@ What the warm pool does and does not do:
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `warmPool.enabled` | `false` keeps nothing booted. | `true` |
+| `warmPool.baselineLearnAfter` | Leases of one baseline within 24 hours that make the warm pool learn it. | `3` |
 | `warmPool.learn` | `false` keeps only your targets warm. Simlock still records leases, so turning it back on starts from the last 24 hours. | `true` |
 | `warmPool.reserveRunning.ios`, `.android` | Running slots idle warm devices may not fill, so a lease for another kind never waits for a shutdown. Leases can still use them. | `0` |
 | `warmPool.maxConcurrentBoots` | Boots and creations under way at once. | a quarter of the CPU cores, at least 1 |
