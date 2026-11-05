@@ -65,6 +65,7 @@ import {
   IosSimctlDriver,
   type SilenceFailedFact,
   type SlimmedFact,
+  type WindowFailedFact,
   iosDeviceDataTable,
   iosSourceDataOwner,
   iosPrerequisites,
@@ -1490,6 +1491,10 @@ export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => 
       detail: fact.detail,
     });
   };
+}
+
+export function logWindowFailure(_logger: Logger): (fact: WindowFailedFact) => void {
+  return () => undefined;
 }
 
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
