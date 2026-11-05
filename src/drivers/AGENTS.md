@@ -43,7 +43,7 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
    `hasTerminal: false` means `device.exec`: refuse what needs a tty.
 7. **Lease environment** — set on the lease at grant from `leaseEnvironment`; values are per platform.
 8. **Facts reach the bus through callbacks.** A driver never imports the bus; `daemon/main.ts`
-   bridges its constructor callbacks. Today only iOS `onSlimmed` → `device.slimmed`. iOS `onSlimSkipped` and `onSilenceFailed` go to the logger as warnings. Android `onDiagnostic` goes to the logger as
+   bridges its constructor callbacks. Today only iOS `onSlimmed` → `device.slimmed`. iOS `onSlimSkipped`, `onSilenceFailed` and `onWindowFailed` go to the logger as warnings. Android `onDiagnostic` goes to the logger as
    warnings (`logAndroidDiagnostic`), not the bus.
 
 ## Known gaps

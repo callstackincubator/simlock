@@ -5928,6 +5928,7 @@ describe("IosSimctlDriver simulator window", () => {
     "-shutdownStartedDevicesOnQuit",
     "NO",
   );
+  const deviceHubArgs = "-g -b com.apple.dt.Devices --args -shutdownStartedDevicesOnQuit NO";
   const select = open(`devices://manage/select?id=${udid}`);
   const simulatorApp = open(
     "-b",
@@ -6024,6 +6025,16 @@ describe("IosSimctlDriver simulator window", () => {
       name: "a call times out",
       script: [{ match: deviceHub }, { match: select, hangs: true }],
       detail: "timed out",
+    },
+    {
+      name: "the DeviceHub call times out",
+      script: [{ match: deviceHub, hangs: true }],
+      detail: "timed out",
+    },
+    {
+      name: "the DeviceHub call cannot start",
+      script: [],
+      detail: `Could not start ${deviceHubArgs}: Unexpected process invocation: open ${deviceHubArgs}`,
     },
     {
       name: "a call cannot start",
