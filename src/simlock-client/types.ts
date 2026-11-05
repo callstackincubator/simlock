@@ -9,7 +9,7 @@
 import type { z } from "zod";
 
 import type { OPERATIONS, OperationName, PUSH_SCHEMAS } from "../contract/index.js";
-import type { leaseProgressSchema } from "../contract/schemas.js";
+import type { leaseProgressSchema } from "../contract/lease-schemas.js";
 
 type OpInput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["input"]>;
 type OpOutput<Name extends OperationName> = z.infer<(typeof OPERATIONS)[Name]["output"]>;

@@ -57,8 +57,8 @@
   {
     "type": "dependency",
     "from": "src/core/config.test.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../contract/schemas.js",
+    "to": "src/contract/config-schemas.ts",
+    "unresolvedTo": "../contract/config-schemas.js",
     "dependencyTypes": ["local", "import"],
     "rule": {
       "severity": "error",
@@ -79,8 +79,8 @@
   {
     "type": "dependency",
     "from": "src/core/warm-pool/config.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../../contract/schemas.js",
+    "to": "src/contract/status-schemas.ts",
+    "unresolvedTo": "../../contract/status-schemas.js",
     "dependencyTypes": ["local", "import"],
     "rule": {
       "severity": "error",
@@ -134,8 +134,8 @@
   {
     "type": "dependency",
     "from": "src/simlock-client/types.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../contract/schemas.js",
+    "to": "src/contract/lease-schemas.ts",
+    "unresolvedTo": "../contract/lease-schemas.js",
     "dependencyTypes": ["local", "type-only", "import"],
     "rule": {
       "severity": "error",
@@ -145,8 +145,19 @@
   {
     "type": "dependency",
     "from": "ui/src/model/leases.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../../../src/contract/schemas",
+    "to": "src/contract/config-schemas.ts",
+    "unresolvedTo": "../../../src/contract/config-schemas",
+    "dependencyTypes": ["local", "type-only", "import"],
+    "rule": {
+      "severity": "error",
+      "name": "past-index"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "ui/src/model/leases.ts",
+    "to": "src/contract/status-schemas.ts",
+    "unresolvedTo": "../../../src/contract/status-schemas",
     "dependencyTypes": ["local", "type-only", "import"],
     "rule": {
       "severity": "error",
@@ -156,8 +167,8 @@
   {
     "type": "dependency",
     "from": "ui/src/model/waiting.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../../../src/contract/schemas",
+    "to": "src/contract/lease-schemas.ts",
+    "unresolvedTo": "../../../src/contract/lease-schemas",
     "dependencyTypes": ["local", "type-only", "import"],
     "rule": {
       "severity": "error",
@@ -167,8 +178,8 @@
   {
     "type": "dependency",
     "from": "ui/src/model/workers.ts",
-    "to": "src/contract/schemas.ts",
-    "unresolvedTo": "../../../src/contract/schemas",
+    "to": "src/contract/status-schemas.ts",
+    "unresolvedTo": "../../../src/contract/status-schemas",
     "dependencyTypes": ["local", "type-only", "import"],
     "rule": {
       "severity": "error",

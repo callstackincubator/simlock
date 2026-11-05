@@ -1,6 +1,6 @@
 import { parseOsConstraint } from "../../contract/index.js";
 import type { SystemStats } from "../../ports/index.js";
-import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/schemas.js";
+import { WARM_POOL_NAME_MAX, WARM_POOL_TARGETS_MAX } from "../../contract/status-schemas.js";
 import {
   booleanValue,
   invalidValue,

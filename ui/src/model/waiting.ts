@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import type { waitingRequestSchema } from "../../../src/contract/schemas";
+import type { waitingRequestSchema } from "../../../src/contract/lease-schemas";
 import { describeRequestedDevice, platformName } from "../../../src/contract/inbox";
 import { itemPath } from "./paths";
 import { formatDuration } from "./time";

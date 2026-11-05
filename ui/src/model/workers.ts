@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-import type { workerViewSchema } from "../../../src/contract/schemas";
+import type { workerViewSchema } from "../../../src/contract/status-schemas";
 
 export type WorkerView = z.infer<typeof workerViewSchema>;
 export type WorkerDevice = NonNullable<WorkerView["devices"]>[number];
