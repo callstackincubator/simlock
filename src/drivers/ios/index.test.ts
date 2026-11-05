@@ -5871,3 +5871,45 @@ describe("IosSimctlDriver simulator audio", () => {
     },
   );
 });
+
+describe("IosSimctlDriver simulator window", () => {
+  const udid = driverData.udid;
+  const xcrun = (...args: string[]) => ({ command: "xcrun", args: ["simctl", ...args] });
+  const open = (...args: string[]) => ({ command: "open", args: ["-g", ...args] });
+  const bootCalls = [xcrun("boot", udid), xcrun("bootstatus", udid, "-b"), xcrun("listapps", udid)];
+  const deviceHub = open(
+    "-b",
+    "com.apple.dt.Devices",
+    "--args",
+    "-shutdownStartedDevicesOnQuit",
+    "NO",
+  );
+  const select = open(`devices://manage/select?id=${udid}`);
+
+  it.each([{ name: "DeviceHub installed", expected: [...bootCalls, deviceHub, select] }])(
+    "shows a simulator in a window without taking focus when ios.simulator.headless is false: $name",
+    async (c) => {
+      const runner = new ScriptedProcessRunner(c.expected.map((match) => ({ match })));
+      const driver = await IosSimctlDriver.create({
+        clock: new FakeClock(),
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceSet: "default" },
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+        simulatorHeadless: false,
+      });
+
+      const device = await driver.makeReady(
+        { address: udid, deviceId: udid, driverData },
+        { mode: "full", purpose: "prepare" },
+      );
+
+      expect(device.address).toBe(udid);
+      expect(runner.calls.map(({ command, args }) => ({ command, args }))).toEqual(c.expected);
+    },
+  );
+});

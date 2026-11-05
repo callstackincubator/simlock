@@ -215,6 +215,8 @@ export interface IosSimctlDriverOptions {
   /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
   readonly simulatorAudio?: boolean;
   readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
+  /** why: `ios.simulator.headless`; `false` opens a window for each simulator after every boot. */
+  readonly simulatorHeadless?: boolean;
   readonly slim?: {
     readonly categories?: readonly string[];
     readonly bootTimeoutMs: number;
