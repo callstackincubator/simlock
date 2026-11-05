@@ -206,6 +206,9 @@ describe.skipIf(!hasAndroidSdk)(
               "android",
               "--device",
               "Pixel 9",
+              // why: the caller's adb has its own key, which a Play Store image (`ro.adb.secure` 1) answers `unauthorized`; a `google_apis` image takes any key, and the newest image Pixel 9 fits may be a Play Store one.
+              "--image-tag",
+              "google_apis",
               "--agent-id",
               "tunnel",
               "--detach",
@@ -348,7 +351,8 @@ describe.skipIf(!hasAndroidSdk)(
               async () => driven.stdoutSoFar().includes(`adb: connected to ${device}`),
               {
                 interval: 500,
-                label: "the command connecting the caller's adb",
+                label: () =>
+                  `the command connecting the caller's adb, its stderr: ${driven.stderrSoFar()}`,
                 timeout: 30_000,
               },
             );
