@@ -65,6 +65,21 @@ export const warmPoolOwner: SqliteSchemaOwner = {
   version: 3,
 };
 
+const UPSERT_PLAIN_KIND = `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
+  DO UPDATE SET last_leased_at = excluded.last_leased_at
+  RETURNING id`;
+
+// why: a baseline row is keyed on the name alone, so a lease of another model or platform rewrites the row's spec instead of adding a second row.
+const UPSERT_BASELINE_KIND = `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at, learned)
+  VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+  ON CONFLICT (baseline) WHERE baseline <> ''
+  DO UPDATE SET platform = excluded.platform, model = excluded.model,
+    os_version = excluded.os_version, mode = excluded.mode,
+    image_tag = excluded.image_tag, last_leased_at = excluded.last_leased_at
+  RETURNING id`;
+
 const LEARNED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export interface LearnedKind {
@@ -96,57 +111,48 @@ export class LearnedKinds {
         spec.mode ?? "full",
         spec.imageTag ?? "",
         spec.baseline?.name ?? "",
+        at,
       ];
-      const row =
-        spec.baseline === undefined
-          ? database
-              .prepare(
-                `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT (platform, model, os_version, mode, image_tag, baseline)
-                 DO UPDATE SET last_leased_at = excluded.last_leased_at
-                 RETURNING id`,
-              )
-              .get(...key, at)
-          : database
-              .prepare(
-                `INSERT INTO warm_kinds (platform, model, os_version, mode, image_tag, baseline, last_leased_at, learned)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-                 ON CONFLICT (baseline) WHERE baseline <> ''
-                 DO UPDATE SET platform = excluded.platform, model = excluded.model,
-                   os_version = excluded.os_version, mode = excluded.mode,
-                   image_tag = excluded.image_tag, last_leased_at = excluded.last_leased_at
-                 RETURNING id`,
-              )
-              .get(...key, at);
+      const row = database
+        .prepare(spec.baseline === undefined ? UPSERT_PLAIN_KIND : UPSERT_BASELINE_KIND)
+        .get(...key);
+      const kindId = Number(row?.id);
       database
         .prepare(
           "INSERT OR REPLACE INTO warm_kind_leases (lease_id, kind_id, granted_at, ended_at) VALUES (?, ?, ?, NULL)",
         )
-        .run(leaseId, Number(row?.id), at);
-      if (spec.baseline !== undefined) {
-        const grants = database
-          .prepare(
-            "SELECT COUNT(*) AS grants FROM warm_kind_leases WHERE kind_id = ? AND granted_at > ?",
-          )
-          .get(Number(row?.id), at - LEARNED_WINDOW_MS);
-        if (Number(grants?.grants) >= learnAfter) {
-          database.prepare("UPDATE warm_kinds SET learned = 1 WHERE id = ?").run(Number(row?.id));
-        }
-      }
+        .run(leaseId, kindId, at);
+      if (spec.baseline !== undefined) this.#learnWhenLeasedEnough(kindId, at, learnAfter);
       database
         .prepare("DELETE FROM warm_kind_leases WHERE ended_at < ?")
         .run(at - LEARNED_WINDOW_MS);
-      const surplus = database
-        .prepare(
-          "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
-        )
-        .all(spec.platform, WARM_POOL_LEARNED_KINDS_MAX);
-      for (const { id } of surplus) {
-        database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
-        database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
-      }
+      this.#dropSurplus(spec.platform);
     });
+  }
+
+  #learnWhenLeasedEnough(kindId: number, at: number, learnAfter: number): void {
+    const database = this.#state.database;
+    const grants = database
+      .prepare(
+        "SELECT COUNT(*) AS grants FROM warm_kind_leases WHERE kind_id = ? AND granted_at > ?",
+      )
+      .get(kindId, at - LEARNED_WINDOW_MS);
+    if (Number(grants?.grants) >= learnAfter) {
+      database.prepare("UPDATE warm_kinds SET learned = 1 WHERE id = ?").run(kindId);
+    }
+  }
+
+  #dropSurplus(platform: Platform): void {
+    const database = this.#state.database;
+    const surplus = database
+      .prepare(
+        "SELECT id FROM warm_kinds WHERE platform = ? ORDER BY last_leased_at DESC, id DESC LIMIT -1 OFFSET ?",
+      )
+      .all(platform, WARM_POOL_LEARNED_KINDS_MAX);
+    for (const { id } of surplus) {
+      database.prepare("DELETE FROM warm_kind_leases WHERE kind_id = ?").run(Number(id));
+      database.prepare("DELETE FROM warm_kinds WHERE id = ?").run(Number(id));
+    }
   }
 
   ended(leaseId: string, at: number): void {
