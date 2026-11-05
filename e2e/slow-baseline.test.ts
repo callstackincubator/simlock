@@ -1,21 +1,14 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { IOS } from "./helpers/agent-device-targets.js";
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 import { withDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-device-set.js";
 import { DEVICE_READY_MS } from "./helpers/wait.js";
-
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
 
 interface ListedBaseline {
   readonly name: string;
@@ -164,7 +157,7 @@ describe.skipIf(process.platform !== "darwin")(
   },
 );
 
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "baseline save (real emulator)",
   { tags: ["slow", "android"] },
   () => {

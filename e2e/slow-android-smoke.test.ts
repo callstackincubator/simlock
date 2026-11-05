@@ -2,26 +2,22 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { homedir, userInfo } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
+import type { AndroidSdkPaths } from "../src/drivers/android/testing.js";
+import { defaultWorkerLockPath } from "../src/ports/index.js";
+import { ANDROID_SDK, requireAndroidSdk, runSdkTool } from "./helpers/test-android-sdk.js";
 import { withDaemon } from "./helpers/index.js";
 import { DEVICE_READY_MS, waitFor } from "./helpers/wait.js";
 
 const execFileAsync = promisify(execFile);
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
 
 /** Simlock's emulators live on Simlock's own adb server, so that is the one to ask. */
-async function adbDevices(serverPort: number): Promise<string[]> {
-  const adb = join(ANDROID_HOME, "platform-tools", "adb");
-  const { stdout } = await execFileAsync(adb, ["-P", String(serverPort), "devices"]).catch(() => ({
+async function adbDevices(sdk: AndroidSdkPaths, serverPort: number): Promise<string[]> {
+  const { stdout } = await runSdkTool(sdk.adb, ["-P", String(serverPort), "devices"]).catch(() => ({
     stdout: "",
   }));
   return stdout
@@ -37,9 +33,8 @@ async function adbDevices(serverPort: number): Promise<string[]> {
  * Android Studio, and `-crash-report-mode never` deletes the ones in the database it reads.
  * Returns the shared `completed/` folder of the installed emulator.
  */
-async function sharedCrashCompletedDir(): Promise<string> {
-  const emulator = join(ANDROID_HOME, "emulator", "emulator");
-  const { stdout } = await execFileAsync(emulator, ["-version"]);
+async function sharedCrashCompletedDir(sdk: AndroidSdkPaths): Promise<string> {
+  const { stdout } = await runSdkTool(sdk.emulator, ["-version"]);
   const version = /emulator version (\d+\.\d+\.\d+)/.exec(stdout)?.[1];
   if (version === undefined) {
     throw new Error(`could not read the emulator version from: ${stdout}`);
@@ -56,12 +51,62 @@ function firstMissingAncestor(path: string): string | undefined {
   return missing;
 }
 
-async function avdManagerList(): Promise<string[]> {
-  const avdmanager = join(ANDROID_HOME, "cmdline-tools", "latest", "bin", "avdmanager");
-  const binary = existsSync(avdmanager)
-    ? avdmanager
-    : join(ANDROID_HOME, "tools", "bin", "avdmanager");
-  const { stdout } = await execFileAsync(binary, ["list", "avd"]).catch(() => ({ stdout: "" }));
+interface CrashDump {
+  readonly completedDir: string;
+  readonly createdRoot: string | undefined;
+  readonly id: string;
+  readonly planted: string;
+}
+
+/** why: the planted dump needs crashpad's database xattrs, which only macOS's `xattr` writes; elsewhere there is no dump and the rest of the smoke test still runs. */
+async function crashDumpTarget(sdk: AndroidSdkPaths): Promise<CrashDump | undefined> {
+  if (process.platform !== "darwin") return undefined;
+  const completedDir = await sharedCrashCompletedDir(sdk);
+  const id = randomUUID();
+  return {
+    completedDir,
+    createdRoot: firstMissingAncestor(completedDir),
+    id,
+    planted: join(completedDir, `${id}.dmp`),
+  };
+}
+
+/** why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted. */
+async function plantCrashDump(dump: CrashDump | undefined): Promise<void> {
+  if (dump === undefined) return;
+  await mkdir(dump.completedDir, { recursive: true });
+  await writeFile(dump.planted, "simlock slow-lane crash dump marker");
+  await execFileAsync("xattr", [
+    "-w",
+    "org.chromium.crashpad.database.uuid",
+    dump.id,
+    dump.planted,
+  ]);
+  await execFileAsync("xattr", [
+    "-w",
+    "org.chromium.crashpad.database.creation_time",
+    String(Math.floor(Date.now() / 1000)),
+    dump.planted,
+  ]);
+}
+
+/** why: with no dump planted there is nothing the lease could have deleted. */
+function crashDumpKept(dump: CrashDump | undefined): boolean {
+  return dump === undefined || existsSync(dump.planted);
+}
+
+async function removeCrashDump(dump: CrashDump | undefined): Promise<void> {
+  if (dump === undefined) return;
+  await rm(dump.planted, { force: true });
+  if (dump.createdRoot !== undefined) {
+    await rm(dump.createdRoot, { recursive: true, force: true });
+  }
+}
+
+async function avdManagerList(sdk: AndroidSdkPaths): Promise<string[]> {
+  const { stdout } = await runSdkTool(sdk.avdmanager, ["list", "avd"]).catch(() => ({
+    stdout: "",
+  }));
   return [...stdout.matchAll(/Name:\s*(\S+)/g)].map((match) => match[1] as string);
 }
 
@@ -76,7 +121,7 @@ interface AndroidCatalogOutput {
   }[];
 }
 
-function checkCatalog(output: AndroidCatalogOutput): void {
+function checkCatalog(sdk: AndroidSdkPaths, output: AndroidCatalogOutput): void {
   const android = output.platforms.find((platform) => platform.platform === "android");
   if (android === undefined) {
     throw new Error("simlock catalog reported no android platform -- SDK discovery failed");
@@ -90,13 +135,7 @@ function checkCatalog(output: AndroidCatalogOutput): void {
   expect(images.length, "expected the installed system images to be listed").toBeGreaterThan(0);
   for (const image of images) {
     expect(android.runtimes).toContain(image.runtime);
-    const path = join(
-      ANDROID_HOME,
-      "system-images",
-      `android-${image.runtime}`,
-      image.tag,
-      image.abi,
-    );
+    const path = join(sdk.root, "system-images", `android-${image.runtime}`, image.tag, image.abi);
     expect(existsSync(path), `listed image ${JSON.stringify(image)} is not installed`).toBe(true);
   }
 
@@ -107,14 +146,15 @@ function checkCatalog(output: AndroidCatalogOutput): void {
 
 // Real emulator boots are slow and this SDK layout is host-specific, so this lane is
 // gated on an actually-discoverable Android SDK rather than just `process.platform`.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "Android smoke (real emulator/adb)",
   { tags: ["slow", "android"] },
   () => {
     it(
-      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
+      "catalog lists Simlock's Pixel 9 first, a cold lease of Pixel 9 boots a real emulator with the library screen size and, on macOS, leaves a dump in the user's shared crash database alone, and a released emulator is deleted from the root and from avdmanager with no crash or false provenance finding",
       { timeout: 420_000 },
       async () => {
+        const sdk = requireAndroidSdk();
         const env = await withDaemon({
           driver: "real",
           // why: a learned warm kind would re-boot the emulator the idle shutdown just stopped.
@@ -124,29 +164,12 @@ describe.skipIf(!hasAndroidSdk)(
         if (adbServerPort === undefined) {
           throw new Error("the real-SDK lane must allocate its own adb server port");
         }
-        const completedDir = await sharedCrashCompletedDir();
-        // why: crashpad skips a report file without its database xattrs, so a plain file would never be read, let alone deleted.
-        const dumpId = randomUUID();
-        const planted = join(completedDir, `${dumpId}.dmp`);
-        const createdRoot = firstMissingAncestor(completedDir);
+        const crashDump = await crashDumpTarget(sdk);
         try {
-          await mkdir(completedDir, { recursive: true });
-          await writeFile(planted, "simlock slow-lane crash dump marker");
-          await execFileAsync("xattr", [
-            "-w",
-            "org.chromium.crashpad.database.uuid",
-            dumpId,
-            planted,
-          ]);
-          await execFileAsync("xattr", [
-            "-w",
-            "org.chromium.crashpad.database.creation_time",
-            String(Math.floor(Date.now() / 1000)),
-            planted,
-          ]);
+          await plantCrashDump(crashDump);
           const catalog = await env.cli(["catalog", "--json", "--platform", "android"]);
           expect(catalog.code).toBe(0);
-          checkCatalog(catalog.json as AndroidCatalogOutput);
+          checkCatalog(sdk, catalog.json as AndroidCatalogOutput);
 
           const lease = await env.cli(
             [
@@ -190,7 +213,7 @@ describe.skipIf(!hasAndroidSdk)(
 
           // why: the lease is up, so no dialog blocked the boot, and the launch must have left the user's shared crash database alone.
           expect(
-            existsSync(planted),
+            crashDumpKept(crashDump),
             "the lease deleted a dump in the user's shared crash db",
           ).toBe(true);
 
@@ -202,7 +225,7 @@ describe.skipIf(!hasAndroidSdk)(
           // deliberately keeps opaque outside drivers/android (architecture.md #2) --
           // the grant names simlock's own AVD, not the adb serial, so this only
           // asserts that *an* emulator is actually online, not which one by serial.
-          const onlineSerials = await adbDevices(adbServerPort);
+          const onlineSerials = await adbDevices(sdk, adbServerPort);
           expect(
             onlineSerials.length,
             "expected at least one booted emulator visible to Simlock's own adb server",
@@ -214,7 +237,7 @@ describe.skipIf(!hasAndroidSdk)(
             existsSync(join(avdFolder, "simlock.avd")),
             "expected the AVD to live inside Simlock's own device root",
           ).toBe(true);
-          const avdNames = await avdManagerList();
+          const avdNames = await avdManagerList(sdk);
           expect(
             avdNames.includes("simlock") || avdNames.includes(avdName),
             "a Simlock AVD must not appear in the user's own AVD home",
@@ -235,7 +258,7 @@ describe.skipIf(!hasAndroidSdk)(
             { timeout: 120_000, interval: 500, label: "device deleted after release" },
           );
           expect(existsSync(avdFolder), "the released emulator's folder is gone").toBe(false);
-          expect((await avdManagerList()).includes(avdName)).toBe(false);
+          expect((await avdManagerList(sdk)).includes(avdName)).toBe(false);
 
           // why: `doctor` must not crash on a deleted device nor report it as drift.
           const doctorReport = await env.cli(["doctor"]);
@@ -262,7 +285,11 @@ describe.skipIf(!hasAndroidSdk)(
           expect(list.code).toBe(0);
 
           // why: ADR 0059: the worker with real drivers holds the machine's worker lock while it runs and frees it at its stop.
-          const lockFolder = join(`/tmp/simlock-${process.getuid?.() ?? 0}`, "worker.lock");
+          const lockFolder = defaultWorkerLockPath(
+            process.platform,
+            process.getuid?.() ?? 0,
+            tmpdir(),
+          );
           const owner = JSON.parse(await readFile(join(lockFolder, "owner.json"), "utf8")) as {
             folder: string;
             pid: number;
@@ -277,10 +304,7 @@ describe.skipIf(!hasAndroidSdk)(
             label: "daemon stop left the worker lock behind",
           });
         } finally {
-          await rm(planted, { force: true });
-          if (createdRoot !== undefined) {
-            await rm(createdRoot, { recursive: true, force: true });
-          }
+          await removeCrashDump(crashDump);
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
             .catch(() => undefined);

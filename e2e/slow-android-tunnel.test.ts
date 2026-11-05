@@ -1,9 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -16,13 +13,7 @@ import {
   withSharedDaemon,
   type SharedTestEnv,
 } from "./helpers/index.js";
-
-const ANDROID_HOME =
-  process.env.ANDROID_HOME ??
-  process.env.ANDROID_SDK_ROOT ??
-  join(homedir(), "Library/Android/sdk");
-const hasAndroidSdk =
-  existsSync(ANDROID_HOME) && existsSync(join(ANDROID_HOME, "platform-tools", "adb"));
+import { ANDROID_SDK } from "./helpers/test-android-sdk.js";
 
 const BODY = "simlock-tunnel-ok";
 
@@ -62,7 +53,7 @@ async function waitForWorkerJoined(gateway: SharedTestEnv): Promise<void> {
 }
 
 // why: only a real emulator proves that `adb reverse` reaches the caller's loopback listener through the tunnel socket; the fast end-to-end test fakes the device side.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "simlock tunnel reverse on a real emulator against a lone worker",
   { tags: ["slow", "android"] },
   () => {
@@ -156,7 +147,7 @@ describe.skipIf(!hasAndroidSdk)(
 const FORWARD_IN = "/data/local/tmp/simlock-forward-in";
 
 // why: through a gateway the holder's socket is relayed to the worker, and only a real emulator proves both directions of the device side there: `adb reverse` reaching the caller, and the host protocol reaching a device server.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "simlock tunnel reverse and forward on a real emulator through a gateway",
   { tags: ["slow", "android"] },
   () => {
@@ -328,7 +319,7 @@ describe.skipIf(!hasAndroidSdk)(
   },
 );
 
-const ADB = join(ANDROID_HOME, "platform-tools", "adb");
+const ADB = ANDROID_SDK?.adb ?? "adb";
 
 // why: the worker runs its own adb server (`adbServerPort`), which the user's default server cannot see; the rules a tunnel set live there.
 function workerAdb(
@@ -354,7 +345,7 @@ onclick="fetch('/tapped?'+Date.now()).catch(function(){})">tap</button>
 const CHROME = "com.android.chrome";
 
 // why: a gateway relays a lease's input socket and tunnel socket to its worker side by side, and only a real emulator proves a relayed tap moves its screen and that a request it causes comes back through the relayed tunnel.
-describe.skipIf(!hasAndroidSdk)(
+describe.skipIf(ANDROID_SDK === undefined)(
   "input and tunnel together on a real emulator through a gateway",
   { tags: ["slow", "android"] },
   () => {
