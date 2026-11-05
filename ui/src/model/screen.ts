@@ -1,6 +1,8 @@
 import { type WorkerView, workerName } from "./workers";
 import type { Toned } from "./tones";
 
+export const SCREEN_CAPTURE_LIMIT = 4;
+
 export type ScreenPhase = "idle" | "starting" | "live" | "stopped";
 
 export interface ScreenFact {
@@ -135,10 +137,16 @@ export function deviceScreen(input: {
   readonly state: string;
   readonly offer: StreamOffer;
   readonly conflict: string | undefined;
+  readonly queued?: boolean;
 }): DeviceScreen {
   const { conflict, offer, state } = input;
   if (!offer.offered) return { kind: "sentence", text: offer.reason ?? "" };
   if (STREAMING_STATES.has(state)) {
+    if (input.queued)
+      return {
+        kind: "sentence",
+        text: `Paused: ${SCREEN_CAPTURE_LIMIT} screens are already capturing.`,
+      };
     return conflict === undefined ? { kind: "picture" } : { kind: "sentence", text: conflict };
   }
   return {

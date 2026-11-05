@@ -9,6 +9,8 @@ describe("the console's routes", () => {
     expect(routeFor("/fleet/wrk_1")?.label).toBe("Fleet");
     expect(routeFor("/activity/e1")?.label).toBe("Activity");
     expect(routeFor("/usage")?.label).toBe("Usage");
+    expect(routeFor("/baselines")).toMatchObject({ label: "Baselines", group: "Operate" });
+    expect(routeFor("/screens")).toMatchObject({ label: "Screens", group: "Observe" });
   });
 
   it("has no route for a path no section owns, one that only shares a prefix included", () => {
@@ -24,6 +26,7 @@ describe("the console's routes", () => {
       "/leases",
       "/queue",
       "/baselines",
+      "/screens",
       "/activity",
       "/usage",
     ]);

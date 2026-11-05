@@ -5,7 +5,7 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab or views its tile on **Screens**. A drawer capture stops when they leave the tab or close the drawer. Screens captures up to four visible tiles at once, shows a waiting notice on the others, and pauses captures when the browser tab is hidden. Leaving Screens or signing out stops its captures. A capture also stops when the device stops running.
 
 ## Before you start
 
@@ -142,6 +142,10 @@ A socket that answers no ping within 15 seconds is closed. A lease that is not t
 | "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone, then leave the **Screen** tab and open it again. |
 | The tab gives up waiting for the first picture | The device painted nothing for 30 seconds. | Leave the **Screen** tab and open it again. |
 | The picture stops on a device that is still running | The device stopped sending frames. | Leave the **Screen** tab and open it again. |
+
+## Watch devices side by side
+
+Select **Screens** under **Observe** in the console to see ready and leased devices across workers. Each tile has its own stream state and an **Open device Screen** link. A failed or ended stream clears its picture while the other tiles keep playing. Scroll a tile out of view or hide the browser tab to pause its capture; returning starts a fresh capture. At most four tiles capture simultaneously, on HTTP/1 and HTTP/2. Other tiles wait for a slot released by cleanup; captures do not rotate automatically. The budget is per page and does not coordinate other tabs or unrelated traffic. No devices are booted or leased by this view.
 
 ## Related
 

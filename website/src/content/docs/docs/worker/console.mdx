@@ -72,9 +72,9 @@ To sign people in through a sign-in proxy instead of tokens, see [Access control
 
 ## Find your way around
 
-The sidebar leads to every page: **Overview**, **Workers**, **Leases**, **Waiting**, **Baselines**, **Attention**, **Events** and **Usage**. **Attention** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
+The sidebar leads to every page: **Overview**, **Inbox**, **Fleet**, **Leases**, **Queue**, **Baselines**, **Screens**, **Activity** and **Usage**. **Inbox** shows how many items need you, on every page. At the bottom of the sidebar you see the connection, who you are signed in as, and **Sign out**. On a gateway, when the gateway itself is behind the latest release, a line above the connection says `simlock 0.3.0 · 0.4.0 available`. It is hidden while the sidebar is collapsed, and the console checks again every 10 minutes.
 
-Every page but the overview is a list on the left and the item you chose on the right. Lists show 25 rows at a time, with a pager for 50 or 100.
+Screens shows device screens in a responsive grid. Tables show 25 rows at a time, with a pager for 50 or 100.
 
 Every page keeps itself current: a lease being granted or a device booting shows within about a second, with no reload. Readings with no event of their own, such as host load, refresh within 15 seconds. The bottom of the sidebar says how the connection is:
 
@@ -206,3 +206,11 @@ Select an event to see its whole payload and a link to the lease, worker, reques
 ## Usage
 
 **Usage** shows the figures for a range, the same numbers `simlock stats` gives: requests, grants, rejections, the wait and hold times, grants by source (warm, booted or provisioned), rejections by reason, device incidents, and the figures per platform and per requester. Pick **1 hour**, **6 hours**, **24 hours** or **7 days**. See [Monitoring](/simlock/docs/worker/monitoring).
+
+## Screens
+
+Select **Screens** under **Observe** to watch running devices side by side across workers. Each tile names its worker, device model, platform and runtime, and **Open device Screen** opens the existing device drawer. Devices that are ready or leased appear; a disconnected worker or disabled streaming explains why no picture is available.
+
+At most four tiles in view capture a screen at once. Other eligible devices remain listed with a waiting notice. A waiting tile starts when a capture slot is released; there is no automatic rotation. Captures pause when you hide the browser tab or scroll a tile out of view, and stop when you leave Screens or sign out. Returning starts a new capture. An ended or failed stream clears its picture and shows its reason independently of the other tiles.
+
+The four-capture budget applies to this Screens page on both HTTP/1 and HTTP/2. It leaves room for data reads beside the event stream in Chromium's usual HTTP/1 connection pool. It does not coordinate other tabs or unrelated traffic, and a connection may take time to close after cancellation. Scroll an active tile out of view to let a waiting tile capture.

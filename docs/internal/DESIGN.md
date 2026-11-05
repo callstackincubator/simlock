@@ -134,7 +134,7 @@ put together from them and draws nothing of its own that one of them already dra
 - **Sidebar.** The console's navigation, on the left of every signed-in page: the "SIMLOCK"
   wordmark (`--on-accent` on an `--accent` block), one link per page in a fixed order (Overview,
   Inbox, then the **Operate** group: Fleet, Leases, Queue, Baselines; then the **Observe** group:
-  Activity, Usage; each group under its small label, hidden when collapsed), then at the bottom the connection as a status,
+  Screens, Activity, Usage; each group under its small label, hidden when collapsed), then at the bottom the connection as a status,
   "Signed in as <name>" (hidden when collapsed, where the Sign out tooltip reads "Sign out (<name>)"),
   **Sign out** (absent for a proxy person with no sign-out address) and the collapse button. A link is an icon and its label in `--text-muted`; the
   current one is `--text` on `--field` with a 2px `--accent` bar on its left and

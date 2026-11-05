@@ -292,10 +292,16 @@ describe("reading the envelope", () => {
   });
 
   it("refuses a length larger than any frame the tool writes, and lets go of the body", async () => {
+    vi.useFakeTimers();
+    let finishCancel!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      finishCancel = resolve;
+    });
     const cancelled: unknown[] = [];
     const body = new ReadableStream<Uint8Array>({
       cancel: (reason) => {
         cancelled.push(reason);
+        return cancellation;
       },
       start(controller) {
         controller.enqueue(Uint8Array.from([0xff, 0xff, 0xff, 0xff, TAG.keyframe, 0, 0, 0]));
@@ -303,7 +309,17 @@ describe("reading the envelope", () => {
     });
     const recorded = new Recorded();
 
-    await readStream(body, recorded.sink(), new AbortController().signal);
+    let finished = false;
+    const reading = readStream(body, recorded.sink(), new AbortController().signal).then(() => {
+      finished = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const finishedBeforeCancel = finished;
+    finishCancel();
+    await reading;
+    vi.useRealTimers();
+    expect(finishedBeforeCancel).toBe(false);
+    expect(finished).toBe(true);
 
     expect(recorded.ends).toEqual(["The stream is not a frame envelope"]);
     // why: the request is what keeps the worker capturing, so a reader that gives up has to close it —
