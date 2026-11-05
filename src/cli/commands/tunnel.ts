@@ -29,6 +29,7 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const CALLER_CONNECT_TIMEOUT_MS = 5_000;
 const CLOSE_NORMAL = 1000;
 const WARN_EVERY_MS = 10_000;
+const ADB_CONNECT_TIMEOUT_MS = 10_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
 const MAX_LEASE_CHARS = 256;
@@ -411,29 +412,45 @@ function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFa
   );
 }
 
-// why: the caller's own adb is the one that lists the remote emulator, so the command runs it and not Simlock's; its output is read as text, the lines of a fresh server's startup (`* daemon ...`) dropped.
+// why: the caller's own adb is the one that lists the remote emulator, so the command runs it and not Simlock's; its output is read as text, the lines of a fresh server's startup (`* daemon ...`) dropped, and an adb that does not answer is killed after 10 s so it cannot hold the tunnel's output.
 async function connectCallerAdb(environment: CliEnvironment, callerPort: number): Promise<void> {
   const target = `127.0.0.1:${String(callerPort)}`;
+  const warn = (what: string): void => {
+    environment.stderr.write(`warning: emulator adb: ${what}; run: adb connect ${target}\n`);
+  };
   const runner = environment.processRunner;
-  if (runner === undefined) return;
   for (const adb of environment.adbCandidates ?? ["adb"]) {
     let handle: ProcessHandle;
     try {
+      if (runner === undefined) break;
       handle = runner.spawn(adb, ["connect", target]);
     } catch (error) {
       if (error instanceof ProcessSpawnError) continue;
       throw error;
     }
+    let timedOut = false;
+    const timer = environment.clock.setTimer(ADB_CONNECT_TIMEOUT_MS, () => {
+      timedOut = true;
+      handle.kill();
+    });
     const result = await handle.wait();
+    environment.clock.cancel(timer);
+    if (timedOut) {
+      warn("adb did not answer in 10 s");
+      return;
+    }
     const lines = `${result.stdout}\n${result.stderr}`
       .split(/\r?\n/)
       .map((text) => text.trim())
       .filter((text) => text !== "" && !text.startsWith("*"));
     if (lines.some((text) => /^(already )?connected to /.test(text))) {
       environment.stdout.write(`adb: connected to ${target}\n`);
+    } else {
+      warn(`adb answered: ${escapeControl(lines[0] ?? "")}`);
     }
     return;
   }
+  warn("adb was not found");
 }
 
 function serve(

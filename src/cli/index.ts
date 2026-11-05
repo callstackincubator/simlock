@@ -158,6 +158,7 @@ async function buildDefaultEnvironment(flag: DaemonFlag): Promise<CliEnvironment
       workingDirectory: process.cwd(),
       codexHome: process.env.CODEX_HOME,
       hostPlatform: process.platform,
+      processRunner: new NodeProcessRunner(),
       runTool: async (bin, args, options) => {
         const { toolRunner } = await import("../instructions/index.js");
         return toolRunner(new NodeProcessRunner())(bin, args, options);
