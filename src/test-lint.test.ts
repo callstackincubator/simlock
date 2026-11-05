@@ -209,6 +209,106 @@ describe("test-lint.mjs", () => {
     },
   );
 
+  it("always-in-scope 8: passes a declaration the diff moves verbatim from another contract file, and flags a new one", () => {
+    const before = {
+      "src/contract/a.ts": file(
+        "// Old comment.",
+        "export const a = z.object({ name: z.string(), tags: z.array(z.string()) });",
+        "export const keep = 1;",
+      ),
+    };
+    const after = {
+      "src/contract/a.ts": file("export const keep = 1;"),
+      "src/contract/b.ts": file(
+        "export const a = z.object({",
+        "  name: z.string(),",
+        "  tags: z.array(z.string()),",
+        "});",
+        "export const b = z.object({",
+        "  label: z.string(),",
+        "});",
+      ),
+    };
+    expect(lint(repo(before, after))).toEqual({
+      status: 1,
+      lines: [`src/contract/b.ts:6: ${BOUND}`],
+    });
+  });
+
+  it("always-in-scope 8: passes declarations moved out of a source file the split deletes, which git would pair as a rename", () => {
+    const declaration = (name: string) =>
+      `export const ${name} = z.object({ name: z.string(), tags: z.array(z.string()) });`;
+    const dir = repo(
+      { "src/contract/schemas.ts": file(declaration("a"), declaration("b"), declaration("c")) },
+      { "src/contract/a-schemas.ts": file(declaration("a"), declaration("b")) },
+    );
+    execFileSync("git", ["rm", "-q", "src/contract/schemas.ts"], { cwd: dir });
+    execFileSync(
+      "git",
+      ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--amend", "--no-edit"],
+      {
+        cwd: dir,
+      },
+    );
+
+    expect(lint(dir)).toEqual({ status: 0, lines: [] });
+  });
+
+  it.each([
+    {
+      case: "a moved schema that loses a bound on a later line of its chain",
+      before: {
+        "src/contract/a.ts": file(
+          "export const a = z.object({",
+          "  name: z",
+          "    .string()",
+          "    .max(64),",
+          "});",
+        ),
+      },
+      after: {
+        "src/contract/a.ts": file(""),
+        "src/contract/b.ts": file(
+          "export const a = z.object({",
+          "  name: z",
+          "    .string()",
+          "    .min(1),",
+          "});",
+        ),
+      },
+      line: "src/contract/b.ts:3",
+    },
+    {
+      case: "a new copy in one file of a line bounded in place in another",
+      before: {
+        "src/contract/a.ts": file("export const a = z.object({", "  name: z.string(),", "});"),
+      },
+      after: {
+        "src/contract/a.ts": file(
+          "export const a = z.object({",
+          "  name: z.string().max(64),",
+          "});",
+        ),
+        "src/contract/b.ts": file("export const b = z.object({", "  name: z.string(),", "});"),
+      },
+      line: "src/contract/b.ts:2",
+    },
+    {
+      case: "a second copy of one moved schema",
+      before: {
+        "src/contract/a.ts": file("export const a = z.object({ name: z.string() });"),
+      },
+      after: {
+        "src/contract/a.ts": file(""),
+        "src/contract/b.ts": file("export const a = z.object({ name: z.string() });"),
+        "src/contract/c.ts": file("export const a = z.object({ name: z.string() });"),
+      },
+      line: "src/contract/c.ts:1",
+    },
+  ])("always-in-scope 8: flags $case", ({ before, after, line }) => {
+    expect(lint(repo(before, after))).toEqual({ status: 1, lines: [`${line}: ${BOUND}`] });
+  });
+
   it("judges only the lines the diff adds in the files given, and never a pattern inside a string or comment", () => {
     const dir = repo(
       { "src/a/old.test.ts": file("it.skip('old', () => {});") },

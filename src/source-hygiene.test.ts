@@ -28,7 +28,6 @@ type SizedFile = { path: string; lines: number };
  */
 const SHRINK_ONLY: Record<string, number> = {
   "src/cli/index.test.ts": 11610,
-  "src/contract/schemas.ts": 1503,
   "src/drivers/ios/index.test.ts": 5996,
   "src/drivers/ios/index.ts": 2700,
   "src/leasing/create-leasing.test.ts": 5276,
