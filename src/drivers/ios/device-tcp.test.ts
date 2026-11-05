@@ -117,157 +117,174 @@ const environmentOf = (udid: string) =>
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 const NOTHING = `nothing on the lease's simulator listens on port ${String(PORT)}`;
 
+async function reachesOwnedListeners(): Promise<void> {
+  const accepted: {
+    readonly name: string;
+    readonly holders: readonly (readonly [number, ...string[]])[];
+    readonly environments: Record<number, string>;
+    readonly dialled: readonly LoopbackHost[];
+  }[] = [
+    {
+      dialled: ["127.0.0.1"],
+      environments: { 10: environmentOf(UDID) },
+      holders: [[10, "127.0.0.1", "[::1]"]],
+      name: "the lease's simulator on 127.0.0.1",
+    },
+    {
+      dialled: ["::1"],
+      environments: { 10: environmentOf(UDID) },
+      holders: [[10, "[::1]"]],
+      name: "the lease's simulator on ::1 only",
+    },
+    {
+      dialled: ["127.0.0.1"],
+      environments: { 10: environmentOf(UDID) },
+      holders: [[10, "*"]],
+      name: "the lease's simulator on all interfaces",
+    },
+    {
+      dialled: ["::1"],
+      environments: { 10: environmentOf(UDID), 20: environmentOf(OTHER_UDID) },
+      holders: [
+        [10, "*"],
+        [20, "127.0.0.1"],
+      ],
+      name: "all interfaces while another process holds 127.0.0.1",
+    },
+    {
+      dialled: ["::1"],
+      environments: { 10: environmentOf(UDID), 20: environmentOf(OTHER_UDID) },
+      holders: [
+        [10, "[::1]"],
+        [20, "127.0.0.1"],
+      ],
+      name: "::1 while another simulator holds 127.0.0.1",
+    },
+  ];
+  for (const { dialled, environments, holders, name } of accepted) {
+    const machine = setup();
+    machine.runner.lookup = ok(lsofOutput(...holders));
+    for (const [pid, environment] of Object.entries(environments)) {
+      machine.runner.environments.set(Number(pid), environment);
+    }
+    const stream = await machine.connect();
+    expect(machine.dialled(), name).toEqual(dialled);
+
+    const peer = machine.connector.connections[0]?.peer;
+    await stream.write("ping");
+    expect(peer?.writtenText(), name).toBe("ping");
+    peer?.send("pong");
+    const reader = stream.readable.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value), name).toBe("pong");
+  }
+}
+
+async function refusesForeignListeners(): Promise<void> {
+  const refused: {
+    readonly name: string;
+    readonly lookup: ProcessResult | Error;
+    readonly environments: Record<number, string>;
+    readonly message: string;
+  }[] = [
+    {
+      environments: { 20: environmentOf(OTHER_UDID) },
+      lookup: ok(lsofOutput([20, "127.0.0.1"])),
+      message: NOTHING,
+      name: "another simulator's process",
+    },
+    {
+      environments: { 30: "/usr/bin/adb PATH=/usr/bin HOME=/Users/x" },
+      lookup: ok(lsofOutput([30, "*"])),
+      message: NOTHING,
+      name: "a worker process with no SIMULATOR_UDID",
+    },
+    {
+      environments: { 30: `/usr/bin/node server.js --env=SIMULATOR_UDID=${UDID} PATH=/usr/bin` },
+      lookup: ok(lsofOutput([30, "127.0.0.1"])),
+      message: NOTHING,
+      name: "SIMULATOR_UDID only inside an argument",
+    },
+    {
+      environments: {},
+      lookup: { code: 1, stderr: "", stdout: "" },
+      message: NOTHING,
+      name: "lookup exit 1 with no output",
+    },
+    {
+      environments: {},
+      lookup: { code: 2, stderr: "lsof: can't run\nsecond line", stdout: "" },
+      message: "could not check the port's owner: lsof: can't run",
+      name: "lookup exit 2",
+    },
+    {
+      environments: {},
+      lookup: new ProcessSpawnError("lsof", ["-nP"]),
+      message: "could not check the port's owner: Failed to spawn lsof -nP",
+      name: "lookup that cannot start",
+    },
+  ];
+  for (const { environments, lookup, message, name } of refused) {
+    const machine = setup();
+    machine.runner.lookup = lookup;
+    for (const [pid, environment] of Object.entries(environments)) {
+      machine.runner.environments.set(Number(pid), environment);
+    }
+    await expect(machine.connect(), name).rejects.toMatchObject({ message });
+    expect(machine.connector.connections, name).toEqual([]);
+  }
+}
+
+async function timesOutAHangingStep(): Promise<void> {
+  for (const hanging of ["lookup", "connect"] as const) {
+    const machine = setup(hanging === "connect" ? new HangingConnector() : undefined);
+    machine.runner.lookup = hanging === "lookup" ? "hangs" : ok(lsofOutput([10, "127.0.0.1"]));
+    machine.runner.environments.set(10, environmentOf(UDID));
+    const connecting = machine.connect();
+    const outcome = promiseState(connecting);
+    await settle();
+    machine.clock.advance(4_999);
+    await settle();
+    expect(outcome.state, `${hanging} at 4.9 s`).toBe("pending");
+    machine.clock.advance(1);
+    await settle();
+    expect(outcome.state, `${hanging} at 5 s`).toBe("rejected");
+    await expect(connecting).rejects.toMatchObject({ message: "timeout" });
+  }
+}
+
+async function closesALateConnect(): Promise<void> {
+  const late = new DeferredConnector();
+  const slow = setup(late);
+  slow.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
+  slow.runner.environments.set(10, environmentOf(UDID));
+  const slowOutcome = promiseState(slow.connect());
+  await settle();
+  slow.clock.advance(5_000);
+  await settle();
+  expect(slowOutcome.state, "5 s with the connect pending").toBe("rejected");
+  expect(late.peer.closed, "stream still open before the connect resolves").toBe(false);
+  late.settle.open?.();
+  await settle();
+  expect(late.peer.closed, "a stream that opens after the reset is closed").toBe(true);
+}
+
+async function refusesAfterTheOwnerMoved(): Promise<void> {
+  const moved = setup();
+  moved.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
+  moved.runner.environments.set(10, environmentOf(UDID));
+  await moved.connect();
+  moved.runner.environments.set(10, environmentOf(OTHER_UDID));
+  await expect(moved.connect()).rejects.toMatchObject({ message: NOTHING });
+}
+
 // why: the owner check is pure decision logic with many cases over the real lsof lines, which the module's one surface (the tunnel module) cannot enumerate cheaply; the spec names this seam.
 describe("iOS deviceTcp forward connections", () => {
   it("reaches the port only when a process of the lease's simulator listens there", async () => {
-    const accepted: {
-      readonly name: string;
-      readonly holders: readonly (readonly [number, ...string[]])[];
-      readonly environments: Record<number, string>;
-      readonly dialled: readonly LoopbackHost[];
-    }[] = [
-      {
-        dialled: ["127.0.0.1"],
-        environments: { 10: environmentOf(UDID) },
-        holders: [[10, "127.0.0.1", "[::1]"]],
-        name: "the lease's simulator on 127.0.0.1",
-      },
-      {
-        dialled: ["::1"],
-        environments: { 10: environmentOf(UDID) },
-        holders: [[10, "[::1]"]],
-        name: "the lease's simulator on ::1 only",
-      },
-      {
-        dialled: ["127.0.0.1"],
-        environments: { 10: environmentOf(UDID) },
-        holders: [[10, "*"]],
-        name: "the lease's simulator on all interfaces",
-      },
-      {
-        dialled: ["::1"],
-        environments: { 10: environmentOf(UDID), 20: environmentOf(OTHER_UDID) },
-        holders: [
-          [10, "*"],
-          [20, "127.0.0.1"],
-        ],
-        name: "all interfaces while another process holds 127.0.0.1",
-      },
-      {
-        dialled: ["::1"],
-        environments: { 10: environmentOf(UDID), 20: environmentOf(OTHER_UDID) },
-        holders: [
-          [10, "[::1]"],
-          [20, "127.0.0.1"],
-        ],
-        name: "::1 while another simulator holds 127.0.0.1",
-      },
-    ];
-    for (const { dialled, environments, holders, name } of accepted) {
-      const machine = setup();
-      machine.runner.lookup = ok(lsofOutput(...holders));
-      for (const [pid, environment] of Object.entries(environments)) {
-        machine.runner.environments.set(Number(pid), environment);
-      }
-      const stream = await machine.connect();
-      expect(machine.dialled(), name).toEqual(dialled);
-
-      const peer = machine.connector.connections[0]?.peer;
-      await stream.write("ping");
-      expect(peer?.writtenText(), name).toBe("ping");
-      peer?.send("pong");
-      const reader = stream.readable.getReader();
-      expect(new TextDecoder().decode((await reader.read()).value), name).toBe("pong");
-    }
-
-    const refused: {
-      readonly name: string;
-      readonly lookup: ProcessResult | Error;
-      readonly environments: Record<number, string>;
-      readonly message: string;
-    }[] = [
-      {
-        environments: { 20: environmentOf(OTHER_UDID) },
-        lookup: ok(lsofOutput([20, "127.0.0.1"])),
-        message: NOTHING,
-        name: "another simulator's process",
-      },
-      {
-        environments: { 30: "/usr/bin/adb PATH=/usr/bin HOME=/Users/x" },
-        lookup: ok(lsofOutput([30, "*"])),
-        message: NOTHING,
-        name: "a worker process with no SIMULATOR_UDID",
-      },
-      {
-        environments: { 30: `/usr/bin/node server.js --env=SIMULATOR_UDID=${UDID} PATH=/usr/bin` },
-        lookup: ok(lsofOutput([30, "127.0.0.1"])),
-        message: NOTHING,
-        name: "SIMULATOR_UDID only inside an argument",
-      },
-      {
-        environments: {},
-        lookup: { code: 1, stderr: "", stdout: "" },
-        message: NOTHING,
-        name: "lookup exit 1 with no output",
-      },
-      {
-        environments: {},
-        lookup: { code: 2, stderr: "lsof: can't run\nsecond line", stdout: "" },
-        message: "could not check the port's owner: lsof: can't run",
-        name: "lookup exit 2",
-      },
-      {
-        environments: {},
-        lookup: new ProcessSpawnError("lsof", ["-nP"]),
-        message: "could not check the port's owner: Failed to spawn lsof -nP",
-        name: "lookup that cannot start",
-      },
-    ];
-    for (const { environments, lookup, message, name } of refused) {
-      const machine = setup();
-      machine.runner.lookup = lookup;
-      for (const [pid, environment] of Object.entries(environments)) {
-        machine.runner.environments.set(Number(pid), environment);
-      }
-      await expect(machine.connect(), name).rejects.toMatchObject({ message });
-      expect(machine.connector.connections, name).toEqual([]);
-    }
-    for (const hanging of ["lookup", "connect"] as const) {
-      const machine = setup(hanging === "connect" ? new HangingConnector() : undefined);
-      machine.runner.lookup = hanging === "lookup" ? "hangs" : ok(lsofOutput([10, "127.0.0.1"]));
-      machine.runner.environments.set(10, environmentOf(UDID));
-      const connecting = machine.connect();
-      const outcome = promiseState(connecting);
-      await settle();
-      machine.clock.advance(4_999);
-      await settle();
-      expect(outcome.state, `${hanging} at 4.9 s`).toBe("pending");
-      machine.clock.advance(1);
-      await settle();
-      expect(outcome.state, `${hanging} at 5 s`).toBe("rejected");
-      await expect(connecting).rejects.toMatchObject({ message: "timeout" });
-    }
-
-    const late = new DeferredConnector();
-    const slow = setup(late);
-    slow.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
-    slow.runner.environments.set(10, environmentOf(UDID));
-    const slowOutcome = promiseState(slow.connect());
-    await settle();
-    slow.clock.advance(5_000);
-    await settle();
-    expect(slowOutcome.state, "5 s with the connect pending").toBe("rejected");
-    expect(late.peer.closed, "stream still open before the connect resolves").toBe(false);
-    late.settle.open?.();
-    await settle();
-    expect(late.peer.closed, "a stream that opens after the reset is closed").toBe(true);
-
-    const moved = setup();
-    moved.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
-    moved.runner.environments.set(10, environmentOf(UDID));
-    await moved.connect();
-    moved.runner.environments.set(10, environmentOf(OTHER_UDID));
-    await expect(moved.connect()).rejects.toMatchObject({ message: NOTHING });
+    await reachesOwnedListeners();
+    await refusesForeignListeners();
+    await timesOutAHangingStep();
+    await closesALateConnect();
+    await refusesAfterTheOwnerMoved();
   });
 });
 
