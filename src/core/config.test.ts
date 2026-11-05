@@ -434,6 +434,17 @@ describe("loadConfig", () => {
       expect((await load({ maxConcurrentBoots: 5 }, 2)).warmPool.maxConcurrentBoots).toBe(5);
     });
 
+    it("loads warmPool.baselineLearnAfter, 3 when unset, and rejects anything but a positive integer naming the key", async () => {
+      expect((await load()).warmPool.baselineLearnAfter).toBe(3);
+      expect((await load({ baselineLearnAfter: 1 })).warmPool.baselineLearnAfter).toBe(1);
+      expect((await load({ baselineLearnAfter: 5 })).warmPool.baselineLearnAfter).toBe(5);
+      for (const bad of [0, -1, 2.5, "3"]) {
+        await expect(load({ baselineLearnAfter: bad }), `${JSON.stringify(bad)}`).rejects.toThrow(
+          'Invalid config value for "warmPool.baselineLearnAfter": expected a positive integer',
+        );
+      }
+    });
+
     it("loads a target with a model, an OS range, a mode and a count, and a boot cap of two", async () => {
       const config = await load({
         maxConcurrentBoots: 2,

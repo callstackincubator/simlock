@@ -24,7 +24,8 @@ import type { DriverCatalog } from "../driver-catalog.js";
 import type { ManagedDeviceLifecycle } from "../managed-device-lifecycle.js";
 import type { SerializedDecision } from "../serialized-decision.js";
 import { stableError } from "../stable-error.js";
-import type { WarmPoolConfig, WarmTarget } from "./config.js";
+import type { CurrentBaseline } from "../baselines.js";
+import { DEFAULT_BASELINE_LEARN_AFTER, type WarmPoolConfig, type WarmTarget } from "./config.js";
 import {
   describeTarget,
   evaluate,
@@ -43,7 +44,14 @@ import { RetrySchedule } from "./retry.js";
 export interface WarmPoolOptions {
   /** why: a learned baseline kind is warmed from the baseline's newest version, and goes when the baseline is removed or stale. */
   readonly baselines: {
-    current(name: string): { readonly version: number; readonly staleReason?: string } | undefined;
+    current(
+      name: string,
+    ):
+      | Pick<
+          CurrentBaseline,
+          "imageTag" | "mode" | "model" | "osVersion" | "platform" | "staleReason" | "version"
+        >
+      | undefined;
   };
   readonly acquisition: {
     kick(): void;
@@ -193,7 +201,7 @@ export class WarmPool {
    * Answers the kinds forgotten.
    */
   forgetKinds(match: LearnedKindMatch): VirtualSpec[] {
-    const forgotten = this.#learned.forgetMatching(match);
+    const forgotten = this.#learned.forgetMatching(match, (spec) => this.#newestVersion(spec));
     for (const spec of forgotten) {
       if (!this.#resolved.some((configured) => sameSpec(configured.spec, spec)))
         this.#schedule.succeeded(spec);
@@ -214,7 +222,12 @@ export class WarmPool {
         );
         if (device === undefined) return;
         this.#recording("learn a lease", () =>
-          this.#learned.learn(device.spec, payload.leaseId, clock.now()),
+          this.#learned.learn(
+            device.spec,
+            payload.leaseId,
+            clock.now(),
+            this.options.config.baselineLearnAfter ?? DEFAULT_BASELINE_LEARN_AFTER,
+          ),
         );
       }),
     );
@@ -246,14 +259,19 @@ export class WarmPool {
     });
   }
 
-  /** why: a learned baseline kind stores only the name, so each pass gives its spec the version the baseline has now, and a copy of an older one matches no kind. */
-  #atCurrentVersion(kind: LearnedKind): LearnedKind {
-    const named = kind.spec.baseline;
+  /** why: a learned baseline kind stores only the name, so each pass warms it as the baseline's newest version; a baseline no longer there leaves the stored spec for the catalog check to forget. */
+  #newestVersion(spec: VirtualSpec): VirtualSpec {
+    const named = spec.baseline;
     const current = named === undefined ? undefined : this.options.baselines.current(named.name);
-    if (named === undefined || current === undefined) return kind;
+    if (named === undefined || current === undefined) return spec;
     return {
-      ...kind,
-      spec: { ...kind.spec, baseline: { name: named.name, version: current.version } },
+      model: current.model,
+      osVersion: current.osVersion,
+      physical: false,
+      platform: current.platform,
+      ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+      ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+      baseline: { name: named.name, version: current.version },
     };
   }
 
@@ -263,7 +281,7 @@ export class WarmPool {
     try {
       return this.#learned
         .kinds(this.options.clock.now())
-        .map((kind) => this.#atCurrentVersion(kind));
+        .map((kind) => ({ ...kind, spec: this.#newestVersion(kind.spec) }));
     } catch (error: unknown) {
       if (!this.#readLogged) {
         this.#logger.warn("the warm pool's record could not be read", {
