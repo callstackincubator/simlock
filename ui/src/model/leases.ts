@@ -192,6 +192,7 @@ export interface LeaseInspection {
     readonly mode?: string;
     readonly imageTag?: string;
     readonly kind?: string;
+    readonly baseline?: string;
     readonly deviceId: string;
     readonly udid: string;
   };
@@ -240,6 +241,10 @@ function leaseDevice(
     deviceId: lease.deviceId,
     udid: lease.udid,
     ...defined({
+      baseline:
+        device?.spec.baseline === undefined
+          ? undefined
+          : `${device.spec.baseline.name} v${String(device.spec.baseline.version)}`,
       imageTag: lease.imageTag ?? device?.spec.imageTag,
       kind: device === undefined ? undefined : device.physical ? "Physical" : "Virtual",
       mode: lease.mode,
