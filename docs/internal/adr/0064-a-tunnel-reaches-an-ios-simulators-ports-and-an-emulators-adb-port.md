@@ -59,17 +59,18 @@ adb 37.0.0) checked what this rests on:
    `HELLO` names one as `{kind: "emulator", emulatorPort: "adb"}`.
 
 2. **iOS simulator, forward.** Each caller connection makes the worker
-   connect to the device port on `127.0.0.1`, then on `::1`, and only when
-   the process listening there carries `SIMULATOR_UDID` equal to the
-   lease's simulator. Any other listener, or none, resets that connection
+   connect to the device port only at an address (`127.0.0.1` first, then
+   `::1`) that a process carrying `SIMULATOR_UDID` equal to the lease's
+   simulator listens on, never at an address only another process holds. Any other listener, or none, resets that connection
    with a reason; the tunnel stays. The check runs per connection, because
    an app starts, stops and restarts while a tunnel is open. So a holder
    never reaches the daemon, its adb server, or another lease's app.
 
 3. **iOS simulator, reverse.** The worker listens on exactly the device
    port, on both `127.0.0.1` and `::1`, so `localhost` reaches it whichever
-   address an app tries first. If anything on the worker already listens
-   on the port, on any address, or either bind fails, the tunnel is
+   address an app tries first. If anything already answers on the port
+   at either loopback address (a listener on all interfaces included), or
+   either bind fails, the tunnel is
    refused `TUNNEL_PORT_IN_USE`: the first listener on a worker wins a
    port. The bind alone is not the check, because macOS lets both
    loopback binds succeed while another process holds the port on all
