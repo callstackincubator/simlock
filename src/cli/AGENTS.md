@@ -82,7 +82,8 @@ Surface: [cli.mdx](../../website/src/content/docs/docs/reference/cli.mdx) — ev
    line on stdout, with the session's `role` (`--export-env`: shell lines). `--agent-id`
    sets the requester. Then, unless `--detach`:
    - renew on `startLeaseRenewal` (a third of the TTL);
-   - wait for `SIGINT`/`SIGTERM`, or the exit of `--bind-pid` or the parent (`ParentWatch`);
+   - wait for `SIGINT`/`SIGTERM`, or the exit of `--bind-pid` or the parent (`ParentWatch`); the same wait
+     during the request aborts it (the client cancels the queued request) and exits 0;
    - stop renewing, release within `RELEASE_TIMEOUT_MS` (5 s), close.
      Lease lost → exit 14. Connection lost → `DAEMON_CONNECTION_LOST`; the lease runs to its deadline.
 5. **`simlock simctl` / `adb`** — reads `status.get` `daemon.mode`:

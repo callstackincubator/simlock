@@ -81,6 +81,7 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -7181,6 +7182,53 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
       expect(released).toBe("lse_1");
     },
   );
+
+  it.each([
+    { trigger: "SIGINT", act: (signals: EventEmitter) => signals.emit("SIGINT") },
+    { trigger: "SIGTERM", act: (signals: EventEmitter) => signals.emit("SIGTERM") },
+    {
+      trigger: "the exit of the --bind-pid process",
+      act: (_signals: EventEmitter, parentWatch: FakeParentWatch) => parentWatch.exit(9876),
+    },
+  ])("cancels its waiting request and exits 0 on $trigger before a grant", async ({ act }) => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    let requestSignal: AbortSignal | undefined;
+    let requested = false;
+    const client = fakeClient({
+      // why: The request waits in the queue and never resolves on its own; like the client's
+      // documented abort, it rejects CANCELLED once its signal aborts.
+      requestLease: (_input, options) => {
+        requested = true;
+        requestSignal = options?.signal;
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {}));
+          });
+        });
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
+      output.environmentWith({
+        connectAdmin: async () => client,
+        parentPid: 4321,
+        parentWatch,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    const runState = promiseState(run);
+    await vi.waitFor(() => expect(requested).toBe(true));
+
+    act(signals, parentWatch);
+    await settle();
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(runState.state).toBe("fulfilled");
+    expect(await run).toBe(0);
+    expect(output.stdout).toBe("");
+  });
 
   it("reports a failed renewal on stderr and keeps holding the lease", async () => {
     const clock = new FakeClock(0);

@@ -8,14 +8,35 @@
 //                       2); at most 150 words
 //   `## Reproduction`   (a triage report, maybe after `Supersedes the report above.`) the
 //                       headings Reproduction, Root cause, Simplest fix, Alternatives rejected,
-//                       Risk and an optional Side findings, in order (rule 8); a `path:line` in
-//                       Root cause; at most three Alternatives lines and three Risk bullets; at
-//                       most 300 words
+//                       Risk, Fast track and an optional Side findings, in order (rule 8); a
+//                       `path:line` in Root cause; at most three Alternatives lines and three
+//                       Risk bullets; under Fast track the five FAST_TRACK lines, each `yes` or
+//                       `no — <why>` (rule 17); at most 300 words outside Fast track
 //   `Spec updated:`     one line and the footer
 //   `## Review notes`   every note one bullet on one line
+//
+// For fast-track.mjs: `FAST_TRACK`, the facts a triage report answers under `## Fast track`, in
+// order; `fastTrackFacts(text)`, null when `text` is not a triage report, else its Fast track
+// lines as `{ name, yes, why }` (none when the section is missing or a line is out of shape);
+// `writtenByAgent(text)`, whether the body ends with the footer.
 const FOOTER = /^[*_]Written by an agent\.[*_]$/;
 const HANDOFF = ["Done", "Not done", "Findings", "Blocked on"];
-const TRIAGE = ["Reproduction", "Root cause", "Simplest fix", "Alternatives rejected", "Risk"];
+const TRIAGE = [
+  "Reproduction",
+  "Root cause",
+  "Simplest fix",
+  "Alternatives rejected",
+  "Risk",
+  "Fast track",
+];
+export const FAST_TRACK = [
+  "Defect",
+  "Fix tried",
+  "Nothing public added or broken",
+  "No ADR or rule changed",
+  "One fix",
+];
+const FACT = /^- (.+?): (yes|no\s+[—–-]\s+(\S.*))$/;
 
 // why: the first lines name what a body is; the first kind whose `at` holds checks it.
 const KINDS = [
@@ -40,6 +61,29 @@ export function bodyDefects(raw) {
   }
   const kind = KINDS.find((k) => k.at(filled));
   return kind === undefined ? defects : [...defects, ...kind.check(lines, filled)];
+}
+
+export function fastTrackFacts(raw) {
+  const text = String(raw ?? "").replace(/\r/g, "");
+  const filled = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  if (!isTriageReport(filled)) return null;
+  const lines = (section(withoutCode(text).split("\n"), "Fast track") ?? [])
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !FOOTER.test(l));
+  const facts = lines.map((l) => FACT.exec(l));
+  if (facts.some((f) => f === null)) return [];
+  return facts.map((f) => ({ name: f[1], yes: f[2] === "yes", why: f[3] ?? "" }));
+}
+
+export function writtenByAgent(raw) {
+  const filled = String(raw ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  return FOOTER.test(filled.at(-1) ?? "");
 }
 
 function isTriageReport(filled) {
@@ -88,7 +132,7 @@ const TRIAGE_RULES = [
       return headings.join("|") !== expected.join("|");
     },
     reason: () =>
-      "A triage report has the sections Reproduction, Root cause, Simplest fix, Alternatives rejected, Risk and, when there are any, Side findings, in that order (delivery rule 8).",
+      "A triage report has the sections Reproduction, Root cause, Simplest fix, Alternatives rejected, Risk, Fast track and, when there are any, Side findings, in that order (delivery rule 8).",
   },
   {
     when: (lines) =>
@@ -111,11 +155,31 @@ const TRIAGE_RULES = [
     reason: () => "Risk holds at most three bullets (delivery rule 8).",
   },
   {
-    when: (lines) => countWords(lines) > 300,
+    when: (lines) =>
+      sectionHas(lines, "Fast track", (body) => {
+        const facts = body.map((l) => l.trim()).filter((l) => l !== "" && !FOOTER.test(l));
+        return (
+          facts.some((l) => !FACT.test(l)) ||
+          facts.map((l) => FACT.exec(l)[1]).join("|") !== FAST_TRACK.join("|")
+        );
+      }),
+    reason: () =>
+      `Fast track holds these five lines, in this order, each \`- <name>: yes\` or \`- <name>: no — <why>\`: ${FAST_TRACK.join(", ")} (delivery rule 17).`,
+  },
+  {
+    when: (lines) => countWords(reportProse(lines)) > 300,
     reason: (lines) =>
-      `This report is ${countWords(lines)} words outside code; the budget is 300 (delivery rule 12): cut it.`,
+      `This report is ${countWords(reportProse(lines))} words outside code and Fast track; the budget is 300 (delivery rule 12): cut it.`,
   },
 ];
+
+// why: the Fast track lines are fixed, so they stay outside the budget, as a PR's checklist does.
+function reportProse(lines) {
+  const at = lines.findIndex((l) => /^##\s+Fast track\s*$/.test(l));
+  if (at === -1) return lines;
+  const end = lines.findIndex((l, i) => i > at && /^##\s/.test(l));
+  return [...lines.slice(0, at), ...(end === -1 ? [] : lines.slice(end))];
+}
 
 function triage(lines) {
   return TRIAGE_RULES.filter((r) => r.when(lines)).map((r) => r.reason(lines));

@@ -56,6 +56,7 @@ type SentRequest = Parameters<WebhookPoster["post"]>[0];
 const gatewayConfig = {
   capabilities: {},
   capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
+  drivers: {},
   diskPressure: { freeBytesThreshold: 1 },
   downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
   eventBuffer: { capacity: 100 },

@@ -124,7 +124,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 
 Without `--detach`, the command renews the lease every third of its TTL and releases it on `SIGINT`, `SIGTERM`, or when the watched process exits. It exits:
 
-- 0 after it released the lease on request.
+- 0 after it released the lease on request. The same signal or exit while the request still waits in the queue cancels the request and exits 0, with nothing printed on stdout.
 - 14 when the daemon ended the lease first (TTL expiry, an operator's `release`, or a device that could not be recovered). A `lease-lost` line on stderr says why.
 - 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon dropped. The lease is not released and stays yours until its deadline; the stderr line names it.
 
