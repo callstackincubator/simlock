@@ -22,7 +22,9 @@ describe("Registry: state.db rows", () => {
         state,
         ...options,
       });
-    const registry = await open({ generate: () => String((next += 1)) });
+    // why: Fallow reads a binding's type only from an annotation in this file, not from an imported
+    // helper's return type; without it Fallow reports `Registry.renewLease` as never referenced.
+    const registry: Registry = await open({ generate: () => String((next += 1)) });
     const readyDevice = async (fakeDeviceId: string) => {
       const device = await registry.registerDevice({
         driverData: { fakeDeviceId },
