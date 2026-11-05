@@ -88,11 +88,12 @@ the status is stale.
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
 | [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted; §3 narrowed by 0052 |
-| [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted |
+| [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted; an alternative narrowed by 0055 (proposed) |
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
 | [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
 | [0053](0053-the-daemon-owns-each-leases-device-input.md) | The daemon owns each lease's device input, and `device.rotate` uses it | Accepted; narrows 0049 §4 and 0052 §1 |
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding) |
+| [0055](0055-device-remove-deletes-an-idle-simulator-or-emulator-and-the-console-offers-device-actions-on-a-worker.md) | `device remove` deletes an idle simulator or emulator, and the console offers device actions on a worker | Proposed; narrows 0050's rejected virtual delete, extends 0022 §2 and 0037 §3 |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
