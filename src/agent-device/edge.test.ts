@@ -735,16 +735,20 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await requestedSpecs(rig, hex(3))).toEqual([{ osVersion: "34", platform: "android" }]);
   });
 
-  it('allocate with `deviceBaseline` "logged-in" makes a lease request with `baseline: "logged-in"`, alone on iOS and on Android, with `target: "mobile"` (no class) and with `device` (the model too)', async () => {
+  it('allocate with `deviceBaseline` "logged-in" makes a lease request with `baseline: "logged-in"`, alone on iOS and (a baseline of its own) on Android, with `target: "mobile"` (no class) and with `device` (the model too)', async () => {
     const rig = await setUp({
       drivers: (clock) => [iosDriver(clock), androidDriver(clock)],
       maxRunning: 8,
     });
     await saveBaseline(rig, "logged-in", { model: "iPhone 17 Pro", platform: "ios" });
-    await saveBaseline(rig, "logged-in", { model: "Pixel 8", platform: "android" });
+    await saveBaseline(rig, "logged-in-android", { model: "Pixel 8", platform: "android" });
     const cases = [
       [1, { platform: "ios" }, { baseline: "logged-in", platform: "ios" }],
-      [2, { platform: "android" }, { baseline: "logged-in", platform: "android" }],
+      [
+        2,
+        { deviceBaseline: "logged-in-android", platform: "android" },
+        { baseline: "logged-in-android", platform: "android" },
+      ],
       [3, { platform: "ios", target: "mobile" }, { baseline: "logged-in", platform: "ios" }],
       [
         4,
@@ -754,7 +758,7 @@ describe("the agent-device front, through the whole worker daemon", () => {
     ] as const;
 
     for (const [n, extra, spec] of cases) {
-      await granted(rig, n, { ...extra, deviceBaseline: "logged-in" });
+      await granted(rig, n, { deviceBaseline: "logged-in", ...extra });
       expect(await requestedSpecs(rig, hex(n))).toEqual([spec]);
     }
   });

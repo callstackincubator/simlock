@@ -49,6 +49,7 @@ interface Plan {
   readonly leaseId: string;
   readonly platform: "ios" | "android";
   readonly model?: string;
+  readonly baseline?: string;
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
@@ -127,11 +128,16 @@ function planOf(params: Record<string, unknown>, cap: number | undefined): Plan 
   const device =
     typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
   const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
+  const baseline = typeof fields.deviceBaseline === "string" ? fields.deviceBaseline : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
-    ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
+    ...(device === undefined ? {} : { model: device }),
+    ...(device !== undefined || baseline !== undefined || klass === undefined
+      ? {}
+      : { class: klass }),
+    ...(baseline === undefined ? {} : { baseline }),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),
@@ -267,6 +273,7 @@ function forwardedBody(
 ) {
   const {
     device: _device,
+    deviceBaseline: _deviceBaseline,
     deviceKey: _deviceKey,
     imageTag: _imageTag,
     osVersion: _osVersion,
