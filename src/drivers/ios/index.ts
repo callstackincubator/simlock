@@ -2163,7 +2163,10 @@ function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string
 
 function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "default" {
   const configured = options.driverConfig["deviceSet"];
-  if (configured === undefined || configured === "simlock") return "simlock";
+  if (configured === undefined || configured === "simlock") {
+    if (options.simulatorHeadless === false) throw headlessNeedsDefaultSet("simlock");
+    return "simlock";
+  }
   if (configured !== "default") {
     throw new OwnedRootError(
       `Refusing the ios device set: drivers.ios.deviceSet must be "simlock" or "default", but it is ${JSON.stringify(configured)}`,
@@ -2181,6 +2184,15 @@ function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "defa
     );
   }
   return "default";
+}
+
+function headlessNeedsDefaultSet(root: string): OwnedRootError {
+  return new OwnedRootError(
+    'Refusing the ios device set: ios.simulator.headless is false, which needs drivers.ios.deviceSet "default". Set drivers.ios.deviceSet to "default", or ios.simulator.headless to true.',
+    "invalid-device-set",
+    root,
+    "ios",
+  );
 }
 
 function xcodeDeviceSetPath(options: IosSimctlDriverOptions): string {
