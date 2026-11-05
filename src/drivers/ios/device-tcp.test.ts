@@ -9,7 +9,9 @@ import {
   type LoopbackHost,
   type ProcessResult,
   type ProcessRunner,
+  type TcpStream,
 } from "../../ports/index.js";
+import { promiseState } from "../../test-support/promise-state.js";
 import { createIosDeviceTcp } from "./device-tcp.js";
 
 const UDID = "5A1E4B7C-0000-4000-8000-00000000AAAA";
@@ -67,6 +69,12 @@ class MachineRunner implements ProcessRunner {
   }
 }
 
+class HangingConnector extends FakeTcpStreamConnector {
+  override connect(): Promise<TcpStream> {
+    return new Promise<TcpStream>(() => undefined);
+  }
+}
+
 function setup(connector: FakeTcpStreamConnector = new FakeTcpStreamConnector()) {
   const runner = new MachineRunner();
   const clock = new FakeClock();
@@ -85,6 +93,7 @@ function setup(connector: FakeTcpStreamConnector = new FakeTcpStreamConnector())
 
 const environmentOf = (udid: string) =>
   `/bin/app PATH=/usr/bin SIMULATOR_UDID=${udid} HOME=/Users/x`;
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 const NOTHING = `nothing on the lease's simulator listens on port ${String(PORT)}`;
 
 // why: the owner check is pure decision logic with many cases over the real lsof lines, which the module's one surface (the tunnel module) cannot enumerate cheaply; the spec names this seam.
@@ -196,5 +205,26 @@ describe("iOS deviceTcp forward connections", () => {
       await expect(machine.connect(), name).rejects.toMatchObject({ message });
       expect(machine.connector.connections, name).toEqual([]);
     }
+    for (const hanging of ["lookup", "connect"] as const) {
+      const machine = setup(hanging === "connect" ? new HangingConnector() : undefined);
+      machine.runner.lookup = hanging === "lookup" ? "hangs" : ok(lsofOutput([10, "127.0.0.1"]));
+      machine.runner.environments.set(10, environmentOf(UDID));
+      const connecting = machine.connect();
+      await settle();
+      machine.clock.advance(4_999);
+      await settle();
+      expect(promiseState(connecting).state, `${hanging} at 4.9 s`).toBe("pending");
+      machine.clock.advance(1);
+      await settle();
+      expect(promiseState(connecting).state, `${hanging} at 5 s`).toBe("rejected");
+      await expect(connecting).rejects.toMatchObject({ message: "timeout" });
+    }
+
+    const moved = setup();
+    moved.runner.lookup = ok(lsofOutput([10, "127.0.0.1"]));
+    moved.runner.environments.set(10, environmentOf(UDID));
+    await moved.connect();
+    moved.runner.environments.set(10, environmentOf(OTHER_UDID));
+    await expect(moved.connect()).rejects.toMatchObject({ message: NOTHING });
   });
 });
