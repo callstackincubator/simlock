@@ -40,7 +40,6 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/daemon/server.ts": 1850,
   "src/drivers/ios/index.test.ts": 5996,
   "src/drivers/ios/index.ts": 2700,
-  "src/gateway/dispatcher.test.ts": 3057,
   "src/http/app.test.ts": 3488,
   "src/leasing/create-leasing.test.ts": 5276,
   "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
