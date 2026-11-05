@@ -158,7 +158,11 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
       }
     },
     reverse: (): Promise<DeviceReverse> =>
-      Promise.reject(new DeviceTcpError("TUNNEL_FAILED", "not built")),
+      Promise.resolve({
+        close: () => Promise.resolve(),
+        hostPort: 0,
+        onConnection: () => undefined,
+      }),
     supports: () => false,
     sweep: () => Promise.resolve(),
   };

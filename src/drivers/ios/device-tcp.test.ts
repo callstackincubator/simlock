@@ -75,20 +75,19 @@ class HangingConnector extends FakeTcpStreamConnector {
   }
 }
 
-function setup(connector: FakeTcpStreamConnector = new FakeTcpStreamConnector()) {
+function setup(
+  connector: FakeTcpStreamConnector = new FakeTcpStreamConnector(),
+  listeners: FakeTcpListenerFactory = new FakeTcpListenerFactory(),
+  probe: FakeTcpProbe = new FakeTcpProbe(),
+) {
   const runner = new MachineRunner();
   const clock = new FakeClock();
-  const deviceTcp = createIosDeviceTcp({
-    clock,
-    connector,
-    listeners: new FakeTcpListenerFactory(),
-    probe: new FakeTcpProbe(),
-    runner,
-  });
+  const deviceTcp = createIosDeviceTcp({ clock, connector, listeners, probe, runner });
   const signal = new AbortController().signal;
   const connect = () => deviceTcp.connect(simulator, PORT, signal);
   const dialled = (): readonly LoopbackHost[] => connector.connections.map(({ host }) => host);
-  return { clock, connect, connector, dialled, runner };
+  const reverse = () => deviceTcp.reverse(simulator, PORT, signal);
+  return { clock, connect, connector, dialled, reverse, runner };
 }
 
 const environmentOf = (udid: string) =>
@@ -227,5 +226,58 @@ describe("iOS deviceTcp forward connections", () => {
     await moved.connect();
     moved.runner.environments.set(10, environmentOf(OTHER_UDID));
     await expect(moved.connect()).rejects.toMatchObject({ message: NOTHING });
+  });
+});
+
+describe("iOS deviceTcp reverse", () => {
+  it("listens on exactly the device port on both loopbacks and refuses a port anything listens on", async () => {
+    const listeners = new FakeTcpListenerFactory();
+    const free = setup(undefined, listeners);
+    const reverse = await free.reverse();
+    expect(reverse.hostPort).toBe(PORT);
+    expect(listeners.listeners.map(({ address, port }) => [address, port])).toEqual([
+      ["127.0.0.1", PORT],
+      ["::1", PORT],
+    ]);
+    const arrived: TcpStream[] = [];
+    reverse.onConnection((stream) => arrived.push(stream));
+    for (const listener of listeners.listeners) listener.connect();
+    expect(arrived).toHaveLength(2);
+
+    await reverse.close();
+    expect(listeners.listeners.map(({ closed }) => closed)).toEqual([true, true]);
+
+    const refused: {
+      readonly name: string;
+      readonly prepare: (taken: { listeners: FakeTcpListenerFactory; probe: FakeTcpProbe }) => void;
+    }[] = [
+      {
+        name: "127.0.0.1 taken at bind",
+        prepare: (t) => t.listeners.busyOn.add(`127.0.0.1:${String(PORT)}`),
+      },
+      { name: "::1 taken at bind", prepare: (t) => t.listeners.busyOn.add(`::1:${String(PORT)}`) },
+      { name: "127.0.0.1 answers", prepare: (t) => t.probe.startListening(PORT) },
+      { name: "::1 answers", prepare: (t) => t.probe.startListening(PORT, "::1") },
+      {
+        name: "[::] answers on both",
+        prepare: (t) => {
+          t.probe.startListening(PORT);
+          t.probe.startListening(PORT, "::1");
+        },
+      },
+    ];
+    for (const { name, prepare } of refused) {
+      const taken = { listeners: new FakeTcpListenerFactory(), probe: new FakeTcpProbe() };
+      prepare(taken);
+      const machine = setup(undefined, taken.listeners, taken.probe);
+      await expect(machine.reverse(), name).rejects.toMatchObject({
+        code: "TUNNEL_PORT_IN_USE",
+        message: `reverse ${String(PORT)}: port ${String(PORT)} is already in use on the worker; pick another port`,
+      });
+      expect(
+        taken.listeners.listeners.filter(({ closed }) => !closed),
+        name,
+      ).toEqual([]);
+    }
   });
 });
