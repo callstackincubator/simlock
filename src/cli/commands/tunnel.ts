@@ -159,7 +159,7 @@ function relayConnections(
   socket: WebSocketClient,
   environment: CliEnvironment,
   warn: (devicePort: number, callerPort: number) => void,
-  warnForward: (devicePort: number, reason: string) => void,
+  warnForward: (label: string, reason: string) => void,
 ) {
   interface Relayed {
     readonly stream: TcpStream;
@@ -169,7 +169,7 @@ function relayConnections(
     sentEnd: boolean;
     receivedEnd: boolean;
     // why: set on a forward connection, so the reason of a worker's reset is shown against the tunnel it belongs to.
-    readonly forwardPort: number | undefined;
+    readonly resetLabel: string | undefined;
   }
   const streams = new Map<number, Relayed>();
   // why: a connection is dropped only when both directions have ended; one half alone leaves the other still carrying data.
@@ -214,9 +214,9 @@ function relayConnections(
     new DataView(credit.buffer).setUint32(0, size);
     socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
   };
-  const adopt = (conn: number, stream: TcpStream, forwardPort?: number): void => {
+  const adopt = (conn: number, stream: TcpStream, resetLabel?: string): void => {
     const relayed: Relayed = {
-      forwardPort,
+      resetLabel,
       stream,
       receivedEnd: false,
       sentEnd: false,
@@ -264,8 +264,8 @@ function relayConnections(
         .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
       const reason = field(payloadJson(frame.payload), "reason");
-      if (connection.forwardPort !== undefined && typeof reason === "string") {
-        warnForward(connection.forwardPort, reason);
+      if (connection.resetLabel !== undefined && typeof reason === "string") {
+        warnForward(connection.resetLabel, reason);
       }
       connection.stream.close();
       streams.delete(frame.conn);
@@ -453,6 +453,11 @@ async function connectCallerAdb(environment: CliEnvironment, callerPort: number)
   warn("adb was not found");
 }
 
+// why: the words a tunnel is named by in a warning or a refusal; an emulator tunnel has no device port.
+function tunnelLabel(spec: TunnelSpec): string {
+  return spec.kind === "emulator" ? "emulator adb" : `${spec.kind} ${String(spec.devicePort)}`;
+}
+
 function serve(
   environment: CliEnvironment,
   socket: WebSocketClient,
@@ -462,7 +467,7 @@ function serve(
   base: string,
 ): Promise<number> {
   const warned = new Map<number, number>();
-  const warnedForward = new Map<number, number>();
+  const warnedForward = new Map<string, number>();
   const relay = relayConnections(
     socket,
     environment,
@@ -475,14 +480,12 @@ function serve(
         `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
       );
     },
-    (devicePort, reason) => {
+    (label, reason) => {
       const now = environment.clock.now();
-      const last = warnedForward.get(devicePort);
+      const last = warnedForward.get(label);
       if (last !== undefined && now - last < WARN_EVERY_MS) return;
-      warnedForward.set(devicePort, now);
-      environment.stderr.write(
-        `warning: forward ${String(devicePort)}: ${escapeControl(reason)}\n`,
-      );
+      warnedForward.set(label, now);
+      environment.stderr.write(`warning: ${label}: ${escapeControl(reason)}\n`);
     },
   );
   let nextCallerConnection = 2;
@@ -500,7 +503,7 @@ function serve(
         ),
       ),
     );
-    relay.adopt(conn, stream, spec.kind === "emulator" ? undefined : spec.devicePort);
+    relay.adopt(conn, stream, tunnelLabel(spec));
   };
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
@@ -648,7 +651,7 @@ async function run(
       if (listener === undefined) {
         throw new TunnelFailure(
           "TUNNEL_CALLER_PORT_IN_USE",
-          `forward ${String(spec.devicePort)}: localhost:${String(spec.callerPort)} is already in use`,
+          `${tunnelLabel(spec)}: localhost:${String(spec.callerPort)} is already in use`,
           ERROR_TABLE.TUNNEL_CALLER_PORT_IN_USE.cliExitCode,
         );
       }
