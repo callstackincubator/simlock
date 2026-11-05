@@ -1,6 +1,6 @@
 # Core
 
-Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, doctor.
+Does: device management on a worker — registry, state machine, device verbs, reclaim, quarantine, warm pool, capacity, cleanup, components, baselines, doctor.
 Entry: `index.ts` → `createCore(options)`, then `core.connect(ports)` once, before any request.
 Uses: auth (config strategies), bus, ports, contract, history (`usage/` only). Never imports: leasing, drivers, daemon, gateway, agent-device.
 Imported by: daemon, leasing, cli, http, agent-device, drivers (`Driver`, `ensureOwnedRoot`), gateway (catalog match, `fits`, `createUsageReader`).
@@ -21,7 +21,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 | **Device verbs**                                          |                                                                                                                                                                                                                                                                                                                                                                                           |
 | `managed-device-lifecycle.ts`                             | `ManagedDeviceLifecycle`: every driver verb on a registered device                                                                                                                                                                                                                                                                                                                        |
 | `device-provisioner.ts`                                   | `DeviceProvisioner`: the one place a device record is created                                                                                                                                                                                                                                                                                                                             |
-| `reclaim-coordinator.ts`                                  | `ReclaimCoordinator`: wipe after a lease, spent delete, interrupted reclaim                                                                                                                                                                                                                                                                                                               |
+| `reclaim-coordinator.ts`                                  | `ReclaimCoordinator`: delete a virtual device after its lease, wipe a physical one, interrupted reclaim                                                                                                                                                                                                                                                                                   |
 | `quarantine-coordinator.ts`                               | `QuarantineCoordinator`: entry, retry on backoff, give up                                                                                                                                                                                                                                                                                                                                 |
 | `nuke-service.ts`, `nuke.ts`                              | `NukeService` (operator reset); `Nuke` (command facade)                                                                                                                                                                                                                                                                                                                                   |
 | `idle-order.ts`                                           | LRU order and eviction victim choice                                                                                                                                                                                                                                                                                                                                                      |
@@ -34,6 +34,7 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 | `doctor.ts`, `host-facts.ts`                              | `Doctor` findings and fixes (`service-broken` from an injected `serviceCheck`, never drift); `HostFactsReader` for status                                                                                                                                                                                                                                                                 |
 | `driver.ts`, `driver-catalog.ts`, `screen.ts`, `input.ts` | `Driver`, errors, `DiskSpaceGuard`; `DriverCatalog` (`openScreen`, `openInput`); `ScreenCapture`, frame tags; `DeviceInput`, the input messages and their parser                                                                                                                                                                                                                          |
 | `catalog-match.ts`                                        | Model name, class and paired runtimes against a catalog entry                                                                                                                                                                                                                                                                                                                             |
+| `baselines.ts`, `baselines-schema.ts`                     | `BaselineService`: save, list, remove, `removeAll` (nuke), stale check, `nameSources` (doctor); owner `baselines`. One save or remove at a time                                                                                                                                                                                                                                           |
 | `component-installer.ts`                                  | `ComponentInstaller`: install, list, remove                                                                                                                                                                                                                                                                                                                                               |
 | `physical-enrollment.ts`, `physical-presence.ts`          | `device add`/`remove`; every presence read, `latestPresence`                                                                                                                                                                                                                                                                                                                              |
 | `device-root.ts`, `instance-identity.ts`                  | `ensureOwnedRoot`; `loadInstanceId`                                                                                                                                                                                                                                                                                                                                                       |
@@ -44,12 +45,9 @@ See also: [leasing](../leasing/AGENTS.md) (lease flow, when reclaim runs), [warm
 1. `src/daemon/main.ts` builds `Registry.load`, one `SerializedDecision`, one `ComponentInstaller`,
    `createCore`, then `CleanupReaper`, `Nuke`, `HostFactsReader`. `createCore` builds the rest.
 2. `createLeasing` builds `corePorts`; the daemon calls `core.connect`. A port used before that
-   throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor),
-   `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue);
-   `physicalDeviceReady` is optional, a no-op before `connect`.
+   throws `CorePortMissingError`. Ports: `leaseMaintenance` (nuke), `leaseExpirer` (doctor), `warmPoolDemand` (demand, mode, `resolve`), `notifyAvailability` (kick the queue); `physicalDeviceReady` is optional, a no-op before `connect`.
 3. Lock: `SerializedDecision.run`, shared by core, leasing and the installer. No driver I/O inside.
-4. Claims: one per device, memory only. Kinds: `boot`, `eviction`, `cleanup`, `nuke`, `recovery`,
-   `reclaim`, `enrollment`, `grant`; optional `owner`.
+4. Claims: one per device, memory only. Kinds: `boot`, `eviction`, `cleanup`, `nuke`, `recovery`, `reclaim`, `enrollment`, `grant`; optional `owner`.
 5. Every verb: claim + revalidate (lock) → driver (no lock) → revalidate + commit (lock) → release.
 6. Commit: one `state.db` transaction that writes the rows whose record changed (and a device's device-data row) → memory → `onCommit` → event; a throw rolls back and leaves memory as it was. A transition
    without the one event its edge calls for throws `RegistryEventError`.
@@ -83,11 +81,9 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
    leased, gone or moved device. `recoverLeased` reboots under the lease: no commit, no event.
 2. **Provision** — `claimProvision` (lock) → `driver.provision` → `registerDevice` (`provisioning`,
    `device.provisioned`, optional `boot` claim) → ready. Boot failure: destroy, `BootTimeoutError` carrying the driver's message.
-3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. Spent `fresh`:
-   shutdown → destroy → `deleted`. Else commit what `driver.reclaim` returns. Failure → quarantine;
-   physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
+3. **Reclaim** — `ReclaimCoordinator.reclaim`, after leasing's lease-end commit. A virtual device (`mayBeGranted` refuses every released one): shutdown → destroy → `deleted`, initiator `lease-end`. A physical device: commit what `driver.reclaim` returns. Failure → quarantine; physical and not present → `absent`. `reclaimReturned` wipes a returned device in the background.
 4. **Quarantine** — from a failed purge, a failed spent delete, a failed boot-destroy, or
-   `doctor --fix` on a stall. Retry under `reclaim` (claim held: wait one backoff). Out of retries: destroy a virtual device
+   `doctor --fix` on a stall. Retry under `reclaim` (claim held: wait one backoff): a virtual device is destroyed, a physical one reclaimed. Out of retries: destroy a virtual device
    (`device.quarantine-abandoned`; failed destroy: `device.quarantine-stranded`, stays), unenrol a
    physical one. Physical not present: wait `health.probeIntervalMs`, not counted. Entry writes
    `quarantineCause` (kind, message cut to 300 characters, or `stalledState`); retries keep it, every exit drops it.
@@ -113,6 +109,11 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
     `component.installed`. `effectiveAllowDownload`: `never` refuses, `always` grants, `on-request`
     follows the caller. Remove: own it → no users → platform idle (`dryRun` stops) → mark (lock):
     `claimProvision` throws `ComponentBeingRemovedError` → `removeComponent` → delete record.
+12. **Baselines** — `BaselineService` (`core.baselines`), ADR 0061 §4. `save` queues behind any save or remove, then leasing's
+    `releaseToSave` ends the lease and `ReclaimCoordinator.retireSaved` calls `driver.saveSource` under the `reclaim` claim: row,
+    `baseline.saved`, `destroy`; a driver failure quarantines the device and answers `BASELINE_SAVE_FAILED`. A replace deletes the idle, unclaimed devices of older versions in the gate and keeps leased ones; an older version (row and source) is dropped only when no device record and no provision (`hold`) has it, checked after a save, on every `device.deleted` and at startup (`baseline.removed` reason `replaced`). `remove` refuses a
+    baseline a lease uses (`BaselineInUseError`), disposes its idle devices, then deletes sources and rows. `checkStale` runs before
+    `list` and `doctor` and after `component.removed`. `nameSources` marks a baseline source no row names `orphan`. `removeAll` (nuke) deletes rows first.
 
 ## State and timers
 
@@ -142,8 +143,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 ## Known gaps
 
 - **A rollback keeps a stale quarantine cause.** An older daemon keeps `quarantineCause` unknown; re-entry under it shows the old one.
-- **One download at a time per platform.** A second missing runtime waits, spending its own
-  `downloads.timeoutMs`. A bounded model with no `--os` asks Xcode for a bare major; pass `--os`.
+- **One download at a time per platform.** A second missing runtime waits, spending its own `downloads.timeoutMs`. A bounded model with no `--os` asks Xcode for a bare major; pass `--os`.
 - **`component remove` sees only this instance.** One worker per user, so this matters for test roots and a second OS user. Another instance's devices, never-used default-set
   simulators and foreign devices made after the driver's count are not counted.
 - **An older Simlock cannot end a physical lease.** It skips `physicalDevices`; `beginRelease` throws `UnknownDeviceError`. Release physical leases before a rollback.

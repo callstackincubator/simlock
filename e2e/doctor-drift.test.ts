@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withDaemon } from "./helpers/index.js";
+import { waitFor, withDaemon } from "./helpers/index.js";
 import type { CliBackgroundHandle } from "./helpers/cli.js";
 import type { ScriptedObservedDevice } from "./fake-driver/types.js";
 
@@ -24,9 +24,6 @@ async function deviceRows(env: Awaited<ReturnType<typeof withDaemon>>): Promise<
   return result.json as DeviceRow[];
 }
 
-/** Launches a `simlock lease` holder for `agentId`; caller launches every agent it needs
- *  before awaiting any of their grants, so none is warm-pool reused for the next
- *  (a sequential lease/release/lease would just reuse the same warm device). */
 function leaseHeld(
   env: Awaited<ReturnType<typeof withDaemon>>,
   agentId: string,
@@ -58,39 +55,42 @@ describe("doctor and drift", () => {
     const env = await withDaemon({
       configOverrides: {
         limits: { maxRunning: 5, ios: { maxDevices: 5, maxRunning: 5 } },
+        warmPool: {
+          targets: [{ count: 4, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
+        },
       },
     });
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
 
-    // A, C, D, E get released back to `ready` right after grant; B stays leased
-    // throughout as the "must skip a leased device" case. All five are launched
-    // before any grant is awaited, so capacity (5) covers them concurrently and
-    // none is warm-pool reused for the next.
-    const heldA = leaseHeld(env, "doctor-a");
-    const deviceA = await grantOf(heldA);
+    // why: a released device is deleted, so A, C, D and E are the four idle devices the warm pool keeps ready; B is leased from the fifth slot throughout as the "must skip a leased device" case.
+    await waitFor(
+      async () => (await deviceRows(env)).filter((row) => row.state === "ready").length === 4,
+      { label: "the warm pool keeps four devices ready" },
+    );
     const heldB = leaseHeld(env, "doctor-b");
     const deviceB = await grantOf(heldB);
-    const heldC = leaseHeld(env, "doctor-c");
-    const deviceC = await grantOf(heldC);
-    const heldD = leaseHeld(env, "doctor-d");
-    const deviceD = await grantOf(heldD);
-    const heldE = leaseHeld(env, "doctor-e");
-    const deviceE = await grantOf(heldE);
+    let idle: DeviceRow[] = [];
+    await waitFor(
+      async () => {
+        idle = (await deviceRows(env)).filter((row) => row.state === "ready");
+        return idle.length === 4;
+      },
+      { label: "the pool refills to four ready devices beside the leased one" },
+    );
+    const [deviceA, deviceC, deviceD, deviceE] = idle.map((row) => ({
+      device: { driverDeviceId: row.driverDeviceId },
+    })) as [
+      Pick<Grant, "device">,
+      Pick<Grant, "device">,
+      Pick<Grant, "device">,
+      Pick<Grant, "device">,
+    ];
     const distinctUdids = new Set(
       [deviceA, deviceB, deviceC, deviceD, deviceE].map((d) => d.device.driverDeviceId),
     );
-    expect(distinctUdids.size, "expected 5 distinct devices, one per concurrent lease").toBe(5);
-
-    for (const device of [deviceA, deviceC, deviceD, deviceE]) {
-      const release = await env.cli(["release", device.lease.id]);
-      expect(release.code).toBe(0);
-    }
-    for (const held of [heldA, heldC, heldD, heldE]) {
-      held.kill("SIGKILL");
-      await held.waitForExit(15_000).catch(() => undefined);
-    }
+    expect(distinctUdids.size, "expected 5 distinct devices, one leased and four idle").toBe(5);
 
     const rows = await deviceRows(env);
     const registryIdOf = (udid: string): string => {

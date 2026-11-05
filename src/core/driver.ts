@@ -32,6 +32,8 @@ export interface ExactDeviceRequest {
 }
 
 export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
+  /** why: the name of the baseline the request wants a copy of; the coordinator checks it against the baseline and resolves the spec from it. */
+  readonly baseline?: string;
   readonly model?: string;
   readonly class?: DeviceClass;
   readonly physical?: boolean;
@@ -228,6 +230,21 @@ export type PhysicalInspection =
       readonly message: string;
     };
 
+/** why: a device that booted once and was shut down, kept only to be copied into a lease's device (ADR 0061 §1). */
+export interface DriverSource {
+  readonly id: string;
+  readonly kind: "seed" | "baseline";
+  readonly model: string;
+  readonly osVersion: string;
+  readonly imageTag?: string;
+  /** why: absent when it could not be counted. */
+  readonly sizeBytes?: number;
+  /** why: reads after "is stale:", at most 300 characters. */
+  readonly staleReason?: string;
+  /** why: a simulator in the sources set that no row names; only `doctor --purge-orphans` destroys it, never nuke (ADR 0061 §1). */
+  readonly orphan?: true;
+}
+
 export interface Driver {
   readonly platform: Platform;
   readonly defaultModels: Readonly<Partial<Record<DeviceClass, readonly string[]>>>;
@@ -260,7 +277,19 @@ export interface Driver {
     receipt: ComponentReceipt,
     options: { readonly signal: AbortSignal },
   ): Promise<ComponentRemoval>;
-  provision(spec: VirtualSpec): Promise<DriverDevice>;
+  provision(spec: VirtualSpec, options?: { readonly source?: string }): Promise<DriverDevice>;
+  /** why: ready sources only; a source being made is never listed (ADR 0061 §1). */
+  listSources(): Promise<readonly DriverSource[]>;
+  destroySource(sourceId: string): Promise<void>;
+  /**
+   * why: keeps a copy of a device as a baseline source (ADR 0061 §4). The driver writes the
+   * source's row, kind `baseline`, state `making`, before any folder or simulator exists, shuts the
+   * device down cleanly itself, makes the copy in its own sources area and sets the row `ready`.
+   * `sizeBytes` is absent when it could not be counted.
+   */
+  saveSource(
+    device: VirtualDriverDevice,
+  ): Promise<{ sourceId: string; sizeBytes?: number; imageTag?: string }>;
   /**
    * why: Boots the device and returns it with a freshly read `address`. Never trust the address a
    * caller passed in or one captured at `provision` -- an Android console port is assigned per
@@ -587,6 +616,29 @@ export class UnknownModelError extends Error {
     this.name = "UnknownModelError";
     this.model = model;
     this.class = deviceClass;
+  }
+}
+
+/** why: a request naming a baseline also named a field that differs from it; `field` is the first that differs. */
+export class BaselineMismatchError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly field: "platform" | "model" | "osVersion" | "mode" | "imageTag",
+    message: string,
+  ) {
+    super(message);
+    this.name = "BaselineMismatchError";
+  }
+}
+
+/** why: a request named a baseline whose runtime or image is gone, so no copy of it can be made. */
+export class BaselineStaleError extends Error {
+  constructor(
+    readonly baselineName: string,
+    readonly reason: string,
+  ) {
+    super(`baseline ${baselineName} is stale: ${reason}`);
+    this.name = "BaselineStaleError";
   }
 }
 

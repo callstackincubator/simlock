@@ -29,6 +29,7 @@ export interface EventMap {
     readonly fleetRequestId?: string;
     // why: events stored before this field existed lack it and a rebuild replays them, so the projector reads it as optional.
     readonly platform: "ios" | "android";
+    readonly baseline?: { readonly name: string; readonly version: number };
   };
   "lease.renewed": { readonly leaseId: string; readonly newDeadline: number };
   "lease.released": {
@@ -231,6 +232,29 @@ export interface EventMap {
     readonly sizeBytes?: number;
     readonly residue?: string;
     readonly requesterId: string;
+  };
+  "baseline.saved": {
+    readonly name: string;
+    readonly version: number;
+    readonly platform: string;
+    readonly model: string;
+    readonly osVersion: string;
+    readonly mode: "slim" | "full";
+    readonly imageTag?: string;
+    readonly sizeBytes?: number;
+    readonly leaseId: string;
+    readonly requesterId: string;
+  };
+  "baseline.removed": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: "operator" | "nuke" | "replaced";
+    readonly requesterId?: string;
+  };
+  "baseline.stale": {
+    readonly name: string;
+    readonly version: number;
+    readonly reason: string;
   };
   "daemon.started": { readonly version: string; readonly configSnapshot: unknown };
   "daemon.stopping": { readonly reason: string };

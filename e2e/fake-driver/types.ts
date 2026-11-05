@@ -21,7 +21,8 @@ export type FakeDriverOperation =
   | "revalidateRoot"
   | "inspectPhysical"
   | "listPresentPhysical"
-  | "uninstall";
+  | "uninstall"
+  | "saveSource";
 
 export type FakeDriverEstimateOperation = "provision" | "boot" | "reclaim";
 
@@ -126,8 +127,6 @@ export interface FakeDriverPlatformScript {
   readonly removalResidue?: string;
   readonly latencyMs?: Partial<Record<FakeDriverOperation, number>>;
   readonly estimateMs?: Partial<Record<FakeDriverEstimateOperation, number>>;
-  readonly reclaimResult?: "ready" | "shutdown";
-  readonly reclaimStrategy?: "erase" | "snapshot" | "wipe";
   readonly failures?: Partial<Record<FakeDriverOperation, FakeDriverErrorSpec>>;
   readonly managedReality?: ScriptedManagedReality;
   readonly physicalDevices?: readonly ScriptedPhysicalDevice[];

@@ -4,6 +4,7 @@ import {
   eventEnvelopeSchema,
   OPERATIONS,
   updateRequestedVersionSchema,
+  WORKER_ID_MAX,
 } from "../contract/index.js";
 import { declareRoute, firstValue, platformQuerySchema, sseMessage } from "./routes.js";
 
@@ -144,6 +145,53 @@ export const componentRemoveRoute = declareRoute({
   errors: { 501: ["UNSUPPORTED_IN_GATEWAY_MODE"] },
 });
 
+export const baselineListRoute = declareRoute({
+  method: "get",
+  path: "/v1/baselines",
+  tag: "Baselines",
+  summary: "The baselines on this machine: the newest version of each, with its stale reason",
+  role: "agent",
+  notes: "On a gateway, every worker's baselines, each with its `workerId`.",
+  reply: OPERATIONS["baseline.list"].output,
+});
+
+export const baselineSaveRoute = declareRoute({
+  method: "post",
+  path: "/v1/baselines",
+  tag: "Baselines",
+  summary: "Save a held simulator or emulator as a baseline, ending its lease",
+  role: "admin",
+  notes:
+    "A lease on a physical device is refused with 400. The lease has ended when the answer is 500 BASELINE_SAVE_FAILED. On a gateway the worker that holds the lease saves it; 503 WORKER_UNREACHABLE when that worker has no live link.",
+  request: { json: OPERATIONS["baseline.save"].input },
+  reply: OPERATIONS["baseline.save"].output,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    500: ["BASELINE_SAVE_FAILED"],
+    503: ["WORKER_UNREACHABLE"],
+  },
+});
+
+export const baselineRemoveRoute = declareRoute({
+  method: "delete",
+  path: "/v1/baselines/{name}",
+  tag: "Baselines",
+  summary: "Remove a baseline and the idle devices made from it",
+  role: "admin",
+  notes:
+    "The name is checked by the daemon; a baseline a lease uses is refused with 409. A gateway requires `workerId` (the worker that holds the baseline) and answers 400 without it; a worker refuses it with 400.",
+  request: {
+    params: z.object({ name: z.string() }),
+    query: z.object({ workerId: firstValue(z.string().min(1).max(WORKER_ID_MAX)).optional() }),
+  },
+  reply: OPERATIONS["baseline.remove"].output,
+  errors: {
+    400: ["BAD_REQUEST"],
+    404: ["UNKNOWN_BASELINE", "UNKNOWN_WORKER"],
+    409: ["BASELINE_IN_USE", "WORKER_NOT_CONNECTED"],
+  },
+});
+
 export const tokenListRoute = declareRoute({
   method: "get",
   path: "/v1/tokens",
@@ -242,6 +290,9 @@ export const ADMIN_ROUTES = [
   componentListRoute,
   componentRemoveRoute,
   componentInstallRoute,
+  baselineListRoute,
+  baselineSaveRoute,
+  baselineRemoveRoute,
   tokenListRoute,
   eventsRoute,
   eventsStreamRoute,

@@ -4,7 +4,8 @@ import {
   parseOsConstraint,
   satisfies,
 } from "../contract/index.js";
-import type { DeviceRequest } from "./driver.js";
+import { findCatalogModel } from "./catalog-match.js";
+import type { DeviceRequest, DriverCatalogEntry } from "./driver.js";
 
 export type Platform = "ios" | "android";
 
@@ -45,6 +46,12 @@ export interface VirtualSpec {
    * carries it and compares it in `sameSpec`, and never reads what it means.
    */
   readonly imageTag?: string;
+  /**
+   * why: the baseline version this device was copied from (ADR 0061 §5): part of spec identity, so
+   * a plain request never gets a copy and a request for a baseline never gets another's. Absent on
+   * a device not made from a baseline.
+   */
+  readonly baseline?: { readonly name: string; readonly version: number };
 }
 
 /** The kinds of device an admin can enrol (ADR 0022 §1). */
@@ -63,6 +70,7 @@ export interface PhysicalSpec {
   readonly class: PhysicalClass;
   readonly mode?: undefined;
   readonly imageTag?: undefined;
+  readonly baseline?: undefined;
 }
 
 export type DeviceSpec = VirtualSpec | PhysicalSpec;
@@ -96,9 +104,96 @@ export function sameSpec(left: DeviceSpec, right: DeviceSpec): boolean {
     left.model === right.model &&
     left.osVersion === right.osVersion &&
     specMode(left) === specMode(right) &&
-    left.imageTag === right.imageTag
+    left.imageTag === right.imageTag &&
+    sameBaseline(left.baseline, right.baseline)
   );
 }
+
+/** why: the fields of a saved baseline a request can name, as `baselineMismatch` compares them. */
+export interface BaselineFacts {
+  readonly name: string;
+  readonly platform: Platform;
+  readonly model: string;
+  readonly osVersion: string;
+  readonly mode: DeviceMode;
+  readonly imageTag?: string | undefined;
+}
+
+export type BaselineMismatch = {
+  readonly field: "platform" | "model" | "osVersion" | "mode" | "imageTag";
+  readonly message: string;
+};
+
+/**
+ * why: the one rule for whether a request naming a baseline agrees with it (architecture rule 10).
+ * A field the request does not name is not compared; the first field that differs, in the order
+ * platform, model, OS, mode, image tag, is named. A model matches by the catalog's case and alias
+ * rule, an OS by `satisfiesOs`.
+ */
+export function baselineMismatch(
+  baseline: BaselineFacts,
+  request: Pick<DeviceRequest, "platform" | "model" | "osVersion" | "mode" | "imageTag">,
+  catalogEntry: Pick<DriverCatalogEntry, "models" | "modelAliases">,
+): BaselineMismatch | undefined {
+  const label = baseline.platform === "ios" ? "iOS" : "Android";
+  const checks: readonly (readonly [
+    BaselineMismatch["field"],
+    boolean,
+    string,
+    string | undefined,
+  ])[] = [
+    ["platform", request.platform !== baseline.platform, baseline.platform, request.platform],
+    ["model", modelDiffers(baseline, request.model, catalogEntry), baseline.model, request.model],
+    [
+      "osVersion",
+      osDiffers(baseline, request.osVersion),
+      `${label} ${baseline.osVersion}`,
+      request.osVersion,
+    ],
+    [
+      "mode",
+      request.mode !== undefined && request.mode !== baseline.mode,
+      baseline.mode,
+      request.mode,
+    ],
+    [
+      "imageTag",
+      request.imageTag !== undefined && request.imageTag !== baseline.imageTag,
+      `image tag ${baseline.imageTag ?? "none"}`,
+      request.imageTag,
+    ],
+  ];
+  const differing = checks.find(([, differs]) => differs);
+  if (differing === undefined) return undefined;
+  const [field, , is, asked] = differing;
+  return {
+    field,
+    message: `baseline ${baseline.name} is ${is}, the request asks for ${asked ?? ""}`,
+  };
+}
+
+function modelDiffers(
+  baseline: BaselineFacts,
+  asked: string | undefined,
+  catalogEntry: Pick<DriverCatalogEntry, "models" | "modelAliases">,
+): boolean {
+  if (asked === undefined) return false;
+  const listed = findCatalogModel(catalogEntry, asked) ?? asked;
+  return listed !== baseline.model;
+}
+
+function osDiffers(baseline: BaselineFacts, asked: string | undefined): boolean {
+  if (asked === undefined) return false;
+  const parsed = parseOsConstraint(asked);
+  return !parsed.ok || !satisfies(baseline.osVersion, parsed.constraint);
+}
+
+/** why: a baseline is a pool key (ADR 0061 §5): a plain spec matches only a plain one, and a baseline spec only its own name at its own version. */
+function sameBaseline(left: BaselineRef | undefined, right: BaselineRef | undefined): boolean {
+  return left?.name === right?.name && left?.version === right?.version;
+}
+
+type BaselineRef = { readonly name: string; readonly version: number };
 
 /**
  * The OS a requirement accepts (ADR 0015 §5). `exact` is one version, the one an exact request
@@ -122,6 +217,8 @@ export interface DeviceRequirement {
     | { readonly kind: "class"; readonly class: DeviceClass };
   readonly osVersion: OsRequirement;
   readonly imageTag: string | undefined;
+  /** why: the baseline version a device must be a copy of; absent for a plain request, which no baseline copy serves. */
+  readonly baseline?: BaselineRef | undefined;
 }
 
 /**
@@ -143,6 +240,7 @@ export interface WaitingDemand {
 /** The requirement an exact request has once its driver resolved it: that spec's model, OS and tag. */
 export function exactRequirement(spec: VirtualSpec): DeviceRequirement {
   return {
+    baseline: spec.baseline,
     imageTag: spec.imageTag,
     osVersion: { kind: "exact", version: spec.osVersion },
     platform: spec.platform,
@@ -161,6 +259,7 @@ export interface FittableSpec {
   readonly model: string;
   readonly osVersion: string;
   readonly imageTag?: string | undefined;
+  readonly baseline?: BaselineRef | undefined;
 }
 
 export function fits(
@@ -169,7 +268,11 @@ export function fits(
   classOf: (model: string) => DeviceClass | undefined,
 ): boolean {
   if (spec.physical) return false;
-  if (requirement.platform !== spec.platform || requirement.imageTag !== spec.imageTag) {
+  if (
+    requirement.platform !== spec.platform ||
+    requirement.imageTag !== spec.imageTag ||
+    !sameBaseline(requirement.baseline, spec.baseline)
+  ) {
     return false;
   }
   return (
@@ -282,14 +385,14 @@ export function readySince(device: DeviceRecord): number {
 }
 
 /**
- * The one answer to "may this device be handed to a new lease?". A `fresh` device that has ended
- * a lease is spent: `beginRelease` stamps `lastLeaseEndedAt` on every lease end, so that stamp is
- * the proof it already served its one lease. Every other device is grantable as far as identity
- * goes; state, spec, and claims are the caller's own checks. A physical device has no
- * `leaseIdentity`, so it is always reusable: `lease.identity` does not apply to it.
+ * why: the one answer to "may this device be handed to a new lease?". A virtual device serves one lease
+ * (ADR 0061 §2): `beginRelease` stamps `lastLeaseEndedAt` on every lease end, so that stamp is the
+ * proof it already served its one lease, whatever `leaseIdentity` says. A physical device is
+ * always grantable: `lease.identity` does not apply to it. State, spec, and claims are the
+ * caller's own checks.
  */
 export function mayBeGranted(device: DeviceRecord): boolean {
-  return device.leaseIdentity !== "fresh" || device.lastLeaseEndedAt === undefined;
+  return device.physical || device.lastLeaseEndedAt === undefined;
 }
 
 export interface LeaseRecord {

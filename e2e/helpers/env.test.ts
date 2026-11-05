@@ -11,9 +11,13 @@ const execFileAsync = promisify(execFile);
 
 // why: teardown after a failure is seen only from a vitest run of its own. Its flows fail as the
 // slow-lane runs of #1102 did (a shared daemon's beforeAll, as warmUp; a per-test daemon's test)
-// and record each socket path, which the daemon's "Daemon started" log line names.
+// and record each socket path, which the daemon's "Daemon started" log line names. The shared
+// daemon's home is torn down twice, the second time over an empty daemon.log, as in a slow-lane
+// run whose suite teardown failed on an emulator still writing into the home and the file's
+// afterAll then tore it down again.
 const FAILING_FLOWS = `
-import { appendFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { withDaemon, withSharedDaemon } from ${JSON.stringify(join(REPO_ROOT, "e2e/helpers/env.ts"))};
 
 const record = (env) => appendFile(process.env.FIXTURE_SOCKETS, env.socketPath + "\\n");
@@ -28,7 +32,10 @@ describe("a suite whose beforeAll fails, as warmUp does", () => {
     throw new Error("waitFor timed out (2 warm-up devices ready; last observed: shutdown,ready)");
   });
   afterAll(async () => {
-    await env?.teardown();
+    await env.teardown();
+    await mkdir(env.dataDirectory, { recursive: true });
+    await writeFile(join(env.dataDirectory, "daemon.log"), "");
+    await env.teardown();
   });
   it("never runs", () => {});
 });
@@ -52,7 +59,7 @@ async function filesUnder(directory: string): Promise<string[]> {
 }
 
 describe("withDaemon and withSharedDaemon teardown", () => {
-  it("after a run whose flows fail, leaves the log of each daemon it started in SIMLOCK_E2E_LOG_DIR", async () => {
+  it("after a run whose flows fail, leaves the log of each daemon it started in SIMLOCK_E2E_LOG_DIR, and a second teardown of the same home does not replace it", async () => {
     const work = await mkdtemp(join(tmpdir(), "simlock-e2e-kept-logs-"));
     try {
       const logDirectory = join(work, "daemon-logs");

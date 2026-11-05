@@ -7,7 +7,7 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 
 A gateway can post a message when something in the fleet needs a person: a worker drops off, a device cannot be cleaned up, a disk runs low. You choose the events, and where each one goes.
 
-Alerts are sent only by a gateway. A worker on its own sends none; to watch a single worker, see [Monitoring](/simlock/docs/worker/monitoring).
+Only a gateway sends alerts. A worker on its own sends none; to watch a single worker, see [Monitoring](/simlock/docs/worker/monitoring).
 
 ## Events you can alert on
 
@@ -25,7 +25,7 @@ Alerts are sent only by a gateway. A worker on its own sends none; to watch a si
 | `disk.pressure-detected` | A worker's free disk space fell below its `diskPressure.freeBytesThreshold`. |
 | `component.install-failed` | Installing a runtime or system image on a worker failed. |
 
-The gateway's own stop sends no `worker.disconnected` for its workers.
+When the gateway itself stops, it sends no `worker.disconnected` for its workers.
 
 What each event's payload holds is in [Events reference](/simlock/docs/reference/events).
 
@@ -85,7 +85,7 @@ The same list in the gateway's `config.json`:
 }
 ```
 
-The rules for each destination. A destination that breaks one stops the gateway from starting, and `config set` refuses it with the field and what it expected:
+Each destination must follow these rules. `config set` refuses one that breaks a rule, naming the field and what it expected, and such a destination in `config.json` stops the gateway from starting:
 
 - `name`: lowercase letters, digits and dashes, starting with a letter, at most 32 characters, and different from every other destination's.
 - `format`: `slack` or `generic`.
@@ -107,7 +107,7 @@ simlock --gateway alerts test fleet-slack
 Sent a test message to fleet-slack: HTTP 200
 ```
 
-The test sends one sample message, with the event name `alerts.test-sent`, once and at once. It does not retry, and it does not wait behind other alerts. Add `--json` for the answer as JSON.
+The test sends one sample message, with the event name `alerts.test-sent`, right away. It isn't retried, and doesn't wait behind other alerts. Add `--json` for the answer as JSON.
 
 When the test fails, the command says why:
 
@@ -158,7 +158,7 @@ Answer with any `2xx` status to accept the message.
 
 ## Delivery and failures
 
-Each destination has its own queue. The gateway sends one message at a time to it, oldest first, so a slow receiver does not hold up the others.
+The gateway sends messages to each destination one at a time, oldest first. A slow receiver doesn't hold up the other destinations.
 
 - **Retries.** Each try may take up to 10 seconds. A network error, a timeout, `429` or a `5xx` answer is tried again, after 1 second and then after 5 seconds: three tries in all. Any other answer that is not `2xx` is not retried.
 - **Giving up.** After the last try, the gateway drops the message and logs `Alert send gave up` with the destination's name and the status or error code.
@@ -166,5 +166,5 @@ Each destination has its own queue. The gateway sends one message at a time to i
 - **A stop.** Waiting messages are kept in memory only. When the gateway stops, they are lost, and the gateway logs how many with `Alerts discarded at stop`.
 
 <Aside>
-A failed alert is only logged. It raises no event and no other alert. To find failures, search the gateway's log: `simlock --gateway daemon logs`.
+A failed alert is only logged. It raises no event and no other alert, so nothing tells you about it unless you check the log. To find failures, search the gateway's log: `simlock --gateway daemon logs`.
 </Aside>

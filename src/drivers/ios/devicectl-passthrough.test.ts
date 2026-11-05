@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PassthroughRefusedError } from "../../core/index.js";
 import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { IosSimctlDriver } from "./index.js";
+import { memorySourceDatabase } from "./testing.js";
 
 const deviceRoot = "/Devices";
 const UDID = "00008110-001A2B3C4D5E";
@@ -26,8 +27,9 @@ const VIRTUAL_DEVICE = {
 
 type PassthroughDevice = Parameters<IosSimctlDriver["passthrough"]>[1];
 
-function createDriver(runner: ScriptedProcessRunner): Promise<IosSimctlDriver> {
+async function createDriver(runner: ScriptedProcessRunner): Promise<IosSimctlDriver> {
   return IosSimctlDriver.create({
+    database: await memorySourceDatabase(),
     clock: new FakeClock(),
     driverConfig: { deviceRoot },
     filesystem: new MemoryFilesystem(),

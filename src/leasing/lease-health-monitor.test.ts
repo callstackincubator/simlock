@@ -93,7 +93,12 @@ function config(overrides: Partial<Config["health"]> = {}): Config {
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
     http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+    ios: {
+      defaultMode: "full",
+      defaultModels: {},
+      slim: { bootTimeoutMs: 600_000 },
+      simulator: { audio: true, headless: true },
+    },
     android: {
       defaultModels: {},
       emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },

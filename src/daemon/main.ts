@@ -39,6 +39,7 @@ import {
   Registry,
   registryOwner,
   warmPoolOwner,
+  baselinesOwner,
   Nuke,
   SerializedDecision,
   stableError,
@@ -56,6 +57,7 @@ import {
   type AndroidDriverDiagnostic,
   type AndroidEmulatorLaunchOptions,
   androidDeviceDataTable,
+  androidSourceDataOwner,
   androidPrerequisites,
 } from "../drivers/android/index.js";
 import {
@@ -63,6 +65,7 @@ import {
   IosSimctlDriver,
   type SlimmedFact,
   iosDeviceDataTable,
+  iosSourceDataOwner,
   iosPrerequisites,
 } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
@@ -122,6 +125,7 @@ import {
   defaultWorkerLockPath,
   NodeWorkerLock,
   type WorkerLockHandle,
+  type SqliteDatabase,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -141,6 +145,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
@@ -358,7 +363,15 @@ async function composeDaemon(
     owners:
       role === "gateway"
         ? [tokensOwner, drainedWorkersOwner]
-        : [registryOwner, warmPoolOwner, tokensOwner, ...new Set(deviceDataTables.values())],
+        : [
+            registryOwner,
+            warmPoolOwner,
+            baselinesOwner,
+            tokensOwner,
+            iosSourceDataOwner,
+            androidSourceDataOwner,
+            ...new Set(deviceDataTables.values()),
+          ],
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -452,6 +465,7 @@ async function composeDaemon(
       ? await discoverDrivers({
           acceptAndroidLicenses: config.downloads.acceptAndroidLicenses,
           clock,
+          database: state.database,
           driversConfig: config.drivers,
           eventBus,
           filesystem,
@@ -463,6 +477,8 @@ async function composeDaemon(
           processRunner,
           processSupervisor,
           simlockHome: dataDirectory,
+          simulatorAudio: config.ios.simulator.audio,
+          simulatorHeadless: config.ios.simulator.headless,
           slim: config.ios.slim,
           slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
@@ -747,6 +763,7 @@ async function composeDaemon(
     nuke,
     registry,
     warmKinds: core.warmKinds,
+    baselines: core.baselines,
     stalls: { claims: core.claimReader, drivers },
     resolveRole: { resolve: (hello) => auth.resolveHelloRole(hello) },
     adminSecret: auth.adminSecret,
@@ -1282,6 +1299,7 @@ function errorMessage(error: unknown): string {
 export interface DriverDiscoveryContext {
   readonly acceptAndroidLicenses?: boolean;
   readonly clock: Clock;
+  readonly database: SqliteDatabase;
   readonly driversConfig: Config["drivers"];
   readonly eventBus: Pick<EventBus, "emit">;
   readonly filesystem: Filesystem;
@@ -1305,6 +1323,8 @@ export interface DriverDiscoveryContext {
     readonly bootTimeoutMs: number;
   };
   readonly slimByDefault?: boolean;
+  readonly simulatorAudio?: boolean;
+  readonly simulatorHeadless?: boolean;
   readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
@@ -1417,11 +1437,14 @@ async function discoverIosDriver(
     const driver = await IosSimctlDriver.create({
       clock: options.clock,
       coreSimulatorRoot: `${homedir()}/Library/Developer/CoreSimulator`,
+      database: options.database,
       driverConfig: options.driversConfig["ios"] ?? {},
       filesystem: options.filesystem,
       idGenerator: options.idGenerator,
       instanceId: options.instanceId,
       logger: logger.child("ios"),
+      onSilenceFailed: logSilenceFailure(logger),
+      onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       screenCapture: {
         baseEnvironment: process.env,
@@ -1439,6 +1462,10 @@ async function discoverIosDriver(
       },
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
+      ...(options.simulatorAudio === undefined ? {} : { simulatorAudio: options.simulatorAudio }),
+      ...(options.simulatorHeadless === undefined
+        ? {}
+        : { simulatorHeadless: options.simulatorHeadless }),
       ...(options.slim === undefined ? {} : { slim: options.slim }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
@@ -1465,7 +1492,7 @@ async function discoverIosDriver(
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {
   if (diagnostic.kind === "snapshot-cold-boot") {
     logger.warn("Android snapshot boot fell back to a cold boot", {
-      avdName: diagnostic.avdName,
+      deviceId: diagnostic.deviceId,
       readyAfterMs: diagnostic.readyAfterMs,
     });
     return;
@@ -1490,6 +1517,7 @@ async function discoverAndroidDriver(
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
       clock: options.clock,
+      database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
       emulator: options.androidEmulator,
       env: process.env,

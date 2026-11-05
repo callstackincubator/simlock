@@ -54,25 +54,8 @@ function leaseHolder(
   ]);
 }
 
-async function releaseAndForget(
-  env: Awaited<ReturnType<typeof withDaemon>>,
-  agentId: string,
-): Promise<string> {
-  const holder = leaseHolder(env, agentId);
-  const grant = JSON.parse(await holder.firstStdoutLine()) as {
-    lease: { id: string };
-    device: { driverDeviceId: string };
-  };
-  // Released explicitly, before the process is killed: a SIGKILLed holder frees nothing
-  // (ADR 0004 §3), so the release has to be its own step for the device to come back.
-  await env.cli(["release", grant.lease.id]);
-  holder.kill("SIGKILL");
-  await holder.waitForExit(15_000).catch(() => undefined);
-  return grant.device.driverDeviceId;
-}
-
 describe("capacity, warm pool, cleanup, and nuke", () => {
-  it("distinguishes the managed-device limit from the running limit, and counts reclaiming as running, never warm", async () => {
+  it("distinguishes the managed-device limit from the running limit, and counts a released device on its way out as running, never warm", async () => {
     const env = await withDaemon({
       configOverrides: { limits: { maxRunning: 2, ios: { maxDevices: 1, maxRunning: 2 } } },
     });
@@ -93,7 +76,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
       label: "second requester queues on the managed-device limit, not the running limit",
     });
 
-    await env.driverScript.merge({ ios: { latencyMs: { reclaim: 1_500 } } });
+    await env.driverScript.merge({ ios: { latencyMs: { shutdown: 1_500 } } });
     const releasePromise = env.cli(["release", grantA.lease.id]);
 
     await waitFor(
@@ -104,7 +87,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
             row.driverDeviceId === grantA.device.driverDeviceId && row.state === "reclaiming",
         );
       },
-      { label: "device visibly enters reclaiming" },
+      { label: "released device visibly enters reclaiming" },
     );
 
     const duringReclaim = await status(env);
@@ -114,13 +97,12 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     const release = await releasePromise;
     expect(release.code).toBe(0);
 
-    // The queued second requester is granted the same device once reclaim finishes
-    // and it becomes warm (`ready`) again.
+    // why: the queued second requester is granted a new device once the released one is deleted; a released device is never granted again.
     const grantB = JSON.parse(await second.firstStdoutLine(15_000)) as {
       lease: { id: string };
       device: { driverDeviceId: string };
     };
-    expect(grantB.device.driverDeviceId).toBe(grantA.device.driverDeviceId);
+    expect(grantB.device.driverDeviceId).not.toBe(grantA.device.driverDeviceId);
 
     // `second` still holds `grantB`, and a SIGKILL would leave it standing for the whole
     // TTL (ADR 0004 §3), so it is released explicitly before the processes are torn down.
@@ -156,27 +138,22 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     await env.cli(["release", grantX.lease.id]);
     holderX.kill("SIGKILL");
     await holderX.waitForExit(15_000).catch(() => undefined);
-    await waitForDeviceState(env, grantX.device.driverDeviceId, "ready");
-
-    // why: the pool learned the kind from the lease and keeps its device ready past idle.shutdownAfterMs.
+    await waitForDeviceState(env, grantX.device.driverDeviceId, "deleted");
+    // why: the released device is deleted; the pool learned the kind from the lease and makes a new device that stays ready past idle.shutdownAfterMs.
+    let readyDevice: { id: string; driverDeviceId: string; state: string } | undefined;
+    await waitFor(
+      async () => {
+        readyDevice = (await deviceRows(env)).find((row) => row.state === "ready");
+        return readyDevice !== undefined;
+      },
+      { label: "the pool makes a ready device of the leased kind" },
+    );
     expect((await env.cli(["cleanup"])).code).toBe(0);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect((await env.cli(["cleanup"])).code).toBe(0);
-    expect(
-      (await deviceRows(env)).find((row) => row.driverDeviceId === grantX.device.driverDeviceId)
-        ?.state,
-    ).toBe("ready");
+    expect((await deviceRows(env)).find((row) => row.id === readyDevice?.id)?.state).toBe("ready");
 
     // why: a dry run lists what a real run would do, and the device the pool keeps is not in it. That it executes nothing is the reaper unit test's: no device here is one a rule acts on.
-    await env.driverScript.merge({ ios: { latencyMs: { reclaim: 5_000 } } });
-    const dryRunDeviceId = await releaseAndForget(env, "dryrun-z");
-    await waitForDeviceState(env, dryRunDeviceId, "ready");
-    const rowsAfterZ = await deviceRows(env);
-    const readyDevice = rowsAfterZ.find(
-      (row) => row.driverDeviceId === dryRunDeviceId && row.state === "ready",
-    );
-    expect(readyDevice, "expected a ready (warm) device for the dry-run preview").toBeDefined();
-
     const preview = await env.cli(["cleanup", "--dry-run"]);
     expect(
       (preview.json as { target: string }[]).filter(
@@ -190,8 +167,7 @@ describe("capacity, warm pool, cleanup, and nuke", () => {
     // about (safety.md: registry-only destruction).
     const heldForNuke = leaseHolder(env, "nuke-held");
     await heldForNuke.firstStdoutLine();
-    // Managed devices are already at 2/2 and running at 1/1 from the idle/dry-run
-    // phase above, so this requester has no device to reuse or provision and queues.
+    // why: the held lease took the one ready device, so running is at 1/1 and this requester has no device to reuse or provision and queues.
     const queuedForNuke = leaseHolder(env, "nuke-queued");
     await waitFor(() => queuedForNuke.progressEvents().some((event) => isQueuedAt(event, 1)), {
       label: "a waiter is queued before nuke",

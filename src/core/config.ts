@@ -306,9 +306,9 @@ export interface Config {
      * silent clamp, so a caller is never left believing it has more time than it does. */
     readonly maxTtlMs: number;
     /**
-     * The lease-identity policy per platform (see `LeaseIdentity`), read by key for a new
-     * device's own platform when it is registered. Daemon configuration only: no lease request
-     * can change it, and a device keeps the value it was created under after this changes.
+     * why: The lease-identity policy per platform (see `LeaseIdentity`) no longer changes anything:
+     * every virtual device serves one lease and is deleted when it ends (ADR 0061 §2). It stays
+     * accepted and stored on each device record.
      */
     readonly identity: {
       readonly ios: LeaseIdentity;
@@ -376,6 +376,12 @@ export interface Config {
       readonly categories?: readonly string[];
       /** why: a slim device gets its own boot deadline, because CI runners are slow. */
       readonly bootTimeoutMs: number;
+    };
+    readonly simulator: {
+      /** why: `false` sets each simulator's volume to 0 after every boot; the core only validates the boolean (the iOS driver reads it). */
+      readonly audio: boolean;
+      /** why: `false` shows each simulator Simlock boots in DeviceHub or Simulator.app; it needs `drivers.ios.deviceSet: default` (the iOS driver refuses otherwise). */
+      readonly headless: boolean;
     };
   };
   /**
@@ -1001,6 +1007,7 @@ function defaultConfig(
       slim: {
         bootTimeoutMs: 600_000,
       },
+      simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},
@@ -1165,6 +1172,10 @@ export function configValidators(
       slim: objectValidator({
         categories: stringArray,
         bootTimeoutMs: positiveNumber,
+      }),
+      simulator: objectValidator({
+        audio: booleanValue,
+        headless: booleanValue,
       }),
     }),
     android: objectValidator({

@@ -246,7 +246,63 @@ describe("LearnedKinds", () => {
     second.close();
   });
 
-  it("warmPoolOwner version 1 creates both STRICT tables with their columns", async () => {
+  it("learns a baseline kind beside the plain kind of its model, forgets both naming the baseline, and migrates a file at warm pool version 1 keeping each kind and its leases", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-learned-"));
+    directories.push(directory);
+    const openFile = (owner: typeof warmPoolOwner) =>
+      openStateDatabase({
+        dataDirectory: directory,
+        filesystem: new NodeFilesystem(),
+        logger: new NoopLogger(),
+        oldFiles: [],
+        owners: [owner],
+        sqlite: new NodeSqliteOpener(),
+        upgradeStep: "",
+      });
+    const first = await openFile({
+      ...warmPoolOwner,
+      migrations: warmPoolOwner.migrations.slice(0, 1),
+      version: 1,
+    });
+    first.database
+      .prepare(
+        "INSERT INTO warm_kinds (id, platform, model, os_version, mode, image_tag, last_leased_at) VALUES (7, 'ios', 'iPhone 16', '18.4', 'full', '', ?)",
+      )
+      .run(T0 + 1);
+    for (const [lease, granted, ended] of [
+      ["a", T0, T0 + 2],
+      ["b", T0 + 1, null],
+    ] as const) {
+      first.database
+        .prepare(
+          "INSERT INTO warm_kind_leases (lease_id, kind_id, granted_at, ended_at) VALUES (?, 7, ?, ?)",
+        )
+        .run(lease, granted, ended);
+    }
+    first.close();
+
+    const second = await openFile(warmPoolOwner);
+    const kinds = new LearnedKinds(second);
+    expect(kinds.kinds(T0 + 5).map((kind) => [kind.spec.model, kind.count])).toEqual([
+      ["iPhone 16", 2],
+    ]);
+    kinds.learn(spec("iPhone 16", { baseline: { name: "checkout", version: 3 } }), "c", T0 + 6);
+    kinds.learn(spec("iPhone 16", { baseline: { name: "login", version: 1 } }), "d", T0 + 7);
+
+    const learned = kinds.kinds(T0 + 8);
+    expect(learned.map((kind) => kind.spec.baseline?.name)).toEqual([
+      "login",
+      "checkout",
+      undefined,
+    ]);
+    expect(learned.map((kind) => kind.count)).toEqual([1, 1, 2]);
+    const forgotten = kinds.forgetMatching({ model: "iPhone 16", platform: "ios" });
+    expect(forgotten.map((kind) => kind.baseline?.name)).toEqual(["login", "checkout", undefined]);
+    expect(kinds.kinds(T0 + 8)).toEqual([]);
+    second.close();
+  });
+
+  it("warmPoolOwner version 2 creates both STRICT tables with their columns", async () => {
     const { state } = await open();
     const table = (name: string) =>
       state.database.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(name)?.sql;
@@ -256,7 +312,7 @@ describe("LearnedKinds", () => {
         .all()
         .map((column) => [column.name, column.type, column.required]);
 
-    expect(warmPoolOwner.version).toBe(1);
+    expect(warmPoolOwner.version).toBe(2);
     expect(String(table("warm_kinds"))).toMatch(/STRICT/);
     expect(String(table("warm_kind_leases"))).toMatch(/STRICT/);
     expect(columns("warm_kinds")).toEqual([
@@ -266,6 +322,7 @@ describe("LearnedKinds", () => {
       ["os_version", "TEXT", 1],
       ["mode", "TEXT", 1],
       ["image_tag", "TEXT", 1],
+      ["baseline", "TEXT", 1],
       ["last_leased_at", "INTEGER", 1],
     ]);
     expect(columns("warm_kind_leases")).toEqual([

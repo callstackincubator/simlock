@@ -5,7 +5,7 @@ description: Find out what is wrong with a worker from its symptoms, and fix it.
 
 import { Aside } from '@astrojs/starlight/components';
 
-Each entry below starts from what you see, names the likely cause, and gives the fix. When nothing here matches, start with the log and `simlock doctor`.
+Find what you see below. Each entry gives the likely cause and the fix. If nothing matches, start with the log and `simlock doctor`.
 
 ## Read the log first
 
@@ -38,14 +38,14 @@ Every CLI error is one JSON line on stderr with a `code` and a `message`, and th
 simlock doctor
 ```
 
-`doctor` compares what Simlock has on record with the devices and processes that really exist on this machine, and checks that the platform tools are installed. It prints a JSON report on stdout, `{"findings":[...]}`. Findings you have to act on also print as one line each on stderr:
+`doctor` checks that the platform tools are installed, and that Simlock's records match the devices that really exist on this machine. It prints a JSON report on stdout, `{"findings":[...]}`. Anything you need to act on also prints as one line on stderr:
 
 ```text
 Missing [android] android-emulator: The Android emulator package is not installed in /Users/dana/Library/Android/sdk. Run `sdkmanager --install emulator`.
 Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana/.nvm/versions/node/v22.13.0/bin/node. Run `simlock daemon install` again.
 ```
 
-`simlock doctor --fix` applies the corrections that are safe. It never touches a leased device, never installs anything, and never deletes a device Simlock has no record of.
+`simlock doctor --fix` makes the fixes that are safe. It never touches a leased device, never installs anything, and never deletes a device Simlock has no record of.
 
 | Finding | What it means | What `--fix` does |
 | --- | --- | --- |
@@ -71,7 +71,7 @@ Service broken: com.callstack.simlock.worker (launchd) names missing /Users/dana
 {"error":{"code":"DAEMON_STARTUP_FAILED","message":"The daemon could not start: ..."}}
 ```
 
-The CLI starts the daemon on demand and waits up to 20 seconds for it. The message carries the daemon's own start error. Common causes:
+The message says why the daemon could not start. Common causes:
 
 - **The config file is wrong.** This one does not reach `DAEMON_STARTUP_FAILED`: the CLI checks `~/.simlock/config.json` before it starts the daemon and fails with `USAGE`, exit 2, printing the problem and naming the key, such as `lease.defaultTtlMs` with `at most lease.maxTtlMs`. Fix the key with `simlock config set`, or edit the file. A file that is not valid JSON fails with `Invalid JSON in config file`. A config that still has a `mode` key is refused: remove it.
 - **State from an older Simlock.** The message starts with `Found ~/.simlock/state.json, which this Simlock no longer reads`. Follow the steps in the message; [Running the daemon](/simlock/docs/worker/running-the-daemon) explains them.
@@ -86,7 +86,7 @@ If the message ends in `Timed out starting simlock daemon`, read `simlock daemon
 
 **Symptom.** Leases for iOS or Android fail with `NO_DRIVER` (exit 12).
 
-**Cause.** A tool the platform needs was missing when the daemon started. Simlock looks for the platform tools once, at start.
+**Cause.** A tool the platform needs was missing when the daemon started. The daemon looks for these tools only when it starts, so installing one later is not enough.
 
 **Fix.**
 
@@ -124,30 +124,33 @@ A request refused with `REQUESTER_ALREADY_LEASED` (exit 13) did not queue: the s
 
 **Symptom.** A lease fails with `PROVISION_FAILED`, or `simlock status` shows a device as `quarantined (purge retry 2, next retry at ...; purge failed: ...)`.
 
-**Cause.** The platform tools failed to create, boot or reset the device. After a lease ends, Simlock resets the device; when the reset fails, the device leaves service and Simlock retries the reset a few times (`warmPool.quarantine.maxRetries`, 3 by default). When the retries run out, Simlock deletes the device.
+**Cause.** Xcode or the Android tools failed to create, boot or clean up the device. A device Simlock cannot clean up is `quarantined`: nobody can lease it, and Simlock tries again a few times (`warmPool.quarantine.maxRetries`, 3 by default). If it still fails, Simlock deletes the device.
 
 **Fix.**
 
 1. Read the reason on the status line and in `simlock daemon logs`.
-2. Check the platform tools work on their own, through Simlock's passthrough: `simlock simctl list devices` or `simlock adb devices`.
+2. Check that the platform tools work on their own: `simlock simctl list devices` or `simlock adb devices`.
 3. Run `simlock doctor`. A `stalled-transition` finding means a device got stuck mid-way; `simlock doctor --fix` takes it out of service and retries.
 4. If one runtime or system image keeps failing, remove it and install it again ([Runtimes and images](/simlock/docs/worker/runtimes-and-images)).
 
-Two Android warnings in the daemon log point at the cause. `Android snapshot boot fell back to a cold boot` (fields `avdName`, `readyAfterMs`) means a device restored from its snapshot took over three times the expected time, so the snapshot is probably damaged. `Android device profile source could not be read` (fields `path`, `reason`) means the Android `devices.xml` exists but could not be read or parsed. A missing file is not reported.
+Two Android warnings in the daemon log can explain slow or failed boots:
+
+- `Android snapshot boot fell back to a cold boot`: an emulator took more than three times as long as expected to start from its saved snapshot, so the snapshot is probably damaged.
+- `Android device profile source could not be read`: the Android `devices.xml` file exists but could not be read. The `path` and `reason` fields say which file and why.
 
 ## An Android device drops off adb
 
 **Symptom.** An Android emulator or phone disappears from `simlock adb devices` mid-lease, or an `adb` call fails with `device offline` or `device not found`.
 
-**Cause.** Simlock runs its own adb server for Android emulators. Its output goes to `logs/adb-server.log` in the Simlock home (`~/.simlock` by default), a file only you can read. Simlock empties it each time it starts that server. adb logs a closing transport there, and nothing else records why it closed.
+**Cause.** adb lost its connection to the device. Simlock runs its own adb for its emulators, and that adb writes to `~/.simlock/logs/adb-server.log`. The file starts empty each time that adb starts, and by default it does not say why a connection closed.
 
-**Fix.** To see why, turn on adb's trace and reproduce the drop:
+**Fix.** To find out why, turn on adb's trace and make the drop happen again:
 
 1. Stop the daemon: `simlock daemon stop`.
 2. Start it again with `ADB_TRACE` set in its environment, for example `ADB_TRACE=all simlock daemon start`. `ADB_TRACE=transport,usb` is quieter. The daemon passes it on to the adb server it starts.
 3. When the device drops, read `logs/adb-server.log`.
 
-The trace is verbose, so unset `ADB_TRACE` and restart the daemon once you have the log. Phones on the default adb server on port 5037 are not covered: that server is not Simlock's.
+The trace is large, so restart the daemon without `ADB_TRACE` once you have the log. This does not cover physical phones: they use the machine's normal adb, not Simlock's.
 
 ## Android licence not accepted
 
@@ -186,12 +189,12 @@ Then retry the request. [Runtimes and images](/simlock/docs/worker/runtimes-and-
 
 **Symptom.** `simlock doctor` reports `orphan-device` findings.
 
-**Cause.** A device sits inside Simlock's own device folder, but Simlock has no record of it. This happens when the daemon stopped between creating a device and recording it, or after you moved `state.db` away. Orphans use disk and are never leased.
+**Cause.** A device sits in Simlock's device folder, but Simlock has no record of it. This happens when the daemon stopped while creating a device, or after you moved `state.db` away. Orphans take disk space and are never leased. Leftover copies Simlock creates devices from, and leftover baseline files, show up the same way, in `sources` with `orphan: true`.
 
 **Fix.** Delete them:
 
 <Aside type="caution">
-`--purge-orphans` permanently deletes every orphaned device it finds, with everything installed on it. It only reaches into Simlock's own device folders, and it stops without deleting anything if it can no longer prove a folder is Simlock's.
+`--purge-orphans` permanently deletes every orphaned device and orphan source it finds, with everything installed on it. It only reaches into Simlock's own device folders, and it stops without deleting anything if it can no longer prove a folder is Simlock's.
 </Aside>
 
 ```sh

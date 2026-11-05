@@ -5,6 +5,7 @@ export type StaleKey = readonly string[];
 const LEASES: readonly StaleKey[] = [["leases"], ["workers"], ["lease"], ["inbox"]];
 const REQUESTS: readonly StaleKey[] = [["lease-requests"], ["inbox"]];
 const WORKERS: readonly StaleKey[] = [["workers"], ["inbox"]];
+const BASELINES: readonly StaleKey[] = [["baselines"]];
 const NONE: readonly StaleKey[] = [];
 
 function hasLeaseId(payload: unknown): boolean {
@@ -28,6 +29,10 @@ export function staleKeys(name: string, payload: unknown): readonly StaleKey[] {
       return REQUESTS;
     case "capacity.changed":
       return WORKERS;
+    case "baseline.saved":
+    case "baseline.removed":
+    case "baseline.stale":
+      return BASELINES;
     default:
   }
   if (name.startsWith("request.")) return REQUESTS;

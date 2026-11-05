@@ -10,6 +10,11 @@ const base = {
 };
 
 describeDeviceDataTable("androidDeviceDataTable", androidDeviceDataTable, [
+  {
+    ...base,
+    avdHome: "/home/simlock/devices/android/simlock_1",
+    imageIdentity: "system-images;android-35;google_apis;arm64-v8a@3",
+  },
   { ...base, imageIdentity: "system-images;android-35;google_apis;arm64-v8a@3" },
   base,
 ]);
@@ -23,6 +28,7 @@ describe("androidDeviceDataTable write", () => {
       "port that is not an integer": { ...base, port: 5554.5 },
       "port that is NaN": { ...base, port: Number.NaN },
       "optional key of the wrong type": { ...base, imageIdentity: 5 },
+      "AVD home of the wrong type": { ...base, avdHome: 5 },
       "extra key": { ...base, extra: "x" },
     };
     const state = await openMemoryState([androidDeviceDataTable]);

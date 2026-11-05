@@ -135,7 +135,12 @@ describe("loadConfig", () => {
         },
       },
       stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 600_000 },
+        simulator: { audio: true, headless: true },
+      },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(resourceOptions(config).limits)).toBe(true);

@@ -70,9 +70,10 @@ class NotingDriver extends FakeDriver {
     super(options);
   }
 
-  override async reclaim(...args: Parameters<FakeDriver["reclaim"]>) {
-    this.notes.push("driver reclaim");
-    return super.reclaim(...args);
+  // why: a released virtual device is destroyed, never reclaimed (ADR 0061).
+  override async destroy(...args: Parameters<FakeDriver["destroy"]>) {
+    this.notes.push("driver destroy");
+    return super.destroy(...args);
   }
 
   async dispose(): Promise<void> {
@@ -715,7 +716,7 @@ describe("optional modules: afterSocketClaimed", () => {
 });
 
 describe("optional modules: beforeDeviceReclaim", () => {
-  it("a release reclaims the device when no turned-on module has beforeDeviceReclaim", async () => {
+  it("a release destroys the device when no turned-on module has beforeDeviceReclaim", async () => {
     const notes: string[] = [];
     const { daemon } = await start({
       modules: definitions(fakeModule({ name: "alpha" })),
@@ -726,10 +727,10 @@ describe("optional modules: beforeDeviceReclaim", () => {
 
     await leaseAndRelease(daemon);
 
-    await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
+    await vi.waitFor(() => expect(notes).toContain("driver destroy"));
   });
 
-  it("beforeDeviceReclaim runs after a release commits and before the device's reclaim starts", async () => {
+  it("beforeDeviceReclaim runs after a release commits and before the device's destroy starts", async () => {
     const notes: string[] = [];
     let live: DaemonServer | undefined;
     const { daemon } = await start({
@@ -759,9 +760,9 @@ describe("optional modules: beforeDeviceReclaim", () => {
     live = daemon;
 
     await leaseAndRelease(daemon);
-    await vi.waitFor(() => expect(notes).toContain("driver reclaim"));
+    await vi.waitFor(() => expect(notes).toContain("driver destroy"));
 
-    expect(notes).toEqual(["lease gone", "hook done", "driver reclaim"]);
+    expect(notes).toEqual(["lease gone", "hook done", "driver destroy"]);
   });
 });
 

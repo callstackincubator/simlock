@@ -98,8 +98,7 @@ async function createHarness(
 ) {
   const clock = new FakeClock(1_000);
   const bus = new EventBus(clock);
-  const driver =
-    options.driver ?? new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
+  const driver = options.driver ?? new FakeDriver({ clock, platform: "ios" });
   const driverDevice = await driver.provision(spec);
   const reclaiming = device("reclaiming", "reclaiming", driverDevice.deviceId, spec);
   const registry = new TestRegistry(options.devices ?? [reclaiming], options.leases, bus);
@@ -174,6 +173,38 @@ function released(device: VirtualDevice): ReleasedLease {
 }
 
 describe("ReclaimCoordinator", () => {
+  const PHYSICAL_UDID = "00008110-001A2B3C4D5E";
+
+  function physicalFixture(): PhysicalDevice {
+    return {
+      createdAt: 1,
+      driverData: {},
+      driverDeviceId: PHYSICAL_UDID,
+      enrolledApps: [],
+      id: "dev_physical",
+      lastLeaseEndedAt: 1_000,
+      physical: true,
+      spec: {
+        class: "phone",
+        model: "iPhone 15 Pro",
+        osVersion: "18.4",
+        physical: true,
+        platform: "ios",
+      },
+      state: "reclaiming",
+    };
+  }
+
+  function physicalDriverFixture() {
+    return new FakeDriver({
+      clock: new FakeClock(1_000),
+      physicalDevices: [
+        { apps: [], ids: [PHYSICAL_UDID], model: "iPhone 15 Pro", osVersion: "18.4" },
+      ],
+      platform: "ios",
+    });
+  }
+
   it("reclaims a released physical lease through the driver with its enrollment app list, and commits ready with the uninstall strategy and its missing apps", async () => {
     const clock = new FakeClock(1_000);
     const driver = new FakeDriver({
@@ -231,25 +262,16 @@ describe("ReclaimCoordinator", () => {
     ]);
     expect(harness.quarantined).toEqual([]);
     expect(harness.notifyAvailability).toHaveBeenCalledOnce();
+    expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
   });
 
-  it("hands the driver's reclaim a device marked virtual", async () => {
-    const harness = await createHarness();
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    const reclaims = harness.driver.calls.filter((call) => call.operation === "reclaim");
-    expect(reclaims.map((call) => call.arguments[0])).toEqual([
-      expect.objectContaining({ physical: false }),
-    ]);
-  });
-
-  it("asks the driver for the strategy of a standard clean before it reclaims", async () => {
-    const harness = await createHarness();
+  it("asks the driver for the strategy of a standard clean before it reclaims a physical device", async () => {
+    const physical = physicalFixture();
+    const harness = await createHarness({ devices: [physical], driver: physicalDriverFixture() });
     const strategy = vi.spyOn(harness.driver, "reclaimStrategy");
     const reclaim = vi.spyOn(harness.driver, "reclaim");
 
-    await harness.coordinator.reclaim(released(harness.reclaiming));
+    await harness.coordinator.reclaim({ ...released(harness.reclaiming), device: physical });
 
     expect(strategy.mock.calls.map((call) => call[1])).toEqual([{ clean: "standard" }]);
     expect(strategy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -293,25 +315,14 @@ describe("ReclaimCoordinator", () => {
     expect(harness.registry.deviceById("dev_physical")?.state).toBe("ready");
   });
 
-  it("commits shutdown, emits device.reclaimed and kicks acquisition when the driver returns shutdown", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
-    expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
-    expect(harness.notifyAvailability).toHaveBeenCalledOnce();
-  });
-
   // ReclaimCoordinator takes no capacity input at all, so "over its limit" cannot be configured
   // here; another device already running is the strongest state the harness can set up, and
   // the reclaim must still commit `ready` without shutting anything down.
-  it("commits ready when the driver returns ready, without shutting it down, even with another device already running", async () => {
-    const harness = await createHarness();
+  it("commits a physical device ready, without shutting it down, even with another device already running", async () => {
+    const physical = physicalFixture();
+    const harness = await createHarness({ devices: [physical], driver: physicalDriverFixture() });
     const extra = device("extra", "ready", "extra-driver", { ...spec, model: "iPhone SE" });
-    const overloaded = new TestRegistry([harness.reclaiming, extra], [], harness.bus);
+    const overloaded = new TestRegistry([physical, extra], [], harness.bus);
     const coordinator = new ReclaimCoordinator({
       claims: harness.claims,
       clock: harness.clock,
@@ -323,49 +334,10 @@ describe("ReclaimCoordinator", () => {
       registry: overloaded,
     });
 
-    await coordinator.reclaim(released(harness.reclaiming));
+    await coordinator.reclaim({ ...released(harness.reclaiming), device: physical });
 
-    expect(
-      overloaded.snapshot.virtualDevices.find((device) => device.id === harness.reclaiming.id)
-        ?.state,
-    ).toBe("ready");
+    expect(overloaded.deviceById("dev_physical")?.state).toBe("ready");
     expect(harness.driver.calls.map((call) => call.operation)).not.toContain("shutdown");
-  });
-
-  it("never calls makeReady on a reclaim", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "shutdown" });
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(driver.calls.map((call) => call.operation)).toContain("reclaim");
-    expect(driver.calls.map((call) => call.operation)).not.toContain("makeReady");
-  });
-
-  it("hands a release-time purge failure to quarantine instead of readiness-checking the device back in", async () => {
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ clock, platform: "ios" });
-    driver.failOn("reclaim", 1, new Error("purge exploded"));
-    const harness = await createHarness({ driver });
-
-    await harness.coordinator.reclaim(released(harness.reclaiming));
-
-    expect(harness.quarantined).toEqual([
-      {
-        attemptedStrategy: "wipe",
-        deviceId: harness.reclaiming.id,
-        duration: 0,
-        error: "Error: purge exploded",
-        kind: "purge-failed",
-        leaseId: "lease-1",
-      },
-    ]);
-    // Quarantine entry is a coordinator concern, not a capacity one: the device
-    // stays running (`reclaiming` and `quarantined` both count), so nothing here
-    // wakes a queued waiter -- and no readiness probe ever runs.
-    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
-    expect(harness.notifyAvailability).not.toHaveBeenCalled();
   });
 
   it("recovers an unleased interrupted reclaim through shutdown, a committed fact, and itself as the emitter", async () => {
@@ -397,150 +369,80 @@ describe("ReclaimCoordinator", () => {
   });
 
   describe("a device whose wipe a daemon start put off", () => {
-    async function deferredHarness(options: {
-      readonly fresh?: boolean;
-      readonly fail?: boolean;
-      readonly slowEraseMs?: number;
-    }) {
+    async function deferredHarness(identity: VirtualDevice["leaseIdentity"]) {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({
-        clock,
-        ...(options.slowEraseMs === undefined
-          ? {}
-          : { latencyMs: { reclaim: options.slowEraseMs } }),
-        platform: "ios",
-        reclaimResult: "ready",
-      });
-      if (options.fail === true) driver.failOn("reclaim", 1, new Error("purge exploded"));
+      const driver = new FakeDriver({ clock, platform: "ios" });
       const driverDevice = await driver.provision(spec);
       const target: VirtualDevice = {
         ...device("deferred", "reclaiming", driverDevice.deviceId, spec),
         deferredReclaimLeaseId: "lease-deferred",
-        ...(options.fresh === true ? { leaseIdentity: "fresh" as const } : {}),
+        ...(identity === undefined ? {} : { leaseIdentity: identity }),
         lastLeaseEndedAt: 900,
       };
-      return {
-        ...(await createHarness({ devices: [target], driver })),
-        // The driver's own clock times its erase, not the coordinator's.
-        driverClock: clock,
-        target,
-      };
+      return { ...(await createHarness({ devices: [target], driver })), target };
     }
 
-    it("is purged by the full reclaim, not only shut down, and returns to the pool ready", async () => {
-      const harness = await deferredHarness({});
+    it.each(["fresh", "reusable"] as const)(
+      "is only shut down, never purged, whatever lease.identity says (%s): the device has ended a lease",
+      async (identity) => {
+        const harness = await deferredHarness(identity);
 
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
-      await harness.coordinator.settle();
+        await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
+        await harness.coordinator.settle();
 
-      const operations = harness.driver.calls.map((call) => call.operation);
-      expect(operations).toContain("reclaim");
-      expect(
-        harness.driver.calls.find((call) => call.operation === "reclaim")?.arguments[1],
-      ).toEqual({ clean: "standard" });
-      expect(operations).not.toContain("shutdown");
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-      expect(harness.bus.replay().map((event) => event.event)).toEqual(["device.reclaimed"]);
-    });
-
-    it("hands a failed purge to quarantine under the lease it was deferred for", async () => {
-      const harness = await deferredHarness({ fail: true });
-
-      await harness.coordinator.recoverInterrupted(harness.target.id);
-      await harness.coordinator.settle();
-
-      expect(harness.quarantined).toMatchObject([
-        { deviceId: harness.target.id, kind: "purge-failed", leaseId: "lease-deferred" },
-      ]);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
-    });
-
-    it("is wiped in the background: recovery returns while the erase runs, and the device stays claimed", async () => {
-      const harness = await deferredHarness({ slowEraseMs: 30_000 });
-
-      const outcome = await Promise.race([
-        harness.coordinator.recoverInterrupted(harness.target.id).then((started) => started),
-        new Promise<"still erasing">((resolve) => setImmediate(() => resolve("still erasing"))),
-      ]);
-
-      expect(outcome).toBe(true);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("reclaiming");
-      expect(harness.claims.claim(harness.target.id)?.kind).toBe("reclaim");
-
-      await new Promise((resolve) => setImmediate(resolve));
-      harness.driverClock.advance(30_000);
-      await harness.coordinator.settle();
-
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("ready");
-      expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
-      expect(harness.notifyAvailability).toHaveBeenCalled();
-    });
-
-    it("settles, with the claim released, when its commit fails and no logger was given", async () => {
-      const harness = await deferredHarness({});
-      vi.spyOn(harness.registry, "transitionDevice").mockRejectedValue(new Error("write failed"));
-
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(true);
-      await expect(harness.coordinator.settle()).resolves.toBeUndefined();
-
-      expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
-    });
-
-    it("is left alone when another operation already holds the device", async () => {
-      const harness = await deferredHarness({});
-      const held = harness.claims.tryClaim(harness.target.id, "boot");
-
-      await expect(harness.coordinator.recoverInterrupted(harness.target.id)).resolves.toBe(false);
-
-      expect(harness.driver.calls.map((call) => call.operation)).not.toContain("reclaim");
-      expect(harness.claims.claim(harness.target.id)?.kind).toBe("boot");
-      held?.release();
-    });
-
-    it("is only shut down when the device is a spent fresh one, which is never purged", async () => {
-      const harness = await deferredHarness({ fresh: true });
-
-      await harness.coordinator.recoverInterrupted(harness.target.id);
-
-      const operations = harness.driver.calls.map((call) => call.operation);
-      expect(operations).toContain("shutdown");
-      expect(operations).not.toContain("reclaim");
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
-    });
+        const operations = harness.driver.calls.map((call) => call.operation);
+        expect(operations).toContain("shutdown");
+        expect(operations).not.toContain("reclaim");
+        expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("shutdown");
+        expect(harness.claims.isClaimed(harness.target.id)).toBe(false);
+      },
+    );
   });
 
   describe("a spent fresh device", () => {
-    function spent(record: VirtualDevice): VirtualDevice {
-      return { ...record, lastLeaseEndedAt: 900, leaseIdentity: "fresh" };
+    function spent(
+      record: VirtualDevice,
+      identity: VirtualDevice["leaseIdentity"] = "fresh",
+    ): VirtualDevice {
+      return { ...record, lastLeaseEndedAt: 900, leaseIdentity: identity };
     }
 
-    async function freshHarness(state: VirtualDevice["state"]) {
+    async function freshHarness(
+      state: VirtualDevice["state"],
+      identity: VirtualDevice["leaseIdentity"] = "fresh",
+    ) {
       const clock = new FakeClock(1_000);
-      const driver = new FakeDriver({ clock, platform: "ios", reclaimResult: "ready" });
-      const target = spent(device("fresh", state, (await driver.provision(spec)).deviceId, spec));
+      const driver = new FakeDriver({ clock, platform: "ios" });
+      const target = spent(
+        device("fresh", state, (await driver.provision(spec)).deviceId, spec),
+        identity,
+      );
       const harness = await createHarness({ devices: [target], driver });
       const operations = () =>
         driver.calls.map((call) => call.operation).filter((operation) => operation !== "provision");
       return { ...harness, operations, target };
     }
 
-    it("is never erased: its lease end is a shutdown and a delete", async () => {
-      const harness = await freshHarness("reclaiming");
+    it.each(["fresh", "reusable"] as const)(
+      "is never erased, whatever lease.identity says (%s): its lease end is a shutdown and a delete",
+      async (identity) => {
+        const harness = await freshHarness("reclaiming", identity);
 
-      await harness.coordinator.reclaim(released(harness.target));
+        await harness.coordinator.reclaim(released(harness.target));
 
-      expect(harness.operations()).toEqual(["shutdown", "destroy"]);
-      expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
-      expect(
-        harness.bus.replay().map((event) => ({ event: event.event, payload: event.payload })),
-      ).toEqual([
-        {
-          event: "device.deleted",
-          payload: { deviceId: harness.target.id, initiator: "lease-end", physical: false },
-        },
-      ]);
-      expect(harness.quarantined).toEqual([]);
-    });
+        expect(harness.operations()).toEqual(["shutdown", "destroy"]);
+        expect(harness.registry.snapshot.virtualDevices[0]?.state).toBe("deleted");
+        expect(
+          harness.bus.replay().map((event) => ({ event: event.event, payload: event.payload })),
+        ).toEqual([
+          {
+            event: "device.deleted",
+            payload: { deviceId: harness.target.id, initiator: "lease-end", physical: false },
+          },
+        ]);
+        expect(harness.quarantined).toEqual([]);
+      },
+    );
 
     it("hands a failed delete to quarantine with strategy delete, after the shutdown commit", async () => {
       const harness = await freshHarness("reclaiming");
@@ -624,7 +526,6 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
           { apps: [], ids: [PHYSICAL_ID], model: "iPhone 15 Pro", osVersion: "18.4" },
         ],
         platform: "ios",
-        reclaimResult: "ready",
       });
     const testState = await openTestState();
     const seeding = await loadTestRegistry({
@@ -764,6 +665,8 @@ describe("ReclaimCoordinator for a physical device the platform no longer lists 
     expect(harness.mockedQuarantine.enter.mock.calls.map(([failure]) => failure)).toMatchObject([
       { deviceId: "dev_physical", error: "Error: uninstall exploded", kind: "purge-failed" },
     ]);
+    // why: a purge failure is quarantined, never readiness-checked back in.
+    expect(harness.driver.calls.map((call) => call.operation)).not.toContain("makeReady");
   });
 
   it("a failed physical reclaim whose presence read rejects, or whose platform has no driver, commits absent with not-present", async () => {
@@ -943,13 +846,14 @@ describe("ReclaimCoordinator readiness callback and returned-device reclaims", (
     expect(physicalDeviceReady).toHaveBeenCalledExactlyOnceWith("dev_physical");
   });
 
-  it("does not call the readiness callback for a virtual device reclaimed to ready", async () => {
+  it("does not call the readiness callback for a virtual device retired on release", async () => {
     const physicalDeviceReady = vi.fn();
     const harness = await createHarness({ physicalDeviceReady });
 
     await harness.coordinator.reclaim(released(harness.reclaiming));
 
-    expect(harness.registry.deviceById("reclaiming")?.state).toBe("ready");
+    // why: ADR 0061 §2 retires a released virtual device; it is never reclaimed back to ready.
+    expect(harness.registry.deviceById("reclaiming")?.state).toBe("deleted");
     expect(physicalDeviceReady).not.toHaveBeenCalled();
   });
 

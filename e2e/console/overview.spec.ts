@@ -436,7 +436,9 @@ test.describe("the Overview's five numbers", () => {
           const { workers } = (await operatorGet(fleet.gateway, "/v1/workers")) as {
             workers: { devices: { state: string }[] }[];
           };
-          const states = workers.flatMap((worker) => worker.devices.map((device) => device.state));
+          const states = workers
+            .flatMap((worker) => worker.devices.map((device) => device.state))
+            .filter((state) => state !== "deleted");
           return states.length === 4 && states.filter((state) => state === "ready").length === 3;
         },
         { label: "four devices, three ready" },

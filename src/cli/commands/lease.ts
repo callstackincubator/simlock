@@ -43,6 +43,7 @@ async function runLease(
   const values = commandArgs(argv, {
     "agent-id": { type: "string" },
     "allow-download": { type: "boolean" },
+    baseline: { type: "string" },
     "bind-pid": { type: "string" },
     class: { type: "string" },
     detach: { type: "boolean" },
@@ -63,6 +64,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
+        "                     [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -72,6 +74,12 @@ async function runLease(
   if (values.platform !== "ios" && values.platform !== "android")
     throw new UsageError(withHelpHint("lease requires --platform <ios|android>"));
   const platform = values.platform as "ios" | "android";
+  const baseline =
+    typeof values.baseline === "string"
+      ? values.baseline
+      : environment.baselineFromEnv === "" || environment.baselineFromEnv === undefined
+        ? undefined
+        : environment.baselineFromEnv;
   if (values.device === "") throw new UsageError("lease --device must not be empty");
   if (values.class === "") throw new UsageError("lease --class must not be empty");
   if (values["agent-id"] === "") throw new UsageError("lease --agent-id must not be empty");
@@ -183,6 +191,7 @@ async function runLease(
         platform,
         ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
         ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
+        ...(baseline === undefined ? {} : { baseline }),
         ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(ttlMs === undefined ? {} : { ttlMs }),

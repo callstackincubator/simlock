@@ -12,12 +12,10 @@ import { iosDeviceSet, setDevices, sweepStaleDeviceSets } from "./helpers/ios-de
 const execFileAsync = promisify(execFile);
 
 /**
- * The warm pool on real devices: a target boots a real simulator and a real emulator ahead of any
- * lease, and with the pool off a released device of each platform ends shut down. The fast lane
+ * why: the warm pool on real devices: a target boots a real simulator and a real emulator ahead of any
+ * lease, and with the pool off a released device of each platform is deleted. The fast lane
  * proves what the pool decides against fake drivers; only a real `simctl` and a real emulator can
- * prove that the create-and-boot path works end to end, that a released Android emulator comes
- * back ready from its snapshot (its `device.reclaimed` strategy is `snapshot`), and that with the pool off a released device of each platform ends
- * shut down and is the device the next lease boots.
+ * prove that the create-and-boot path works end to end, that a released simulator and emulator are deleted, and that with the pool off the next lease creates and boots a new device of each platform.
  *
  * Run only through `scripts/slow-e2e.sh e2e/slow-warm-pool.test.ts`, never in CI.
  */
@@ -72,7 +70,6 @@ const TEST_TIMEOUT = 30 * MINUTE;
  */
 const WARM_ROUND_TIMEOUT = 90 * MINUTE;
 const LEASE_TIMEOUT = 10 * MINUTE;
-/** A release returns once the lease is gone; the device's reclaim is awaited separately. */
 const RELEASE_TIMEOUT = 3 * MINUTE;
 /** Every call that asks the machine or the daemon a question (`simctl`, `adb`, the CLI), so one that never answers names itself. */
 const QUERY_TIMEOUT = MINUTE;
@@ -310,21 +307,27 @@ async function holdsState(
   });
 }
 
-async function untilSettled(env: TestEnv, driverDeviceId: string): Promise<void> {
-  let last: Row[] = [];
+async function untilReadyReplacement(
+  env: TestEnv,
+  platform: Platform,
+  except: string,
+): Promise<Row> {
+  let found: Row | undefined;
   await waitFor(
     async () => {
-      last = await devices(env);
-      const row = last.find((entry) => entry.driverDeviceId === driverDeviceId);
-      return row !== undefined && (row.state === "ready" || row.state === "shutdown");
+      found = (await devices(env)).find(
+        (row) => row.spec.platform === platform && row.state === "ready" && row.id !== except,
+      );
+      return found !== undefined;
     },
     {
       interval: 1000,
-      label: () =>
-        `${driverDeviceId} is reclaimed; last saw ${JSON.stringify(last.map((r) => [r.driverDeviceId, r.state]))}`,
+      label: () => `a ready ${platform} device in place of ${except}`,
       timeout: READY_TIMEOUT,
     },
   );
+  if (found === undefined) throw new Error(`no ready ${platform} replacement`);
+  return found;
 }
 
 async function untilEachPlatformHasReady(env: TestEnv): Promise<void> {
@@ -476,8 +479,7 @@ async function diagnose(env: TestEnv): Promise<void> {
   }
 }
 
-/** The second lease waited on a boot, was not served warm, and booted the device the first one released. */
-async function expectBootedFromShutdown(
+async function expectBootedFresh(
   env: TestEnv,
   platform: Platform,
   second: { readonly grant: Grant; readonly stderr: string },
@@ -496,11 +498,10 @@ async function expectBootedFromShutdown(
   ).not.toMatchObject({ source: "warm" });
   expect(
     second.grant.device.id,
-    `${platform}: the second lease boots the device the first one released`,
-  ).toBe(released.device.id);
+    `${platform}: the second lease boots a new device, not the one the first released`,
+  ).not.toBe(released.device.id);
 }
 
-/** Each platform has exactly one device, the one its first lease released, and it is shut down. */
 function expectOnlyReleasedDevices(
   rows: readonly Row[],
   first: Readonly<Record<Platform, { readonly grant: Grant }>>,
@@ -508,8 +509,8 @@ function expectOnlyReleasedDevices(
   for (const platform of ["ios", "android"] as const) {
     expect(
       rows.filter((row) => row.spec.platform === platform).map((row) => [row.id, row.state]),
-      `${platform}: the released device is the only device and it is shut down`,
-    ).toEqual([[first[platform].grant.device.id, "shutdown"]]);
+      `${platform}: the released device is the only record and it is deleted`,
+    ).toEqual([[first[platform].grant.device.id, "deleted"]]);
   }
 }
 
@@ -580,7 +581,7 @@ describe(
     );
 
     it(
-      "grants the first lease of each targeted model warm with no booting progress, and after release each platform still has a ready device",
+      "grants the first lease of each targeted model warm with no booting progress, and after release each device is deleted, never reclaimed, and each platform still has a ready device",
       { timeout: WARM_ROUND_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
@@ -608,25 +609,28 @@ describe(
           await expectGrantedWarm(env, granted, readyEvents);
 
           for (const grant of granted) await release(env, grant);
-          // why: the pool booted a second device of each kind while the first was leased (a target counts
-          // ready devices only), so once the released one is reclaimed the kind already has its
-          // ready device: the pool owes the released one nothing, and it may stay down.
+          // why: a released device is deleted, never wiped and kept; the pool booted a second device of each kind while the first was leased (a target counts ready devices only), so each kind already has its ready device.
           for (const grant of granted) {
-            await untilSettled(env, grant.device.driverDeviceId);
+            await untilState(env, grant.device.driverDeviceId, "deleted");
           }
           await untilEachPlatformHasReady(env);
-          // A failed snapshot load falls back to a wipe and the pool boots the device back to ready,
-          // so the state alone cannot tell the two apart: the reclaim's own strategy does.
-          const android = granted.find((grant) => grant.device.spec.platform === "android");
-          const reclaimed = (await recordedEvents(env)).filter(
-            (entry) =>
-              entry.event === "device.reclaimed" &&
-              (entry.payload as { deviceId?: string }).deviceId === android?.device.id,
-          );
+          const afterRelease = await recordedEvents(env);
           expect(
-            reclaimed.map((entry) => (entry.payload as { strategy?: string }).strategy),
-            "device.reclaimed strategy of the released emulator",
-          ).toEqual(["snapshot"]);
+            afterRelease.filter((entry) => entry.event === "device.reclaimed"),
+            "a virtual device is never reclaimed",
+          ).toEqual([]);
+          for (const grant of granted) {
+            expect(
+              afterRelease
+                .filter(
+                  (entry) =>
+                    entry.event === "device.deleted" &&
+                    (entry.payload as { deviceId?: string }).deviceId === grant.device.id,
+                )
+                .map((entry) => (entry.payload as { initiator?: string }).initiator),
+              `${grant.device.spec.platform}: device.deleted initiator of the released device`,
+            ).toEqual(["lease-end"]);
+          }
         } finally {
           await nuke(env);
         }
@@ -634,15 +638,14 @@ describe(
     );
 
     it(
-      "with warmPool.enabled false, a released simulator and a released emulator are both shut down, and each boots on the next lease",
+      "with warmPool.enabled false, a released simulator and a released emulator are both deleted, and the next lease creates and boots a new one of each",
       { timeout: COLD_TEST_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
-        // The daemon is restarted with the targets and enabled false in one config write, so the
+        // why: the daemon is restarted with the targets and enabled false in one config write, so the
         // pool never has a target to boot: the only device of each kind is the one the first lease
-        // creates, and once released it is the only shut-down device of its kind, so the planner
-        // has no other to boot on the next lease.
+        // creates, and once released it is deleted, so the next lease has to create another.
         let lane: Lane | undefined;
         try {
           // Inside the try and a step, so a hung setup names itself. `lane` is unset then, so
@@ -673,19 +676,19 @@ describe(
 
           const iosUdid = first.ios.grant.device.driverDeviceId;
           const androidId = first.android.grant.device.driverDeviceId;
-          await step("the simulator reaches shutdown", 6 * MINUTE, () =>
-            untilState(env, iosUdid, "shutdown", 5 * MINUTE),
+          await step("the simulator is deleted", 6 * MINUTE, () =>
+            untilState(env, iosUdid, "deleted", 5 * MINUTE),
           );
-          await step("the emulator reaches shutdown", 6 * MINUTE, () =>
-            untilState(env, androidId, "shutdown", 5 * MINUTE),
+          await step("the emulator is deleted", 6 * MINUTE, () =>
+            untilState(env, androidId, "deleted", 5 * MINUTE),
           );
-          await step("simctl reports the simulator Shutdown", 2 * MINUTE, () =>
+          await step("simctl no longer lists the simulator", 2 * MINUTE, () =>
             waitFor(
               async () =>
-                (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
+                !(await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).some(
                   (device) => device.udid === iosUdid,
-                )?.state === "Shutdown",
-              { interval: 1000, label: "the simulator is Shutdown in simctl", timeout: MINUTE },
+                ),
+              { interval: 1000, label: "the simulator is gone from simctl", timeout: MINUTE },
             ),
           );
           await step("no emulator is online", 2 * MINUTE, () =>
@@ -696,23 +699,23 @@ describe(
             }),
           );
 
-          // Shut down is an end state: the pool, if it were on, would boot both again within this window.
-          await step("the simulator stays shutdown", HOLD + 2 * MINUTE, () =>
-            holdsState(env, iosUdid, "shutdown", HOLD),
+          // why: deleted is an end state: the pool, if it were on, would make a device of each kind again within this window.
+          await step("the simulator stays deleted", HOLD + 2 * MINUTE, () =>
+            holdsState(env, iosUdid, "deleted", HOLD),
           );
-          await step("the emulator stays shutdown", HOLD + 2 * MINUTE, () =>
-            holdsState(env, androidId, "shutdown", HOLD),
+          await step("the emulator stays deleted", HOLD + 2 * MINUTE, () =>
+            holdsState(env, androidId, "deleted", HOLD),
           );
           expect(
-            (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).find(
+            (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).some(
               (device) => device.udid === iosUdid,
-            )?.state,
-            "the simulator is still Shutdown in simctl",
-          ).toBe("Shutdown");
+            ),
+            "the simulator is still gone from simctl",
+          ).toBe(false);
           expect(await onlineEmulators(adbServerPort), "no emulator came back online").toEqual([]);
 
-          // The next boot is clean: each lease waits on a boot, is granted, and its device really is running.
-          // Each platform has exactly one device, the released one, so the next lease can only boot it.
+          // why: the next lease creates and boots a new device: it waits on a boot, is granted, and its device really is running.
+          // Each platform has exactly one record, the released device, deleted.
           expectOnlyReleasedDevices(await devices(env), first);
           const second = {
             android: await step("second lease: boot the emulator", LEASE_TIMEOUT, () =>
@@ -723,7 +726,7 @@ describe(
             ),
           };
           for (const platform of ["ios", "android"] as const) {
-            await expectBootedFromShutdown(env, platform, second[platform], first[platform].grant);
+            await expectBootedFresh(env, platform, second[platform], first[platform].grant);
           }
           await expectSecondBootsRunning(env, deviceSet, adbServerPort, second);
 
@@ -743,7 +746,7 @@ describe(
     );
 
     it(
-      "with no target, a released simulator and a released emulator are ready again before the next lease, are shut down with the pool off, and are booted again from the record with it on",
+      "with no target, a released simulator and a released emulator are deleted and a new one of each is ready before the next lease, shut down with the pool off, and booted again from the record with it on",
       { timeout: COLD_TEST_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
@@ -768,12 +771,21 @@ describe(
           await step("release the emulator", RELEASE_TIMEOUT + MINUTE, () =>
             release(env, first.android.grant),
           );
-          const iosUdid = first.ios.grant.device.driverDeviceId;
-          const androidId = first.android.grant.device.driverDeviceId;
-          await step("both devices are ready again", 2 * READY_TIMEOUT, async () => {
-            await untilState(env, iosUdid, "ready");
-            await untilState(env, androidId, "ready");
+          await step("both released devices are deleted", 6 * MINUTE, async () => {
+            await untilState(env, first.ios.grant.device.driverDeviceId, "deleted");
+            await untilState(env, first.android.grant.device.driverDeviceId, "deleted");
           });
+          // why: the pool learned each kind from its lease and makes a new device of it.
+          const replaced = await step(
+            "a new device of each kind is ready",
+            2 * READY_TIMEOUT,
+            async () => ({
+              android: await untilReadyReplacement(env, "android", first.android.grant.device.id),
+              ios: await untilReadyReplacement(env, "ios", first.ios.grant.device.id),
+            }),
+          );
+          const iosUdid = replaced.ios.driverDeviceId;
+          const androidId = replaced.android.driverDeviceId;
           await step("both stay ready", HOLD + 2 * MINUTE, async () => {
             await holdsState(env, iosUdid, "ready", HOLD);
             await holdsState(env, androidId, "ready", HOLD);
