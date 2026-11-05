@@ -10,7 +10,12 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
-import { DeviceTcpError, unsupportedTunnelMessage, type DeviceReverse } from "./device-tcp.js";
+import {
+  DeviceTcpError,
+  unsupportedEmulatorPortMessage,
+  unsupportedTunnelMessage,
+  type DeviceReverse,
+} from "./device-tcp.js";
 import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
@@ -143,19 +148,26 @@ export class DriverCatalog {
   }
 
   supportsEmulatorPort(
-    _platform: Platform,
-    _device: VirtualDriverDevice | PhysicalDriverDevice,
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
   ): boolean {
-    return false;
+    return this.#drivers.get(platform)?.deviceTcp?.supportsEmulatorPort?.(device) ?? false;
   }
 
   async connectEmulatorPort(
-    _platform: Platform,
-    _device: VirtualDriverDevice | PhysicalDriverDevice,
-    _name: string,
-    _signal: AbortSignal,
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
   ): Promise<TcpStream> {
-    throw new DeviceTcpError("TUNNEL_FAILED", "stub");
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp?.connectEmulatorPort === undefined) {
+      throw new DeviceTcpError(
+        "TUNNEL_UNSUPPORTED",
+        unsupportedEmulatorPortMessage(name, platform, device.physical),
+      );
+    }
+    return await deviceTcp.connectEmulatorPort(device, name, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {
