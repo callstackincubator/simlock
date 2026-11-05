@@ -414,6 +414,7 @@ function withGrantedDevice<T extends { text: string | undefined }>(
     osVersion: spec.osVersion,
     physical: spec.physical,
     ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+    ...(spec.baseline === undefined ? {} : { baseline: spec.baseline }),
   };
   return { ...reply, text: JSON.stringify(body) };
 }
