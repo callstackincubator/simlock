@@ -208,7 +208,7 @@ mode, image tag, note, size, saved time and stale reason.
 
 A device record carries the baseline name and version it was copied from,
 or none. A request carries an optional `baseline` name beside its required
-`platform` (CLI `--baseline`, `SIMLOCK_BASELINE`, HTTP, MCP, the client).
+`platform` (CLI `--baseline`, `SIMLOCK_BASELINE`, HTTP, MCP, the client, agent-device's `deviceBaseline`).
 `fits` and `sameSpec` compare it like the image tag: unset matches only
 unset, a name matches only that name. A request naming a baseline takes the
 baseline's model, OS, mode and image tag; a request whose platform, model,
@@ -218,8 +218,9 @@ OS, mode or image tag differs from the baseline's fails at once
 stale. One function decides a mismatch, and the worker and the gateway both
 call it. A device of an older version than the baseline's
 current one is never granted. A grant and `lease.granted` carry the
-baseline name and version. agent-device does not send a baseline yet; that
-is a later change on both sides.
+baseline name and version. The agent-device front maps `deviceBaseline` to
+`baseline`, sends no class beside it, and adds the baseline to the reply's
+`data.lease.device`.
 
 A learned warm kind carries the baseline name, so the pool keeps baseline
 devices warm with no configuration.

@@ -422,6 +422,9 @@ export const driverPassthrough = defineOperation({
   output: passthroughCommandSchema,
 });
 
+// why: the daemon parses a request as one string, so unbounded stdin exhausts the heap (#1242).
+export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
+
 /**
  * Runs `simctl`, `adb` or `devicectl` **on the machine that owns the device** and streams the output back
  * (ADR 0005 §19a). The difference from `driver.passthrough` is where the process runs, not
@@ -468,7 +471,7 @@ export const deviceExec = defineOperation({
       leaseId: z.string(),
       tool: z.string().min(1),
       args: z.array(z.string()),
-      stdin: z.string().optional(),
+      stdin: z.string().max(EXEC_STDIN_MAX_LENGTH).optional(),
       /**
        * why: Who this command is being run *for* -- the requester the lease is attributed to (ADR
        * 0003 §4), not the connection's principal. Read **only on an admin session**, where it

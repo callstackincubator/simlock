@@ -49,9 +49,11 @@ interface Plan {
   readonly leaseId: string;
   readonly platform: "ios" | "android";
   readonly model?: string;
+  readonly baseline?: string;
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
+  readonly mode?: "slim" | "full";
   readonly physical?: true;
   readonly ttlMs?: number;
 }
@@ -119,19 +121,27 @@ function stringFields(fields: ReturnType<typeof leaseCallFields>) {
   return {
     ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
     ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+    ...(present(fields.deviceMode) ? { mode: fields.deviceMode as "slim" | "full" } : {}),
   };
+}
+
+// why: a named model wins over a class, and a baseline names a device of its own, so it replaces the class and rides beside a model.
+function chosenDevice(fields: ReturnType<typeof leaseCallFields>) {
+  const { device, deviceBaseline, target } = fields;
+  const baseline = typeof deviceBaseline === "string" ? { baseline: deviceBaseline } : {};
+  if (typeof device === "string" && device !== "") return { model: device, ...baseline };
+  if (typeof deviceBaseline === "string") return baseline;
+  const klass = typeof target === "string" ? CLASS_OF_TARGET[target] : undefined;
+  return klass === undefined ? {} : { class: klass };
 }
 
 function planOf(params: Record<string, unknown>, cap: number | undefined): Plan {
   const fields = leaseCallFields(params);
-  const device =
-    typeof fields.device === "string" && fields.device !== "" ? fields.device : undefined;
-  const klass = typeof fields.target === "string" ? CLASS_OF_TARGET[fields.target] : undefined;
   const ttlMs = chosenTtl(fields.ttlMs, cap);
   return {
     leaseId: fields.leaseId as string,
     platform: fields.platform as "ios" | "android",
-    ...(device === undefined ? (klass === undefined ? {} : { class: klass }) : { model: device }),
+    ...chosenDevice(fields),
     ...stringFields(fields),
     ...(params["physical"] === true ? { physical: true as const } : {}),
     ...(ttlMs === undefined ? {} : { ttlMs }),
@@ -267,7 +277,9 @@ function forwardedBody(
 ) {
   const {
     device: _device,
+    deviceBaseline: _deviceBaseline,
     deviceKey: _deviceKey,
+    deviceMode: _deviceMode,
     imageTag: _imageTag,
     osVersion: _osVersion,
     physical: _physical,
@@ -407,6 +419,7 @@ function withGrantedDevice<T extends { text: string | undefined }>(
     osVersion: spec.osVersion,
     physical: spec.physical,
     ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+    ...(spec.baseline === undefined ? {} : { baseline: spec.baseline }),
   };
   return { ...reply, text: JSON.stringify(body) };
 }
