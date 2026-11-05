@@ -186,18 +186,17 @@ export class LearnedKinds {
     });
   }
 
+  /** why: a baseline kind is one row per name, whatever model its latest lease or newest version has. */
   #delete(spec: VirtualSpec): void {
     const database = this.#state.database;
     const where =
-      "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ? AND baseline = ?";
-    const key = [
-      spec.platform,
-      spec.model,
-      spec.osVersion,
-      spec.mode ?? "full",
-      spec.imageTag ?? "",
-      spec.baseline?.name ?? "",
-    ];
+      spec.baseline === undefined
+        ? "platform = ? AND model = ? AND os_version = ? AND mode = ? AND image_tag = ? AND baseline = ''"
+        : "baseline = ?";
+    const key =
+      spec.baseline === undefined
+        ? [spec.platform, spec.model, spec.osVersion, spec.mode ?? "full", spec.imageTag ?? ""]
+        : [spec.baseline.name];
     database
       .prepare(
         `DELETE FROM warm_kind_leases WHERE kind_id IN (SELECT id FROM warm_kinds WHERE ${where})`,

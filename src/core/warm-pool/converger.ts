@@ -259,14 +259,22 @@ export class WarmPool {
     });
   }
 
-  /** why: a learned baseline kind stores only the name, so each pass gives its spec the version the baseline has now, and a copy of an older one matches no kind. */
+  /** why: a learned baseline kind stores only the name, so each pass warms it as the baseline's newest version; a baseline no longer there leaves the stored spec for the catalog check to forget. */
   #atCurrentVersion(kind: LearnedKind): LearnedKind {
     const named = kind.spec.baseline;
     const current = named === undefined ? undefined : this.options.baselines.current(named.name);
     if (named === undefined || current === undefined) return kind;
     return {
       ...kind,
-      spec: { ...kind.spec, baseline: { name: named.name, version: current.version } },
+      spec: {
+        model: current.model,
+        osVersion: current.osVersion,
+        physical: false,
+        platform: current.platform,
+        ...(current.mode === "slim" ? { mode: "slim" as const } : {}),
+        ...(current.imageTag === undefined ? {} : { imageTag: current.imageTag }),
+        baseline: { name: named.name, version: current.version },
+      },
     };
   }
 
