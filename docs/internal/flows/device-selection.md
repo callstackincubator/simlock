@@ -26,7 +26,7 @@ How one lease request becomes one concrete device, virtual or physical.
 | Enrolled physical devices | registry snapshot; presence from `Driver.listPresentPhysical` | Each physical plan; presence before each grant |
 | Warm targets | `warmPool.targets` (`core/warm-pool/config.ts`), and the kinds the pool learned from leases (`core/warm-pool/learned.ts`, `state.db`) | Every warm-pool pass, downloads off |
 
-Never read: the sdkmanager catalog. A preference list is merged in `daemon/main.ts`
+Never read: the sdkmanager catalog. A preference list is merged in `daemon/worker-composition.ts`
 `modelPreferenceWiring`; nothing else builds it.
 
 ## Virtual: request → spec

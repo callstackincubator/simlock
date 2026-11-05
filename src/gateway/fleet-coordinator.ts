@@ -34,30 +34,18 @@
  * authorization for `lease.renew`/`lease.release`/`device.exec` keys on **`ownerId`** instead
  * (§26) -- the gateway's own inbound principal, resolved by `GatewayDispatcher`'s
  * `authorizeLookups` from `ownerId()`/`leaseRequesterId()` below, never by this class directly.
- *
- * ## What this class does not do
- *
- * `WORKER_UNREACHABLE` retry/backoff semantics and "dispatched, then uplink lost" recovery are
- * #119's (ADR §28/§29) -- every forward in this class funnels through `#forwardToWorker`, the one
- * chokepoint #119 can wrap without touching every call site. This class answers
- * `WORKER_UNREACHABLE` when a target is not reachable *right now*, and nothing more.
  */
 import type { EventBus, EventMap } from "../bus/index.js";
 import type {
   BaselineSaveInput,
   BaselineSaveOutput,
   LeaseGrant,
-  LeaseRecord,
-  RotateInput,
   RotateOutput,
-  SimlockAdminClient,
 } from "../admin/index.js";
 import {
   isSimlockError,
   requestedClass,
   requestedDevice,
-  capacityReasonSchema,
-  type AnySimlockError,
   type Platform,
 } from "../contract/index.js";
 import { DispatchError, type DispatchSession } from "../daemon/dispatch.js";
@@ -77,8 +65,15 @@ import {
 } from "../leasing/index.js";
 import type { Clock, IdGenerator, Logger } from "../ports/index.js";
 import { NoopLogger } from "../ports/index.js";
-import { isUplinkLost, liveClient, type WorkerDirectory } from "./fleet-ports.js";
+import {
+  classifyRelayedError,
+  FleetForwarding,
+  type FleetExecInput,
+  type FleetRotateInput,
+} from "./fleet-forwarding.js";
+import { liveClient, type WorkerDirectory } from "./fleet-ports.js";
 import type { FleetViews } from "./fleet-ports.js";
+import { FleetRefusals, refusedCapacityReason, type WorkerEntry } from "./fleet-refusals.js";
 import { type FleetLeaseEntry, type FleetLeaseIndex } from "./lease-index.js";
 import type { WorkerView } from "./worker-registry.js";
 import {
@@ -95,35 +90,11 @@ import {
   type RoutableRequest,
   type RoutingDecision,
   type RoutingPolicy,
-  type WorkerExplanation,
 } from "./routing.js";
-import {
-  type CapacityReason,
-  type Rejection,
-  viewLoadKey,
-  type WorkerReason,
-} from "./routing/index.js";
-
-type WorkerEntry = WorkerReason & { readonly workerId: string };
+import { type Rejection, type WorkerReason } from "./routing/index.js";
 
 // why: the gateway adds this to the leasing module's entry; the contract's schema is its wire shape.
 export type FleetWaitingRequest = WaitingRequest & { readonly workers?: WorkerEntry[] };
-
-interface Refusal {
-  readonly key: string;
-  readonly capacityReason?: CapacityReason;
-  readonly provisionFailure?: DispatchError;
-}
-
-const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
-  CAPABILITY_MISSING: "capability-missing",
-  NO_DRIVER: "no-driver",
-  RUNTIME_MISSING: "runtime-missing",
-  UNKNOWN_MODEL: "unknown-model",
-  UNKNOWN_BASELINE: "no-baseline",
-  BASELINE_MISMATCH: "baseline-mismatch",
-  BASELINE_STALE: "baseline-stale",
-};
 
 // why: the filters that hold a worker back only for now (it is full, busy, not ready or unhealthy), so it could take the request later; any other reason (drained, disconnected, a missing driver, runtime, model or capability) means it will not take it by waiting.
 const COULD_TAKE_LATER: ReadonlySet<WorkerReason["reason"]> = new Set([
@@ -147,18 +118,6 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "BASELINE_STALE",
 ]);
 
-export interface FleetExecInput {
-  readonly leaseId: string;
-  readonly tool: string;
-  readonly args: readonly string[];
-  readonly stdin?: string;
-}
-
-export interface FleetRotateInput {
-  readonly leaseId: string;
-  readonly orientation: RotateInput["orientation"];
-}
-
 export interface FleetLeaseCoordinatorOptions {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
@@ -172,9 +131,9 @@ export interface FleetLeaseCoordinatorOptions {
    * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
    * to fire first, since the gateway's default is deliberately the longer of the two. */
   readonly execTimeoutMs: number;
-  /** P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded `lease.request`,
-   * the one uplink call that used to have no timeout of its own. See
-   * `#withLeaseRequestTimeout`'s own doc comment. */
+  /** why: P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded
+   * `lease.request`, the one uplink call that used to have no timeout of its own. See
+   * `FleetForwarding.withLeaseRequestTimeout`'s own doc comment. */
   readonly leaseRequestTimeoutMs: number;
   /**
    * `lease.requestRetentionMs`/`lease.maxRequestRecords`. A gateway keeps its lease requests in
@@ -219,16 +178,24 @@ export class FleetLeaseCoordinator {
   readonly #unsubscribeViews: () => void;
   /** A `WeakMap` so a waiter that never dispatches (rejected, cancelled, timed out) leaks no entry. */
   readonly #createdAt = new WeakMap<FleetWaiter, number>();
-  /** A `WeakMap` so the memo dies with the waiter. */
-  readonly #refusals = new WeakMap<FleetWaiter, Map<string, Refusal>>();
   readonly #workerReasons = new WeakMap<FleetWaiter, readonly WorkerEntry[]>();
-  /** A `WeakMap` so the memo dies with the waiter. */
-  readonly #cannotServe = new WeakMap<FleetWaiter, Map<string, DispatchError>>();
+  readonly #refusals: FleetRefusals;
+  readonly #forwarding: FleetForwarding;
   #dispatchDepth = 0;
   #passRequested = false;
 
   constructor(private readonly options: FleetLeaseCoordinatorOptions) {
     this.#logger = options.logger ?? new NoopLogger();
+    this.#refusals = new FleetRefusals({ routing: options.routing, views: options.views });
+    this.#forwarding = new FleetForwarding({
+      clock: options.clock,
+      directory: options.directory,
+      execTimeoutMs: options.execTimeoutMs,
+      leaseIndex: options.leaseIndex,
+      leaseRequestTimeoutMs: options.leaseRequestTimeoutMs,
+      logger: this.#logger,
+      views: options.views,
+    });
     this.#queue = new FleetQueue({
       clock: options.clock,
       idGenerator: options.idGenerator,
@@ -272,6 +239,7 @@ export class FleetLeaseCoordinator {
     });
   }
 
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
   ownerId(gatewayLeaseId: string): string | undefined {
     return this.options.leaseIndex.ownerId(gatewayLeaseId);
   }
@@ -404,374 +372,35 @@ export class FleetLeaseCoordinator {
     });
   }
 
-  async renew(gatewayLeaseId: string, ttlMs: number | undefined): Promise<FleetLeaseRecord> {
-    const entry = this.#requireEntry(gatewayLeaseId);
-    let record: LeaseRecord;
-    try {
-      record = await this.#forwardToWorker(entry.workerId, (client) =>
-        client.renewLease({
-          leaseId: entry.workerLeaseId,
-          ...(ttlMs === undefined ? {} : { ttlMs }),
-        }),
-      );
-    } catch (error: unknown) {
-      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
-      throw error;
-    }
-    return this.#projectRecord(record, entry);
+  renew(gatewayLeaseId: string, ttlMs: number | undefined): Promise<FleetLeaseRecord> {
+    return this.#forwarding.renew(gatewayLeaseId, ttlMs);
   }
 
-  /**
-   * why: ADR 0061 §6: a save goes to the worker that holds the lease, by its own lease id; it ends the lease, so the index entry goes as after a release, and the answer waits for a view read with the worker's baselines, so a request after it sees the new copy.
-   */
   // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
-  async saveBaseline(
+  saveBaseline(
     gatewayLeaseId: string,
     input: Pick<BaselineSaveInput, "name" | "note">,
   ): Promise<BaselineSaveOutput> {
-    const entry = this.#requireEntry(gatewayLeaseId);
-    let saved: BaselineSaveOutput;
-    try {
-      saved = await this.#forwardToWorker(entry.workerId, (client) =>
-        client.saveBaseline({
-          leaseId: entry.workerLeaseId,
-          name: input.name,
-          ...(input.note === undefined ? {} : { note: input.note }),
-        }),
-      );
-    } catch (error: unknown) {
-      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
-      throw error;
-    }
-    this.options.leaseIndex.remove(gatewayLeaseId);
-    await this.options.directory.target(entry.workerId)?.refresh({ includeCatalog: true });
-    return { ...saved, leaseId: gatewayLeaseId };
+    return this.#forwarding.saveBaseline(gatewayLeaseId, input);
   }
 
-  async release(gatewayLeaseId: string): Promise<void> {
-    const entry = this.#requireEntry(gatewayLeaseId);
-    try {
-      await this.#forwardToWorker(entry.workerId, (client) =>
-        client.releaseLease({ leaseId: entry.workerLeaseId }),
-      );
-    } catch (error: unknown) {
-      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
-      throw error;
-    }
-    // Removed immediately rather than waiting on the relayed `lease.released` fact to make the
-    // round trip back over the uplink: the release just succeeded, on this same call, so there
-    // is nothing left to learn from that event. `removeByWorkerLease` still runs when it arrives
-    // (idempotent -- see `FleetLeaseIndex`), which is what covers a release the worker's own
-    // TTL or a local operator caused instead.
-    this.options.leaseIndex.remove(gatewayLeaseId);
+  release(gatewayLeaseId: string): Promise<void> {
+    return this.#forwarding.release(gatewayLeaseId);
   }
 
-  /**
-   * ADR §34: releases only the leases this gateway issued, across every connected worker, and
-   * never a worker's own local leases. A worker that cannot be reached is reported, naming it,
-   * while every other worker's releases still complete -- what has already succeeded by the time
-   * one fails stays released.
-   *
-   * H8 (round 2 review): the thrown error's `details.releasedLeaseIds` names everything that did
-   * succeed before the failure, rather than leaving the operator to guess (§34's own "leaves the
-   * operator guessing" is exactly the thing this closes) -- `lease.release-all`'s output shape
-   * (`{ leaseIds }`) still has no room to carry a partial result on its *success* path, so this is
-   * the one channel available on the answer that does exist. #119, which owns `WORKER_UNREACHABLE`
-   * retry/backoff, may still want to widen the output shape itself.
-   */
-  async releaseAll(): Promise<readonly string[]> {
-    const released: string[] = [];
-    let firstFailure: unknown;
-    for (const entry of this.options.leaseIndex.all()) {
-      try {
-        await this.#forwardToWorker(entry.workerId, (client) =>
-          client.releaseLease({ leaseId: entry.workerLeaseId }),
-        );
-        this.options.leaseIndex.remove(entry.gatewayLeaseId);
-        released.push(entry.gatewayLeaseId);
-      } catch (error: unknown) {
-        if (this.#forgetIfUnknownToWorker(entry.gatewayLeaseId, error)) {
-          // C3: the worker already agrees this lease does not exist -- that is not a failure to
-          // report, it is the release this call asked for, already true. Skip it (not a
-          // `firstFailure`) rather than making a single zombie entry fail every future
-          // `release-all` forever.
-          released.push(entry.gatewayLeaseId);
-          continue;
-        }
-        firstFailure ??= error;
-      }
-    }
-    if (firstFailure !== undefined) {
-      throw this.#withReleasedDetails(firstFailure, released);
-    }
-    return released;
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  releaseAll(): Promise<readonly string[]> {
+    return this.#forwarding.releaseAll();
   }
 
-  /**
-   * C3 (round 2 review): a worker answering `UNKNOWN_LEASE` to a release or renew is telling this
-   * gateway its own index entry is wrong -- the one source of truth for removal
-   * (`lease.released`/`lease.expired`) never fires for a lease the worker has no record of at
-   * all, so without this the entry is immortal: every future request from the same requester is
-   * refused `REQUESTER_ALREADY_LEASED` naming a lease that exists nowhere, and (`releaseAll`)
-   * every future `lease.release-all` fails on it forever. Returns whether it acted, so a caller
-   * (`releaseAll`) can fold that lease into its own success accounting instead of its failure one.
-   */
-  #forgetIfUnknownToWorker(gatewayLeaseId: string, error: unknown): boolean {
-    if (!(error instanceof DispatchError) || error.code !== "UNKNOWN_LEASE") return false;
-    this.options.leaseIndex.remove(gatewayLeaseId);
-    return true;
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  exec(input: FleetExecInput, session: DispatchSession): Promise<{ readonly exitCode: number }> {
+    return this.#forwarding.exec(input, session);
   }
 
-  #withReleasedDetails(error: unknown, released: readonly string[]): unknown {
-    if (!(error instanceof DispatchError)) return error;
-    const baseDetails =
-      typeof error.details === "object" && error.details !== null ? error.details : {};
-    return new DispatchError(error.code, error.message, {
-      ...baseDetails,
-      releasedLeaseIds: released,
-    });
-  }
-
-  async exec(
-    input: FleetExecInput,
-    session: DispatchSession,
-  ): Promise<{ readonly exitCode: number }> {
-    const entry = this.#requireEntry(input.leaseId);
-    // ADR §19b/§27: the worker checks this *namespaced* requester against the lease in front of
-    // it (§19a'), so it must be built from the lease's own recorded requester -- never from
-    // whatever `device.exec`'s own optional `requesterId` said, which the gateway's own
-    // `authorize` hook (via `leaseRequesterId` above) has already resolved by the time this
-    // handler runs.
-    const namespacedRequesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    // ADR §19a/§19e: `session.onStarted` means "the process now exists", and a transport chooses
-    // its response shape on it -- HTTP commits its `200` and starts an SSE stream, so every
-    // failure that can happen *before* a process exists (§19a''s `FORBIDDEN` when the worker's own
-    // ownership check disagrees with this gateway's index, the driver's `PASSTHROUGH_REFUSED` /
-    // `UNKNOWN_PASSTHROUGH_TOOL`) has to reach the caller as its own status code instead.
-    //
-    // This gateway cannot infer that moment: it holds no driver refusal list and does not
-    // duplicate the worker-side ownership check. Two earlier attempts to infer it each broke one
-    // half of the contract -- announcing before the forward went out turned a `FORBIDDEN` between
-    // two fleet agents into a `200` + SSE `error` (round 2), and deferring to the first relayed
-    // `output` chunk left a *silent* long-running command (§19b's own worked example,
-    // `simctl install <path>`) with no `200` and no keepalives at all (round 3), then a timed
-    // grace window put the first failure back for any refusal slower than the guess (round 4).
-    //
-    // So the worker sends the fact instead of the gateway guessing it. Its dispatcher already
-    // computes this exact moment -- it spawns the child and then calls `onStarted` -- and ADR
-    // §19a's request-scoped push family carries it (`started`, see `contract/pushes.ts`).
-    // Relaying it is all this needs.
-    //
-    // `started` is part of protocol 5, not an addition on top of it: 5 has never shipped (`main`
-    // advertises 3; 4 and 5 both land with this stack), so it releases as one version carrying
-    // `device.exec`, its `output` family, `status.get`'s `mode`, the gateway surface and this
-    // frame together. Nothing will ever advertise 5 without it, which is exactly why the grace
-    // timer could be deleted outright rather than kept as a fallback -- there is no peer to fall
-    // back for, and a second path to this signal would be the duplication architecture rule 10
-    // forbids. A worker older than protocol 5 negotiates nothing and is `incompatible` by range
-    // (§31), so it is never dispatched to at all.
-    let started = false;
-    const announceStarted = (): void => {
-      if (started) return;
-      started = true;
-      session.onStarted?.();
-    };
-    // H4 (round 3 review): `#withExecTimeout` settling `EXEC_TIMEOUT` only stops *this* call's
-    // returned promise from being awaited any further -- the worker's own `client.exec` RPC is
-    // never cancelled, and its `onOutput` closure below stays live for as long as the worker
-    // keeps sending chunks, relaying every one of them into `session.onOutput` long after the
-    // caller has already been told this command timed out. Nothing here made that safe; it was
-    // HTTP's own `OutputRelay.drop()` that happened to swallow a push arriving after an SSE
-    // response had already ended, which is the transport saving this class, not this class
-    // cancelling anything -- a future non-HTTP frontend has no such backstop. `detached` is
-    // flipped by `#withExecTimeout`'s own `onTimeout` hook, right as it decides to reject, so no
-    // late chunk reaches `session.onOutput` (or spuriously fires `onStarted`) once that has
-    // happened.
-    let detached = false;
-    return this.#forwardToWorker(entry.workerId, async (client) => {
-      // ADR §19e (P5, round 2 review): `gateway.execTimeoutMs` is the backstop for "the worker
-      // never answers at all" -- the worker's own `exec.timeoutMs` is authoritative for an
-      // ordinary timeout and is expected to answer first (the gateway's default is deliberately
-      // the longer of the two), so this only ever fires when nothing else would have.
-      return this.#withExecTimeout(
-        client.exec(
-          {
-            leaseId: entry.workerLeaseId,
-            tool: input.tool,
-            args: [...input.args],
-            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-            requesterId: namespacedRequesterId,
-          },
-          {
-            onOutput: (chunk) => {
-              if (detached) return;
-              void session.onOutput?.(chunk.stream, chunk.chunk);
-            },
-            // The worker's own "the process exists" fact, relayed verbatim -- the only thing
-            // that announces `started` here, so there is exactly one path to it.
-            onStarted: () => {
-              if (detached) return;
-              announceStarted();
-            },
-          },
-        ),
-        entry.workerId,
-        () => {
-          detached = true;
-        },
-      );
-    });
-  }
-
-  /**
-   * why: `device.rotate` forwarded to the worker that owns the lease, with the lease's own namespaced requester, bounded by `gateway.execTimeoutMs` like `exec`. A worker names the lease by its own id in any coded error; the caller holds the gateway's id, so the error names that instead.
-   */
-  async rotate(input: FleetRotateInput, _session: DispatchSession): Promise<RotateOutput> {
-    const entry = this.#requireEntry(input.leaseId);
-    const requesterId = `${this.options.leaseIndex.requesterPrefix}${entry.requesterId}`;
-    try {
-      const rotated = await this.#forwardToWorker(entry.workerId, (client) =>
-        this.#withExecTimeout(
-          client.rotate(entry.workerLeaseId, input.orientation, { requesterId }),
-          entry.workerId,
-          () => undefined,
-          "device.rotate",
-        ),
-      );
-      return { leaseId: input.leaseId, orientation: rotated.orientation };
-    } catch (error) {
-      throw this.#namedForCaller(error, entry);
-    }
-  }
-
-  #namedForCaller(error: unknown, entry: FleetLeaseEntry): unknown {
-    if (!(error instanceof DispatchError)) return error;
-    const details =
-      typeof error.details === "object" && error.details !== null ? error.details : undefined;
-    const names = (details as { leaseId?: unknown } | undefined)?.leaseId === entry.workerLeaseId;
-    const message = replaceWholeId(error.message, entry.workerLeaseId, entry.gatewayLeaseId);
-    if (!names && message === error.message) return error;
-    return new DispatchError(
-      error.code,
-      message,
-      names ? { ...details, leaseId: entry.gatewayLeaseId } : error.details,
-    );
-  }
-
-  /**
-   * Races a forwarded `device.exec` against `gateway.execTimeoutMs` (ADR §19e). Before this,
-   * `exec` awaited `client.exec` unbounded -- a worker that never answers at all (the case this
-   * config value exists for, not an ordinary command timeout the worker's own `exec.timeoutMs`
-   * already covers) hung the call and its SSE stream forever, and nothing here read the config
-   * value the schema, validator, and docs already described.
-   *
-   * `onTimeout` (H4, round 3 review) is `#raceTimeout`'s own detach hook -- see `exec`'s own
-   * `detached` flag for why: a client that only stops *awaiting* the worker's answer, without
-   * also telling `exec`'s `onOutput` closure to stop relaying, would keep forwarding late chunks
-   * to `session.onOutput` for as long as the worker cared to keep sending them.
-   */
-  #withExecTimeout<Value>(
-    promise: Promise<Value>,
-    workerId: string,
-    onTimeout: () => void,
-    operation = "device.exec",
-  ): Promise<Value> {
-    return this.#raceTimeout(
-      promise,
-      this.options.execTimeoutMs,
-      () =>
-        new DispatchError(
-          "EXEC_TIMEOUT",
-          `Worker ${workerId} did not answer ${operation} within gateway.execTimeoutMs (${String(this.options.execTimeoutMs)}ms)`,
-        ),
-      onTimeout,
-    );
-  }
-
-  /**
-   * P2 (round 2 review): races a forwarded `lease.request` against
-   * `gateway.leaseRequestTimeoutMs`. Before this, the one uplink call this class makes with no
-   * bound of its own left a waiter `processing` -- a state neither `WaitQueue#armTimeout` (it
-   * declines to reject a `processing` waiter) nor `cancelPending` (`not-cancellable`) can reach
-   * -- for as long as a wedged worker cared to hold it, with `timeoutMs`/`lease.cancel`
-   * unenforceable the whole time (ADR §10). Expiry maps to `WORKER_UNREACHABLE`: not a fact
-   * about this worker's capacity (a real answer might still have been a grant), but the same
-   * "not reachable right now" story `#forwardToWorker`'s pre-flight check already answers that
-   * code for.
-   *
-   * If the worker does eventually answer after this already gave up, that answer is discarded
-   * here exactly as `#withExecTimeout`'s own doc describes -- a grant landing late becomes an
-   * orphan lease on the worker (this gateway rejected the waiter and issued nothing to release
-   * it by), the same class of gap H2/H8 already name for the RPCs this class does track state
-   * for. A genuinely wedged worker is rare enough, and `leaseRequestTimeoutMs` generous enough,
-   * that this is left as a known consequence rather than built out here.
-   *
-   * `onTimeout` (P4, round 3 review): the same detach hook `#withExecTimeout` already takes, for
-   * the same reason -- see `#attempt`'s own `detached` flag.
-   */
-  #withLeaseRequestTimeout<Value>(
-    promise: Promise<Value>,
-    workerId: string,
-    onTimeout: () => void,
-  ): Promise<Value> {
-    return this.#raceTimeout(
-      promise,
-      this.options.leaseRequestTimeoutMs,
-      () =>
-        new DispatchError(
-          "WORKER_UNREACHABLE",
-          `Worker ${workerId} did not answer lease.request within gateway.leaseRequestTimeoutMs (${String(this.options.leaseRequestTimeoutMs)}ms)`,
-          { workerId },
-        ),
-      onTimeout,
-    );
-  }
-
-  /**
-   * Mirrors `WorkerLink#withTimeout`'s race-and-cancel shape: whichever of the timer or
-   * `promise` settles first wins, and the other is inert from then on (the timer is cancelled on
-   * a real answer; a promise that eventually does settle after the timer already fired is simply
-   * ignored, not delivered late).
-   *
-   * That "ignored, not delivered late" is true of `promise`'s own eventual resolution -- it is
-   * *not* true, on its own, of anything a callback reachable from `promise` keeps doing after the
-   * timer wins (H4, round 3 review): `client.exec`'s `onOutput` closure is exactly such a
-   * callback, invoked directly by the worker's own RPC handling, entirely outside this promise's
-   * settlement. `onTimeout`, when given, runs synchronously the moment the timer decides to
-   * reject -- before `buildTimeoutError` is even called -- so a caller with such a callback can
-   * flip its own "stop relaying" flag in the same tick its timeout error is built, rather than
-   * relying on a downstream transport (HTTP's `OutputRelay.drop()`) to swallow what this class
-   * itself never stopped producing.
-   */
-  #raceTimeout<Value>(
-    promise: Promise<Value>,
-    timeoutMs: number,
-    buildTimeoutError: () => DispatchError,
-    onTimeout?: () => void,
-  ): Promise<Value> {
-    return new Promise<Value>((resolve, reject) => {
-      let settled = false;
-      const timer = this.options.clock.setTimer(timeoutMs, () => {
-        if (settled) return;
-        settled = true;
-        onTimeout?.();
-        reject(buildTimeoutError());
-      });
-      promise.then(
-        (value) => {
-          if (settled) return;
-          settled = true;
-          this.options.clock.cancel(timer);
-          resolve(value);
-        },
-        (error: unknown) => {
-          if (settled) return;
-          settled = true;
-          this.options.clock.cancel(timer);
-          reject(error);
-        },
-      );
-    });
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  rotate(input: FleetRotateInput, session: DispatchSession): Promise<RotateOutput> {
+    return this.#forwarding.rotate(input, session);
   }
 
   /** Unsubscribes from worker-view changes and rejects every still-pending waiter -- a gateway
@@ -880,7 +509,7 @@ export class FleetLeaseCoordinator {
     const claimedThisPass = isPhysical ? claims.physical : claims.virtual;
     const claimKey = (workerId: string): string =>
       isPhysical ? `${workerId}\u0000${physicalMatchKey(waiter.request)}` : workerId;
-    const refusals = this.#cannotServe.get(waiter);
+    const refusals = this.#refusals.cannotServe(waiter);
     // A worker claimed this pass or one that answered `NO_CAPACITY` is busy, not unable, so it
     // stays in the table's view.
     const allViews = this.options.views.routingViews();
@@ -891,12 +520,13 @@ export class FleetLeaseCoordinator {
       this.#rejectUnservable(waiter, verdict, refusals);
       return false;
     }
-    const reasons = this.#reasonsFor(waiter, request, allViews, {
+    const reasons = this.#refusals.reasonsFor(waiter, request, allViews, {
       claimed: (workerId) => claimedThisPass.has(claimKey(workerId)),
     });
     this.#workerReasons.set(waiter, reasons);
     const eligibleWorkers = views.filter(
-      (worker) => !claimedThisPass.has(claimKey(worker.id)) && !this.#refused(waiter, worker),
+      (worker) =>
+        !claimedThisPass.has(claimKey(worker.id)) && !this.#refusals.refused(waiter, worker),
     );
     const decision = this.options.routing.select(request, eligibleWorkers);
     if (decision === undefined) {
@@ -908,67 +538,13 @@ export class FleetLeaseCoordinator {
     return true;
   }
 
-  // why: the first failing check wins, in the order the spec lists: a filter reason, an unreachable target, a cannot-serve memo, a refusal at the current view, a claim this pass, a rank zero reason, else not-chosen.
-  #reasonsFor(
-    waiter: FleetWaiter,
-    request: RoutableRequest,
-    views: readonly WorkerView[],
-    options: {
-      readonly claimed?: (workerId: string) => boolean;
-      readonly unreachable?: string;
-    } = {},
-  ): readonly WorkerEntry[] {
-    const explained = new Map(
-      this.options.routing.explain(request, views).map((entry) => [entry.workerId, entry]),
-    );
-    return views.map((view): WorkerEntry => ({
-      ...this.#reasonFor(waiter, view, explained.get(view.id), options),
-      workerId: view.id,
-    }));
-  }
-
-  #reasonFor(
-    waiter: FleetWaiter,
-    view: WorkerView,
-    entry: WorkerExplanation | undefined,
-    options: { readonly claimed?: (workerId: string) => boolean; readonly unreachable?: string },
-  ): WorkerReason {
-    if (entry?.filter !== undefined) return entry.filter;
-    if (options.unreachable === view.id) return { reason: "disconnected" };
-    const claimed = options.claimed?.(view.id) === true;
-    return (
-      this.#cannotServeReason(waiter, view.id) ??
-      this.#refusedReason(waiter, view, entry?.zero) ??
-      passedOver(claimed, entry?.zero)
-    );
-  }
-
-  #cannotServeReason(waiter: FleetWaiter, workerId: string): WorkerReason | undefined {
-    const code = this.#cannotServe.get(waiter)?.get(workerId)?.code;
-    const reason = code === undefined ? undefined : CANNOT_SERVE_REASONS[code];
-    return reason === undefined ? undefined : { reason };
-  }
-
-  #refusedReason(
-    waiter: FleetWaiter,
-    view: WorkerView,
-    zero: WorkerReason | undefined,
-  ): WorkerReason | undefined {
-    if (!this.#refused(waiter, view)) return undefined;
-    const refusal = this.#refusals.get(waiter)?.get(view.id);
-    // why: a failed provision is no capacity refusal; the worker lists as one that passed every check.
-    if (refusal?.provisionFailure !== undefined) return undefined;
-    const capacityReason = refusal?.capacityReason ?? zero?.capacityReason;
-    return capacityReason === undefined ? { reason: "full" } : { capacityReason, reason: "full" };
-  }
-
   // why: a second failed provision walks on like a cannot-serve code, and only when every worker that could take the request failed so does it end with the last answer; a worker held back only for now (full, busy, not ready, unhealthy) could take it later, so it keeps the request queued.
   #rejectIfEveryWorkerFailedProvisioning(
     waiter: FleetWaiter,
     request: RoutableRequest,
     views: readonly WorkerView[],
   ): void {
-    const refusals = this.#refusals.get(waiter);
+    const refusals = this.#refusals.refusals(waiter);
     if (refusals === undefined) return;
     const open = this.options.routing
       .explain(request, views)
@@ -1087,20 +663,21 @@ export class FleetLeaseCoordinator {
       });
     };
 
-    // P4 (round 3 review): H4's own reasoning applies verbatim here -- `#withLeaseRequestTimeout`
-    // settling `WORKER_UNREACHABLE` only stops *this* call's returned promise from being awaited
+    // why: P4 (round 3 review): H4's own reasoning applies verbatim here --
+    // `FleetForwarding.withLeaseRequestTimeout` settling `WORKER_UNREACHABLE` only stops *this*
+    // call's returned promise from being awaited
     // any further, not the worker's own still-pending `lease.request` RPC, whose `onProgress`
     // closure below stays live for as long as the worker keeps pushing progress. Before this,
     // a late `progress` push after the timeout had already rejected the waiter still called
     // `announceDispatched()` and emitted `request.dispatched` for a request this gateway had
     // already told its caller was `WORKER_UNREACHABLE` -- a false past-tense fact against
     // `docs/internal/EVENTS.md`'s own "and the worker took it". Same mechanism as `exec`'s `detached`, not
-    // a second bespoke one: flipped by `#withLeaseRequestTimeout`'s own `onTimeout` hook, checked
-    // here before either `announceDispatched()` or `notifyProgress` run.
+    // a second bespoke one: flipped by `FleetForwarding.withLeaseRequestTimeout`'s own `onTimeout`
+    // hook, checked here before either `announceDispatched()` or `notifyProgress` run.
     let detached = false;
     let grant: LeaseGrant;
     try {
-      grant = await this.#withLeaseRequestTimeout(
+      grant = await this.#forwarding.withLeaseRequestTimeout(
         client.requestLease(
           {
             // The request as it arrived, under the worker's own name for an exact model.
@@ -1165,7 +742,7 @@ export class FleetLeaseCoordinator {
       // work already started means the request was this worker's (§11's own wording). Re-queuing
       // it anyway silently reversed a dispatch the caller had already been told about.
       if (isSimlockError(error) && STALE_VIEW_CODES.has(error.code) && !announced) {
-        this.#rememberRefusal(waiter, workerId, {
+        this.#refusals.rememberRefusal(waiter, workerId, {
           capacityReason: refusedCapacityReason(error.details),
         });
         if (waiter.options.noWait === true) {
@@ -1181,15 +758,15 @@ export class FleetLeaseCoordinator {
       }
       // why: a provision failure before the worker's progress push did no device work, so another worker may serve it and the walk goes on without this one; after a progress push it falls through to the terminal branch below, as today.
       if (isSimlockError(error) && error.code === "PROVISION_FAILED" && !announced) {
-        this.#rememberRefusal(waiter, workerId, {
-          provisionFailure: this.#classifyRelayedError(error, workerId),
+        this.#refusals.rememberRefusal(waiter, workerId, {
+          provisionFailure: classifyRelayedError(error, workerId),
         });
         this.#refreshView(workerId);
         this.#admit(waiter);
         return;
       }
       if (isSimlockError(error) && CANNOT_SERVE_CODES.has(error.code) && !announced) {
-        this.#rememberCannotServe(waiter, workerId, this.#classifyRelayedError(error, workerId));
+        this.#refusals.rememberCannotServe(waiter, workerId, classifyRelayedError(error, workerId));
         this.#refreshView(workerId, { includeCatalog: true });
         this.#admit(waiter);
         return;
@@ -1217,7 +794,7 @@ export class FleetLeaseCoordinator {
       // The worker answered with an id the gateway did not ask for: the attempt failed, and the
       // request goes back to the queue as after an unreachable worker. This worker is left out
       // until its view changes, so a worker that keeps answering so is not asked in a loop.
-      this.#rememberRefusal(waiter, workerId);
+      this.#refusals.rememberRefusal(waiter, workerId);
       this.#staleView(waiter, workerId);
       return;
     }
@@ -1227,8 +804,8 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
-   * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
+   * why: a terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never
+   * rejects a probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
    * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
    * `INTERNAL`) it usually emitted nothing; after a dispatch timeout the worker's request is
    * still running and may yet end in a relayed `lease.declined` or a grant, since the timeout
@@ -1239,19 +816,19 @@ export class FleetLeaseCoordinator {
    * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
    *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
    *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
-   * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
-   *   `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
+   * - `FleetForwarding.withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) --
+   *   never a `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
    *   answer (the request itself did reach the worker and keeps running there) -- forwarded as-is;
    * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
    *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
    *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
    *   used to answer this case too, misreporting a gateway-side crash as "the machine is
-   *   unreachable"; `INTERNAL` is what `#forwardToWorker`'s matching branch answers for the same
-   *   shape of failure.
+   *   unreachable"; `INTERNAL` is what `FleetForwarding#forwardToWorker`'s matching branch
+   *   answers for the same shape of failure.
    */
   #classifyLeaseRequestError(error: unknown, workerId: string): DispatchError {
     if (error instanceof DispatchError) return error;
-    if (isSimlockError(error)) return this.#classifyRelayedError(error, workerId);
+    if (isSimlockError(error)) return classifyRelayedError(error, workerId);
     return new DispatchError(
       "INTERNAL",
       `Unexpected error forwarding lease.request to worker ${workerId}`,
@@ -1272,7 +849,7 @@ export class FleetLeaseCoordinator {
     // why: the walk that picked this worker ran before its answer; the entries must say what is true now.
     this.#workerReasons.set(
       waiter,
-      this.#reasonsFor(
+      this.#refusals.reasonsFor(
         waiter,
         routable(waiter),
         this.options.views.routingViews(),
@@ -1291,46 +868,6 @@ export class FleetLeaseCoordinator {
         message: error instanceof Error ? error.message : String(error),
       });
     });
-  }
-
-  #rememberCannotServe(waiter: FleetWaiter, workerId: string, refusal: DispatchError): void {
-    const refusals = this.#cannotServe.get(waiter) ?? new Map<string, DispatchError>();
-    refusals.set(workerId, refusal);
-    this.#cannotServe.set(waiter, refusals);
-  }
-
-  #rememberRefusal(
-    waiter: FleetWaiter,
-    workerId: string,
-    detail: {
-      readonly capacityReason?: CapacityReason | undefined;
-      readonly provisionFailure?: DispatchError;
-    } = {},
-  ): void {
-    const view = this.options.views.views().find((worker) => worker.id === workerId);
-    if (view === undefined) return;
-    const refusals = this.#refusals.get(waiter) ?? new Map<string, Refusal>();
-    // why: delete first so the map's order is the order the workers answered in; the last failure ends the request.
-    refusals.delete(workerId);
-    refusals.set(workerId, {
-      key: viewLoadKey(view),
-      ...(detail.capacityReason === undefined ? {} : { capacityReason: detail.capacityReason }),
-      ...(detail.provisionFailure === undefined
-        ? {}
-        : { provisionFailure: detail.provisionFailure }),
-    });
-    this.#refusals.set(waiter, refusals);
-  }
-
-  /** Whether `worker` refused `waiter` and its view has not changed since. */
-  #refused(waiter: FleetWaiter, worker: WorkerView): boolean {
-    const refusals = this.#refusals.get(waiter);
-    const key = refusals?.get(worker.id)?.key;
-    if (key === undefined) return false;
-    if (key === viewLoadKey(worker)) return true;
-    // why: a device unplugged and plugged back in returns the view to the key it was refused at; the refusal must end at the first change.
-    refusals?.delete(worker.id);
-    return false;
   }
 
   /**
@@ -1356,7 +893,7 @@ export class FleetLeaseCoordinator {
           workerId,
         },
       );
-      this.#releaseOnWorker(workerId, grant.lease.id);
+      this.#forwarding.releaseOnWorker(workerId, grant.lease.id);
       return "retry";
     }
     const gatewayLeaseId = forwardedLeaseId ?? `${workerId}.${grant.lease.id}`;
@@ -1379,14 +916,14 @@ export class FleetLeaseCoordinator {
     if (!this.options.leaseIndex.add(entry, waiter.request.platform)) {
       // The index already routes this bare id to another worker, which got it there first: the
       // new worker's lease is given back and the caller is told the id is taken.
-      this.#releaseOnWorker(workerId, grant.lease.id);
+      this.#forwarding.releaseOnWorker(workerId, grant.lease.id);
       this.#reject(waiter, leaseIdTaken(gatewayLeaseId), "lease-id-taken");
       return "settled";
     }
     const fleetGrant: FleetLeaseGrant = {
       device: grant.device,
       environment: grant.environment,
-      lease: this.#projectRecord(grant.lease, entry),
+      lease: this.#forwarding.projectRecord(grant.lease, entry),
       timing: grant.timing,
     };
     // ADR 0021 §4: the grant is the request's end only if the waiter was still open. One that
@@ -1400,18 +937,6 @@ export class FleetLeaseCoordinator {
       });
     }
     return "settled";
-  }
-
-  #releaseOnWorker(workerId: string, workerLeaseId: string): void {
-    void this.#forwardToWorker(workerId, (client) =>
-      client.releaseLease({ leaseId: workerLeaseId }),
-    ).catch((error: unknown) => {
-      this.#logger.warn("Failed to release a lease the gateway will not route", {
-        message: error instanceof Error ? error.message : String(error),
-        workerId,
-        workerLeaseId,
-      });
-    });
   }
 
   #enqueue(waiter: FleetWaiter): void {
@@ -1455,90 +980,6 @@ export class FleetLeaseCoordinator {
       // `worker`, never `workerId`: that key marks an event relayed from a worker (ADR 0014 §6).
       ...(failedOn === undefined ? {} : { code: failedOn.code, worker: failedOn.worker }),
     });
-  }
-
-  // ---- forwarding and views -------------------------------------------------------------------
-
-  /** The one chokepoint every forwarded operation funnels through -- #119's seam for
-   * `WORKER_UNREACHABLE` retry/backoff, without touching `renew`/`release`/`releaseAll`/`exec`
-   * individually. */
-  async #forwardToWorker<Result>(
-    workerId: string,
-    fn: (client: SimlockAdminClient) => Promise<Result>,
-  ): Promise<Result> {
-    const client = liveClient(this.options.directory.target(workerId));
-    if (client === undefined) {
-      throw new DispatchError("WORKER_UNREACHABLE", `Worker ${workerId} is not reachable`, {
-        workerId,
-      });
-    }
-    try {
-      return await fn(client);
-    } catch (error: unknown) {
-      if (isSimlockError(error)) throw this.#classifyRelayedError(error, workerId);
-      // H1 (round 2 review): rethrown unchanged before this fix, which let a `TypeError` in this
-      // coordinator's own request-building code surface exactly as if the worker itself had
-      // produced it -- no code, no `kind`, nothing a caller could branch on the way it could on
-      // every other failure this class answers. Every real transport failure already arrives as
-      // a `kind: "transport"` `SimlockError` (handled above), so anything else here is this
-      // gateway's own bug, not a fact about the worker -- `INTERNAL` names that, consistent with
-      // `#attempt`'s matching branch for the one forward this chokepoint does not cover
-      // (`lease.request`, bound by `#withLeaseRequestTimeout` instead).
-      if (error instanceof DispatchError) throw error;
-      throw new DispatchError(
-        "INTERNAL",
-        `Unexpected error forwarding a call to worker ${workerId}`,
-        { workerId },
-      );
-    }
-  }
-
-  /**
-   * P4 (round 2 review): `error.code` was preserved verbatim for every `SimlockError`, which
-   * answered a fleet client its own `DAEMON_CONNECTION_LOST` whenever the uplink itself died
-   * mid-call -- naming *this coordinator's* session to the worker, not the worker's own fact.
-   * `kind: "transport"` is what the admin client's wire (`src/simlock-client/wire.ts`) stamps on
-   * every rejection caused by the connection dying under an in-flight call, so it is what
-   * distinguishes that case from an ordinary domain refusal (`RUNTIME_MISSING`,
-   * `REQUESTER_ALREADY_LEASED`, ...), which is forwarded byte for byte -- ADR §28/§29 name
-   * `WORKER_UNREACHABLE` for exactly the transport case, and `#forwardToWorker`'s "not reachable
-   * right now" branch above already answers that same code for the pre-flight version of it.
-   */
-  #classifyRelayedError(error: AnySimlockError, workerId: string): DispatchError {
-    if (isUplinkLost(error)) {
-      return new DispatchError("WORKER_UNREACHABLE", error.message, { workerId });
-    }
-    return new DispatchError(error.code, error.message, error.details);
-  }
-
-  #requireEntry(gatewayLeaseId: string): FleetLeaseEntry {
-    const entry = this.options.leaseIndex.resolve(gatewayLeaseId);
-    if (entry === undefined) {
-      throw new DispatchError("UNKNOWN_LEASE", `Unknown lease: ${gatewayLeaseId}`, {
-        leaseId: gatewayLeaseId,
-      });
-    }
-    return entry;
-  }
-
-  #projectRecord<
-    Record extends { readonly id: string; readonly requesterId: string; readonly ownerId: string },
-  >(
-    record: Record,
-    entry: FleetLeaseEntry,
-  ): Record & { readonly worker?: { readonly id: string; readonly label?: string } } {
-    const workerLabel = this.options.views.view(entry.workerId)?.label;
-    return {
-      ...record,
-      id: entry.gatewayLeaseId,
-      // H6 (round 2 review): the index's own `ownerId` (trusted -- see `#settleGrant`), never
-      // this record's raw `ownerId` as a worker's own RPC answer echoed it back.
-      ownerId: entry.ownerId,
-      requesterId: entry.requesterId,
-      ...(workerLabel === undefined
-        ? { worker: { id: entry.workerId } }
-        : { worker: { id: entry.workerId, label: workerLabel } }),
-    };
   }
 
   /**
@@ -1597,21 +1038,6 @@ function forwardedModel(
   return { model: (view === undefined ? undefined : matchRequest(view, request)) ?? request.model };
 }
 
-// why: a relayed error's details are a claim; only a value of the contract's enum is kept.
-function refusedCapacityReason(details: unknown): Refusal["capacityReason"] {
-  const parsed = capacityReasonSchema.safeParse(
-    typeof details === "object" && details !== null && "capacityReason" in details
-      ? details.capacityReason
-      : undefined,
-  );
-  return parsed.success ? parsed.data : undefined;
-}
-
-// why: a worker claimed earlier in the walk, or one nothing else names, lost to the worker picked.
-function passedOver(claimed: boolean, zero: WorkerReason | undefined): WorkerReason {
-  return claimed || zero === undefined ? { reason: "not-chosen" } : zero;
-}
-
 function leaseIdTaken(leaseId: string): DispatchError {
   return new DispatchError("LEASE_ID_TAKEN", `lease ID ${leaseId} is already in use`, { leaseId });
 }
@@ -1641,19 +1067,4 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
   };
-}
-
-// why: a lease id is replaced only as a whole token, so a short id inside a longer word or id is left alone.
-function replaceWholeId(text: string, id: string, replacement: string): string {
-  const isIdCharacter = (character: string | undefined): boolean =>
-    character !== undefined && /[\w-]/.test(character);
-  let result = "";
-  let from = 0;
-  for (let at = text.indexOf(id); at !== -1; at = text.indexOf(id, from)) {
-    const end = at + id.length;
-    const whole = !isIdCharacter(text[at - 1]) && !isIdCharacter(text[end]);
-    result += text.slice(from, at) + (whole ? replacement : id);
-    from = end;
-  }
-  return result + text.slice(from);
 }
