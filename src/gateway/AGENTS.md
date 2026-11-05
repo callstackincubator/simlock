@@ -16,7 +16,9 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 | `worker-registry.ts`          | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                                                     |
 | `drain-store.ts`              | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                                           |
 | `dispatcher.ts`               | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through `testDestination`, `daemon.update` through `update` |
-| `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry, forward renew/release/exec                                                                      |
+| `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry; delegates to its parts                                                                          |
+| `fleet-refusals.ts`           | `FleetRefusals`: per-request refusal and cannot-serve memos, why each worker is passed over                                                      |
+| `fleet-forwarding.ts`         | `FleetForwarding`: renew, release, release-all, exec, rotate, baseline save; the timeouts                                                        |
 | `queue.ts`                    | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                                                   |
 | `lease-index.ts`              | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                                             |
 | `routing.ts`, `routing/`      | `createRoutingPolicy`: `assess` and the stage list                                                                                               |
