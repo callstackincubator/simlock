@@ -1030,6 +1030,7 @@ export const configSchema = z.object({
   warmPool: z.object({
     enabled: z.boolean(),
     learn: z.boolean().optional(),
+    baselineLearnAfter: z.number().optional(),
     reserveRunning: z.object({ ios: z.number(), android: z.number() }),
     maxConcurrentBoots: z.number(),
     targets: z.array(

@@ -48,6 +48,7 @@ export interface WarmPoolConfig {
 
 export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
   return {
+    baselineLearnAfter: DEFAULT_BASELINE_LEARN_AFTER,
     enabled: true,
     learn: true,
     maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
