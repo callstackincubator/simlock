@@ -423,7 +423,7 @@ export const driverPassthrough = defineOperation({
 });
 
 // why: the daemon parses a request as one string, so unbounded stdin exhausts the heap (#1242).
-const EXEC_STDIN_MAX_LENGTH = 8_388_608;
+export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
 
 /**
  * Runs `simctl`, `adb` or `devicectl` **on the machine that owns the device** and streams the output back
