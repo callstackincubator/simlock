@@ -1126,6 +1126,80 @@ describe("simlock tunnel emulator adb", () => {
       expect(await otherExit).toBe(0);
     }
 
+    const pinned = new CallerAdb([
+      {
+        match: { args: ["connect", "127.0.0.1:6000"], command: "adb" },
+        stdoutLines: ["connected to 127.0.0.1:6000"],
+      },
+    ]);
+    const both = command(ENV, pinned);
+    const bothExit = both.run(["tunnel", "emulator", "adb:6000", "--lease", "L1"]);
+    await vi.waitFor(() => expect(both.webSocket.connections).toHaveLength(1));
+    expect(both.tcpListeners.listeners.map((listener) => listener.port)).toEqual([6000]);
+    firstPeer(both).receive(READY);
+    await vi.waitFor(() =>
+      expect(both.out.join("")).toBe(
+        "emulator localhost:6000 -> emulator:adb (lease L1)\nadb: connected to 127.0.0.1:6000\n",
+      ),
+    );
+    both.signals.emit("SIGINT");
+    both.clock.advance(2_000);
+    expect(await bothExit).toBe(0);
+
+    const busy = command(ENV, new CallerAdb([]));
+    busy.tcpListeners.busy.add(6000);
+    expect(await busy.run(["tunnel", "emulator", "adb:6000", "--lease", "L1"])).toBe(1);
+    expect(line(busy)).toEqual(
+      errorBody("TUNNEL_CALLER_PORT_IN_USE", "emulator adb: localhost:6000 is already in use"),
+    );
+
+    const mixedAdb = new CallerAdb([connect("adb")]);
+    const mixed = command(ENV, mixedAdb);
+    const mixedExit = mixed.run(["tunnel", "reverse", "8081", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(sentFrames(mixed)).toHaveLength(1));
+    expect(new TextDecoder().decode(sentFrames(mixed)[0]?.payload)).toBe(
+      '{"tunnels":[{"devicePort":8081,"kind":"reverse"},{"kind":"emulator","emulatorPort":"adb"}]}',
+    );
+    firstPeer(mixed).receive(READY);
+    await vi.waitFor(() =>
+      expect(mixed.out.join("")).toBe(
+        `reverse device:8081 -> localhost:8081 (lease L1)\nemulator localhost:49152 -> emulator:adb (lease L1)\nadb: connected to ${target}\n`,
+      ),
+    );
+    firstPeer(mixed).receive(open(1, 8081));
+    await vi.waitFor(() =>
+      expect(mixed.tcpStreams.connections.map(({ port }) => port)).toEqual([8081]),
+    );
+
+    mixed.tcpListeners.listeners[0]?.connect();
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() =>
+      expect(sentFrames(mixed).filter((f) => f.tag === TUNNEL_TAG.open)).toHaveLength(2),
+    );
+    const reset = (conn: number, reason: string) =>
+      encodeTunnelFrame(TUNNEL_TAG.reset, conn, JSON.stringify({ reason }));
+    firstPeer(mixed).receive(reset(2, "closed"));
+    firstPeer(mixed).receive(reset(4, "timeout"));
+    await vi.waitFor(() => expect(mixed.err.join("")).toBe("warning: emulator adb: closed\n"));
+    mixed.clock.advance(9_999);
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(mixed).at(-1)?.conn).toBe(6));
+    firstPeer(mixed).receive(reset(6, "timeout"));
+    await settle();
+    expect(mixed.err.join("")).toBe("warning: emulator adb: closed\n");
+    mixed.clock.advance(1);
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(mixed).at(-1)?.conn).toBe(8));
+    firstPeer(mixed).receive(reset(8, "timeout"));
+    await vi.waitFor(() =>
+      expect(mixed.err.join("")).toBe(
+        "warning: emulator adb: closed\nwarning: emulator adb: timeout\n",
+      ),
+    );
+    mixed.signals.emit("SIGINT");
+    mixed.clock.advance(2_000);
+    expect(await mixedExit).toBe(0);
+
     const hung = new CallerAdb([connect("adb", { hangs: true })]);
     const slow = command(ENV, hung);
     const slowExit = slow.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
