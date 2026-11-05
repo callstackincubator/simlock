@@ -1116,7 +1116,11 @@ export class IosSimctlDriver implements Driver {
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#bestEffortShutdown(udid, this.#sourcesSet);
-    await this.#simctl(["delete", udid], COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const args = ["delete", udid];
+    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    // why: a seed deleted by hand is already gone, and its row must still be dropped.
+    if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
+    this.#checked(args, COMMAND_TIMEOUT_MS, outcome);
   }
 
   async #ensureSourcesSet(): Promise<void> {
@@ -2609,6 +2613,10 @@ function sameEntries(a: ReadonlyMap<string, boolean>, b: ReadonlyMap<string, boo
 
 function alreadyShutdown(stderr: string): boolean {
   return /Unable to shutdown.*current state:\s*Shutdown/i.test(stderr);
+}
+
+function unknownDevice(result: ProcessResult): boolean {
+  return result.code === 148 && /^Invalid device:/m.test(result.stderr);
 }
 
 function alreadyBooted(stderr: string): boolean {
