@@ -966,7 +966,7 @@ describe("a worker's tunnel socket with an emulator tunnel", () => {
     return { deviceTcp, socket };
   }
 
-  it("carries a caller's emulator connection to the emulator's adb port, bytes both ways, and resets one the port refuses", async () => {
+  it("carries a caller's emulator connection to the emulator's adb port, bytes both ways, resets one the port refuses, and closes the socket 4003 on an OPEN when HELLO named none", async () => {
     const accepted = await ready();
     expect(frames(accepted.socket)).toEqual([
       { body: '{"tunnels":[{"kind":"emulator","emulatorPort":"adb"}]}', conn: 0, tag: 0x81 },

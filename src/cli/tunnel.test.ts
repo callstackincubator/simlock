@@ -1120,6 +1120,20 @@ describe("simlock tunnel emulator adb", () => {
         out: "",
       },
       {
+        adb: new CallerAdb([
+          connect("adb", {
+            stdoutLines: [],
+            result: {
+              code: 1,
+              stderr: "",
+              stdout: `* daemon started successfully\nfailed to authenticate to ${target}\n`,
+            },
+          }),
+        ]),
+        err: `warning: emulator adb: adb answered: failed to authenticate to ${target}; ${rerun}\n`,
+        out: "",
+      },
+      {
         adb: new CallerAdb([], []),
         err: `warning: emulator adb: adb was not found; ${rerun}\n`,
         out: "",
@@ -1288,6 +1302,8 @@ describe("simlock tunnel emulator adb", () => {
     await settle();
     expect(stuckState.state).toBe("pending");
     stuck.clock.advance(1);
+    await settle();
+    expect(stuckState.state).toBe("fulfilled");
     expect(await stuckExit).toBe(0);
     expect((await stuckAdb.handles[1]?.wait())?.code).toBeNull();
 
@@ -1298,8 +1314,14 @@ describe("simlock tunnel emulator adb", () => {
     firstPeer(interrupted).receive(READY);
     await vi.waitFor(() => expect(early.calls).toHaveLength(1));
     interrupted.signals.emit("SIGINT");
+    const interruptedState = promiseState(interruptedExit);
+    await settle();
+    expect(interruptedState.state).toBe("fulfilled");
     expect(await interruptedExit).toBe(0);
     expect(calls(early)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+    const killed = promiseState(Promise.resolve(early.handles[0]?.wait()));
+    await settle();
+    expect(killed.state).toBe("fulfilled");
     expect((await early.handles[0]?.wait())?.code).toBeNull();
     expect(interrupted.err).toEqual([]);
 
