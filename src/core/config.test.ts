@@ -2337,19 +2337,10 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
     });
 
     const parsed = configSchema.parse(config);
-    // `drivers` is deliberately off the wire: an open-ended
-    // `Record<string, Record<string, …>>` whose contents are each driver's own business
-    // (architecture rule 2), so the contract cannot declare its shape. Excluded by name and
-    // asserted separately below rather than skipped silently -- it defaults to `{}`, so a
-    // key-walk would otherwise "cover" it by finding nothing to lose and keep passing if it
-    // ever gained something.
-    const declared = dottedLeafKeys(config).filter((key) => !key.startsWith("drivers"));
+    const declared = dottedLeafKeys(config);
     const onTheWire = new Set(dottedLeafKeys(parsed));
 
     expect(declared.filter((key) => !onTheWire.has(key))).toEqual([]);
-    // The one intentional omission, stated as an assertion so it is a decision and not an
-    // accident: if `drivers` is ever added to the wire, this fails and the filter is revisited.
-    expect(Object.keys(parsed)).not.toContain("drivers");
   });
 
   it("carries gateway.leaseRequestTimeoutMs through to what config get answers", async () => {

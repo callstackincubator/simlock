@@ -565,6 +565,25 @@ describe("startDaemon", () => {
     });
   });
 
+  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
+    const { daemon } = await start({
+      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
+    });
+
+    const config = (await daemon.dispatch(
+      "config.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
+    )) as { readonly drivers?: unknown };
+
+    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
+  });
+
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
     const { daemon, sink } = await start({
       configOverrides: {

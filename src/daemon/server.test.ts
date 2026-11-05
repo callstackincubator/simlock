@@ -221,6 +221,7 @@ describe("DaemonServer", () => {
     [47, "cannot read config.get's http.proxyAuth"],
     [48, "cannot read config.get's gateway.alerts"],
     [51, "cannot page events.replay with beforeId or limit"],
+    [75, "cannot read config.get's drivers"],
   ])(
     "answers PROTOCOL_VERSION_UNSUPPORTED, naming the daemon's protocol range, to a client on protocol %i, which %s",
     async (version) => {
