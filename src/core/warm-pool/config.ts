@@ -37,6 +37,8 @@ export interface WarmPoolConfig {
   readonly targets: readonly WarmTarget[];
   /** why: `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
   readonly learn?: boolean;
+  /** why: a baseline kind is learned on its Nth lease within 24 hours; plain kinds on their first. */
+  readonly baselineLearnAfter?: number;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
 }
@@ -109,6 +111,7 @@ const targetsValidator: Validator = (value, path, warn) => {
 
 /** The validators for the keys this module owns, composed into the `warmPool` object. */
 export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Validator>> = {
+  baselineLearnAfter: positiveInteger,
   enabled: booleanValue,
   learn: booleanValue,
   maxConcurrentBoots: positiveInteger,

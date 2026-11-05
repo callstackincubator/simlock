@@ -108,6 +108,7 @@ function harness(
     limit?: number;
     enabled?: boolean;
     learn?: boolean;
+    baselineLearnAfter?: number;
     refuseBoot?: boolean;
     shutdown?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
     boot?: (target: VirtualDevice) => Promise<VirtualDevice | undefined>;
@@ -269,6 +270,9 @@ function harness(
     config: {
       enabled: options.enabled ?? true,
       ...(options.learn === undefined ? {} : { learn: options.learn }),
+      ...(options.baselineLearnAfter === undefined
+        ? {}
+        : { baselineLearnAfter: options.baselineLearnAfter }),
       maxConcurrentBoots: options.maxConcurrentBoots ?? 1,
       reserveRunning: { android: 0, ios: 0 },
       targets: options.targets ?? [],
@@ -2302,6 +2306,37 @@ describe("warm pool learned kinds", () => {
     physical.pool.start();
     granted(physical, "l3", "phone-1");
     expect(kindsOf(state)).toEqual([]);
+  });
+
+  it("learns a baseline kind only on its Nth lease within 24 hours", async () => {
+    const plain = device("b1", "leased", 0);
+    const checkout = {
+      ...plain,
+      spec: { ...plain.spec, baseline: { name: "checkout", version: 1 } },
+    };
+    const state = await openMemoryState([warmPoolOwner]);
+    const rig = harness([checkout], {
+      baselineLearnAfter: 3,
+      baselines: { checkout: { version: 1 } },
+      catalog: async () => [iosListing],
+      limit: 0,
+      state,
+    });
+    rig.pool.start();
+    const learnedBaselines = async () => {
+      await rig.pool.pass();
+      await rig.pool.settle();
+      return rig.pool.figures().targets.flatMap((target) => target.baseline ?? []);
+    };
+    const afterLeases: string[][] = [];
+    for (const lease of ["l1", "l2", "l3"]) {
+      granted(rig, lease, "b1");
+      afterLeases.push(await learnedBaselines());
+      rig.clock.advance(minute);
+    }
+    rig.pool.dispose();
+
+    expect(afterLeases).toEqual([[], [], ["checkout"]]);
   });
 
   it("closes at start() the lease rows the registry no longer holds, and the first pass boots the recorded kinds", async () => {
