@@ -16,6 +16,7 @@ import {
   DeviceTcpError,
   stableError,
   toDriverDevice,
+  unsupportedEmulatorPortMessage,
   unsupportedTunnelMessage,
   type DeviceRecord,
   type DeviceReverse,
@@ -415,10 +416,19 @@ export function createTunnelSessions(options: {
         return;
       }
       const target = toDriverDevice(device);
-      if (!options.deviceTcp.supports(device.spec.platform, target)) {
+      const wantsPorts = tunnels.some(({ kind }) => kind !== "emulator");
+      if (wantsPorts && !options.deviceTcp.supports(device.spec.platform, target)) {
         refuse({
           code: "TUNNEL_UNSUPPORTED",
           message: unsupportedTunnelMessage(device.spec.platform, target.physical),
+        });
+        return;
+      }
+      const wantsEmulator = tunnels.some(({ kind }) => kind === "emulator");
+      if (wantsEmulator && !options.deviceTcp.supportsEmulatorPort(device.spec.platform, target)) {
+        refuse({
+          code: "TUNNEL_UNSUPPORTED",
+          message: unsupportedEmulatorPortMessage("adb", device.spec.platform, target.physical),
         });
         return;
       }

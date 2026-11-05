@@ -23,11 +23,14 @@ export function unsupportedTunnelMessage(platform: string, physical: boolean): s
 
 // why: one wording for a lease whose device opens no emulator port, so the holder's refusal names the port and what the lease is on; only an Android emulator opens one.
 export function unsupportedEmulatorPortMessage(
-  _name: string,
-  _platform: string,
-  _physical: boolean,
+  name: string,
+  platform: string,
+  physical: boolean,
 ): string {
-  return "";
+  let noun = `a ${platform} device`;
+  if (platform === "ios") noun = physical ? "an iPhone" : "an iOS simulator";
+  else if (platform === "android" && physical) noun = "an Android phone";
+  return `emulator ${name}: the lease is on ${noun}; emulator ports need an Android emulator`;
 }
 
 // why: one device port reversed to a loopback listener on the worker; every connection the device
