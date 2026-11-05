@@ -24,7 +24,7 @@ simlock daemon stop
 simlock daemon start
 ```
 
-If `daemon start` fails with `DAEMON_STOPPING`, the old daemon is still finishing its work. Wait a few seconds and run it again.
+`daemon stop` returns once the old daemon has exited, so `daemon start` can follow at once.
 
 ## When the disk runs low
 
