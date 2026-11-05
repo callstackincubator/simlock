@@ -209,6 +209,25 @@ describe("test-lint.mjs", () => {
     },
   );
 
+  it("always-in-scope 8: passes a contract line the diff moves verbatim from another contract file, and flags a new one", () => {
+    const before = {
+      "src/contract/a.ts": file("export const a = z.object({", "  name: z.string(),", "});"),
+    };
+    const after = {
+      "src/contract/a.ts": file("export const a = 1;"),
+      "src/contract/b.ts": file(
+        "export const b = z.object({",
+        "    name: z.string(),",
+        "  label: z.string(),",
+        "});",
+      ),
+    };
+    expect(lint(repo(before, after))).toEqual({
+      status: 1,
+      lines: [`src/contract/b.ts:3: ${BOUND}`],
+    });
+  });
+
   it("judges only the lines the diff adds in the files given, and never a pattern inside a string or comment", () => {
     const dir = repo(
       { "src/a/old.test.ts": file("it.skip('old', () => {});") },

@@ -19,7 +19,8 @@
 //
 // and in `src/contract/*.ts` (not tests) an added `z.string()` with no `.max(`, `.length(`,
 // `.regex(`, `.uuid(` or `.datetime(` on its chain, a `z.array(` with no `.max(` or `.length(`,
-// or any `z.record(` fails (always-in-scope 8), unless a `why:` comment sits right above it.
+// or any `z.record(` fails (always-in-scope 8), unless a `why:` comment sits right above it or
+// the same diff removes that line verbatim (whitespace-trimmed) from another `src/contract/` file.
 // Strings and comments are never read as code, so a fixture in a string is no finding.
 // Each finding prints as `path:line: <what to do> (<rule>)` and the exit code is 1. <files>
 // restricts the paths, for the commit hook.
@@ -167,10 +168,11 @@ function firstTestBlock(codeLines) {
   return codeLines.findIndex((l) => /^\s*(?:it|test)\b[\w.]*\s*\(/.test(l));
 }
 
-function contractFindings(changed) {
+function contractFindings(changed, moved) {
   const source = sourceOf(changed);
   return [...source.code.matchAll(/\bz\s*\.\s*(string|array|record)\s*\(/g)]
     .filter((m) => unboundedAddedShape(source, m))
+    .filter((m) => !movedFromAnother(source, m, moved))
     .map((m) => ({
       path: source.file,
       line: lineOf(source.starts, m.index + m[0].length - 1),
@@ -185,6 +187,33 @@ function unboundedAddedShape(source, m) {
   if (BOUNDED_BY[m[1]].some((name) => chain.includes(name))) return false;
   const statement = lineOf(source.starts, m.index);
   return !hasWhyAbove(source.lines, source.codeLines, statement - 1, 1);
+}
+
+function movedFromAnother(source, m, moved) {
+  const text = source.lines[lineOf(source.starts, m.index) - 1].trim();
+  return [...(moved.get(text) ?? [])].some((from) => from !== source.file);
+}
+
+// why: a split moves shapes between contract files unchanged, so a moved line is not new wire input;
+// this maps each line the diff removes from a contract file (trimmed) to the files it left.
+function removedContractLines(base, head) {
+  const from = execFileSync("git", ["merge-base", base, head ?? "HEAD"], { encoding: "utf8" });
+  const range = head === undefined ? [from.trim()] : [from.trim(), head];
+  const diff = execFileSync("git", ["diff", "-U0", "--no-color", ...range, "--", "src/contract/"], {
+    encoding: "utf8",
+    maxBuffer: 1 << 28,
+  });
+  const removed = new Map();
+  let file = null;
+  for (const line of diff.split("\n")) {
+    const header = /^--- (?:a\/(.+)|\/dev\/null)$/.exec(line);
+    if (header !== null) file = header[1] ?? null;
+    else if (line.startsWith("-") && file !== null && CONTRACT_FILE.test(file)) {
+      const text = line.slice(1).trim();
+      removed.set(text, (removed.get(text) ?? new Set()).add(file));
+    }
+  }
+  return removed;
 }
 
 function chainMethods(code, from) {
@@ -353,10 +382,11 @@ for (let i = 0; i < args.length; i++) {
 if (base === undefined || (args.includes("--head") && head === undefined)) usage();
 
 const findings = [];
+const moved = removedContractLines(base, head);
 for (const file of changedFiles({ base, head, files: files.length > 0 ? files : null })) {
   if (TEST_FILE.test(file.path)) findings.push(...testFindings(file));
   else if (CONTRACT_FILE.test(file.path) && !HELPER_FILE.test(file.path)) {
-    findings.push(...contractFindings(file));
+    findings.push(...contractFindings(file, moved));
   }
 }
 const seen = new Set();
