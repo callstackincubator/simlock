@@ -3082,6 +3082,62 @@ describe("warm pool learned kinds", () => {
     ).toEqual([{ model: "iPhone 15", osVersion: "26.0", platform: "ios" }]);
   });
 
+  it("forgetKinds matches a learned baseline kind on the newest version's model, OS, mode and image tag, and never answers or deletes a baseline still counting", async () => {
+    const learnedBaseline = {
+      ...device("d1", "ready", 0).spec,
+      baseline: { name: "checkout", version: 1 },
+    };
+    const newest = {
+      imageTag: "google_apis",
+      mode: "slim",
+      model: "Pixel 8",
+      osVersion: "35",
+      platform: "android",
+      version: 2,
+    } as const;
+    const run = async (match: Parameters<WarmPool["forgetKinds"]>[0], learnAfter = 1) => {
+      const state = await openMemoryState([warmPoolOwner]);
+      new LearnedKinds(state).learn(learnedBaseline, "l1", now - minute, learnAfter);
+      const rig = harness([], { baselines: { checkout: newest }, state });
+      const answered = rig.pool.forgetKinds(match);
+      return {
+        answered: answered.map((spec) => [spec.model, spec.baseline?.name]),
+        remaining: new LearnedKinds(state).kinds(now).length,
+        state,
+      };
+    };
+
+    expect((await run({ model: "Pixel 8", platform: "android" })).answered).toEqual([
+      ["Pixel 8", "checkout"],
+    ]);
+    expect((await run({ model: "Pixel 8", platform: "android" })).remaining).toBe(0);
+    expect((await run({ model: "iPhone 15", platform: "ios" })).answered).toEqual([]);
+    expect((await run({ model: "iPhone 15", platform: "ios" })).remaining).toBe(1);
+    expect(
+      (await run({ model: "Pixel 8", osVersion: "35", platform: "android" })).answered,
+    ).toHaveLength(1);
+    expect(
+      (await run({ model: "Pixel 8", osVersion: "34", platform: "android" })).answered,
+    ).toEqual([]);
+    expect(
+      (await run({ mode: "slim", model: "Pixel 8", platform: "android" })).answered,
+    ).toHaveLength(1);
+    expect((await run({ mode: "full", model: "Pixel 8", platform: "android" })).answered).toEqual(
+      [],
+    );
+    expect(
+      (await run({ imageTag: "google_apis", model: "Pixel 8", platform: "android" })).answered,
+    ).toHaveLength(1);
+    expect(
+      (await run({ imageTag: "other", model: "Pixel 8", platform: "android" })).answered,
+    ).toEqual([]);
+
+    const counting = await run({ model: "Pixel 8", platform: "android" }, 2);
+    expect(counting.answered).toEqual([]);
+    new LearnedKinds(counting.state).learn(learnedBaseline, "l2", now, 2);
+    expect(new LearnedKinds(counting.state).kinds(now)).toHaveLength(1);
+  });
+
   it("forgetKinds keeps the retry backoff of a failing configured target of the forgotten kind's spec", async () => {
     const phone = device("d1", "ready", 0).spec;
     const state = await openMemoryState([warmPoolOwner]);
