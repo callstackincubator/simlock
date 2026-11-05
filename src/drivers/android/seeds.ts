@@ -36,8 +36,9 @@ export const BOOT_SNAPSHOT = "simlock_boot";
 const SOURCES_DIRECTORY = "sources";
 const SEED_COPY_TIMEOUT_MS = 600_000;
 const STALE_REASON_MAX_LENGTH = 300;
-// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make.
-const SEED_MAKE_CEILING_MS = 900_000;
+// why: avdmanager create has no limit of its own, so this is the ceiling of one seed make: two boots plus the steps between them, which are bounded at 600 s in all.
+const SEED_MAKE_MIN_CEILING_MS = 900_000;
+const SEED_MAKE_STEPS_MS = 600_000;
 const SEED_POWER_OFF_TIMEOUT_MS = 60_000;
 /** why: a device found after a restart has no process handle, so its exit is seen by listing adb's devices. */
 const SAVE_EXIT_POLL_INTERVAL_MS = 1_000;
@@ -77,6 +78,7 @@ export interface SeedsOptions {
   readonly adbTools: AdbTools;
   readonly avdConfig: AvdConfig;
   readonly avdmanager: string;
+  readonly bootTimeoutMs: number;
   readonly catalog: Catalog;
   readonly clock: Clock;
   readonly consolePorts: ConsolePorts;
@@ -97,6 +99,7 @@ export class Seeds {
   readonly #adbTools: AdbTools;
   readonly #avdConfig: AvdConfig;
   readonly #avdmanager: string;
+  readonly #makeCeilingMs: number;
   readonly #catalog: Catalog;
   readonly #clock: Clock;
   readonly #consolePorts: ConsolePorts;
@@ -117,6 +120,10 @@ export class Seeds {
     this.#adbTools = options.adbTools;
     this.#avdConfig = options.avdConfig;
     this.#avdmanager = options.avdmanager;
+    this.#makeCeilingMs = Math.max(
+      SEED_MAKE_MIN_CEILING_MS,
+      2 * options.bootTimeoutMs + SEED_MAKE_STEPS_MS,
+    );
     this.#catalog = options.catalog;
     this.#clock = options.clock;
     this.#consolePorts = options.consolePorts;
@@ -166,7 +173,7 @@ export class Seeds {
     for (const row of this.#sources.makingRows()) {
       if (onlyKind !== undefined && row.specKey !== onlyKind) continue;
       const mine = this.#making.has(row.sourceId);
-      if (mine && this.#clock.now() - row.createdAt <= SEED_MAKE_CEILING_MS) continue;
+      if (mine && this.#clock.now() - row.createdAt <= this.#makeCeilingMs) continue;
       await this.#removeSource(row.sourceId, row.folder, row.avdName);
     }
   }

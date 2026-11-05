@@ -13,6 +13,10 @@ export interface IosDriverConfig {
     /** why: a slim device gets its own boot deadline, because CI runners are slow. */
     readonly bootTimeoutMs: number;
   };
+  readonly full: {
+    /** why: a full simulator boot (and a recovery or seed boot) may take this long before it is given up. */
+    readonly bootTimeoutMs: number;
+  };
   readonly simulator: {
     /** why: `false` sets each simulator's volume to 0 after every boot. */
     readonly audio: boolean;
@@ -25,10 +29,12 @@ export const iosDriverConfig: DriverConfigEntry<IosDriverConfig> = {
   platform: "ios",
   defaults: {
     slim: { bootTimeoutMs: 600_000 },
+    full: { bootTimeoutMs: 300_000 },
     simulator: { audio: true, headless: true },
   },
   validators: {
     slim: objectValidator({ categories: stringArray, bootTimeoutMs: positiveNumber }),
+    full: objectValidator({ bootTimeoutMs: positiveNumber }),
     simulator: objectValidator({ audio: booleanValue, headless: booleanValue }),
   },
 };
