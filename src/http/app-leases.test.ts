@@ -1284,10 +1284,10 @@ describe("lease routes", () => {
       // dispatcher that calls `onStarted` when told to (`call.session.onStarted?.()` below is
       // this test driving that by hand) -- it says nothing about when a real dispatcher actually
       // calls it, and cannot notice a dispatcher that stops calling it for a genuinely silent,
-      // long-running command. That is `FleetLeaseCoordinator`'s own job for a gateway
-      // (`src/gateway/fleet-coordinator.ts#exec`); the invariant this comment describes is
-      // guarded end to end there, not here -- see `fleet-coordinator.test.ts`'s "relays the
-      // worker's own started push for a silent, long-running command".
+      // long-running command. That is the gateway's own job (`FleetForwarding.exec` in
+      // `src/gateway/fleet-forwarding.ts`); the invariant this comment describes is guarded end
+      // to end there, not here -- see `fleet-coordinator.test.ts`'s "relays the worker's own
+      // started push for a silent command that never answers (ADR §19a/§19b/§19e)".
       const { app, clock, dispatcher } = buildHarness();
 
       const responsePromise = postExec(app);
