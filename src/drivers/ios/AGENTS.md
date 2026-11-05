@@ -43,9 +43,9 @@ Provision — `simctl create simlock-<id> <devicetype> <runtime>` → UDID, then
 
 Boot — `makeReady`:
 
-1. `simctl boot`, then `simctl bootstatus -b`, then poll `simctl listapps` until it succeeds.
-   Bootstatus and installer polling share one deadline; each probe is capped at 30 s and
-   failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`.
+1. `simctl boot` (60 s; expiry → SIGTERM, `BootTimeoutError`, no shutdown), then `simctl bootstatus -b`, then poll `simctl listapps` until it succeeds.
+   Bootstatus and installer polling share one deadline, counted from the end of `simctl boot`; each probe is capped at 30 s and
+   failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`. The error's `diagnostics` and message give `phase` (`boot-command`, `bootstatus`, `installer`), `budgetMs` and `elapsedMs`; elapsed time stops before any shutdown. A seed's timeout reaches `provision` as this text inside a `DriverCrashError`, so leasing retries it once; a failed delete of that seed adds to the text and never replaces it.
 2. Before step 1, for `prepare` + mode `slim` + runtime 18.5+ only (ADR 0060): merge the managed
    labels into `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/disabled.plist` (labels of
    the configured categories `true`, every other managed label `false`, other entries kept),
@@ -107,6 +107,7 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 | Device set                    | `simlock`                   | `drivers.ios.deviceSet`  |
 | Default mode                  | `full`                      | `ios.defaultMode`        |
 | Slim categories               | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
+| Initial `simctl boot`         | 60 s, each boot             | none                     |
 | Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
 | Bootstatus + installer (full) | 120 s                       | none                     |
 | Any other `simctl` call       | 30 s                        | none                     |
@@ -125,6 +126,8 @@ record of a device's mode. Also writes, and deletes with the device, its folder 
 
 ## Known gaps
 
+- **A `simctl boot` that timed out gets SIGTERM and nothing more.** The driver neither waits for the child nor sends SIGKILL, and CoreSimulator can finish a boot its client has left. After a timeout a new or seed device is deleted at once, a warm boot leaves its device `shutdown` in the registry, possibly running and uncounted, until a later boot, the reaper or `doctor --fix` acts on it, and a recovery leaves it to the next attempt. Not observed on a real simulator.
+- **60 s bounds one `simctl boot`, not a request.** A lease that makes a seed boots twice, a seed that fails is retried once, and each recovery attempt starts over.
 - **Input:** no app switcher or Lock, and no keys on iOS 27 runtimes (#1024). Rotation was checked on Xcode 26.4 (iOS 26.4 runtime) and Xcode 27.0 (iOS 26.4 and 27.0 runtimes) (#1080); a screen that does not rotate (the iPhone home screen, upside down on a Face ID iPhone) ignores it, and nothing tells the client. The input follows the device's native frame, so after a rotation taps and picture stay in the same frame. After the health monitor reboots a crashed simulator the helper's HID client is bound to the old boot, so taps may vanish until the lease's input reopens.
 - **A restart between `simctl create` and the durable mark under `default` (#968)** leaves one unlisted `simlock-<id>` simulator in Xcode's set. Delete it with `xcrun simctl delete <udid>`.
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its ~8.5 GiB asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.

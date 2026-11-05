@@ -642,16 +642,30 @@ export class BaselineStaleError extends Error {
   }
 }
 
+export interface BootTimeoutDiagnostics {
+  readonly phase: "boot-command" | "bootstatus" | "installer";
+  readonly budgetMs: number;
+  readonly elapsedMs: number;
+}
+
 export class BootTimeoutError extends Error {
-  /** why: `reason` is the driver's own message for a boot that failed rather than ran out of time. */
+  /**
+   * why: `reason` is the driver's own message for a boot that failed rather than ran out of time.
+   * `diagnostics` goes in the message because every log and the seed's wrapper keep only that.
+   */
   constructor(
     readonly deviceId: string,
     reason?: string,
+    readonly diagnostics?: BootTimeoutDiagnostics,
   ) {
-    super(
+    const message =
       reason === undefined
         ? `Timed out waiting for device to boot: ${deviceId}`
-        : `Device failed to boot: ${deviceId}: ${reason}`,
+        : `Device failed to boot: ${deviceId}: ${reason}`;
+    super(
+      diagnostics === undefined
+        ? message
+        : `${message} [phase=${diagnostics.phase}, budgetMs=${String(diagnostics.budgetMs)}, elapsedMs=${String(diagnostics.elapsedMs)}]`,
     );
     this.name = "BootTimeoutError";
   }
@@ -661,6 +675,7 @@ export class BootTimeoutError extends Error {
     return new BootTimeoutError(
       deviceId,
       error instanceof BootTimeoutError || !(error instanceof Error) ? undefined : error.message,
+      error instanceof BootTimeoutError ? error.diagnostics : undefined,
     );
   }
 }

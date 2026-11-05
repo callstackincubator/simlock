@@ -85,6 +85,9 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+// why: `simctl boot` can outlast `COMMAND_TIMEOUT_MS` while CoreSimulator is still starting the
+// device, and the readiness deadline only starts once it answers.
+const INITIAL_BOOT_TIMEOUT_MS = 60_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
@@ -1032,8 +1035,17 @@ export class IosSimctlDriver implements Driver {
       try {
         await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
       } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
-        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+        const failure = `seed ${udid} did not boot: ${errorMessage(error)}`;
+        // why: leasing retries a seed failure without logging it, so one a retry recovers from leaves no other record.
+        this.#logger?.warn("a seed failed to boot", { error: failure, sourceId });
+        try {
+          await this.#deleteSeedSimulator(udid);
+        } catch (deleteError: unknown) {
+          throw new DriverCrashError(
+            `${failure}; deleting it failed: ${errorMessage(deleteError)}`,
+          );
+        }
+        throw new DriverCrashError(failure);
       }
       try {
         await this.#shutdown(udid, this.#sourcesSet);
@@ -1191,14 +1203,20 @@ export class IosSimctlDriver implements Driver {
     bootstatusTimeoutMs: number,
     set?: string,
   ): Promise<void> {
-    const boot = await this.#invokeSimctl(["boot", udid], COMMAND_TIMEOUT_MS, set);
+    const bootStartedAt = this.#clock.now();
+    const boot = await this.#invokeSimctl(["boot", udid], INITIAL_BOOT_TIMEOUT_MS, set);
     if (boot.kind === "timed-out") {
-      throw new BootTimeoutError(deviceId);
+      throw new BootTimeoutError(deviceId, undefined, {
+        budgetMs: INITIAL_BOOT_TIMEOUT_MS,
+        elapsedMs: this.#clock.now() - bootStartedAt,
+        phase: "boot-command",
+      });
     }
     if (boot.result.code !== 0 && !alreadyBooted(boot.result.stderr)) {
       this.#assertSuccessful(["boot", udid], boot.result);
     }
-    const deadline = this.#clock.now() + bootstatusTimeoutMs;
+    const readinessStartedAt = this.#clock.now();
+    const deadline = readinessStartedAt + bootstatusTimeoutMs;
     const outcome = await this.#invokeSimctl(["bootstatus", udid, "-b"], bootstatusTimeoutMs, set);
 
     if (outcome.kind === "finished") {
@@ -1206,8 +1224,13 @@ export class IosSimctlDriver implements Driver {
       if (await this.#waitForInstaller(udid, deadline, set)) return;
     }
 
+    const elapsedMs = this.#clock.now() - readinessStartedAt;
     await this.#bestEffortShutdown(udid, set);
-    throw new BootTimeoutError(deviceId);
+    throw new BootTimeoutError(deviceId, undefined, {
+      budgetMs: bootstatusTimeoutMs,
+      elapsedMs,
+      phase: outcome.kind === "timed-out" ? "bootstatus" : "installer",
+    });
   }
 
   async #waitForInstaller(udid: string, deadline: number, set?: string): Promise<boolean> {

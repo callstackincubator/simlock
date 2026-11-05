@@ -731,6 +731,12 @@ export interface ScriptedProcessExpectation {
    * sends the second signal would be dead and nothing would notice.
    */
   readonly ignoresSigterm?: boolean;
+  /**
+   * why: `hangs` ends only on a signal, so it cannot model a child that succeeds late, the case
+   * on the far side of every deadline. The child keeps running until this settles, then finishes
+   * with `result`.
+   */
+  readonly finishesOn?: Promise<void>;
   readonly onSpawn?: (args: readonly string[]) => void | Promise<void>;
 }
 
@@ -743,7 +749,10 @@ export class ScriptedProcessRunner implements ProcessRunner {
    * released, and a spawned child that stays referenced keeps the daemon alive after
    * `daemon stop`.
    */
-  readonly handles: (ProcessHandle & { readonly unreffed: boolean })[] = [];
+  readonly handles: (ProcessHandle & {
+    readonly unreffed: boolean;
+    readonly signals: readonly NodeJS.Signals[];
+  })[] = [];
   #nextPid = 1;
   readonly #expectations: ScriptedProcessExpectation[];
 
@@ -885,6 +894,7 @@ function scriptedChunks(
 class ScriptedProcessHandle implements ProcessHandle {
   /** Whether the caller released the event loop, which only a supervised child should do. */
   unreffed = false;
+  readonly signals: NodeJS.Signals[] = [];
   readonly stdout = new LineBuffer();
   readonly stderr = new LineBuffer();
   readonly #result: Promise<ProcessResult>;
@@ -906,12 +916,18 @@ class ScriptedProcessHandle implements ProcessHandle {
       this.#writeChunks(expectation.chunks, lineEnd);
     }
 
-    if (!expectation.hangs) {
+    const finish = (): void => {
       this.#finish(expectation.result ?? defaultResult(expectation));
+    };
+    if (expectation.finishesOn !== undefined) {
+      void expectation.finishesOn.then(finish);
+    } else if (!expectation.hangs) {
+      finish();
     }
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    this.signals.push(signal);
     if (this.expectation.ignoresSigterm === true && signal !== "SIGKILL") return;
     this.#finish({ code: null, stderr: "", stdout: "" });
   }
