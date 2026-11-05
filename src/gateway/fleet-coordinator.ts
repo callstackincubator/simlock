@@ -44,6 +44,8 @@
  */
 import type { EventBus, EventMap } from "../bus/index.js";
 import type {
+  BaselineSaveInput,
+  BaselineSaveOutput,
   LeaseGrant,
   LeaseRecord,
   RotateInput,
@@ -118,6 +120,9 @@ const CANNOT_SERVE_REASONS: Readonly<Record<string, WorkerReason["reason"]>> = {
   NO_DRIVER: "no-driver",
   RUNTIME_MISSING: "runtime-missing",
   UNKNOWN_MODEL: "unknown-model",
+  UNKNOWN_BASELINE: "no-baseline",
+  BASELINE_MISMATCH: "baseline-mismatch",
+  BASELINE_STALE: "baseline-stale",
 };
 
 // why: the filters that hold a worker back only for now (it is full, busy, not ready or unhealthy), so it could take the request later; any other reason (drained, disconnected, a missing driver, runtime, model or capability) means it will not take it by waiting.
@@ -137,6 +142,9 @@ const CANNOT_SERVE_CODES: ReadonlySet<string> = new Set([
   "RUNTIME_MISSING",
   "NO_DRIVER",
   "CAPABILITY_MISSING",
+  "UNKNOWN_BASELINE",
+  "BASELINE_MISMATCH",
+  "BASELINE_STALE",
 ]);
 
 export interface FleetExecInput {
@@ -411,6 +419,33 @@ export class FleetLeaseCoordinator {
       throw error;
     }
     return this.#projectRecord(record, entry);
+  }
+
+  /**
+   * why: ADR 0061 §6: a save goes to the worker that holds the lease, by its own lease id; it ends the lease, so the index entry goes as after a release, and the answer waits for a view read with the worker's baselines, so a request after it sees the new copy.
+   */
+  // fallow-ignore-next-line unused-class-member -- reached through the dispatcher's Pick of the coordinator.
+  async saveBaseline(
+    gatewayLeaseId: string,
+    input: Pick<BaselineSaveInput, "name" | "note">,
+  ): Promise<BaselineSaveOutput> {
+    const entry = this.#requireEntry(gatewayLeaseId);
+    let saved: BaselineSaveOutput;
+    try {
+      saved = await this.#forwardToWorker(entry.workerId, (client) =>
+        client.saveBaseline({
+          leaseId: entry.workerLeaseId,
+          name: input.name,
+          ...(input.note === undefined ? {} : { note: input.note }),
+        }),
+      );
+    } catch (error: unknown) {
+      this.#forgetIfUnknownToWorker(gatewayLeaseId, error);
+      throw error;
+    }
+    this.options.leaseIndex.remove(gatewayLeaseId);
+    await this.options.directory.target(entry.workerId)?.refresh({ includeCatalog: true });
+    return { ...saved, leaseId: gatewayLeaseId };
   }
 
   async release(gatewayLeaseId: string): Promise<void> {
@@ -1601,6 +1636,7 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
     ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
     ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
+    ...(waiter.request.baseline === undefined ? {} : { baseline: waiter.request.baseline }),
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),

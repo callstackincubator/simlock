@@ -206,6 +206,27 @@ describe("matchRequest", () => {
       expect(listsModel(worker(PHONES), { platform: "ios" })).toBe(true);
     });
 
+    it("reads a request naming a baseline as the baseline's model, the class it also names dropped", () => {
+      const held = {
+        ...worker(PHONES),
+        baselines: [
+          {
+            mode: "full" as const,
+            model: "iPhone 17",
+            name: "checkout",
+            osVersion: "26.0",
+            platform: "ios" as const,
+            savedAt: "2026-11-02T13:10:00Z",
+            version: 1,
+          },
+        ],
+      };
+      const request = { baseline: "checkout", class: "watch" as const, platform: "ios" as const };
+
+      expect(listsModel(held, request)).toBe(true);
+      expect(listsModel(worker(PHONES), request)).toBe(false);
+    });
+
     it("matches no runtime for a string the OS grammar refuses", () => {
       expect(matchRequest(worker(PHONES), { ...phone, osVersion: "^18" })).toBeUndefined();
     });

@@ -379,7 +379,7 @@ describe("MCP server (smoke)", () => {
     }
   });
 
-  it("passes lease_simulator's imageTag to the lease request, and refuses one outside the allowed characters before asking", async () => {
+  it("passes lease_simulator's imageTag and baseline to the lease request, and refuses one outside the allowed characters before asking", async () => {
     const client = new FakeSimlockClient();
     const inputs: unknown[] = [];
     client.requestLeaseImpl = (input) => {
@@ -388,23 +388,30 @@ describe("MCP server (smoke)", () => {
     };
     const { mcpClient, close } = await connectedServer(client);
     try {
-      const call = (imageTag: string) =>
+      const call = (imageTag: string, baseline?: string) =>
         mcpClient.request(
           {
             method: "tools/call",
             params: {
-              arguments: { imageTag, model: "Pixel 8", platform: "android" },
+              arguments: {
+                ...(baseline === undefined ? {} : { baseline }),
+                imageTag,
+                model: "Pixel 8",
+                platform: "android",
+              },
               name: "lease_simulator",
             },
           },
           CallToolResultSchema,
         );
 
-      const granted = await call("google_apis_playstore");
+      const granted = await call("google_apis_playstore", "checkout");
       const refused = await call("google apis").catch((error: unknown) => error);
 
       expect(granted.isError).not.toBe(true);
-      expect(inputs).toEqual([expect.objectContaining({ imageTag: "google_apis_playstore" })]);
+      expect(inputs).toEqual([
+        expect.objectContaining({ baseline: "checkout", imageTag: "google_apis_playstore" }),
+      ]);
       expect(refused).toSatisfy(
         (result: unknown) =>
           result instanceof Error || (result as { isError?: boolean }).isError === true,

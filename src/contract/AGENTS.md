@@ -16,7 +16,7 @@ Imported by: daemon, gateway, simlock-client, every frontend, core, leasing, his
 | `roles.ts`         | `Role`, `AuthorizeContext`, `ownsLease`                                                                                                                                                                                                                 |
 | `errors.ts`        | `ErrorDetailsMap`, `ERROR_TABLE`, `SimlockError`, `fromWireError`                                                                                                                                                                                       |
 | `pushes.ts`        | `PUSH_SCHEMAS`: every push kind                                                                                                                                                                                                                         |
-| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas                                                                                                                                                                                                  |
+| `protocol.ts`      | `PROTOCOL_VERSION_RANGE`, negotiation, `hello` schemas, `CORE_ROUTE_SEGMENTS` (the first segment of each core HTTP route: `baselines`, `components`, …)                                                                                                 |
 | `worker-view.ts`   | `workerViewFields`, view refresh interval and events                                                                                                                                                                                                    |
 | `inbox.ts`         | The Inbox rules: `inboxItems` (what needs the operator, with each item's group, key and subject), `problemCount`, and the helpers they call (`holderOf`, `workerOfLease`, `isExpiring`, ...); no runtime import, so the console imports it by this path |
 | `os-range.ts`      | OS constraint grammar: parse, `satisfies`, `compareVersions`                                                                                                                                                                                            |
@@ -59,7 +59,7 @@ Three identities:
 
 ## Protocol version
 
-- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 69, max: 69 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
+- `PROTOCOL_VERSION_RANGE` in `protocol.ts` holds it, now `{ min: 75, max: 75 }`. `DAEMON_PROTOCOL_VERSION` (`src/daemon-protocol/`) is its `max`.
 - Every change to a contract shape bumps it by one in the same PR. Move `min` too, unless
   a compatibility path stays side by side. `.agents/scripts/protocol-bump-check.mjs` checks
   it on push and in CI; it counts every file here as a shape but tests, `index.ts` and the
@@ -99,7 +99,9 @@ Three identities:
   is nothing to show, and absent until the first status read. A status without an update clears `update`.
 - A `starting` worker's view is `health`, `host` and `load` only. Absent, never empty.
 - Full re-read every `WORKER_VIEW_REFRESH_INTERVAL_MS` (30 s); catalog at once on
-  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); status at once on
+  `WORKER_VIEW_CATALOG_EVENTS` (`component.installed`); baselines (`baseline.list`, read with the
+  catalog) at once on `WORKER_VIEW_BASELINE_EVENTS` (`baseline.saved`, `baseline.removed`,
+  `baseline.stale`); status at once on
   `WORKER_VIEW_UPDATE_EVENTS` (`daemon.update-started`, `daemon.update-failed`).
 
 ## OS ranges and durations

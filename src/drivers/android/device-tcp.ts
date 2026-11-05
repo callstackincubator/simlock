@@ -117,22 +117,6 @@ function fields(output: string): string[][] {
     .filter((parts) => parts.length >= 3);
 }
 
-// why: reclaim of a device proved its own leaves none of the lease's rules: every reverse rule of this serial, and this serial's forwards one by one, because `forward --remove-all` would end every device's on the server.
-export async function removeDeviceRules(
-  run: RunAdb,
-  warn: Warn,
-  device: Target,
-  serial: string,
-): Promise<void> {
-  await attempt(run, warn, device, ["reverse", "--remove-all"]);
-  const listed = await attempt(run, warn, device, ["forward", "--list"]);
-  for (const [owner, local] of fields(listed ?? "")) {
-    if (owner === serial && local !== undefined) {
-      await attempt(run, warn, device, ["forward", "--remove", local]);
-    }
-  }
-}
-
 // why: at start only a rule into the loopback range the worker keeps for tunnels is Simlock's own; a holder's other rules are not read as such.
 async function tunnelRules(
   run: RunAdb,
@@ -157,7 +141,7 @@ interface HeldPort {
 }
 
 export interface AndroidDeviceTcp extends DeviceTcp {
-  // why: called by the driver's reclaim of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
+  // why: called by the driver's reclaim of a phone and its destroy of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
   release(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<void>;
 }
 

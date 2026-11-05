@@ -95,6 +95,14 @@ async function reclaimCalls(env: TestEnv, driverDeviceId: string) {
   );
 }
 
+async function destroyCalls(env: TestEnv, driverDeviceId: string) {
+  return (await env.driverLog.calls()).filter(
+    (call) =>
+      call.operation === "destroy" &&
+      (call.arguments[0] as { deviceId?: string }).deviceId === driverDeviceId,
+  );
+}
+
 async function deviceState(env: TestEnv, deviceId: string): Promise<string | undefined> {
   const rows = (await env.cli(["list", "--devices"])).json as { id: string; state: string }[];
   return rows.find((row) => row.id === deviceId)?.state;
@@ -102,7 +110,7 @@ async function deviceState(env: TestEnv, deviceId: string): Promise<string | und
 
 describe("startup ends every lease whose device is not running", () => {
   it.each(["stopped", "transitioning"] as const)(
-    "a daemon restarted after its leased device was scripted %s answers a renew of that lease with UNKNOWN_LEASE, records lease.released with reason device-lost, and the device becomes ready after reclaim",
+    "a daemon restarted after its leased device was scripted %s answers a renew of that lease with UNKNOWN_LEASE, records lease.released with reason device-lost, and the device is deleted, not reclaimed",
     async (runState) => {
       const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });
       await prepare(env);
@@ -115,8 +123,9 @@ describe("startup ends every lease whose device is not running", () => {
       const ended = await leaseEvents(env, held.leaseId);
       expect(ended.map((entry) => entry.event)).toEqual(["lease.released"]);
       expect(ended[0]?.payload).toMatchObject({ leaseId: held.leaseId, reason: "device-lost" });
-      await waitForDeviceState(env, held.driverDeviceId, "ready");
-      expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
+      await waitForDeviceState(env, held.driverDeviceId, "deleted");
+      expect(await destroyCalls(env, held.driverDeviceId)).toHaveLength(1);
+      expect(await reclaimCalls(env, held.driverDeviceId)).toEqual([]);
     },
   );
 
@@ -170,7 +179,7 @@ describe("startup ends every lease whose device is not running", () => {
     expect(await reclaimCalls(env, held.driverDeviceId)).toEqual([]);
   });
 
-  it("a daemon restarted after that with the listing working wipes the device through the full reclaim and returns it ready", async () => {
+  it("a daemon restarted after that with the listing working deletes the device its lease left behind, with no reclaim", async () => {
     const env = await withDaemon({ configOverrides: { lease: { defaultTtlMs: 120_000 } } });
     await prepare(env);
     const held = await lease(env, "ios");
@@ -183,11 +192,10 @@ describe("startup ends every lease whose device is not running", () => {
     await prepare(env);
     await restart(env);
 
-    // A reusable device must not return to the pool with its last holder's data: the start that
-    // can read its platform wipes it, as the release it never got would have.
-    await waitForDeviceState(env, held.driverDeviceId, "ready");
-    expect(await deviceState(env, held.deviceId)).toBe("ready");
-    expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
+    // why: a released device is never reused, so the start that can read its platform deletes it, as the release it never got would have.
+    await waitForDeviceState(env, held.driverDeviceId, "deleted");
+    expect(await destroyCalls(env, held.driverDeviceId)).toHaveLength(1);
+    expect(await reclaimCalls(env, held.driverDeviceId)).toEqual([]);
   });
 
   it("a daemon restarted with listManaged scripted to fail on one platform reaches running, ends that platform's leases, and keeps a running lease on the other platform", async () => {
@@ -225,7 +233,7 @@ describe("startup ends every lease whose device is not running", () => {
     expect(await reclaimCalls(env, held.driverDeviceId)).toEqual([]);
   });
 
-  it("a lease whose deadline passed while the daemon was down emits lease.expired at the restart and no lease.released, and with its device scripted running it is reclaimed", async () => {
+  it("a lease whose deadline passed while the daemon was down emits lease.expired at the restart and no lease.released, and with its device scripted running it is deleted, not reclaimed", async () => {
     const env = await withDaemon();
     await prepare(env);
     const held = await lease(env, "ios", "2s");
@@ -237,8 +245,9 @@ describe("startup ends every lease whose device is not running", () => {
 
     const ended = await leaseEvents(env, held.leaseId);
     expect(ended.map((entry) => entry.event)).toEqual(["lease.expired"]);
-    await waitForDeviceState(env, held.driverDeviceId, "ready");
-    expect(await reclaimCalls(env, held.driverDeviceId)).toHaveLength(1);
+    await waitForDeviceState(env, held.driverDeviceId, "deleted");
+    expect(await destroyCalls(env, held.driverDeviceId)).toHaveLength(1);
+    expect(await reclaimCalls(env, held.driverDeviceId)).toEqual([]);
   });
 
   it("a lease whose deadline passed while the daemon was down, with its device removed from the scripted reality, is marked missing with no reclaim call", async () => {

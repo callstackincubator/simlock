@@ -3,6 +3,7 @@ import { z } from "@hono/zod-openapi";
 import {
   deviceClassSchema,
   deviceRecordSchema,
+  baselineNameSchema,
   imageTagSchema,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
@@ -24,6 +25,7 @@ const leasePayloadSchema = z.object({
   deviceId: z.string(),
   expiresAt: z.string(),
   id: z.string(),
+  baseline: z.object({ name: z.string(), version: z.number().int() }).optional(),
   imageTag: z.string().optional(),
   mode: z.enum(["slim", "full"]).optional(),
   os: z.string(),
@@ -195,6 +197,7 @@ export const leaseRequestGetRoute = declareRoute({
 export const leaseRequestBodySchema = z
   .object({
     allowDownload: z.boolean().optional(),
+    baseline: baselineNameSchema.optional(),
     class: deviceClassSchema.optional(),
     device: z.string().min(1).max(WARM_POOL_NAME_MAX).optional(),
     imageTag: imageTagSchema.optional(),
@@ -235,7 +238,8 @@ export const leaseRequestCreateRoute = declareRoute({
   status: 201,
   errors: {
     409: ["LEASE_ID_TAKEN", "REQUESTER_ALREADY_LEASED"],
-    422: ["UNKNOWN_MODEL"],
+    404: ["UNKNOWN_BASELINE"],
+    422: ["UNKNOWN_MODEL", "BASELINE_MISMATCH", "BASELINE_STALE"],
     503: ["NO_CAPACITY"],
   },
   errorExtras: {

@@ -39,7 +39,7 @@ worker daemon ── uplink (WebSocket to /v1/uplink, worker dials) ──┘
 | module-registry | The list of optional modules, read by the composition root and the CLI | [module-registry](../../src/module-registry/AGENTS.md) |
 | daemon | Composition root, socket server, `Dispatcher`, sessions, uplink dialler | [daemon](../../src/daemon/AGENTS.md) |
 | leasing | Every lease rule: admit, queue, plan, grant, renew, end | [leasing](../../src/leasing/AGENTS.md) |
-| core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, doctor | [core](../../src/core/AGENTS.md) |
+| core | Registry, device lifecycle, reclaim, quarantine, cleanup, components, baselines, doctor | [core](../../src/core/AGENTS.md) |
 | core/warm-pool | What stays booted, and warm targets | [warm-pool](../../src/core/warm-pool/AGENTS.md) |
 | core/capacity | Limits, RAM budget, reservations | [capacity](../../src/core/capacity/AGENTS.md) |
 | core/usage | Usage figures from the history rows, read on a thread | [usage](../../src/core/usage/AGENTS.md) |

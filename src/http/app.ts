@@ -19,6 +19,9 @@ import { type AuthEnv, requireAuth } from "./auth.js";
 import { buildHttpSession, type HttpDispatch } from "./dispatcher-session.js";
 import {
   componentInstallRoute,
+  baselineListRoute,
+  baselineRemoveRoute,
+  baselineSaveRoute,
   componentListRoute,
   componentRemoveRoute,
   eventsRoute,
@@ -186,8 +189,15 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
-    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
+    ...leaseRequestImageFields(body),
+  };
+}
+
+function leaseRequestImageFields(body: z.infer<typeof leaseRequestBodySchema>) {
+  return {
+    ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
+    ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
   };
 }
 
@@ -290,6 +300,33 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       await deps.dispatch(
         "component.remove",
         { platform, version, ...(dryRun === undefined ? {} : { dryRun: dryRun === "true" }) },
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    );
+  });
+
+  app.openapi({ ...baselineListRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(await deps.dispatch("baseline.list", {}, buildHttpSession(c.get("identity"))), 200),
+  );
+
+  app.openapi({ ...baselineSaveRoute, middleware: [agentAuth] }, async (c) =>
+    c.json(
+      await deps.dispatch(
+        "baseline.save",
+        c.req.valid("json"),
+        buildHttpSession(c.get("identity")),
+      ),
+      200,
+    ),
+  );
+
+  app.openapi({ ...baselineRemoveRoute, middleware: [agentAuth] }, async (c) => {
+    const { workerId } = c.req.valid("query");
+    return c.json(
+      await deps.dispatch(
+        "baseline.remove",
+        { name: c.req.valid("param").name, ...(workerId === undefined ? {} : { workerId }) },
         buildHttpSession(c.get("identity")),
       ),
       200,

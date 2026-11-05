@@ -34,6 +34,9 @@ const ROLE_MATRIX: ReadonlyArray<{
   { name: "cleanup.run", input: {}, role: "admin" },
   { name: "nuke.run", input: {}, role: "admin" },
   { name: "warm.forget", input: { model: "Pixel", platform: "android" }, role: "admin" },
+  { name: "baseline.save", input: { leaseId: "L1", name: "checkout" }, role: "admin" },
+  { name: "baseline.list", input: {}, role: "agent" },
+  { name: "baseline.remove", input: { name: "checkout" }, role: "admin" },
   { name: "config.get", input: {}, role: "admin" },
   { name: "daemon.stop", input: {}, role: "admin" },
   { name: "daemon.update", input: {}, role: "admin" },
@@ -128,6 +131,9 @@ const EFFECT_MATRIX: ReadonlyArray<{
   { name: "cleanup.run", input: { dryRun: true }, effect: "read" },
   { name: "nuke.run", input: {}, effect: "write" },
   { name: "warm.forget", input: { model: "Pixel", platform: "android" }, effect: "write" },
+  { name: "baseline.save", input: { leaseId: "L1", name: "checkout" }, effect: "write" },
+  { name: "baseline.list", input: {}, effect: "read" },
+  { name: "baseline.remove", input: { name: "checkout" }, effect: "write" },
   { name: "config.get", input: {}, effect: "read" },
   { name: "daemon.stop", input: {}, effect: "write" },
   { name: "daemon.update", input: {}, effect: "write" },
@@ -534,6 +540,7 @@ describe("operation input/output round trips", () => {
   it("doctor.run: round-trips a driver-advisory finding", () => {
     const report = {
       findings: [{ kind: "driver-advisory", platform: "ios", code: "slim-disabled", message: "x" }],
+      sources: [],
     };
     expect(OPERATIONS["doctor.run"].output.parse(report)).toBeDefined();
   });
@@ -546,11 +553,14 @@ describe("operation input/output round trips", () => {
       message: "The Android emulator package is not installed.",
       remedy: "Run `sdkmanager --install emulator`.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     const { remedy: _remedy, ...withoutRemedy } = finding;
-    expect(() => OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy] })).toThrow();
+    expect(() =>
+      OPERATIONS["doctor.run"].output.parse({ findings: [withoutRemedy], sources: [] }),
+    ).toThrow();
   });
 
   it("doctor.run: round-trips a service-broken finding field for field, and refuses an empty missing list or a missing name, remedy or unknown manager", () => {
@@ -561,15 +571,22 @@ describe("operation input/output round trips", () => {
       missing: ["/Users/me/.nvm/versions/node/v22.13.0/bin/node"],
       remedy: "Run `simlock daemon install` again.",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
     expect(() =>
-      OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, missing: [] }] }),
+      OPERATIONS["doctor.run"].output.parse({
+        findings: [{ ...finding, missing: [] }],
+        sources: [],
+      }),
     ).toThrow();
     for (const broken of [{ name: undefined }, { manager: "pm2" }, { remedy: undefined }]) {
       expect(() =>
-        OPERATIONS["doctor.run"].output.parse({ findings: [{ ...finding, ...broken }] }),
+        OPERATIONS["doctor.run"].output.parse({
+          findings: [{ ...finding, ...broken }],
+          sources: [],
+        }),
       ).toThrow();
     }
   });
@@ -781,9 +798,9 @@ describe("operation input/output round trips", () => {
         target: "t",
       };
 
-      expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] }).findings).toEqual([
-        finding,
-      ]);
+      expect(
+        OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] }).findings,
+      ).toEqual([finding]);
     },
   );
 
@@ -796,8 +813,9 @@ describe("operation input/output round trips", () => {
       remedy: "run simlock component install ios 27.0",
       target: "iPhone 17 / 27.0 / full",
     };
-    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding] })).toEqual({
+    expect(OPERATIONS["doctor.run"].output.parse({ findings: [finding], sources: [] })).toEqual({
       findings: [finding],
+      sources: [],
     });
   });
 
@@ -1202,6 +1220,24 @@ describe("operation input/output round trips", () => {
     }
   });
 
+  it("baseline.remove: accepts a workerId of 1 to 128 characters, and refuses an empty or 129-character one, a non-string and an unknown key", () => {
+    const parse = (input: object) => OPERATIONS["baseline.remove"].input.parse(input);
+    const base = { name: "checkout" };
+
+    expect(parse(base)).toEqual(base);
+    for (const workerId of ["w", "x".repeat(128)]) {
+      expect(parse({ ...base, workerId })).toEqual({ ...base, workerId });
+    }
+    for (const refused of [
+      { ...base, workerId: "" },
+      { ...base, workerId: "x".repeat(129) },
+      { ...base, workerId: 7 },
+      { ...base, worker: "wrk_a" },
+    ]) {
+      expect(() => parse(refused)).toThrow();
+    }
+  });
+
   it("the output push carries a frame id, a stream, and a chunk", () => {
     expect(PUSH_SCHEMAS.output.parse({ chunk: "hello", requestId: 7, stream: "stdout" })).toEqual({
       chunk: "hello",
@@ -1293,14 +1329,22 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: false, headless: false },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config)).toBeDefined();
+    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({
+      audio: false,
+      headless: false,
+    });
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1359,7 +1403,12 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 1 } },
+      ios: {
+        defaultMode: "full",
+        defaultModels: {},
+        slim: { bootTimeoutMs: 1 },
+        simulator: { audio: true, headless: true },
+      },
       android: {
         defaultModels: {},
         emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },

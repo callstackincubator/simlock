@@ -120,7 +120,7 @@ export function createCaptureRegistry(): CaptureRegistry {
 
 export function createStreamLeaseEnd(captures: CaptureRegistry): ModuleLeaseEndParticipant {
   return {
-    // why: waits for each capture's close, which a driver bounds, so a reclaim does not wipe or
+    // why: waits for each capture's close, which a driver bounds, so a reclaim does not delete or
     // reboot a device while its capture is still being torn down on it; leasing's own signal ends
     // the wait if leasing gives up first.
     leaseEnded: async (ended, signal) => {

@@ -61,7 +61,7 @@ The Inbox is the daemon's: `GET /v1/inbox` (`inbox.get`, rules in `src/contract/
 
 A page reads a route only while it is on screen (`useRouteQuery`, `state/live.tsx`). `state/queries.ts`
 holds the TanStack `QueryClient` (the dependency rules keep it out of `data/` and `model/`) and the keys and times of ADR 0044:
-`['workers']` every 15 s, `['leases']`, `['lease', id]` and `['inbox']` 10 s, `['lease-requests']` 5 s,
+`['workers']` and `['baselines']` every 15 s, `['leases']`, `['lease', id]` and `['inbox']` 10 s, `['lease-requests']` 5 s,
 `['stats', range]` 60 s, `['tokens']` never; a read stays fresh 2 s (stats 30 s, tokens 5 min);
 data no page uses is dropped after 60 s. A key polls only while a page uses it, the tab is shown and
 the connection is up; a hidden tab or a lost connection reads nothing, and coming back reads each key
@@ -105,17 +105,18 @@ not (its highlight is an index it resets when the items change), so the listbox 
 
 ## Pages
 
-| Path                         | Screen   | Layout                                                                                                                                                                                           |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/`                          | Overview | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                                                                      |
-| `/fleet[/<id>[/<deviceId>]]` | Fleet    | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` (Details, Screen; `?drawer=screen` holds the tab) |
-| `/leases[/<id>]`             | Leases   | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Events)                                                                                                               |
-| `/queue[/<id>]`              | Queue    | Wait p95 tile + table; a request opens in a `Drawer`                                                                                                                                             |
-| `/inbox[/<key>]`             | Inbox    | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                                                                            |
-| `/activity[/<id>]`           | Activity | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload                                                            |
-| `/usage`                     | Usage    | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                                                                    |
+| Path                         | Screen    | Layout                                                                                                                                                                                           |
+| ---------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/`                          | Overview  | range chips in the toolbar, five stat tiles, Needs you, capacity, two charts, workers table                                                                                                      |
+| `/fleet[/<id>[/<deviceId>]]` | Fleet     | table; a worker opens as its own page (load, capacity, leases, tabs Devices, Warm pool, Host, Events in `?tab=`); a device opens in a `Drawer` (Details, Screen; `?drawer=screen` holds the tab) |
+| `/leases[/<id>]`             | Leases    | toolbar (filters, search) + table; the lease opens in a `Drawer` (Details, Events)                                                                                                               |
+| `/queue[/<id>]`              | Queue     | Wait p95 tile + table; a request opens in a `Drawer`                                                                                                                                             |
+| `/baselines`                 | Baselines | one table, a row per baseline (a Worker column on a gateway); read-only                                                                                                                          |
+| `/inbox[/<key>]`             | Inbox     | toolbar (group chips) + a panel per group; an item opens in a `Drawer` (what happened, facts, events)                                                                                            |
+| `/activity[/<id>]`           | Activity  | chart, toolbar (type chips, search) + event feed that scrolls back through the history; an event opens in a `Drawer` with the payload                                                            |
+| `/usage`                     | Usage     | range chips in the toolbar, stat tiles, the Device slots in use chart, panels of tables (workers, requesters page in the URL)                                                                    |
 
-The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue), then
+The sidebar groups the pages: Overview and Inbox, then Operate (Fleet, Leases, Queue, Baselines), then
 Observe (Activity, Usage); a route's `group` in `routes.ts` puts it in one.
 
 Leases, Queue, Inbox and Activity show the list alone, and the chosen item opens in a drawer over it

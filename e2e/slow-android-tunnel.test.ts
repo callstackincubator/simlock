@@ -591,34 +591,39 @@ describe.skipIf(!hasAndroidSdk)(
           expect(ended.code, ended.stderr).toBe(14);
           expect(ended.error?.code).toBe("TUNNEL_LEASE_ENDED");
 
-          // why: release returns before the device's reclaim has run, and adb answers throughout it, so the rules are read once the device is ready again.
-          await waitForDeviceState(onWorker(), lease.deviceId, "ready", { timeout: 120_000 });
-          let left = { forward: "", reverse: "" };
+          // why: release returns before the device is deleted, and adb answers until the emulator is gone, so the rules are read once the device is deleted: nothing of the lease's tunnel is left on the worker's adb server.
+          await waitForDeviceState(onWorker(), lease.deviceId, "deleted", { timeout: 120_000 });
+          let left = { devices: "", forward: "" };
           await waitFor(
             async () => {
-              const reverse = await workerAdb(workerAdbPort(), [
-                "-s",
-                lease.serial,
-                "reverse",
-                "--list",
-              ]);
+              const devices = await workerAdb(workerAdbPort(), ["devices"]);
               const forward = await workerAdb(workerAdbPort(), ["forward", "--list"]);
               left = {
+                devices: devices.stdout
+                  .split("\n")
+                  .filter((line) => line.startsWith(`${lease.serial}\t`))
+                  .join("\n"),
                 forward: forward.stdout
                   .split("\n")
                   .filter((line) => line.startsWith(`${lease.serial} `))
                   .join("\n"),
-                reverse: reverse.stdout.trim(),
               };
-              return reverse.code === 0 && forward.code === 0;
+              // why: adb lists a killed emulator as `offline` for a few seconds, so the read ends when it is gone, not when adb first answers.
+              return (
+                devices.code === 0 &&
+                forward.code === 0 &&
+                left.devices === "" &&
+                left.forward === ""
+              );
             },
             {
               interval: 2_000,
-              label: "the emulator answering adb after its reclaim",
+              label: () =>
+                `the worker's adb server listing nothing of the lease's serial; last read ${JSON.stringify(left)}`,
               timeout: 120_000,
             },
           );
-          expect(left).toEqual({ forward: "", reverse: "" });
+          expect(left).toEqual({ devices: "", forward: "" });
         } finally {
           socket.close();
           await new Promise<void>((resolve) => page.close(() => resolve()));

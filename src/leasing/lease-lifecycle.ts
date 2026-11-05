@@ -108,6 +108,7 @@ export class LeaseLifecycle {
         requestId,
         source,
         platform: device.spec.platform,
+        ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
         ...(fleetRequestId === undefined ? {} : { fleetRequestId }),
       },
       "lease-lifecycle",

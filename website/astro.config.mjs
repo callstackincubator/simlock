@@ -114,6 +114,7 @@ export default defineConfig({
             doc("worker/configuration", "Configuration"),
             doc("worker/capacity", "Capacity and warm pool"),
             doc("worker/runtimes-and-images", "Runtimes and system images"),
+            doc("worker/baselines", "Baselines"),
             doc("worker/cleanup", "Cleanup and disk"),
             doc("worker/enrolling-physical-devices", "Enrol physical devices"),
             doc("worker/console", "Web console"),
@@ -126,7 +127,7 @@ export default defineConfig({
           items: [
             doc("gateway", "When you need a gateway"),
             doc("gateway/setup", "Set up a gateway"),
-            doc("gateway/joining-workers", "Join workers"),
+            doc("gateway/joining-workers", "Add a worker"),
             doc("gateway/routing", "How requests are routed"),
             doc("gateway/managing-workers", "Manage workers"),
             doc("gateway/access-control", "Access control"),

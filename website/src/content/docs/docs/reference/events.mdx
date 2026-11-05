@@ -5,13 +5,13 @@ description: Every event a worker or a gateway records, when it fires, what it c
 
 import { Aside } from '@astrojs/starlight/components';
 
-An event is a fact Simlock records after it happens: a lease was granted, a device booted, a worker
-disconnected. Events are for watching and auditing. They never change anything.
+An event is a record of something that happened: a lease was granted, a device booted, a worker
+disconnected. Use events to watch a machine or audit it after the fact. Reading them changes nothing.
 
 ## Watch events
 
-All three ways need admin rights: the CLI on the same machine as the daemon, or an operator token
-over HTTP.
+All three ways need admin rights: run the CLI on the machine where the daemon runs, or use an
+operator token over HTTP.
 
 ### From the CLI
 
@@ -53,7 +53,7 @@ curl -N -H "Authorization: Bearer $SIMLOCK_TOKEN" https://simlock-gw.example.com
 
 ### In the console
 
-The **Events** screen lists the last hour and adds new events as they arrive. Filter by Leases,
+The console's **Activity** page lists the last hour, adds new events as they arrive, and loads older ones as you scroll down. Filter by Leases,
 Devices, Workers, Components or Other. See [Console](/simlock/docs/worker/console).
 
 ## What every event carries
@@ -65,10 +65,10 @@ Devices, Workers, Components or Other. See [Console](/simlock/docs/worker/consol
 | `timestamp` | When it happened, in milliseconds since the Unix epoch.                                                    |
 | `event`     | The event name from the tables below.                                                                      |
 | `payload`   | The fields listed for that event.                                                                          |
-| `module`    | The part of Simlock that recorded it.                                                                      |
+| `module`    | The part of Simlock that recorded it, such as `lease-lifecycle`.                                           |
 
-A payload may gain fields over time. A field list such as `reason` may gain values. Ignore what you
-do not know.
+Payloads can gain new fields, and fields such as `reason` can gain new values. Code that reads
+events should ignore fields and values it does not know.
 
 ## Where events are kept
 
@@ -104,14 +104,14 @@ The **Gateway** column below says what a gateway shows for each event:
 
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
-| `lease.requested` | A lease request was accepted and stored. | `requestId`, `requestSpec` (the request as sent), `requester`, `waitPolicy` (`wait` or `no-wait`), `fleetRequestId` on a worker when the request came from a gateway | Own and relayed |
+| `lease.requested` | A lease request was accepted and stored. | `requestId`, `requestSpec` (the request as sent, with `baseline` when it named one), `requester`, `waitPolicy` (`wait` or `no-wait`), `fleetRequestId` on a worker when the request came from a gateway | Own and relayed |
 | `lease.queued` | No device was free, so the request started waiting. | `requestId`, `queuePosition` (counted among requests of the same kind: physical requests wait in a line of their own) | Own and relayed |
-| `lease.granted` | A device was handed to a request. | `leaseId`, `deviceId`, `requester`, `requestId`, `source` (`warm`: ready device; `booted`: shut-down device booted; `provisioned`: device created), `platform`, `fleetRequestId` when it served a gateway | Relayed |
+| `lease.granted` | A device was handed to a request. | `leaseId`, `deviceId`, `requester`, `requestId`, `source` (`warm`: ready device; `booted`: shut-down device booted; `provisioned`: device created), `platform`, `baseline` (`{ name, version }`) when the device is a copy of a baseline, `fleetRequestId` when it served a gateway | Relayed |
 | `lease.renewed` | A lease was renewed. | `leaseId`, `newDeadline` | Relayed |
 | `lease.released` | A lease ended because someone or something ended it. | `leaseId`, `deviceId`, `reason` (`explicit`: released; `killed`: `release --all` or `nuke`; `device-lost`: the device crashed and could not be brought back, or a physical device went away), `ownerId` | Relayed |
 | `lease.expired` | A lease reached its deadline without a renew. | `leaseId`, `deviceId`, `ownerId` | Relayed |
-| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec`, `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `boot-timeout`, `killed`, `updating`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
-| `lease.declined` | A worker refused or failed a request a gateway sent it. The gateway may try another worker. | `requestId`, `fleetRequestId`, `requester`, `requestSpec`, `reason` (the `lease.rejected` values) | Relayed |
+| `lease.rejected` | A request ended without a device. A worker records it only for its own requests. | `requestId`, `requester`, `requestSpec` (with `baseline` when it named one), `reason` (`timeout`, `no-wait`, `unresolvable-spec`, `no-worker`, `already-leased`, `lease-id-taken`, `boot-timeout`, `killed`, `updating`, `cancelled`, `daemon-restarted`, `worker-failed`), and on `worker-failed` the error `code` and the `worker` | Own and relayed |
+| `lease.declined` | A worker refused or failed a request a gateway sent it. The gateway may try another worker. | `requestId`, `fleetRequestId`, `requester`, `requestSpec` (with `baseline` when it named one), `reason` (the `lease.rejected` values) | Relayed |
 | `request.granted` | The gateway handed a worker's grant to the caller. | `requestId`, `worker`, `leaseId` (the gateway's), `workerLeaseId` | Own |
 | `request.dispatched` | The gateway sent a queued request to a worker and the worker took it. | `requestId`, `workerId`, `requesterId`, `platform`, `model` or `class` when named, `mode` when named, `physical` for a physical request, `reason` (`warm-hit` or `free-capacity`), `stage`, `queuedMs` | Own |
 
@@ -131,12 +131,12 @@ release and records nothing.
 
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
-| `device.provisioned` | A simulator or emulator was created. | `deviceId`, `spec`, `driver`, `duration` | Relayed |
+| `device.provisioned` | A simulator or emulator was created. | `deviceId`, `spec` (with `baseline` when the device is a copy of a baseline), `driver`, `duration` | Relayed |
 | `device.ready` | A device finished booting and is ready to use. | `deviceId`, `bootDuration`, `platform` | Relayed |
-| `device.slimmed` | A slim iOS simulator booted with its chosen services turned off, and a readback confirmed it. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
-| `device.reclaimed` | A device was cleaned after a lease and can be leased again. | `deviceId`, `strategy` (`erase`, `snapshot`, `wipe`, `uninstall`), `duration`, `missingApps` for a physical device | Relayed |
+| `device.slimmed` | A slim iOS simulator booted with its chosen services turned off, and Simlock checked they are off. | `deviceId`, `address`, `platform`, `categories`, `labelCount`, `durationMs`, `signature`, `unknownLabels` | Relayed |
+| `device.reclaimed` | A physical device was cleaned after a lease and can be leased again. Never sent for a simulator or emulator: each is deleted when its lease ends (`device.deleted`, initiator `lease-end`). | `deviceId`, `strategy` (`uninstall`), `duration`, `missingApps` | Relayed |
 | `device.purge-failed` | Cleaning a device after a lease failed. `device.quarantined` follows. | `deviceId`, `leaseId`, `attemptedStrategy`, `duration`, `error` | Relayed |
-| `device.quarantined` | A device was set aside: it is not leased and cleanup is retried. | `deviceId`, `maxRetries`, `nextRetryAt`, `platform`, `kind` (`purge-failed`, `shutdown-failed`, `delete-failed`, `stalled`), `stalledState` or `message` | Relayed |
+| `device.quarantined` | A device was set aside after its cleanup failed: no one can lease it, and Simlock retries the cleanup. | `deviceId`, `maxRetries`, `nextRetryAt`, `platform`, `kind` (`purge-failed`, `shutdown-failed`, `delete-failed`, `stalled`), `stalledState` or `message` | Relayed |
 | `device.quarantine-recovered` | A retry cleaned a quarantined device; it is back in use. | `deviceId`, `attempts`, `strategy`, `platform`, `missingApps` for a physical device | Relayed |
 | `device.quarantine-abandoned` | A quarantined device ran out of retries and was deleted, or unenrolled if physical. | `deviceId`, `attempts`, `platform` | Relayed |
 | `device.quarantine-stranded` | A quarantined device ran out of retries and could not be deleted either. It needs a person. | `deviceId`, `attempts`, `error`, `platform` | Relayed |
@@ -144,7 +144,7 @@ release and records nothing.
 | `device.recovered` | A crashed leased device was rebooted and the lease goes on. | `deviceId`, `leaseId`, `attempts`, `duration`, `platform` | Relayed |
 | `device.recovery-failed` | A crashed leased device could not be brought back; its lease ends as `device-lost`. | `deviceId`, `leaseId`, `attempts`, `reason`, `error`, `platform` | Relayed |
 | `device.shutdown` | A device was shut down and kept on disk. | `deviceId`, `initiator` (who did it, such as `cleanup-reaper`, `warm-pool`, `daemon-stop` or `nuke`) | Relayed |
-| `device.deleted` | A device was removed: deleted from disk, or forgotten if physical. | `deviceId`, `initiator` (such as `lease-end`, `cleanup-reaper`, `lease-engine`, `doctor`, `nuke`, `operator`, `quarantine`), `physical` | Relayed |
+| `device.deleted` | A device was removed: deleted from disk, or forgotten if physical. | `deviceId`, `initiator` (such as `lease-end`, `cleanup-reaper`, `lease-engine`, `doctor`, `nuke`, `operator`, `quarantine`, `baseline-save`, `baseline-remove`, `baseline-replaced`), `physical` | Relayed |
 | `device.enrolled` | `simlock device add` enrolled a physical device. | `deviceId`, `platform`, `driverDeviceId`, `model`, `osVersion`, `class` (`phone` or `tablet`), `appCount`, `reenrolled` | Relayed |
 | `device.absence-detected` | An enrolled physical device went away. | `deviceId`, `previousState` (`ready`, `leased`, `reclaiming`), `absentReason` (`locked`, `untrusted`, `not-present`) | Relayed |
 | `device.returned` | An absent physical device is back; it is cleaned before its next lease. | `deviceId`, `osVersion` | Relayed |
@@ -161,6 +161,14 @@ release and records nothing.
 | `component.installed` | An install finished and the component is confirmed present. | `platform`, `componentId`, `version`, `alreadyPresent`, `durationMs`, `requesterId` when known | Relayed |
 | `component.install-failed` | An install failed, ran out of `downloads.timeoutMs`, or was cut short by a daemon stop. | `platform`, `componentId`, `durationMs`, `error`, `requesterId` when known | Relayed |
 | `component.removed` | `simlock component remove` removed a component. | `platform`, `componentId`, `version`, `sizeBytes` when known, `residue` when something stayed on disk, `requesterId` | Relayed |
+
+## Baselines
+
+| Event | When it fires | Payload | Gateway |
+| --- | --- | --- | --- |
+| `baseline.saved` | `simlock baseline save` kept a device as a baseline. | `name`, `version`, `platform`, `model`, `osVersion`, `mode`, `imageTag` when the device has one, `sizeBytes` when known, `leaseId`, `requesterId` | Relayed |
+| `baseline.removed` | One version of a baseline was deleted, by `baseline remove`, by `nuke --delete-devices` or because a newer save of the name replaced it. | `name`, `version`, `reason` (`operator`, `nuke` or `replaced`), `requesterId` when someone asked | Relayed |
+| `baseline.stale` | A baseline became stale: the runtime, system image or emulator it was made with changed after the save. | `name`, `version`, `reason` | Relayed |
 
 ## Workers
 
@@ -184,15 +192,15 @@ as `incompatible` in `simlock --gateway worker list`.
 | `daemon.update-started` | An update began: the daemon resolved the version and now waits for its leases to end or installs. | `from`, `to`, `forced` | Relayed |
 | `daemon.update-failed` | An update ended without a new daemon: the install failed and this daemon serves again, or the new version did not start and the old one was started again. | `stage` (`installing` or `restarting`), `from`, `to`, `message` | Relayed |
 | `daemon.stopping` | The daemon began to stop. | `reason` (`signal` when the daemon process received SIGTERM) | Own and relayed |
-| `doctor.reconciled` | Simlock compared its records with the devices on disk (at start and on `simlock doctor`). | `driftFindings` | Relayed |
+| `doctor.reconciled` | Simlock compared its records with the devices that exist (at start and on `simlock doctor`). | `driftFindings` | Relayed |
 | `cleanup.executed` | Cleanup shut down or deleted an idle device. | `ruleName` (`idle-shutdown` or `idle-destroy`), `action` (`shutdown` or `destroy`), `target`, `reason` | Relayed |
 | `disk.pressure-detected` | Free disk space fell below `diskPressure.freeBytesThreshold`. Once per crossing. | `freeBytes`, `threshold` | Relayed |
-| `driver.root-rejected` | A device folder failed its ownership check, or (iOS) `drivers.ios.deviceSet` was invalid or switched with simulators left over, so that platform did not start. Reasons include `invalid-device-set` and `device-set-changed`; `root` is then the configured value or the set that holds the leftovers. | `platform`, `root`, `reason` | Relayed |
-| `driver.adb-server-rejected` | Simlock's own adb server could not start, so Android did not start. | `port`, `reason` (`occupied`, `start-failed`, `invalid-port`) | Relayed |
+| `driver.root-rejected` | A platform did not start because of its device folder: the folder failed its ownership check, or (iOS) `drivers.ios.deviceSet` was invalid, conflicted with `ios.simulator.headless: false`, or was switched while simulators were left in the old set. `simlock doctor` says what to fix. Reasons include `invalid-device-set` and `device-set-changed`; `root` is then the configured value or the set that holds the leftovers. | `platform`, `root`, `reason` | Relayed |
+| `driver.adb-server-rejected` | The adb server Simlock runs for its emulators could not start (see `drivers.android.adbServerPort`), so Android did not start. | `port`, `reason` (`occupied`, `start-failed`, `invalid-port`) | Relayed |
 
 <Aside>
-Running a command on a device and watching its screen record no event. The daemon log records
-each stream.
+Running a command on a device and watching its screen record no event. Each screen stream shows in
+`simlock daemon logs`.
 </Aside>
 
 To have a gateway post some of these events to a webhook, see [Alerts](/simlock/docs/gateway/alerts).

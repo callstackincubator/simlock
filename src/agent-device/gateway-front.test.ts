@@ -562,6 +562,7 @@ async function grantedDevice(member: Member) {
   return device as { readonly address: string };
 }
 
+// why: a released device is deleted and its record stays listed, so only live devices count.
 async function deviceStates(member: Member): Promise<readonly string[]> {
   return (
     (await (
@@ -569,7 +570,9 @@ async function deviceStates(member: Member): Promise<readonly string[]> {
     ).dispatch("list.get", { kind: "devices" }, adminSession)) as unknown as readonly {
       readonly state: string;
     }[]
-  ).map((device) => device.state);
+  )
+    .map((device) => device.state)
+    .filter((state) => state !== "deleted");
 }
 
 function track<T>(promise: Promise<T>): {
@@ -1143,7 +1146,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     member.fake.releaseCommand();
   });
 
-  it("release goes to the worker's agent-device daemon first, then releases the simlock lease, and the device is reclaimed", async () => {
+  it("release goes to the worker's agent-device daemon first, then releases the simlock lease, and the device is deleted and the pool makes a ready one", async () => {
     const rig = await setUp();
     const member = first(rig);
     let heldAtDaemonRelease: readonly string[] = [];

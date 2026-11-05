@@ -220,17 +220,24 @@ describe("StartupConverger", () => {
     expect(harness.devices.find((item) => item.id === leasedDevice.id)?.state).toBe("leased");
   });
 
-  it("deletes every spent fresh device found reclaiming or shutdown, after recovering interrupted reclaims", async () => {
-    // `device()` stamps `lastLeaseEndedAt` on every record, so the reusable one below has ended
-    // a lease too: only its identity policy keeps it out of the delete.
-    const spentReclaiming = { ...device("spent-reclaiming", "ios", "reclaiming", 1) };
-    const spentShutdown = { ...device("spent-shutdown", "ios", "shutdown", 2) };
+  it("deletes every spent virtual device found reclaiming or shutdown, after recovering interrupted reclaims, and keeps a never-leased one", async () => {
+    // why: `device()` stamps `lastLeaseEndedAt`, so each record here has ended a lease and is
+    // spent whatever its identity; only the never-leased one is stripped of the stamp.
+    const spentReclaiming = device("spent-reclaiming", "ios", "reclaiming", 1);
+    const spentShutdown = device("spent-shutdown", "ios", "shutdown", 2);
     const reusableShutdown = device("reusable-shutdown", "ios", "shutdown", 3);
+    const { lastLeaseEndedAt: _unused, ...neverLeased } = device(
+      "never-leased",
+      "ios",
+      "shutdown",
+      4,
+    );
     const harness = createHarness(
       [
         { ...spentReclaiming, leaseIdentity: "fresh" },
         { ...spentShutdown, leaseIdentity: "fresh" },
-        reusableShutdown,
+        { ...reusableShutdown, leaseIdentity: "reusable" },
+        neverLeased,
       ],
       [],
     );
@@ -242,7 +249,8 @@ describe("StartupConverger", () => {
       "recover:spent-reclaiming",
       "delete-spent:spent-reclaiming",
       "delete-spent:spent-shutdown",
+      "delete-spent:reusable-shutdown",
     ]);
-    expect(harness.devices.find((item) => item.id === reusableShutdown.id)?.state).toBe("shutdown");
+    expect(harness.devices.find((item) => item.id === neverLeased.id)?.state).toBe("shutdown");
   });
 });

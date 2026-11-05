@@ -11,7 +11,7 @@
 //   - `Part of #N.` first, equal to the GitHub parent; then `## Scope`, `## In short`, `##
 //     Technical spec` with `### Facts`, `### Modules touched`, (`### Surface and extension
 //     points`), `### Contract and event changes`, `### Other code on the same state`, `###
-//     Failure modes`, `### Rules in play`, `### Tests`, then `## Done when`, `## Out of scope`,
+//     Failure modes`, `### Rules in play`, (`### Retired words`), `### Tests`, then `## Done when`, `## Out of scope`,
 //     `## Depends on`, in that order; the last line is the agent footer;
 //   - no template leftovers: `#NNN`, a row of `...` cells, a `- ...` bullet, a template comment;
 //   - In short holds a mermaid block;
@@ -76,9 +76,10 @@ const TASK_H3 = [
   "Other code on the same state",
   "Failure modes",
   "Rules in play",
+  "Retired words",
   "Tests",
 ];
-const OPTIONAL = new Set(["Surface and extension points"]);
+const OPTIONAL = new Set(["Surface and extension points", "Retired words"]);
 const FEATURE_H2 = [
   "Problem",
   "Who it is for",

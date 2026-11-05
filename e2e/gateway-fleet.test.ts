@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  mintJoinToken,
-  waitFor,
-  waitForDeviceState,
-  withDaemon,
-  withHttpDaemon,
-} from "./helpers/index.js";
+import { mintJoinToken, waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
 
 interface WorkerView {
@@ -540,16 +534,23 @@ describe("gateway fleet", () => {
         modelClasses: { "Pixel 8": "phone" },
       },
     } as const;
-    const join = async (label: string) =>
+    const join = async (label: string, warm: boolean) =>
       withDaemon({
         configOverrides: {
           gateway: { label, token: await mintJoinToken(gateway), url: `ws://127.0.0.1:${port}` },
+          ...(warm
+            ? {
+                warmPool: {
+                  targets: [{ count: 1, model: "Pixel 8", osVersion: "34", platform: "android" }],
+                },
+              }
+            : {}),
         },
         driverScript: pixels,
         fakeDriverPlatforms: ["android"],
       });
-    const warmWorker = await join("worker-warm");
-    const freeWorker = await join("worker-free");
+    await join("worker-warm", true);
+    const freeWorker = await join("worker-free", false);
     await waitForWorkers(
       gateway,
       (views) =>
@@ -558,27 +559,14 @@ describe("gateway fleet", () => {
       "both workers connected with their catalogs",
     );
 
-    const warmed = await warmWorker.cli([
-      "lease",
-      "--platform",
-      "android",
-      "--device",
-      "Pixel 8",
-      "--detach",
-    ]);
-    expect(warmed.code, warmed.stderr).toBe(0);
-    const { device: warmDevice, lease: warmLease } = warmed.json as {
-      device: { id: string; driverDeviceId: string };
-      lease: { id: string };
-    };
-    await warmWorker.cli(["release", warmLease.id]);
-    await waitForDeviceState(warmWorker, warmDevice.driverDeviceId, "ready");
-    // why: Until the gateway's view shows that device ready, a request could miss it.
+    // why: the worker's warm pool keeps the Pixel ready, and until the gateway's view shows it ready a request could miss it.
+    let warmDevice: { id: string } | undefined;
     await waitFor(
       async () => {
         const status = await gateway.cli(["status", "--json"]);
         const devices = (status.json as { devices?: { id: string; state: string }[] }).devices;
-        return devices?.some((device) => device.state === "ready") === true;
+        warmDevice = devices?.find((device) => device.state === "ready");
+        return warmDevice !== undefined;
       },
       { label: "the warm device ready in the gateway's view", timeout: 30_000 },
     );
@@ -594,7 +582,7 @@ describe("gateway fleet", () => {
       device: { id: string };
       lease: { worker?: { label?: string } };
     };
-    expect(grant.device.id).toBe(warmDevice.id);
+    expect(grant.device.id).toBe(warmDevice?.id);
     expect(grant.lease.worker?.label).toBe("worker-warm");
     const work = (await freeWorker.driverLog.calls()).filter((call) =>
       ["provision", "makeReady"].includes(call.operation),

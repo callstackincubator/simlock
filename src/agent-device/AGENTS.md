@@ -99,7 +99,7 @@ under leasing's signal (`lease.endWaitMs`).
    `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceMode`/`physical` (commands lose both keys too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
 5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag? }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
-7. Release → agent-device first, then `lease.release` → reclaim; lease-end finds no scope left.
+7. Release → agent-device first, then `lease.release` → the device is deleted; lease-end finds no scope left.
 
 ## Flow: through a gateway
 

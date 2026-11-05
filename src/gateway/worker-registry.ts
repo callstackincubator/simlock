@@ -15,6 +15,7 @@ export type WorkerView = z.infer<typeof workerViewSchema>;
 
 export type WorkerViewSnapshot = Pick<
   WorkerView,
+  | "baselines"
   | "capabilities"
   | "capacity"
   | "catalog"
@@ -78,6 +79,7 @@ export interface WorkerRegistryOptions {
  */
 function withoutReadFields(view: WorkerView): WorkerView {
   const {
+    baselines: _baselines,
     capabilities: _capabilities,
     capacity: _capacity,
     catalog: _catalog,
@@ -101,6 +103,8 @@ export class WorkerRegistry {
    * worker listed when it last read it (ADR 0009 §4: a reconnecting worker stays known while its
    * new catalog is on the way). */
   readonly #lastCatalog = new Map<string, NonNullable<WorkerView["catalog"]>>();
+  /** why: a `starting` refresh leaves `baselines` off the view, but a request whose only holder restarts waits for it instead of failing `UNKNOWN_BASELINE`, as it does for the catalog. */
+  readonly #lastBaselines = new Map<string, NonNullable<WorkerView["baselines"]>>();
   // why: a restarting worker stays known for its enrolled devices, as for its catalog (ADR 0009 §4).
   readonly #lastPhysicalDevices = new Map<string, NonNullable<WorkerView["devices"]>>();
   /** why: A `starting` refresh leaves `leases` off the view, which is "not known", not "none". */
@@ -144,11 +148,13 @@ export class WorkerRegistry {
   routingViews(): readonly WorkerView[] {
     return this.views().map((view) => {
       const catalog = this.#lastCatalog.get(view.id);
+      const baselines = view.baselines === undefined ? this.#lastBaselines.get(view.id) : undefined;
       const physical =
         view.devices === undefined ? this.#lastPhysicalDevices.get(view.id) : undefined;
       return {
         ...view,
         ...(catalog === undefined ? {} : { catalog }),
+        ...(baselines === undefined ? {} : { baselines }),
         ...(physical === undefined || physical.length === 0 ? {} : { devices: physical }),
       };
     });
@@ -327,9 +333,9 @@ export class WorkerRegistry {
    * re-reads status and devices but not the catalog, so an absent key leaves the previous
    * value standing rather than blanking it, except `load` (a refresh without one removes it, since a
    * stale load would mislead routing) and a `starting` refresh, which says the
-   * worker has checked nothing: it drops capacity, catalog, catalogReadAt, devices, installs,
+   * worker has checked nothing: it drops baselines, capacity, catalog, catalogReadAt, devices, installs,
    * leases, queueDepth and waiting from the view (absent means "not known"), keeping the last
-   * catalog, leases and physical devices aside for routing and retention. A refresh for a worker whose view is gone
+   * baselines, catalog, leases and physical devices aside for routing and retention. A refresh for a worker whose view is gone
    * (removed while a status call was in flight) is dropped rather than resurrecting it.
    */
   refresh(workerId: string, refresh: WorkerRefresh): void {
@@ -347,7 +353,16 @@ export class WorkerRegistry {
     };
     const next = built.connection === "connected" ? built : withoutLoad(built);
     this.#workers.set(workerId, next);
+    this.#keepLastReads(workerId, snapshot);
+    if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
+    this.#warnOnLowerMaxTtl(existing, next);
+    this.#notifyViewsChanged();
+  }
+
+  /** why: what routing and retention fall back on while a `starting` view has dropped the read fields. */
+  #keepLastReads(workerId: string, snapshot: Partial<WorkerViewSnapshot>): void {
     if (snapshot.catalog !== undefined) this.#lastCatalog.set(workerId, snapshot.catalog);
+    if (snapshot.baselines !== undefined) this.#lastBaselines.set(workerId, snapshot.baselines);
     if (snapshot.leases !== undefined) this.#lastLeases.set(workerId, snapshot.leases);
     if (snapshot.devices !== undefined) {
       this.#lastPhysicalDevices.set(
@@ -355,9 +370,6 @@ export class WorkerRegistry {
         snapshot.devices.filter((device) => device.physical === true),
       );
     }
-    if (grantedDevices !== undefined) this.#grantedDevices.set(workerId, grantedDevices);
-    this.#warnOnLowerMaxTtl(existing, next);
-    this.#notifyViewsChanged();
   }
 
   // why: both the operator's `worker.update` and an incompatible worker's query read these three fields from a `daemon.update` answer.
@@ -572,6 +584,7 @@ export class WorkerRegistry {
     this.#workers.delete(view.id);
     this.#grantedDevices.delete(view.id);
     this.#lastCatalog.delete(view.id);
+    this.#lastBaselines.delete(view.id);
     this.#lastLeases.delete(view.id);
     this.#lastPhysicalDevices.delete(view.id);
     if (clearDrain && this.#drained.delete(view.id)) {

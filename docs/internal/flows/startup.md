@@ -10,7 +10,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 2. `Logger` → `daemon.log`. At `log.level: debug` the `ProcessRunner` is wrapped.
 3. Host info read once (`sw_vers` on macOS); bounded, never throws.
 4. `EventBus` → the event history is created (`createEventHistory`). It touches no file yet.
-   `refuseWhenDaemonAnswers` (`src/daemon/main.ts:241`) first connects to the socket: a daemon
+   `refuseWhenDaemonAnswers` (`src/daemon/main.ts`) first connects to the socket: a daemon
    that answers makes this one fail with `DaemonAlreadyRunningError`, before any `state.db` is opened.
    `openStateDatabase` then opens the role's `state.db` (both roles) in this order, each failure
    being the daemon's start error: an old file of the role's former state refuses, then
@@ -47,7 +47,7 @@ reaches its settle step, the steps after the read are skipped. Before step 16 it
 removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
 the data directory (`sweepWriteLeftovers`).
 
-Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47999 a stopped daemon's tunnels left, on its idle owned emulators; on a leased emulator it only reads the rules and reserves their ports, and its reclaim removes them; on a phone it only reads them and reserves their ports, which its reclaim frees once no rule points to them (Android: `AndroidDriver` manual); a failure is a `warn`.
+Before step 16, a driver with `deviceTcp` sweeps the reverse rules into 47000-47999 a stopped daemon's tunnels left, on its idle owned emulators; on a leased emulator it only reads the rules and reserves their ports, which its destroy frees; on a phone it only reads them and reserves their ports, which its reclaim frees once no rule points to them (Android: `AndroidDriver` manual); a failure is a `warn`.
 
 16. Settle open requests — `leasing.settleRequests`: every `open` request fails
     `INTERNAL`; `lease.rejected` with reason `daemon-restarted`.
