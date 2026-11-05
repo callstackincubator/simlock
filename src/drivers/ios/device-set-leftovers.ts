@@ -24,7 +24,7 @@ export async function refuseOwnSetLeftovers(filesystem: Filesystem, root: string
   if (udids.length === 0) return;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(root, "sources")} delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
+    `Refusing the ios device set: Simlock's own set at ${root} still holds ${String(udids.length)} simulator(s) (${udids.join(", ")}). Set drivers.ios.deviceSet back to simlock, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl --set ${root} delete <udid>\`, or, for a seed in the sources set, \`xcrun simctl --set ${join(root, "sources")} delete <udid>\`.`,
     "device-set-changed",
     root,
     "ios",
@@ -64,7 +64,7 @@ export async function refuseXcodeSetLeftovers(
   if (marked.length === 0) return;
 
   throw new OwnedRootError(
-    `Refusing the ios device set: Xcode's device set still holds ${String(marked.length)} of this Simlock's simulator(s) (${marked.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
+    `Refusing the ios device set: Xcode's device set still holds ${String(marked.length)} of this Simlock's simulator(s) (${marked.join(", ")}). Set drivers.ios.deviceSet back to default, ${SWITCH_STEPS} Delete any that remain with \`xcrun simctl delete <udid>\`.`,
     "device-set-changed",
     devicesDir,
     "ios",
