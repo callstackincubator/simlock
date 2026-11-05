@@ -442,6 +442,10 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
 
     expect(callSites(/\.registerDevice\(/g)).toEqual({
       [join("core", "device-provisioner.ts")]: 1,
+      // why: test helpers, never loaded in production, that register fixture devices for the
+      // doctor and registry tests split out of one file (ADR 0063).
+      [join("core", "test-doctor.ts")]: 2,
+      [join("core", "test-registry.ts")]: 1,
     });
     expect(callSites(/\.provision\(/g)).toEqual({
       // The driver call itself.
