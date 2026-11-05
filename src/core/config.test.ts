@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { AuthStrategyDefinition } from "../auth/index.js";
 import { MemoryFilesystem, FakeSystemStats } from "../ports/index.js";
 import type { ResourceStrategyOptions } from "./capacity/index.js";
-import { configSchema } from "../contract/config-schemas.js";
+import { configSchema } from "../contract/schemas.js";
 import {
   ALERT_EVENTS,
   ALERT_FORMATS,

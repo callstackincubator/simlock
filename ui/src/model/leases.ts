@@ -1,7 +1,6 @@
 import type { z } from "zod";
 
-import type { tokenRecordSchema } from "../../../src/contract/config-schemas";
-import type { statusLeaseSchema } from "../../../src/contract/status-schemas";
+import type { statusLeaseSchema, tokenRecordSchema } from "../../../src/contract/schemas";
 import {
   deviceOfLease,
   holderName,
