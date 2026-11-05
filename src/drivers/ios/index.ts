@@ -77,6 +77,7 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+const DEVICEHUB_BUNDLE_ID = "com.apple.dt.Devices";
 const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
@@ -312,6 +313,7 @@ export class IosSimctlDriver implements Driver {
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
   readonly #silent: boolean;
+  readonly #headless: boolean;
   readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -349,6 +351,7 @@ export class IosSimctlDriver implements Driver {
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
     this.#silent = options.simulatorAudio === false;
+    this.#headless = options.simulatorHeadless !== false;
     this.#onSilenceFailed = options.onSilenceFailed;
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
@@ -1149,6 +1152,9 @@ export class IosSimctlDriver implements Driver {
     if (this.#silent) {
       await this.#silence(data.udid, device.deviceId);
     }
+    if (this.#headless === false) {
+      await this.#openWindow(data.udid);
+    }
 
     if (plan.kind === "skip") {
       this.#onSlimSkipped?.({
@@ -1195,6 +1201,19 @@ export class IosSimctlDriver implements Driver {
     } catch (error: unknown) {
       return errorMessage(error);
     }
+  }
+
+  async #openWindow(udid: string): Promise<void> {
+    await this.#invokeCommand(
+      "open",
+      ["-g", "-b", DEVICEHUB_BUNDLE_ID, "--args", "-shutdownStartedDevicesOnQuit", "NO"],
+      COMMAND_TIMEOUT_MS,
+    );
+    await this.#invokeCommand(
+      "open",
+      ["-g", `devices://manage/select?id=${udid}`],
+      COMMAND_TIMEOUT_MS,
+    );
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
@@ -1946,9 +1965,17 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #invokeXcrun(argv: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return await this.#invokeCommand("xcrun", argv, timeoutMs);
+  }
+
+  async #invokeCommand(
+    command: string,
+    argv: readonly string[],
+    timeoutMs: number,
+  ): Promise<ProcessOutcome> {
     let process;
     try {
-      process = this.#processRunner.spawn("xcrun", [...argv], { timeoutMs });
+      process = this.#processRunner.spawn(command, [...argv], { timeoutMs });
     } catch (error: unknown) {
       throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
     }
