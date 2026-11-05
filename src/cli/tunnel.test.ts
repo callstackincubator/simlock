@@ -6,6 +6,7 @@ import {
   decodeTunnelFrame,
   encodeTunnelFrame,
 } from "../contract/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { buildCliEnvironment, runCli } from "./index.js";
 import {
   FakeClock,
@@ -1199,6 +1200,76 @@ describe("simlock tunnel emulator adb", () => {
     mixed.signals.emit("SIGINT");
     mixed.clock.advance(2_000);
     expect(await mixedExit).toBe(0);
+
+    const disconnect = (
+      output: Partial<ScriptedProcessExpectation> = {},
+    ): ScriptedProcessExpectation => ({
+      match: { args: ["disconnect", target], command: "adb" },
+      stdoutLines: [`disconnected ${target}`],
+      ...output,
+    });
+    const calls = (runner: CallerAdb) => runner.calls.map(({ args }) => args.join(" "));
+    const endings: readonly {
+      readonly end: (cli: ReturnType<typeof command>, peer: Peer) => void;
+      readonly exit: number;
+    }[] = [
+      { end: (cli) => cli.signals.emit("SIGINT"), exit: 0 },
+      { end: (_cli, ended) => ended.receive(refusedFrame("TUNNEL_BAD_PORT", "no")), exit: 1 },
+      { end: (_cli, ended) => ended.dropped(4001, "device released"), exit: 14 },
+      { end: (_cli, ended) => ended.dropped(1006, ""), exit: 1 },
+    ];
+    for (const ending of endings) {
+      const runner = new CallerAdb([connect("adb"), disconnect()]);
+      const leaving = command(ENV, runner);
+      const leavingExit = leaving.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+      await vi.waitFor(() => expect(leaving.webSocket.connections).toHaveLength(1));
+      firstPeer(leaving).receive(READY);
+      await vi.waitFor(() => expect(leaving.out.join("")).toContain("adb: connected"));
+      ending.end(leaving, firstPeer(leaving));
+      expect(await leavingExit).toBe(ending.exit);
+      expect(calls(runner)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+    }
+
+    const failing = new CallerAdb([
+      connect("adb"),
+      disconnect({ result: { code: 1, stderr: "error: no such device", stdout: "" } }),
+    ]);
+    const failed = command(ENV, failing);
+    const failedExit = failed.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(failed.webSocket.connections).toHaveLength(1));
+    firstPeer(failed).receive(READY);
+    await vi.waitFor(() => expect(failed.out.join("")).toContain("adb: connected"));
+    firstPeer(failed).dropped(4001, "device released");
+    expect(await failedExit).toBe(14);
+    expect(calls(failing)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+
+    const stuckAdb = new CallerAdb([connect("adb"), disconnect({ hangs: true })]);
+    const stuck = command(ENV, stuckAdb);
+    const stuckExit = stuck.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(stuck.webSocket.connections).toHaveLength(1));
+    firstPeer(stuck).receive(READY);
+    await vi.waitFor(() => expect(stuck.out.join("")).toContain("adb: connected"));
+    stuck.signals.emit("SIGINT");
+    await vi.waitFor(() => expect(stuckAdb.calls).toHaveLength(2));
+    const stuckState = promiseState(stuckExit);
+    stuck.clock.advance(1_999);
+    await settle();
+    expect(stuckState.state).toBe("pending");
+    stuck.clock.advance(1);
+    expect(await stuckExit).toBe(0);
+    expect((await stuckAdb.handles[1]?.wait())?.code).toBeNull();
+
+    const early = new CallerAdb([connect("adb", { hangs: true }), disconnect()]);
+    const interrupted = command(ENV, early);
+    const interruptedExit = interrupted.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(interrupted.webSocket.connections).toHaveLength(1));
+    firstPeer(interrupted).receive(READY);
+    await vi.waitFor(() => expect(early.calls).toHaveLength(1));
+    interrupted.signals.emit("SIGINT");
+    expect(await interruptedExit).toBe(0);
+    expect(calls(early)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+    expect((await early.handles[0]?.wait())?.code).toBeNull();
+    expect(interrupted.err).toEqual([]);
 
     const hung = new CallerAdb([connect("adb", { hangs: true })]);
     const slow = command(ENV, hung);
