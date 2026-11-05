@@ -7,13 +7,13 @@ import {
   SCREEN_TAGS as TAG,
   deviceStreamUrl,
   readScreenFrames as readFrames,
+  selectedInDeviceHub,
   waitFor,
   withHttpDaemon,
 } from "./helpers/index.js";
 
 const execFileAsync = promisify(execFile);
 
-const DEVICEHUB_DEFAULTS = "com.apple.dt.Devices";
 const FRAME_BOUND = 120_000;
 
 async function frontmostApp(): Promise<string> {
@@ -24,17 +24,6 @@ async function frontmostApp(): Promise<string> {
     "ObjC.import('AppKit'); $.NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier.js",
   ]);
   return stdout.trim();
-}
-
-/** why: DeviceHub keeps the UDID it was last told to select in its defaults, as quoted data; reading it needs no permission. */
-async function selectedInDeviceHub(): Promise<string> {
-  const { stdout } = await execFileAsync("defaults", [
-    "read",
-    DEVICEHUB_DEFAULTS,
-    "lastSelectedDeviceIdentifier",
-  ]);
-  const bytes = /0x([0-9a-f ]+)/.exec(stdout)?.[1]?.replaceAll(" ", "") ?? "";
-  return Buffer.from(bytes, "hex").toString("utf8").replaceAll('"', "");
 }
 
 describe.skipIf(process.platform !== "darwin")(
@@ -94,7 +83,7 @@ describe.skipIf(process.platform !== "darwin")(
         } finally {
           await execFileAsync("osascript", [
             "-e",
-            `tell application id "${DEVICEHUB_DEFAULTS}" to quit`,
+            `tell application id "com.apple.dt.Devices" to quit`,
           ]).catch(() => undefined);
           await env
             .cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 })
