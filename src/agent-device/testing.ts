@@ -139,6 +139,12 @@ function errorEnvelope(id: unknown, failure: FakeFailure): Response {
 }
 
 const ARTIFACT_PIECE_BYTES = 64 * 1024;
+const ARTIFACT_PATTERN_PERIOD = 251;
+// why: byte n of an artifact is n % 251, so every piece is a view of this one buffer and a 2 GiB artifact costs no fill.
+const ARTIFACT_PATTERN = Uint8Array.from(
+  { length: ARTIFACT_PIECE_BYTES + ARTIFACT_PATTERN_PERIOD },
+  (_, index) => index % ARTIFACT_PATTERN_PERIOD,
+);
 const UPLOAD_TEXT_LIMIT = 1024 * 1024;
 
 export interface FakeArtifact {
@@ -343,8 +349,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
             return;
           }
           const length = Math.min(ARTIFACT_PIECE_BYTES, artifact.size - produced);
-          const piece = new Uint8Array(length);
-          for (let index = 0; index < length; index += 1) piece[index] = (produced + index) % 251;
+          const start = produced % ARTIFACT_PATTERN_PERIOD;
+          const piece = ARTIFACT_PATTERN.subarray(start, start + length);
           produced += length;
           this.artifactBytesProduced += length;
           controller.enqueue(piece);
