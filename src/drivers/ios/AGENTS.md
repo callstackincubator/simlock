@@ -101,17 +101,17 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 
 ## State and timers
 
-| What                          | Default                     | Key                      |
-| ----------------------------- | --------------------------- | ------------------------ |
-| Device root                   | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
-| Device set                    | `simlock`                   | `drivers.ios.deviceSet`  |
-| Default mode                  | `full`                      | `ios.defaultMode`        |
-| Slim categories               | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
-| Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
-| Bootstatus + installer (full) | 120 s                       | none                     |
-| Any other `simctl` call       | 30 s                        | none                     |
-| Slim readback                 | 120 s                       | none                     |
-| `devicectl` read / uninstall  | 30 s / 60 s                 | none                     |
+| What                                                   | Default                     | Key                      |
+| ------------------------------------------------------ | --------------------------- | ------------------------ |
+| Device root                                            | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
+| Device set                                             | `simlock`                   | `drivers.ios.deviceSet`  |
+| Default mode                                           | `full`                      | `ios.defaultMode`        |
+| Slim categories                                        | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
+| Slim boot deadline                                     | 10 min                      | `ios.slim.bootTimeoutMs` |
+| Bootstatus + installer (full), recovery and seed boots | 5 min                       | `ios.full.bootTimeoutMs` |
+| Any other `simctl` call                                | 30 s                        | none                     |
+| Slim readback                                          | 120 s                       | none                     |
+| `devicectl` read / uninstall                           | 30 s / 60 s                 | none                     |
 
 Writes: the device set (by `simctl`), the two mark files per device. The registry is the only
 record of a device's mode. Also writes, and deletes with the device, its folder in `/private/var/tmp` (`launchdOverridesRoot` option).

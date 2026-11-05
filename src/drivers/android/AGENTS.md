@@ -51,7 +51,7 @@ Simlock's adb server — `adb -P <port> nodaemon server`, env `ADB_EMU=0` (no sc
 Provision — `provision`: every device is a copy of a seed, or of the ready baseline source named by `options.source` (a lease naming a baseline): then steps 1–3 are skipped and step 4 copies that source's folder.
 
 1. Profile from `Catalog.profileFor`: the `resolveSpec` cache, else `DeviceProfileRegistry.resolve`. Image: installed, fitting, at the spec's API level. Order: host-ABI `google_apis` → host ABI → `google_apis` → any. With an image tag: that tag only, host ABI first.
-2. Seed for `<model>|<system image package>`: a `ready` row recomputed on each provision (`emulator -version`, installed images). Stale (`system image … is not installed` / `changed from revision …`, `emulator changed from … to …`, `android.emulator launch settings changed`) → destroyed and made again; the reason is stored by `listSources` and clears when things match. One make per kind at a time (lock); a `making` row of an earlier process, or older than 900 s, is swept (its emulator stopped by its path) at the next listing or make of that kind.
+2. Seed for `<model>|<system image package>`: a `ready` row recomputed on each provision (`emulator -version`, installed images). Stale (`system image … is not installed` / `changed from revision …`, `emulator changed from … to …`, `android.emulator launch settings changed`) → destroyed and made again; the reason is stored by `listSources` and clears when things match. One make per kind at a time (lock); a `making` row of an earlier process, or older than the larger of 900 s and twice `android.bootTimeoutMs` plus 600 s, is swept (its emulator stopped by its path) at the next listing or make of that kind.
 3. Making: row `making` → `avdmanager create avd -n simlock -k <package> -d <profile>` in `<root>/sources/seed_<id>/` (SDK profile id, else the first `avdmanager list device`; devices.xml / library profiles write `config.ini` and `boot.prop`) → cold boot → `shell sync` + `shell reboot -p` (60 s) → cold boot → `emu avd snapshot save simlock_boot` (60 s) + `snapshot list` → `emu kill` → row `ready` with `configHash` and size. Any failure removes folder and row.
 4. Copy: `Filesystem.copyTree` (600 s) of the seed's `simlock.avd` into `<root>/<device id>/`, `simlock.ini` written with its `path=`; failure removes the folder. `configHash` = image path@revision, `emulator -version`, the `config.ini` `hw.*` / `image.sysdir.1` / `disk.dataPartition.*` lines (not `hw.device.hash2`), `headless`/`gpu` when not default; it is kept only to judge a seed stale.
 
@@ -112,18 +112,19 @@ Otherwise the last good answer is served; a failed run is not kept; concurrent c
 
 ## State and timers
 
-| What                                                        | Default                                  | Key                                                             |
-| ----------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
-| Device root                                                 | `$SIMLOCK_HOME/devices/android`          | `drivers.android.deviceRoot`                                    |
-| adb server port                                             | 5038 (never 5037)                        | `drivers.android.adbServerPort`                                 |
-| Emulator flags                                              | window, auto GPU, audio, boot animation  | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
-| Readiness timeout                                           | 180 s, poll 2 s                          | none                                                            |
-| adb server start / stop                                     | 10 s / SIGTERM, 5 s, SIGKILL             | none                                                            |
-| `adb devices` in `listManaged`                              | 30 s                                     | none                                                            |
-| AVD path query (listing / boot), mark read in `listManaged` | 5 s; the mark read keeps the first 4 KiB | none                                                            |
-| Seed copy / power-off / save                                | 600 s / 60 s / 60 s                      | none                                                            |
-| Physical read / uninstall                                   | 30 s / 60 s                              | none                                                            |
-| `avdmanager list device`                                    | 30 s                                     | none                                                            |
+| What                                                          | Default                                  | Key                                                             |
+| ------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------- |
+| Device root                                                   | `$SIMLOCK_HOME/devices/android`          | `drivers.android.deviceRoot`                                    |
+| adb server port                                               | 5038 (never 5037)                        | `drivers.android.adbServerPort`                                 |
+| Emulator flags                                                | window, auto GPU, audio, boot animation  | `android.emulator.headless`, `.gpu`, `.audio`, `.bootAnimation` |
+| Boot deadline, from the spawn (every emulator boot; poll 2 s) | 5 min                                    | `android.bootTimeoutMs`                                         |
+| Emulator exit at shutdown and delete                          | 180 s                                    | none                                                            |
+| adb server start / stop                                       | 10 s / SIGTERM, 5 s, SIGKILL             | none                                                            |
+| `adb devices` in `listManaged`                                | 30 s                                     | none                                                            |
+| AVD path query (listing / boot), mark read in `listManaged`   | 5 s; the mark read keeps the first 4 KiB | none                                                            |
+| Seed copy / power-off / save                                  | 600 s / 60 s / 60 s                      | none                                                            |
+| Physical read / uninstall                                     | 30 s / 60 s                              | none                                                            |
+| `avdmanager list device`                                      | 30 s                                     | none                                                            |
 
 Writes: `<root>/<device id>/` (a copy, with its `emulator.log`), `<root>/sources/<source id>/` (a seed, config, boot properties, `simlock_boot`); `$SIMLOCK_HOME/adb-server.json` (`pid`, `port`, `startedAt`); `$SIMLOCK_HOME/logs/adb-server.log` (the adb server's stdout and stderr, 0600, truncated at each start; `ADB_TRACE` from the daemon's env lands here). Reads only: the user's AVD home, devices.xml, the SDK.
 
