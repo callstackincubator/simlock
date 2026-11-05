@@ -78,6 +78,7 @@ import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from ".
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
 const DEVICEHUB_BUNDLE_ID = "com.apple.dt.Devices";
+const SIMULATOR_APP_BUNDLE_ID = "com.apple.iphonesimulator";
 const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
@@ -1204,16 +1205,27 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #openWindow(udid: string): Promise<void> {
-    await this.#invokeCommand(
+    const hub = await this.#invokeCommand(
       "open",
       ["-g", "-b", DEVICEHUB_BUNDLE_ID, "--args", "-shutdownStartedDevicesOnQuit", "NO"],
       COMMAND_TIMEOUT_MS,
     );
-    await this.#invokeCommand(
-      "open",
-      ["-g", `devices://manage/select?id=${udid}`],
-      COMMAND_TIMEOUT_MS,
-    );
+    const args =
+      hub.kind === "finished" && hub.result.code !== 0
+        ? [
+            "-g",
+            "-b",
+            SIMULATOR_APP_BUNDLE_ID,
+            "--args",
+            "-CurrentDeviceUDID",
+            udid,
+            "-DetachOnWindowClose",
+            "YES",
+            "-DetachOnAppQuit",
+            "YES",
+          ]
+        : ["-g", `devices://manage/select?id=${udid}`];
+    await this.#invokeCommand("open", args, COMMAND_TIMEOUT_MS);
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
