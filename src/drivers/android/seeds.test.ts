@@ -1187,6 +1187,45 @@ describe("Seeds", () => {
       expect(await slow.filesystem.exists(seedHome)).toBe(false);
       slowClock.advance(600_000);
       await slowFailed;
+
+      const quickClock = new FakeClock();
+      const quick = await seedHarness(
+        [
+          stage.version,
+          stage.create,
+          stage.devices,
+          stage.firstBoot[0] as ScriptedProcessExpectation,
+          processResult(
+            binaries.adb,
+            ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+            "0\n",
+          ),
+          processResult(binaries.adb, ["devices"], "List of devices attached\n"),
+        ],
+        { bootTimeoutMs: 60_000, clock: quickClock },
+      );
+      const quickMaking = quick.seeds.provision(quick.spec);
+      const quickFailed = expect(quickMaking).rejects.toThrow();
+      await vi.waitFor(() =>
+        expect(quick.runner.calls.some((call) => call.args.includes("sys.boot_completed"))).toBe(
+          true,
+        ),
+      );
+      const quickAgeTo = (ageMs: number) =>
+        quick.database
+          .prepare("UPDATE android_source_data SET created_at = ?")
+          .run(quickClock.now() - ageMs);
+
+      // why: twice 60 s plus 600 s is 720 s, under the 900 s floor, which then decides.
+      quickAgeTo(900_000);
+      await quick.seeds.listSources();
+      expect(await quick.filesystem.exists(seedHome)).toBe(true);
+
+      quickAgeTo(900_001);
+      await quick.seeds.listSources();
+      expect(await quick.filesystem.exists(seedHome)).toBe(false);
+      quickClock.advance(60_000);
+      await quickFailed;
     });
   });
 });

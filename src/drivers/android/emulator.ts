@@ -32,7 +32,7 @@ const EMULATOR_EXIT_TIMEOUT_MS = 180_000;
 // why: After this long without an answer from a serial, the emulator's own registration is
 // assumed lost and Simlock re-sends it. Long enough that a normally-booting emulator has
 // already attached, short enough that a lost announcement costs seconds, not the whole
-// readiness timeout.
+// boot deadline.
 const REGISTRATION_RETRY_AFTER_MS = 5_000;
 // why: A defense-in-depth bound on the wait that follows a SIGKILL: NodeProcessHandle#wait
 // already settles shortly after `exit`, but this keeps a pathologically slow reap
