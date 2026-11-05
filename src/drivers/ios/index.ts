@@ -88,7 +88,7 @@ const COMMAND_TIMEOUT_MS = 30_000;
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
-const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const DEFAULT_FULL_BOOT_TIMEOUT_MS = 300_000;
 const INSTALLER_POLL_MS = 1_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
@@ -312,6 +312,7 @@ export class IosSimctlDriver implements Driver {
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
+  readonly #fullBootTimeoutMs: number;
   readonly #afterBoot: AfterBoot;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -348,6 +349,7 @@ export class IosSimctlDriver implements Driver {
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
     this.#slim = options.slim;
+    this.#fullBootTimeoutMs = options.fullBootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
     this.#afterBoot = {
       silent: options.simulatorAudio === false,
       headless: options.simulatorHeadless !== false,
@@ -1032,7 +1034,7 @@ export class IosSimctlDriver implements Driver {
       const udid = created.stdout.trim();
       this.#sources.setUdid(sourceId, udid);
       try {
-        await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
+        await this.#bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
       } catch (error: unknown) {
         await this.#deleteSeedSimulator(udid);
         throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
@@ -1153,7 +1155,12 @@ export class IosSimctlDriver implements Driver {
     options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
-    const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
+    const { plan, bootstatusTimeoutMs } = planSlimBoot(
+      data,
+      this.#slim,
+      this.#fullBootTimeoutMs,
+      options,
+    );
     const write =
       plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
@@ -2563,16 +2570,17 @@ type SlimPlan =
 function planSlimBoot(
   data: IosDriverData,
   slim: SlimOptions | undefined,
+  fullBootTimeoutMs: number,
   options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
 ): { readonly plan: SlimPlan; readonly bootstatusTimeoutMs: number } {
   if (options.purpose === "recover" || slim === undefined || options.mode !== "slim") {
-    return { bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS, plan: { kind: "off" } };
+    return { bootstatusTimeoutMs: fullBootTimeoutMs, plan: { kind: "off" } };
   }
 
   const version = iosRuntimeVersionFromId(data.runtimeId);
   if (!supportsPersistentSlim(version)) {
     return {
-      bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS,
+      bootstatusTimeoutMs: fullBootTimeoutMs,
       plan: {
         detail:
           version === undefined

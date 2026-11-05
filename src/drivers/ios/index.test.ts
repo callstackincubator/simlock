@@ -871,7 +871,7 @@ describe("IosSimctlDriver", () => {
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
-      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
       { ...cloneInvocation, options: { timeoutMs: 30_000 } },
@@ -1139,7 +1139,7 @@ describe("IosSimctlDriver", () => {
       void provisioned.catch(() => undefined);
       if ("hangs" in failing) {
         await waitForCalls(runner, entries.length + 1);
-        clock.advance(120_000);
+        clock.advance(300_000);
       }
       const error = await provisioned.catch((caught: unknown) => caught);
 
@@ -1695,7 +1695,7 @@ describe("IosSimctlDriver", () => {
     });
     expect(runner.calls).toEqual([
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
-      { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 300_000 } },
       { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
     ]);
   });
@@ -1743,7 +1743,7 @@ describe("IosSimctlDriver", () => {
         { match: simctl("boot", driverData.udid) },
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
-          onSpawn: () => clock.advance(119_500),
+          onSpawn: () => clock.advance(299_500),
         },
         {
           match: simctl("listapps", driverData.udid),
@@ -1784,11 +1784,11 @@ describe("IosSimctlDriver", () => {
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
           onSpawn: () => {
-            if (slowCommand === "bootstatus") clock.advance(120_000);
+            if (slowCommand === "bootstatus") clock.advance(300_000);
           },
         },
         ...(slowCommand === "listapps"
-          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(120_000) }]
+          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(300_000) }]
           : []),
         { match: simctl("shutdown", driverData.udid) },
       ]);
@@ -1825,7 +1825,7 @@ describe("IosSimctlDriver", () => {
     void ready.catch(() => undefined);
 
     await waitForCalls(runner, 2);
-    clock.advance(120_000);
+    clock.advance(300_000);
 
     await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
     expect(runner.calls.map((call) => call.args)).toEqual([
