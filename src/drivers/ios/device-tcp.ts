@@ -10,6 +10,7 @@ import {
   type TimerHandle,
   type LoopbackHost,
   type ProcessRunner,
+  type TcpListener,
   type TcpListenerFactory,
   type TcpProbe,
   type TcpStream,
@@ -157,12 +158,50 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
         if (timer !== undefined) options.clock.cancel(timer);
       }
     },
-    reverse: (): Promise<DeviceReverse> =>
-      Promise.resolve({
-        close: () => Promise.resolve(),
-        hostPort: 0,
-        onConnection: () => undefined,
-      }),
+    // why: an app in a simulator tries `::1` before `127.0.0.1`, so the worker listens on the device port itself on both; a port that anything already answers on is refused, because a wildcard holder would leave the bind to succeed on a more specific address nobody dials.
+    async reverse(_device, devicePort): Promise<DeviceReverse> {
+      const named = `reverse ${String(devicePort)}`;
+      const inUse = new DeviceTcpError(
+        "TUNNEL_PORT_IN_USE",
+        `${named}: port ${String(devicePort)} is already in use on the worker; pick another port`,
+      );
+      for (const host of LOOPBACKS) {
+        if (await options.probe.isListening(devicePort, undefined, host)) throw inUse;
+      }
+      const bound: TcpListener[] = [];
+      try {
+        for (const host of LOOPBACKS) {
+          const listener = await options.listeners.listen(devicePort, host);
+          if (listener === undefined) throw inUse;
+          bound.push(listener);
+        }
+      } catch (error) {
+        await Promise.all(bound.map((listener) => listener.close()));
+        if (error instanceof DeviceTcpError) throw error;
+        throw new DeviceTcpError(
+          "TUNNEL_FAILED",
+          `${named}: ${cut(error instanceof Error ? error.message : String(error))}`,
+        );
+      }
+      // why: a connection that arrives before the tunnel has a handler, or after it is closing, is closed at once.
+      let accept: ((stream: TcpStream) => void) | undefined;
+      for (const listener of bound) {
+        listener.onConnection((stream) => {
+          if (accept === undefined) stream.close();
+          else accept(stream);
+        });
+      }
+      return {
+        close: async () => {
+          accept = undefined;
+          await Promise.all(bound.map((listener) => listener.close()));
+        },
+        hostPort: devicePort,
+        onConnection: (handler) => {
+          accept = handler;
+        },
+      };
+    },
     supports: () => false,
     sweep: () => Promise.resolve(),
   };

@@ -69,6 +69,13 @@ class MachineRunner implements ProcessRunner {
   }
 }
 
+class FailingOnIpv6Listeners extends FakeTcpListenerFactory {
+  override listen(port: number, host: LoopbackHost = "127.0.0.1") {
+    if (host === "::1") return Promise.reject(new Error("listen EACCES"));
+    return super.listen(port, host);
+  }
+}
+
 class HangingConnector extends FakeTcpStreamConnector {
   override connect(): Promise<TcpStream> {
     return new Promise<TcpStream>(() => undefined);
@@ -279,5 +286,12 @@ describe("iOS deviceTcp reverse", () => {
         name,
       ).toEqual([]);
     }
+
+    const failing = new FailingOnIpv6Listeners();
+    await expect(setup(undefined, failing).reverse()).rejects.toMatchObject({
+      code: "TUNNEL_FAILED",
+      message: `reverse ${String(PORT)}: listen EACCES`,
+    });
+    expect(failing.listeners.map(({ closed }) => closed)).toEqual([true]);
   });
 });
