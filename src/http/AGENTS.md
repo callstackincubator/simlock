@@ -8,24 +8,24 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 
 ## Files
 
-| File                    | Role                                                                                                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.ts`                | Every `/v1` route, error boundary, request log line                                                                                                      |
-| `routes.ts`             | `declareRoute`: a route declaration plus its base error codes; `validationHook`                                                                          |
-| `route-declarations.ts` | The declared routes (`DECLARED_ROUTES`): System and Devices, with the lease and admin lists                                                              |
-| `lease-declarations.ts` | The declared lease and lease-request routes (`LEASE_ROUTES`), their reply and SSE message schemas                                                        |
-| `admin-declarations.ts` | The declared worker, component, baseline, token and event routes (`ADMIN_ROUTES`), which side answers 501, install's and the event stream's SSE messages |
-| `openapi.ts`            | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                                                                                                |
-| `module-routes.ts`      | `moduleRoutes`: the routes a module definition's `http` carries, as registrable paths                                                                    |
-| `auth.ts`               | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                                                                                               |
-| `dispatcher-session.ts` | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                                                                                         |
-| `tracker.ts`            | `LeaseRequestTracker`: lease requests as resources                                                                                                       |
-| `notices.ts`            | `LeaseNoticeBuffer`: per-lease health facts between polls                                                                                                |
-| `output-relay.ts`       | `OutputRelay`: `device.exec` chunks onto one SSE response                                                                                                |
-| `sse.ts`                | `pipeSse`: ordered writes, keepalive                                                                                                                     |
-| `errors.ts`             | `HttpApiError`, `mapError`: error → status and body                                                                                                      |
-| `server.ts`             | `HttpGateway` listener; `withConsole` serves the built `ui/`                                                                                             |
-| `test-fakes.ts`         | Fakes for this module's tests                                                                                                                            |
+| File                           | Role                                                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.ts`                       | Every `/v1` route, error boundary, request log line                                                                                                      |
+| `routes.ts`                    | `declareRoute`: a route declaration plus its base error codes; `validationHook`                                                                          |
+| `route-declarations.ts`        | The declared routes (`DECLARED_ROUTES`): System and Devices, with the lease and admin lists                                                              |
+| `lease-declarations.ts`        | The declared lease and lease-request routes (`LEASE_ROUTES`), their reply and SSE message schemas                                                        |
+| `admin-declarations.ts`        | The declared worker, component, baseline, token and event routes (`ADMIN_ROUTES`), which side answers 501, install's and the event stream's SSE messages |
+| `openapi.ts`                   | `buildOpenApiDocument(modules)`: the OpenAPI 3.1 document                                                                                                |
+| `module-routes.ts`             | `moduleRoutes`: the routes a module definition's `http` carries, as registrable paths                                                                    |
+| `auth.ts`                      | `requireAuth`: asks `src/auth`, maps `AuthError` → 401/403                                                                                               |
+| `dispatcher-session.ts`        | `HttpDispatch`; `buildHttpSession`: identity → `DispatchSession`                                                                                         |
+| `tracker.ts`                   | `LeaseRequestTracker`: lease requests as resources                                                                                                       |
+| `notices.ts`                   | `LeaseNoticeBuffer`: per-lease health facts between polls                                                                                                |
+| `output-relay.ts`              | `OutputRelay`: `device.exec` chunks onto one SSE response                                                                                                |
+| `sse.ts`                       | `pipeSse`: ordered writes, keepalive                                                                                                                     |
+| `errors.ts`                    | `HttpApiError`, `mapError`: error → status and body                                                                                                      |
+| `server.ts`                    | `HttpGateway` listener; `withConsole` serves the built `ui/`                                                                                             |
+| `test-fakes.ts`, `test-app.ts` | Fakes for this module's tests; `buildHarness`, the app over them, and its request and SSE helpers                                                        |
 
 ## How a request runs
 
