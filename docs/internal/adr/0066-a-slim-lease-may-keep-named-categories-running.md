@@ -68,10 +68,12 @@ as it maps `deviceMode` to `mode`. The word is simslim's.
 The contract refuses, as `BAD_REQUEST`, a request with `except` that is
 physical, whose platform is not `ios`, or whose `mode` is `full`.
 
-The worker refuses it, as `BAD_REQUEST`, when:
+The request's effective mode is the baseline's when it names one, else its
+`mode`, else the worker's `ios.defaultMode`. The worker refuses it, as
+`BAD_REQUEST`, when:
 
-- it names no `mode` and the worker's `ios.defaultMode` is `full`;
-- it names a baseline whose mode is `full`;
+- its effective mode is `full` (a full baseline, or no `mode`, no baseline
+  and a worker whose default is `full`);
 - a name is not a category of this Simlock's list;
 - a name is not in the worker's slim set (`ios.slim.categories`, every
   category when unset).
@@ -121,11 +123,14 @@ A recovery boot under the lease writes nothing and reads nothing back (ADR
 
 ### 5. A worker advertises its slim set, and a gateway routes by it
 
-A worker's `catalog.get` carries, for iOS, `slimCategories`: the names its
-slim set resolves to. A gateway forwards `except` and routes a request with
-it only to a worker whose `slimCategories` holds every name and, when the
-request names no `mode`, whose `ios.defaultMode` is `slim`. `assess`
-answers `BAD_REQUEST` when no known worker is such a worker.
+A worker's `catalog.get` carries, for iOS, `slimCategories` (the names its
+slim set resolves to) and `defaultMode`. The catalog is what a gateway keeps
+for a restarting worker, so both stay known. A gateway forwards `except` and
+routes a request with it only to a worker whose `slimCategories` holds every
+name and whose effective mode for it (§1, with the baseline narrowed first,
+as every stage does) is `slim`. `assess` answers `BAD_REQUEST` when no known
+worker is such a worker; a waiting request shows a dropped worker as
+`cannot-keep-except`.
 
 ### 6. The label list follows simslim v0.14.0
 
