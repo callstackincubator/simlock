@@ -79,6 +79,7 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
+import type { IosDriverConfig } from "./definition.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
@@ -214,18 +215,10 @@ export interface IosSimctlDriverOptions {
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
-  /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
-  readonly simulatorAudio?: boolean;
+  /** why: the driver's own keys of the `ios` config section; with no `slim` the driver slims nothing, with no `simulator` it keeps audio on and opens no window. */
+  readonly config?: Partial<IosDriverConfig>;
   readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
-  /** why: `ios.simulator.headless`; `false` opens a window for each simulator after every boot. */
-  readonly simulatorHeadless?: boolean;
   readonly onWindowFailed?: (fact: WindowFailedFact) => void;
-  readonly slim?: {
-    readonly categories?: readonly string[];
-    readonly bootTimeoutMs: number;
-  };
-  /** why: `ios.full.bootTimeoutMs`; how long a full boot may take. */
-  readonly fullBootTimeoutMs?: number;
   readonly slimByDefault?: boolean;
   // why: the device input logs a Home press that did nothing; nothing else in the driver logs through it.
   readonly logger?: Logger;
@@ -240,7 +233,7 @@ export interface IosSimctlDriverOptions {
   };
 }
 
-type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
+type SlimOptions = IosDriverConfig["slim"];
 
 type SlimWrite =
   | { readonly kind: "no-categories"; readonly detail: string }
@@ -348,11 +341,11 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
-    this.#slim = options.slim;
-    this.#fullBootTimeoutMs = options.fullBootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
+    this.#slim = options.config?.slim;
+    this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
     this.#afterBoot = {
-      silent: options.simulatorAudio === false,
-      headless: options.simulatorHeadless !== false,
+      silent: options.config?.simulator?.audio === false,
+      headless: options.config?.simulator?.headless !== false,
       commands: {
         simctl: (args, timeoutMs) => this.#invokeSimctl(args, timeoutMs),
         open: (args, timeoutMs) => this.#invokeCommand("open", args, timeoutMs),
@@ -2083,7 +2076,7 @@ function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string
 function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "default" {
   const configured = options.driverConfig["deviceSet"];
   if (configured === undefined || configured === "simlock") {
-    if (options.simulatorHeadless === false) throw headlessNeedsDefaultSet("simlock");
+    if (options.config?.simulator?.headless === false) throw headlessNeedsDefaultSet("simlock");
     return "simlock";
   }
   if (configured !== "default") {
@@ -2672,6 +2665,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 export type { SilenceFailedFact, WindowFailedFact } from "./boot-courtesies.js";
+export { type IosDriverConfig, iosDriverConfig } from "./definition.js";
 export { iosDeviceDataTable } from "./device-data.js";
 export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";

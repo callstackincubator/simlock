@@ -3125,7 +3125,7 @@ describe("IosSimctlDriver", () => {
         idGenerator: { generate: () => "device-1" },
         launchdOverridesRoot: overridesRoot,
         processRunner: runner,
-        slim: slimOptions(),
+        config: { slim: slimOptions() },
       });
 
       const ready = driver.makeReady(
@@ -3178,8 +3178,10 @@ describe("IosSimctlDriver", () => {
           idGenerator: { generate: () => "device-1" },
           launchdOverridesRoot: overridesRoot,
           processRunner: runner,
-          slim: slimOptions(250_000),
-          ...(full === undefined ? {} : { fullBootTimeoutMs: full }),
+          config: {
+            slim: slimOptions(250_000),
+            ...(full === undefined ? {} : { full: { bootTimeoutMs: full } }),
+          },
         });
 
         const ready = driver.makeReady(
@@ -4886,7 +4888,9 @@ async function createDriver(
     filesystem,
     idGenerator: { generate: () => "device-1" },
     instanceId,
-    ...(fullBootTimeoutMs === undefined ? {} : { fullBootTimeoutMs }),
+    ...(fullBootTimeoutMs === undefined
+      ? {}
+      : { config: { full: { bootTimeoutMs: fullBootTimeoutMs } } }),
     ...(logger === undefined ? {} : { logger }),
     processRunner: runner,
     simlockHome: "/home/.simlock",
@@ -4991,7 +4995,7 @@ async function createSlimDriver(
     ...(onSlimSkipped === undefined ? {} : { onSlimSkipped }),
     launchdOverridesRoot: overridesRoot,
     processRunner: runner,
-    slim,
+    config: { slim },
     slimByDefault,
   });
 }
@@ -5960,8 +5964,10 @@ describe("IosSimctlDriver simulator audio", () => {
         onSilenceFailed: (fact) => failures.push(fact),
         processRunner: runner,
         simlockHome: "/home/.simlock",
-        simulatorAudio: c.audio ?? false,
-        slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+        config: {
+          simulator: { audio: c.audio ?? false, headless: true },
+          slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+        },
       });
 
       const ready = driver.makeReady(

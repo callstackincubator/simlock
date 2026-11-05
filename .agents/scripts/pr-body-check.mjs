@@ -47,7 +47,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { option } from "./cli-args.mjs";
+import { option, repository } from "./cli-args.mjs";
 
 const BUDGET = 200;
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -440,14 +440,6 @@ function git(argv, status = false) {
 
 function hasCommit(sha) {
   return git(["cat-file", "-e", `${sha}^{commit}`], true);
-}
-
-function repository() {
-  if (process.env.GH_REPO) return process.env.GH_REPO;
-  const url = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
-  const match = /([^/:]+)\/([^/]+?)(?:\.git)?$/.exec(url);
-  if (match === null) throw new Error(`Cannot read owner/name from origin ${url}; set GH_REPO`);
-  return `${match[1]}/${match[2]}`;
 }
 
 function withoutCodeBlocks(text) {

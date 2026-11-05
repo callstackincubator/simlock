@@ -28,6 +28,7 @@ import {
   CleanupReaper,
   ComponentInstaller,
   DEVICE_CLASSES,
+  driverConfig,
   DiskSpaceGuard,
   DriverCatalog,
   HostFactsReader,
@@ -55,7 +56,8 @@ import {
   hostAbiFor,
   SdkMissingError,
   type AndroidDriverDiagnostic,
-  type AndroidEmulatorLaunchOptions,
+  type AndroidDriverConfig,
+  androidDriverConfig,
   androidDeviceDataTable,
   androidSourceDataOwner,
   androidPrerequisites,
@@ -63,6 +65,8 @@ import {
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
+  type IosDriverConfig,
+  iosDriverConfig,
   type SlimmedFact,
   iosDeviceDataTable,
   iosSourceDataOwner,
@@ -148,6 +152,7 @@ import { classifyError } from "./error-code.js";
 import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
+import { driverConfigEntries } from "../driver-registry/index.js";
 import { optionalModules } from "../module-registry/index.js";
 import { DaemonServer } from "./server.js";
 import { socketHeld } from "../updater/index.js";
@@ -312,6 +317,7 @@ async function composeDaemon(
       ...moduleConfig,
       ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
     })),
+    driverSections: driverConfigEntries,
     ...(options.configOverrides === undefined ? {} : { overrides: options.configOverrides }),
     role,
     systemStats,
@@ -477,13 +483,9 @@ async function composeDaemon(
           processRunner,
           processSupervisor,
           simlockHome: dataDirectory,
-          simulatorAudio: config.ios.simulator.audio,
-          simulatorHeadless: config.ios.simulator.headless,
-          slim: config.ios.slim,
-          iosFullBootTimeoutMs: config.ios.full.bootTimeoutMs,
-          androidBootTimeoutMs: config.android.bootTimeoutMs,
+          iosConfig: driverConfig(config, iosDriverConfig),
           slimByDefault: deviceModeWiring(config).slimByDefault,
-          androidEmulator: config.android.emulator,
+          androidConfig: driverConfig(config, androidDriverConfig),
           tcpProbe,
         })
       : {
@@ -885,7 +887,6 @@ async function composeDaemon(
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
-      config,
       dispatch,
       eventBus,
       idGenerator,
@@ -1211,7 +1212,6 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       daemon.dispatch(operation, input, session);
     const app = createHttpApp({
       clock,
-      config,
       dispatch,
       eventBus,
       idGenerator,
@@ -1320,16 +1320,9 @@ export interface DriverDiscoveryContext {
   readonly processSupervisor: ProcessSupervisor;
   readonly simlockHome: string;
   readonly tcpProbe: TcpProbe;
-  readonly slim?: {
-    readonly categories?: readonly string[];
-    readonly bootTimeoutMs: number;
-  };
-  readonly iosFullBootTimeoutMs?: number;
-  readonly androidBootTimeoutMs?: number;
+  readonly iosConfig?: IosDriverConfig;
   readonly slimByDefault?: boolean;
-  readonly simulatorAudio?: boolean;
-  readonly simulatorHeadless?: boolean;
-  readonly androidEmulator?: AndroidEmulatorLaunchOptions;
+  readonly androidConfig?: AndroidDriverConfig;
 }
 
 export interface DriverDiscovery {
@@ -1466,14 +1459,7 @@ async function discoverIosDriver(
       },
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
-      ...(options.simulatorAudio === undefined ? {} : { simulatorAudio: options.simulatorAudio }),
-      ...(options.simulatorHeadless === undefined
-        ? {}
-        : { simulatorHeadless: options.simulatorHeadless }),
-      ...(options.slim === undefined ? {} : { slim: options.slim }),
-      ...(options.iosFullBootTimeoutMs === undefined
-        ? {}
-        : { fullBootTimeoutMs: options.iosFullBootTimeoutMs }),
+      ...(options.iosConfig === undefined ? {} : { config: options.iosConfig }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
       // composition root stays the only place that touches process state.
@@ -1523,13 +1509,10 @@ async function discoverAndroidDriver(
   try {
     const driver = await AndroidDriver.create({
       acceptAndroidLicenses: options.acceptAndroidLicenses ?? false,
-      ...(options.androidBootTimeoutMs === undefined
-        ? {}
-        : { bootTimeoutMs: options.androidBootTimeoutMs }),
       clock: options.clock,
       database: options.database,
       driverConfig: options.driversConfig["android"] ?? {},
-      emulator: options.androidEmulator,
+      config: options.androidConfig,
       env: process.env,
       filesystem: options.filesystem,
       homeDirectory: homedir(),

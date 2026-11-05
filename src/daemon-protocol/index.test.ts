@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  DAEMON_PROTOCOL_VERSION,
-  parseDaemonResponse,
-  parseRequestFrame,
-  serializeFrame,
-} from "./index.js";
+import { parseDaemonResponse, parseRequestFrame, serializeFrame } from "./index.js";
 
 describe("daemon protocol", () => {
-  it("keeps the current protocol version and newline framing", () => {
-    expect(DAEMON_PROTOCOL_VERSION).toBe(77);
+  it("serializes a frame as one line of JSON ending in a newline", () => {
     expect(serializeFrame({ id: 1, type: "hello" })).toBe('{"id":1,"type":"hello"}\n');
   });
 

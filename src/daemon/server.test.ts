@@ -1,3 +1,4 @@
+import { testConfig as configWithDefaults } from "../core/testing.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -4401,60 +4402,7 @@ function testConfig(
   downloadsOverrides?: Partial<Config["downloads"]>,
   iosMaxDevices = 1,
 ): Config {
-  return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 100 },
-    health: {
-      enabled: true,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: {
-      policy: "on-request",
-      acceptAndroidLicenses: false,
-      timeoutMs: 1_200_000,
-      ...downloadsOverrides,
-    },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      full: { bootTimeoutMs: 300_000 },
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      bootTimeoutMs: 300_000,
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    lease: {
-      defaultTtlMs: 60_000,
-      maxTtlMs: 3_600_000,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-      ...leaseOverrides,
-    },
+  return configWithDefaults({
     capacity: {
       strategy: "resource",
       config: {
@@ -4466,25 +4414,13 @@ function testConfig(
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
-    warmPool: {
-      enabled: true,
-      maxConcurrentBoots: 1,
-      reserveRunning: { android: 0, ios: 0 },
-      targets: [],
-      quarantine: {
-        maxRetries: 3,
-        maxRetryBackoffMs: 300_000,
-        retryBackoffMs: 30_000,
-        retryBackoffMultiplier: 2,
-      },
-    },
-  };
+    ...(downloadsOverrides === undefined ? {} : { downloads: downloadsOverrides }),
+    eventBuffer: { capacity: 100 },
+    http: { enabled: false, port: 4700 },
+    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000, ...leaseOverrides },
+    warmPool: { maxConcurrentBoots: 1 },
+  });
 }
 
 async function adminAuth(filesystem: MemoryFilesystem, secrets: CryptoTokenSecrets): Promise<Auth> {

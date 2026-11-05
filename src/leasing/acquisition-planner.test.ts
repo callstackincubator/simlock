@@ -15,66 +15,7 @@ import { createCapacityStrategy } from "../core/testing.js";
 
 const gibibyte = 1024 ** 3;
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
-const config: Config = {
-  capabilities: {},
-  mode: "worker",
-  exec: { timeoutMs: 600_000 },
-  diskPressure: { freeBytesThreshold: 10 * gibibyte },
-  gateway: {
-    disconnectedRetentionMs: 24 * 60 * 60_000,
-    execTimeoutMs: 11 * 60_000,
-    leaseRequestTimeoutMs: 5 * 60_000,
-    routing: "warm-then-free" as const,
-    alerts: { destinations: [] },
-  },
-  drivers: {},
-  eventBuffer: { capacity: 100 },
-  health: {
-    enabled: true,
-    maxConcurrentRecoveries: 1,
-    maxRecoveryAttempts: 3,
-    probeIntervalMs: 30_000,
-    recoveryBackoffMs: 5_000,
-    stableObservations: 2,
-  },
-  stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-  downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-  http: { enabled: false, host: "127.0.0.1", port: 4700 },
-  ios: {
-    defaultMode: "full",
-    defaultModels: {},
-    full: { bootTimeoutMs: 300_000 },
-    slim: { bootTimeoutMs: 600_000 },
-    simulator: { audio: true, headless: true },
-  },
-  android: {
-    defaultModels: {},
-    bootTimeoutMs: 300_000,
-    emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-  },
-  idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-  update: { check: true },
-  warmPool: {
-    enabled: true,
-    maxConcurrentBoots: 1,
-    reserveRunning: { android: 0, ios: 0 },
-    targets: [],
-    quarantine: {
-      maxRetries: 3,
-      maxRetryBackoffMs: 300_000,
-      retryBackoffMs: 30_000,
-      retryBackoffMultiplier: 2,
-    },
-  },
-  lease: {
-    defaultTtlMs: 100,
-    maxTtlMs: 100,
-    identity: { ios: "reusable", android: "reusable" },
-    requestRetentionMs: 600_000,
-    maxRequestRecords: 10_000,
-    maxPerRequester: 1,
-    endWaitMs: 600_000,
-  },
+const config: Pick<Config, "capacity"> = {
   capacity: {
     strategy: "resource",
     config: {
@@ -86,12 +27,6 @@ const config: Config = {
       ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
     },
   },
-  log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-  eventLog: {
-    retention: 7 * 24 * 60 * 60 * 1000,
-    maxBytes: 256 * 1024 * 1024,
-  },
-  metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
 };
 
 function device(

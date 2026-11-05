@@ -1,3 +1,4 @@
+import { testConfig as configWithDefaults } from "../core/testing.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   capacityChangedPayload,
@@ -518,7 +519,9 @@ describe("Dispatcher: parsing", () => {
   });
 
   it("rejects a ttlMs above lease.maxTtlMs on a request, rather than clamping it, and creates no lease", async () => {
-    const { dispatcher, registry } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    const { dispatcher, registry } = await buildDispatcher({
+      lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
+    });
     await expect(
       dispatcher.dispatch(
         "lease.request",
@@ -530,7 +533,9 @@ describe("Dispatcher: parsing", () => {
   });
 
   it("rejects a ttlMs above lease.maxTtlMs on a renew too, leaving the lease's deadline as it was", async () => {
-    const { clock, dispatcher, registry } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    const { clock, dispatcher, registry } = await buildDispatcher({
+      lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
+    });
     const grant = await dispatcher.dispatch(
       "lease.request",
       { model: "iPhone 17 Pro", platform: "ios", ttlMs: 1_000 },
@@ -545,7 +550,9 @@ describe("Dispatcher: parsing", () => {
   });
 
   it("accepts a ttlMs at the cap on a request (ADR 0004 §4)", async () => {
-    const { dispatcher } = await buildDispatcher({ lease: { maxTtlMs: 1_000 } });
+    const { dispatcher } = await buildDispatcher({
+      lease: { defaultTtlMs: 1_000, maxTtlMs: 1_000 },
+    });
     await expect(
       dispatcher.dispatch(
         "lease.request",
@@ -761,19 +768,13 @@ describe("Dispatcher: the fleet operations on a worker", () => {
   });
 
   it("an admin reads the config and sees ios.full.bootTimeoutMs and android.bootTimeoutMs", async () => {
-    const defaults = await buildDispatcher();
     const configured = await buildDispatcher({
       bootTimeouts: { android: 600_000, iosFull: 400_000 },
     });
 
-    const before = await defaults.dispatcher.dispatch("config.get", {}, admin);
-    const after = await configured.dispatcher.dispatch("config.get", {}, admin);
+    const config = await configured.dispatcher.dispatch("config.get", {}, admin);
 
-    expect([before.ios.full, before.android.bootTimeoutMs]).toEqual([
-      { bootTimeoutMs: 300_000 },
-      300_000,
-    ]);
-    expect([after.ios.full, after.android.bootTimeoutMs]).toEqual([
+    expect([config.ios["full"], config.android["bootTimeoutMs"]]).toEqual([
       { bootTimeoutMs: 400_000 },
       600_000,
     ]);
@@ -5388,75 +5389,16 @@ function testConfig(
     },
   },
 ): Config {
-  return {
-    capabilities: {},
-    mode: "worker",
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    exec: { timeoutMs: 600_000, ...execOverrides },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    eventBuffer: { capacity: 100 },
-    health: {
-      enabled: true,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: { policy: downloadsPolicy, acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      full: { bootTimeoutMs: 300_000 },
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      bootTimeoutMs: 300_000,
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    lease: {
-      defaultTtlMs: 60_000,
-      maxTtlMs: 3_600_000,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-      ...leaseOverrides,
-    },
+  return configWithDefaults({
     capacity,
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
-    warmPool: {
-      enabled: true,
-      maxConcurrentBoots: 1,
-      reserveRunning: { android: 0, ios: 0 },
-      targets: [],
-      quarantine: {
-        maxRetries: 3,
-        maxRetryBackoffMs: 300_000,
-        retryBackoffMs: 30_000,
-        retryBackoffMultiplier: 2,
-      },
-    },
-  };
+    downloads: { policy: downloadsPolicy },
+    eventBuffer: { capacity: 100 },
+    exec: execOverrides,
+    http: { enabled: false, port: 4700 },
+    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000, ...leaseOverrides },
+    warmPool: { maxConcurrentBoots: 1 },
+  });
 }
 
 describe("Dispatcher: device.add and device.remove", () => {

@@ -983,9 +983,11 @@ function onlyProvided(options: {
     ...(options.deviceProfileSources === undefined
       ? {}
       : { deviceProfileSources: options.deviceProfileSources }),
-    ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+    config: {
+      ...(options.emulator === undefined ? {} : { emulator: options.emulator }),
+      ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
+    },
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
-    ...(options.bootTimeoutMs === undefined ? {} : { bootTimeoutMs: options.bootTimeoutMs }),
   };
 }
 

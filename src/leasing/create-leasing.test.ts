@@ -44,7 +44,7 @@ import {
 } from "./lease-acquisition-coordinator.js";
 import { LeaseHealthMonitor } from "./lease-health-monitor.js";
 import type { LeaseEndParticipant } from "./lease-ports.js";
-import { createTestEngine } from "./testing.js";
+import { createTestEngine, type TestEngineConfig } from "./testing.js";
 import { QueueTimeoutError, RequestCancelledError } from "./wait-queue.js";
 
 const gibibyte = 1024 ** 3;
@@ -65,35 +65,8 @@ function config(
   warmPoolEnabled = true,
   idleShutdownAfterMs = 10_000,
   warmPool: Partial<Config["warmPool"]> = {},
-): Config {
+): TestEngineConfig {
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
-    eventBuffer: { capacity: 100 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      full: { bootTimeoutMs: 300_000 },
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      bootTimeoutMs: 300_000,
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -104,7 +77,6 @@ function config(
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
     idle: { deleteAfterMs: 60_000, shutdownAfterMs: idleShutdownAfterMs },
-    update: { check: true },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 14_400_000,
@@ -126,12 +98,6 @@ function config(
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: warmPoolEnabled,
       maxConcurrentBoots: 1,
@@ -149,7 +115,7 @@ function config(
 }
 
 /** Narrows the config's capacity block, which the harness always builds as `resource`. */
-function resourceOptions(source: Config): ResourceStrategyOptions {
+function resourceOptions(source: Pick<Config, "capacity">): ResourceStrategyOptions {
   if (source.capacity.strategy !== "resource") throw new Error("expected the resource strategy");
   return source.capacity.config;
 }
@@ -167,7 +133,7 @@ function withCapacity(
 
 /** The harness's capacity block: the one a test names, or the resource strategy with overrides. */
 function capacityConfig(
-  base: Config,
+  base: Pick<Config, "capacity">,
   options: Partial<ResourceStrategyOptions> & { readonly capacity?: Config["capacity"] },
 ): Config["capacity"] {
   return (
@@ -229,7 +195,7 @@ async function createHarness(
     options.idleShutdownAfterMs,
     options.warmPool,
   );
-  const engineConfig: Config = {
+  const engineConfig: TestEngineConfig = {
     ...baseConfig,
     capacity: capacityConfig(baseConfig, options),
   };
@@ -3436,7 +3402,7 @@ describe("createLeasing queued device cleanup", () => {
     expect(state()).toBe("ready");
     const reaper = new CleanupReaper({
       clock: harness.clock,
-      config: config(),
+      config: { ...config(), diskPressure: { freeBytesThreshold: 10 * gibibyte } },
       eventBus: harness.bus,
       executor: harness.engine.cleanup,
       filesystem: new MemoryFilesystem(),

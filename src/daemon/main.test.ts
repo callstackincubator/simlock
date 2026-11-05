@@ -27,8 +27,8 @@ import {
 import { seedTokensDatabase } from "../auth/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { androidDeviceDataTable } from "../drivers/android/index.js";
-import { IosSimctlDriver, iosDeviceDataTable } from "../drivers/ios/index.js";
+import { androidDeviceDataTable, androidDriverConfig } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDeviceDataTable, iosDriverConfig } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -2464,7 +2464,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      androidEmulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      androidConfig: {
+        ...androidDriverConfig.defaults,
+        emulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      },
       processRunner,
     });
     const android = drivers.find((driver) => driver.platform === "android");
@@ -2618,7 +2621,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
       const { drivers } = await discoverIos({
         clock,
         filesystem,
-        iosFullBootTimeoutMs: 400_000,
+        iosConfig: { ...iosDriverConfig.defaults, full: { bootTimeoutMs: 400_000 } },
         processRunner: runner,
       });
       const driver = drivers.find((candidate) => candidate.platform === "ios");
@@ -2664,7 +2667,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         }),
       );
       const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-        androidBootTimeoutMs: 600_000,
+        androidConfig: { ...androidDriverConfig.defaults, bootTimeoutMs: 600_000 },
         clock,
         processRunner: runner,
       });
@@ -2741,12 +2744,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     overrides: Partial<
       Pick<
         DriverDiscoveryContext,
-        | "androidBootTimeoutMs"
-        | "androidEmulator"
-        | "clock"
-        | "hostArch"
-        | "logger"
-        | "processRunner"
+        "androidConfig" | "clock" | "hostArch" | "logger" | "processRunner"
       >
     > = {},
   ) {
@@ -2819,7 +2817,7 @@ async function discoverIos(
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
     readonly idGenerator?: IdGenerator;
-    readonly iosFullBootTimeoutMs?: number;
+    readonly iosConfig?: DriverDiscoveryContext["iosConfig"];
     readonly processRunner?: ScriptedProcessRunner;
     readonly sink?: MemoryLogSink;
   } = {},
@@ -2827,9 +2825,7 @@ async function discoverIos(
   return discoverDrivers({
     database: await memorySourceDatabase(),
     clock: overrides.clock ?? new FakeClock(),
-    ...(overrides.iosFullBootTimeoutMs === undefined
-      ? {}
-      : { iosFullBootTimeoutMs: overrides.iosFullBootTimeoutMs }),
+    ...(overrides.iosConfig === undefined ? {} : { iosConfig: overrides.iosConfig }),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
@@ -2858,9 +2854,6 @@ describe("deviceModeWiring", () => {
           ios: {
             defaultMode,
             defaultModels: {},
-            full: { bootTimeoutMs: 300_000 },
-            slim: { bootTimeoutMs: 1 },
-            simulator: { audio: true, headless: true },
           },
         }),
       ).toEqual({
@@ -3150,20 +3143,32 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     expect(prerequisiteChecks).toEqual([expect.objectContaining({ fromModule: true })]);
   });
 
-  it("hands config's android.emulator block to driver discovery when the daemon starts", async () => {
-    const key = "__simlockDiscoveredAndroidEmulator";
+  it("hands each driver its own section of the config, android.emulator and ios.simulator as set and ios.slim defaulted, to driver discovery when the daemon starts", async () => {
+    const key = "__simlockDiscoveredDriverConfig";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
-         globalThis.${key} = context.androidEmulator;
+         globalThis.${key} = {
+           emulator: context.androidConfig.emulator,
+           simulator: context.iosConfig.simulator,
+           slim: context.iosConfig.slim,
+         };
          return [];
        }`,
     );
     const emulator = { audio: false, bootAnimation: false, gpu: "host", headless: true };
+    const simulator = { audio: false, headless: true };
 
     try {
-      await start({ configOverrides: { android: { emulator } }, drivers: undefined });
+      await start({
+        configOverrides: { android: { emulator }, ios: { simulator } },
+        drivers: undefined,
+      });
 
-      expect((globalThis as Record<string, unknown>)[key]).toEqual(emulator);
+      expect((globalThis as Record<string, unknown>)[key]).toEqual({
+        emulator,
+        simulator,
+        slim: { bootTimeoutMs: 600_000 },
+      });
     } finally {
       delete (globalThis as Record<string, unknown>)[key];
     }
@@ -3173,7 +3178,7 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     const key = "__simlockDiscoveredBootTimeouts";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
-         globalThis.${key} = [context.iosFullBootTimeoutMs, context.androidBootTimeoutMs];
+         globalThis.${key} = [context.iosConfig.full.bootTimeoutMs, context.androidConfig.bootTimeoutMs];
          return [];
        }`,
     );
