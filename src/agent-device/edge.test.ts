@@ -460,6 +460,15 @@ function allocatesReceived(rig: Rig, n?: number) {
     .filter((request) => n === undefined || request.params?.["leaseId"] === hex(n));
 }
 
+async function saveBaseline(
+  rig: Rig,
+  name: string,
+  spec: { readonly model: string; readonly platform: "ios" | "android" },
+): Promise<void> {
+  const grant = await rig.daemon.dispatch("lease.request", spec, sessionFor(principals.one));
+  await rig.daemon.dispatch("baseline.save", { leaseId: grant.lease.id, name }, adminSession);
+}
+
 async function simlockMessage(rig: Rig, input: Record<string, unknown>): Promise<string> {
   try {
     await rig.daemon.dispatch("lease.request", input, sessionFor(principals.one));
@@ -724,6 +733,30 @@ describe("the agent-device front, through the whole worker daemon", () => {
     expect(await requestedSpecs(rig, hex(1))).toEqual([{ osVersion: "26.0", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(2))).toEqual([{ osVersion: ">=18 <27", platform: "ios" }]);
     expect(await requestedSpecs(rig, hex(3))).toEqual([{ osVersion: "34", platform: "android" }]);
+  });
+
+  it('allocate with `deviceBaseline` "logged-in" makes a lease request with `baseline: "logged-in"`, alone on iOS and on Android, with `target: "mobile"` (no class) and with `device` (the model too)', async () => {
+    const rig = await setUp({
+      drivers: (clock) => [iosDriver(clock), androidDriver(clock)],
+      maxRunning: 8,
+    });
+    await saveBaseline(rig, "logged-in", { model: "iPhone 17 Pro", platform: "ios" });
+    await saveBaseline(rig, "logged-in", { model: "Pixel 8", platform: "android" });
+    const cases = [
+      [1, { platform: "ios" }, { baseline: "logged-in", platform: "ios" }],
+      [2, { platform: "android" }, { baseline: "logged-in", platform: "android" }],
+      [3, { platform: "ios", target: "mobile" }, { baseline: "logged-in", platform: "ios" }],
+      [
+        4,
+        { device: "iPhone 17 Pro", platform: "ios" },
+        { baseline: "logged-in", model: "iPhone 17 Pro", platform: "ios" },
+      ],
+    ] as const;
+
+    for (const [n, extra, spec] of cases) {
+      await granted(rig, n, { ...extra, deviceBaseline: "logged-in" });
+      expect(await requestedSpecs(rig, hex(n))).toEqual([spec]);
+    }
   });
 
   it('allocate on Android with `imageTag` "google_apis_playstore", with and without `osVersion`, makes a lease request that carries it', async () => {
