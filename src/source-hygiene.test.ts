@@ -30,8 +30,6 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/agent-device/edge.test.ts": 4506,
   "src/cli/index.test.ts": 11610,
   "src/contract/schemas.ts": 1503,
-  "src/core/doctor.test.ts": 3534,
-  "src/core/registry.test.ts": 2901,
   "src/core/warm-pool/converger.test.ts": 2965,
   "src/daemon/dispatcher.test.ts": 6284,
   "src/daemon/main.test.ts": 5515,
