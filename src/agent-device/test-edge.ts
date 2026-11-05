@@ -95,7 +95,7 @@ export async function listed(rig: Rig): Promise<readonly string[]> {
   return (await leases(rig)).map((lease) => lease.id);
 }
 
-export type RawDispatch = (operation: string, input: unknown, session: unknown) => Promise<unknown>;
+type RawDispatch = (operation: string, input: unknown, session: unknown) => Promise<unknown>;
 
 export interface DispatchTap {
   readonly operations: string[];
