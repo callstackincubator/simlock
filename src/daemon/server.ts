@@ -340,6 +340,7 @@ export class DaemonServer {
   readonly #logger: Logger;
   #eventSubscriptionSeq = 0;
   #stopping = false;
+  #closingConnections = false;
   #stopPromise: Promise<void> | undefined;
   #health: DaemonHealth = "starting";
   #readyPromise: Promise<void> | undefined;
@@ -712,6 +713,7 @@ export class DaemonServer {
   }
 
   async #closeConnections(): Promise<void> {
+    this.#closingConnections = true;
     for (const connection of this.#connections) {
       await connection.socket.close();
     }
@@ -737,7 +739,8 @@ export class DaemonServer {
   }
 
   #accept(socket: IpcConnection, forcedRole?: Role, link?: LinkConnection): void {
-    if (this.#stopping) {
+    // why: a stopping daemon still listens until `host.stop()`; a connection opened before the connections are closed gets `DAEMON_STOPPING` (or the `daemon.stop` reply) from the dispatch gates, and only one arriving after that would never be closed.
+    if (this.#closingConnections) {
       void socket.close();
       return;
     }

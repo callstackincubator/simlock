@@ -155,9 +155,11 @@ export interface DoctorQuarantine {
   enterFromStalledTransition(deviceId: string, findingState: DeviceState): Promise<boolean>;
 }
 
+export type DoctorConfig = Pick<Config, "stalledTransition" | "warmPool">;
+
 export interface DoctorOptions {
   readonly clock: Clock;
-  readonly config: Config;
+  readonly config: DoctorConfig;
   /**
    * why: The decision section every registry write of this daemon is made in. A write made outside it
    * can land on top of a concurrent one that read the registry before it, and undo it.

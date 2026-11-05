@@ -23,7 +23,7 @@ import {
   type StreamingProcessHandle,
 } from "../../ports/index.js";
 import { AndroidDriver } from "./index.js";
-import { memoryAndroidSourceDatabase } from "./testing.js";
+import { emulatorHelpListing, memoryAndroidSourceDatabase } from "./testing.js";
 import { AndroidPhysicalHandler } from "./physical-handler.js";
 import type { ScreenTarget } from "./screen/index.js";
 
@@ -1375,6 +1375,7 @@ describe("Android physical handler: independence from emulator calls", () => {
         "pixel_8",
       ]),
       scripted(adb, ["devices"], "List of devices attached\n"),
+      scripted(`${sdk}/emulator/emulator`, ["-help"], emulatorHelpListing),
       {
         hangs: true,
         match: {

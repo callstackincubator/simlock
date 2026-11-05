@@ -36,8 +36,9 @@ Runs the command on the machine that owns the device and streams its output back
    another device (ADR 0047), see "Resolution per platform".
 5. Env — `execBaseEnvironment(process.env)` (`src/daemon/exec-env.ts`, the allowlisted
    keys, read once at start) + the command's `env`, minus its `unsetEnv`.
-6. Spawn — `ProcessRunner.spawnStreaming`, pipes only. `stdin` is written once,
-   then closed.
+6. Spawn — `ProcessRunner.spawnStreaming`, pipes only. `stdin` (at most 8 MiB
+   of characters, refused `BAD_REQUEST` by the contract before any dispatcher
+   forwards or spawns) is written once, then closed.
 7. `started` push the moment the process exists, then one `output` push per chunk
    (`{ requestId, stream, chunk }`). The push write is awaited before the child is
    read again: a slow reader slows the command. Nothing is buffered; no size cap.

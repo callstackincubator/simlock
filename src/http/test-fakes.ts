@@ -1,5 +1,4 @@
 import {
-  type Config,
   type DeviceRecord,
   type LeaseRecord,
   SerializedDecision,
@@ -21,87 +20,6 @@ import { DispatchError } from "../daemon/dispatch.js";
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
 import { type Clock, FakeClock, type IdGenerator } from "../ports/index.js";
-
-const gibibyte = 1024 * 1024 * 1024;
-
-/** Shared config fixture; every field `Config` currently declares (see `src/core/config.ts`). */
-export function testConfig(
-  overrides: Partial<Config["lease"]> = {},
-  mode: Config["mode"] = "worker",
-): Config {
-  return {
-    capabilities: {},
-    mode,
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    capacity: {
-      strategy: "resource",
-      config: {
-        limits: {
-          android: { maxDevices: 4, maxRunning: 4 },
-          ios: { maxDevices: 4, maxRunning: 4 },
-          maxRunning: 8,
-        },
-        ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
-      },
-    },
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    eventBuffer: { capacity: 100 },
-    health: {
-      enabled: true,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    http: { enabled: true, host: "127.0.0.1", port: 4700 },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    ios: { defaultMode: "full", defaultModels: {}, slim: { bootTimeoutMs: 600_000 } },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    lease: {
-      defaultTtlMs: 900_000,
-      maxTtlMs: 14_400_000,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-      ...overrides,
-    },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 604_800_000,
-      maxBytes: 268_435_456,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
-    stalledTransition: { minimumThresholdMs: 60_000, thresholdMultiplier: 3 },
-    warmPool: {
-      enabled: true,
-      maxConcurrentBoots: 1,
-      reserveRunning: { android: 0, ios: 0 },
-      targets: [],
-      quarantine: {
-        maxRetries: 3,
-        maxRetryBackoffMs: 300_000,
-        retryBackoffMs: 30_000,
-        retryBackoffMultiplier: 2,
-      },
-    },
-  };
-}
 
 export function sequenceIdGenerator(prefix = "id"): IdGenerator {
   let next = 0;

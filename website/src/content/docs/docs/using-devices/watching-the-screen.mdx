@@ -5,12 +5,16 @@ description: Watch a leased simulator, emulator or physical device live in the c
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone, or a physical iPhone. You watch; you cannot tap or type in the console. A coding agent can also watch its own lease's screen over HTTP (see [Stream from your own tool](#stream-from-your-own-tool)), and open an input socket for it (see [Send input to your own lease](#send-input-to-your-own-lease)). Nothing is captured until someone opens a device's **Screen** tab, and the capture stops when they leave the tab, close the drawer, or the device stops running.
+The console can show the live screen of any running device, leased or not: an iOS simulator, an Android emulator, a physical Android phone or a physical iPhone. In the console you can only watch; you can't tap or type.
+
+Your own tools can do more over HTTP: [stream a lease's screen](#stream-from-your-own-tool) and [send it taps and keys](#send-input-to-your-own-lease).
+
+Nothing is captured until someone opens a device's **Screen** tab. Capture stops when they leave the tab, close the drawer, or the device stops running.
 
 ## Before you start
 
 - The console is on, and you can sign in with an operator token. See [Console](/simlock/docs/worker/console).
-- Screen streaming is turned on for the worker that holds the device. It is off by default.
+- Screen streaming is on for the worker that holds the device. It is off by default.
 - For a physical iPhone: the worker runs Xcode 27 or later, and the iPhone runs iOS 27 or later.
 
 ## Turn screen streaming on
@@ -23,13 +27,13 @@ The console can show the live screen of any running device, leased or not: an iO
    simlock config set capabilities.stream.enabled true
    ```
 
-2. With a gateway, turn it on there too. The gateway passes each stream through to the worker that holds the device:
+2. With a gateway, turn it on there too:
 
    ```sh
    simlock --gateway config set capabilities.stream.enabled true
    ```
 
-3. Restart each daemon you changed, because the setting is read when the daemon starts:
+3. Restart each daemon you changed. The setting is only read when the daemon starts:
 
    ```sh
    simlock daemon stop
@@ -42,7 +46,9 @@ The console can show the live screen of any running device, leased or not: an iO
    3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93 (mac-studio-2): connected -- ios 1/6, android 0/4, 1 lease(s) -- macOS 26.0 arm64; xcode 26.1 (17B55) -- stream available
    ```
 
-   `stream unavailable: <reason>` says why no platform on that worker can stream. `stream off` means the setting is not on there.
+   - `stream available`: it works.
+   - `stream off`: the setting isn't on for that worker.
+   - `stream unavailable: <reason>`: no platform on that worker can stream, and why.
 
 </Steps>
 
@@ -52,33 +58,37 @@ To turn streaming off, set `capabilities.stream.enabled` to `false` and restart 
 
 <Steps>
 
-1. Open the console and go to **Fleet**, then select the worker. On a gateway, select the worker that holds the device.
+1. Open the console, go to **Fleet** and select the worker that holds the device.
 2. Select the device.
 3. Open the **Screen** tab.
 
 </Steps>
 
-The picture starts by itself. The **Stream details** button (ⓘ) shows its size, codec, frame rate and bandwidth. Leaving the tab, closing the drawer, leaving the page and signing out stop it. A lease being taken on the device while you watch does not interrupt the picture.
+The picture starts by itself. The **Stream details** button (ⓘ) shows its size, codec, frame rate and bandwidth. Someone taking a lease on the device while you watch doesn't interrupt the picture.
 
-A device that is not running has no picture, and the tab says why: shut down, starting, being reset, quarantined, not connected. The picture starts by itself once the device is `ready` again. When streaming is off on the device's worker, the tab says "Streaming is off on" and the worker's name. When the worker cannot capture this device, the tab says why.
+A device that isn't running has no picture, and the tab says why: shut down, starting, being reset, quarantined or not connected. The picture starts by itself once the device is `ready` again.
 
 ## What to expect
 
-- **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer: Simlock checks the phone's screen and adb server before it starts. The console waits up to 200 seconds.
-- **A phone with its screen off is woken first.** If it does not wake, you are told to turn it on. While a phone streams, it is kept awake as long as it is charging, and its setting is put back when the stream ends.
-- **The picture ends with the device's run.** When the device is shut down, loses its connection, is quarantined or deleted, or its lease is released, expires or loses it, the stream stops, so a device is never watched after it is handed back or reset. When a lease ends it, the tab says "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost." Other ends show no such reason. A stream that ends with no reason after its picture started, such as when your sign-in through a proxy expires, is opened again by the tab.
-- **A frozen device does not look live.** A stream that gets no frames for 30 seconds ends with an error.
+- **The first picture can take a while.** A simulator usually shows within seconds. A physical Android phone takes longer. The console waits up to 200 seconds.
+- **A phone with its screen off is woken first.** If it doesn't wake, you are told to turn it on. While a phone streams and is charging, it is kept awake. Its setting is put back when the stream ends.
+- **The picture ends when the device stops or is handed back.** When the device shuts down, loses its connection, is quarantined or deleted, or its lease ends, the stream stops. So nobody can watch a device after it is handed back or reset. When a lease end stops it, the tab says why: "The lease was released.", "The lease expired.", "The lease was ended by an operator." or "The device was lost."
+- **A dropped stream reconnects.** If the picture started and the stream then ends without a reason, such as when your sign-in through a proxy expires, the tab opens it again.
+- **A frozen device doesn't look live.** A stream that gets no new frames for 30 seconds ends with an error.
 - **Each viewer is a separate capture.** Two browser tabs on one device capture it twice.
-- **A rotated iOS simulator or iPhone keeps the first picture's scale.** An Android device's picture follows the rotation.
+- **Rotation.** A rotated iOS simulator or iPhone keeps the scale of the first picture. An Android device's picture follows the rotation.
 
-## Physical iPhone requirements
+## When it doesn't work
 
-A physical iPhone streams only when both of these hold:
+| What you see | Why | What to do |
+| --- | --- | --- |
+| "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` isn't `true` on that worker. | Turn it on and restart the worker's daemon. |
+| The panel says the screen can't be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on Xcode older than 27. | Update the iPhone or the worker's Xcode. |
+| "The phone's screen is off and did not turn on." | The phone didn't wake. | Unlock the phone, then leave the **Screen** tab and open it again. |
+| The tab gives up waiting for the first picture | The device showed nothing for 30 seconds. | Leave the **Screen** tab and open it again. |
+| The picture stops on a device that is still running | The device stopped sending frames. | Leave the **Screen** tab and open it again. |
 
-- The worker it is plugged into runs Xcode 27 or later.
-- The iPhone runs iOS 27 or later.
-
-Otherwise the panel shows the reason, for example:
+A physical iPhone that can't stream says why in the panel, for example:
 
 ```text
 Physical iPhone streams need iOS 27 or later on the iPhone; 00008110-001A2B3C4D5E801E runs iOS 18.6. Update the iPhone and ask for the stream again.
@@ -86,64 +96,144 @@ Physical iPhone streams need iOS 27 or later on the iPhone; 00008110-001A2B3C4D5
 
 Simulators stream on any Xcode the worker supports.
 
-## Quality and cost
+## Picture quality and bandwidth
 
-The worker encodes the screen as H.264. Three settings on the worker trade picture quality for bandwidth:
+Three settings on the worker trade picture quality for bandwidth. Restart the daemon after you change them.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `capabilities.stream.maxDimension` | `720` | Longest side of the picture, in pixels (96 to 4096). Costs the most bandwidth. |
+| `capabilities.stream.maxDimension` | `720` | Longest side of the picture, in pixels (96 to 4096). Has the biggest effect on bandwidth. |
 | `capabilities.stream.bitrateKbps` | `1500` | Target bitrate, in kilobits per second (100 to 40000). |
 | `capabilities.stream.fps` | `30` | Highest frame rate (1 to 60). A still screen sends far fewer frames. |
 
-At the defaults, a screen that is busy redrawing costs about 1.4 Mbit/s, and a screen nobody touches costs between 25 and 90 kbit/s. Each iOS capture uses about 50 to 80 MB of memory on the worker. Restart the daemon after you change these.
+At the defaults, a busy screen uses about 1.4 Mbit/s, and a screen nobody touches uses 25 to 90 kbit/s. Each iOS capture uses about 50 to 80 MB of memory on the worker.
 
 ## Stream from your own tool
 
-Anything with an operator token can read the screen of a running device, leased or not, over HTTP at `GET /v1/stream/workers/<worker-id>/devices/<device-id>`, on a worker (which answers only for its own id) or on a gateway (which relays to the named worker), with streaming on. A device streams while it is `ready` or `leased`; any other state answers 409 `DEVICE_NOT_RUNNING`. The stream ends when the device stops running or its lease ends. An agent token cannot read a device's screen by device.
+Most people watch in the console. This section is for building your own viewer. Streaming must be on (see above).
 
-A lease's holder can read its own lease's screen at `GET /v1/leases/<lease-id>/stream`, on a worker or on a gateway, with the same frames. An operator token can read any lease's. A lease that is not the caller's, or does not exist, answers 404 `UNKNOWN_LEASE`. With streaming off on the daemon that answers, the path is a plain 404; through a gateway, streaming must be on for the lease's worker too, or the answer is 503 `STREAM_UNAVAILABLE`.
+| Who | Route | Works on |
+| --- | --- | --- |
+| A lease's holder (or an operator, for any lease) | `GET /v1/leases/<lease-id>/stream` | A worker or a gateway |
+| An operator, for any running device | `GET /v1/stream/workers/<worker-id>/devices/<device-id>` | A worker (its own id only) or a gateway |
 
-The body is Simlock's own framing of H.264 frames, made for the console's player, and it runs until you close the request. When a lease end stops a stream, its last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Any other end sends no such frame. Most users watch in the console instead.
+An agent token can't read a device's screen by device id, only through its own lease.
+
+What the routes answer:
+
+- A device streams while it is `ready` or `leased`. In any other state, the device route answers `409 DEVICE_NOT_RUNNING`.
+- A lease that isn't yours, or doesn't exist, answers `404 UNKNOWN_LEASE`.
+- With streaming off on the daemon you call, the route answers a plain `404`. Through a gateway, streaming must also be on for the lease's worker, or the answer is `503 STREAM_UNAVAILABLE`.
+
+The body is H.264 frames in Simlock's own framing, made for the console's player. It runs until you close the request, or until the device stops or its lease ends. When a lease end stops the stream, the last frame has tag `0x07` and holds JSON like `{"reason":"explicit"}`, then the body ends. The reason is `explicit` (released), `expired`, `killed` (ended by an operator) or `device-lost`. Other ends send no such frame.
 
 ## Send input to your own lease
 
-A lease's holder can open a WebSocket for its lease at `GET /v1/leases/<lease-id>/input` (with an `Upgrade: websocket` request), on a worker or on a gateway, with its agent token in an `Authorization: Bearer` header. An operator token can open any lease's. Turn it on with `capabilities.input.enabled` (off by default; see [Configuration reference](/simlock/docs/reference/configuration)); through a gateway, the gateway and the lease's worker both need it on.
+A lease's holder can send taps, swipes, keys and buttons to its device over a WebSocket. An operator can do it for any lease.
 
-The messages are expo serve-sim's: each is one tag byte and UTF-8 JSON, so a client that already drives serve-sim (T3 Code's device panel) needs nothing Simlock-specific. The server sends `0x83` (input is accepted from now on), then `0x82` with the screen as it is now, `{"width":1179,"height":2556,"orientation":"portrait"}`, and again whenever the size changes. A device that takes no input gets `0x82` `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}`, and the socket stays open. An Android emulator, an enrolled Android phone and an iOS simulator take input (see below); a physical iPhone does not, so its sockets get that answer.
+**Turn it on** with `capabilities.input.enabled` on the worker (it is off by default; see [Configuration reference](/simlock/docs/reference/configuration)). Through a gateway, turn it on at the gateway and at the lease's worker.
 
-The client sends `0x03` touch (`{"type":"begin","x":0.4,"y":0.7}`, `type` is `begin`, `move` or `end`, positions are fractions from 0 to 1), `0x04` button (`home`, `app_switcher`, `lock` or `back`), `0x06` key (`{"type":"down","usage":4}`, a USB HID usage from 0 to 255), `0x07` orientation (`{"orientation":"landscape_left"}`, one of `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`) and `0x0b` scroll. A message that is not valid JSON, has an unknown tag, a position outside 0 to 1, an orientation not in that list, or is over 64 KiB is dropped and the socket stays open. Only an iOS simulator acts on `0x07` (see below); `POST /v1/leases/<lease-id>/rotate` turns it with no socket. `0x10` is answered `0x90` `{"requestId":7,"ok":false}`.
+**Connect** to `GET /v1/leases/<lease-id>/input` with an `Upgrade: websocket` request and your token in an `Authorization: Bearer` header, on the worker or the gateway.
 
-On Android, a tap, swipe, scroll, key or button reaches the device through a second, control-only scrcpy server that Simlock starts for the lease; it shows no picture and changes no device setting. Taps and scrolls land on the screen as it is now, in its current rotation, and Simlock reads the size every 2 seconds, so after an agent rotates the device a tap may use the old size for up to 2 seconds, and the socket then gets a new `0x82`. A scroll sends 1 wheel unit for each 1/16 of the screen, up to 16, at the given position or the screen's centre; a positive `dy` moves the content down and a positive `dx` moves it right. `home`, `app_switcher`, `lock` and `back` are Android's Home, Recents, Power and Back keys. A `0x06` key is a USB HID usage typed as a US keyboard: letters, digits, Enter, Escape, Backspace, Tab, Space, the punctuation row, the arrows and the modifiers (Shift, Ctrl, Alt, Meta) work, and a modifier stays held for the keys after it until its `up`; other usages (function keys, the keypad) are dropped. A `0x07` orientation is dropped; rotate an Android device with agent-device. A dark phone screen is not woken, so a tap on it does nothing. A phone whose adb check is closed gets `inputUnavailable`.
+Which devices take input:
 
-On an iOS simulator, a tap, swipe, scroll and `home` work, and so do `0x06` keys on iOS 26 and older runtimes. A tap reaches the simulator through a helper process that Simlock starts for the lease; it shows no picture. `home` brings the home screen forward and sends the app to the background. A scroll is sent as a finger drag. `app_switcher`, `lock` and `back` are dropped. A `0x07` orientation turns the simulator with a device-orientation event, as turning a phone in your hand does; this was checked with Xcode 26.4 and Xcode 27, on iOS 26.4 and iOS 27 runtimes. A screen that does not rotate, such as the iPhone home screen, stays as it is, and nothing tells the client. On an iOS 27 or newer runtime the simulator ignores injected keys, so `0x06` keys are dropped and the `0x82` message carries `"keyboardUnavailable":true`. The `0x82` message always says `"orientation":"portrait"`, after a rotation too, and touch positions stay fractions of the screen in its portrait frame.
+- An iOS simulator, an Android emulator and an enrolled Android phone take input.
+- A physical iPhone doesn't. Its socket stays open but reports `inputUnavailable` (see below).
 
-### Rotate without a socket
+### The messages
 
-A lease's holder can also rotate its iPhone or iPad simulator with `POST /v1/leases/<lease-id>/rotate` and a body such as `{"orientation":"landscape_left"}`, on a worker or on a gateway, whether or not `capabilities.input.enabled` is on. `orientation` is one of `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`; any other spelling answers 400 `BAD_REQUEST`. The call answers `200` with `{"leaseId":"<lease-id>","orientation":"landscape_left"}` once the event is written to the simulator's input helper, and it uses the helper an open input socket already has. Through a gateway, `<lease-id>` is the id you hold. A lease on any other device (an Apple TV, Apple Watch or Apple Vision simulator, an Android emulator or phone, a physical iPhone or iPad) answers 422 `ROTATION_UNSUPPORTED`, and a helper that cannot start or a failed write answers 503 `INPUT_UNAVAILABLE`. A lease that is not the caller's answers 403, and one that does not exist answers 404 `UNKNOWN_LEASE`. A worker that gives no answer within `gateway.execTimeoutMs` answers 504 `EXEC_TIMEOUT`. The JS client calls it as `client.rotate(leaseId, orientation)`.
+The messages use expo serve-sim's format, so a client that already drives serve-sim (such as T3 Code's device panel) needs nothing Simlock-specific. Each message is one tag byte followed by UTF-8 JSON.
 
-Up to 8 sockets share one lease's device input. The socket closes with:
+From the server:
+
+| Tag | Means |
+| --- | --- |
+| `0x83` | Input is accepted from now on. |
+| `0x82` | The screen's size, such as `{"width":1179,"height":2556,"orientation":"portrait"}`. Sent after `0x83`, and again whenever the size changes. A device that takes no input gets `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}`. |
+| `0x90` | The answer to `0x10`: `{"requestId":7,"ok":false}`. |
+
+From your client:
+
+| Tag | Sends | Example |
+| --- | --- | --- |
+| `0x03` | Touch. `type` is `begin`, `move` or `end`; positions are fractions of the screen, from 0 to 1. | `{"type":"begin","x":0.4,"y":0.7}` |
+| `0x04` | Button: `home`, `app_switcher`, `lock` or `back`. | |
+| `0x06` | Key, as a USB HID usage from 0 to 255. | `{"type":"down","usage":4}` |
+| `0x07` | Orientation: `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. | `{"orientation":"landscape_left"}` |
+| `0x0b` | Scroll. | |
+
+A message is dropped, and the socket stays open, when it isn't valid JSON, has an unknown tag, has a position outside 0 to 1 or an unknown orientation, or is over 64 KiB.
+
+### On Android
+
+- **Taps and scrolls** land on the screen as it is now, in its current rotation. Right after the device rotates, a tap may use the old screen size for up to 2 seconds; the socket then gets a new `0x82`.
+- **A scroll** moves 1 wheel unit for each 1/16 of the screen, up to 16, at the given position or the screen's centre. A positive `dy` moves the content down; a positive `dx` moves it right.
+- **Buttons**: `home`, `app_switcher`, `lock` and `back` are Android's Home, Recents, Power and Back.
+- **Keys** are typed as a US keyboard. Letters, digits, Enter, Escape, Backspace, Tab, Space, the punctuation row, the arrows and the modifiers (Shift, Ctrl, Alt, Meta) work. A modifier stays held for the keys after it until its `up`. Other keys, such as function keys and the keypad, are dropped.
+- **Orientation (`0x07`)** is dropped. Rotate an Android device with agent-device.
+- **A dark screen isn't woken**, so a tap on it does nothing.
+- Input on Android doesn't change any device setting.
+- A phone whose adb check is closed reports `inputUnavailable`.
+
+### On an iOS simulator
+
+- **Taps, swipes and scrolls** work. A scroll is sent as a finger drag.
+- **`home`** brings the home screen forward and sends the app to the background. `app_switcher`, `lock` and `back` are dropped.
+- **Keys** work on iOS 26 and older. On iOS 27 and newer the simulator ignores injected keys, so they are dropped, and `0x82` carries `"keyboardUnavailable":true`.
+- **Orientation (`0x07`)** turns the simulator as if you turned the phone in your hand. A screen that doesn't rotate, such as the iPhone home screen, stays as it is, and nothing tells the client.
+- `0x82` always says `"orientation":"portrait"`, even after a rotation, and touch positions stay fractions of the screen in portrait.
+
+### When the socket closes
+
+Up to 8 sockets can share one lease's input.
 
 | Code | Reason | When |
 | --- | --- | --- |
-| 4001 | `explicit`, `killed`, `expired` or `device-lost` | The lease ended. Through a gateway, `lease ended` if the worker did not say why within 2 seconds. |
-| 1011 | `Worker <id> stopped answering` | Through a gateway, the worker stopped answering for 15 seconds or its uplink dropped. |
+| 4001 | `explicit`, `killed`, `expired` or `device-lost` | The lease ended. Through a gateway, `lease ended` if the worker didn't say why within 2 seconds. |
+| 1011 | `Worker <id> stopped answering` | Through a gateway, the worker stopped answering for 15 seconds or lost its connection. |
 | 1001 | `Simlock is stopping` | The daemon is stopping. |
-| 1013 | `Input is unavailable for this lease` | A 9th socket, a device input that failed, or a reconnect within 10 seconds of a failed open. |
+| 1013 | `Input is unavailable for this lease` | A 9th socket, a failure to reach the device's input, or a reconnect within 10 seconds of a failed open. |
 
-A socket that answers no ping within 15 seconds is closed. A lease that is not the caller's, or does not exist, answers 404 `UNKNOWN_LEASE`, no token answers 401, and a plain `GET` without an upgrade answers 426. With input off on the daemon that answers, the path is a plain 404. Through a gateway, a worker with input off answers 503 `INPUT_UNAVAILABLE` ("Worker w1 does not take input for lease L-42; turn on capabilities.input.enabled there"), and a worker that gives no answer within 10 seconds answers 503 `WORKER_UNREACHABLE`.
+A socket that doesn't answer a ping within 15 seconds is closed.
 
-## When it does not work
+Errors before the socket opens:
 
-| What you see | Why | What to do |
-| --- | --- | --- |
-| "Streaming is off on mac-studio-2." | `capabilities.stream.enabled` is not `true` on that worker. | Turn it on and restart the worker's daemon. |
-| The panel says the screen cannot be captured, naming iOS 27 or Xcode 27 | A physical iPhone below iOS 27, or a worker on an Xcode older than 27. | Update the iPhone or the worker's Xcode. |
-| "The phone's screen is off and did not turn on." | The phone did not wake. | Unlock the phone, then leave the **Screen** tab and open it again. |
-| The tab gives up waiting for the first picture | The device painted nothing for 30 seconds. | Leave the **Screen** tab and open it again. |
-| The picture stops on a device that is still running | The device stopped sending frames. | Leave the **Screen** tab and open it again. |
+| Answer | Why |
+| --- | --- |
+| `401` | No token. |
+| `404 UNKNOWN_LEASE` | The lease isn't yours, or doesn't exist. |
+| `404` | Input is off on the daemon you called. |
+| `426` | A plain `GET` without an upgrade. |
+| `503 INPUT_UNAVAILABLE` | Through a gateway, input is off on the lease's worker ("Worker w1 does not take input for lease L-42; turn on capabilities.input.enabled there"). |
+| `503 WORKER_UNREACHABLE` | Through a gateway, the worker didn't answer within 10 seconds. |
+
+### Rotate without a socket
+
+A lease's holder can rotate an iPhone or iPad simulator with one HTTP call, on a worker or a gateway. This works whether or not `capabilities.input.enabled` is on. The example uses the variables from [Remote agents](/simlock/docs/using-devices/remote-agents#lease-a-device).
+
+```sh
+curl -sS -X POST "$SIMLOCK_URL/v1/leases/$LEASE/rotate" \
+  -H "Authorization: Bearer $SIMLOCK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"orientation":"landscape_left"}'
+```
+
+```json
+{"leaseId":"lse_3b9d6c1e-7f2a-4c55-9e0b-8a41d2f6c7e3","orientation":"landscape_left"}
+```
+
+`orientation` is `portrait`, `portrait_upside_down`, `landscape_left` or `landscape_right`. The `200` answer means the rotation was sent to the simulator. Through a gateway, use the lease id the gateway gave you. From the JS client, call `client.rotate(leaseId, orientation)`. From the command line, run `simlock rotate landscape-left` (see the [CLI reference](/simlock/docs/reference/cli)).
+
+| Answer | Why |
+| --- | --- |
+| `400 BAD_REQUEST` | Any other `orientation` spelling. |
+| `403` | The lease isn't yours. |
+| `404 UNKNOWN_LEASE` | The lease doesn't exist. |
+| `422 ROTATION_UNSUPPORTED` | The lease isn't on an iPhone or iPad simulator: an Apple TV, Apple Watch or Apple Vision simulator, an Android device, or a physical iPhone or iPad. |
+| `503 INPUT_UNAVAILABLE` | The rotation couldn't be sent to the simulator. |
+| `504 EXEC_TIMEOUT` | Through a gateway, the worker didn't answer within `gateway.execTimeoutMs`. |
 
 ## Related
 
 - Using the console: [Console](/simlock/docs/worker/console).
-- Every `capabilities.stream.*` key: [Configuration reference](/simlock/docs/reference/configuration).
+- Every `capabilities.stream.*` and `capabilities.input.*` key: [Configuration reference](/simlock/docs/reference/configuration).

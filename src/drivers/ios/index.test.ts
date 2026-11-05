@@ -26,6 +26,7 @@ import {
   SystemClock,
   type Filesystem,
   type Logger,
+  type ProcessResult,
   type SqliteDatabase,
 } from "../../ports/index.js";
 import { promiseState } from "../../test-support/promise-state.js";
@@ -34,6 +35,7 @@ import {
   iosRuntimeVersionFromId,
   SLIM_CATEGORIES,
   supportsPersistentSlim,
+  type SilenceFailedFact,
   type SlimmedFact,
   type SlimSkippedFact,
 } from "./index.js";
@@ -818,6 +820,49 @@ describe("IosSimctlDriver", () => {
     });
   });
 
+  it("a provision that makes a new iOS seed boots the seed within ios.full.bootTimeoutMs", async () => {
+    for (const { full, waitsMs } of [
+      { full: undefined, waitsMs: 300_000 },
+      { full: 400_000, waitsMs: 400_000 },
+    ]) {
+      const cloneInvocation = sourcesSimctl("clone", seedUdid, driverData.name, deviceRoot);
+      const runner = new ScriptedProcessRunner([
+        { match: listInvocation, result: { code: 0, stderr: "", stdout: listFixture } },
+        {
+          match: sourcesSimctl(
+            "create",
+            "simlock-seed-device-1",
+            driverData.deviceTypeId,
+            driverData.runtimeId,
+          ),
+          result: { code: 0, stderr: "", stdout: `${seedUdid}\n` },
+        },
+        { match: sourcesSimctl("boot", seedUdid) },
+        { match: sourcesSimctl("bootstatus", seedUdid, "-b") },
+        { match: sourcesSimctl("listapps", seedUdid) },
+        { match: sourcesSimctl("shutdown", seedUdid) },
+        { match: cloneInvocation, result: { code: 0, stderr: "", stdout: `${driverData.udid}\n` } },
+      ]);
+      const filesystem = new MemoryFilesystem();
+      const driver = await createDriver(
+        runner,
+        new FakeClock(),
+        filesystem,
+        undefined,
+        undefined,
+        full,
+      );
+      await plantManagedDevice(filesystem);
+
+      await driver.provision(spec);
+
+      expect(
+        runner.calls.find((call) => call.args.includes("bootstatus"))?.options,
+        `key ${String(full)}`,
+      ).toEqual({ timeoutMs: waitsMs });
+    }
+  });
+
   it("provisions a copy of the kind's seed, making the seed first when there is none", async () => {
     const copyUdid = "00000000-0000-0000-0000-000000000002";
     const database = await memorySourceDatabase();
@@ -869,7 +914,7 @@ describe("IosSimctlDriver", () => {
       { ...listInvocation, options: { timeoutMs: 30_000 } },
       { ...seedCreate, options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("boot", seedUdid), options: { timeoutMs: 30_000 } },
-      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...sourcesSimctl("bootstatus", seedUdid, "-b"), options: { timeoutMs: 300_000 } },
       { ...sourcesSimctl("listapps", seedUdid), options: { timeoutMs: 30_000 } },
       { ...sourcesSimctl("shutdown", seedUdid), options: { timeoutMs: 30_000 } },
       { ...cloneInvocation, options: { timeoutMs: 30_000 } },
@@ -1137,7 +1182,7 @@ describe("IosSimctlDriver", () => {
       void provisioned.catch(() => undefined);
       if ("hangs" in failing) {
         await waitForCalls(runner, entries.length + 1);
-        clock.advance(120_000);
+        clock.advance(300_000);
       }
       const error = await provisioned.catch((caught: unknown) => caught);
 
@@ -1373,9 +1418,25 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
-    { name: "deletes its simulator in the sources set and its row", deleteCode: 0, rows: 0 },
-    { name: "keeps the row and throws when the delete fails", deleteCode: 1, rows: 1 },
-  ])("destroySource $name", async ({ deleteCode, rows }) => {
+    {
+      name: "deletes its simulator in the sources set and its row",
+      deleteCode: 0,
+      stderr: "",
+      rows: 0,
+    },
+    {
+      name: "keeps the row and throws when the delete fails",
+      deleteCode: 1,
+      stderr: "busy",
+      rows: 1,
+    },
+    {
+      name: "drops the row of a seed simctl no longer knows (Invalid device)",
+      deleteCode: 148,
+      stderr: `Invalid device: ${seedUdid}\n`,
+      rows: 0,
+    },
+  ])("destroySource $name", async ({ deleteCode, stderr, rows }) => {
     const database = plantSource(await memorySourceDatabase(), {
       deviceTypeId: driverData.deviceTypeId,
       runtimeId: driverData.runtimeId,
@@ -1386,7 +1447,7 @@ describe("IosSimctlDriver", () => {
       { match: sourcesSimctl("shutdown", seedUdid) },
       {
         match: sourcesSimctl("delete", seedUdid),
-        result: { code: deleteCode, stderr: "busy", stdout: "" },
+        result: { code: deleteCode, stderr, stdout: "" },
       },
     ]);
     const driver = await createDriver(runner, new FakeClock(), undefined, database);
@@ -1394,7 +1455,7 @@ describe("IosSimctlDriver", () => {
 
     const destroyed = driver.destroySource(listed?.id ?? "");
 
-    if (deleteCode === 0) await expect(destroyed).resolves.toBeUndefined();
+    if (rows === 0) await expect(destroyed).resolves.toBeUndefined();
     else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
     expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
     expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
@@ -1677,7 +1738,7 @@ describe("IosSimctlDriver", () => {
     });
     expect(runner.calls).toEqual([
       { ...simctl("boot", driverData.udid), options: { timeoutMs: 30_000 } },
-      { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 120_000 } },
+      { ...simctl("bootstatus", driverData.udid, "-b"), options: { timeoutMs: 300_000 } },
       { ...simctl("listapps", driverData.udid), options: { timeoutMs: 30_000 } },
     ]);
   });
@@ -1725,7 +1786,7 @@ describe("IosSimctlDriver", () => {
         { match: simctl("boot", driverData.udid) },
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
-          onSpawn: () => clock.advance(119_500),
+          onSpawn: () => clock.advance(299_500),
         },
         {
           match: simctl("listapps", driverData.udid),
@@ -1766,11 +1827,11 @@ describe("IosSimctlDriver", () => {
         {
           match: simctl("bootstatus", driverData.udid, "-b"),
           onSpawn: () => {
-            if (slowCommand === "bootstatus") clock.advance(120_000);
+            if (slowCommand === "bootstatus") clock.advance(300_000);
           },
         },
         ...(slowCommand === "listapps"
-          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(120_000) }]
+          ? [{ match: simctl("listapps", driverData.udid), onSpawn: () => clock.advance(300_000) }]
           : []),
         { match: simctl("shutdown", driverData.udid) },
       ]);
@@ -1807,7 +1868,7 @@ describe("IosSimctlDriver", () => {
     void ready.catch(() => undefined);
 
     await waitForCalls(runner, 2);
-    clock.advance(120_000);
+    clock.advance(300_000);
 
     await expect(ready).rejects.toBeInstanceOf(BootTimeoutError);
     expect(runner.calls.map((call) => call.args)).toEqual([
@@ -3064,7 +3125,7 @@ describe("IosSimctlDriver", () => {
         idGenerator: { generate: () => "device-1" },
         launchdOverridesRoot: overridesRoot,
         processRunner: runner,
-        slim: slimOptions(),
+        config: { slim: slimOptions() },
       });
 
       const ready = driver.makeReady(
@@ -3083,6 +3144,62 @@ describe("IosSimctlDriver", () => {
       clock.advance(300_000 - 120_001);
       expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
       expect(runner.calls[1]?.options).toEqual({ timeoutMs: 300_000 });
+    });
+
+    it("an operator's full iOS boot waits ios.full.bootTimeoutMs, then fails with BootTimeoutError", async () => {
+      const slim18_4 = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-4" };
+      const cases = [
+        { data: driverData, full: undefined, options: prepareFull, waitsMs: 300_000 },
+        { data: driverData, full: 400_000, options: prepareFull, waitsMs: 400_000 },
+        { data: slim18_4, full: 400_000, options: prepareSlim, waitsMs: 400_000 },
+        { data: driverData, full: 400_000, options: recoverFull, waitsMs: 400_000 },
+        { data: driverData, full: 400_000, options: recoverSlim, waitsMs: 400_000 },
+        { data: slim18_5, full: 400_000, options: prepareSlim, waitsMs: 250_000 },
+      ];
+      for (const { data, full, options, waitsMs } of cases) {
+        const filesystem = new MemoryFilesystem();
+        await plantManagedDevice(filesystem);
+        const clock = new FakeClock();
+        const runner = new ScriptedProcessRunner([
+          { match: { command: "xcrun", args: simctlArgs("boot", data.udid) } },
+          {
+            hangs: true,
+            match: { command: "xcrun", args: simctlArgs("bootstatus", data.udid, "-b") },
+          },
+          { match: { command: "xcrun", args: simctlArgs("shutdown", data.udid) } },
+        ]);
+        const driver = await IosSimctlDriver.create({
+          database: await memorySourceDatabase(),
+          driverConfig: { deviceRoot },
+          instanceId,
+          simlockHome: "/home/.simlock",
+          clock,
+          filesystem,
+          idGenerator: { generate: () => "device-1" },
+          launchdOverridesRoot: overridesRoot,
+          processRunner: runner,
+          config: {
+            slim: slimOptions(250_000),
+            ...(full === undefined ? {} : { full: { bootTimeoutMs: full } }),
+          },
+        });
+
+        const ready = driver.makeReady(
+          { address: data.udid, deviceId: data.udid, driverData: data },
+          options,
+        );
+        await waitForCalls(runner, 2);
+        const readyState = promiseState(ready);
+
+        clock.advance(waitsMs - 1);
+        await flushMicrotasks221();
+        expect(readyState.state, `${JSON.stringify({ full, options })} still waiting`).toBe(
+          "pending",
+        );
+
+        clock.advance(1);
+        expect(await settledValue(ready)).toBeInstanceOf(BootTimeoutError);
+      }
     });
 
     it.each([
@@ -4761,6 +4878,7 @@ async function createDriver(
   filesystem: Filesystem = new MemoryFilesystem(),
   database?: SqliteDatabase,
   logger?: Logger,
+  fullBootTimeoutMs?: number,
 ): Promise<IosSimctlDriver> {
   scopedRunners.push(runner);
   return IosSimctlDriver.create({
@@ -4770,6 +4888,9 @@ async function createDriver(
     filesystem,
     idGenerator: { generate: () => "device-1" },
     instanceId,
+    ...(fullBootTimeoutMs === undefined
+      ? {}
+      : { config: { full: { bootTimeoutMs: fullBootTimeoutMs } } }),
     ...(logger === undefined ? {} : { logger }),
     processRunner: runner,
     simlockHome: "/home/.simlock",
@@ -4874,7 +4995,7 @@ async function createSlimDriver(
     ...(onSlimSkipped === undefined ? {} : { onSlimSkipped }),
     launchdOverridesRoot: overridesRoot,
     processRunner: runner,
-    slim,
+    config: { slim },
     slimByDefault,
   });
 }
@@ -5154,6 +5275,8 @@ function assetInfoPlist(simulatorVersion: string, build: string): string {
 
 const prepareFull = { mode: "full", purpose: "prepare" } as const;
 const prepareSlim = { mode: "slim", purpose: "prepare" } as const;
+const recoverFull = { mode: "full", purpose: "recover" } as const;
+const recoverSlim = { mode: "slim", purpose: "recover" } as const;
 
 describe("IosSimctlDriver device set", () => {
   const coreSimulatorRoot = "/CoreSim";
@@ -5361,7 +5484,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.mkdirp(`${ownRoot}-sources/${second}`);
         },
         {
-          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
           path: `${ownRoot}-sources`,
           reason: "device-set-changed",
         },
@@ -5744,4 +5867,130 @@ describe("IosSimctlDriver device set", () => {
       );
     }
   });
+});
+
+describe("IosSimctlDriver simulator audio", () => {
+  const volumeState = "com.apple.springboard.volumestate";
+  const udid = driverData.udid;
+  const slimData = { ...driverData, runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-18-5" };
+
+  const silence = [
+    simctlArgs("spawn", udid, "notifyutil", "-s", volumeState, "0"),
+    simctlArgs("spawn", udid, "notifyutil", "-p", volumeState),
+  ];
+  const bootCalls = [
+    simctlArgs("boot", udid),
+    simctlArgs("bootstatus", udid, "-b"),
+    simctlArgs("listapps", udid),
+  ];
+  const readbackCall = simctlArgs("spawn", udid, "launchctl", "print-disabled", "system");
+
+  it.each([
+    {
+      name: "prepare",
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "recover",
+      options: { mode: "full", purpose: "recover" } as const,
+      expected: [...bootCalls, ...silence],
+    },
+    {
+      name: "a slim prepare, silenced before the readback",
+      data: slimData,
+      options: { mode: "slim", purpose: "prepare" } as const,
+      expected: [...bootCalls, ...silence, readbackCall],
+    },
+    {
+      name: "the setting true",
+      audio: true,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: bootCalls,
+    },
+    {
+      name: "a volume command that fails",
+      volume: { code: 1, stderr: "boom", stdout: "" },
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "boom",
+    },
+    {
+      name: "a volume command that times out",
+      volume: "hangs" as const,
+      options: { mode: "full", purpose: "prepare" } as const,
+      expected: [...bootCalls, silence[0]],
+      failure: "timed out",
+    },
+  ])(
+    "sets a simulator's volume to 0 before handing it on when ios.simulator.audio is false: $name",
+    async (c) => {
+      const data = c.data ?? driverData;
+      const silenceCall = (index: number, result?: ProcessResult) => ({
+        match: { args: silence[index]!, command: "xcrun" },
+        ...(result === undefined ? {} : { result }),
+      });
+      const runner = new ScriptedProcessRunner([
+        { match: simctl("boot", udid) },
+        { match: simctl("bootstatus", udid, "-b") },
+        { match: simctl("listapps", udid) },
+        ...(c.audio === true
+          ? []
+          : c.volume === "hangs"
+            ? [{ ...silenceCall(0), hangs: true }]
+            : c.volume !== undefined
+              ? [silenceCall(0, c.volume)]
+              : [silenceCall(0), silenceCall(1)]),
+        ...(c.options.mode === "slim"
+          ? [
+              {
+                match: simctl("spawn", udid, "launchctl", "print-disabled", "system"),
+                result: { code: 0, stderr: "", stdout: wantedReadback() },
+              },
+            ]
+          : []),
+      ]);
+      scopedRunners.push(runner);
+      const clock = new FakeClock();
+      const failures: SilenceFailedFact[] = [];
+      const driver = await IosSimctlDriver.create({
+        clock,
+        database: await memorySourceDatabase(),
+        driverConfig: { deviceRoot },
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        launchdOverridesRoot: overridesRoot,
+        onSilenceFailed: (fact) => failures.push(fact),
+        processRunner: runner,
+        simlockHome: "/home/.simlock",
+        config: {
+          simulator: { audio: c.audio ?? false, headless: true },
+          slim: { bootTimeoutMs: 300_000, categories: ["widgets"] },
+        },
+      });
+
+      const ready = driver.makeReady(
+        { address: udid, deviceId: udid, driverData: data },
+        c.options,
+      );
+      if (c.volume === "hangs") {
+        const state = promiseState(ready);
+        await waitForCalls(runner, c.expected.length);
+        clock.advance(29_999);
+        await flushMicrotasks221();
+        expect(state.state).toBe("pending");
+        clock.advance(1);
+        await flushMicrotasks221();
+        expect(state.state).toBe("fulfilled");
+      }
+      const device = await ready;
+
+      expect(device.address).toBe(udid);
+      expect(runner.calls.map((call) => call.args)).toEqual(c.expected);
+      expect(failures).toEqual(
+        c.failure === undefined ? [] : [{ deviceId: udid, detail: c.failure }],
+      );
+    },
+  );
 });
