@@ -7,7 +7,12 @@
   §1 (a kind is learned from every lease) and §5 (the record's tables), for
   baseline kinds only, and
   [ADR 0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md)
-  §5 (a learned kind carries the baseline name). Plain kinds keep ADR 0038
+  §5 (a learned kind carries the baseline name). It also adds the config key
+  `warmPool.baselineLearnAfter` to ADR 0038 §8's `warmPool` keys, the
+  baseline's removal or staleness to ADR 0038 §4's causes that forget a kind,
+  and changes how
+  [ADR 0050](0050-an-operator-can-forget-a-learned-warm-kind.md)'s
+  `warm forget` matches a baseline kind. Plain kinds keep ADR 0038
   as written. ADR 0038's rejected alternative "Forget a kind after a fixed
   time" stays rejected.
 
@@ -86,8 +91,9 @@ version.
 The pool's owner in `state.db` gains one schema version. It keys a
 baseline row on its name, and marks whether a baseline row is
 learned. Rows of baseline kinds written before it are deleted with their
-lease rows: baselines have been in no release, and the next leases learn
-them again under §1. Plain rows and their lease rows are kept.
+lease rows. A 0.6.0 worker, the release that shipped baselines, loses its
+learned baseline kinds at the upgrade, and each is learned again on its Nth
+lease within 24 hours, which is what §1 asks of any baseline. Plain rows and their lease rows are kept.
 
 A row counting toward N is a row: it counts toward the 32 kinds per
 platform, and the oldest by last lease is dropped first, as today.
