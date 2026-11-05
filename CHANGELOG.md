@@ -414,6 +414,61 @@ is the daemon that exists today.
   what it said when it was accepted, and is never edited to match a later
   vocabulary.
 
+## [0.6.0](https://github.com/callstackincubator/simlock/compare/v0.5.0...v0.6.0) (2026-11-05)
+
+### What's Changed
+
+- docs(adr): 0059 a worker with real drivers holds a per-user lock (#1189) by @V3RON in https://github.com/callstackincubator/simlock/pull/1190
+- feat(daemon): a worker with real drivers holds a per-user lock by @V3RON in https://github.com/callstackincubator/simlock/pull/1193
+- docs(adr): 0060 iOS slim writes launchd overrides while the simulator is shut down by @V3RON in https://github.com/callstackincubator/simlock/pull/1194
+- feat(ios): slim writes launchd overrides before one boot, reads them back by @V3RON in https://github.com/callstackincubator/simlock/pull/1197
+- fix(auth): refuse unsafe worker ids at join by @V3RON in https://github.com/callstackincubator/simlock/pull/1214
+- fix(gateway): drop the proxy auth header and cookie before relaying to a worker by @V3RON in https://github.com/callstackincubator/simlock/pull/1213
+- fix: owner-only SIMLOCK_HOME and per-request waiting-row ownership by @V3RON in https://github.com/callstackincubator/simlock/pull/1217
+- fix(cli): escape control characters in remote text and restrict requesterId by @V3RON in https://github.com/callstackincubator/simlock/pull/1218
+- fix(gateway): a worker cannot crash, stall or corrupt its gateway by @V3RON in https://github.com/callstackincubator/simlock/pull/1215
+- fix(limits): bound input sizes and make their parsing linear by @V3RON in https://github.com/callstackincubator/simlock/pull/1216
+- fix(android): passthrough refuses emu avd snapshot except list by @V3RON in https://github.com/callstackincubator/simlock/pull/1221
+- fix(input): ignore messages after a lease's input is released by @V3RON in https://github.com/callstackincubator/simlock/pull/1226
+- fix(cli): tunnel drops a connection once both halves ended by @V3RON in https://github.com/callstackincubator/simlock/pull/1227
+- fix(android): bound the emulator mark read in time and size by @V3RON in https://github.com/callstackincubator/simlock/pull/1224
+- fix(e2e): capture stand-in logs closed when its stdout fails by @V3RON in https://github.com/callstackincubator/simlock/pull/1230
+- fix(e2e): a held loopback port never stalls its release by @V3RON in https://github.com/callstackincubator/simlock/pull/1231
+- fix(stream): a screen stream ends at the identity's expiresAt by @V3RON in https://github.com/callstackincubator/simlock/pull/1228
+- fix(android): fail the boot when the emulator exits, quoting its error (#1199) by @V3RON in https://github.com/callstackincubator/simlock/pull/1232
+- feat(mcp): list_devices lists enrolled phones by @leonardoxr in https://github.com/callstackincubator/simlock/pull/1120
+- chore(agents): manuals reach agents, retired words, fresh checkouts, inline test commands by @V3RON in https://github.com/callstackincubator/simlock/pull/1252
+- docs(adr): 0061 every virtual device is a copy of a source, and a baseline is a named source by @V3RON in https://github.com/callstackincubator/simlock/pull/1201
+- feat(ios): every simulator is a copy of a seed, and every virtual device serves one lease by @V3RON in https://github.com/callstackincubator/simlock/pull/1210
+- feat(android): every emulator is a copy of a seed, booted from its boot snapshot by @V3RON in https://github.com/callstackincubator/simlock/pull/1222
+- feat(baselines): save, list and remove baselines from held leases by @V3RON in https://github.com/callstackincubator/simlock/pull/1235
+- feat(leasing): a lease names a baseline and gets a copy of it by @V3RON in https://github.com/callstackincubator/simlock/pull/1236
+- feat(gateway): route baseline lease requests to a worker that holds the baseline by @V3RON in https://github.com/callstackincubator/simlock/pull/1241
+- feat(ui): a Baselines page and a device's baseline by @V3RON in https://github.com/callstackincubator/simlock/pull/1245
+- feat(ios): ios.simulator.audio keeps every simulator silent by @V3RON in https://github.com/callstackincubator/simlock/pull/1258
+- docs(adr): propose 0063, a big module is one composition root over parts that own their state (#1259) by @V3RON in https://github.com/callstackincubator/simlock/pull/1262
+- test(hygiene): size test, a code file stays at 1,400 lines and a test file at 2,500 by @V3RON in https://github.com/callstackincubator/simlock/pull/1274
+- refactor(android): adb-tools.ts, the leaf part for env, commands and device folders by @V3RON in https://github.com/callstackincubator/simlock/pull/1276
+- refactor(android): ownership.ts, the one check before a stop, load or destroy by @V3RON in https://github.com/callstackincubator/simlock/pull/1277
+- refactor(android): console-ports.ts owns the console port reservations by @V3RON in https://github.com/callstackincubator/simlock/pull/1278
+- refactor(android): passthrough-rules.ts holds the adb refusal rules by @V3RON in https://github.com/callstackincubator/simlock/pull/1279
+- refactor(android): avd-config.ts owns config.ini, the config hash and the marks by @V3RON in https://github.com/callstackincubator/simlock/pull/1280
+- refactor(android): emulator.ts starts, readies and stops an emulator by @V3RON in https://github.com/callstackincubator/simlock/pull/1281
+- refactor(android): system-images.ts owns system images and components by @V3RON in https://github.com/callstackincubator/simlock/pull/1283
+- refactor(android): catalog.ts is a part of the Android driver by @V3RON in https://github.com/callstackincubator/simlock/pull/1284
+- refactor(android): device-table.ts owns the device states, locks, listManaged and pre-root devices by @V3RON in https://github.com/callstackincubator/simlock/pull/1285
+- refactor(android): seeds.ts is a part of the Android driver by @V3RON in https://github.com/callstackincubator/simlock/pull/1286
+- feat(ios): ios.simulator.headless false shows each simulator in a window by @V3RON in https://github.com/callstackincubator/simlock/pull/1290
+- docs(website): rewrite the user docs in plain, task-first English by @V3RON in https://github.com/callstackincubator/simlock/pull/1291
+- fix(ui): the lease drawer shows the baseline the lease was made from by @V3RON in https://github.com/callstackincubator/simlock/pull/1306
+- fix(android): pass -crash-report-mode only to an emulator that lists it by @V3RON in https://github.com/callstackincubator/simlock/pull/1304
+- fix(daemon): a stopping daemon answers new connections with DAEMON_STOPPING by @V3RON in https://github.com/callstackincubator/simlock/pull/1302
+- fix(ios): a seed simctl no longer knows counts as deleted (#1296) by @V3RON in https://github.com/callstackincubator/simlock/pull/1303
+- fix(cli): daemon stop waits until the daemon has exited by @V3RON in https://github.com/callstackincubator/simlock/pull/1305
+- test: raise five shrink-only line limits in source hygiene by @V3RON in https://github.com/callstackincubator/simlock/pull/1307
+
+**Full Changelog**: https://github.com/callstackincubator/simlock/compare/v0.5.0...v0.6.0
+
 ## [0.5.0](https://github.com/callstackincubator/simlock/compare/v0.4.2...v0.5.0) (2026-11-01)
 
 ### What's Changed
