@@ -196,6 +196,7 @@ export function createIosDeviceTcp(options: IosDeviceTcpOptions): DeviceTcp {
           accept = undefined;
           await Promise.all(bound.map((listener) => listener.close()));
         },
+        holdsDeviceRule: false,
         hostPort: devicePort,
         onConnection: (handler) => {
           accept = handler;

@@ -242,6 +242,7 @@ describe("iOS deviceTcp reverse", () => {
     const free = setup(undefined, listeners);
     const reverse = await free.reverse();
     expect(reverse.hostPort).toBe(PORT);
+    expect(reverse.holdsDeviceRule).toBe(false);
     expect(listeners.listeners.map(({ address, port }) => [address, port])).toEqual([
       ["127.0.0.1", PORT],
       ["::1", PORT],
