@@ -5316,6 +5316,48 @@ describe("IosSimctlDriver device set", () => {
     },
   );
 
+  it.each([
+    ["false with default", { deviceSet: "default" }, false, undefined],
+    ["true with simlock", { deviceSet: "simlock" }, true, undefined],
+    ["false with simlock", { deviceSet: "simlock" }, false, "simlock"],
+    ["false with the set unset", {}, false, "simlock"],
+    ["false with a bad value", { deviceSet: "Default" }, false, "Default"],
+  ] as const)(
+    "refuses iOS with invalid-device-set when ios.simulator.headless is false and the device set is Simlock's own: %s",
+    async (_case, driverConfig, headless, refusedRoot) => {
+      const failure = await IosSimctlDriver.create({
+        database: await memorySourceDatabase(),
+        clock: new FakeClock(),
+        coreSimulatorRoot,
+        driverConfig,
+        filesystem: new MemoryFilesystem(),
+        idGenerator: { generate: () => "device-1" },
+        instanceId,
+        processRunner: new ScriptedProcessRunner([]),
+        simlockHome: "/home/.simlock",
+        simulatorHeadless: headless,
+      })
+        .then(() => undefined)
+        .catch((error: unknown) => error);
+
+      if (refusedRoot === undefined) {
+        expect(failure).toBeUndefined();
+        return;
+      }
+      expect(failure).toBeInstanceOf(OwnedRootError);
+      expect(failure).toMatchObject({
+        path: refusedRoot,
+        platform: "ios",
+        reason: "invalid-device-set",
+      });
+      expect((failure as Error).message).toBe(
+        refusedRoot === "Default"
+          ? 'Refusing the ios device set: drivers.ios.deviceSet must be "simlock" or "default", but it is "Default"'
+          : 'Refusing the ios device set: ios.simulator.headless is false, which needs drivers.ios.deviceSet "default". Set drivers.ios.deviceSet to "default", or ios.simulator.headless to true.',
+      );
+    },
+  );
+
   it("an operator who switches with leftovers gets device-set-changed, and an unreadable folder gets unreadable", async () => {
     const ownRoot = "/home/.simlock/devices/ios";
     const xcodeDevices = `${coreSimulatorRoot}/Devices`;
