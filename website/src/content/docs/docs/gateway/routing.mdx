@@ -40,7 +40,7 @@ simlock --gateway lease --platform ios --device "iPhone 16" --timeout 10m
 
 When the time runs out, the request fails with `QUEUE_TIMEOUT` (exit 10). To fail at once instead of waiting, pass `--no-wait`; the request fails with `NO_CAPACITY` (exit 11) if no worker can take it now.
 
-To see the queue, run `simlock --gateway status`, which prints `Queue depth`, or open the console's **Waiting** page. It lists each waiting request and, for each worker, why that worker didn't take it. See [Fleet console](/simlock/docs/gateway/fleet-console#why-a-request-waits).
+To see the queue, run `simlock --gateway status`, which prints `Queue depth`, or open the console's **Queue** page. It lists each waiting request and, for each worker, why that worker didn't take it. See [Fleet console](/simlock/docs/gateway/fleet-console#why-a-request-waits).
 
 ## When no worker can serve a request
 

@@ -23,13 +23,13 @@ A worker's operator token doesn't work on the gateway. To sign people in through
 
 On a gateway the overview adds up the fleet:
 
-- The **Workers** tile shows how many workers are connected, of all the workers the gateway knows, for example `3 of 4 up`.
-- **Leases** counts the leases on every worker the gateway knows. The device limit beside it, **Utilisation** and **Capacity** count connected workers only.
-- The **Workers** table has one row per worker: its status square and name, a square per device slot, CPU, memory, and its lease count.
+- The **Workers** tile shows how many workers are connected, of all the workers the gateway knows, for example `3` `of 4`.
+- **Leased** counts the leases on every worker the gateway knows. It shows `—` until every worker has reported, and **Capacity · all workers** says how many workers have not reported yet.
+- The **Workers** panel has one row per worker: its status square and name, a square per device slot, CPU, memory, and its lease count.
 
-## Workers
+## Fleet
 
-**Workers** lists every worker the gateway knows, by label, or by id when it has no label. Each row shows how many devices it runs out of its limit. A worker that isn't connected shows `—` instead, since the numbers it last reported may be out of date.
+**Fleet** lists every worker the gateway knows, by label, or by id when it has no label. Each row shows how many devices it runs out of its limit. A worker that isn't connected shows `—` instead, since the numbers it last reported may be out of date.
 
 The square shows the worst of the worker's states. Besides the states a single worker can show, a gateway adds:
 
@@ -61,7 +61,7 @@ A disconnected worker stays in the list for 24 hours by default (`gateway.discon
 
 ## Why a request waits
 
-On **Waiting**, a request's **Queue** says where it waits: `the gateway's queue` while the gateway looks for a worker. Under it, the console names each worker and why that worker did not take the request:
+On **Queue**, a request's **Queue** field says where it waits: `the gateway's queue` while the gateway looks for a worker. Under it, the console names each worker and why that worker did not take the request:
 
 | It says | What it means |
 | --- | --- |
@@ -80,9 +80,9 @@ On **Waiting**, a request's **Queue** says where it waits: `the gateway's queue`
 
 How the gateway picks a worker is in [How requests are routed](/simlock/docs/gateway/routing).
 
-## Attention
+## Inbox
 
-On a gateway, **Attention** also lists workers:
+On a gateway, **Inbox** also lists workers:
 
 | Item | Colour | What to do |
 | --- | --- | --- |
