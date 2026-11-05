@@ -178,30 +178,47 @@ async function runLease(
     }
   };
   let renewal: LeaseRenewal | undefined;
+  // why: A signal or a dead --bind-pid process while the request waits must leave the queue at
+  // once, as the client's abort does; noticed only at grant time, the device would be taken and
+  // released, and a killed process would leave its request queued.
+  const waitAbort = new AbortController();
+  let cancelledWhileWaiting = false;
+  void termination?.settled.then(() => {
+    if (ourLeaseId !== undefined) return;
+    cancelledWhileWaiting = true;
+    waitAbort.abort();
+  });
   try {
-    const grant = await client.requestLease(
-      {
-        allowDownload: values["allow-download"] === true,
-        noWait: values["no-wait"] === true,
-        requesterId,
-        ...(typeof values.device === "string" ? { model: values.device } : {}),
-        ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
-        ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
-        ...(values.physical === true ? { physical: true } : {}),
-        platform,
-        ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
-        ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
-        ...(baseline === undefined ? {} : { baseline }),
-        ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        ...(ttlMs === undefined ? {} : { ttlMs }),
-      },
-      {
-        onProgress: (progress) => {
-          environment.stderr.write(`${JSON.stringify({ push: "progress", ...progress })}\n`);
+    let grant: LeaseGrant;
+    try {
+      grant = await client.requestLease(
+        {
+          allowDownload: values["allow-download"] === true,
+          noWait: values["no-wait"] === true,
+          requesterId,
+          ...(typeof values.device === "string" ? { model: values.device } : {}),
+          ...(typeof values.class === "string" ? { class: values.class as DeviceClass } : {}),
+          ...(typeof values.os === "string" ? { osVersion: values.os } : {}),
+          ...(values.physical === true ? { physical: true } : {}),
+          platform,
+          ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
+          ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
+          ...(baseline === undefined ? {} : { baseline }),
+          ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(ttlMs === undefined ? {} : { ttlMs }),
         },
-      },
-    );
+        {
+          signal: waitAbort.signal,
+          onProgress: (progress) => {
+            environment.stderr.write(`${JSON.stringify({ push: "progress", ...progress })}\n`);
+          },
+        },
+      );
+    } catch (error: unknown) {
+      if (cancelledWhileWaiting && (error as { code?: unknown }).code === "CANCELLED") return 0;
+      throw error;
+    }
     ourLeaseId = grant.lease.id;
     ourLeaseDeadline = grant.lease.ttlDeadline;
     if (!detached) heldLeaseId = grant.lease.id;
