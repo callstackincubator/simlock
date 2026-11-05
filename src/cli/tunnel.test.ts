@@ -145,6 +145,12 @@ describe("simlock tunnel that cannot run", () => {
     floor.signals.emit("SIGINT");
     expect(await floorExit).toBe(0);
 
+    const help = command(ENV);
+    expect(await help.run(["tunnel", "--help"])).toBe(0);
+    expect(help.out.join("")).toBe(
+      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
+    );
+
     const cases: readonly {
       readonly argv: readonly string[];
       readonly env?: NodeJS.ProcessEnv;
@@ -190,7 +196,32 @@ describe("simlock tunnel that cannot run", () => {
       },
       {
         argv: ["sideways", "5173"],
-        message: 'Unknown tunnel kind "sideways": use reverse or forward',
+        message: 'Unknown tunnel kind "sideways": use reverse, forward or emulator',
+      },
+      {
+        argv: ["emulate", "adb"],
+        message: 'Unknown tunnel kind "emulate": use reverse, forward or emulator',
+      },
+      ...["console", "grpc", "5555", ""].map((name) => ({
+        argv: name === "" ? ["emulator"] : ["emulator", name],
+        message: `Unknown emulator port "${name}": use adb`,
+      })),
+      {
+        argv: ["emulator", "adb:80"],
+        message: 'emulator caller port "80" is below 1024',
+      },
+      {
+        argv: ["emulator", "adb:70000"],
+        message: 'caller port "70000" is not an integer from 1 to 65535',
+      },
+      {
+        argv: ["emulator", "adb:"],
+        message: 'caller port "" is not an integer from 1 to 65535',
+      },
+      { argv: ["emulator", "adb", "emulator", "adb"], message: "Name emulator adb once" },
+      {
+        argv: ["forward", "6000", "emulator", "adb:6000"],
+        message: "Caller port 6000 is named by two tunnels",
       },
       {
         argv: ["--url", "http://10.0.0.5:7300", "reverse", "5173"],
