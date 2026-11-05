@@ -9,27 +9,26 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
 
 ## Files
 
-| File                          | Role                                                                                                                                             |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `service.ts`                  | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                                        |
-| `worker-link.ts`              | One uplink, gateway side: admin client, view reads, event relay                                                                                  |
-| `worker-registry.ts`          | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                                                     |
-| `drain-store.ts`              | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                                           |
-| `dispatcher.ts`               | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through `testDestination`, `daemon.update` through `update` |
-| `fleet-coordinator.ts`        | `FleetLeaseCoordinator`: admit, dispatch, retry; delegates to its parts                                                                          |
-| `fleet-refusals.ts`           | `FleetRefusals`: per-request refusal and cannot-serve memos, why each worker is passed over                                                      |
-| `fleet-forwarding.ts`         | `FleetForwarding`: renew, release, release-all, exec, rotate, baseline save; the timeouts                                                        |
-| `queue.ts`                    | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                                                   |
-| `lease-index.ts`              | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                                             |
-| `routing.ts`, `routing/`      | `createRoutingPolicy`: `assess` and the stage list                                                                                               |
-| `owner-routed-facts.ts`       | Relayed lease facts → `lease-lost` and device pushes to the owner                                                                                |
-| `aggregate.ts`                | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                                          |
-| `component-relay.ts`          | `relayComponentInstall`: `worker.install-component` fan-out                                                                                      |
-| `relay.ts`                    | `GatewayRelay`: one HTTP exchange, or a two-way channel, to a worker's relay target                                                              |
-| `fleet-ports.ts`              | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                                                    |
-| `../daemon/gateway-uplink.ts` | Worker: `GatewayUplink`, dial and redial                                                                                                         |
-| `../daemon/relay.ts`          | Worker: `RelayConnection`, serves `relay.request`                                                                                                |
-| `../link/`                    | Both ends: text messages plus byte channels on one WebSocket                                                                                     |
+| File                                       | Role                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `service.ts`                               | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                                        |
+| `worker-link.ts`                           | One uplink, gateway side: admin client, view reads, event relay                                                                                  |
+| `worker-registry.ts`                       | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                                                     |
+| `drain-store.ts`                           | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                                           |
+| `dispatcher.ts`                            | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through `testDestination`, `daemon.update` through `update` |
+| `fleet-coordinator.ts`                     | `FleetLeaseCoordinator`: admit, dispatch, retry; delegates to its parts                                                                          |
+| `fleet-refusals.ts`, `fleet-forwarding.ts` | Its parts: refusal memos and why each worker is passed over; the forwarded renew, release, exec, rotate, baseline save                           |
+| `queue.ts`                                 | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                                                   |
+| `lease-index.ts`                           | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                                             |
+| `routing.ts`, `routing/`                   | `createRoutingPolicy`: `assess` and the stage list                                                                                               |
+| `owner-routed-facts.ts`                    | Relayed lease facts → `lease-lost` and device pushes to the owner                                                                                |
+| `aggregate.ts`                             | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                                          |
+| `component-relay.ts`                       | `relayComponentInstall`: `worker.install-component` fan-out                                                                                      |
+| `relay.ts`                                 | `GatewayRelay`: one HTTP exchange, or a two-way channel, to a worker's relay target                                                              |
+| `fleet-ports.ts`                           | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                                                    |
+| `../daemon/gateway-uplink.ts`              | Worker: `GatewayUplink`, dial and redial                                                                                                         |
+| `../daemon/relay.ts`                       | Worker: `RelayConnection`, serves `relay.request`                                                                                                |
+| `../link/`                                 | Both ends: text messages plus byte channels on one WebSocket                                                                                     |
 
 ## How it works
 
