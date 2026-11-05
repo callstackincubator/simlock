@@ -83,14 +83,14 @@ A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabil
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iPhone, which takes no tunnels. | Use an Android emulator or phone, or an iOS simulator. |
+| `TUNNEL_UNSUPPORTED` | 1 | 422 | The lease is on an iPhone, which takes no tunnels; or an `emulator adb` tunnel was asked for on a lease that is not on an Android emulator (`emulator adb: the lease is on an Android phone; emulator ports need an Android emulator`, and the same for an iOS simulator or an iPhone). | Use an Android emulator or phone, or an iOS simulator; for `emulator adb`, an Android emulator. |
 | `TUNNEL_PORT_IN_USE` | 1 | 409 | The device port is already taken: by another reverse rule on an Android device, for example one you added with `simlock adb reverse`, or, on an iOS simulator, by any process on the worker that listens on that port, another lease's reverse included. | Remove that rule first, or use another port. |
 | `TUNNEL_BAD_PORT` | 1 | 422 | A device port is an integer outside 1024 to 65535. A port that is not an integer at all is refused `BAD_REQUEST`. | Name a port in that range. |
 | `TUNNEL_LIMIT` | 1 | 409 | The lease would have more than 8 tunnels across its sockets. | Close a tunnel first. |
 | `TUNNEL_FAILED` | 1 | 502 | `adb` could not set the tunnel up, or the worker ran out of ports for tunnels. The message carries adb's own words. | Read the message, then try again. |
 | `TUNNEL_UNAVAILABLE` | 1 | 503 | Through a gateway: the worker that holds the lease has tunnels off. | Turn on `capabilities.tunnel.enabled` on the worker. |
 | `TUNNEL_DISCONNECTED` | 1 | 503 | `simlock tunnel` lost its connection to the worker or gateway. | Open the tunnel again. |
-| `TUNNEL_CALLER_PORT_IN_USE` | 1 | 409 | The caller port a `forward` tunnel listens on is in use on your machine. | Pick another caller port. |
+| `TUNNEL_CALLER_PORT_IN_USE` | 1 | 409 | The caller port a `forward` or `emulator adb` tunnel listens on is in use on your machine. | Pick another caller port. |
 | `TUNNEL_LEASE_ENDED` | 14 | 410 | The lease ended while the tunnel was open. | Take a new lease. |
 
 ## Running commands on a device
