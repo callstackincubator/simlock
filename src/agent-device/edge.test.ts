@@ -778,18 +778,21 @@ describe("the agent-device front, through the whole worker daemon", () => {
     ]);
   });
 
-  it("the allocate the agent-device daemon receives carries neither `osVersion` nor `imageTag`, whether the CLI sent one or both", async () => {
+  it("the allocate the agent-device daemon receives carries none of `osVersion`, `imageTag` or `deviceBaseline`, whether the CLI sent one, two or all", async () => {
     const rig = await setUp({ drivers: (clock) => [taggedAndroidDriver(clock)], maxRunning: 8 });
     const android = { platform: "android" };
 
     await granted(rig, 1, { ...android, osVersion: "34" });
     await granted(rig, 2, { ...android, imageTag: "google_apis_playstore" });
     await granted(rig, 3, { ...android, imageTag: "google_apis_playstore", osVersion: "33" });
+    await saveBaseline(rig, "logged-in", { model: "Pixel 8", platform: "android" });
+    await granted(rig, 4, { ...android, deviceBaseline: "logged-in" });
 
-    for (const n of [1, 2, 3]) {
+    for (const n of [1, 2, 3, 4]) {
       const received = receivedAllocate(rig, n);
       expect(received).not.toHaveProperty("osVersion");
       expect(received).not.toHaveProperty("imageTag");
+      expect(received).not.toHaveProperty("deviceBaseline");
     }
   });
 
@@ -3747,10 +3750,10 @@ describe("the agent-device front's request rules", () => {
       );
     });
 
-    it("a command with `osVersion` or `imageTag` on `flags`, on `input` or inside a batch step reaches agent-device without them, and a command without them reaches it with its flags as sent", async () => {
+    it("a command with `osVersion`, `imageTag` or `deviceBaseline` on `flags`, on `input` or inside a batch step reaches agent-device without them, and a command without them reaches it with its flags as sent", async () => {
       const rig = await setUp();
       await granted(rig, 1);
-      const keys = { imageTag: "default", osVersion: ">=26" };
+      const keys = { deviceBaseline: "logged-in", imageTag: "default", osVersion: ">=26" };
 
       const onFlags = await forwarded(rig, () =>
         runCommand(rig, "snapshot", 1, { flags: { ...keys, platform: "ios" } }),
