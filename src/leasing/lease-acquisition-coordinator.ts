@@ -1017,6 +1017,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       this.#reject(waiter, new NukeCancelledError(), "killed");
       return undefined;
     }
+    if (this.#stopPlanning) return undefined;
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
     if (plan.kind === "grant-ready") {
@@ -1061,7 +1062,6 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return undefined;
     }
 
-    if (this.#stopPlanning) return undefined;
     if (this.#refuseUnderHold(waiter)) return undefined;
     this.#followBaseline(waiter);
     const head = this.options.queue.head;
