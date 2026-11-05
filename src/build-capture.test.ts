@@ -59,14 +59,20 @@ function fakeSwift(repo: string): string {
       "#!/bin/sh",
       "product=''",
       'scratch=""',
+      'archs=""',
+      "count=0",
       'while [ "$#" -gt 0 ]; do',
       '  if [ "$1" = "--product" ]; then shift; product="$1"; fi',
       '  if [ "$1" = "--scratch-path" ]; then shift; scratch="$1"; fi',
+      '  if [ "$1" = "--arch" ]; then shift; archs="$archs $1"; count=$((count + 1)); fi',
       "  shift",
       "done",
       'case ",$SIMLOCK_FAKE_SWIFT_FAIL," in *",$product,"*) exit 1 ;; esac',
-      '/bin/mkdir -p "$scratch/release"',
-      'echo program > "$scratch/release/$product"',
+      // why: SwiftPM writes a build with more than one --arch under apple/Products/Release.
+      'out="$scratch/release"',
+      'if [ "$count" -gt 1 ]; then out="$scratch/apple/Products/Release"; fi',
+      '/bin/mkdir -p "$out"',
+      'echo "program for:$archs" > "$out/$product"',
     ].join("\n"),
   );
   chmodSync(join(bin, "swift"), 0o755);
@@ -114,7 +120,7 @@ describe("scripts/build-capture.mjs", () => {
   });
 
   it.skipIf(process.platform !== "darwin")(
-    "builds each iOS capture program on its own, ships each one that built with serve-sim's NOTICE.md and license, and leaves out what did not build",
+    "builds each iOS capture program on its own, the simulator one universal (arm64 and x86_64) and the device one for the host alone, ships each one that built with serve-sim's NOTICE.md and license, and leaves out what did not build",
     () => {
       const repo = scratchRepo("the real server", sha256("the real server"));
       const run = (path: string, fail = "") =>
@@ -132,8 +138,8 @@ describe("scripts/build-capture.mjs", () => {
       expect(existsSync(shipped)).toBe(false);
 
       run(fakeSwift(repo));
-      expect(existsSync(simulatorProgram)).toBe(true);
-      expect(existsSync(deviceProgram)).toBe(true);
+      expect(readFileSync(simulatorProgram, "utf8")).toBe("program for: arm64 x86_64\n");
+      expect(readFileSync(deviceProgram, "utf8")).toBe("program for:\n");
       expect(readFileSync(join(shipped, "NOTICE.md"), "utf8")).toBe("notice of screen-capture");
       expect(readFileSync(join(shipped, "LICENSES", "serve-sim.APACHE-2.0.txt"), "utf8")).toBe(
         "license of screen-capture",
