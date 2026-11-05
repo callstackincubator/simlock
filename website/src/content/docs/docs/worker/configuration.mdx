@@ -103,6 +103,7 @@ The output includes secrets from the file, such as `gateway.token`. Do not paste
 | Make iOS devices slim by default | `ios.defaultMode` | `full` |
 | Pick which model a class such as `phone` gets | `ios.defaultModels`, `android.defaultModels` | none |
 | Run Android emulators without a window | `android.emulator.headless` | `false` |
+| Watch iOS simulators in a window | `ios.simulator.headless`, with `drivers.ios.deviceSet` | `true` (no window) |
 | Write more or less to the log | `log.level` | `info` |
 
 The sections below show the common changes. Each needs a restart.
@@ -154,6 +155,22 @@ simlock config set android.emulator.headless true
 ```
 
 The emulator then runs without a window, which suits a machine nobody watches. It applies the next time each emulator boots.
+
+### Watch iOS simulators in a window
+
+```sh
+simlock config set drivers.ios.deviceSet default
+simlock config set ios.simulator.headless false
+```
+
+Restart the daemon. Every simulator Simlock makes ready then shows on the Mac: in DeviceHub's main window when DeviceHub is installed, else in its own Simulator.app window. Simlock opens it in the background, so the app you are working in keeps the keyboard focus. A window that cannot be opened is a warning in the daemon log (`Could not open a window for iOS simulator`), never a failed lease.
+
+`ios.simulator.headless: false` needs `drivers.ios.deviceSet: default`, because DeviceHub and Simulator.app show only Xcode's own device set. With Simlock's own set, iOS is turned off and `simlock doctor` shows `invalid-device-set`.
+
+- DeviceHub's main window shows the newest simulator; the others are in its list.
+- If you close the main window, DeviceHub stops following new simulators until you restart it.
+- When Simlock starts DeviceHub or Simulator.app itself, closing a window or quitting the app leaves the simulators running.
+- When you started DeviceHub or Simulator.app yourself, quitting DeviceHub or closing a Simulator.app window shuts simulators down. Simlock reboots them within about a minute, and what ran on them is lost.
 
 ### Capacity, the warm pool, downloads and cleanup
 
