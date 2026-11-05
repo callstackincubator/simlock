@@ -321,6 +321,7 @@ export class IosSimctlDriver implements Driver {
   readonly #slim: SlimOptions | undefined;
   readonly #silent: boolean;
   readonly #headless: boolean;
+  readonly #onWindowFailed: ((fact: WindowFailedFact) => void) | undefined;
   readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
@@ -359,6 +360,7 @@ export class IosSimctlDriver implements Driver {
     this.#slim = options.slim;
     this.#silent = options.simulatorAudio === false;
     this.#headless = options.simulatorHeadless !== false;
+    this.#onWindowFailed = options.onWindowFailed;
     this.#onSilenceFailed = options.onSilenceFailed;
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
@@ -1160,7 +1162,7 @@ export class IosSimctlDriver implements Driver {
       await this.#silence(data.udid, device.deviceId);
     }
     if (this.#headless === false) {
-      await this.#openWindow(data.udid);
+      await this.#openWindow(data.udid, device.deviceId);
     }
 
     if (plan.kind === "skip") {
@@ -1210,28 +1212,58 @@ export class IosSimctlDriver implements Driver {
     }
   }
 
-  async #openWindow(udid: string): Promise<void> {
-    const hub = await this.#invokeCommand(
-      "open",
-      ["-g", "-b", DEVICEHUB_BUNDLE_ID, "--args", "-shutdownStartedDevicesOnQuit", "NO"],
-      COMMAND_TIMEOUT_MS,
-    );
-    const args =
-      hub.kind === "finished" && hub.result.code !== 0
-        ? [
-            "-g",
-            "-b",
-            SIMULATOR_APP_BUNDLE_ID,
-            "--args",
-            "-CurrentDeviceUDID",
-            udid,
-            "-DetachOnWindowClose",
-            "YES",
-            "-DetachOnAppQuit",
-            "YES",
-          ]
-        : ["-g", `devices://manage/select?id=${udid}`];
-    await this.#invokeCommand("open", args, COMMAND_TIMEOUT_MS);
+  async #openWindow(udid: string, deviceId: string): Promise<void> {
+    const hub = await this.#runOpen([
+      "-g",
+      "-b",
+      DEVICEHUB_BUNDLE_ID,
+      "--args",
+      "-shutdownStartedDevicesOnQuit",
+      "NO",
+    ]);
+    // why: a non-zero exit means DeviceHub is not installed; any other failure leaves no window to fill.
+    const hubMissing = hub.kind === "failed" && hub.exitCode;
+    if (hub.kind !== "ok" && !hubMissing) {
+      this.#onWindowFailed?.({ deviceId, detail: hub.detail });
+      return;
+    }
+    const window = hubMissing
+      ? await this.#runOpen([
+          "-g",
+          "-b",
+          SIMULATOR_APP_BUNDLE_ID,
+          "--args",
+          "-CurrentDeviceUDID",
+          udid,
+          "-DetachOnWindowClose",
+          "YES",
+          "-DetachOnAppQuit",
+          "YES",
+        ])
+      : await this.#runOpen(["-g", `devices://manage/select?id=${udid}`]);
+    if (window.kind !== "ok") {
+      // why: the device stays in use; a window is a courtesy to the operator, not a lease condition.
+      this.#onWindowFailed?.({ deviceId, detail: window.detail });
+    }
+  }
+
+  /** why: never throws; `exitCode` tells a refusal of the app from a call that did not finish. */
+  async #runOpen(
+    args: readonly string[],
+  ): Promise<
+    | { readonly kind: "ok" }
+    | { readonly kind: "failed"; readonly detail: string; readonly exitCode: boolean }
+  > {
+    try {
+      const outcome = await this.#invokeCommand("open", args, COMMAND_TIMEOUT_MS);
+      if (outcome.kind === "timed-out")
+        return { kind: "failed", detail: "timed out", exitCode: false };
+      return outcome.result.code === 0
+        ? { kind: "ok" }
+        : { kind: "failed", detail: outcome.result.stderr.trim(), exitCode: true };
+    } catch (error: unknown) {
+      return { kind: "failed", detail: errorMessage(error), exitCode: false };
+    }
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
