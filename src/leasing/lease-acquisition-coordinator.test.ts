@@ -88,7 +88,7 @@ function config(maxDevices = 1, maxRunning = 1): Config {
       defaultMode: "full",
       defaultModels: {},
       slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true },
+      simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},

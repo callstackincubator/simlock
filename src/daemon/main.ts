@@ -63,7 +63,6 @@ import {
 import {
   IOS_PASSTHROUGH_TOOLS,
   IosSimctlDriver,
-  type SilenceFailedFact,
   type SlimmedFact,
   iosDeviceDataTable,
   iosSourceDataOwner,
@@ -146,6 +145,7 @@ import {
   WebSocketUplinkListenerFactory,
 } from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
+import { logSilenceFailure, logWindowFailure } from "./ios-driver-logging.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { optionalModules } from "../module-registry/index.js";
@@ -478,6 +478,7 @@ async function composeDaemon(
           processSupervisor,
           simlockHome: dataDirectory,
           simulatorAudio: config.ios.simulator.audio,
+          simulatorHeadless: config.ios.simulator.headless,
           slim: config.ios.slim,
           slimByDefault: deviceModeWiring(config).slimByDefault,
           androidEmulator: config.android.emulator,
@@ -1323,6 +1324,7 @@ export interface DriverDiscoveryContext {
   };
   readonly slimByDefault?: boolean;
   readonly simulatorAudio?: boolean;
+  readonly simulatorHeadless?: boolean;
   readonly androidEmulator?: AndroidEmulatorLaunchOptions;
 }
 
@@ -1442,6 +1444,7 @@ async function discoverIosDriver(
       instanceId: options.instanceId,
       logger: logger.child("ios"),
       onSilenceFailed: logSilenceFailure(logger),
+      onWindowFailed: logWindowFailure(logger),
       onSlimmed: emitSlimDiagnostic(options.eventBus),
       screenCapture: {
         baseEnvironment: process.env,
@@ -1460,6 +1463,9 @@ async function discoverIosDriver(
       processRunner: options.processRunner,
       simlockHome: options.simlockHome,
       ...(options.simulatorAudio === undefined ? {} : { simulatorAudio: options.simulatorAudio }),
+      ...(options.simulatorHeadless === undefined
+        ? {}
+        : { simulatorHeadless: options.simulatorHeadless }),
       ...(options.slim === undefined ? {} : { slim: options.slim }),
       ...(options.slimByDefault === undefined ? {} : { slimByDefault: options.slimByDefault }),
       // why: Ambient like `homedir()` above, and read here rather than in the driver so the
@@ -1481,15 +1487,6 @@ async function discoverIosDriver(
     });
     return { rejection: rootRejection(error, IOS_PASSTHROUGH_TOOLS) };
   }
-}
-
-export function logSilenceFailure(logger: Logger): (fact: SilenceFailedFact) => void {
-  return (fact) => {
-    logger.warn("Could not silence iOS simulator", {
-      deviceId: fact.deviceId,
-      detail: fact.detail,
-    });
-  };
 }
 
 export function logAndroidDiagnostic(logger: Logger, diagnostic: AndroidDriverDiagnostic): void {

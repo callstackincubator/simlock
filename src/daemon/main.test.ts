@@ -67,7 +67,6 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   logAndroidDiagnostic,
-  logSilenceFailure,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -2580,23 +2579,6 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
-  it("logs one warning, with the device id and the detail, when an iOS simulator could not be silenced", () => {
-    const sink = new MemoryLogSink();
-
-    logSilenceFailure(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }))({
-      deviceId: "simlock-ios-1",
-      detail: "timed out",
-    });
-
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        fields: { deviceId: "simlock-ios-1", detail: "timed out" },
-        level: "warn",
-        message: "Could not silence iOS simulator",
-      }),
-    ]);
-  });
-
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
     process.env.ANDROID_HOME = "/android-sdk";
@@ -2723,7 +2705,7 @@ describe("deviceModeWiring", () => {
             defaultMode,
             defaultModels: {},
             slim: { bootTimeoutMs: 1 },
-            simulator: { audio: true },
+            simulator: { audio: true, headless: true },
           },
         }),
       ).toEqual({

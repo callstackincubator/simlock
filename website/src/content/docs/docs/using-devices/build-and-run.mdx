@@ -67,7 +67,7 @@ An admin switches on the worker:
 
 2. If iOS stays off, run `simlock doctor`. The reason `device-set-changed` means simulators are left from the setting you gave up. Set the key back, run `simlock nuke --delete-devices` and `simlock doctor --purge-orphans`, then switch again. The message names any simulator that remains, with the `xcrun simctl delete` command for it.
 
-`invalid-device-set` means the value is not exactly `simlock` or `default`, or `drivers.ios.deviceRoot` is set together with `default`. Remove one of them.
+`invalid-device-set` means the value is not exactly `simlock` or `default`, or `drivers.ios.deviceRoot` is set together with `default`, or `ios.simulator.headless` is `false` while the set is `simlock`. Remove one of them, or set `drivers.ios.deviceSet` to `default`.
 
 If you set `drivers.ios.deviceRoot`, keep it set while you run the two cleanup commands, and remove it only when you switch to `default`. The leftover check reads only the default root, `~/.simlock/devices/ios`, so a custom root's simulators are named by these steps, not by the check.
 

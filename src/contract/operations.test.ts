@@ -1333,7 +1333,7 @@ describe("operation input/output round trips", () => {
         defaultMode: "full",
         defaultModels: {},
         slim: { bootTimeoutMs: 1 },
-        simulator: { audio: false },
+        simulator: { audio: false, headless: false },
       },
       android: {
         defaultModels: {},
@@ -1341,7 +1341,10 @@ describe("operation input/output round trips", () => {
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({ audio: false });
+    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({
+      audio: false,
+      headless: false,
+    });
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1404,7 +1407,7 @@ describe("operation input/output round trips", () => {
         defaultMode: "full",
         defaultModels: {},
         slim: { bootTimeoutMs: 1 },
-        simulator: { audio: true },
+        simulator: { audio: true, headless: true },
       },
       android: {
         defaultModels: {},

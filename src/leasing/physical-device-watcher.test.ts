@@ -70,7 +70,7 @@ function config(options: HarnessOptions): Config {
       defaultMode: "full",
       defaultModels: {},
       slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true },
+      simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},

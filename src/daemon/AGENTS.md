@@ -26,6 +26,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `error-code.ts`         | `classifyError`: thrown error → contract code                                                                                                                                                                                                        |
 | `enrollment-wake.ts`    | `wakingQueueAfter`: wakes the queue after `device.add`/`device.remove`                                                                                                                                                                               |
 | `lease-inputs.ts`       | `createLeaseInputs`: the per-lease device input shared by the input module's sockets and `device.rotate`, closed by its last release, failure or the lease's end; `rotation-refusal.ts`: `rotationRefusal`, `device.rotate`'s `ROTATION_UNSUPPORTED` |
+| `ios-driver-logging.ts` | `logSilenceFailure`, `logWindowFailure`: the iOS driver's silence and window failures as `warn` lines                                                                                                                                                |
 | `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                                                                                                                       |
 | `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                                                                                                                                     |
 
@@ -35,8 +36,7 @@ Both modes: the data directory (`prepareDataDirectory`: created `0700` when miss
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
-  `discoverDrivers` (validates each root; a refused root costs that platform only) →
-  `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
+  `discoverDrivers` (validates each root; a refused root costs that platform only) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
   HTTP starts only when `http.enabled` (default on for a standalone worker, off for a joined one).
@@ -60,7 +60,7 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
 3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 74, max: 74 }` (`src/contract/protocol.ts`). No overlap → the
+   is `{ min: 75, max: 75 }` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.
