@@ -53,6 +53,7 @@ interface Plan {
   readonly class?: "phone" | "tv" | "desktop";
   readonly imageTag?: string;
   readonly osVersion?: string;
+  readonly mode?: "slim" | "full";
   readonly physical?: true;
   readonly ttlMs?: number;
 }
@@ -120,6 +121,7 @@ function stringFields(fields: ReturnType<typeof leaseCallFields>) {
   return {
     ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
     ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
+    ...(present(fields.deviceMode) ? { mode: fields.deviceMode as "slim" | "full" } : {}),
   };
 }
 
@@ -277,6 +279,7 @@ function forwardedBody(
     device: _device,
     deviceBaseline: _deviceBaseline,
     deviceKey: _deviceKey,
+    deviceMode: _deviceMode,
     imageTag: _imageTag,
     osVersion: _osVersion,
     physical: _physical,

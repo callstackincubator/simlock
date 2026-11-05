@@ -93,10 +93,10 @@ under leasing's signal (`lease.endWaitMs`).
 1. CLI `open` → `POST /v1/agent-device/rpc` `agent_device.lease.allocate` with its lease id.
 2. Front refuses a non-plain lease, no `--platform`, a bad `ttlMs`, no lease id, a `physical` that is not a boolean, a `deviceBaseline` that is not text, or a `--target` it does not map.
 3. `lease.request`: `leaseId` = `requesterId` = the CLI's lease id; `--device` → model,
-   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `deviceBaseline` → `baseline` (and then no class from `--target`), `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
+   `--target` → class, `--os` → `osVersion`, `--image-tag` → `imageTag`, `deviceBaseline` → `baseline` (and then no class from `--target`), `deviceMode` → `mode`, `physical: true` → `physical: true` (Simlock picks an enrolled phone); TTL = sent, capped by `capabilities.agent-device.leaseTtlCapMs`, at least 5 s;
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
-   `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceBaseline`/`physical` (commands lose `osVersion`, `imageTag` and `deviceBaseline` too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
+   `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceBaseline`/`deviceMode`/`physical` (commands lose `osVersion`, `imageTag`, `deviceBaseline` and `deviceMode` too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
 5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag?, baseline? { name, version } }` added from the grant.
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → the device is deleted; lease-end finds no scope left.

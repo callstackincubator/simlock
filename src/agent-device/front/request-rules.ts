@@ -133,11 +133,11 @@ function checkTypes(unit: Unit): void {
   }
 }
 
-// why: the daemon behind the front does not know these three keys, so a request that is not the flat allocate form must not carry them; the flat allocate is exempt because simlock reads them from it.
+// why: the daemon behind the front does not know these keys, so a request that is not the flat allocate form must not carry them; the flat allocate is exempt because simlock reads them from it.
 function ruleLeaseKeys(check: Check, unit: Unit): void {
   if (isFlat(unit)) return;
   for (const place of places(unit)) {
-    for (const key of ["osVersion", "imageTag", "deviceBaseline"]) {
+    for (const key of ["osVersion", "imageTag", "deviceBaseline", "deviceMode"]) {
       if (!(key in place)) continue;
       delete place[key];
       check.changed = true;

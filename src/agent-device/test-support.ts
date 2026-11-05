@@ -91,8 +91,9 @@ export interface Rig {
   readonly restart: (between?: () => void) => Promise<Rig>;
 }
 
-export function iosDriver(clock: FakeClock): FakeDriver {
+export function iosDriver(clock: FakeClock, slimmableOsVersions?: readonly string[]): FakeDriver {
   return new FakeDriver({
+    ...(slimmableOsVersions === undefined ? {} : { slimmableOsVersions }),
     availableOsVersions: ["26.5"],
     clock,
     defaultModels: { desktop: ["Mac"], phone: ["iPhone 16"], tv: ["Apple TV 4K"] },
