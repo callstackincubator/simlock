@@ -80,6 +80,7 @@ import {
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
 import { memorySourceDatabase } from "../drivers/ios/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -2584,6 +2585,121 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
+  it("a worker's discovered drivers boot within the deadlines of its config: ios.full.bootTimeoutMs, android.bootTimeoutMs", async () => {
+    // why: a hand-off dropped in `discoverDrivers` leaves the driver on its 300 s default, so each case configures another value and watches the boot end exactly there.
+    const bootIos = async (clock: FakeClock): Promise<readonly [Promise<unknown>]> => {
+      const filesystem = new MemoryFilesystem();
+      const udid = "00000000-0000-0000-0000-000000000001";
+      const simctl = (...args: string[]) => ["simctl", "--set", IOS_ROOT, ...args];
+      const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctl("boot", udid) } },
+        { hangs: true, match: { command: "xcrun", args: simctl("bootstatus", udid, "-b") } },
+        { match: { command: "xcrun", args: simctl("shutdown", udid) } },
+      ]);
+      const { drivers } = await discoverIos({
+        clock,
+        filesystem,
+        iosFullBootTimeoutMs: 400_000,
+        processRunner: runner,
+      });
+      const driver = drivers.find((candidate) => candidate.platform === "ios");
+      await filesystem.mkdirp(join(IOS_ROOT, udid, "data"));
+      const ready = driver!.makeReady(
+        {
+          address: udid,
+          deviceId: udid,
+          physical: false,
+          driverData: {
+            deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+            name: "simlock-device-1",
+            runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            udid,
+          },
+        },
+        { mode: "full", purpose: "recover" },
+      );
+      for (let turn = 0; turn < 50 && runner.calls.length < 2; turn += 1) await Promise.resolve();
+      return [ready];
+    };
+    const bootAndroid = async (clock: FakeClock): Promise<readonly [Promise<unknown>]> => {
+      const filesystem = await androidSdk();
+      await filesystem.mkdirp(SIMLOCK_HOME);
+      await filesystem.writeFileAtomic(
+        join(SIMLOCK_HOME, "adb-server.json"),
+        JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+      );
+      const runner = new ScriptedProcessRunner([]);
+      // why: the emulator never finishes booting and never exits, so only the deadline ends the boot.
+      vi.spyOn(runner, "spawn").mockImplementation((command, args, options) =>
+        new ScriptedProcessRunner([{ hangs: true, match: { command, args } }]).spawn(
+          command,
+          args,
+          options,
+        ),
+      );
+      vi.spyOn(runner, "run").mockImplementation((_command, args) =>
+        Promise.resolve({
+          code: 0,
+          stderr: "",
+          stdout: args.at(-1) === "sys.boot_completed" ? "0\n" : "",
+        }),
+      );
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        androidBootTimeoutMs: 600_000,
+        clock,
+        processRunner: runner,
+      });
+      const driver = drivers.find((candidate) => candidate.platform === "android");
+      const avdHome = join(SIMLOCK_HOME, "devices", "android", "device-1");
+      await filesystem.mkdirp(join(avdHome, "simlock.avd"));
+      const ready = driver!.makeReady(
+        {
+          address: "emulator-5586",
+          deviceId: "device-1",
+          physical: false,
+          driverData: {
+            avdHome,
+            avdName: "simlock",
+            configHash: "hash",
+            port: 5586,
+            serial: "emulator-5586",
+          },
+        },
+        { mode: "full", purpose: "recover" },
+      );
+      return [ready];
+    };
+
+    for (const { configuredMs, boot, stepMs } of [
+      { configuredMs: 400_000, boot: bootIos, stepMs: 400_000 },
+      { configuredMs: 600_000, boot: bootAndroid, stepMs: 1_000 },
+    ]) {
+      const clock = new FakeClock();
+      const [ready] = await boot(clock);
+      const state = promiseState(ready);
+      const failed = ready.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      // why: Android arms each poll's delay only after the previous one fired, so its clock moves in steps; iOS's deadline is one timer.
+      for (let elapsed = 0; elapsed < configuredMs - 1; elapsed += stepMs) {
+        expect(state.state, `still booting at ${String(elapsed)} ms`).toBe("pending");
+        if (stepMs < configuredMs) {
+          await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
+        }
+        clock.advance(Math.min(stepMs, configuredMs - 1 - elapsed));
+        for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      }
+      expect(state.state, `still booting at ${String(configuredMs - 1)} ms`).toBe("pending");
+
+      if (stepMs < configuredMs) {
+        await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
+      }
+      clock.advance(1);
+      await expect(failed).resolves.toMatchObject({ name: "BootTimeoutError" });
+    }
+  });
+
   async function androidSdk(): Promise<MemoryFilesystem> {
     const filesystem = new MemoryFilesystem();
     process.env.ANDROID_HOME = "/android-sdk";
@@ -2604,7 +2720,15 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
+      Pick<
+        DriverDiscoveryContext,
+        | "androidBootTimeoutMs"
+        | "androidEmulator"
+        | "clock"
+        | "hostArch"
+        | "logger"
+        | "processRunner"
+      >
     > = {},
   ) {
     return discoverDrivers({
@@ -2672,15 +2796,21 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
 
 async function discoverIos(
   overrides: {
+    readonly clock?: FakeClock;
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
     readonly idGenerator?: IdGenerator;
+    readonly iosFullBootTimeoutMs?: number;
+    readonly processRunner?: ScriptedProcessRunner;
     readonly sink?: MemoryLogSink;
   } = {},
 ) {
   return discoverDrivers({
     database: await memorySourceDatabase(),
-    clock: new FakeClock(),
+    clock: overrides.clock ?? new FakeClock(),
+    ...(overrides.iosFullBootTimeoutMs === undefined
+      ? {}
+      : { iosFullBootTimeoutMs: overrides.iosFullBootTimeoutMs }),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
@@ -2693,7 +2823,7 @@ async function discoverIos(
       level: "debug",
       sink: overrides.sink ?? new MemoryLogSink(),
     }),
-    processRunner: new ScriptedProcessRunner([]),
+    processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
     processSupervisor: new FakeProcessSupervisor(),
     simlockHome: SIMLOCK_HOME,
     tcpProbe: new FakeTcpProbe(),
