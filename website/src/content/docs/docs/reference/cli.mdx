@@ -124,7 +124,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 
 Without `--detach`, the command renews the lease every third of its TTL and releases it on `SIGINT`, `SIGTERM`, or when the watched process exits. It exits:
 
-- 0 after it released the lease on request.
+- 0 after it released the lease on request. The same signal or exit while the request still waits in the queue cancels the request and exits 0, with nothing printed on stdout.
 - 14 when the daemon ended the lease first (TTL expiry, an operator's `release`, or a device that could not be recovered). A `lease-lost` line on stderr says why.
 - 1 with `DAEMON_CONNECTION_LOST` when the connection to the daemon dropped. The lease is not released and stays yours until its deadline; the stderr line names it.
 
@@ -171,7 +171,7 @@ simlock simctl [--lease <lease-id>] [--stdin] <simctl-args...>
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the simctl arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
-| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command. Must come before the simctl arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
+| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the simctl arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<simctl-args...>` | Passed to `xcrun simctl` as written. | — |
 
 Every other argument goes to `simctl`, including `--help`. On a worker the command runs on this machine with your terminal. Through a gateway it runs on the worker that holds the lease, its output is streamed back. Stdin is sent only with `--stdin`; without it the command gets empty input and a pipe that never closes does not hold it up. The command exits with `simctl`'s own exit code; a Simlock failure also writes a `{"error":...}` line to stderr. Through a gateway the worker puts the lease's UDID into a command that leaves the device out, so write `simlock --gateway simctl install ./MyApp.app`. Simlock refuses `create`, `erase`, `delete`, `shutdown all`, `runtime delete`, a caller-supplied `--set` or `--profiles`, and (through a gateway) a command that names another device such as `booted`, with `PASSTHROUGH_REFUSED` (exit 2). Use `simlock release` and `simlock cleanup` to give devices back.
@@ -187,7 +187,7 @@ simlock adb [--lease <lease-id>] [--stdin] <adb-args...>
 | Flag | Meaning | Default |
 | --- | --- | --- |
 | `--lease <lease-id>` | Through a gateway: the lease whose device the command runs against. Must come before the adb arguments. On a worker it is accepted and ignored. | Through a gateway: your only lease |
-| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command. Must come before the adb arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
+| `--stdin` | Through a gateway: read stdin to its end (Ctrl-D at a terminal) and send it to the command, at most 8,388,608 characters; more is refused with `BAD_REQUEST`. Must come before the adb arguments, in either order with `--lease`. On a worker it is accepted and ignored. | Off: the command gets empty input and stdin is never read |
 | `<adb-args...>` | Passed to `adb` as written. | — |
 
 The command exits with `adb`'s own exit code. Through a gateway, stdin is sent only with `--stdin`; without it the command gets empty input. Simlock refuses `adb kill-server`, `adb disconnect`, flags that move adb to a different server, and (through a gateway) `adb shell` with no command, with `PASSTHROUGH_REFUSED` (exit 2). `-s`, `-t`, `-d` and `-e` are allowed before the subcommand. Through a gateway the worker adds `-s <serial>` for an emulator, and refuses `-s` with another serial, `-e`, `-d` and `-t`.
@@ -403,7 +403,7 @@ simlock daemon uninstall [--json]
 | Subcommand | What it does |
 | --- | --- |
 | `start` | Start the daemon if it is not running, wait until it has finished starting (up to 90 seconds), and print `Daemon running` with the console address. A start that fails (for example, the HTTP port is taken) exits 1 with `DAEMON_STARTUP_FAILED` and the daemon's own error; a daemon still starting after the wait is left running and reported as such. `simlock --gateway daemon start` creates the gateway on first run. |
-| `stop` | Ask the daemon to stop and print `Daemon stopping`. Before it exits the daemon shuts down every idle device it booted; leased devices keep running. Needs the admin role. Never starts a daemon. |
+| `stop` | Ask the daemon to stop, wait until it has exited (up to 300 s, then `SERVICE_FAILED`) and print `Daemon stopping`. With no daemon running it prints `Daemon not running` and exits 0. Before it exits the daemon shuts down every idle device it booted; leased devices keep running. Needs the admin role. Never starts a daemon. |
 | `status` | Print the daemon's status, or `Daemon stopped` when none is running, then on macOS and Linux one `Service:` line: `not installed`, `installed (launchd, <name>)`, `not loaded (launchd, <name>): commands start the daemon without it` or `broken (launchd, <name>): <path> is gone; run simlock daemon install` (`<path>, <path> are gone` for two). Never starts a daemon. Exits 1 when a daemon answers but refuses the connection, with no `Service:` line. |
 | `logs` | Print the last 100 lines of `daemon.log`. |
 | `install` | macOS and Linux only. Stop a running daemon (leases are kept), add a LaunchAgent (macOS) or a systemd user unit at `$XDG_CONFIG_HOME/systemd/user/<name>.service`, else `~/.config/systemd/user/<name>.service` (Linux) for this role and start the daemon through it. Prints `Service installed: <name> (launchd)` or `(systemd)`, `Daemon running` and a hint: `To start after a reboot, turn on automatic login for this user.` on macOS, `To start after a reboot without logging in, run: loginctl enable-linger <user>` on Linux. Without linger the last logout stops the user's systemd, the daemon and its emulators with it. On another platform it is a usage error: `daemon install is supported on macOS and Linux only`. |
@@ -411,7 +411,7 @@ simlock daemon uninstall [--json]
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--json` | Print one JSON line in place of the text. `start` prints `{"status":"running"}`, `stop` prints `{"status":"stopping"}`, `status` prints the status or `{"status":"stopped"}`, each plus the `service` object on macOS, `logs` prints `{"logs":"..."}`, `install` prints `{"status":"installed","stopped":true,"service":{...}}` (`stopped` only when a daemon was running), `uninstall` prints `{"status":"removed"}` or `{"status":"not-installed"}` plus the same `service` object. | Off |
+| `--json` | Print one JSON line in place of the text. `start` prints `{"status":"running"}`, `stop` prints `{"status":"stopping"}` or `{"status":"not-running"}`, `status` prints the status or `{"status":"stopped"}`, each plus the `service` object on macOS, `logs` prints `{"logs":"..."}`, `install` prints `{"status":"installed","stopped":true,"service":{...}}` (`stopped` only when a daemon was running), `uninstall` prints `{"status":"removed"}` or `{"status":"not-installed"}` plus the same `service` object. | Off |
 | `--follow` | `logs` only: keep printing new lines, across log rotations, until Ctrl-C. Cannot be combined with `--json`. | Off |
 
 ## simlock config

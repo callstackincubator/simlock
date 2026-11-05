@@ -31,7 +31,7 @@ simlock daemon stop
 simlock daemon start
 ```
 
-If `daemon start` fails with `DAEMON_STOPPING`, the old daemon is still finishing work in progress, such as a device reset. Wait a few seconds and run it again.
+`daemon stop` waits until the old daemon has exited, so `daemon start` right after it starts a new one.
 
 ## Stop the daemon
 
@@ -45,7 +45,7 @@ Daemon stopping
 
 Stopping the daemon does not end leases. It shuts down every device that has no lease, and leaves leased devices running; the next daemon picks them up (see [What a restart keeps](#what-a-restart-keeps)).
 
-The command returns at once, but the daemon may take a while to finish the work it has started. Commands sent in the meantime fail with `DAEMON_STOPPING`.
+The command returns once the daemon has exited. That can take a while, because the daemon first finishes the work it has started and shuts down idle devices. It gives up with `SERVICE_FAILED` after 300 seconds. Commands sent in the meantime fail with `DAEMON_STOPPING`.
 
 ## Start it at login
 

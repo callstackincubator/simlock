@@ -9,7 +9,7 @@ holds its own steps. This page links to them rather than restating them.
 
 GitHub Issues is the spec and the queue. Every issue carries exactly one
 `<kind>:<state>` label, and agents act only on `bug:new` (to triage it,
-nothing more), `bug:ready` and `task:ready`. The body is the spec; a
+and to fix it when the fast track passes it), `bug:ready` and `task:ready`. The body is the spec; a
 comment changes nothing until a spec session folds it in. A reporter's
 issue is never rewritten. After `ready`, state is read from GitHub itself
 (assignee, linked PR, closed).
@@ -18,7 +18,7 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 | Label             | Meaning                                                  |
 | ----------------- | -------------------------------------------------------- |
 | `request:new`     | Inbox. Never picked up, body never edited.               |
-| `bug:new`         | An agent may triage it, and nothing more.                |
+| `bug:new`         | An agent may triage it; the fast track may set it ready. |
 | `bug:needs-info`  | Could not reproduce. Waiting on the reporter.            |
 | `bug:ready`       | An agent may fix it.                                     |
 | `bug:blocked`     | Waiting on the maintainer to clear a blocker.            |
@@ -34,13 +34,28 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 1. A bug arrives as `bug:new`, and an agent may triage it from there.
 2. `triage-bug` (or `deliver` on a `bug:new` issue) reproduces it as a
    failing test on `bug/<n>-repro` and posts one report comment (delivery
-   rule 8). The label stays `bug:new`. If it cannot reproduce, it moves the
-   issue to `bug:needs-info`.
-3. You read the report. Agree: add `bug:ready`, which also accepts the
-   shape the report proposes for a gap. Disagree: reply and run
-   `triage-bug` again; the new report supersedes the old one.
-4. `deliver` builds the fix on `bug/<n>` from the repro branch, reviews it
-   and merges it. The triage test becomes the regression test.
+   rule 8). If it cannot reproduce, it moves the issue to `bug:needs-info`.
+3. **Fast track** (delivery rule 17), only under `deliver`: the report
+   ends with five yes/no facts (a defect, the fix was tried, nothing
+   public added or broken, no ADR or rule changed, one fix). All `yes`:
+   `fast-track.mjs` sets `bug:ready` and `fast-track`, and the same run
+   goes on to step 5. `deliver #<n> no-fast-track` skips this.
+4. Otherwise the label stays `bug:new` and you read the report. Agree: add
+   `bug:ready`, which also accepts the shape the report proposes for a
+   gap. Disagree: reply and run `triage-bug` again; the new report
+   supersedes the old one.
+5. `deliver` builds the fix on `bug/<n>` from the repro branch, reviews it
+   and merges it. The triage test becomes the regression test. The gate
+   holds a fast-tracked fix that grew past 250 lines or 8 files, touches
+   a surface file (delivery rule 17 lists them), the protocol version or
+   an ADR, or needed a
+   `## Decision taken`: the PR stays open and ready with the reason in
+   its handoff. Merge it yourself, or remove `fast-track` from the issue,
+   re-add `bug:ready` and run `deliver` again.
+
+`gh issue list --label fast-track --state all` lists every bug that took
+the fast track. The limits are `MAX_LINES`, `MAX_FILES` and `HOLD_PATHS`
+at the top of `.agents/scripts/fast-track.mjs`.
 
 ## A feature
 
@@ -126,8 +141,8 @@ What any change includes without its spec asking is listed once, in
 - a closed PR, or a claim silent for three days, releases the claim;
 - a PR from `<kind>/<n>` must close `#<n>` and nothing else.
 
-One transition stays manual on purpose, one click: `bug:new` →
-`bug:ready`, after you read the triage report. Flipping a closed feature's
+One transition stays manual, one click: `bug:new` → `bug:ready`, after
+you read the triage report of a bug the fast track did not pass. Flipping a closed feature's
 ADRs to _Accepted_ (delivery rule 10) is yours too, unless delivery did it.
 
 ## Watching the pipeline
@@ -185,7 +200,7 @@ templates and the issue-state workflow and labels hold no fact about this
 project. To move them, copy those, then write the new project's
 `toolchain.md`, `always-in-scope.md` and its own rules, rewrite
 `worktree.sh` and `ensure-pnpm.sh` for its package manager, and change
-`tool-guard.mjs`'s list of checks.
+`tool-guard.mjs`'s list of checks and `fast-track.mjs`'s `HOLD_PATHS`.
 
 ## Where things live
 

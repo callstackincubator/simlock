@@ -221,6 +221,7 @@ describe("DaemonServer", () => {
     [47, "cannot read config.get's http.proxyAuth"],
     [48, "cannot read config.get's gateway.alerts"],
     [51, "cannot page events.replay with beforeId or limit"],
+    [75, "cannot read config.get's drivers"],
   ])(
     "answers PROTOCOL_VERSION_UNSUPPORTED, naming the daemon's protocol range, to a client on protocol %i, which %s",
     async (version) => {
@@ -1826,6 +1827,60 @@ describe("DaemonServer failed start", () => {
   });
 });
 
+describe("DaemonServer failed start release", () => {
+  it("closes a connection opened after the connections were closed, while the endpoint release still holds", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "simlock-daemon-"));
+    temporaryDirectories.push(directory);
+    const socketPath = join(directory, "daemon.sock");
+    const real = new DaemonEndpointHost({
+      connector: new NodeIpcTransport(),
+      endpoint: socketPath,
+      filesystem: new NodeFilesystem(),
+      listenerFactory: new NodeIpcTransport(),
+    });
+    const releasing = deferred<void>();
+    let releaseBegun = false;
+    const harness = await createHarness({
+      adminSecret: {
+        persist: async () => {
+          throw new Error("disk is read-only");
+        },
+        remove: async () => undefined,
+      },
+      host: {
+        endpoint: socketPath,
+        start: (accept) => real.start(accept),
+        stop: async () => {
+          releaseBegun = true;
+          await releasing.promise;
+          await real.stop();
+        },
+      },
+      socketPath,
+      start: false,
+    });
+    const starting = harness.daemon.start().then(
+      () => "started",
+      (error: unknown) => (error as Error).message,
+    );
+    await expect.poll(() => releaseBegun).toBe(true);
+
+    const late = await createClient(socketPath);
+    const closed = new Promise<"closed">((resolve) =>
+      late.socket.once("close", () => resolve("closed")),
+    );
+    const outcome = await Promise.race([closed, relaySupport.sleep(1_000).then(() => "hung")]);
+    // why: a leaked connection would hang the release, so the assertion comes first and the cleanup forces the socket down.
+    try {
+      expect(outcome).toBe("closed");
+    } finally {
+      late.socket.destroy();
+      releasing.resolve();
+    }
+    expect(await starting).toBe("disk is read-only");
+  });
+});
+
 async function createClientRetrying(socketPath: string, timeoutMs = 2_000): Promise<Client> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -2763,6 +2818,71 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
       await expect
         .poll(() => harness.eventBus.replay().map((event) => event.event))
         .toContain("daemon.stopping");
+    });
+
+    it("answers a connection opened while the daemon is stopping: status.get with DAEMON_STOPPING, daemon.stop with stopping true", async () => {
+      let finishSettle!: () => void;
+      const settling = new Promise<void>((resolve) => {
+        finishSettle = resolve;
+      });
+      const harness = await createHarness({
+        resolveRole: { resolve: () => "admin" },
+        settle: () => settling,
+      });
+      const stopping = harness.daemon.stop("test-stop-window");
+      await expect
+        .poll(() => harness.eventBus.replay().map((event) => event.event))
+        .toContain("daemon.stopping");
+
+      const late = await createClient(harness.socketPath);
+      const closed = new Promise<"connection closed">((resolve) =>
+        late.socket.once("close", () => resolve("connection closed")),
+      );
+      const ask = (type: string, payload: unknown) =>
+        Promise.race([late.request(type, payload), closed]);
+      const replies = [
+        await ask("hello", { clientVersion: "test", protocolVersion: DAEMON_PROTOCOL_VERSION }),
+        await ask("status.get", {}),
+        await ask("daemon.stop", {}),
+      ];
+      finishSettle();
+      await stopping;
+
+      expect(replies).toMatchObject([
+        { ok: true },
+        { error: { code: "DAEMON_STOPPING" }, ok: false },
+        { ok: true, payload: { stopping: true } },
+      ]);
+    });
+
+    it("closes a connection opened after the connections were closed, while the admin.token removal still holds the stop", async () => {
+      const removing = deferred<void>();
+      let removalBegun = false;
+      const harness = await createHarness({
+        adminSecret: {
+          persist: async () => undefined,
+          remove: () => {
+            removalBegun = true;
+            return removing.promise;
+          },
+        },
+      });
+      const stopping = harness.daemon.stop("test-late-connection");
+      await expect.poll(() => removalBegun).toBe(true);
+
+      const late = await createClient(harness.socketPath);
+      const closed = new Promise<"closed">((resolve) =>
+        late.socket.once("close", () => resolve("closed")),
+      );
+      const outcome = await Promise.race([closed, relaySupport.sleep(1_000).then(() => "hung")]);
+      // why: a leaked connection would hang the stop, so the assertion comes first and the cleanup forces the socket down.
+      try {
+        expect(outcome).toBe("closed");
+      } finally {
+        late.socket.destroy();
+        removing.resolve();
+        await stopping;
+      }
     });
 
     it("still refuses daemon.stop with FORBIDDEN on a version-mismatched connection whose role is agent", async () => {

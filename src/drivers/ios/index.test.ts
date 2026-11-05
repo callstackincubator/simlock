@@ -1375,9 +1375,25 @@ describe("IosSimctlDriver", () => {
   });
 
   it.each([
-    { name: "deletes its simulator in the sources set and its row", deleteCode: 0, rows: 0 },
-    { name: "keeps the row and throws when the delete fails", deleteCode: 1, rows: 1 },
-  ])("destroySource $name", async ({ deleteCode, rows }) => {
+    {
+      name: "deletes its simulator in the sources set and its row",
+      deleteCode: 0,
+      stderr: "",
+      rows: 0,
+    },
+    {
+      name: "keeps the row and throws when the delete fails",
+      deleteCode: 1,
+      stderr: "busy",
+      rows: 1,
+    },
+    {
+      name: "drops the row of a seed simctl no longer knows (Invalid device)",
+      deleteCode: 148,
+      stderr: `Invalid device: ${seedUdid}\n`,
+      rows: 0,
+    },
+  ])("destroySource $name", async ({ deleteCode, stderr, rows }) => {
     const database = plantSource(await memorySourceDatabase(), {
       deviceTypeId: driverData.deviceTypeId,
       runtimeId: driverData.runtimeId,
@@ -1388,7 +1404,7 @@ describe("IosSimctlDriver", () => {
       { match: sourcesSimctl("shutdown", seedUdid) },
       {
         match: sourcesSimctl("delete", seedUdid),
-        result: { code: deleteCode, stderr: "busy", stdout: "" },
+        result: { code: deleteCode, stderr, stdout: "" },
       },
     ]);
     const driver = await createDriver(runner, new FakeClock(), undefined, database);
@@ -1396,7 +1412,7 @@ describe("IosSimctlDriver", () => {
 
     const destroyed = driver.destroySource(listed?.id ?? "");
 
-    if (deleteCode === 0) await expect(destroyed).resolves.toBeUndefined();
+    if (rows === 0) await expect(destroyed).resolves.toBeUndefined();
     else await expect(destroyed).rejects.toBeInstanceOf(DriverCrashError);
     expect(runner.calls.map((call) => call.args[3])).toEqual(["list", "shutdown", "delete"]);
     expect(database.prepare("SELECT COUNT(*) AS n FROM ios_source_data").get()).toEqual({
@@ -5363,7 +5379,7 @@ describe("IosSimctlDriver device set", () => {
           await fs.mkdirp(`${ownRoot}-sources/${second}`);
         },
         {
-          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`.`,
+          message: `Refusing the ios device set: Simlock's sources set at ${ownRoot}-sources still holds 1 simulator(s) (${second}). Set drivers.ios.deviceSet back to default, run \`simlock nuke --delete-devices\` and \`simlock doctor --purge-orphans\`, then switch again. Delete any that remain with \`xcrun simctl --set ${ownRoot}-sources delete <udid>\`. Run \`simlock nuke --delete-devices\` again afterwards, so Simlock drops its record of them.`,
           path: `${ownRoot}-sources`,
           reason: "device-set-changed",
         },

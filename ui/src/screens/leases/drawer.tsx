@@ -140,6 +140,9 @@ function DeviceCard({ lease }: { readonly lease: LeaseInspection }) {
           { label: "Model", value: lease.model },
           { label: "Runtime", value: lease.runtime ?? "—" },
           { label: "Mode", value: device.mode ?? "—" },
+          ...(device.baseline === undefined
+            ? []
+            : [{ label: "Baseline", value: <span className="mono">{device.baseline}</span> }]),
           { label: "Image tag", value: <span className="mono">{device.imageTag ?? "—"}</span> },
           { label: "Kind", value: device.kind ?? "—" },
           { label: "Worker", value: worker === undefined ? "—" : <WorkerName worker={worker} /> },
