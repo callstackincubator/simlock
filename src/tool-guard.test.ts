@@ -295,6 +295,11 @@ describe("tool-guard.mjs", () => {
 
     expect(bash(command, "a1", "bug-triager").stderr).toContain("you never run it yourself");
     expect(bash(`${command} --pr 9`, "a1", "implementer").status).toBe(2);
+    expect(
+      bash("env GH_REPO=o/r .agents/scripts/fast-track.mjs 5", "a1", "implementer").status,
+    ).toBe(2);
+    expect(bash("git add .agents/scripts/fast-track.mjs", "a1", "implementer")).toEqual(OK);
+    expect(bash("cat .agents/scripts/fast-track.mjs", "a1", "bug-triager")).toEqual(OK);
     expect(bash(command, "a1", "general-purpose")).toEqual(OK);
     expect(bash(command, null)).toEqual(OK);
   });

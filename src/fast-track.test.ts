@@ -19,7 +19,7 @@ interface World {
   readonly state?: string;
   readonly labels?: readonly string[];
   readonly assignees?: readonly string[];
-  readonly comments?: readonly string[];
+  readonly comments?: readonly (string | { body: string; by: string })[];
   readonly repro?: boolean;
   readonly pull?: { additions: number; deletions: number; changed_files: number };
   readonly files?: readonly string[];
@@ -39,7 +39,7 @@ const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); }
 const missing = () => { process.stderr.write("gh: Not Found (HTTP 404)\n"); process.exit(1); };
 const page = (items) => (args.includes("page=1") ? items : []);
 if (method === "GET" && at === "issues/5") out({ state: world.state, labels: world.labels.map((name) => ({ name })), assignees: world.assignees.map((login) => ({ login })) });
-if (method === "GET" && at === "issues/5/comments") out(page(world.comments.map((body) => ({ body }))));
+if (method === "GET" && at === "issues/5/comments") out(page(world.comments.map((c) => (typeof c === "string" ? { body: c, author_association: "MEMBER" } : { body: c.body, author_association: c.by }))));
 if (method === "GET" && at === "branches/bug/5-repro") world.repro ? out({ name: "bug/5-repro" }) : missing();
 if (method === "GET" && at === "pulls/9") out(world.pull);
 if (method === "GET" && at === "pulls/9/files") out(page(world.files.map((filename) => ({ filename }))));
@@ -110,9 +110,10 @@ describe("fast-track.mjs entry check", { timeout: 30_000 }, () => {
     expect(result.calls).toBe("POST labels[]=bug:ready labels[]=fast-track\nDELETE \n");
   });
 
-  it("reads the newest report, and passes agent comments that follow it", () => {
+  it("reads the newest report, and passes a person's comments before it and an agent's after it", () => {
     const result = fastTrack({
       comments: [
+        "It also happens on Android.",
         report({ Defect: "no — a gap" }),
         `Supersedes the report above.\n\n${report()}`,
         `Opened #6 for the stale doc.\n\n${FOOTER}`,
@@ -140,6 +141,16 @@ describe("fast-track.mjs entry check", { timeout: 30_000 }, () => {
     [
       "a person's reply after the report",
       { comments: [report(), "Not sure about the fix."] },
+      "a person commented after the report",
+    ],
+    [
+      "a report from an account that cannot write to the repo",
+      { comments: [report({ Defect: "no — a gap" }), { body: report(), by: "NONE" }] },
+      "not from an account that can write to the repo",
+    ],
+    [
+      "a comment with the agent footer from an account that cannot write to the repo",
+      { comments: [report(), { body: `Looks right.\n\n${FOOTER}`, by: "CONTRIBUTOR" }] },
       "a person commented after the report",
     ],
     ["a missing reproduction branch", { repro: false }, "bug/5-repro does not exist"],
@@ -185,8 +196,8 @@ describe("fast-track.mjs exit check", { timeout: 30_000 }, () => {
       { pull: { additions: 10, deletions: 0, changed_files: 9 } },
       "changes 9 files, over 8",
     ],
-    ["that touches the CLI tree", { files: ["src/cli/tree.ts"] }, "the public surface"],
-    ["that touches an HTTP route file", { files: ["src/http/app.ts"] }, "the public surface"],
+    ["that touches the CLI tree", { files: ["src/cli/tree.ts"] }, "a surface file"],
+    ["that touches an HTTP source file", { files: ["src/http/app.ts"] }, "a surface file"],
     ["that bumps the protocol", { files: ["src/contract/protocol.ts"] }, "the protocol version"],
     ["that changes an ADR", { files: ["docs/internal/adr/0005-x.md"] }, "an ADR"],
     [

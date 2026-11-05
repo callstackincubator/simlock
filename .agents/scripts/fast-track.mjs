@@ -7,14 +7,17 @@
 //
 // Entry passes when issue <n> is open, carries `bug:new`, has no assignee, has a
 // `bug/<n>-repro` branch, its newest triage report says `yes` on all five Fast track lines
-// (`FAST_TRACK` in body-rules.mjs), and every comment after that report is an agent's. It then
+// (`FAST_TRACK` in body-rules.mjs) and was posted from an account that can write to the repo
+// (an agent posts under a maintainer's), and every comment after that report is an agent's
+// from such an account. It then
 // adds `bug:ready` and `fast-track`, removes `bug:new`, prints `fast-track: #<n> is bug:ready`
 // and exits 0. Otherwise it changes nothing, prints `fast-track: #<n> held: <reasons>` and
 // exits 1.
 //
 // Exit has nothing to check, and exits 0, unless issue <n> carries `fast-track`. Then PR <m>
 // passes when it changes at most MAX_LINES lines in at most MAX_FILES files, touches no path in
-// HOLD_PATHS, and has no `## Decision taken` comment; otherwise the same `held:` line and exit
+// HOLD_PATHS (a surface file, the protocol version, an ADR), and has no `## Decision taken`
+// comment; otherwise the same `held:` line and exit
 // 1. `merge-pr.sh` runs it on every PR from a `bug/<n>` branch. The maintainer lets a held PR
 // through by removing the `fast-track` label, or merges it by hand.
 //
@@ -27,17 +30,22 @@ import { option } from "./cli-args.mjs";
 
 const MAX_LINES = 250;
 const MAX_FILES = 8;
-// why: the surface docs-surface-check.mjs lists (documentation rule 9), the wire protocol's
-// version and the ADRs. A fix that touches one is the maintainer's to read before it merges.
+// why: the surface files docs-surface-check.mjs lists (the command tree, the config, the error
+// table, the MCP tools, the HTTP sources, the client exports, the event map), the wire
+// protocol's version and the ADRs. A fix that touches one may add to or break what a user
+// meets, so it is the maintainer's to read before it merges.
 const HOLD_PATHS = [
   [
-    "the public surface",
+    "a surface file",
     /^src\/(?:cli\/tree|core\/config|contract\/errors|mcp\/(?:server|contracts)|(?:client|admin)\/index|bus\/index)\.ts$/,
   ],
-  ["the public surface", /^src\/http\/(?!.*\.test\.ts$)[^/]+\.ts$/],
+  ["a surface file", /^src\/http\/(?!.*\.test\.ts$)[^/]+\.ts$/],
   ["the protocol version", /^src\/contract\/protocol\.ts$/],
   ["an ADR", /^docs\/internal\/adr\//],
 ];
+// why: a comment counts as an agent's, and a report as real, only from an account that can
+// write to the repo; anyone can type the footer or a report's headings into a comment.
+const WRITERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 const [number] = process.argv.slice(2);
 const pr = option("--pr");
@@ -66,11 +74,12 @@ function entryCheck() {
   const comments = paged(`issues/${number}/comments`);
   const at = comments.findLastIndex((c) => fastTrackFacts(c.body) !== null);
   if (at === -1) holds.push("it has no triage report");
-  else {
+  else if (!WRITERS.has(comments[at].author_association)) {
+    holds.push("its newest triage report is not from an account that can write to the repo");
+  } else {
     holds.push(...factHolds(fastTrackFacts(comments[at].body)));
-    if (comments.slice(at + 1).some((c) => !writtenByAgent(c.body))) {
-      holds.push("a person commented after the report");
-    }
+    const agents = (c) => WRITERS.has(c.author_association) && writtenByAgent(c.body);
+    if (!comments.slice(at + 1).every(agents)) holds.push("a person commented after the report");
   }
   if (!exists(`branches/bug/${number}-repro`)) holds.push(`bug/${number}-repro does not exist`);
   if (holds.length > 0) held(holds);

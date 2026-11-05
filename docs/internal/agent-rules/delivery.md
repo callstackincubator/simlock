@@ -273,13 +273,17 @@ is open, done means closed as completed.
     - **One fix**: no rejected alternative would change what a user sees,
       and no other repository could carry the fix.
 
-    Five times `yes`, a `bug/<n>-repro` branch, and no person's comment
-    after the report: the script sets `bug:ready` and `fast-track`. One
+    Five times `yes` in a report posted from an account that can write to
+    the repo, a `bug/<n>-repro` branch, and no person's comment after the
+    report: the script sets `bug:ready` and `fast-track`. One
     `no`: the bug stays `bug:new` and waits for the maintainer, as any bug
     did before. *Exit.* The gate (rule 15) runs the script on the fix's PR
     and refuses one that changes more than 250 lines or 8 files, touches
-    the public surface ([documentation.md](documentation.md) rule 9), the
-    protocol version or an ADR, or carries a `## Decision taken` comment.
+    a surface file `docs-surface-check.mjs` lists (the command tree, the
+    config, the error table, the MCP tools, an HTTP source, the client
+    exports, the event map), the protocol version or an ADR, or carries a
+    `## Decision taken` comment. A fix elsewhere, a console screen or a
+    command's output included, is not held for its path.
     An `Assumption:` line is a minor decision and passes. A held PR stays
     open and ready: the maintainer merges it, or removes `fast-track` and
     lets the gate through. The orchestrator runs the script, never the

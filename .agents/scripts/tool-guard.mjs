@@ -259,15 +259,20 @@ function commandStep(state, cmd, words, dynamic) {
   if (name === "git" && subAgent) gitRules(words);
   if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
   slowLaneRules(words);
-  if (
-    FAST_TRACK_AUTHORS.has(input.agent_type ?? "") &&
-    words.some((w) => path.basename(w) === "fast-track.mjs")
-  ) {
+  if (FAST_TRACK_AUTHORS.has(input.agent_type ?? "") && runsScript(words, "fast-track.mjs")) {
     refuse(
       "Refused: the fast track checks your report or your fix, so you never run it yourself " +
         "(delivery rule 17). The orchestrator runs `fast-track.mjs`; leave the label as it is.",
     );
   }
+}
+
+// why: the script as the program, or as node's script; `git add` or `cat` on the file is no run.
+function runsScript(words, script) {
+  const at = words.findIndex((w) => path.basename(w) === script);
+  if (at === -1) return false;
+  const before = words.slice(0, at).filter((w) => !WRAPPERS.has(path.basename(w)));
+  return before.every((w, i) => (i === 0 && path.basename(w) === "node") || w.startsWith("-"));
 }
 
 // why: a body file written by a heredoc earlier in the same command is not on disk yet.

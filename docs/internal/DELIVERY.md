@@ -47,7 +47,8 @@ Issue `<n>` is built on branch `<kind>/<n>`.
 5. `deliver` builds the fix on `bug/<n>` from the repro branch, reviews it
    and merges it. The triage test becomes the regression test. The gate
    holds a fast-tracked fix that grew past 250 lines or 8 files, touches
-   the public surface, the protocol version or an ADR, or needed a
+   a surface file (delivery rule 17 lists them), the protocol version or
+   an ADR, or needed a
    `## Decision taken`: the PR stays open and ready with the reason in
    its handoff. Merge it yourself, or remove `fast-track` from the issue,
    re-add `bug:ready` and run `deliver` again.
