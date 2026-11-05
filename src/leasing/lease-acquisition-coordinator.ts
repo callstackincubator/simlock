@@ -1020,27 +1020,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (this.#stopPlanning) return undefined;
     const plan = this.#nextPlan(waiter);
     if (plan === undefined) return undefined;
-    if (plan.kind === "grant-ready") {
-      waiter.timing = grantReadyTiming(
-        this.options.drivers.get(plan.device.spec.platform),
-        plan.device.spec,
-      );
-      // why: the queue's own rule is that a timeout firing mid-attempt does not reject
-      // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
-      // this mark the waiter is still `queued` while the lease is written, so a timeout that
-      // falls due in that window rejects the caller over a lease that is being stored.
-      if (!this.options.queue.markProcessing(waiter)) return undefined;
-      try {
-        await this.#grant(waiter, plan.device, plan.kind);
-        // why: the next request in line may already have a ready device waiting for it, and no
-        // other event will wake it.
-        this.#wakeQueue();
-      } catch (error: unknown) {
-        this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
-        this.#defer(waiter, "waiting-for-device");
-      }
-      return undefined;
-    }
+    if (plan.kind === "grant-ready") return this.#decideGrantReady(waiter, plan);
     const operation = operationPlan(plan);
     if (operation === undefined) {
       this.#defer(waiter, blockedReason(plan));
@@ -1055,6 +1035,31 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       return undefined;
     }
     return operation;
+  }
+
+  async #decideGrantReady(
+    waiter: AcquisitionWaiter,
+    plan: Extract<AcquisitionPlan, { kind: "grant-ready" }>,
+  ): Promise<undefined> {
+    waiter.timing = grantReadyTiming(
+      this.options.drivers.get(plan.device.spec.platform),
+      plan.device.spec,
+    );
+    // why: the queue's own rule is that a timeout firing mid-attempt does not reject
+    // (`wait-queue.ts`), and it tells an attempt is in flight only from `processing`. Without
+    // this mark the waiter is still `queued` while the lease is written, so a timeout that
+    // falls due in that window rejects the caller over a lease that is being stored.
+    if (!this.options.queue.markProcessing(waiter)) return undefined;
+    try {
+      await this.#grant(waiter, plan.device, plan.kind);
+      // why: the next request in line may already have a ready device waiting for it, and no
+      // other event will wake it.
+      this.#wakeQueue();
+    } catch (error: unknown) {
+      this.#logFailure("granting a ready device failed", waiter, plan.device, "grant", error);
+      this.#defer(waiter, "waiting-for-device");
+    }
+    return undefined;
   }
 
   #nextPlan(waiter: AcquisitionWaiter): AcquisitionPlan | undefined {
