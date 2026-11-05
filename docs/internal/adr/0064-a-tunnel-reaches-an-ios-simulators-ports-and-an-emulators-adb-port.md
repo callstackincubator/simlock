@@ -45,6 +45,8 @@ adb 37.0.0) checked what this rests on:
   parent chain breaks once it double-forks.
 - An app's `getaddrinfo("localhost")` gives `::1`, then `127.0.0.1`; a
   refused `::1` costs no time. Two simulators cannot bind the same port.
+- With a process holding `[::]:<p>`, Node still bound `127.0.0.1:<p>` and
+  `::1:<p>` (spec check, same day).
 
 ## Decision
 
@@ -66,8 +68,12 @@ adb 37.0.0) checked what this rests on:
 
 3. **iOS simulator, reverse.** The worker listens on exactly the device
    port, on both `127.0.0.1` and `::1`, so `localhost` reaches it whichever
-   address an app tries first. If either is taken, the tunnel is refused
-   `TUNNEL_PORT_IN_USE`: the first tunnel on a worker wins a port. Nothing
+   address an app tries first. If anything on the worker already listens
+   on the port, on any address, or either bind fails, the tunnel is
+   refused `TUNNEL_PORT_IN_USE`: the first listener on a worker wins a
+   port. The bind alone is not the check, because macOS lets both
+   loopback binds succeed while another process holds the port on all
+   interfaces, as the worker's own HTTP server can. Nothing
    is set on the device, so these listeners are outside 47000 to 47999,
    sweep and reclaim have nothing to remove, and the listeners close with
    the socket. Like ADR 0054 §4, any simulator or local process on the
