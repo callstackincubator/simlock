@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -161,7 +161,7 @@ describe.skipIf(!hasAndroidSdk)(
   { tags: ["slow", "android"] },
   () => {
     it(
-      "serves the caller's page to the emulator through reverse, and a device server's bytes to the caller's loopback port through forward, with the caller's bytes arriving",
+      "serves the caller's page to the emulator through reverse, and a device server's bytes to the caller's loopback port through forward, with the caller's bytes arriving, and lets the caller's own separate adb server list the emulator and run a shell command on it through emulator adb while Simlock's own adb still lists it",
       { timeout: 480_000 },
       async () => {
         const gatewayPort = await freeLoopbackPort();
@@ -313,6 +313,63 @@ describe.skipIf(!hasAndroidSdk)(
           );
           server.kill("SIGINT");
 
+          const callerServerPort = await freeLoopbackPort();
+          const callerHome = mkdtempSync(join(tmpdir(), "simlock-caller-adb-"));
+          const callerAdb = (args: readonly string[]) =>
+            workerAdb(callerServerPort, args, { HOME: callerHome });
+          const driven = gateway.cliBackground(
+            [
+              "--token",
+              secret,
+              "tunnel",
+              "emulator",
+              "adb",
+              "--url",
+              `http://127.0.0.1:${String(gatewayPort)}`,
+              "--lease",
+              leaseId,
+            ],
+            { env: { ANDROID_ADB_SERVER_PORT: String(callerServerPort), HOME: callerHome } },
+          );
+          try {
+            const line = await driven.firstStdoutLine(60_000);
+            const callerPort = /localhost:(\d+) -> emulator:adb/.exec(line)?.[1] ?? "";
+            expect(line).toBe(
+              `emulator localhost:${callerPort} -> emulator:adb (lease ${leaseId})`,
+            );
+            const device = `127.0.0.1:${callerPort}`;
+            await waitFor(
+              async () => driven.stdoutSoFar().includes(`adb: connected to ${device}`),
+              {
+                interval: 500,
+                label: "the command connecting the caller's adb",
+                timeout: 30_000,
+              },
+            );
+            let listed = "";
+            await waitFor(
+              async () => {
+                listed = (await callerAdb(["devices"])).stdout;
+                return new RegExp(`^${device}\\s+device$`, "m").test(listed);
+              },
+              {
+                interval: 1_000,
+                label: () =>
+                  `the caller's adb listing the emulator as a device, last list: ${listed}`,
+                timeout: 30_000,
+              },
+            );
+            expect((await callerAdb(["-s", device, "shell", "echo", "ok"])).stdout.trim()).toBe(
+              "ok",
+            );
+          } finally {
+            driven.kill("SIGINT");
+            expect((await driven.waitForExit(10_000)).code).toBe(0);
+            await callerAdb(["kill-server"]);
+          }
+          const own = await leaseAdb(gateway, { agentId: "tunnel", leaseId }, ["get-state"]);
+          expect(own.stdout.trim()).toBe("device");
+
           tunnel.kill("SIGINT");
           expect((await tunnel.waitForExit(10_000)).code).toBe(0);
         } finally {
@@ -334,14 +391,20 @@ const ADB = join(ANDROID_HOME, "platform-tools", "adb");
 function workerAdb(
   serverPort: number,
   args: readonly string[],
+  env: NodeJS.ProcessEnv = {},
 ): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(ADB, ["-P", String(serverPort), ...args], (error, stdout) => {
-      resolve({
-        code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
-        stdout,
-      });
-    });
+    execFile(
+      ADB,
+      ["-P", String(serverPort), ...args],
+      { env: { ...process.env, ...env } },
+      (error, stdout) => {
+        resolve({
+          code: error === null ? 0 : typeof error.code === "number" ? error.code : 1,
+          stdout,
+        });
+      },
+    );
   });
 }
 
