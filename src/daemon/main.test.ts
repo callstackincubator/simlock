@@ -3020,6 +3020,30 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     }
   });
 
+  it("starts its drivers with ios.full.bootTimeoutMs and android.bootTimeoutMs from its config", async () => {
+    const key = "__simlockDiscoveredBootTimeouts";
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         globalThis.${key} = [context.iosFullBootTimeoutMs, context.androidBootTimeoutMs];
+         return [];
+       }`,
+    );
+
+    try {
+      await start({
+        configOverrides: {
+          android: { bootTimeoutMs: 600_000 },
+          ios: { full: { bootTimeoutMs: 400_000 } },
+        },
+        drivers: undefined,
+      });
+
+      expect((globalThis as Record<string, unknown>)[key]).toEqual([400_000, 600_000]);
+    } finally {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+
   it("a throwing event subscriber writes nothing through console.error", async () => {
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
