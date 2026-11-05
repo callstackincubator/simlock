@@ -1280,7 +1280,7 @@ describe("operation input/output round trips", () => {
     expect(parse(inside)).toBe(true);
   });
 
-  it("config.get: round-trips a representative config", () => {
+  it("config.get: round-trips a representative config, carries a driver's own keys under ios and android as sent, and refuses a platform section whose core keys are missing or wrong", () => {
     const config = {
       capabilities: {},
       mode: "worker",
@@ -1318,6 +1318,7 @@ describe("operation input/output round trips", () => {
       },
       exec: { timeoutMs: 1 },
       diskPressure: { freeBytesThreshold: 1 },
+      drivers: {},
       eventBuffer: { capacity: 1 },
       log: { level: "info", rotateBytes: 1 },
       http: { enabled: false, host: "127.0.0.1", port: 4700 },
@@ -1334,6 +1335,7 @@ describe("operation input/output round trips", () => {
         defaultModels: {},
         slim: { bootTimeoutMs: 1 },
         simulator: { audio: false, headless: false },
+        aKeyOfALaterDriver: { nested: [1, "two"] },
       },
       android: {
         defaultModels: {},
@@ -1341,10 +1343,13 @@ describe("operation input/output round trips", () => {
       },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
-    expect(OPERATIONS["config.get"].output.parse(config).ios.simulator).toEqual({
-      audio: false,
-      headless: false,
-    });
+    const output = OPERATIONS["config.get"].output;
+    const parsed = output.parse(config);
+    expect([parsed.ios, parsed.android]).toEqual([config.ios, config.android]);
+    expect([
+      output.safeParse({ ...config, ios: { ...config.ios, defaultMode: "fast" } }).success,
+      output.safeParse({ ...config, android: { emulator: config.android.emulator } }).success,
+    ]).toEqual([false, false]);
     for (const maxPerRequester of [2, { ios: 2 }, { ios: 1, android: 1 }]) {
       const parsed = OPERATIONS["config.get"].output.parse({
         ...config,
@@ -1391,6 +1396,7 @@ describe("operation input/output round trips", () => {
         endWaitMs: 600_000,
       },
       exec: { timeoutMs: 1 },
+      drivers: {},
       diskPressure: { freeBytesThreshold: 1 },
       eventBuffer: { capacity: 1 },
       log: { level: "info", rotateBytes: 1 },
@@ -1403,16 +1409,8 @@ describe("operation input/output round trips", () => {
         recoveryBackoffMs: 1,
         maxConcurrentRecoveries: 1,
       },
-      ios: {
-        defaultMode: "full",
-        defaultModels: {},
-        slim: { bootTimeoutMs: 1 },
-        simulator: { audio: true, headless: true },
-      },
-      android: {
-        defaultModels: {},
-        emulator: { headless: true, gpu: "host", audio: false, bootAnimation: false },
-      },
+      ios: { defaultMode: "full", defaultModels: {} },
+      android: { defaultModels: {} },
       stalledTransition: { thresholdMultiplier: 1, minimumThresholdMs: 1 },
     };
     const config = (pool: object) => ({
@@ -1439,6 +1437,24 @@ describe("operation input/output round trips", () => {
     ).toThrow();
     expect(() => output.parse(config({ maxConcurrentBoots: 1 }))).toThrow();
     expect(() => output.parse(config({ targets: [] }))).toThrow();
+  });
+
+  it("config.get: bounds the drivers section's driver names, keys and string values, and takes strings, numbers and booleans", () => {
+    const drivers = OPERATIONS["config.get"].output.shape.drivers;
+    const long = (n: number) => "x".repeat(n);
+
+    expect(
+      drivers.safeParse({ [long(64)]: { [long(64)]: long(4096), n: 1, b: false } }).success,
+    ).toBe(true);
+    for (const refused of [
+      { [long(65)]: { a: "x" } },
+      { a: { [long(65)]: "x" } },
+      { a: { k: long(4097) } },
+      { a: { k: null } },
+      { a: { k: ["x"] } },
+    ]) {
+      expect(drivers.safeParse(refused).success).toBe(false);
+    }
   });
 
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {

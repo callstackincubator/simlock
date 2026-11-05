@@ -17,9 +17,11 @@ import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DriverCatalog } from "./driver-catalog.js";
 import { ManagedDeviceLifecycle } from "./managed-device-lifecycle.js";
 import { SerializedDecision } from "./serialized-decision.js";
-import { createTestEngine } from "../leasing/testing.js";
+import { createTestEngine, type TestEngineConfig } from "../leasing/testing.js";
 
 const gibibyte = 1024 ** 3;
+
+type ReaperTestConfig = TestEngineConfig & Pick<Config, "diskPressure">;
 const spec = { physical: false, model: "iPhone 16", osVersion: "26.5", platform: "ios" } as const;
 
 /**
@@ -43,21 +45,9 @@ class MutableFreeDiskFilesystem extends MemoryFilesystem {
   }
 }
 
-function config(): Config {
+function config(): ReaperTestConfig {
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
     diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 100 },
     health: {
       enabled: true,
       maxConcurrentRecoveries: 1,
@@ -67,20 +57,7 @@ function config(): Config {
       stableObservations: 2,
     },
     stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
     idle: { deleteAfterMs: 30_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
     lease: {
       defaultTtlMs: 100,
       maxTtlMs: 100,
@@ -101,12 +78,6 @@ function config(): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,
@@ -126,7 +97,7 @@ async function createHarness(
   rules: readonly CleanupRule[],
   latencyMs: Partial<Record<"destroy" | "shutdown", number>> = {},
   options: {
-    readonly cleanupConfig?: Config;
+    readonly cleanupConfig?: ReaperTestConfig;
     readonly filesystem?: MemoryFilesystem;
     readonly logger?: Logger;
     readonly targetedDevices?: () => Promise<ReadonlySet<string>>;

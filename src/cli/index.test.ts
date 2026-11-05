@@ -1,3 +1,4 @@
+import { testConfig as configWithDefaults } from "../core/testing.js";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -81,6 +82,7 @@ import { readLogFile } from "./log-file.js";
 import { readPipedStdin } from "./stdio.js";
 import { parseDuration } from "./duration.js";
 import { createTestEngine } from "../leasing/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 
 const gibibyte = 1024 ** 3;
 
@@ -3444,6 +3446,36 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
       expect(exitCode).toBe(2);
       expect(wrote).toBe(false);
       expect(JSON.parse(output.stderr).error.code).toBe("USAGE");
+    },
+  );
+
+  it.each([
+    ["ios.simulator.audio", "false", "loud"],
+    ["android.emulator.headless", "true", "yes"],
+  ])(
+    "writes a good value of %s, a key its driver declares, and refuses a bad one naming the key",
+    async (key, good, bad) => {
+      const run = async (value: string) => {
+        const output = outputCapture(realCliEnvironmentPorts());
+        let wrote = false;
+        const exitCode = await runCli(
+          ["config", "set", key, value],
+          output.environmentWith({
+            readConfigFile: async () => ({}),
+            writeConfigFile: async () => {
+              wrote = true;
+            },
+          }),
+        );
+        return { exitCode, stderr: output.stderr, wrote };
+      };
+
+      const accepted = await run(good);
+      const refused = await run(bad);
+
+      expect([accepted.exitCode, accepted.wrote]).toEqual([0, true]);
+      expect([refused.exitCode, refused.wrote]).toEqual([2, false]);
+      expect(refused.stderr).toContain(key);
     },
   );
 
@@ -7182,6 +7214,53 @@ describe("CLI: holder renew and release (ADR 0004 §2)", () => {
     },
   );
 
+  it.each([
+    { trigger: "SIGINT", act: (signals: EventEmitter) => signals.emit("SIGINT") },
+    { trigger: "SIGTERM", act: (signals: EventEmitter) => signals.emit("SIGTERM") },
+    {
+      trigger: "the exit of the --bind-pid process",
+      act: (_signals: EventEmitter, parentWatch: FakeParentWatch) => parentWatch.exit(9876),
+    },
+  ])("cancels its waiting request and exits 0 on $trigger before a grant", async ({ act }) => {
+    const output = outputCapture();
+    const signals = new EventEmitter();
+    const parentWatch = new FakeParentWatch();
+    let requestSignal: AbortSignal | undefined;
+    let requested = false;
+    const client = fakeClient({
+      // why: The request waits in the queue and never resolves on its own; like the client's
+      // documented abort, it rejects CANCELLED once its signal aborts.
+      requestLease: (_input, options) => {
+        requested = true;
+        requestSignal = options?.signal;
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new SimlockError("CANCELLED", "domain", "Lease request was cancelled", {}));
+          });
+        });
+      },
+    });
+    const run = runCli(
+      ["lease", "--platform", "ios", "--device", "iPhone 17 Pro", "--bind-pid", "9876"],
+      output.environmentWith({
+        connectAdmin: async () => client,
+        parentPid: 4321,
+        parentWatch,
+        signals: signals as unknown as CliEnvironment["signals"],
+      }),
+    );
+    const runState = promiseState(run);
+    await vi.waitFor(() => expect(requested).toBe(true));
+
+    act(signals, parentWatch);
+    await settle();
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(runState.state).toBe("fulfilled");
+    expect(await run).toBe(0);
+    expect(output.stdout).toBe("");
+  });
+
   it("reports a failed renewal on stderr and keeps holding the lease", async () => {
     const clock = new FakeClock(0);
     const output = outputCapture();
@@ -9329,52 +9408,7 @@ async function startInMemoryDaemon(options: {
 }
 
 function testConfig(): Config {
-  return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    eventBuffer: { capacity: 100 },
-    health: {
-      enabled: false,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    downloads: { policy: "on-request", acceptAndroidLicenses: false, timeoutMs: 1_200_000 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true, headless: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    lease: {
-      defaultTtlMs: 60_000,
-      maxTtlMs: 3_600_000,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-    },
+  return configWithDefaults({
     capacity: {
       strategy: "resource",
       config: {
@@ -9386,25 +9420,13 @@ function testConfig(): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
-    warmPool: {
-      enabled: true,
-      maxConcurrentBoots: 1,
-      reserveRunning: { android: 0, ios: 0 },
-      targets: [],
-      quarantine: {
-        maxRetries: 3,
-        maxRetryBackoffMs: 300_000,
-        retryBackoffMs: 30_000,
-        retryBackoffMultiplier: 2,
-      },
-    },
-  };
+    eventBuffer: { capacity: 100 },
+    health: { enabled: false },
+    http: { enabled: false, port: 4700 },
+    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
+    lease: { defaultTtlMs: 60_000, maxTtlMs: 3_600_000 },
+    warmPool: { maxConcurrentBoots: 1 },
+  });
 }
 
 describe("simlock list --requests", () => {
@@ -10621,6 +10643,26 @@ describe("CLI: daemon install (#830)", () => {
     const exitCode = await runCli(options.argv, environment);
     return { exitCode, output, stops, serviceManager, clock };
   }
+
+  it('daemon stop with no socket exits 0 and prints Daemon not running; with --json it prints {"status":"not-running"}', async () => {
+    const text = await runWithService({
+      argv: ["daemon", "stop"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(text.output.stderr).toBe("");
+    expect(text.exitCode).toBe(0);
+    expect(text.output.stdout).toBe("Daemon not running\n");
+
+    const json = await runWithService({
+      argv: ["daemon", "stop", "--json"],
+      running: false,
+      socketHeldPolls: 0,
+    });
+    expect(json.output.stderr).toBe("");
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output.stdout)).toEqual({ status: "not-running" });
+  });
 
   it("daemon uninstall removes the service", async () => {
     const installedState: ServiceState = {

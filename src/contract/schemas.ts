@@ -1092,24 +1092,11 @@ export const configSchema = z.object({
     recoveryBackoffMs: z.number(),
     maxConcurrentRecoveries: z.number(),
   }),
-  ios: z.object({
-    defaultMode: deviceModeSchema,
-    defaultModels: defaultModelsSchema,
-    slim: z.object({
-      categories: z.array(z.string()).optional(),
-      bootTimeoutMs: z.number(),
-    }),
-    simulator: z.object({ audio: z.boolean(), headless: z.boolean() }),
-  }),
-  android: z.object({
-    defaultModels: defaultModelsSchema,
-    emulator: z.object({
-      headless: z.boolean(),
-      gpu: z.string().min(1),
-      audio: z.boolean(),
-      bootAnimation: z.boolean(),
-    }),
-  }),
+  // why: a platform's section also holds its driver's own keys, which no client reads: they are carried as the worker's loader validated them, the way a module's `capabilities` section is, so a new driver key changes no wire shape.
+  ios: z
+    .object({ defaultMode: deviceModeSchema, defaultModels: defaultModelsSchema })
+    .catchall(z.unknown()),
+  android: z.object({ defaultModels: defaultModelsSchema }).catchall(z.unknown()),
   gateway: z.object({
     url: z.string().optional(),
     token: z.string().optional(),
@@ -1137,6 +1124,12 @@ export const configSchema = z.object({
     thresholdMultiplier: z.number(),
     minimumThresholdMs: z.number(),
   }),
+  // why: Bounded like core's `drivers` leaves (strings, numbers and booleans only), since a gateway parses this from a worker.
+  drivers: z.record(
+    z.string().max(64),
+    // why: The number of keys is the worker's own config.json, which its loader already validated; a gateway holds one such answer per worker, the way it holds `capabilities`.
+    z.record(z.string().max(64), z.union([z.string().max(4096), z.number(), z.boolean()])),
+  ),
 });
 
 /**

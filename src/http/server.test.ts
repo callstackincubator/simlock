@@ -11,7 +11,7 @@ import type { Identity } from "../auth/index.js";
 import { fakeAuth, tokenIdentity } from "../auth/testing.js";
 import { createHttpApp } from "./app.js";
 import { CONSOLE_CONTENT_SECURITY_POLICY, HttpGateway, withConsole } from "./server.js";
-import { FakeDispatcher, FakeRegistry, sequenceIdGenerator, testConfig } from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, sequenceIdGenerator } from "./test-fakes.js";
 
 const PAGE = '<!doctype html><title>Simlock</title><div id="root"></div>';
 const SCRIPT = "console.log('console');";
@@ -52,7 +52,6 @@ function harness(root: string) {
   const logger = new JsonLinesLogger({ clock, sink: new MemoryLogSink() });
   const app = createHttpApp({
     clock,
-    config: testConfig(),
     dispatch: (op, input, session) => dispatcher.dispatch(op, input, session) as never,
     eventBus,
     idGenerator: sequenceIdGenerator("gw"),

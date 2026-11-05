@@ -564,6 +564,25 @@ describe("startDaemon", () => {
     });
   });
 
+  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
+    const { daemon } = await start({
+      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
+    });
+
+    const config = (await daemon.dispatch(
+      "config.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
+    )) as { readonly drivers?: unknown };
+
+    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
+  });
+
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
     const { daemon, sink } = await start({
       configOverrides: {
@@ -2538,7 +2557,9 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      androidEmulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      androidConfig: {
+        emulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      },
       processRunner,
     });
     const android = drivers.find((driver) => driver.platform === "android");
@@ -2698,7 +2719,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
+      Pick<DriverDiscoveryContext, "androidConfig" | "hostArch" | "logger" | "processRunner">
     > = {},
   ) {
     return discoverDrivers({
@@ -2803,8 +2824,6 @@ describe("deviceModeWiring", () => {
           ios: {
             defaultMode,
             defaultModels: {},
-            slim: { bootTimeoutMs: 1 },
-            simulator: { audio: true, headless: true },
           },
         }),
       ).toEqual({
@@ -3094,20 +3113,32 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     expect(prerequisiteChecks).toEqual([expect.objectContaining({ fromModule: true })]);
   });
 
-  it("hands config's android.emulator block to driver discovery when the daemon starts", async () => {
-    const key = "__simlockDiscoveredAndroidEmulator";
+  it("hands each driver its own section of the config, android.emulator and ios.simulator as set and ios.slim defaulted, to driver discovery when the daemon starts", async () => {
+    const key = "__simlockDiscoveredDriverConfig";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
-         globalThis.${key} = context.androidEmulator;
+         globalThis.${key} = {
+           emulator: context.androidConfig.emulator,
+           simulator: context.iosConfig.simulator,
+           slim: context.iosConfig.slim,
+         };
          return [];
        }`,
     );
     const emulator = { audio: false, bootAnimation: false, gpu: "host", headless: true };
+    const simulator = { audio: false, headless: true };
 
     try {
-      await start({ configOverrides: { android: { emulator } }, drivers: undefined });
+      await start({
+        configOverrides: { android: { emulator }, ios: { simulator } },
+        drivers: undefined,
+      });
 
-      expect((globalThis as Record<string, unknown>)[key]).toEqual(emulator);
+      expect((globalThis as Record<string, unknown>)[key]).toEqual({
+        emulator,
+        simulator,
+        slim: { bootTimeoutMs: 600_000 },
+      });
     } finally {
       delete (globalThis as Record<string, unknown>)[key];
     }

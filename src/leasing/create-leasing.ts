@@ -35,10 +35,12 @@ import { LeaseStartup } from "./lease-startup.js";
 import { PhysicalDeviceWatcher } from "./physical-device-watcher.js";
 import { type LeaseRequestOptions, WaitQueue } from "./wait-queue.js";
 
+export type LeasingConfig = Pick<Config, "health" | "lease">;
+
 export interface LeasingOptions {
   readonly clock: Clock;
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: LeasingConfig;
   readonly core: Core;
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;

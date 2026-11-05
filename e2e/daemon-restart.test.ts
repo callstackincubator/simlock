@@ -25,9 +25,7 @@ describe("daemon stop then start", () => {
           targets: [{ count: 1, model: "iPhone 16", osVersion: "18.4", platform: "ios" }],
         },
       },
-    });
-    await env.driverScript.set({
-      ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
+      driverScript: { ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] } },
     });
     await waitForReadyDevice(env, "iPhone 16");
     await env.driverScript.merge({ ios: { latencyMs: { shutdown: 2_000 } } });

@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry, updater (`checkInstall`, `socketHeld`); gateway and alerts from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry, driver-registry, updater (`checkInstall`, `socketHeld`); gateway and alerts from `main.ts` only.
 Never imports: gateway or alerts outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -36,7 +36,7 @@ Both modes: the data directory (`prepareDataDirectory`: created `0700` when miss
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
-  `discoverDrivers` (validates each root; a refused root costs that platform only) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
+  `discoverDrivers` (validates each root; a refused root costs that platform only; each driver gets its own section of the config whole, `driverConfig`) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
   HTTP starts only when `http.enabled` (default on for a standalone worker, off for a joined one).
@@ -59,8 +59,8 @@ Its stdout lines move the state; a failed line, a non-zero exit or a failed laun
 1. **Claim** — `DaemonEndpointHost.start`: creates the socket's directory `0700` when missing (an existing one keeps its mode); a live peer → `DaemonAlreadyRunningError`; a dead socket file is removed and claimed. Default `<data dir>/daemon.sock`. On Windows the endpoint is a named pipe (`\\.\pipe\simlock-<hash of the data directory>`): none of the file steps run, since a pipe has no directory and no stale entry, and a live one fails the bind with `address-in-use`.
 2. **Hello** — first frame must be `hello`, else `HANDSHAKE_REQUIRED` and close.
    Role: the uplink connection is `admin` by acceptance; otherwise the resolver. Principal: `hello.principal`, else `SIMLOCK_AGENT_ID`, else the daemon's pid. Both are fixed for the connection's life.
-3. **Version** — ranges overlap → highest common version. `PROTOCOL_VERSION_RANGE`
-   is `{ min: 75, max: 75 }` (`src/contract/protocol.ts`). No overlap → the
+3. **Version** — ranges overlap → highest common version. This daemon's range is
+   `PROTOCOL_VERSION_RANGE` (`src/contract/protocol.ts`). No overlap → the
    connection stays open, and every request but `daemon.stop` gets
    `PROTOCOL_VERSION_UNSUPPORTED`.
 4. **Request** — one frame → one `dispatch()` call. While stopping: `DAEMON_STOPPING`.

@@ -534,6 +534,10 @@ describe("a module's definition.ts, read by the registry without loading the mod
     "src/heavy/definition.ts": 'import { heavy } from "./impl.js";\nexport const d = heavy;\n',
     "src/heavy/impl.ts": "export const heavy = 1;\n",
     "src/heavy/index.ts": "export {};\n",
+    "src/drivers/heavy/definition.ts":
+      'import { heavy } from "./impl.js";\nexport const d = heavy;\n',
+    "src/drivers/heavy/impl.ts": "export const heavy = 1;\n",
+    "src/drivers/heavy/index.ts": "export {};\n",
     "src/light/definition.ts":
       'import type { Light } from "./impl.js";\nexport type D = Light;\nexport const load = () => import("./impl.js");\n',
     "src/light/impl.ts": "export type Light = number;\n",
@@ -554,11 +558,14 @@ describe("a module's definition.ts, read by the registry without loading the mod
     return cruise(dir, ["src"]);
   }
 
-  it("dependency-cruiser fails a definition.ts that imports a value from its own module, and passes a type-only and a dynamic-import one", () => {
+  it("dependency-cruiser fails a module's or a driver's definition.ts that imports a value from its own module, and passes a type-only and a dynamic-import one", () => {
     const found = worldViolations();
 
     expect(
       found.filter((v) => v.from === "src/heavy/definition.ts").map((v) => v.rule.name),
+    ).toEqual(["definition-is-light"]);
+    expect(
+      found.filter((v) => v.from === "src/drivers/heavy/definition.ts").map((v) => v.rule.name),
     ).toEqual(["definition-is-light"]);
     expect(found.filter((v) => v.from === "src/light/definition.ts")).toEqual([]);
   });

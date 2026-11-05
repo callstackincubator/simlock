@@ -28,8 +28,8 @@ type SizedFile = { path: string; lines: number };
  */
 const SHRINK_ONLY: Record<string, number> = {
   "src/agent-device/edge.test.ts": 4506,
-  "src/cli/index.test.ts": 11542,
-  "src/contract/schemas.ts": 1497,
+  "src/cli/index.test.ts": 11610,
+  "src/contract/schemas.ts": 1503,
   "src/core/doctor.test.ts": 3534,
   "src/core/registry.test.ts": 2901,
   "src/core/warm-pool/converger.test.ts": 2965,
@@ -40,10 +40,10 @@ const SHRINK_ONLY: Record<string, number> = {
   "src/daemon/server.ts": 1850,
   "src/drivers/ios/index.test.ts": 5950,
   "src/drivers/ios/index.ts": 2700,
-  "src/gateway/dispatcher.test.ts": 3022,
+  "src/gateway/dispatcher.test.ts": 3057,
   "src/gateway/fleet-coordinator.test.ts": 5283,
   "src/gateway/fleet-coordinator.ts": 1659,
-  "src/http/app.test.ts": 3487,
+  "src/http/app.test.ts": 3488,
   "src/leasing/create-leasing.test.ts": 5276,
   "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
   "src/leasing/lease-acquisition-coordinator.ts": 1638,

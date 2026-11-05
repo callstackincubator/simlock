@@ -5,6 +5,7 @@ import {
   deviceRecordSchema,
   baselineNameSchema,
   imageTagSchema,
+  EXEC_STDIN_MAX_LENGTH,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
@@ -137,6 +138,7 @@ const execBodySchema = z
     args: z.array(z.string()),
     stdin: z
       .string()
+      .max(EXEC_STDIN_MAX_LENGTH)
       .nullish()
       .transform((value) => value ?? undefined),
     requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
