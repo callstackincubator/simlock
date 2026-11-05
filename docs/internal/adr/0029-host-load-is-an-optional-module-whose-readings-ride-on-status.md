@@ -56,7 +56,7 @@ has no core.
 `src/daemon/main.ts` builds it in both modes. `DaemonServer` starts and
 disposes it (§3). Each status handler gets a function, `load: () =>
 StatusLoad | undefined`, which main.ts builds as `fitHostLoad(sampler.current())`.
-`fitHostLoad` lives beside the schema in `src/contract/schemas.ts`, as
+`fitHostLoad` lives beside the schema in `src/contract/status-schemas.ts`, as
 `fitHostFacts` does, so the wire bounds are written once.
 
 `startDaemon`'s `hostLoadProbe` option set to `null` leaves the module out.
