@@ -93,6 +93,7 @@ the status is stale.
 | [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
 | [0053](0053-the-daemon-owns-each-leases-device-input.md) | The daemon owns each lease's device input, and `device.rotate` uses it | Accepted; narrows 0049 §4 and 0052 §1 |
 | [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) | A lease holder tunnels device ports to its own machine | Accepted; narrows 0005 Non-goals (port forwarding) |
+| [0056](0056-an-operator-sets-warm-targets-at-runtime-and-they-replace-the-configs.md) | An operator sets warm targets at runtime, and they replace the config's | Proposed; supersedes 0017's deferred runtime-targets alternative; narrows 0017 §5 step 3 and §8, 0050 (HTTP route) and 0051 §1 and §3 |
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
