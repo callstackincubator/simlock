@@ -75,8 +75,8 @@ describe("HTTP API", () => {
     const { secret } = tokenResult.json as { secret: string };
     const agentAuth = { authorization: `Bearer ${secret}` };
 
-    // 2. The gateway is started only after the daemon's own startup convergence
-    //    finishes (see the comment in src/daemon/main.ts), strictly after the unix
+    // why: 2. The gateway is started only after the daemon's own startup convergence
+    //    finishes (see the comment in src/daemon/worker-composition.ts), strictly after the unix
     //    socket already answers `daemon start` -- so the first HTTP call must tolerate
     //    a connection refused for a brief window rather than assume the port is live
     //    the instant `withDaemon()` returns.

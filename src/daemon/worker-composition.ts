@@ -1,3 +1,4 @@
+import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventBus } from "../bus/index.js";
@@ -56,11 +57,11 @@ import {
   type ProcessRunner,
   type ProcessSupervisor,
   type TcpProbe,
+  type UplinkConnector,
   defaultWorkerLockPath,
   NodeWorkerLock,
   type WorkerLockHandle,
 } from "../ports/index.js";
-import { createUpgradeRouter, WebSocketUplinkConnector } from "../ports/uplink-websocket.js";
 import { createLeaseInputs } from "./lease-inputs.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { DaemonServer } from "./server.js";
@@ -118,6 +119,12 @@ export interface SharedParts {
   readonly state: StateDatabase;
   readonly systemStats: SystemStats;
   readonly tcpProbe: TcpProbe;
+  /** why: the WebSocket adapters sit past the ports index, so only `main.ts` imports them. */
+  readonly upgradeRouter: (options: {
+    readonly clock: Clock;
+    readonly leaseSocket: ReturnType<typeof createHttpApp>["leaseSocket"];
+  }) => { readonly attach: (server: Server) => void };
+  readonly uplinkConnector: () => UplinkConnector;
   readonly version: string;
   readonly versionCheck: VersionCheck;
 }
@@ -151,6 +158,8 @@ export async function composeWorker(
     state,
     systemStats,
     tcpProbe,
+    upgradeRouter,
+    uplinkConnector,
     version,
     versionCheck,
   } = parts;
@@ -347,7 +356,7 @@ export async function composeWorker(
       : new GatewayUplink({
           accept: (connection) => daemon.acceptUplink(connection),
           clock,
-          connector: new WebSocketUplinkConnector(),
+          connector: uplinkConnector(),
           logger: logger.child("uplink"),
           token: config.gateway.token,
           url: config.gateway.url,
@@ -628,9 +637,7 @@ export async function composeWorker(
       host: config.http.host,
       logger: httpLogger,
       onServerCreated: (server) =>
-        createUpgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(
-          server,
-        ),
+        upgradeRouter({ clock, leaseSocket: (request) => app.leaseSocket(request) }).attach(server),
       port: config.http.port,
     });
     await gateway.start();

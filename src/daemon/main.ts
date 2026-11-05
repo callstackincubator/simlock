@@ -86,7 +86,11 @@ import {
   GatewayService,
   type GatewayServiceOptions,
 } from "../gateway/index.js";
-import { createUpgradeRouter, WebSocketUplinkListenerFactory } from "../ports/uplink-websocket.js";
+import {
+  createUpgradeRouter,
+  WebSocketUplinkConnector,
+  WebSocketUplinkListenerFactory,
+} from "../ports/uplink-websocket.js";
 import { classifyError } from "./error-code.js";
 import { createModuleHost, type OptionalModuleDefinition } from "../modules/index.js";
 import { driverConfigEntries } from "../driver-registry/index.js";
@@ -349,6 +353,8 @@ async function composeDaemon(
       state,
       systemStats,
       tcpProbe,
+      upgradeRouter: createUpgradeRouter,
+      uplinkConnector: () => new WebSocketUplinkConnector(),
       version,
       versionCheck,
     },

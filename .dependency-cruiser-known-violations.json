@@ -122,17 +122,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/daemon/worker-composition.ts",
-    "to": "src/ports/uplink-websocket.ts",
-    "unresolvedTo": "../ports/uplink-websocket.js",
-    "dependencyTypes": ["local", "import"],
-    "rule": {
-      "severity": "error",
-      "name": "past-index"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/auth/token-store.test.ts",
     "to": "src/ports/token-secrets.ts",
     "unresolvedTo": "../ports/token-secrets.js",

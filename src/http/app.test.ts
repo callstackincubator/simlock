@@ -1810,9 +1810,9 @@ describe("lease routes", () => {
   });
 
   /**
-   * ADR 0005 §19a's HTTP frontend. The route's whole job is to turn one dispatched
+   * why: ADR 0005 §19a's HTTP frontend. The route's whole job is to turn one dispatched
    * `device.exec` into a stream: `output` per chunk, one terminal `exit` or `error`. What the
-   * command does is the dispatcher's business (see `daemon/dispatcher.test.ts`).
+   * command does is the dispatcher's business (see `daemon/dispatcher-exec.test.ts`).
    */
   describe("POST /v1/leases/:id/exec", () => {
     function postExec(
@@ -1894,7 +1894,7 @@ describe("lease routes", () => {
       // that an agent token may not supply `requesterId` at all, which left that rule living
       // only in the HTTP transport (ADR 0003 §2 puts a contract operation's answer in the
       // dispatcher). The rule moved into `device.exec`'s own `authorize` hook -- exercised
-      // directly in `dispatcher.test.ts` -- so this route now forwards `requesterId` exactly
+      // directly in `dispatcher-exec.test.ts` -- so this route now forwards `requesterId` exactly
       // the same way for either token and merely surfaces whatever the dispatcher answers.
       const { app, dispatcher } = buildHarness();
 
@@ -2168,9 +2168,9 @@ describe("lease routes", () => {
 });
 
 /**
- * ADR 0010 §6's HTTP frontend: one dispatched `component.install` turned into a stream of
+ * why: ADR 0010 §6's HTTP frontend: one dispatched `component.install` turned into a stream of
  * `progress` events and one terminal `result` or `error`. What the install does is the
- * dispatcher's and the installer's business (`daemon/dispatcher.test.ts`).
+ * dispatcher's and the installer's business (`daemon/dispatcher-components.test.ts`).
  */
 describe("POST /v1/components/install", () => {
   /** The response, which must arrive while the dispatched install is still unsettled. */

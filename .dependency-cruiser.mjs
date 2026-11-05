@@ -234,9 +234,11 @@ export default {
     {
       name: "main-loads-modules-lazily",
       comment:
-        "main.ts imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
+        "the composition root (main.ts and its parts: worker-composition.ts, driver-discovery.ts, composition-support.ts, entry-support.ts) imports nothing from src/agent-device, of any type: a module reaches a daemon only through the module host",
       severity: "error",
-      from: { path: "^src/daemon/main\\.ts$" },
+      from: {
+        path: "^src/daemon/(main|worker-composition|driver-discovery|composition-support|entry-support)\\.ts$",
+      },
       to: { path: "^src/agent-device/" },
     },
     direction(
