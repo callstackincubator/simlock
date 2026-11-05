@@ -843,8 +843,8 @@ describe("the agent-device front, through the whole worker daemon", () => {
     }
   });
 
-  it('allocate with `osVersion` "^18", with `imageTag` on iOS (with a model and without) or with an OS the driver lacks answers `refused by simlock:` with simlock\'s own message and leaves no lease; under `downloads.policy: always` the missing OS is installed for a named model and still refused without one', async () => {
-    const rig = await setUp();
+  it('allocate with `osVersion` "^18", with `imageTag` on iOS (with a model and without), with an OS the driver lacks, or with a `deviceBaseline` Simlock refuses (unknown, model or platform mismatch, stale, an invalid name, beside `physical`) answers `refused by simlock:` with simlock\'s own message and leaves no lease; under `downloads.policy: always` the missing OS is installed for a named model and still refused without one', async () => {
+    const rig = await setUp({ drivers: (clock) => [iosDriver(clock), androidDriver(clock)] });
     const refusals: readonly Record<string, unknown>[] = [
       { osVersion: "^18" },
       { device: "iPhone 17 Pro", imageTag: "default" },
@@ -863,7 +863,48 @@ describe("the agent-device front, through the whole worker daemon", () => {
       const answer = await envelopeOf(await allocate(rig, index + 1, extra));
       expect(answer.error?.message).toBe(`refused by simlock: ${expected}`);
     }
+
+    await saveBaseline(rig, "logged-in", { model: "iPhone 16", platform: "ios" });
+    await saveBaseline(rig, "went-stale", { model: "iPhone 16", platform: "ios" });
+    const sources = await rig.driver.listSources();
+    const [, staleSource] = sources;
+    rig.driver.setSources(
+      sources.map((source) =>
+        source === staleSource ? { ...source, staleReason: "runtime is not installed" } : source,
+      ),
+    );
+    await rig.daemon.dispatch("baseline.list", {}, adminSession);
+    const baselineRefusals: readonly (readonly [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ])[] = [
+      [{ deviceBaseline: "no-such" }, { baseline: "no-such" }],
+      [
+        { device: "iPhone 17 Pro", deviceBaseline: "logged-in" },
+        { baseline: "logged-in", model: "iPhone 17 Pro" },
+      ],
+      [
+        { deviceBaseline: "logged-in", platform: "android" },
+        { baseline: "logged-in", platform: "android" },
+      ],
+      [{ deviceBaseline: "went-stale" }, { baseline: "went-stale" }],
+      [{ deviceBaseline: "Logged In" }, { baseline: "Logged In" }],
+      [
+        { deviceBaseline: "logged-in", physical: true },
+        { baseline: "logged-in", physical: true },
+      ],
+    ];
+    for (const [index, [extra, spec]] of baselineRefusals.entries()) {
+      const expected = await simlockMessage(rig, {
+        leaseId: hex(190 + index),
+        platform: "ios",
+        ...spec,
+      });
+      const answer = await envelopeOf(await allocate(rig, 100 + index, extra));
+      expect(answer.error?.message).toBe(`refused by simlock: ${expected}`);
+    }
     expect(await leases(rig)).toEqual([]);
+    expect(allocatesReceived(rig)).toEqual([]);
     expect(rig.driver.calls.map((call) => call.operation)).not.toContain("installComponent");
 
     const always = await setUp({ downloads: "always" });
