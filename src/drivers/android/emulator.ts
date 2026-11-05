@@ -267,7 +267,9 @@ export class Emulator {
         ...this.#flags,
         ...launchArgs,
       ],
-      { env: this.#env(data), stdio: { file: logPath } },
+      // why: on Windows a kill otherwise ends `emulator.exe` alone, and its qemu child keeps
+      // running with the guest's RAM; no adb command asks for this (the 5037 server rule).
+      { env: this.#env(data), killTree: true, stdio: { file: logPath } },
     );
     handle.unref();
     // why: No announcement here, deliberately. adb answers `host:emulator:<port>` by connecting

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { NodeProcessRunner } from "./index.js";
+import { NodeProcessRunner, type ProcessHandle, type ProcessRunOptions } from "./index.js";
 import { childLaunch } from "./windows-command.js";
 
 const sdkmanager = String.raw`C:\Android\Sdk/cmdline-tools/latest/bin/sdkmanager.bat`;
@@ -136,6 +136,34 @@ describe.runIf(process.platform === "win32")("NodeProcessRunner on Windows", () 
     }
   });
 
+  /**
+   * why: `emulator.exe` runs the emulator itself as a child (`qemu-system-x86_64-headless.exe`);
+   * a kill that reached only the parent left that child running with its RAM and console port.
+   * The child here is `detached` because libuv otherwise puts it in a job object that ends it with
+   * its parent, which `emulator.exe` does not do for qemu.
+   */
+  it("ends the children of an .exe spawned with killTree, not only the .exe, and reports no exit code", async () => {
+    await withParentOfDetachedChild({ killTree: true }, async (handle, childPid) => {
+      handle.kill("SIGKILL");
+
+      await expect(handle.wait()).resolves.toMatchObject({ code: null });
+      await expect.poll(() => isAlive(childPid), { timeout: 5_000 }).toBe(false);
+    });
+  });
+
+  /**
+   * why: an `adb` client can start the adb server as its child, and for a phone that is the
+   * shared 5037 server, which a timed-out command must not take down with it.
+   */
+  it("kills an .exe spawned without killTree alone, leaving its children running", async () => {
+    await withParentOfDetachedChild({}, async (handle, childPid) => {
+      handle.kill("SIGKILL");
+
+      await handle.wait();
+      expect(isAlive(childPid)).toBe(true);
+    });
+  });
+
   it("reports a batch file's own exit code when kill comes after cmd.exe exited but a grandchild still holds its output", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock bat "));
     const pidFile = join(directory, "grandchild.pid");
@@ -169,6 +197,34 @@ exit /b 0
     }
   });
 });
+
+async function withParentOfDetachedChild(
+  options: ProcessRunOptions,
+  use: (handle: ProcessHandle, childPid: number) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "simlock exe "));
+  const pidFile = join(directory, "child.pid");
+  const childScript = `require('fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`;
+  const parentScript = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}, process.argv[1]], { detached: true, stdio: 'ignore' }); setInterval(() => {}, 1000)`;
+  let handle: ProcessHandle | undefined;
+  let childPid: number | undefined;
+  try {
+    handle = new NodeProcessRunner().spawn(
+      process.execPath,
+      ["-e", parentScript, pidFile],
+      options,
+    );
+    await expect
+      .poll(() => readFile(pidFile, "utf8").catch(() => ""), { timeout: 5_000 })
+      .not.toBe("");
+    childPid = Number(await readFile(pidFile, "utf8"));
+    await use(handle, childPid);
+  } finally {
+    handle?.kill("SIGKILL");
+    if (childPid !== undefined && isAlive(childPid)) process.kill(childPid);
+    await rm(directory, { force: true, recursive: true });
+  }
+}
 
 function isAlive(pid: number): boolean {
   try {

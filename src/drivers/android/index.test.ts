@@ -293,6 +293,24 @@ describe("AndroidDriver", () => {
     },
   );
 
+  // why: On Windows a kill ends the child alone, and `emulator.exe`'s qemu child would keep its
+  // RAM; but an `adb` client can start the adb server as its child, and for a phone that is the
+  // shared 5037 server, which a tree kill would take down.
+  it("asks for a tree kill when it starts the emulator, and for no adb command", async () => {
+    const harness = await provisionedHarness();
+
+    await harness.driver.makeReady(harness.device);
+
+    const emulatorCalls = harness.runner.calls.filter(
+      (call) => call.command === binaries.emulator && call.args.includes("-avd"),
+    );
+    const adbCalls = harness.runner.calls.filter((call) => call.command === binaries.adb);
+    expect(emulatorCalls.length).toBeGreaterThan(0);
+    expect(emulatorCalls.filter((call) => call.options.killTree !== true)).toEqual([]);
+    expect(adbCalls.length).toBeGreaterThan(0);
+    expect(adbCalls.filter((call) => call.options.killTree !== undefined)).toEqual([]);
+  });
+
   // why: The gRPC port follows the reserved console port, so two parallel leases never share one.
   it("puts the gRPC endpoint at the reserved console port plus 3000", async () => {
     const filesystem = await androidFilesystem();

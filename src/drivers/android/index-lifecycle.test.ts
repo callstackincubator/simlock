@@ -62,6 +62,7 @@ const home = ANDROID_HOME_DIRECTORY;
 // why: The emulator outlives the daemon, so it is spawned detached; its output goes to the log file in its AVD folder.
 const emulatorOptions = {
   env: { ...scopedEnv, ANDROID_EMU_CRASH_REPORTING_DATABASE: `${avdDirectory}/emu-crash.db` },
+  killTree: true,
   stdio: { file: `${avdDirectory}/simlock_one/simlock.avd/emulator.log` },
 } as const;
 
