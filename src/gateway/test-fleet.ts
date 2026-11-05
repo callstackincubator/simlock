@@ -23,8 +23,9 @@ class FakeDirectory implements WorkerDirectory {
    * `undefined` -- the real window `WorkerLink#reachable`/`#client` can disagree in, between a
    * reconnecting link's `#closed` clearing and its own handshake finishing (`#client` is not
    * assigned until `start()` completes). Distinct from `unreachable` above, which models
-   * `reachable: false` instead -- a different code path in `#attempt`/`#forwardToWorker` that no
-   * test previously exercised the *first* of the two ways. */
+   * `reachable: false` instead -- a different code path in `FleetLeaseCoordinator#attempt`/
+   * `FleetForwarding#forwardToWorker` that no test previously exercised the *first* of the two
+   * ways. */
   readonly reachableButNoClient = new Set<string>();
   readonly refreshCalls: string[] = [];
   readonly catalogRefreshCalls: string[] = [];

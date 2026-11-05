@@ -131,9 +131,9 @@ export interface FleetLeaseCoordinatorOptions {
    * authoritative for an ordinary timeout (it owns the process and can kill it) and is expected
    * to fire first, since the gateway's default is deliberately the longer of the two. */
   readonly execTimeoutMs: number;
-  /** P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded `lease.request`,
-   * the one uplink call that used to have no timeout of its own. See
-   * `#withLeaseRequestTimeout`'s own doc comment. */
+  /** why: P2 (round 2 review): `gateway.leaseRequestTimeoutMs` -- bounds a forwarded
+   * `lease.request`, the one uplink call that used to have no timeout of its own. See
+   * `FleetForwarding.withLeaseRequestTimeout`'s own doc comment. */
   readonly leaseRequestTimeoutMs: number;
   /**
    * `lease.requestRetentionMs`/`lease.maxRequestRecords`. A gateway keeps its lease requests in
@@ -663,16 +663,17 @@ export class FleetLeaseCoordinator {
       });
     };
 
-    // P4 (round 3 review): H4's own reasoning applies verbatim here -- `#withLeaseRequestTimeout`
-    // settling `WORKER_UNREACHABLE` only stops *this* call's returned promise from being awaited
+    // why: P4 (round 3 review): H4's own reasoning applies verbatim here --
+    // `FleetForwarding.withLeaseRequestTimeout` settling `WORKER_UNREACHABLE` only stops *this*
+    // call's returned promise from being awaited
     // any further, not the worker's own still-pending `lease.request` RPC, whose `onProgress`
     // closure below stays live for as long as the worker keeps pushing progress. Before this,
     // a late `progress` push after the timeout had already rejected the waiter still called
     // `announceDispatched()` and emitted `request.dispatched` for a request this gateway had
     // already told its caller was `WORKER_UNREACHABLE` -- a false past-tense fact against
     // `docs/internal/EVENTS.md`'s own "and the worker took it". Same mechanism as `exec`'s `detached`, not
-    // a second bespoke one: flipped by `#withLeaseRequestTimeout`'s own `onTimeout` hook, checked
-    // here before either `announceDispatched()` or `notifyProgress` run.
+    // a second bespoke one: flipped by `FleetForwarding.withLeaseRequestTimeout`'s own `onTimeout`
+    // hook, checked here before either `announceDispatched()` or `notifyProgress` run.
     let detached = false;
     let grant: LeaseGrant;
     try {
@@ -803,8 +804,8 @@ export class FleetLeaseCoordinator {
   }
 
   /**
-   * A terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never rejects a
-   * probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
+   * why: a terminal failure past `#attempt`'s `NO_CAPACITY`/stale-view check. A worker never
+   * rejects a probe: where it answered, it only declined (`lease.declined`, relayed onto this bus with
    * `workerId` added by `WorkerLink`), and where it did not (`WORKER_UNREACHABLE`, a gateway-side
    * `INTERNAL`) it usually emitted nothing; after a dispatch timeout the worker's request is
    * still running and may yet end in a relayed `lease.declined` or a grant, since the timeout
@@ -815,15 +816,15 @@ export class FleetLeaseCoordinator {
    * - a transport failure (the uplink itself, not the worker's own answer) -- ADR §28/§29 name
    *   `WORKER_UNREACHABLE` for that, not whatever the client's own connection loss happens to be
    *   called (`daemon/dispatch.js`'s `SimlockError.kind` is what tells the two apart);
-   * - `#withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) -- never a
-   *   `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
+   * - `FleetForwarding.withLeaseRequestTimeout`'s own `DispatchError` (P2, round 2 review) --
+   *   never a `SimlockError`, since it is raised here, by this gateway's own timer, not by the worker's
    *   answer (the request itself did reach the worker and keeps running there) -- forwarded as-is;
    * - anything else that is neither of those (H1, round 2 review): not a fact about the worker,
    *   since every real transport failure already arrives as a `kind: "transport"` `SimlockError`,
    *   so this is a bug in this coordinator's own request-building code. `WORKER_UNREACHABLE`
    *   used to answer this case too, misreporting a gateway-side crash as "the machine is
-   *   unreachable"; `INTERNAL` is what `#forwardToWorker`'s matching branch answers for the same
-   *   shape of failure.
+   *   unreachable"; `INTERNAL` is what `FleetForwarding#forwardToWorker`'s matching branch
+   *   answers for the same shape of failure.
    */
   #classifyLeaseRequestError(error: unknown, workerId: string): DispatchError {
     if (error instanceof DispatchError) return error;
