@@ -356,6 +356,7 @@ export class AndroidDriver implements Driver {
     if (options.tcpListener === undefined) return undefined;
     return createAndroidDeviceTcp({
       clock: options.clock,
+      connector: options.tcpStreamConnector,
       listeners: options.tcpListener,
       target,
       isOwn: (device) => this.#ownership.deviceIsOwn(device),
