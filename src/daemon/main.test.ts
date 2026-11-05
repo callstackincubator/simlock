@@ -1747,6 +1747,90 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
   });
 });
 
+describe("startDaemon stop with a lease request booting its device (#1200)", () => {
+  const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("disposes the driver only after a lease request's boot has ended, and deletes the device that failed to boot", async () => {
+    // why: records the order of the driver's boot, destroy and disposal, and holds a new device's boot until the test fails it.
+    class HeldBootDriver extends FakeDriver {
+      readonly order: string[] = [];
+      readonly held: ((error: Error) => void)[] = [];
+      override async makeReady(
+        device: Parameters<FakeDriver["makeReady"]>[0],
+        options: Parameters<FakeDriver["makeReady"]>[1],
+      ): ReturnType<FakeDriver["makeReady"]> {
+        if (options.purpose !== "prepare") return super.makeReady(device, options);
+        this.order.push("boot started");
+        return new Promise((_resolve, reject) =>
+          this.held.push((error) => {
+            this.order.push("boot failed");
+            reject(error);
+          }),
+        );
+      }
+      override async destroy(device: Parameters<FakeDriver["destroy"]>[0]): Promise<void> {
+        this.order.push("destroy");
+        await super.destroy(device);
+      }
+      async dispose(): Promise<void> {
+        this.order.push("dispose");
+      }
+    }
+    const clock = new FakeClock(1_000);
+    const driver = new HeldBootDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    const { daemon, directory } = await start({ clock, drivers: [driver] });
+    const leased = daemon.dispatch(
+      "lease.request",
+      { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId: "agent-1" },
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "agent",
+        role: "agent",
+      },
+    );
+    const settled = leased.then(
+      () => "granted",
+      () => "failed",
+    );
+    for (let turn = 0; turn < 200 && driver.held.length === 0; turn += 1) {
+      await turnOfTheEventLoop();
+    }
+    expect(driver.order).toEqual(["boot started"]);
+
+    const stopped = daemon.stop("test-stop");
+    let stopEnded = false;
+    void stopped.then(() => {
+      stopEnded = true;
+    });
+    for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+    expect(driver.order).toEqual(["boot started"]);
+    for (const fail of driver.held.splice(0))
+      fail(new Error("Timed out waiting for device to boot"));
+    await stopped;
+    expect(await settled).toBe("failed");
+    expect(driver.order).toEqual(["boot started", "boot failed", "destroy", "dispose"]);
+
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "1" },
+      state,
+    });
+    expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["deleted"]);
+    state.close();
+  });
+});
+
 describe("startDaemon stop with a health recovery in flight (#1000)", () => {
   const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
   const turns = async (count: number) => {
