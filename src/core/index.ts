@@ -118,6 +118,7 @@ export {
 } from "./driver-catalog.js";
 export {
   DeviceTcpError,
+  unsupportedEmulatorPortMessage,
   unsupportedTunnelMessage,
   type DeviceReverse,
   type DeviceTcp,

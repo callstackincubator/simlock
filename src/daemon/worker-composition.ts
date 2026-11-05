@@ -311,6 +311,9 @@ export async function composeWorker(
         supports: (platform, device) => catalog.supportsDeviceTcp(platform, device),
         reverse: (platform, device, devicePort, signal) =>
           catalog.reverseDevicePort(platform, device, devicePort, signal),
+        supportsEmulatorPort: (platform, device) => catalog.supportsEmulatorPort(platform, device),
+        connectEmulatorPort: (platform, device, name, signal) =>
+          catalog.connectEmulatorPort(platform, device, name, signal),
       },
       inputs: leaseInputs,
       screens: catalog,

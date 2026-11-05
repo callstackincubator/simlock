@@ -1,6 +1,6 @@
 # 0064. A tunnel reaches an iOS simulator's ports and an emulator's adb port
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-04
 - **Issue:** [#1282](https://github.com/callstackincubator/simlock/issues/1282)
 - **Narrows:** [ADR 0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md)

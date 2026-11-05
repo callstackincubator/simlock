@@ -195,6 +195,8 @@ A tunnel connects ports between your machine and a leased Android device or iOS 
 
 iOS simulators take tunnels; an iPhone does not. A simulator has no network of its own: an app in it listens on the worker's loopback and reaches the worker's ports. So `reverse 8081` makes the worker listen on port 8081 itself, on `127.0.0.1` and `::1`, and two leases on one worker cannot reverse the same port. `reverse` is refused with `TUNNEL_PORT_IN_USE` when anything on the worker already listens on that port. `forward 9100` reaches port 9100 only when a process of your own lease's simulator listens there; a port that another simulator's app, the worker's own tools or nothing listens on is closed, and `simlock tunnel` prints the reason on stderr.
 
+An Android emulator also takes the **`emulator adb`** tunnel: your own `adb`, and so Android Studio, lists the remote emulator as a device and drives it.
+
 ### Before you start
 
 Tunnels are off by default. Turn on `capabilities.tunnel.enabled` on the worker, and on the gateway too if you go through one, then restart each daemon.
@@ -233,6 +235,24 @@ What else to know:
 - On a phone, Simlock only removes the rules its own tunnels set. It never clears the phone's other `adb reverse` or `adb forward` rules.
 - If the worker crashes while a tunnel is open, the tunnel's rule stays on the phone until it reboots or you remove it with `adb reverse --remove`. Until then, that port can't be used for new tunnels.
 
+### Drive a remote emulator with your own adb
+
+```bash
+simlock tunnel emulator adb
+```
+
+```text
+emulator localhost:61544 -> emulator:adb (lease 9c1d)
+adb: connected to 127.0.0.1:61544
+```
+
+The command runs `adb connect` for you and `adb disconnect` when you press Ctrl-C, so `adb devices` on your machine lists `127.0.0.1:61544` as a `device`. Shell, install, Logcat, the debugger and `adb reverse` work on it. Your adb and Simlock's own adb server on the worker both stay connected to the emulator at once. `emulator adb:6000` picks the caller port yourself.
+
+- The lease must be on an Android emulator. A phone or an iOS simulator is refused with `TUNNEL_UNSUPPORTED`.
+- A Play Store image keeps `ro.adb.secure` on, so your adb lists it as `unauthorized` and the command warns `adb answered: failed to authenticate`. Lease a `google_apis` image instead.
+- If the command cannot find or run your adb, it warns and keeps the tunnel open; run the `adb connect` it prints.
+- Rules you add with `adb reverse` live on the emulator and go when the lease ends. A rule on a device port you later pass to `simlock tunnel reverse` makes that tunnel fail with `TUNNEL_PORT_IN_USE`.
+
 ### Build your own tunnel client
 
 `simlock tunnel` covers most needs. If you write your own client, open `GET /v1/leases/<lease-id>/tunnel` as a WebSocket with your token, on the worker or the gateway.
@@ -252,11 +272,13 @@ What else to know:
 | `0x05` | `END` | Both | Closes one direction; the other stays open |
 | `0x06` | `RESET` | Both | Closes the connection; from the worker, JSON `{reason}` |
 
-**Setting up.** `HELLO` names 1 to 8 tunnels per lease, across all its sockets, each `reverse` or `forward`, with device ports from 1024 to 65535. A `HELLO` the worker can't meet gets `REFUSED`, and nothing it named stays set up. The codes are in the [errors reference](/simlock/docs/reference/errors#tunnels). A frame that breaks the protocol is refused with `BAD_REQUEST` the same way.
+**Setting up.** `HELLO` names 1 to 8 tunnels per lease, across all its sockets, each `reverse` or `forward`, with device ports from 1024 to 65535, or `{"kind":"emulator","emulatorPort":"adb"}` for an Android emulator's adb port (any other `emulatorPort` is `BAD_REQUEST`; a lease that is not on an emulator is refused `TUNNEL_UNSUPPORTED`). A `HELLO` the worker can't meet gets `REFUSED`, and nothing it named stays set up. The codes are in the [errors reference](/simlock/docs/reference/errors#tunnels). A frame that breaks the protocol is refused with `BAD_REQUEST` the same way.
 
 **Reverse connections.** Each connection the device makes to `localhost:<devicePort>` arrives as `OPEN`, with an odd connection number. Its bytes then flow as `DATA` both ways.
 
 **Forward connections.** You open them: send `OPEN` with an even connection number above your last one, and JSON `{"kind":"forward","devicePort":<port>}` naming a `forward` tunnel of this socket, then send `DATA` at once. The worker answers `RESET` when nothing listens on the device port (on an iOS simulator: when no process of the lease's simulator does), when the device doesn't answer within 5 seconds (reason `timeout`), or when 256 connections are already open on the socket (reason `too many connections`). An `OPEN` that breaks these rules is refused with `BAD_REQUEST`.
+
+**Emulator connections.** Like forward connections, you open them with `OPEN` and JSON `{"kind":"emulator","emulatorPort":"adb"}`, for an `emulator` tunnel of this socket. The worker connects to the emulator's adb port, and answers `RESET` when nothing listens there or the emulator does not answer within 5 seconds (reason `timeout`).
 
 **Flow control.** Each direction of a connection starts with a 262144-byte window. The reader grants more with `CREDIT`. A reader that grants none pauses that one connection and no other.
 

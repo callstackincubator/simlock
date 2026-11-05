@@ -10,6 +10,8 @@ import {
   TUNNEL_WINDOW_BYTES,
 } from "../../contract/index.js";
 import {
+  type ProcessHandle,
+  ProcessSpawnError,
   type TcpListener,
   type TcpStream,
   type TimerHandle,
@@ -27,13 +29,17 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
 const CALLER_CONNECT_TIMEOUT_MS = 5_000;
 const CLOSE_NORMAL = 1000;
 const WARN_EVERY_MS = 10_000;
+const ADB_CONNECT_TIMEOUT_MS = 10_000;
+const ADB_DISCONNECT_TIMEOUT_MS = 2_000;
 const MAX_URL_CHARS = 2048;
 const MAX_TOKEN_CHARS = 4096;
 const MAX_LEASE_CHARS = 256;
 
 interface TunnelSpec {
-  readonly kind: "reverse" | "forward";
+  readonly kind: "reverse" | "forward" | "emulator";
+  // why: an emulator tunnel names no device port (it names the port `adb`), so its device port is 0.
   readonly devicePort: number;
+  // why: 0 is a caller port still to be picked by the OS, which only an emulator tunnel may leave open.
   readonly callerPort: number;
 }
 
@@ -45,12 +51,31 @@ function portOf(text: string, what: string): number {
   return port;
 }
 
+function parseEmulator(text: string): TunnelSpec {
+  const colon = text.indexOf(":");
+  const name = colon === -1 ? text : text.slice(0, colon);
+  if (name !== "adb") throw new UsageError(`Unknown emulator port "${name}": use adb`);
+  const callerText = text.slice(colon + 1);
+  const callerPort = colon === -1 ? 0 : portOf(callerText, "caller");
+  if (colon !== -1 && callerPort < FORWARD_CALLER_PORT_MIN) {
+    throw new UsageError(
+      `emulator caller port "${callerText}" is below ${String(FORWARD_CALLER_PORT_MIN)}`,
+    );
+  }
+  return { callerPort, devicePort: 0, kind: "emulator" };
+}
+
 function parseTunnel(words: readonly string[], index: number): TunnelSpec {
   const kind = words[index] as string;
-  if (kind !== "reverse" && kind !== "forward") {
-    throw new UsageError(`Unknown tunnel kind "${kind}": use reverse or forward`);
-  }
   const text = words[index + 1] ?? "";
+  if (kind === "emulator") return parseEmulator(text);
+  if (kind !== "reverse" && kind !== "forward") {
+    throw new UsageError(`Unknown tunnel kind "${kind}": use reverse, forward or emulator`);
+  }
+  return parseDeviceTunnel(kind, text);
+}
+
+function parseDeviceTunnel(kind: "reverse" | "forward", text: string): TunnelSpec {
   const colon = text.indexOf(":");
   const device = colon === -1 ? text : text.slice(0, colon);
   const devicePort = portOf(device, "device");
@@ -72,6 +97,9 @@ function parseTunnels(words: readonly string[]): readonly TunnelSpec[] {
   for (let index = 0; index < words.length; index += 2) specs.push(parseTunnel(words, index));
   if (specs.length > TUNNEL_MAX_TUNNELS)
     throw new UsageError(`At most ${String(TUNNEL_MAX_TUNNELS)} tunnels`);
+  if (specs.filter(({ kind }) => kind === "emulator").length > 1) {
+    throw new UsageError("Name emulator adb once");
+  }
   const callerPorts = specs.map(({ callerPort }) => callerPort);
   const repeated = callerPorts.find((port, at) => callerPorts.indexOf(port) !== at);
   if (repeated !== undefined) {
@@ -145,7 +173,7 @@ function relayConnections(
   socket: WebSocketClient,
   environment: CliEnvironment,
   warn: (devicePort: number, callerPort: number) => void,
-  warnForward: (devicePort: number, reason: string) => void,
+  warnForward: (label: string, reason: string) => void,
 ) {
   interface Relayed {
     readonly stream: TcpStream;
@@ -155,7 +183,7 @@ function relayConnections(
     sentEnd: boolean;
     receivedEnd: boolean;
     // why: set on a forward connection, so the reason of a worker's reset is shown against the tunnel it belongs to.
-    readonly forwardPort: number | undefined;
+    readonly resetLabel: string | undefined;
   }
   const streams = new Map<number, Relayed>();
   // why: a connection is dropped only when both directions have ended; one half alone leaves the other still carrying data.
@@ -200,9 +228,9 @@ function relayConnections(
     new DataView(credit.buffer).setUint32(0, size);
     socket.send(encodeTunnelFrame(TUNNEL_TAG.credit, conn, credit));
   };
-  const adopt = (conn: number, stream: TcpStream, forwardPort?: number): void => {
+  const adopt = (conn: number, stream: TcpStream, resetLabel?: string): void => {
     const relayed: Relayed = {
-      forwardPort,
+      resetLabel,
       stream,
       receivedEnd: false,
       sentEnd: false,
@@ -250,8 +278,8 @@ function relayConnections(
         .catch(() => failed(frame.conn, connection));
     } else if (frame.tag === TUNNEL_TAG.reset) {
       const reason = field(payloadJson(frame.payload), "reason");
-      if (connection.forwardPort !== undefined && typeof reason === "string") {
-        warnForward(connection.forwardPort, reason);
+      if (connection.resetLabel !== undefined && typeof reason === "string") {
+        warnForward(connection.resetLabel, reason);
       }
       connection.stream.close();
       streams.delete(frame.conn);
@@ -398,6 +426,88 @@ function frameFailure(frame: { payload: Uint8Array }, leaseId: string): TunnelFa
   );
 }
 
+// why: the caller's own adb is the one that lists the remote emulator, so the command runs it and not Simlock's. Its output is read as text, the lines of a fresh server's startup (`* daemon ...`) dropped; a connect that does not answer is killed after 10 s so it cannot hold the tunnel's output, and one still running when the command leaves is killed without a warning.
+function callerAdb(environment: CliEnvironment) {
+  let used: string | undefined;
+  let target = "";
+  let running: ProcessHandle | undefined;
+  let leaving = false;
+  const warn = (what: string): void => {
+    environment.stderr.write(`warning: emulator adb: ${what}; run: adb connect ${target}\n`);
+  };
+  const start = (args: readonly string[]): ProcessHandle | undefined => {
+    const runner = environment.processRunner;
+    for (const adb of used === undefined ? (environment.adbCandidates ?? ["adb"]) : [used]) {
+      try {
+        if (runner === undefined) return undefined;
+        const handle = runner.spawn(adb, args);
+        used = adb;
+        return handle;
+      } catch (error) {
+        if (!(error instanceof ProcessSpawnError)) throw error;
+      }
+    }
+    return undefined;
+  };
+  // why: a command that outlives its limit is killed, and the caller is told whether that happened.
+  const waitFor = async (handle: ProcessHandle, limitMs: number) => {
+    let timedOut = false;
+    const timer = environment.clock.setTimer(limitMs, () => {
+      timedOut = true;
+      handle.kill();
+    });
+    const result = await handle.wait();
+    environment.clock.cancel(timer);
+    return { result, timedOut };
+  };
+  return {
+    async connect(callerPort: number): Promise<void> {
+      target = `127.0.0.1:${String(callerPort)}`;
+      running = start(["connect", target]);
+      if (running === undefined) {
+        warn("adb was not found");
+        return;
+      }
+      const { result, timedOut } = await waitFor(running, ADB_CONNECT_TIMEOUT_MS);
+      if (leaving) return;
+      if (timedOut) {
+        warn("adb did not answer in 10 s");
+        return;
+      }
+      const lines = `${result.stdout}\n${result.stderr}`
+        .split(/\r?\n/)
+        .map((text) => text.trim())
+        .filter((text) => text !== "" && !text.startsWith("*"));
+      if (lines.some((text) => /^(already )?connected to /.test(text))) {
+        environment.stdout.write(`adb: connected to ${target}\n`);
+      } else {
+        warn(`adb answered: ${escapeControl(lines[0] ?? "")}`);
+      }
+    },
+    // why: the disconnect removes the tunnel's device from the caller's adb, whatever its answer, and is bounded so a hung adb cannot hold the command's exit.
+    async disconnect(): Promise<void> {
+      leaving = true;
+      running?.kill();
+      if (used === undefined) return;
+      const handle = start(["disconnect", target]);
+      if (handle !== undefined) await waitFor(handle, ADB_DISCONNECT_TIMEOUT_MS);
+    },
+  };
+}
+
+// why: the line a tunnel prints once the worker has set it up.
+function routeOf({ callerPort, devicePort, kind }: TunnelSpec): string {
+  const caller = `localhost:${String(callerPort)}`;
+  if (kind === "forward") return `forward ${caller} -> device:${String(devicePort)}`;
+  if (kind === "emulator") return `emulator ${caller} -> emulator:adb`;
+  return `reverse device:${String(devicePort)} -> ${caller}`;
+}
+
+// why: the words a tunnel is named by in a warning or a refusal; an emulator tunnel has no device port.
+function tunnelLabel(spec: TunnelSpec): string {
+  return spec.kind === "emulator" ? "emulator adb" : `${spec.kind} ${String(spec.devicePort)}`;
+}
+
 function serve(
   environment: CliEnvironment,
   socket: WebSocketClient,
@@ -406,8 +516,12 @@ function serve(
   leaseId: string,
   base: string,
 ): Promise<number> {
+  const adb = callerAdb(environment);
+  // why: the disconnect starts when the exit does, and the command ends when it has.
+  let leaving: Promise<void> | undefined;
+  const leave = (): Promise<void> => (leaving ??= adb.disconnect().catch(() => undefined));
   const warned = new Map<number, number>();
-  const warnedForward = new Map<number, number>();
+  const warnedForward = new Map<string, number>();
   const relay = relayConnections(
     socket,
     environment,
@@ -420,14 +534,12 @@ function serve(
         `reverse ${String(devicePort)}: nothing listening on localhost:${String(callerPort)}\n`,
       );
     },
-    (devicePort, reason) => {
+    (label, reason) => {
       const now = environment.clock.now();
-      const last = warnedForward.get(devicePort);
+      const last = warnedForward.get(label);
       if (last !== undefined && now - last < WARN_EVERY_MS) return;
-      warnedForward.set(devicePort, now);
-      environment.stderr.write(
-        `warning: forward ${String(devicePort)}: ${escapeControl(reason)}\n`,
-      );
+      warnedForward.set(label, now);
+      environment.stderr.write(`warning: ${label}: ${escapeControl(reason)}\n`);
     },
   );
   let nextCallerConnection = 2;
@@ -438,10 +550,14 @@ function serve(
       encodeTunnelFrame(
         TUNNEL_TAG.open,
         conn,
-        JSON.stringify({ devicePort: spec.devicePort, kind: "forward" }),
+        JSON.stringify(
+          spec.kind === "emulator"
+            ? { kind: "emulator", emulatorPort: "adb" }
+            : { devicePort: spec.devicePort, kind: "forward" },
+        ),
       ),
     );
-    relay.adopt(conn, stream, spec.devicePort);
+    relay.adopt(conn, stream, tunnelLabel(spec));
   };
   // why: an OPEN waits for its loopback connect, and the DATA behind it must not overtake it, so frames are handled one at a time.
   let handled = Promise.resolve();
@@ -463,6 +579,7 @@ function serve(
     function end(failure: TunnelFailure | undefined, unresponsive = false): void {
       if (finished) return;
       finished = true;
+      void leave();
       environment.signals.off("SIGINT", stop);
       environment.signals.off("SIGTERM", stop);
       environment.clock.cancel(helloTimer);
@@ -475,12 +592,15 @@ function serve(
         // why: a worker that never answers the close would leave the socket holding the process open for 30 s past the bound.
         if (unresponsive) socket.terminate();
       }
-      if (failure === undefined) resolve(0);
-      else reject(failure);
+      void leave().then(() => {
+        if (failure === undefined) resolve(0);
+        else reject(failure);
+      });
     }
     function stop(): void {
       if (finished) return;
       stopping = true;
+      void leave();
       closeTimer = environment.clock.setTimer(CLOSE_WAIT_MS, () => end(undefined, true));
       socket.close(CLOSE_NORMAL, "");
     }
@@ -517,11 +637,10 @@ function serve(
         gate.open = announce;
         for (const { spec, stream } of gate.held.splice(0)) announce(spec, stream);
         for (const { callerPort, devicePort, kind } of specs) {
-          const route =
-            kind === "reverse"
-              ? `reverse device:${String(devicePort)} -> localhost:${String(callerPort)}`
-              : `forward localhost:${String(callerPort)} -> device:${String(devicePort)}`;
-          environment.stdout.write(`${route} (lease ${escapeControl(leaseId)})\n`);
+          environment.stdout.write(
+            `${routeOf({ callerPort, devicePort, kind })} (lease ${escapeControl(leaseId)})\n`,
+          );
+          if (kind === "emulator") void adb.connect(callerPort);
         }
         return;
       }
@@ -540,7 +659,11 @@ function serve(
         TUNNEL_TAG.hello,
         0,
         JSON.stringify({
-          tunnels: specs.map(({ devicePort, kind }) => ({ devicePort, kind })),
+          tunnels: specs.map((spec) =>
+            spec.kind === "emulator"
+              ? { kind: "emulator", emulatorPort: "adb" }
+              : { devicePort: spec.devicePort, kind: spec.kind },
+          ),
         }),
       ),
     );
@@ -558,24 +681,31 @@ async function run(
   });
   if (help) {
     environment.stdout.write(
-      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
+      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
     );
     return 0;
   }
-  const specs = parseTunnels(positionals);
+  const parsed = parseTunnels(positionals);
   const base = checkedUrl(typeof url === "string" ? url : environment.tunnelUrl);
   const secret = checkedToken(token ?? environment.tunnelToken);
   const named = checkedLease(typeof lease === "string" ? lease : undefined);
   const listeners: TcpListener[] = [];
   const gate: ForwardGate = { held: [], open: undefined };
+  // why: a free caller port is only known once its listener is bound, so the tunnels are served with the ports they got.
+  const specs: TunnelSpec[] = [];
   try {
-    for (const spec of specs) {
-      if (spec.kind !== "forward") continue;
-      const listener = await environment.tcpListeners.listen(spec.callerPort);
+    for (const named of parsed) {
+      if (named.kind === "reverse") {
+        specs.push(named);
+        continue;
+      }
+      const listener = await environment.tcpListeners.listen(named.callerPort);
+      const spec = listener === undefined ? named : { ...named, callerPort: listener.port };
+      specs.push(spec);
       if (listener === undefined) {
         throw new TunnelFailure(
           "TUNNEL_CALLER_PORT_IN_USE",
-          `forward ${String(spec.devicePort)}: localhost:${String(spec.callerPort)} is already in use`,
+          `${tunnelLabel(spec)}: localhost:${String(spec.callerPort)} is already in use`,
           ERROR_TABLE.TUNNEL_CALLER_PORT_IN_USE.cliExitCode,
         );
       }

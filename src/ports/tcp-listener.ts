@@ -47,7 +47,8 @@ export class NodeTcpListenerFactory implements TcpListenerFactory {
           onConnection: (listener) => {
             listeners.push(listener);
           },
-          port,
+          // why: asked for port 0 the OS picks one, and the caller needs the one it picked.
+          port: typeof bound === "object" && bound !== null ? bound.port : port,
         });
       });
     });
@@ -86,7 +87,11 @@ export class FakeTcpListenerFactory implements TcpListenerFactory {
   readonly busyOn = new Set<string>();
   readonly listeners: FakeTcpListener[] = [];
 
-  listen(port: number, host: LoopbackHost = "127.0.0.1"): Promise<TcpListener | undefined> {
+  #nextFree = 49_152;
+
+  listen(requested: number, host: LoopbackHost = "127.0.0.1"): Promise<TcpListener | undefined> {
+    // why: port 0 asks for any free port, as on a real machine; the fake hands out its own, counting up from the dynamic range.
+    const port = requested === 0 ? this.#nextFree++ : requested;
     if (this.busy.has(port) || this.busyOn.has(`${host}:${String(port)}`)) {
       return Promise.resolve(undefined);
     }
