@@ -2765,6 +2765,41 @@ describe("DaemonServer roles and ownership (ADR 0003 §2-4)", () => {
         .toContain("daemon.stopping");
     });
 
+    it("answers a connection opened while the daemon is stopping: status.get with DAEMON_STOPPING, daemon.stop with stopping true", async () => {
+      let finishSettle!: () => void;
+      const settling = new Promise<void>((resolve) => {
+        finishSettle = resolve;
+      });
+      const harness = await createHarness({
+        resolveRole: { resolve: () => "admin" },
+        settle: () => settling,
+      });
+      const stopping = harness.daemon.stop("test-stop-window");
+      await expect
+        .poll(() => harness.eventBus.replay().map((event) => event.event))
+        .toContain("daemon.stopping");
+
+      const late = await createClient(harness.socketPath);
+      const closed = new Promise<"connection closed">((resolve) =>
+        late.socket.once("close", () => resolve("connection closed")),
+      );
+      const ask = (type: string, payload: unknown) =>
+        Promise.race([late.request(type, payload), closed]);
+      const replies = [
+        await ask("hello", { clientVersion: "test", protocolVersion: DAEMON_PROTOCOL_VERSION }),
+        await ask("status.get", {}),
+        await ask("daemon.stop", {}),
+      ];
+      finishSettle();
+      await stopping;
+
+      expect(replies).toMatchObject([
+        { ok: true },
+        { error: { code: "DAEMON_STOPPING" }, ok: false },
+        { ok: true, payload: { stopping: true } },
+      ]);
+    });
+
     it("still refuses daemon.stop with FORBIDDEN on a version-mismatched connection whose role is agent", async () => {
       const harness = await createHarness({ resolveRole: { resolve: () => "agent" } });
       const client = await createClient(harness.socketPath);
