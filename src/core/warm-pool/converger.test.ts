@@ -3087,6 +3087,7 @@ describe("warm pool learned kinds", () => {
       ...device("d1", "ready", 0).spec,
       baseline: { name: "checkout", version: 1 },
     };
+    const plain = device("d0", "ready", 0).spec;
     const newest = {
       imageTag: "google_apis",
       mode: "slim",
@@ -3095,9 +3096,14 @@ describe("warm pool learned kinds", () => {
       platform: "android",
       version: 2,
     } as const;
-    const run = async (match: Parameters<WarmPool["forgetKinds"]>[0], learnAfter = 1) => {
+    const run = async (
+      match: Parameters<WarmPool["forgetKinds"]>[0],
+      learnAfter = 1,
+      withPlain = false,
+    ) => {
       const state = await openMemoryState([warmPoolOwner]);
       new LearnedKinds(state).learn(learnedBaseline, "l1", now - minute, learnAfter);
+      if (withPlain) new LearnedKinds(state).learn(plain, "l0", now - minute);
       const rig = harness([], { baselines: { checkout: newest }, state });
       const answered = rig.pool.forgetKinds(match);
       return {
@@ -3113,6 +3119,10 @@ describe("warm pool learned kinds", () => {
     expect((await run({ model: "Pixel 8", platform: "android" })).remaining).toBe(0);
     expect((await run({ model: "iPhone 15", platform: "ios" })).answered).toEqual([]);
     expect((await run({ model: "iPhone 15", platform: "ios" })).remaining).toBe(1);
+    // why: a plain kind that shares the baseline row's stored model is forgotten alone: the baseline's row is keyed on its name.
+    const beside = await run({ model: "iPhone 15", platform: "ios" }, 1, true);
+    expect(beside.answered).toEqual([["iPhone 15", undefined]]);
+    expect(beside.remaining).toBe(1);
     expect(
       (await run({ model: "Pixel 8", osVersion: "35", platform: "android" })).answered,
     ).toHaveLength(1);
