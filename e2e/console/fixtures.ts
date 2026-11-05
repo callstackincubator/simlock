@@ -38,6 +38,8 @@ export interface RunningDaemon extends ConsoleDaemon {
   cliBackground(args: readonly string[]): CliBackgroundHandle;
   writeDriverScript(script: FakeDriverScript): Promise<void>;
   stop(): Promise<void>;
+  /** why: a stop waits for a boot still running (#1200), so a test that needs the daemon gone mid-boot ends its process instead. */
+  kill(): Promise<void>;
   start(): Promise<void>;
   dispose(options?: { readonly preservePages?: readonly Page[] }): Promise<void>;
   /** why: stats read completed minutes only, so this moves the usage rows two minutes back. */
@@ -287,6 +289,15 @@ export async function startDaemon(
     if (discovery.error !== undefined) throw discovery.error;
     if (stopError !== undefined) throw stopError;
   };
+  const kill = async () => {
+    const discovery = await discoverDaemonPids(socketPath);
+    if (discovery.error !== undefined) throw discovery.error;
+    for (const pid of discovery.pids) {
+      daemonPids.add(pid);
+      process.kill(pid, "SIGKILL");
+    }
+    await waitForDaemonPidsToExit(daemonPids);
+  };
   const start = async () => {
     const readLog = () => readFile(join(dataDirectory, "daemon.log"), "utf8").catch(() => "");
     daemonMayBeRunning = true;
@@ -371,6 +382,7 @@ export async function startDaemon(
       socketPath,
       start,
       stop,
+      kill,
       async prepareHistoricalUsage() {
         await stop();
         // why: the daemon writes history.db until its process exits, not until its socket goes.

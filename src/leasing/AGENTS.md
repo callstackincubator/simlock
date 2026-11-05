@@ -92,6 +92,8 @@ device under a `grant` claim; presence is read outside the lock and checked
 again inside it before the grant. A leased device read not present twice ends
 its lease as `device-lost` with no reclaim.
 
+`settleAcquisitions()` (on the `Leasing` handle) stops planning for good and waits for every request already provisioning or booting (a queued request starts nothing and ends with the daemon); the daemon calls it in `dispose`, before any driver is disposed, so a stop never disposes a driver under a running boot (#1200).
+
 ## State and timers
 
 | What                            | Default             | Key                                                      |

@@ -804,6 +804,8 @@ async function composeDaemon(
       // why: Before the drivers: a running install is ended through its signal while its driver
       // can still stop the installer process.
       await components.close();
+      // why: a lease request still booting a device would otherwise fail against a disposed driver and leave its adb server and device behind (#1200).
+      await leasing.settleAcquisitions();
       await moduleHost.beforeDriversDispose();
       const disposals = await Promise.allSettled(drivers.map((driver) => driver.dispose?.()));
       for (const [index, disposal] of disposals.entries()) {
