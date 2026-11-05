@@ -126,7 +126,7 @@ The server starts the daemon if it is not running. It renews the agent's lease w
 | `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
 | `release_simulator` | Releases this session's lease. |
 | `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. |
-| `run_on_device` | Runs one `simctl`, `adb` or `devicectl` command on this session's device. Takes `tool`, `args` and, optionally, `stdin` (at most 8,388,608 characters; more is refused with `BAD_REQUEST`). |
+| `run_on_device` | Runs one `simctl`, `adb` or `devicectl` command on this session's device. Takes `tool`, `args` and, optionally, `stdin` (at most 8,388,608 characters; a longer one fails the tool's input validation, before Simlock sees it). |
 | `rotate_device` | Turns this session's iOS simulator to `portrait`, `portrait-upside-down`, `landscape-left` or `landscape-right`. |
 
 To install and launch an app, the agent calls `run_on_device`, for example `{"tool":"simctl","args":["install","/builds/App.app"]}`. Things to know:
