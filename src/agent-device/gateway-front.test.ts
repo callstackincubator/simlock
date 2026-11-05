@@ -906,16 +906,40 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(reached()).toBe(4);
   });
 
-  it('allocate through the gateway with `osVersion` ">=18" reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device`', async () => {
+  it('allocate through the gateway with `osVersion` ">=18" or a `deviceBaseline` reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device` (with `baseline` for the baseline); an unknown `deviceBaseline` answers `refused by simlock:`', async () => {
     const rig = await setUp();
     const tap = tapDispatch(rig.gateway);
+    const worker = await first(rig).daemon;
+    const held = await worker.dispatch(
+      "lease.request",
+      { platform: "ios" },
+      sessionFor(principals.one),
+    );
+    await worker.dispatch(
+      "baseline.save",
+      { leaseId: held.lease.id, name: "logged-in" },
+      adminSession,
+    );
+    await expect
+      .poll(async () =>
+        (await rig.gateway.dispatch("baseline.list", {}, adminSession)).baselines.map(
+          (entry) => entry.name,
+        ),
+      )
+      .toEqual(["logged-in"]);
 
     const answer = await envelopeOf(await allocate(rig, 1, { osVersion: ">=18" }));
+    const based = await envelopeOf(await allocate(rig, 2, { deviceBaseline: "logged-in" }));
+    const unknown = await envelopeOf(await allocate(rig, 3, { deviceBaseline: "no-such" }));
 
-    const request = tap.inputs.find((entry) => entry.operation === "lease.request");
-    expect(request?.input).toMatchObject({ osVersion: ">=18", requires: ["agent-device"] });
-    const lease = (answer.result as { data: { lease: Record<string, unknown> } }).data.lease;
-    expect(lease["device"]).toMatchObject({ osVersion: "26.5" });
+    const requests = tap.inputs.filter((entry) => entry.operation === "lease.request");
+    expect(requests[0]?.input).toMatchObject({ osVersion: ">=18", requires: ["agent-device"] });
+    expect(requests[1]?.input).toMatchObject({ baseline: "logged-in", requires: ["agent-device"] });
+    const leaseOf = (reply: typeof answer) =>
+      (reply.result as { data: { lease: Record<string, unknown> } }).data.lease;
+    expect(leaseOf(answer)["device"]).toMatchObject({ osVersion: "26.5" });
+    expect(leaseOf(based)["device"]).toMatchObject({ baseline: { name: "logged-in", version: 1 } });
+    expect(unknown.error?.message).toContain("refused by simlock: ");
   });
 
   it("allocate on a worker, directly, sends no `requires`, as today", async () => {
