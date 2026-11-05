@@ -327,6 +327,16 @@ function adbCandidatesFor(
   return [adb, ...roots.map((root) => join(root, "platform-tools", adb))];
 }
 
+function callerAdbPorts(
+  ports: CliEnvironmentPorts,
+  env: NodeJS.ProcessEnv,
+): Pick<CliEnvironment, "adbCandidates" | "processRunner"> {
+  return {
+    adbCandidates: adbCandidatesFor(env, ports.homeDirectory, ports.hostPlatform),
+    processRunner: ports.processRunner,
+  };
+}
+
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -465,8 +475,7 @@ export function buildCliEnvironment(
       },
     },
     ...tcpPorts(ports),
-    adbCandidates: adbCandidatesFor(env, ports.homeDirectory, ports.hostPlatform),
-    ...(ports.processRunner === undefined ? {} : { processRunner: ports.processRunner }),
+    ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),

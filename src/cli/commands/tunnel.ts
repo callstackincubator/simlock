@@ -67,11 +67,15 @@ function parseEmulator(text: string): TunnelSpec {
 
 function parseTunnel(words: readonly string[], index: number): TunnelSpec {
   const kind = words[index] as string;
-  if (kind === "emulator") return parseEmulator(words[index + 1] ?? "");
+  const text = words[index + 1] ?? "";
+  if (kind === "emulator") return parseEmulator(text);
   if (kind !== "reverse" && kind !== "forward") {
     throw new UsageError(`Unknown tunnel kind "${kind}": use reverse, forward or emulator`);
   }
-  const text = words[index + 1] ?? "";
+  return parseDeviceTunnel(kind, text);
+}
+
+function parseDeviceTunnel(kind: "reverse" | "forward", text: string): TunnelSpec {
   const colon = text.indexOf(":");
   const device = colon === -1 ? text : text.slice(0, colon);
   const devicePort = portOf(device, "device");
@@ -491,6 +495,14 @@ function callerAdb(environment: CliEnvironment) {
   };
 }
 
+// why: the line a tunnel prints once the worker has set it up.
+function routeOf({ callerPort, devicePort, kind }: TunnelSpec): string {
+  const caller = `localhost:${String(callerPort)}`;
+  if (kind === "forward") return `forward ${caller} -> device:${String(devicePort)}`;
+  if (kind === "emulator") return `emulator ${caller} -> emulator:adb`;
+  return `reverse device:${String(devicePort)} -> ${caller}`;
+}
+
 // why: the words a tunnel is named by in a warning or a refusal; an emulator tunnel has no device port.
 function tunnelLabel(spec: TunnelSpec): string {
   return spec.kind === "emulator" ? "emulator adb" : `${spec.kind} ${String(spec.devicePort)}`;
@@ -625,13 +637,9 @@ function serve(
         gate.open = announce;
         for (const { spec, stream } of gate.held.splice(0)) announce(spec, stream);
         for (const { callerPort, devicePort, kind } of specs) {
-          let route = `reverse device:${String(devicePort)} -> localhost:${String(callerPort)}`;
-          if (kind === "forward") {
-            route = `forward localhost:${String(callerPort)} -> device:${String(devicePort)}`;
-          } else if (kind === "emulator") {
-            route = `emulator localhost:${String(callerPort)} -> emulator:adb`;
-          }
-          environment.stdout.write(`${route} (lease ${escapeControl(leaseId)})\n`);
+          environment.stdout.write(
+            `${routeOf({ callerPort, devicePort, kind })} (lease ${escapeControl(leaseId)})\n`,
+          );
           if (kind === "emulator") void adb.connect(callerPort);
         }
         return;

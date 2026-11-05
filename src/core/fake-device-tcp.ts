@@ -111,6 +111,7 @@ export class FakeDeviceTcp implements DeviceTcp {
     return peer.stream;
   }
 
+  // fallow-ignore-next-line unused-class-member -- called through the DeviceTcp interface by DriverCatalog.
   supportsEmulatorPort(): boolean {
     return true;
   }

@@ -1045,6 +1045,7 @@ type Peer = ReturnType<typeof command>["webSocket"]["connections"][number]["peer
 describe("simlock tunnel emulator adb", () => {
   const emulatorOpen = JSON.stringify({ kind: "emulator", emulatorPort: "adb" });
 
+  // fallow-ignore-next-line complexity -- one Tests line: each adb outcome and each way the command ends are rows of its cases.
   it("prints the tunnel line and connects the caller's own adb to the caller's port, which opens an emulator connection for each connection to it", async () => {
     const adb = new CallerAdb([
       {
