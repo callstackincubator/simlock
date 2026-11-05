@@ -7,7 +7,7 @@
   {
     "name": "bug:new",
     "color": "d73a4a",
-    "description": "Reported. An agent may triage it (rule 8), and nothing more."
+    "description": "Reported. An agent may triage it (rule 8); the fast track may set it ready (rule 17)."
   },
   {
     "name": "bug:needs-info",
@@ -78,5 +78,10 @@
     "name": "needs-hardware",
     "color": "5319e7",
     "description": "PR parked: a Done when line needs a real simulator or emulator run."
+  },
+  {
+    "name": "fast-track",
+    "color": "0e8a16",
+    "description": "Bug set ready by the fast-track check, not the maintainer (rule 17)."
   }
 ]

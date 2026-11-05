@@ -12,11 +12,13 @@ grounds for rejecting a change even if it works.
    outside `drivers/ios` may reference simctl concepts (UDIDs are opaque
    strings to the core); nothing outside `drivers/android` may reference
    AVDs, snapshots, adb serials, or ports. This extends to configuration and
-   to the lease environment: `drivers.<platform>.*` config entries and the
-   `environment` map a driver returns with a grant are **opaque to the core**
-   — it stores, merges, and forwards them without interpreting a single key.
-   A core module that knows what `deviceRoot` means for iOS, or that
-   `ANDROID_ADB_SERVER_PORT` is a port, has leaked.
+   to the lease environment: `drivers.<platform>.*` config entries, the
+   keys a driver declares under its platform's section (`ios.slim`,
+   `android.emulator`; ADR 0065) and the `environment` map a driver
+   returns with a grant are **opaque to the core** — it stores, merges,
+   and forwards them without interpreting a single key. A core module
+   that knows what `deviceRoot` means for iOS, what `ios.slim` holds, or
+   that `ANDROID_ADB_SERVER_PORT` is a port, has leaked.
 3. **Adding a driver must require zero core changes.** If a new driver needs
    a core edit, the driver interface has leaked — fix the interface, don't
    special-case the core.

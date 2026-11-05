@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { createAlerts } from "../alerts/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import type { AlertDestination } from "../core/index.js";
+import { testConfig } from "../core/testing.js";
 import type { EventHistoryHandle } from "../history/index.js";
 import {
   fixedEventHistory,
@@ -53,66 +54,13 @@ import { WorkerRegistry } from "./worker-registry.js";
 
 type SentRequest = Parameters<WebhookPoster["post"]>[0];
 
-const gatewayConfig = {
-  capabilities: {},
-  capacity: { strategy: "fixed" as const, config: { maxRunning: 4 } },
-  diskPressure: { freeBytesThreshold: 1 },
-  downloads: { acceptAndroidLicenses: false, policy: "on-request" as const, timeoutMs: 1 },
-  eventBuffer: { capacity: 100 },
-  exec: { timeoutMs: 600_000 },
-  gateway: {
-    disconnectedRetentionMs: 24 * 60 * 60_000,
-    execTimeoutMs: 11 * 60_000,
-    leaseRequestTimeoutMs: 5 * 60_000,
-    routing: "warm-then-free" as const,
-    alerts: { destinations: [] },
+const gatewayConfig = testConfig(
+  {
+    capacity: { strategy: "fixed", config: { maxRunning: 4 } },
+    lease: { maxTtlMs: 3_600_000 },
   },
-  health: {
-    enabled: false,
-    maxConcurrentRecoveries: 1,
-    maxRecoveryAttempts: 1,
-    probeIntervalMs: 1,
-    recoveryBackoffMs: 1,
-    stableObservations: 1,
-  },
-  http: { enabled: true, host: "127.0.0.1", port: 4700 },
-  idle: { deleteAfterMs: 1, shutdownAfterMs: 1 },
-  update: { check: true },
-  ios: {
-    defaultMode: "full" as const,
-    defaultModels: {},
-    slim: { bootTimeoutMs: 1 },
-    simulator: { audio: true },
-  },
-  android: {
-    defaultModels: {},
-    emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-  },
-  lease: {
-    defaultTtlMs: 900_000,
-    maxTtlMs: 3_600_000,
-    identity: { ios: "reusable" as const, android: "reusable" as const },
-    requestRetentionMs: 600_000,
-    maxRequestRecords: 10_000,
-    maxPerRequester: 1,
-    endWaitMs: 600_000,
-  },
-  log: { level: "info" as const, rotateBytes: 1 },
-  mode: "gateway" as const,
-  stalledTransition: { minimumThresholdMs: 1, thresholdMultiplier: 1 },
-  warmPool: {
-    enabled: true,
-    maxConcurrentBoots: 1,
-    reserveRunning: { android: 0, ios: 0 },
-    targets: [],
-    quarantine: {
-      maxRetries: 1,
-      maxRetryBackoffMs: 1,
-      retryBackoffMs: 1,
-      retryBackoffMultiplier: 1,
-    },
-  },
-};
+  "gateway",
+);
 
 class FakeTokens implements TokenOperations {
   constructor(private readonly records: readonly { id: string; label?: string }[] = []) {}
@@ -2497,6 +2445,40 @@ describe("GatewayDispatcher", () => {
           session({ principal: "someone-else", role: "agent" }),
         ),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("refuses a device.exec whose stdin is longer than 8,388,608 characters with BAD_REQUEST and forwards nothing to the worker, and forwards one at 8,388,608", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      const exec = (stdin: string) =>
+        dispatcher.dispatch(
+          "device.exec",
+          { args: ["spawn", "booted", "untar"], leaseId: grant.lease.id, stdin, tool: "simctl" },
+          session({ principal: "agent-1", role: "agent" }),
+        );
+      const forwarded = () => client.calls.filter((call) => call.startsWith("device.exec:"));
+
+      client.execQueue.push({ exitCode: 0, kind: "ok" });
+      await expect(exec("A".repeat(8_388_608))).resolves.toEqual({ exitCode: 0 });
+      expect(forwarded()).toHaveLength(1);
+
+      await expect(exec("A".repeat(8_388_609))).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(forwarded()).toHaveLength(1);
     });
 
     it("calls onStarted for a silent device.exec from the worker's own started push (ADR §19a/§19b/§19e)", async () => {

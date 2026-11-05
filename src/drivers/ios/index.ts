@@ -57,8 +57,16 @@ import type {
   ProcessRunner,
   SqliteDatabase,
 } from "../../ports/index.js";
+import {
+  runAfterBoot,
+  type AfterBoot,
+  type ProcessOutcome,
+  type SilenceFailedFact,
+  type WindowFailedFact,
+} from "./boot-courtesies.js";
 import { runBoundedProcess, runInstallerProcess } from "../installer-process.js";
 import {
+  headlessNeedsDefaultSet,
   refuseDefaultSourcesLeftovers,
   refuseOwnSetLeftovers,
   refuseXcodeSetLeftovers,
@@ -71,17 +79,17 @@ import { createIosDeviceInput } from "./input/index.js";
 import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
+import type { IosDriverConfig } from "./definition.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
 const STALE_MAKING_MS = 300_000;
 const COMMAND_TIMEOUT_MS = 30_000;
-const VOLUME_STATE_KEY = "com.apple.springboard.volumestate";
 // why: `xcodebuild -version` answers in about a second; a first run after an Xcode update can take
 // longer while it checks its components, and a hang must not hold host facts forever.
 const XCODE_VERSION_TIMEOUT_MS = 15_000;
-const BOOTSTATUS_TIMEOUT_MS = 120_000;
+const DEFAULT_FULL_BOOT_TIMEOUT_MS = 300_000;
 const INSTALLER_POLL_MS = 1_000;
 const PROVISION_ESTIMATE_MS = 500;
 // why: How often a removal lists again while `simctl runtime list` shows the deleted image as still
@@ -190,11 +198,6 @@ export interface SlimSkippedFact {
   readonly detail: string;
 }
 
-export interface SilenceFailedFact {
-  readonly deviceId: string;
-  readonly detail: string;
-}
-
 export interface IosSimctlDriverOptions {
   readonly clock: Clock;
   readonly database: SqliteDatabase;
@@ -212,13 +215,10 @@ export interface IosSimctlDriverOptions {
   readonly launchdOverridesRoot?: string;
   readonly onSlimmed?: (fact: SlimmedFact) => void;
   readonly onSlimSkipped?: (fact: SlimSkippedFact) => void;
-  /** why: `ios.simulator.audio`; `false` sets each simulator's volume to 0 after every boot. */
-  readonly simulatorAudio?: boolean;
+  /** why: the driver's own keys of the `ios` config section; with no `slim` the driver slims nothing, with no `simulator` it keeps audio on and opens no window. */
+  readonly config?: Partial<IosDriverConfig>;
   readonly onSilenceFailed?: (fact: SilenceFailedFact) => void;
-  readonly slim?: {
-    readonly categories?: readonly string[];
-    readonly bootTimeoutMs: number;
-  };
+  readonly onWindowFailed?: (fact: WindowFailedFact) => void;
   readonly slimByDefault?: boolean;
   // why: the device input logs a Home press that did nothing; nothing else in the driver logs through it.
   readonly logger?: Logger;
@@ -233,7 +233,7 @@ export interface IosSimctlDriverOptions {
   };
 }
 
-type SlimOptions = NonNullable<IosSimctlDriverOptions["slim"]>;
+type SlimOptions = IosDriverConfig["slim"];
 
 type SlimWrite =
   | { readonly kind: "no-categories"; readonly detail: string }
@@ -287,10 +287,6 @@ interface ResolvedIosSpec {
   readonly spec: VirtualSpec;
 }
 
-type ProcessOutcome =
-  | { readonly kind: "finished"; readonly result: ProcessResult }
-  | { readonly kind: "timed-out" };
-
 export class IosSimctlDriver implements Driver {
   readonly platform = "ios" as const;
   readonly defaultModels = IOS_DEFAULT_MODELS;
@@ -309,8 +305,8 @@ export class IosSimctlDriver implements Driver {
   readonly #logger: Logger | undefined;
   readonly #overridesRoot: string;
   readonly #slim: SlimOptions | undefined;
-  readonly #silent: boolean;
-  readonly #onSilenceFailed: ((fact: SilenceFailedFact) => void) | undefined;
+  readonly #fullBootTimeoutMs: number;
+  readonly #afterBoot: AfterBoot;
   readonly #slimByDefault: boolean;
   readonly #sources: IosSourceTable;
   readonly #sourcesSet: string;
@@ -345,9 +341,18 @@ export class IosSimctlDriver implements Driver {
     this.#rootOptions = rootOptions;
     this.#logger = options.logger;
     this.#overridesRoot = options.launchdOverridesRoot ?? DEFAULT_OVERRIDES_ROOT;
-    this.#slim = options.slim;
-    this.#silent = options.simulatorAudio === false;
-    this.#onSilenceFailed = options.onSilenceFailed;
+    this.#slim = options.config?.slim;
+    this.#fullBootTimeoutMs = options.config?.full?.bootTimeoutMs ?? DEFAULT_FULL_BOOT_TIMEOUT_MS;
+    this.#afterBoot = {
+      silent: options.config?.simulator?.audio === false,
+      headless: options.config?.simulator?.headless !== false,
+      commands: {
+        simctl: (args, timeoutMs) => this.#invokeSimctl(args, timeoutMs),
+        open: (args, timeoutMs) => this.#invokeCommand("open", args, timeoutMs),
+      },
+      onSilenceFailed: options.onSilenceFailed,
+      onWindowFailed: options.onWindowFailed,
+    };
     this.#slimByDefault = options.slimByDefault === true;
     this.#sources = new IosSourceTable(options.database);
     this.#sourcesSet =
@@ -1022,7 +1027,7 @@ export class IosSimctlDriver implements Driver {
       const udid = created.stdout.trim();
       this.#sources.setUdid(sourceId, udid);
       try {
-        await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
+        await this.#bootAndWait(udid, sourceId, this.#fullBootTimeoutMs, this.#sourcesSet);
       } catch (error: unknown) {
         await this.#deleteSeedSimulator(udid);
         throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
@@ -1108,7 +1113,11 @@ export class IosSimctlDriver implements Driver {
 
   async #deleteSeedSimulator(udid: string): Promise<void> {
     await this.#bestEffortShutdown(udid, this.#sourcesSet);
-    await this.#simctl(["delete", udid], COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    const args = ["delete", udid];
+    const outcome = await this.#invokeSimctl(args, COMMAND_TIMEOUT_MS, this.#sourcesSet);
+    // why: a seed deleted by hand is already gone, and its row must still be dropped.
+    if (outcome.kind === "finished" && unknownDevice(outcome.result)) return;
+    this.#checked(args, COMMAND_TIMEOUT_MS, outcome);
   }
 
   async #ensureSourcesSet(): Promise<void> {
@@ -1139,14 +1148,17 @@ export class IosSimctlDriver implements Driver {
     options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
-    const { plan, bootstatusTimeoutMs } = planSlimBoot(data, this.#slim, options);
+    const { plan, bootstatusTimeoutMs } = planSlimBoot(
+      data,
+      this.#slim,
+      this.#fullBootTimeoutMs,
+      options,
+    );
     const write =
       plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
-    if (this.#silent) {
-      await this.#silence(data.udid, device.deviceId);
-    }
+    await runAfterBoot(this.#afterBoot, data.udid, device.deviceId);
 
     if (plan.kind === "skip") {
       this.#onSlimSkipped?.({
@@ -1164,35 +1176,6 @@ export class IosSimctlDriver implements Driver {
     }
 
     return this.#readBack(device, data, write);
-  }
-
-  async #silence(udid: string, deviceId: string): Promise<void> {
-    const commands = [
-      ["-s", VOLUME_STATE_KEY, "0"],
-      ["-p", VOLUME_STATE_KEY],
-    ];
-    for (const command of commands) {
-      const detail = await this.#runNotifyutil(udid, command);
-      if (detail !== undefined) {
-        // why: the device stays in use; the volume is a courtesy to the host's speakers, not a lease condition.
-        this.#onSilenceFailed?.({ deviceId, detail });
-        return;
-      }
-    }
-  }
-
-  /** why: answers the failure detail, or undefined when the command exited 0; it never throws. */
-  async #runNotifyutil(udid: string, command: readonly string[]): Promise<string | undefined> {
-    try {
-      const outcome = await this.#invokeSimctl(
-        ["spawn", udid, "notifyutil", ...command],
-        COMMAND_TIMEOUT_MS,
-      );
-      if (outcome.kind === "timed-out") return "timed out";
-      return outcome.result.code === 0 ? undefined : outcome.result.stderr;
-    } catch (error: unknown) {
-      return errorMessage(error);
-    }
   }
 
   #asIs(device: DriverDevice, data: IosDriverData, mode: DeviceMode): DriverDevice {
@@ -1944,9 +1927,17 @@ export class IosSimctlDriver implements Driver {
   }
 
   async #invokeXcrun(argv: readonly string[], timeoutMs: number): Promise<ProcessOutcome> {
+    return await this.#invokeCommand("xcrun", argv, timeoutMs);
+  }
+
+  async #invokeCommand(
+    command: string,
+    argv: readonly string[],
+    timeoutMs: number,
+  ): Promise<ProcessOutcome> {
     let process;
     try {
-      process = this.#processRunner.spawn("xcrun", [...argv], { timeoutMs });
+      process = this.#processRunner.spawn(command, [...argv], { timeoutMs });
     } catch (error: unknown) {
       throw new DriverCrashError(`Could not start ${argv.join(" ")}: ${errorMessage(error)}`);
     }
@@ -2084,7 +2075,10 @@ function configuredDeviceCaptureCommand(options: IosSimctlDriverOptions): string
 
 function configuredDeviceSet(options: IosSimctlDriverOptions): "simlock" | "default" {
   const configured = options.driverConfig["deviceSet"];
-  if (configured === undefined || configured === "simlock") return "simlock";
+  if (configured === undefined || configured === "simlock") {
+    if (options.config?.simulator?.headless === false) throw headlessNeedsDefaultSet("simlock");
+    return "simlock";
+  }
   if (configured !== "default") {
     throw new OwnedRootError(
       `Refusing the ios device set: drivers.ios.deviceSet must be "simlock" or "default", but it is ${JSON.stringify(configured)}`,
@@ -2569,16 +2563,17 @@ type SlimPlan =
 function planSlimBoot(
   data: IosDriverData,
   slim: SlimOptions | undefined,
+  fullBootTimeoutMs: number,
   options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
 ): { readonly plan: SlimPlan; readonly bootstatusTimeoutMs: number } {
   if (options.purpose === "recover" || slim === undefined || options.mode !== "slim") {
-    return { bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS, plan: { kind: "off" } };
+    return { bootstatusTimeoutMs: fullBootTimeoutMs, plan: { kind: "off" } };
   }
 
   const version = iosRuntimeVersionFromId(data.runtimeId);
   if (!supportsPersistentSlim(version)) {
     return {
-      bootstatusTimeoutMs: BOOTSTATUS_TIMEOUT_MS,
+      bootstatusTimeoutMs: fullBootTimeoutMs,
       plan: {
         detail:
           version === undefined
@@ -2623,6 +2618,10 @@ function alreadyShutdown(stderr: string): boolean {
   return /Unable to shutdown.*current state:\s*Shutdown/i.test(stderr);
 }
 
+function unknownDevice(result: ProcessResult): boolean {
+  return /^Invalid device:/m.test(result.stderr);
+}
+
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
 }
@@ -2665,6 +2664,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+export type { SilenceFailedFact, WindowFailedFact } from "./boot-courtesies.js";
+export { type IosDriverConfig, iosDriverConfig } from "./definition.js";
 export { iosDeviceDataTable } from "./device-data.js";
 export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";

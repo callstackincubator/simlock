@@ -9,7 +9,10 @@ import { configSchema } from "../contract/schemas.js";
 import {
   ALERT_EVENTS,
   ALERT_FORMATS,
+  booleanValue,
   type Config,
+  driverConfig,
+  type DriverConfigEntry,
   effectiveAllowDownload,
   loadConfig,
   REDACTED_VALUE,
@@ -138,8 +141,6 @@ describe("loadConfig", () => {
       ios: {
         defaultMode: "full",
         defaultModels: {},
-        slim: { bootTimeoutMs: 600_000 },
-        simulator: { audio: true },
       },
     });
     expect(Object.isFrozen(config)).toBe(true);
@@ -914,7 +915,7 @@ describe("loadConfig", () => {
   it.each([
     [{ limits: { web: {} } }, "limits.web"],
     [{ health: { maxBoltCount: 7 } }, "health.maxBoltCount"],
-    [{ ios: { slim: { turboMode: true } } }, "ios.slim.turboMode"],
+    [{ ios: { turboMode: true } }, "ios.turboMode"],
   ])(
     "warns about an unknown key, nested or not, without rejecting the file: %j",
     async (contents, key) => {
@@ -1121,7 +1122,7 @@ describe("loadConfig", () => {
     ).rejects.toThrow(path);
   });
 
-  it("defaults ios.defaultMode to full, and ios.slim to no categories and a slim boot timeout", async () => {
+  it("defaults ios.defaultMode to full", async () => {
     const config = await loadConfig({
       configPath,
       filesystem: new MemoryFilesystem(),
@@ -1129,30 +1130,50 @@ describe("loadConfig", () => {
     });
 
     expect(config.ios.defaultMode).toBe("full");
-    expect(config.ios.slim).toEqual({ bootTimeoutMs: 600_000 });
-    expect(config.ios.slim.categories).toBeUndefined();
-    expect("categories" in config.ios.slim).toBe(false);
   });
 
-  it("applies a file-level ios.defaultMode and ios.slim override, including an explicit category list", async () => {
+  it("applies a file-level ios.defaultMode override", async () => {
     const filesystem = new MemoryFilesystem();
     await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({
-        ios: {
-          defaultMode: "slim",
-          slim: { categories: ["logging", "diagnostics"], bootTimeoutMs: 900_000 },
-        },
-      }),
-    );
+    await filesystem.writeFileAtomic(configPath, JSON.stringify({ ios: { defaultMode: "slim" } }));
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
     expect(config.ios.defaultMode).toBe("slim");
-    expect(config.ios.slim).toEqual({
-      categories: ["logging", "diagnostics"],
-      bootTimeoutMs: 900_000,
-    });
+  });
+
+  it("a driver's config entry adds its keys to its platform's section: defaulted, taken from the file, refused by its validator, and unknown to a loader without the entry", async () => {
+    const entry: DriverConfigEntry<{ readonly turbo: boolean }> = {
+      platform: "android",
+      defaults: { turbo: false },
+      validators: { turbo: booleanValue },
+    };
+    const load = async (file: unknown, driverSections = [entry]) => {
+      const filesystem = new MemoryFilesystem();
+      const warn = vi.fn();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(configPath, JSON.stringify(file));
+      const config = await loadConfig({
+        configPath,
+        driverSections,
+        filesystem,
+        systemStats: createStats(),
+        warn,
+      });
+      return { config, section: driverConfig(config, entry), warn };
+    };
+
+    const defaulted = await load({});
+    const set = await load({ android: { turbo: true } });
+    const unknown = await load({ android: { turbo: true } }, []);
+
+    expect(defaulted.section.turbo).toBe(false);
+    expect([set.section.turbo, set.warn.mock.calls]).toEqual([true, []]);
+    await expect(load({ android: { turbo: "yes" } })).rejects.toThrow(
+      'Invalid config value for "android.turbo"',
+    );
+    expect(unknown.warn).toHaveBeenCalledWith('Unknown config key: "android.turbo"');
+    expect(unknown.config.android).toEqual({ defaultModels: {} });
+    expect(set.config.ios).toEqual({ defaultMode: "full", defaultModels: {} });
   });
 
   it.each(["fast", "worker", true])(
@@ -1167,163 +1188,6 @@ describe("loadConfig", () => {
       ).rejects.toThrow("ios.defaultMode");
     },
   );
-
-  it("loads a config that still sets the removed ios.slim switch with the unknown-key warning and the full default", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { slim: { enabled: true } } }),
-    );
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
-
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "ios.slim.enabled"');
-    expect(config.ios.defaultMode).toBe("full");
-    expect(config.ios.slim).not.toHaveProperty("enabled");
-  });
-
-  it.each([
-    [{ ios: { slim: { bootTimeoutMs: 0 } } }, "ios.slim.bootTimeoutMs"],
-    [{ ios: { slim: { bootTimeoutMs: -1 } } }, "ios.slim.bootTimeoutMs"],
-    [{ ios: { slim: { bootTimeoutMs: "600000" } } }, "ios.slim.bootTimeoutMs"],
-  ])("rejects a non-positive or malformed ios.slim.bootTimeoutMs", async (contents, path) => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow(path);
-  });
-
-  it.each([
-    [{ ios: { slim: { categories: "logging" } } }],
-    [{ ios: { slim: { categories: [1, 2] } } }],
-    [{ ios: { slim: { categories: [""] } } }],
-  ])("rejects a malformed ios.slim.categories", async (contents) => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow("ios.slim.categories");
-  });
-
-  it.each([
-    { name: "unset", file: {}, audio: true },
-    { name: "true", file: { ios: { simulator: { audio: true } } }, audio: true },
-    { name: "false", file: { ios: { simulator: { audio: false } } }, audio: false },
-  ])("loads ios.simulator.audio: $name", async ({ file, audio }) => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(file));
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
-
-    expect(config.ios.simulator).toEqual({ audio });
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("refuses a non-boolean ios.simulator.audio, naming the key", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { simulator: { audio: "no" } } }),
-    );
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "ios.simulator.audio"');
-  });
-
-  it("defaults android.emulator to a windowed launch with the emulator's GPU, audio, and boot animation", async () => {
-    const config = await loadConfig({
-      configPath,
-      filesystem: new MemoryFilesystem(),
-      systemStats: createStats(),
-    });
-
-    expect(config.android.emulator).toEqual({
-      audio: true,
-      bootAnimation: true,
-      gpu: "auto",
-      headless: false,
-    });
-  });
-
-  it("applies a file-level android.emulator override", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({
-        android: {
-          emulator: {
-            audio: false,
-            bootAnimation: false,
-            gpu: "swiftshader_indirect",
-            headless: true,
-          },
-        },
-      }),
-    );
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats() });
-    expect(config.android.emulator).toEqual({
-      audio: false,
-      bootAnimation: false,
-      gpu: "swiftshader_indirect",
-      headless: true,
-    });
-  });
-
-  it.each([
-    [
-      { android: { defaultModels: {}, emulator: { headless: "yes" } } },
-      "android.emulator.headless",
-    ],
-    [{ android: { defaultModels: {}, emulator: { audio: 0 } } }, "android.emulator.audio"],
-    [
-      { android: { defaultModels: {}, emulator: { bootAnimation: "false" } } },
-      "android.emulator.bootAnimation",
-    ],
-    [{ android: { defaultModels: {}, emulator: { gpu: "" } } }, "android.emulator.gpu"],
-    [{ android: { defaultModels: {}, emulator: { gpu: true } } }, "android.emulator.gpu"],
-  ])("rejects a malformed android.emulator key at load, naming it", async (contents, path) => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(configPath, JSON.stringify(contents));
-
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow(`Invalid config value for "${path}"`);
-  });
-
-  it("warns about and drops an unknown key under android.emulator", async () => {
-    const filesystem = new MemoryFilesystem();
-    const warn = vi.fn();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({
-        android: { defaultModels: {}, emulator: { launchArgs: ["-port", "5554"] } },
-      }),
-    );
-
-    const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
-    expect(warn).toHaveBeenCalledWith('Unknown config key: "android.emulator.launchArgs"');
-    expect(Object.keys(config.android.emulator).sort()).toEqual([
-      "audio",
-      "bootAnimation",
-      "gpu",
-      "headless",
-    ]);
-  });
 
   it.each(["ios", "android"] as const)(
     "%s.defaultModels defaults to no class having a list",
@@ -2336,19 +2200,10 @@ describe("configSchema agrees with the config the daemon actually loads", () => 
     });
 
     const parsed = configSchema.parse(config);
-    // `drivers` is deliberately off the wire: an open-ended
-    // `Record<string, Record<string, …>>` whose contents are each driver's own business
-    // (architecture rule 2), so the contract cannot declare its shape. Excluded by name and
-    // asserted separately below rather than skipped silently -- it defaults to `{}`, so a
-    // key-walk would otherwise "cover" it by finding nothing to lose and keep passing if it
-    // ever gained something.
-    const declared = dottedLeafKeys(config).filter((key) => !key.startsWith("drivers"));
+    const declared = dottedLeafKeys(config);
     const onTheWire = new Set(dottedLeafKeys(parsed));
 
     expect(declared.filter((key) => !onTheWire.has(key))).toEqual([]);
-    // The one intentional omission, stated as an assertion so it is a decision and not an
-    // accident: if `drivers` is ever added to the wire, this fails and the filter is revisited.
-    expect(Object.keys(parsed)).not.toContain("drivers");
   });
 
   it("carries gateway.leaseRequestTimeoutMs through to what config get answers", async () => {

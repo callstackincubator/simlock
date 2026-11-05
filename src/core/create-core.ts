@@ -21,7 +21,12 @@ import type {
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
 import { DeviceProvisioner } from "./device-provisioner.js";
-import { Doctor, type OptionalModuleFinding, type ServiceCheck } from "./doctor.js";
+import {
+  Doctor,
+  type DoctorConfig,
+  type OptionalModuleFinding,
+  type ServiceCheck,
+} from "./doctor.js";
 import type { DeviceMode, Platform, TargetResolution, WaitingDemand } from "./domain.js";
 import type { DeviceRequest, Driver, DriverRejection, PrerequisiteCheck } from "./driver.js";
 import { DriverCatalog, type ModelPreferences } from "./driver-catalog.js";
@@ -38,6 +43,8 @@ import { readStartup, type StartupRead } from "./startup-read.js";
 import { BaselineService } from "./baselines.js";
 import { WarmPool } from "./warm-pool/index.js";
 
+export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "health" | "idle">;
+
 interface CoreOptions {
   readonly clock: Clock;
   /**
@@ -47,7 +54,7 @@ interface CoreOptions {
    * §8).
    */
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: CoreConfig;
   /**
    * The one decision gate every registry write runs inside. Passed in rather than built here
    * because `components` writes the registry too and must share it.

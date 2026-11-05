@@ -6,8 +6,8 @@ import {
   type WarmPoolReader,
   type CatalogReader,
   type ComponentInstaller,
-  type Config,
   type Core,
+  type CoreConfig,
   createCore,
   type DeviceMode,
   type DeviceSpec,
@@ -21,7 +21,7 @@ import {
   type Registry,
   type SerializedDecision,
 } from "../core/index.js";
-import { createLeasing, type Leasing } from "./create-leasing.js";
+import { createLeasing, type Leasing, type LeasingConfig } from "./create-leasing.js";
 import { NoCapacityError } from "./lease-acquisition-coordinator.js";
 import type {
   DeviceModeReader,
@@ -36,10 +36,12 @@ import type { LeaseHealthMonitor } from "./lease-health-monitor.js";
  * import this file, and `pnpm lint` enforces it. Anything production code also uses belongs on
  * `index.ts`.
  */
+export type TestEngineConfig = CoreConfig & LeasingConfig;
+
 export interface TestEngineOptions {
   readonly clock: Clock;
   readonly components: Pick<ComponentInstaller, "claimProvision" | "install">;
-  readonly config: Config;
+  readonly config: TestEngineConfig;
   readonly decisions: SerializedDecision;
   readonly drivers: readonly Driver[];
   readonly eventBus: EventBus;

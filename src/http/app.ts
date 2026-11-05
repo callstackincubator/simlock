@@ -12,7 +12,7 @@ import {
   usageWindow,
   type UsageWindowRefusal,
 } from "../contract/index.js";
-import type { Config, DeviceRecord } from "../core/index.js";
+import type { DeviceRecord } from "../core/index.js";
 import type { OwnerRoutedFacts } from "../daemon/owner-routed-facts.js";
 import type { Clock, IdGenerator, LeaseSocketAccept, Logger } from "../ports/index.js";
 import { type AuthEnv, requireAuth } from "./auth.js";
@@ -114,7 +114,6 @@ export interface HttpGatewayDeps {
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
-  readonly config: Config;
   readonly auth: Pick<Auth, "authenticateRequest">;
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];

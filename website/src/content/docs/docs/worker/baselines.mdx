@@ -5,7 +5,7 @@ description: Prepare a simulator or emulator once, save it under a name, and let
 
 import { Aside } from '@astrojs/starlight/components';
 
-A baseline is a simulator or emulator you set up once and saved under a name, for example `checkout`, with your app installed and a test user signed in. An agent that leases with `--baseline checkout` gets its own copy of that device, so it can start testing without installing or signing in first (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
+A baseline is a simulator or emulator you set up once and save under a name, for example `checkout`, with your app installed and a test user signed in. An agent that leases with `--baseline checkout` gets its own copy of that device, so it can start testing without installing the app or signing in first (see [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline)).
 
 Before you start:
 
@@ -43,7 +43,7 @@ Before you start:
    Saved baseline checkout v1: android Pixel 9, Android 36 (google_apis), full, 4.8 GB. Lease lse_3c9a7e10-52b4-4f6d-8e21-b07d4a9c6f35 ended.
    ```
 
-Simlock shuts the device down cleanly before copying it, so everything you prepared is in the baseline.
+Everything you prepared on the device is in the baseline.
 
 The name is 1 to 64 characters of `a-z`, `0-9`, `.`, `_` and `-`, and starts with a letter or digit. The note is optional: one line, up to 200 characters. A bad name or note is refused before anything happens to the lease.
 

@@ -17,20 +17,24 @@ import {
   type CapacityStrategyName,
   type ResourceStrategyOptions,
 } from "./capacity/index.js";
-import { DEVICE_CLASSES, type DeviceClass, type DeviceMode, type LeaseIdentity } from "./domain.js";
+import {
+  DEVICE_CLASSES,
+  type DeviceClass,
+  type DeviceMode,
+  type LeaseIdentity,
+  type Platform,
+} from "./domain.js";
 import {
   booleanValue,
   ConfigError,
   integerInRange,
   invalidValue,
-  nonEmptyString,
   nonNegativeNumber,
   numberAtLeast,
   objectValidator,
   positiveInteger,
   positiveNumber,
   requireObject,
-  stringArray,
   stringUnion,
   stringValue,
   type Validator,
@@ -370,36 +374,11 @@ export interface Config {
     readonly defaultMode: DeviceMode;
     /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
-    /** How a slim device is made, whatever the default mode is. */
-    readonly slim: {
-      /** Which daemon categories to disable. Undefined means "every category the driver knows". */
-      readonly categories?: readonly string[];
-      /** why: a slim device gets its own boot deadline, because CI runners are slow. */
-      readonly bootTimeoutMs: number;
-    };
-    readonly simulator: {
-      /** why: `false` sets each simulator's volume to 0 after every boot; the core only validates the boolean (the iOS driver reads it). */
-      readonly audio: boolean;
-    };
-  };
-  /**
-   * How this machine's Android emulators are launched. Operator configuration of the Android
-   * driver, the same way `ios.slim` configures the iOS one: the core validates each value's
-   * type and hands the block to the driver without interpreting it, and no lease request can
-   * set it. Which emulator flag a key becomes is the driver's business. Applies at a device's
-   * next boot.
-   */
+  } & DriverConfigSection;
   readonly android: {
     /** The operator's own preference list per class, ahead of the driver's built-in one. */
     readonly defaultModels: DefaultModels;
-    readonly emulator: {
-      readonly headless: boolean;
-      /** An emulator GPU mode; `"auto"` leaves the emulator's own default. */
-      readonly gpu: string;
-      readonly audio: boolean;
-      readonly bootAnimation: boolean;
-    };
-  };
+  } & DriverConfigSection;
   /**
    * ADR 0005 §3/§6. Both sides of the fleet live under one key, and which half is read depends
    * on `mode`:
@@ -525,6 +504,24 @@ export interface LegacyCapacityOverrides {
 
 export type ConfigOverrides = DeepPartial<Config> & LegacyCapacityOverrides;
 
+// why: a platform's section also holds its driver's own keys, which the loader carries without reading one.
+type DriverConfigSection = Readonly<Record<string, unknown>>;
+
+// why: a driver declares the keys it reads under its platform's section, so a new driver setting changes no file of the core; `defaults` holds every key that has one, typed as the driver reads the section.
+export interface DriverConfigEntry<Section = unknown> {
+  readonly platform: Platform;
+  readonly validators: Readonly<Record<string, Validator>>;
+  readonly defaults: Section;
+}
+
+// why: typed by the entry the loader validated the section with; a config loaded without that entry holds none of its keys.
+export function driverConfig<Section>(
+  config: Pick<Config, Platform>,
+  entry: DriverConfigEntry<Section>,
+): Section {
+  return config[entry.platform] as Section;
+}
+
 export interface ModuleConfigEntry {
   readonly name: string;
   readonly validator: Validator;
@@ -537,15 +534,19 @@ export interface ModuleConfigEntry {
 const MODE_KEY_REMOVED =
   '"mode" is no longer a config key. A daemon started with --gateway is a gateway; any other is a worker. Remove "mode" from config.json.';
 
-export interface LoadConfigOptions {
+interface ConfigLayerOptions {
   readonly authStrategies?: readonly AuthStrategyDefinition[];
+  readonly driverSections?: readonly DriverConfigEntry[];
   readonly modules?: readonly ModuleConfigEntry[];
-  readonly filesystem: Filesystem;
   readonly systemStats: SystemStats;
-  readonly configPath?: string;
   readonly overrides?: ConfigOverrides;
   readonly role?: DaemonMode;
   readonly warn?: Warn;
+}
+
+export interface LoadConfigOptions extends ConfigLayerOptions {
+  readonly filesystem: Filesystem;
+  readonly configPath?: string;
 }
 
 type Layer = Record<string, unknown>;
@@ -554,20 +555,31 @@ export async function loadConfig(options: LoadConfigOptions): Promise<Config> {
   return (await loadConfigWithDefaults(options)).config;
 }
 
-export async function loadConfigWithDefaults({
-  authStrategies = registeredAuthStrategies,
-  configPath = DEFAULT_CONFIG_PATH,
-  filesystem,
-  modules = [],
-  overrides,
-  role = "worker",
-  systemStats,
-  warn = () => {},
-}: LoadConfigOptions): Promise<{
+interface LoadedConfig {
   readonly config: Config;
   readonly defaulted: ReadonlySet<string>;
-}> {
-  const fromFile = await readConfigFile(filesystem, configPath);
+}
+
+export async function loadConfigWithDefaults({
+  configPath = DEFAULT_CONFIG_PATH,
+  filesystem,
+  ...layerOptions
+}: LoadConfigOptions): Promise<LoadedConfig> {
+  return configFromLayers(await readConfigFile(filesystem, configPath), layerOptions);
+}
+
+export function configFromLayers(
+  fromFile: unknown,
+  {
+    authStrategies = registeredAuthStrategies,
+    driverSections = [],
+    modules = [],
+    overrides,
+    role = "worker",
+    systemStats,
+    warn = () => {},
+  }: ConfigLayerOptions,
+): LoadedConfig {
   const fromOverrides = overrides ?? {};
 
   // The strategy has to be known before anything else can be validated or
@@ -580,7 +592,7 @@ export async function loadConfigWithDefaults({
       throw new ConfigError(MODE_KEY_REMOVED);
     }
   }
-  const validators = configValidators(strategy, modules, authStrategies);
+  const validators = configValidators(strategy, modules, authStrategies, driverSections);
 
   const fileConfig = normalizeLayer(
     validateConfigLayer(fromFile, "", warn, validators),
@@ -611,7 +623,16 @@ export async function loadConfigWithDefaults({
   );
   const mergedWithoutMetrics = mergeConfig(
     mergeConfig(
-      defaultConfig(systemStats, strategy, role, modules, authStrategies, standalone, defaulted),
+      defaultConfig(
+        systemStats,
+        strategy,
+        role,
+        modules,
+        authStrategies,
+        standalone,
+        defaulted,
+        driverSections,
+      ),
       fileConfig,
     ),
     overrideConfig,
@@ -928,6 +949,7 @@ function defaultConfig(
   authStrategies: readonly AuthStrategyDefinition[],
   standalone: boolean,
   defaulted: ReadonlySet<string>,
+  driverSections: readonly DriverConfigEntry[],
 ): Omit<Config, "metrics"> {
   return {
     mode: role,
@@ -999,23 +1021,8 @@ function defaultConfig(
       recoveryBackoffMs: 5_000,
       maxConcurrentRecoveries: 1,
     },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: {
-        bootTimeoutMs: 600_000,
-      },
-      simulator: { audio: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: {
-        headless: false,
-        gpu: "auto",
-        audio: true,
-        bootAnimation: true,
-      },
-    },
+    ios: { ...driverDefaults(driverSections, "ios"), defaultMode: "full", defaultModels: {} },
+    android: { ...driverDefaults(driverSections, "android"), defaultModels: {} },
     gateway: {
       disconnectedRetentionMs: DEFAULT_DISCONNECTED_RETENTION_MS,
       execTimeoutMs: DEFAULT_GATEWAY_EXEC_TIMEOUT_MS,
@@ -1082,6 +1089,7 @@ export function configValidators(
   strategy: CapacityStrategyName,
   modules: readonly ModuleConfigEntry[],
   authStrategies: readonly AuthStrategyDefinition[],
+  driverSections: readonly DriverConfigEntry[] = [],
 ): Record<string, Validator> {
   return {
     capabilities: capabilitiesValidator(modules),
@@ -1165,30 +1173,41 @@ export function configValidators(
       maxConcurrentRecoveries: positiveInteger,
     }),
     ios: objectValidator({
+      ...driverValidators(driverSections, "ios"),
       defaultMode: stringUnion(["slim", "full"]),
       defaultModels: defaultModelsValidator,
-      slim: objectValidator({
-        categories: stringArray,
-        bootTimeoutMs: positiveNumber,
-      }),
-      simulator: objectValidator({
-        audio: booleanValue,
-      }),
     }),
     android: objectValidator({
+      ...driverValidators(driverSections, "android"),
       defaultModels: defaultModelsValidator,
-      emulator: objectValidator({
-        headless: booleanValue,
-        gpu: nonEmptyString,
-        audio: booleanValue,
-        bootAnimation: booleanValue,
-      }),
     }),
     stalledTransition: objectValidator({
       thresholdMultiplier: numberAtLeast(1),
       minimumThresholdMs: nonNegativeNumber,
     }),
   };
+}
+
+function driverValidators(
+  driverSections: readonly DriverConfigEntry[],
+  platform: Platform,
+): Record<string, Validator> {
+  return Object.assign(
+    {},
+    ...driverSections
+      .filter((entry) => entry.platform === platform)
+      .map((entry) => entry.validators),
+  ) as Record<string, Validator>;
+}
+
+function driverDefaults(
+  driverSections: readonly DriverConfigEntry[],
+  platform: Platform,
+): Record<string, unknown> {
+  return Object.assign(
+    {},
+    ...driverSections.filter((entry) => entry.platform === platform).map((entry) => entry.defaults),
+  ) as Record<string, unknown>;
 }
 
 function schemaValidator(schema: ZodType): Validator {

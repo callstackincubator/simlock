@@ -67,53 +67,8 @@ const request = {
   platform: "ios",
 } as const;
 
-function config(maxDevices = 1, maxRunning = 1): Config {
+function config(maxDevices = 1, maxRunning = 1): Pick<Config, "capacity" | "warmPool"> {
   return {
-    capabilities: {},
-    mode: "worker",
-    exec: { timeoutMs: 600_000 },
-    diskPressure: { freeBytesThreshold: 10 * gibibyte },
-    gateway: {
-      disconnectedRetentionMs: 24 * 60 * 60_000,
-      execTimeoutMs: 11 * 60_000,
-      leaseRequestTimeoutMs: 5 * 60_000,
-      routing: "warm-then-free" as const,
-      alerts: { destinations: [] },
-    },
-    drivers: {},
-    downloads: { acceptAndroidLicenses: false, policy: "on-request", timeoutMs: 1_200_000 },
-    eventBuffer: { capacity: 100 },
-    http: { enabled: false, host: "127.0.0.1", port: 4700 },
-    ios: {
-      defaultMode: "full",
-      defaultModels: {},
-      slim: { bootTimeoutMs: 600_000 },
-      simulator: { audio: true },
-    },
-    android: {
-      defaultModels: {},
-      emulator: { headless: false, gpu: "auto", audio: true, bootAnimation: true },
-    },
-    health: {
-      enabled: true,
-      maxConcurrentRecoveries: 1,
-      maxRecoveryAttempts: 3,
-      probeIntervalMs: 30_000,
-      recoveryBackoffMs: 5_000,
-      stableObservations: 2,
-    },
-    stalledTransition: { thresholdMultiplier: 3, minimumThresholdMs: 60_000 },
-    idle: { deleteAfterMs: 60_000, shutdownAfterMs: 10_000 },
-    update: { check: true },
-    lease: {
-      defaultTtlMs: 100,
-      maxTtlMs: 100,
-      identity: { ios: "reusable", android: "reusable" },
-      requestRetentionMs: 600_000,
-      maxRequestRecords: 10_000,
-      maxPerRequester: 1,
-      endWaitMs: 600_000,
-    },
     capacity: {
       strategy: "resource",
       config: {
@@ -125,12 +80,6 @@ function config(maxDevices = 1, maxRunning = 1): Config {
         ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
       },
     },
-    log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
-    eventLog: {
-      retention: 7 * 24 * 60 * 60 * 1000,
-      maxBytes: 256 * 1024 * 1024,
-    },
-    metrics: { retention: 90 * 24 * 60 * 60 * 1000 },
     warmPool: {
       enabled: true,
       maxConcurrentBoots: 1,

@@ -28,8 +28,9 @@
 //              rewrites or deletes a remote branch (`+<ref>`, `:<ref>`, `--force`, `--delete`).
 //   gh         a sub-agent opens a PR without `--draft` (or a REST create without
 //              `draft=true`), opens one from a `-repro` branch, runs `gh pr ready`, or adds
-//              `bug:ready`, `task:ready` or `feature:planned`; any session assigns an issue by
-//              hand instead of through `claim.mjs`.
+//              `bug:ready`, `task:ready` or `feature:planned`, or removes `fast-track`; a
+//              `bug-triager` or an `implementer` runs `fast-track.mjs` (delivery rule 17); any
+//              session assigns an issue by hand instead of through `claim.mjs`.
 //   body       any session posts a body or comment (`gh issue|pr comment|create|edit|close`,
 //              `gh api ... body=`) that `body-rules.mjs` rejects, or one the guard cannot read
 //              (built by `$(...)`, a backtick or a variable: use `--body-file`).
@@ -81,6 +82,8 @@ const STRICT_AREAS = [
 ];
 const WORK_LABELS = new Set(["bug:ready", "task:ready", "feature:planned"]);
 const SLOW_LANE_AGENTS = new Set(["hardware-verifier", "implementer"]);
+// why: the fast track checks their report and their fix, so they never run it on themselves.
+const FAST_TRACK_AUTHORS = new Set(["bug-triager", "implementer"]);
 const SLOW_LANE_SCRIPTS = new Set([
   "test:e2e:slow",
   "test:e2e:physical",
@@ -256,6 +259,20 @@ function commandStep(state, cmd, words, dynamic) {
   if (name === "git" && subAgent) gitRules(words);
   if (name === "gh") ghRules({ words, dynamic, cmd, ...state, group: words[1], verb: words[2] });
   slowLaneRules(words);
+  if (FAST_TRACK_AUTHORS.has(input.agent_type ?? "") && runsScript(words, "fast-track.mjs")) {
+    refuse(
+      "Refused: the fast track checks your report or your fix, so you never run it yourself " +
+        "(delivery rule 17). The orchestrator runs `fast-track.mjs`; leave the label as it is.",
+    );
+  }
+}
+
+// why: the script as the program, or as node's script; `git add` or `cat` on the file is no run.
+function runsScript(words, script) {
+  const at = words.findIndex((w) => path.basename(w) === script);
+  if (at === -1) return false;
+  const before = words.slice(0, at).filter((w) => !WRAPPERS.has(path.basename(w)));
+  return before.every((w, i) => (i === 0 && path.basename(w) === "node") || w.startsWith("-"));
 }
 
 // why: a body file written by a heredoc earlier in the same command is not on disk yet.
@@ -326,6 +343,12 @@ const GH_RULES = [
       "report what should change.",
   },
   {
+    when: (c) => subAgent && removesFastTrack(c),
+    reason:
+      "Refused: only the maintainer takes a bug off the fast track by removing `fast-track` " +
+      "(delivery rule 17). Leave the label and report why the PR is held.",
+  },
+  {
     when: (c) => subAgent && c.group === "pr" && c.verb === "ready",
     reason:
       "Refused: only the orchestrator marks a PR ready, after its review (delivery rule 14). " +
@@ -363,6 +386,21 @@ function ghRules(c) {
 
 function workLabel(c) {
   return addedLabels(c.words, c.group, c.verb).find((l) => WORK_LABELS.has(l));
+}
+
+// why: without the label the exit check has nothing to check, so removing it is the bypass:
+// `--remove-label`, or a REST call that deletes the label or replaces the issue's labels.
+function removesFastTrack(c) {
+  if ((c.group === "issue" || c.group === "pr") && c.verb === "edit") {
+    return flagValues(c.words, ["--remove-label"])
+      .flatMap((v) => v.split(","))
+      .some((v) => v.trim() === "fast-track");
+  }
+  return (
+    c.group === "api" &&
+    c.words.some((w) => /\/issues\/\d+\/labels(?:\/fast-track)?$/.test(w)) &&
+    c.words.some((w) => /(?:^|=|^-X)(?:DELETE|PUT)$/i.test(w))
+  );
 }
 
 function prCreate(c) {

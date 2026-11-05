@@ -27,8 +27,8 @@ import {
 import { seedTokensDatabase } from "../auth/testing.js";
 import { openStateDatabase } from "../state/index.js";
 import { fakeModule, type FakeModule } from "../modules/testing.js";
-import { androidDeviceDataTable } from "../drivers/android/index.js";
-import { IosSimctlDriver, iosDeviceDataTable } from "../drivers/ios/index.js";
+import { androidDeviceDataTable, androidDriverConfig } from "../drivers/android/index.js";
+import { IosSimctlDriver, iosDeviceDataTable, iosDriverConfig } from "../drivers/ios/index.js";
 import { EventBus, type EventEnvelope } from "../bus/index.js";
 import { readHistoryEvents, seedHistory } from "../history/testing.js";
 import { DAEMON_PROTOCOL_VERSION } from "../daemon-protocol/index.js";
@@ -67,7 +67,6 @@ import {
   modelPreferenceWiring,
   discoverDrivers,
   logAndroidDiagnostic,
-  logSilenceFailure,
   productionDeviceDataTables,
   resolveDeviceDataTables,
   emitSlimDiagnostic,
@@ -81,6 +80,7 @@ import {
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import type { DaemonServer } from "./server.js";
 import { memorySourceDatabase } from "../drivers/ios/testing.js";
+import { promiseState } from "../test-support/promise-state.js";
 
 const runningDaemons: DaemonServer[] = [];
 const temporaryDirectories: string[] = [];
@@ -563,6 +563,25 @@ describe("startDaemon", () => {
       default: "[redacted]",
       shown: secret,
     });
+  });
+
+  it("answers config.get with the drivers section of config.json, so a key under drivers.* can be read back", async () => {
+    const { daemon } = await start({
+      configOverrides: { drivers: { ios: { deviceSet: "simlock", retries: 3 } } },
+    });
+
+    const config = (await daemon.dispatch(
+      "config.get",
+      {},
+      {
+        manageEventSubscription: () => undefined,
+        via: "socket",
+        principal: "operator",
+        role: "admin",
+      },
+    )) as { readonly drivers?: unknown };
+
+    expect(config.drivers).toEqual({ ios: { deviceSet: "simlock", retries: 3 } });
   });
 
   it("keeps gateway.token in the daemon.started payload and the Daemon started log line as the redaction marker, so a set token still reads as set", async () => {
@@ -1748,6 +1767,100 @@ describe("startDaemon stop with a cleanup run in flight (#985)", () => {
   });
 });
 
+describe("startDaemon stop with a lease request booting its device (#1200)", () => {
+  const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("disposes the driver only after a lease request's boot has ended, deletes the device that failed to boot, and boots nothing for a request still queued", async () => {
+    // why: records the order of the driver's boot, destroy and disposal, and holds a new device's boot until the test fails it.
+    class HeldBootDriver extends FakeDriver {
+      readonly order: string[] = [];
+      readonly held: ((error: Error) => void)[] = [];
+      override async makeReady(
+        device: Parameters<FakeDriver["makeReady"]>[0],
+        options: Parameters<FakeDriver["makeReady"]>[1],
+      ): ReturnType<FakeDriver["makeReady"]> {
+        if (options.purpose !== "prepare") return super.makeReady(device, options);
+        this.order.push("boot started");
+        return new Promise((_resolve, reject) =>
+          this.held.push((error) => {
+            this.order.push("boot failed");
+            reject(error);
+          }),
+        );
+      }
+      override async destroy(device: Parameters<FakeDriver["destroy"]>[0]): Promise<void> {
+        this.order.push("destroy");
+        await super.destroy(device);
+      }
+      async dispose(): Promise<void> {
+        this.order.push("dispose");
+      }
+    }
+    const clock = new FakeClock(1_000);
+    const driver = new HeldBootDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+    // why: one running device, so the second requester queues behind the first one's boot and would boot its own device once that boot fails.
+    const { daemon, directory } = await start({
+      clock,
+      configOverrides: { capacity: { config: { maxRunning: 1 }, strategy: "fixed" } },
+      drivers: [driver],
+    });
+    const requestAs = (requesterId: string) =>
+      daemon
+        .dispatch(
+          "lease.request",
+          { model: "iPhone 16", osVersion: "26.5", platform: "ios", requesterId },
+          {
+            manageEventSubscription: () => undefined,
+            via: "socket",
+            principal: "agent",
+            role: "agent",
+          },
+        )
+        .then(
+          () => "granted",
+          () => "failed",
+        );
+    const settled = requestAs("agent-1");
+    for (let turn = 0; turn < 200 && driver.held.length === 0; turn += 1) {
+      await turnOfTheEventLoop();
+    }
+    void requestAs("agent-2");
+    for (let turn = 0; turn < 20; turn += 1) await turnOfTheEventLoop();
+    expect(driver.order).toEqual(["boot started"]);
+
+    const stopped = daemon.stop("test-stop");
+    let stopEnded = false;
+    void stopped.then(() => {
+      stopEnded = true;
+    });
+    for (let turn = 0; turn < 200 && !stopEnded; turn += 1) await turnOfTheEventLoop();
+    expect(driver.order).toEqual(["boot started"]);
+    for (const fail of driver.held.splice(0))
+      fail(new Error("Timed out waiting for device to boot"));
+    await stopped;
+    expect(await settled).toBe("failed");
+    expect(driver.order).toEqual(["boot started", "boot failed", "destroy", "dispose"]);
+
+    const state = await openStateDatabase({
+      dataDirectory: directory,
+      filesystem: new MemoryFilesystem(),
+      logger: new NoopLogger(),
+      oldFiles: [],
+      owners: [registryOwner, fakeDeviceDataTable],
+      sqlite: new NodeSqliteOpener(),
+      upgradeStep: "unused",
+    });
+    const registry = await loadTestRegistry({
+      clock,
+      eventBus: new EventBus(clock),
+      idGenerator: { generate: () => "1" },
+      state,
+    });
+    expect(registry.snapshot.devices.map((device) => device.state)).toEqual(["deleted"]);
+    state.close();
+  });
+});
+
 describe("startDaemon stop with a health recovery in flight (#1000)", () => {
   const turnOfTheEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
   const turns = async (count: number) => {
@@ -2438,10 +2551,17 @@ describe("discoverDrivers on a host with an Android SDK", () => {
         match: { args: ["devices"], command: "/android-sdk/platform-tools/adb" },
         result: { code: 0, stderr: "", stdout: "List of devices attached\n" },
       },
+      {
+        match: { args: ["-help"], command: "/android-sdk/emulator/emulator" },
+        result: { code: 0, stderr: "", stdout: "  -crash-report-mode <mode>  crash reporting\n" },
+      },
     ]);
 
     const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
-      androidEmulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      androidConfig: {
+        ...androidDriverConfig.defaults,
+        emulator: { audio: true, bootAnimation: true, gpu: "host", headless: true },
+      },
       processRunner,
     });
     const android = drivers.find((driver) => driver.platform === "android");
@@ -2466,6 +2586,7 @@ describe("discoverDrivers on a host with an Android SDK", () => {
 
     expect(processRunner.calls.map((call) => call.args)).toEqual([
       ["devices"],
+      ["-help"],
       [
         "-avd",
         "simlock_one",
@@ -2580,21 +2701,119 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     ]);
   });
 
-  it("logs one warning, with the device id and the detail, when an iOS simulator could not be silenced", () => {
-    const sink = new MemoryLogSink();
+  it("a worker's discovered drivers boot within the deadlines of its config: ios.full.bootTimeoutMs, android.bootTimeoutMs", async () => {
+    // why: a hand-off dropped in `discoverDrivers` leaves the driver on its 300 s default, so each case configures another value and watches the boot end exactly there.
+    const bootIos = async (clock: FakeClock): Promise<readonly [Promise<unknown>]> => {
+      const filesystem = new MemoryFilesystem();
+      const udid = "00000000-0000-0000-0000-000000000001";
+      const simctl = (...args: string[]) => ["simctl", "--set", IOS_ROOT, ...args];
+      const runner = new ScriptedProcessRunner([
+        { match: { command: "xcrun", args: simctl("boot", udid) } },
+        { hangs: true, match: { command: "xcrun", args: simctl("bootstatus", udid, "-b") } },
+        { match: { command: "xcrun", args: simctl("shutdown", udid) } },
+      ]);
+      const { drivers } = await discoverIos({
+        clock,
+        filesystem,
+        iosConfig: { ...iosDriverConfig.defaults, full: { bootTimeoutMs: 400_000 } },
+        processRunner: runner,
+      });
+      const driver = drivers.find((candidate) => candidate.platform === "ios");
+      await filesystem.mkdirp(join(IOS_ROOT, udid, "data"));
+      const ready = driver!.makeReady(
+        {
+          address: udid,
+          deviceId: udid,
+          physical: false,
+          driverData: {
+            deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+            name: "simlock-device-1",
+            runtimeId: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            udid,
+          },
+        },
+        { mode: "full", purpose: "recover" },
+      );
+      for (let turn = 0; turn < 50 && runner.calls.length < 2; turn += 1) await Promise.resolve();
+      return [ready];
+    };
+    const bootAndroid = async (clock: FakeClock): Promise<readonly [Promise<unknown>]> => {
+      const filesystem = await androidSdk();
+      await filesystem.mkdirp(SIMLOCK_HOME);
+      await filesystem.writeFileAtomic(
+        join(SIMLOCK_HOME, "adb-server.json"),
+        JSON.stringify({ pid: 4242, port: 5038, startedAt: 1 }),
+      );
+      const runner = new ScriptedProcessRunner([]);
+      // why: the emulator never finishes booting and never exits, so only the deadline ends the boot.
+      vi.spyOn(runner, "spawn").mockImplementation((command, args, options) =>
+        new ScriptedProcessRunner([{ hangs: true, match: { command, args } }]).spawn(
+          command,
+          args,
+          options,
+        ),
+      );
+      vi.spyOn(runner, "run").mockImplementation((_command, args) =>
+        Promise.resolve({
+          code: 0,
+          stderr: "",
+          stdout: args.at(-1) === "sys.boot_completed" ? "0\n" : "",
+        }),
+      );
+      const { drivers } = await discoverAndroid(filesystem, new FakeTcpProbe([5038]), [4242], {
+        androidConfig: { ...androidDriverConfig.defaults, bootTimeoutMs: 600_000 },
+        clock,
+        processRunner: runner,
+      });
+      const driver = drivers.find((candidate) => candidate.platform === "android");
+      const avdHome = join(SIMLOCK_HOME, "devices", "android", "device-1");
+      await filesystem.mkdirp(join(avdHome, "simlock.avd"));
+      const ready = driver!.makeReady(
+        {
+          address: "emulator-5586",
+          deviceId: "device-1",
+          physical: false,
+          driverData: {
+            avdHome,
+            avdName: "simlock",
+            configHash: "hash",
+            port: 5586,
+            serial: "emulator-5586",
+          },
+        },
+        { mode: "full", purpose: "recover" },
+      );
+      return [ready];
+    };
 
-    logSilenceFailure(new JsonLinesLogger({ clock: new FakeClock(), level: "debug", sink }))({
-      deviceId: "simlock-ios-1",
-      detail: "timed out",
-    });
+    for (const { configuredMs, boot, stepMs } of [
+      { configuredMs: 400_000, boot: bootIos, stepMs: 400_000 },
+      { configuredMs: 600_000, boot: bootAndroid, stepMs: 1_000 },
+    ]) {
+      const clock = new FakeClock();
+      const [ready] = await boot(clock);
+      const state = promiseState(ready);
+      const failed = ready.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      // why: Android arms each poll's delay only after the previous one fired, so its clock moves in steps; iOS's deadline is one timer.
+      for (let elapsed = 0; elapsed < configuredMs - 1; elapsed += stepMs) {
+        expect(state.state, `still booting at ${String(elapsed)} ms`).toBe("pending");
+        if (stepMs < configuredMs) {
+          await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
+        }
+        clock.advance(Math.min(stepMs, configuredMs - 1 - elapsed));
+        for (let tick = 0; tick < 100; tick += 1) await Promise.resolve();
+      }
+      expect(state.state, `still booting at ${String(configuredMs - 1)} ms`).toBe("pending");
 
-    expect(sink.records).toEqual([
-      expect.objectContaining({
-        fields: { deviceId: "simlock-ios-1", detail: "timed out" },
-        level: "warn",
-        message: "Could not silence iOS simulator",
-      }),
-    ]);
+      if (stepMs < configuredMs) {
+        await vi.waitFor(() => expect(clock.pendingTimerCount).toBeGreaterThan(0));
+      }
+      clock.advance(1);
+      await expect(failed).resolves.toMatchObject({ name: "BootTimeoutError" });
+    }
   });
 
   async function androidSdk(): Promise<MemoryFilesystem> {
@@ -2617,7 +2836,10 @@ describe("discoverDrivers on a host with an Android SDK", () => {
     tcpProbe: FakeTcpProbe,
     livePids: readonly number[] = [],
     overrides: Partial<
-      Pick<DriverDiscoveryContext, "androidEmulator" | "hostArch" | "logger" | "processRunner">
+      Pick<
+        DriverDiscoveryContext,
+        "androidConfig" | "clock" | "hostArch" | "logger" | "processRunner"
+      >
     > = {},
   ) {
     return discoverDrivers({
@@ -2685,15 +2907,19 @@ async function refusedRoot(filesystem: MemoryFilesystem): Promise<OwnedRootError
 
 async function discoverIos(
   overrides: {
+    readonly clock?: FakeClock;
     readonly filesystem?: MemoryFilesystem;
     readonly hostPlatform?: NodeJS.Platform;
     readonly idGenerator?: IdGenerator;
+    readonly iosConfig?: DriverDiscoveryContext["iosConfig"];
+    readonly processRunner?: ScriptedProcessRunner;
     readonly sink?: MemoryLogSink;
   } = {},
 ) {
   return discoverDrivers({
     database: await memorySourceDatabase(),
-    clock: new FakeClock(),
+    clock: overrides.clock ?? new FakeClock(),
+    ...(overrides.iosConfig === undefined ? {} : { iosConfig: overrides.iosConfig }),
     driversConfig: {},
     eventBus: new EventBus(new FakeClock()),
     filesystem: overrides.filesystem ?? new MemoryFilesystem(),
@@ -2706,7 +2932,7 @@ async function discoverIos(
       level: "debug",
       sink: overrides.sink ?? new MemoryLogSink(),
     }),
-    processRunner: new ScriptedProcessRunner([]),
+    processRunner: overrides.processRunner ?? new ScriptedProcessRunner([]),
     processSupervisor: new FakeProcessSupervisor(),
     simlockHome: SIMLOCK_HOME,
     tcpProbe: new FakeTcpProbe(),
@@ -2722,8 +2948,6 @@ describe("deviceModeWiring", () => {
           ios: {
             defaultMode,
             defaultModels: {},
-            slim: { bootTimeoutMs: 1 },
-            simulator: { audio: true },
           },
         }),
       ).toEqual({
@@ -3013,20 +3237,56 @@ describe("discoverDrivers with SIMLOCK_DRIVERS_MODULE", () => {
     expect(prerequisiteChecks).toEqual([expect.objectContaining({ fromModule: true })]);
   });
 
-  it("hands config's android.emulator block to driver discovery when the daemon starts", async () => {
-    const key = "__simlockDiscoveredAndroidEmulator";
+  it("hands each driver its own section of the config, android.emulator and ios.simulator as set and ios.slim defaulted, to driver discovery when the daemon starts", async () => {
+    const key = "__simlockDiscoveredDriverConfig";
     process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
       `export function createDrivers(context) {
-         globalThis.${key} = context.androidEmulator;
+         globalThis.${key} = {
+           emulator: context.androidConfig.emulator,
+           simulator: context.iosConfig.simulator,
+           slim: context.iosConfig.slim,
+         };
          return [];
        }`,
     );
     const emulator = { audio: false, bootAnimation: false, gpu: "host", headless: true };
+    const simulator = { audio: false, headless: true };
 
     try {
-      await start({ configOverrides: { android: { emulator } }, drivers: undefined });
+      await start({
+        configOverrides: { android: { emulator }, ios: { simulator } },
+        drivers: undefined,
+      });
 
-      expect((globalThis as Record<string, unknown>)[key]).toEqual(emulator);
+      expect((globalThis as Record<string, unknown>)[key]).toEqual({
+        emulator,
+        simulator,
+        slim: { bootTimeoutMs: 600_000 },
+      });
+    } finally {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+
+  it("starts its drivers with ios.full.bootTimeoutMs and android.bootTimeoutMs from its config", async () => {
+    const key = "__simlockDiscoveredBootTimeouts";
+    process.env.SIMLOCK_DRIVERS_MODULE = await writeModule(
+      `export function createDrivers(context) {
+         globalThis.${key} = [context.iosConfig.full.bootTimeoutMs, context.androidConfig.bootTimeoutMs];
+         return [];
+       }`,
+    );
+
+    try {
+      await start({
+        configOverrides: {
+          android: { bootTimeoutMs: 600_000 },
+          ios: { full: { bootTimeoutMs: 400_000 } },
+        },
+        drivers: undefined,
+      });
+
+      expect((globalThis as Record<string, unknown>)[key]).toEqual([400_000, 600_000]);
     } finally {
       delete (globalThis as Record<string, unknown>)[key];
     }

@@ -128,7 +128,8 @@ async function strandProvisioning(
   await untilTheDaemonSays(daemon, (views) =>
     views.some((view) => view.devices.some((device) => device.state === "provisioning")),
   );
-  await daemon.stop();
+  // why: a stop waits for the boot to end (#1200), which would make it a granted lease and no stall.
+  await daemon.kill();
   await beforeStart();
   await daemon.start();
 }

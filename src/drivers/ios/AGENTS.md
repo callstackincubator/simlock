@@ -10,8 +10,10 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 | File                      | Role                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `index.ts`                | `IosSimctlDriver`: every `Driver` verb, slim overrides write and readback, `simctl` passthrough rules                                                                                              |
+| `definition.ts`           | `iosDriverConfig`: the driver's keys of the `ios` config section (`full`, `slim`, `simulator`), their validators and defaults; `IosDriverConfig`, taken as `create`'s `config` option              |
 | `device-data.ts`          | `iosDeviceDataTable`: owner `ios-device-data` version 1, table `ios_device_data` (`udid`, `name`, `device_type_id`, `runtime_id`, nullable `slim_signature`, `slim_mark_token`, no longer written) |
 | `device-set-leftovers.ts` | `refuseOwnSetLeftovers`, `refuseXcodeSetLeftovers`: the file-only check for simulators left from the other `deviceSet`                                                                             |
+| `boot-courtesies.ts`      | `runAfterBoot`: the volume step (`ios.simulator.audio: false`) and the window step (`ios.simulator.headless: false`) that follow a boot; each only reports its failure                             |
 | `physical.ts`             | `IosPhysicalHandler`: enrol, presence, reclaim through `devicectl`                                                                                                                                 |
 | `devicectl-exec.ts`       | `devicectlExecCommand`: the reviewed `devicectl` list                                                                                                                                              |
 | `slim-labels.ts`          | `SLIM_CATEGORIES`, `NEVER_DISABLE_LABELS`, `resolveSlimCategories`, `labelsFor`, `overridesFor`, `slimSignature`                                                                                   |
@@ -24,7 +26,7 @@ Parent: [drivers](../AGENTS.md). Flows: [device selection](../../../docs/interna
 ## How it works
 
 Under `drivers.ios.deviceSet` `simlock` (the default) every simulator command is `xcrun simctl --set <root> …`. Unscoped only: `findLegacy`, `destroyLegacy`, and the read-only `simctl list -j devices` `listComponents` runs.
-Under `default` (ADR 0048) the set is Xcode's own, `<coreSimulatorRoot>/Devices`, and no call carries `--set`: there is no owned root, `listManaged` lists only devices whose durable mark names this instance's `instanceId`, and `findLegacy` answers `undefined`. A value other than `simlock` or `default`, or `default` with `drivers.ios.deviceRoot`, refuses iOS (`invalid-device-set`); simulators left in the set being given up refuse it too (`device-set-changed`), found by reading files only.
+Under `default` (ADR 0048) the set is Xcode's own, `<coreSimulatorRoot>/Devices`, and no call carries `--set`: there is no owned root, `listManaged` lists only devices whose durable mark names this instance's `instanceId`, and `findLegacy` answers `undefined`. A value other than `simlock` or `default`, `default` with `drivers.ios.deviceRoot`, or `ios.simulator.headless: false` with `simlock` (checked after the first two; message `…ios.simulator.headless is false, which needs drivers.ios.deviceSet "default"…`, `root` the configured value or `simlock`), refuses iOS (`invalid-device-set`); simulators left in the set being given up refuse it too (`device-set-changed`), found by reading files only.
 
 Resolve — `resolveSpec` (reads `simctl list -j devicetypes runtimes` on every call):
 
@@ -57,7 +59,9 @@ Boot — `makeReady`:
 4. `purpose: "recover"`: boot only, no write, no readback.
 5. With `ios.simulator.audio: false`, after every boot (prepare and recover, slim or full) and before the readback: `simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0`, then `-p` (30 s each). The first call that exits non-zero, times out or cannot start stops the step: the device stays in use and `onSilenceFailed` gets `{ deviceId, detail }` (stderr, `timed out`, or the spawn error), which the daemon logs at `warn` as `Could not silence iOS simulator`. Nothing is read back; apps keep playing at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does.
 
-Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simulator Simlock booted once, kept in the sources set (`<device set>/sources`; under `deviceSet: default` the owned root `$SIMLOCK_HOME/devices/ios-sources`) and known by its `ios_source_data` row (`source-data.ts`), never by name. `provision(spec, {source?})`: find the ready seed of the spec key (device type + runtime), make it when none or stale (`making` row, `create`, boot, shutdown, `ready` row with its size), then `simctl --set <sources> clone <seed> simlock-<id> <device set>`, both marks, the seed's `disabled.plist` copied. Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot, because it records each app, system apps included, under the original device's folder; a clone whose drop fails is deleted. Two provisions of a kind make one seed; clones of a seed and its deletion take turns. `listSources` (ready rows with `staleReason`, plus sources-set simulators no row names as `orphan`) sweeps another process's `making` rows on its first call; a `making` row of this process older than 300 s goes at the next make of its kind. `destroySource` deletes by a row's UDID, or an orphan's under `doctor --purge-orphans`. `removeComponent` deletes the runtime's seeds first. A seed is in no `listManaged` and no `simlock simctl list`.
+6. With `ios.simulator.headless: false` (device set `default` only), after every boot and the volume step, before the readback: `open -g -b com.apple.dt.Devices --args -shutdownStartedDevicesOnQuit NO` (30 s; starts DeviceHub when it is not running), then on exit 0 `open -g devices://manage/select?id=<udid>`; on a non-zero exit (DeviceHub not installed) `open -g -b com.apple.iphonesimulator --args -CurrentDeviceUDID <udid> -DetachOnWindowClose YES -DetachOnAppQuit YES`. A failed, timed-out or unstartable call (the first one stopping the step) leaves the device in use and `onWindowFailed` gets `{ deviceId, detail }` (trimmed stderr, `timed out`, or the spawn error), which the daemon logs at `warn` as `Could not open a window for iOS simulator`. `-g` keeps the front app in front. Two simulators made ready at once on the Simulator.app path: the second may get no window and no warning.
+
+Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simulator Simlock booted once, kept in the sources set (`<device set>/sources`; under `deviceSet: default` the owned root `$SIMLOCK_HOME/devices/ios-sources`) and known by its `ios_source_data` row (`source-data.ts`), never by name. `provision(spec, {source?})`: find the ready seed of the spec key (device type + runtime), make it when none or stale (`making` row, `create`, boot, shutdown, `ready` row with its size), then `simctl --set <sources> clone <seed> simlock-<id> <device set>`, both marks, the seed's `disabled.plist` copied. Every clone (a seed's copy, `saveSource`'s own clone, a `provision` with `source`) has its `data/var/db/lsd/com.apple.LaunchServices-*.csstore` deleted before its first boot, because it records each app, system apps included, under the original device's folder; a clone whose drop fails is deleted. Two provisions of a kind make one seed; clones of a seed and its deletion take turns. `listSources` (ready rows with `staleReason`, plus sources-set simulators no row names as `orphan`) sweeps another process's `making` rows on its first call; a `making` row of this process older than 300 s goes at the next make of its kind. `destroySource` deletes by a row's UDID, or an orphan's under `doctor --purge-orphans`; a seed `simctl delete` reports as `Invalid device` is already gone, so its row is dropped. `removeComponent` deletes the runtime's seeds first. A seed is in no `listManaged` and no `simlock simctl list`.
 
 Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`. `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
@@ -98,17 +102,17 @@ Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime
 
 ## State and timers
 
-| What                          | Default                     | Key                      |
-| ----------------------------- | --------------------------- | ------------------------ |
-| Device root                   | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
-| Device set                    | `simlock`                   | `drivers.ios.deviceSet`  |
-| Default mode                  | `full`                      | `ios.defaultMode`        |
-| Slim categories               | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
-| Slim boot deadline            | 10 min                      | `ios.slim.bootTimeoutMs` |
-| Bootstatus + installer (full) | 120 s                       | none                     |
-| Any other `simctl` call       | 30 s                        | none                     |
-| Slim readback                 | 120 s                       | none                     |
-| `devicectl` read / uninstall  | 30 s / 60 s                 | none                     |
+| What                                                   | Default                     | Key                      |
+| ------------------------------------------------------ | --------------------------- | ------------------------ |
+| Device root                                            | `$SIMLOCK_HOME/devices/ios` | `drivers.ios.deviceRoot` |
+| Device set                                             | `simlock`                   | `drivers.ios.deviceSet`  |
+| Default mode                                           | `full`                      | `ios.defaultMode`        |
+| Slim categories                                        | all in `SLIM_CATEGORIES`    | `ios.slim.categories`    |
+| Slim boot deadline                                     | 10 min                      | `ios.slim.bootTimeoutMs` |
+| Bootstatus + installer (full), recovery and seed boots | 5 min                       | `ios.full.bootTimeoutMs` |
+| Any other `simctl` call                                | 30 s                        | none                     |
+| Slim readback                                          | 120 s                       | none                     |
+| `devicectl` read / uninstall                           | 30 s / 60 s                 | none                     |
 
 Writes: the device set (by `simctl`), the two mark files per device. The registry is the only
 record of a device's mode. Also writes, and deletes with the device, its folder in `/private/var/tmp` (`launchdOverridesRoot` option).
