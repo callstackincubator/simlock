@@ -1,5 +1,5 @@
 /**
- * ADR 0005 §35's one e2e test: "two fake-driver workers and a gateway in one process tree and
+ * why: ADR 0005 §35's one e2e test: "two fake-driver workers and a gateway in one process tree and
  * leases through the gateway". A real gateway daemon and two real worker daemons (each with a
  * `FakeDriver` instead of real simulator tooling), joined over a real WebSocket uplink on
  * loopback -- not the in-memory uplink port `service.test.ts`/`worker-link.test.ts` script,
@@ -12,7 +12,7 @@
  * exercise (see `fleet-coordinator.test.ts`'s own two-worker tests for the pass-over and
  * dispatch-race cases this file does not re-prove).
  *
- * A fixed port, matching `main.test.ts`'s own real-HTTP tests (`describe("startDaemon HTTP
+ * A fixed port, matching `main-stop.test.ts`'s own real-HTTP tests (`describe("startDaemon HTTP
  * gateway bind failure")`) rather than a dynamically-chosen one: the worker's `gateway.url` has
  * to be known before that worker's daemon is constructed, and this codebase's other real-socket
  * tests already accept a fixed port's small collision risk over that chicken-and-egg problem.
@@ -382,8 +382,8 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       stdout: "hello-from-b",
     });
 
-    // Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise
-    // (`main.ts` fires `gatewayUplink.start()` without awaiting it) -- wait for the gateway to
+    // why: Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise
+    // (`worker-composition.ts` fires `gatewayUplink.start()` without awaiting it) -- wait for the gateway to
     // actually see both usably (C3, round 1 review) before leasing, not merely `connected`.
     await vi.waitFor(async () => {
       const { workers } = await gateway.dispatch("worker.list", {}, adminSession());
@@ -488,7 +488,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   /**
    * why: #119's own flagship: drain semantics, `WORKER_UNREACHABLE`-shaped exclusion, and reconnect
    * rebuild, proved together over real processes and a real WebSocket restart -- not the
-   * scripted uplink `fleet-coordinator.test.ts` and `dispatcher.test.ts` already cover each
+   * scripted uplink `fleet-coordinator.test.ts` and `dispatcher-leases.test.ts` already cover each
    * piece of in isolation (including §27a's ownership round trip, pinned there too). What only
    * this shape of test can catch: the gateway's own persisted state (`instance.json`,
    * the drained workers and join tokens in `state.db`) actually surviving a real `stop()`/`startDaemon()` cycle, and
