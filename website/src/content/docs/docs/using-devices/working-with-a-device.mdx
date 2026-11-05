@@ -5,20 +5,24 @@ description: Install and launch an app on a leased simulator or emulator, run si
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Simlock keeps its simulators and emulators apart from your own. By default (`drivers.ios.deviceSet` is `simlock`), iOS simulators live in a device set Xcode does not read, and emulators connect to Simlock's own adb server instead of the default one. That is what stops another tool, or another agent, from wiping your device. It also means a bare `xcrun simctl` or `adb` does not see the device you leased. When an admin sets `drivers.ios.deviceSet` to `default`, iOS simulators live in Xcode's own device set instead, and a bare `xcrun simctl` does see them; Android is unchanged. To build and run your own app, see [Build and run your app](/simlock/docs/using-devices/build-and-run).
+Once you hold a lease, run your `simctl` and `adb` commands through `simlock simctl` and `simlock adb`. They take the same arguments, print the same output and exit with the same code as the real tools, but point them at Simlock's devices.
 
-Run your commands through `simlock simctl` and `simlock adb`. They pass your arguments through unchanged and point the tool at Simlock's devices.
+You need these wrappers because Simlock keeps its devices apart from your own, so other tools and agents can't wipe them by accident. As a result, a plain `xcrun simctl` or `adb` doesn't see the device you leased.
+
+The exception: when an admin sets `drivers.ios.deviceSet` to `default`, iOS simulators live alongside your own simulators in Xcode, and a plain `xcrun simctl` sees them. Android is the same under either setting. To build your own app for the device, see [Build and run your app](/simlock/docs/using-devices/build-and-run).
 
 ## Find your device in the grant
 
-Read these from the grant line `simlock lease` prints (see [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle#get-a-device-and-keep-it)):
+Take these from the grant line `simlock lease` prints (see [Lease lifecycle](/simlock/docs/using-devices/lease-lifecycle#get-a-device-and-keep-it)):
 
 | Platform | Your device | Grant field | Example |
 | --- | --- | --- | --- |
 | iOS | Simulator UDID | `device.driverDeviceId` | `6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90` |
 | Android | Emulator serial | `device.address` | `emulator-5556` |
 
-Always name your device by this id. Other agents' devices run in the same device set (under `default`, Xcode's own, with your other simulators too) and on the same adb server, so `booted` in a `simctl` command, or an `adb` command with no `-s`, can reach a device that is not yours.
+<Aside type="caution">
+Always name your device by this id. Other agents' devices run alongside yours, so `booted` in a `simctl` command, or an `adb` command without `-s`, can reach a device that isn't yours.
+</Aside>
 
 ## Install and launch an app
 
@@ -45,18 +49,18 @@ simlock adb -s "$SERIAL" exec-out screencap -p > home.png
   </TabItem>
 </Tabs>
 
-Under `simlock`, `simlock simctl` adds `--set <Simlock's device set>` to the command; under `default` it adds nothing and runs plain `xcrun simctl`. `simlock adb` adds `-P <Simlock's adb server port>`. Everything else is the tool you already know, with the exit code and output of the real command. `simlock adb -s "$SERIAL" shell` with no command gives you an interactive shell.
+`simlock adb -s "$SERIAL" shell` with no command opens an interactive shell.
 
-## Use the real tools directly
+## Let other tools reach the device
 
-When a build tool or test runner has to call `xcrun simctl` or `adb` itself, give it the lease's environment. Every grant has an `environment` object:
+When a build tool or test runner calls `xcrun simctl` or `adb` itself, give it the lease's environment. Every grant has an `environment` object:
 
-| Variable | When | What it is |
+| Variable | When it is set | What it is |
 | --- | --- | --- |
-| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator under `simlock` (not set under `default`) | Path of Simlock's device set, for `simctl --set` |
-| `ANDROID_ADB_SERVER_PORT` | Android | Port of the adb server that sees the device; `adb` reads it on its own |
+| `SIMLOCK_IOS_DEVICE_SET` | iOS simulator, unless `drivers.ios.deviceSet` is `default` | Folder of Simlock's simulators, for `simctl --set` |
+| `ANDROID_ADB_SERVER_PORT` | Android | Port of the adb server that sees the device. `adb` reads it by itself. |
 | `SIMLOCK_DEVICE_UDID` | Physical iPhone or iPad | The device's UDID |
-| `ANDROID_SERIAL` | Physical Android phone | The phone's serial; `adb` reads it on its own |
+| `ANDROID_SERIAL` | Physical Android phone | The phone's serial. `adb` reads it by itself. |
 
 `--export-env` prints these as shell `export` lines instead of the JSON grant, ready for `eval`:
 
@@ -65,67 +69,73 @@ eval "$(simlock lease --platform android --device "Pixel 8" --detach --export-en
 adb -s emulator-5556 shell getprop ro.build.version.release
 ```
 
-`simctl` reads no variable for its device set, so under `simlock` pass the path yourself (under `default` there is no variable, and a plain `xcrun simctl list devices` lists your simulator):
+With `--export-env`, stdout holds only the export lines. Find the lease id afterwards with `simlock status`, so you can renew and release it.
+
+`simctl` doesn't read any variable for its device set, so pass the folder yourself:
 
 ```sh
 xcrun simctl --set "$SIMLOCK_IOS_DEVICE_SET" list devices
 ```
 
-With `--export-env`, stdout holds only the export lines. Find the lease id afterwards with `simlock status`, so you can renew and release it.
+When `drivers.ios.deviceSet` is `default`, there is no such variable, and a plain `xcrun simctl list devices` lists your simulator.
 
-The paths and ports in `environment` belong to the machine that owns the device. They are of no use on another machine, for example when you lease through a gateway.
+The paths and ports in `environment` only work on the machine that owns the device. They are no use on another machine, for example when you lease through a gateway.
 
-## Through a gateway
+## Run commands through a gateway
 
-Against a gateway (`simlock --gateway ...`), the device is on a worker, so `simlock simctl` and `simlock adb` run your command on that worker and stream the output back:
+When you lease through a gateway (`simlock --gateway ...`), the device is on a worker. `simlock simctl` and `simlock adb` run your command on that worker and stream the output back:
 
 ```sh
 simlock --gateway simctl --lease 3f81a2c4-9b7d-4e21-8a55-1c0e6f2d7b93.lse_9f2c6a1d listapps 6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90
 ```
 
-- `--lease <lease-id>` names which lease the command runs under. Put it right after `simctl` or `adb`. You can leave it out when you hold exactly one lease. Against a worker it is accepted and ignored.
-- File paths in the arguments are paths on the worker, not on your machine. `simctl install` needs the app to exist on the worker already.
-- Commands that need a terminal, such as a bare `adb shell`, are refused. Input piped to the command is sent once.
-- Right after a worker restarts, the gateway hides its leases from `lease.list` and `lease.get` until the worker is no longer `starting`. That is the worker's startup checks plus one gateway refresh: usually seconds, up to about a minute, because a platform's startup read is capped at 60 seconds. In that window the command fails with `No lease is held by <your id>` although the lease stands. Do not request a new device on that message: wait a minute and run the command again. With `--lease <lease-id>` you do not see the error: the command skips the lookup, waits for the worker to finish starting, and then runs, up to about a minute later.
+- `--lease <lease-id>` says which lease the command runs under. Put it right after `simctl` or `adb`. You can leave it out when you hold exactly one lease. Without a gateway, it is accepted and ignored.
+- File paths in the arguments are paths on the worker, not on your machine. `simctl install` needs the app to be on the worker already.
+- Commands that need a terminal, such as a bare `adb shell`, are refused.
+- The command gets no input unless you pass `--stdin`. With `--stdin`, Simlock reads everything you pipe in (or type, up to Ctrl-D) and sends it once. Put `--stdin` before the command's own arguments, next to `--lease`.
+
+<Aside type="caution" title="Right after a worker restarts">
+For up to about a minute after a worker restarts, a command without `--lease` can fail with `No lease is held by <your id>`, even though your lease still stands. Don't request a new device on that message. Wait a minute and run the command again, or pass `--lease <lease-id>`: then the command waits for the worker to finish starting and runs.
+</Aside>
 
 ## Commands Simlock refuses
 
-Some commands would break a device behind Simlock's back or hit every agent at once. `simlock simctl` and `simlock adb` refuse them with exit 2 and a message that says what to run instead.
+Some commands would break a device behind Simlock's back, or hit every agent at once. `simlock simctl` and `simlock adb` refuse them with exit 2 and a message that says what to run instead:
 
 | Tool | Refused | Why |
 | --- | --- | --- |
 | simctl | `create`, `erase`, `delete` | Simlock creates and deletes devices itself. |
-| simctl | `shutdown all` | Stops every agent's device. `shutdown <udid>` of your own is allowed. |
-| simctl | `runtime delete` | Deletes a runtime other devices use. |
-| simctl | `--set` or `--profiles` before the subcommand | Simlock chooses the device set, under both settings. |
+| simctl | `shutdown all` | Stops every agent's device. `shutdown <udid>` on your own device is allowed. |
+| simctl | `runtime delete` | Deletes an OS version other devices use. |
+| simctl | `--set` or `--profiles` before the subcommand | Simlock chooses where simulators live. |
 | adb | `kill-server` | Disconnects every leased emulator. |
-| adb | `disconnect`, with or without an address | Drops the connection of other leases' emulators. `adb shell echo disconnect` still runs. |
+| adb | `disconnect`, with or without an address | Drops other leases' emulators. (`adb shell echo disconnect` still runs.) |
 | adb | `emu kill`, `emu avd stop` | Stops a device Simlock thinks is running. |
-| adb | `emu avd snapshot`, except `list` | Can replace or delete the boot snapshot Simlock starts the device from. |
-| adb | any global flag before the subcommand except `-s`, `-t`, `-d`, `-e` | `-P`, `-H`, `-L` and others would point adb at another server. |
+| adb | `emu avd snapshot`, except `list` | Can replace or delete the snapshot Simlock starts the device from. |
+| adb | any option before the subcommand except `-s`, `-t`, `-d`, `-e` | `-P`, `-H`, `-L` and others would point adb at another server. |
 
 ```json
 {"error":{"code":"USAGE","message":"Refusing `simlock simctl erase`: it changes a device's lifecycle behind Simlock's registry, which would report the device as drifted on the next reconcile. Use `simlock release` (which deletes the device for you) or `simlock cleanup` instead."}}
 ```
 
-To get a clean device, release the lease and request a new one: Simlock deletes a simulator or emulator every time a lease ends, and the next lease gets a new one.
+To get a clean device, release the lease and request a new one. Every lease starts on a new simulator or emulator.
 
 ## Rules for agents
 
-Tell your agent to follow these. Simlock's separation keeps devices apart from careless tools; it does not stop an agent that sets out to reach another device.
+Give your agent these rules. Simlock keeps devices apart from careless tools; it doesn't stop an agent that sets out to reach another device.
 
-- **Use only the device your lease names.** Name it by its UDID or serial in every command. Never use `booted` or an `adb` command with no `-s` when other agents may be running.
+- **Use only the device your lease names.** Name it by its UDID or serial in every command. Never use `booted`, or an `adb` command without `-s`, when other agents may be running.
 - **Never erase, delete, create or shut down devices yourself.** Release the lease instead. Simlock deletes the device and gives the next agent a new one.
-- **Never stop or restart the adb server, and never point `adb` or `simctl` at another server or device set.**
-- **Release the lease when you are done.** A lease nobody releases holds the device until its TTL runs out, and other agents wait in the queue.
-- **Do not rely on anything surviving a release.** Apps, files, settings and logs are wiped with the device.
+- **Never stop or restart the adb server, and never point `adb` or `simctl` at another server or simulator folder.**
+- **Release the lease when you are done.** A lease nobody releases holds the device until its TTL runs out, while other agents wait.
+- **Don't rely on anything surviving a release.** Apps, files, settings and logs go with the device.
 
 <Aside>
-Physical devices are not separated at all: every tool on the machine sees them. See [Physical devices](/simlock/docs/using-devices/physical-devices).
+Physical devices aren't kept apart at all: every tool on the machine sees them. See [Physical devices](/simlock/docs/using-devices/physical-devices).
 </Aside>
 
 ## Related
 
 - Running commands on a device from another machine: [Remote agents](/simlock/docs/using-devices/remote-agents).
 - Driving an app's UI: [agent-device](/simlock/docs/using-devices/agent-device).
-- Every passthrough flag: [CLI reference](/simlock/docs/reference/cli).
+- Every `simctl` and `adb` flag: [CLI reference](/simlock/docs/reference/cli).
