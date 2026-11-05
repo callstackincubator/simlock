@@ -1443,6 +1443,24 @@ describe("operation input/output round trips", () => {
     expect(() => output.parse(config({ targets: [] }))).toThrow();
   });
 
+  it("config.get: bounds the drivers section's driver names, keys and string values, and takes strings, numbers and booleans", () => {
+    const drivers = OPERATIONS["config.get"].output.shape.drivers;
+    const long = (n: number) => "x".repeat(n);
+
+    expect(
+      drivers.safeParse({ [long(64)]: { [long(64)]: long(4096), n: 1, b: false } }).success,
+    ).toBe(true);
+    for (const refused of [
+      { [long(65)]: { a: "x" } },
+      { a: { [long(65)]: "x" } },
+      { a: { k: long(4097) } },
+      { a: { k: null } },
+      { a: { k: ["x"] } },
+    ]) {
+      expect(drivers.safeParse(refused).success).toBe(false);
+    }
+  });
+
   it("status.get: rejects a RAM budget whose use is negative or not finite", () => {
     const shape = OPERATIONS["status.get"].output.shape.capacity.unwrap().shape.ramBudget;
     const budget = { limitBytes: 8, overLimit: false, usedBytes: 1 };
