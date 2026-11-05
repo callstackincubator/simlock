@@ -145,8 +145,8 @@ sequenceDiagram
   second is refused and must pick another port.
 - A forward connection on iOS costs a listener lookup (about 0.1 s).
 - The caller's own adb reverse rules show in the worker's
-  `adb reverse --list` for that emulator; reclaim removes them with the
-  rest.
+  `adb reverse --list` for that emulator; they go when the emulator is
+  destroyed at lease end.
 - A Play Store emulator image cannot take the caller's adb.
 
 ## Alternatives considered
