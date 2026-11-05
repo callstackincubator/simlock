@@ -82,7 +82,7 @@ const gatewayConfig = {
     defaultMode: "full" as const,
     defaultModels: {},
     slim: { bootTimeoutMs: 1 },
-    simulator: { audio: true },
+    simulator: { audio: true, headless: true },
   },
   android: {
     defaultModels: {},

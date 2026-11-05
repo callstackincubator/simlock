@@ -2723,7 +2723,7 @@ describe("deviceModeWiring", () => {
             defaultMode,
             defaultModels: {},
             slim: { bootTimeoutMs: 1 },
-            simulator: { audio: true },
+            simulator: { audio: true, headless: true },
           },
         }),
       ).toEqual({

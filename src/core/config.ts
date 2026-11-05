@@ -380,6 +380,8 @@ export interface Config {
     readonly simulator: {
       /** why: `false` sets each simulator's volume to 0 after every boot; the core only validates the boolean (the iOS driver reads it). */
       readonly audio: boolean;
+      /** why: `false` shows each simulator Simlock boots in DeviceHub or Simulator.app; it needs `drivers.ios.deviceSet: default` (the iOS driver refuses otherwise). */
+      readonly headless: boolean;
     };
   };
   /**
@@ -1005,7 +1007,7 @@ function defaultConfig(
       slim: {
         bootTimeoutMs: 600_000,
       },
-      simulator: { audio: true },
+      simulator: { audio: true, headless: true },
     },
     android: {
       defaultModels: {},

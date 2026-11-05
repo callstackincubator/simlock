@@ -139,7 +139,7 @@ describe("loadConfig", () => {
         defaultMode: "full",
         defaultModels: {},
         slim: { bootTimeoutMs: 600_000 },
-        simulator: { audio: true },
+        simulator: { audio: true, headless: true },
       },
     });
     expect(Object.isFrozen(config)).toBe(true);
@@ -1213,10 +1213,18 @@ describe("loadConfig", () => {
   });
 
   it.each([
-    { name: "unset", file: {}, audio: true },
-    { name: "true", file: { ios: { simulator: { audio: true } } }, audio: true },
-    { name: "false", file: { ios: { simulator: { audio: false } } }, audio: false },
-  ])("loads ios.simulator.audio: $name", async ({ file, audio }) => {
+    { name: "unset", file: {}, simulator: { audio: true, headless: true } },
+    {
+      name: "true",
+      file: { ios: { simulator: { audio: true, headless: true } } },
+      simulator: { audio: true, headless: true },
+    },
+    {
+      name: "false",
+      file: { ios: { simulator: { audio: false, headless: false } } },
+      simulator: { audio: false, headless: false },
+    },
+  ])("loads ios.simulator: $name", async ({ file, simulator }) => {
     const filesystem = new MemoryFilesystem();
     const warn = vi.fn();
     await filesystem.mkdirp("/home/agent/.simlock");
@@ -1224,22 +1232,25 @@ describe("loadConfig", () => {
 
     const config = await loadConfig({ configPath, filesystem, systemStats: createStats(), warn });
 
-    expect(config.ios.simulator).toEqual({ audio });
+    expect(config.ios.simulator).toEqual(simulator);
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("refuses a non-boolean ios.simulator.audio, naming the key", async () => {
-    const filesystem = new MemoryFilesystem();
-    await filesystem.mkdirp("/home/agent/.simlock");
-    await filesystem.writeFileAtomic(
-      configPath,
-      JSON.stringify({ ios: { simulator: { audio: "no" } } }),
-    );
+  it.each(["audio", "headless"])(
+    "refuses a non-boolean ios.simulator.%s, naming the key",
+    async (key) => {
+      const filesystem = new MemoryFilesystem();
+      await filesystem.mkdirp("/home/agent/.simlock");
+      await filesystem.writeFileAtomic(
+        configPath,
+        JSON.stringify({ ios: { simulator: { [key]: "no" } } }),
+      );
 
-    await expect(
-      loadConfig({ configPath, filesystem, systemStats: createStats() }),
-    ).rejects.toThrow('Invalid config value for "ios.simulator.audio"');
-  });
+      await expect(
+        loadConfig({ configPath, filesystem, systemStats: createStats() }),
+      ).rejects.toThrow(`Invalid config value for "ios.simulator.${key}"`);
+    },
+  );
 
   it("defaults android.emulator to a windowed launch with the emulator's GPU, audio, and boot animation", async () => {
     const config = await loadConfig({
