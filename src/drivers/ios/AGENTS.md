@@ -45,7 +45,7 @@ Boot — `makeReady`:
 
 1. `simctl boot` (60 s; expiry → SIGTERM, `BootTimeoutError`, no shutdown), then `simctl bootstatus -b`, then poll `simctl listapps` until it succeeds.
    Bootstatus and installer polling share one deadline, counted from the end of `simctl boot`; each probe is capped at 30 s and
-   failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`. The error's `diagnostics` and message give `phase` (`boot-command`, `bootstatus`, `installer`), `budgetMs` and `elapsedMs`; elapsed time stops before any shutdown. A seed's timeout reaches `provision` as this text inside a `DriverCrashError`, so leasing retries it once.
+   failures retry after 1 s. Deadline expiry → best-effort shutdown, `BootTimeoutError`. The error's `diagnostics` and message give `phase` (`boot-command`, `bootstatus`, `installer`), `budgetMs` and `elapsedMs`; elapsed time stops before any shutdown. A seed's timeout reaches `provision` as this text inside a `DriverCrashError`, so leasing retries it once; a failed delete of that seed adds to the text and never replaces it.
 2. Before step 1, for `prepare` + mode `slim` + runtime 18.5+ only (ADR 0060): merge the managed
    labels into `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/disabled.plist` (labels of
    the configured categories `true`, every other managed label `false`, other entries kept),

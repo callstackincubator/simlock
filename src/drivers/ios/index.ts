@@ -1035,8 +1035,17 @@ export class IosSimctlDriver implements Driver {
       try {
         await this.#bootAndWait(udid, sourceId, BOOTSTATUS_TIMEOUT_MS, this.#sourcesSet);
       } catch (error: unknown) {
-        await this.#deleteSeedSimulator(udid);
-        throw new DriverCrashError(`seed ${udid} did not boot: ${errorMessage(error)}`);
+        const failure = `seed ${udid} did not boot: ${errorMessage(error)}`;
+        // why: leasing retries a seed failure without logging it, so one a retry recovers from leaves no other record.
+        this.#logger?.warn("a seed failed to boot", { error: failure, sourceId });
+        try {
+          await this.#deleteSeedSimulator(udid);
+        } catch (deleteError: unknown) {
+          throw new DriverCrashError(
+            `${failure}; deleting it failed: ${errorMessage(deleteError)}`,
+          );
+        }
+        throw new DriverCrashError(failure);
       }
       try {
         await this.#shutdown(udid, this.#sourcesSet);

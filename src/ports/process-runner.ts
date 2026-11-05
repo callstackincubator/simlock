@@ -749,7 +749,10 @@ export class ScriptedProcessRunner implements ProcessRunner {
    * released, and a spawned child that stays referenced keeps the daemon alive after
    * `daemon stop`.
    */
-  readonly handles: (ProcessHandle & { readonly unreffed: boolean })[] = [];
+  readonly handles: (ProcessHandle & {
+    readonly unreffed: boolean;
+    readonly signals: readonly NodeJS.Signals[];
+  })[] = [];
   #nextPid = 1;
   readonly #expectations: ScriptedProcessExpectation[];
 
@@ -891,6 +894,7 @@ function scriptedChunks(
 class ScriptedProcessHandle implements ProcessHandle {
   /** Whether the caller released the event loop, which only a supervised child should do. */
   unreffed = false;
+  readonly signals: NodeJS.Signals[] = [];
   readonly stdout = new LineBuffer();
   readonly stderr = new LineBuffer();
   readonly #result: Promise<ProcessResult>;
@@ -923,6 +927,7 @@ class ScriptedProcessHandle implements ProcessHandle {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    this.signals.push(signal);
     if (this.expectation.ignoresSigterm === true && signal !== "SIGKILL") return;
     this.#finish({ code: null, stderr: "", stdout: "" });
   }

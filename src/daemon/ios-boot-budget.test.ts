@@ -24,9 +24,7 @@ import { createTestEngine } from "../leasing/testing.js";
 import {
   FakeClock,
   FakeSystemStats,
-  JsonLinesLogger,
   MemoryFilesystem,
-  MemoryLogSink,
   ScriptedProcessRunner,
   type ScriptedProcessExpectation,
 } from "../ports/index.js";
@@ -90,8 +88,6 @@ async function createHarness(
 ) {
   const clock = new FakeClock(startedAt);
   const eventBus = new EventBus(clock);
-  const sink = new MemoryLogSink();
-  const logger = new JsonLinesLogger({ clock, sink });
   const runner = new ScriptedProcessRunner(script(clock));
   const state = await openMemoryState([
     registryOwner,
@@ -135,7 +131,6 @@ async function createHarness(
     drivers,
     eventBus,
     idGenerator,
-    logger,
     registry,
     state,
     systemStats,
@@ -148,13 +143,18 @@ async function createHarness(
     claims,
     clock,
   );
-  return { claims, clock, engine, eventBus, lifecycle, registry, runner, sink };
+  return { claims, clock, engine, eventBus, lifecycle, registry, runner };
 }
 
 type Harness = Awaited<ReturnType<typeof createHarness>>;
 
 function commands(harness: Harness): readonly (string | undefined)[] {
   return harness.runner.calls.map((call) => call.args[3]);
+}
+
+/** why: the whole argv, because a command for the wrong device is swallowed by best-effort cleanup and shares its verb with the right one. */
+function expectCalls(harness: Harness, ...expected: readonly ReturnType<typeof simctl>[]): void {
+  expect(harness.runner.calls.map(({ args, command }) => ({ args, command }))).toEqual(expected);
 }
 
 async function flush(): Promise<void> {
@@ -201,7 +201,14 @@ function deviceState(harness: Harness, deviceId: string): string | undefined {
   return harness.registry.snapshot.devices.find((device) => device.id === deviceId)?.state;
 }
 
-const hungBoot: ScriptedProcessExpectation = { hangs: true, match: simctl("boot", udid) };
+const boot = simctl("boot", udid);
+const bootstatus = simctl("bootstatus", udid, "-b");
+const listapps = simctl("listapps", udid);
+const shutdown = simctl("shutdown", udid);
+const deleted = simctl("delete", udid);
+const list = simctl("list", "-j", "devicetypes", "runtimes");
+const clone = seedSimctl("clone", seedUdid, "simlock-device-1", deviceRoot);
+const hungBoot: ScriptedProcessExpectation = { hangs: true, match: boot };
 
 describe("an iOS boot under the real lease path", () => {
   it("grants a lease whose `simctl boot` answers after the generic 30 s command budget", async () => {
@@ -225,7 +232,7 @@ describe("an iOS boot under the real lease path", () => {
     const { lease } = await granted;
 
     expect(deviceState(harness, lease.deviceId)).toBe("leased");
-    expect(commands(harness)).toEqual(["list", "clone", "boot", "bootstatus", "listapps"]);
+    expectCalls(harness, list, clone, boot, bootstatus, listapps);
     expect(harness.runner.calls.slice(2).map((call) => call.options.timeoutMs)).toEqual([
       60_000, 120_000, 30_000,
     ]);
@@ -242,37 +249,39 @@ describe("an iOS boot under the real lease path", () => {
       case: "`simctl boot` hangs",
       phase: "boot-command",
       budgetMs: 60_000,
-      script: (): readonly ScriptedProcessExpectation[] => [hungBoot],
+      script: (clock: FakeClock): readonly ScriptedProcessExpectation[] => [
+        { hangs: true, match: boot, onSpawn: () => clock.advance(700) },
+      ],
       steps: [{ after: "boot", advance: 60_000 }],
-      expected: ["boot", "shutdown", "delete"],
+      expected: [boot, shutdown, deleted],
     },
     {
       case: "`bootstatus` hangs",
       phase: "bootstatus",
       budgetMs: 120_000,
-      script: (): readonly ScriptedProcessExpectation[] => [
-        { match: simctl("boot", udid) },
-        { hangs: true, match: simctl("bootstatus", udid, "-b") },
-        { match: simctl("shutdown", udid) },
+      script: (clock: FakeClock): readonly ScriptedProcessExpectation[] => [
+        { match: boot },
+        { hangs: true, match: bootstatus, onSpawn: () => clock.advance(700) },
+        { match: shutdown },
       ],
       steps: [{ after: "bootstatus", advance: 120_000 }],
-      expected: ["boot", "bootstatus", "shutdown", "shutdown", "delete"],
+      expected: [boot, bootstatus, shutdown, shutdown, deleted],
     },
     {
       case: "the installer never answers",
       phase: "installer",
       budgetMs: 120_000,
       script: (clock: FakeClock): readonly ScriptedProcessExpectation[] => [
-        { match: simctl("boot", udid) },
-        { finishesOn: finishesAfter(clock, 119_500), match: simctl("bootstatus", udid, "-b") },
-        { hangs: true, match: simctl("listapps", udid) },
-        { match: simctl("shutdown", udid) },
+        { match: boot },
+        { finishesOn: finishesAfter(clock, 119_500), match: bootstatus },
+        { hangs: true, match: listapps, onSpawn: () => clock.advance(700) },
+        { match: shutdown },
       ],
       steps: [
         { after: "bootstatus", advance: 119_500 },
         { after: "listapps", advance: 500 },
       ],
-      expected: ["boot", "bootstatus", "listapps", "shutdown", "shutdown", "delete"],
+      expected: [boot, bootstatus, listapps, shutdown, shutdown, deleted],
     },
   ])(
     "when $case a new device is destroyed and refused with its phase, budget and elapsed time, and the request is not retried",
@@ -281,8 +290,8 @@ describe("an iOS boot under the real lease path", () => {
         listed,
         cloned,
         ...script(clock),
-        { match: simctl("shutdown", udid) },
-        { match: simctl("delete", udid) },
+        { match: shutdown },
+        { match: deleted },
       ]);
 
       const failed = harness.engine.request(request, requester).catch((error: unknown) => error);
@@ -293,25 +302,15 @@ describe("an iOS boot under the real lease path", () => {
       const failure = await failed;
 
       const deviceId = harness.registry.snapshot.devices[0]?.id ?? "";
-      const detail = `[phase=${phase}, budgetMs=${String(budgetMs)}, elapsedMs=${String(budgetMs)}]`;
+      const elapsedMs = budgetMs + 700;
       expect(failure).toBeInstanceOf(BootTimeoutError);
       expect(failure).toMatchObject({
         deviceId,
-        diagnostics: { budgetMs, elapsedMs: budgetMs, phase },
-        message: `Timed out waiting for device to boot: ${deviceId} ${detail}`,
+        diagnostics: { budgetMs, elapsedMs, phase },
+        message: `Timed out waiting for device to boot: ${deviceId} [phase=${phase}, budgetMs=${String(budgetMs)}, elapsedMs=${String(elapsedMs)}]`,
       });
-      expect(harness.sink.records).toContainEqual(
-        expect.objectContaining({
-          fields: {
-            deviceId,
-            error: `BootTimeoutError: Timed out waiting for device to boot: ${udid} ${detail}`,
-            step: "boot",
-          },
-          level: "warn",
-        }),
-      );
       expect(deviceState(harness, deviceId)).toBe("deleted");
-      expect(commands(harness)).toEqual(["list", "clone", ...expected]);
+      expectCalls(harness, list, clone, ...expected);
       expect(harness.eventBus.replay()).toContainEqual(
         expect.objectContaining({
           event: "lease.rejected",
@@ -343,12 +342,13 @@ describe("an iOS boot under the real lease path", () => {
     const childState = promiseState(child?.wait() ?? Promise.reject(new Error("no boot child")));
     await flush();
     expect(childState.state).toBe("pending");
-    expect(commands(harness)).toEqual(["list", "clone", "boot", "shutdown", "delete"]);
+    expect(child?.signals).toEqual(["SIGTERM"]);
+    expectCalls(harness, list, clone, boot, shutdown, deleted);
 
     harness.clock.advance(1_000);
     await flush();
     expect(childState.state).toBe("fulfilled");
-    expect(commands(harness)).toEqual(["list", "clone", "boot", "shutdown", "delete"]);
+    expectCalls(harness, list, clone, boot, shutdown, deleted);
     expect(harness.registry.snapshot.devices).toMatchObject([{ state: "deleted" }]);
     expect(harness.registry.snapshot.leases).toEqual([]);
   });
@@ -366,7 +366,7 @@ describe("an iOS boot under the real lease path", () => {
     await untilCommand(harness, "boot");
     harness.clock.advance(59_999);
     await flush();
-    expect(commands(harness)).toEqual(["list", "boot"]);
+    expectCalls(harness, list, boot);
 
     harness.clock.advance(1);
 
@@ -376,7 +376,7 @@ describe("an iOS boot under the real lease path", () => {
       name: "BootTimeoutError",
     });
     expect(deviceState(harness, device.id)).toBe("deleted");
-    expect(commands(harness)).toEqual(["list", "boot", "shutdown", "delete"]);
+    expectCalls(harness, list, boot, shutdown, deleted);
   });
 
   it("spends the initial-boot budget once on a new seed and again on its copy", async () => {
@@ -405,38 +405,60 @@ describe("an iOS boot under the real lease path", () => {
 
     expect(deviceState(harness, lease.deviceId)).toBe("leased");
     expect(harness.clock.now() - startedAt).toBe(118_000);
+    expect(harness.runner.calls[2]?.options).toEqual({ timeoutMs: 60_000 });
+    expect(harness.runner.calls[7]?.options).toEqual({ timeoutMs: 60_000 });
   });
 
-  it("gives each attempt at a new seed its own budget, so a request outlasts 60 s, and reports the phase as text", async () => {
-    const seedAttempt: readonly ScriptedProcessExpectation[] = [
-      seedCreated,
-      { hangs: true, match: seedSimctl("boot", seedUdid) },
-      { match: seedSimctl("shutdown", seedUdid) },
-      { match: seedSimctl("delete", seedUdid) },
-    ];
-    const harness = await createHarness(() => [listed, ...seedAttempt, ...seedAttempt], {
-      seeded: false,
-    });
+  it.each([
+    {
+      case: "deleting the seed works",
+      deleteResult: { code: 0, stderr: "", stdout: "" },
+      suffix: "",
+    },
+    {
+      case: "deleting the seed fails too",
+      deleteResult: { code: 1, stderr: "Unable to delete", stdout: "" },
+      suffix: `; deleting it failed: simctl delete ${seedUdid} exited with code 1: Unable to delete`,
+    },
+  ])(
+    "gives each attempt at a new seed its own budget, so a request outlasts 60 s, and keeps the phase as text when $case",
+    async ({ deleteResult, suffix }) => {
+      const seedBoot = seedSimctl("boot", seedUdid);
+      const seedShutdown = seedSimctl("shutdown", seedUdid);
+      const seedDelete = seedSimctl("delete", seedUdid);
+      const seedAttempt = (clock: FakeClock): readonly ScriptedProcessExpectation[] => [
+        seedCreated,
+        { hangs: true, match: seedBoot, onSpawn: () => clock.advance(700) },
+        { match: seedShutdown },
+        { match: seedDelete, result: deleteResult },
+      ];
+      const harness = await createHarness(
+        (clock) => [listed, ...seedAttempt(clock), ...seedAttempt(clock)],
+        { seeded: false },
+      );
 
-    const failed = harness.engine.request(request, requester).catch((error: unknown) => error);
-    await untilCommand(harness, "boot");
-    harness.clock.advance(60_000);
-    await untilCommand(harness, "boot", 2);
-    harness.clock.advance(59_999);
-    await flush();
-    expect(commands(harness).filter((command) => command === "delete")).toHaveLength(1);
+      const failed = harness.engine.request(request, requester).catch((error: unknown) => error);
+      await untilCommand(harness, "boot");
+      harness.clock.advance(60_000);
+      await untilCommand(harness, "boot", 2);
+      harness.clock.advance(59_999);
+      await flush();
+      expect(commands(harness).filter((command) => command === "delete")).toHaveLength(1);
 
-    harness.clock.advance(1);
-    const failure = await failed;
+      harness.clock.advance(1);
+      const failure = await failed;
 
-    expect(failure).toMatchObject({ name: "ProvisionFailedError" });
-    expect(failure).not.toBeInstanceOf(BootTimeoutError);
-    expect((failure as Error).message).toBe(
-      `seed ${seedUdid} did not boot: Timed out waiting for device to boot: device-1 [phase=boot-command, budgetMs=60000, elapsedMs=60000]`,
-    );
-    expect(harness.clock.now() - startedAt).toBe(120_000);
-    expect(harness.registry.snapshot.devices).toEqual([]);
-  });
+      expect(failure).toMatchObject({ name: "ProvisionFailedError" });
+      expect(failure).not.toBeInstanceOf(BootTimeoutError);
+      expect((failure as Error).message).toBe(
+        `seed ${seedUdid} did not boot: Timed out waiting for device to boot: device-1 [phase=boot-command, budgetMs=60000, elapsedMs=60700]${suffix}`,
+      );
+      expect(harness.clock.now() - startedAt).toBe(121_400);
+      expect(harness.registry.snapshot.devices).toEqual([]);
+      const attempt = [seedCreated.match, seedBoot, seedShutdown, seedDelete];
+      expectCalls(harness, list, ...attempt, ...attempt);
+    },
+  );
 
   it("leaves a device shut down and unclaimed after its warm boot times out, with no shutdown sent", async () => {
     const harness = await createHarness(() => [hungBoot]);
@@ -455,7 +477,7 @@ describe("an iOS boot under the real lease path", () => {
     });
     expect(deviceState(harness, device.id)).toBe("shutdown");
     expect(harness.claims.isClaimed(device.id)).toBe(false);
-    expect(commands(harness)).toEqual(["boot"]);
+    expectCalls(harness, boot);
   });
 
   it("keeps the lease through a recovery boot that timed out, frees the claim, and gives the next attempt its own 60 s", async () => {
@@ -494,6 +516,6 @@ describe("an iOS boot under the real lease path", () => {
 
     await expect(second).resolves.toMatchObject({ id: device.id, state: "leased" });
     expect(harness.claims.isClaimed(device.id)).toBe(false);
-    expect(commands(harness)).toEqual(["boot", "boot", "bootstatus", "listapps"]);
+    expectCalls(harness, boot, boot, bootstatus, listapps);
   });
 });

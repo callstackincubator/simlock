@@ -66,8 +66,12 @@ async function untilCalls(runner: ScriptedProcessRunner, count: number): Promise
   expect(runner.calls.map((call) => call.args[3])).toHaveLength(count);
 }
 
-function commands(runner: ScriptedProcessRunner): readonly (string | undefined)[] {
-  return runner.calls.map((call) => call.args[3]);
+/** why: the whole argv, because a command for the wrong device is swallowed by best-effort cleanup and shares its verb with the right one. */
+function expectCalls(
+  runner: ScriptedProcessRunner,
+  ...expected: readonly ReturnType<typeof simctl>[]
+): void {
+  expect(runner.calls.map(({ args, command }) => ({ args, command }))).toEqual(expected);
 }
 
 describe("the `simctl boot` budget", () => {
@@ -109,21 +113,22 @@ describe("the `simctl boot` budget", () => {
 
     expect(await ready).toMatchObject({
       diagnostics: { budgetMs: 60_000, elapsedMs: 61_500, phase: "boot-command" },
+      message: `Timed out waiting for device to boot: ${udid} [phase=boot-command, budgetMs=60000, elapsedMs=61500]`,
     });
   });
 
   it("goes on when a late `simctl boot` says the device is already booted, and fails as a crash when it exits with an error", async () => {
     const clock = new FakeClock();
-    const finishing = (stderr: string): ScriptedProcessExpectation => ({
-      finishesOn: finishesAfter(clock, 45_000),
+    const finishing = (stderr: string, at: number): ScriptedProcessExpectation => ({
+      finishesOn: finishesAfter(clock, at),
       match: simctl("boot", udid),
       result: { code: 149, stderr, stdout: "" },
     });
     const runner = new ScriptedProcessRunner([
-      finishing("Unable to boot device in current state: Booted"),
+      finishing("Unable to boot device in current state: Booted", 45_000),
       { match: simctl("bootstatus", udid, "-b") },
       { match: simctl("listapps", udid) },
-      finishing("simctl could not start the device"),
+      finishing("simctl could not start the device", 90_000),
     ]);
     const driver = await createDriver(runner, clock);
 
@@ -132,13 +137,24 @@ describe("the `simctl boot` budget", () => {
     clock.advance(45_000);
     await expect(booted).resolves.toMatchObject({ deviceId: udid });
 
-    const crashed = await driver
-      .makeReady(device, purposes[0].options)
-      .catch((error: unknown) => error);
+    const crashed = driver.makeReady(device, purposes[0].options).catch((error: unknown) => error);
+    const state = promiseState(crashed);
+    await untilCalls(runner, 4);
+    clock.advance(44_999);
+    await flush();
+    expect(state.state).toBe("pending");
 
-    expect(crashed).toBeInstanceOf(DriverCrashError);
-    expect((crashed as Error).message).toContain("simctl could not start the device");
-    expect(commands(runner)).toEqual(["boot", "bootstatus", "listapps", "boot"]);
+    clock.advance(1);
+
+    expect(await crashed).toBeInstanceOf(DriverCrashError);
+    expect(((await crashed) as Error).message).toContain("simctl could not start the device");
+    expectCalls(
+      runner,
+      simctl("boot", udid),
+      simctl("bootstatus", udid, "-b"),
+      simctl("listapps", udid),
+      simctl("boot", udid),
+    );
   });
 });
 
@@ -210,7 +226,13 @@ describe("the readiness budget after a slow `simctl boot`", () => {
         diagnostics: { budgetMs: readinessMs, elapsedMs: readinessMs, phase: "installer" },
       });
       expect(runner.calls[2]?.options).toEqual({ timeoutMs: 500 });
-      expect(commands(runner)).toEqual(["boot", "bootstatus", "listapps", "shutdown"]);
+      expectCalls(
+        runner,
+        simctl("boot", udid),
+        simctl("bootstatus", udid, "-b"),
+        simctl("listapps", udid),
+        simctl("shutdown", udid),
+      );
     },
   );
 
@@ -252,6 +274,7 @@ describe("the readiness budget after a slow `simctl boot`", () => {
 
       expect(await ready).toMatchObject({
         diagnostics: { budgetMs: 120_000, elapsedMs: 120_700, phase },
+        message: `Timed out waiting for device to boot: ${udid} [phase=${phase}, budgetMs=120000, elapsedMs=120700]`,
       });
     },
   );
