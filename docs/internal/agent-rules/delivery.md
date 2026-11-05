@@ -17,7 +17,7 @@ it before anything else happens to it.
 | `request:new`      | feature request form                | Inbox. Never picked up, body never edited.                |
 | `bug:new`          | bug report form                     | An agent may triage it (rule 8), and nothing more.        |
 | `bug:needs-info`   | triage agent                        | Could not reproduce. Waiting on the reporter.             |
-| `bug:ready`        | maintainer, after the triage report | An agent may fix it.                                      |
+| `bug:ready`        | maintainer, or the fast track (17)  | An agent may fix it.                                      |
 | `bug:blocked`      | agent, on a blocked handoff         | Waiting on the maintainer to clear a blocker.             |
 | `feature:spec`     | spec session, on creation           | Spec in progress, business and technical together.        |
 | `feature:planned`  | spec session, with its tasks ready  | Split into tasks. Never picked up itself.                 |
@@ -29,15 +29,16 @@ it before anything else happens to it.
 Two labels sit outside that scheme. `flaky-test` marks a bug that names a
 test failing without a code change (testing rule 5). `needs-hardware` marks
 a pull request parked because a Done when line needs a slow-lane run that
-has not happened (rule 16).
+has not happened (rule 16). `fast-track` marks a bug the fast track set
+ready, not the maintainer (rule 17).
 
 Transitions per kind:
 
 - **request**: `new` until closed. Closed as not planned, or as completed with
   a comment naming the feature it became.
-- **bug**: `new` → `ready` when the maintainer accepts the triage report,
-  with `needs-info` as a side-trip that returns to `new` when the reporter
-  answers.
+- **bug**: `new` → `ready` when the maintainer accepts the triage report
+  or the fast track passes it (rule 17), with `needs-info` as a side-trip
+  that returns to `new` when the reporter answers.
 - **feature**: `spec` → `planned` when the spec session has set its tasks
   ready, then closed when its last sub-issue closes (rule 9).
 - **task**: `draft` → `ready` when its spec check passes, and back to
@@ -54,8 +55,9 @@ is open, done means closed as completed.
 
 1. **An agent acts only on `bug:new` (triage only), `bug:ready` and
    `task:ready`.** Nothing else is work. The work on `bug:new` is the
-   triage report (rule 8); only the maintainer moves a bug to `bug:ready`,
-   after reading it. Agents never label their way into work: only a
+   triage report (rule 8); the maintainer moves a bug to `bug:ready`
+   after reading it, or the fast-track script does (rule 17). Agents
+   never label their way into work: only a
    maintainer, automation a maintainer configured, or the spec session
    that wrote a task and saw its spec check pass (rule 7) moves an issue
    to a state an agent may act on. The maintainer's say on a task is
@@ -150,7 +152,8 @@ is open, done means closed as completed.
    the test proves, finds the root cause, and posts one comment with exactly
    these sections: *Reproduction*, *Root cause* (with file and line),
    *Simplest fix*, *Alternatives rejected* (at most three, one line each),
-   *Risk* (at most three bullets), and *Side findings* when there are any. The root cause says first whether this is a defect
+   *Risk* (at most three bullets), *Fast track* (rule 17's five lines), and
+   *Side findings* when there are any. The root cause says first whether this is a defect
    (the code does the wrong thing) or a gap (nothing is wrong and something
    is missing); for a gap the test's expectation is a proposal
    and the report says so; `bug:ready` on a gap accepts that proposal. A
@@ -158,7 +161,8 @@ is open, done means closed as completed.
    its own `bug:new` issue and listed under Side findings, not described in
    the report. It pushes the failing test to a
    `bug/<number>-repro` branch and opens no pull request. It then unassigns
-   itself and leaves the label at `bug:new`. If it cannot reproduce, it
+   itself and leaves the label at `bug:new`; it never runs the fast-track
+   script on its own report. If it cannot reproduce, it
    moves the issue to `bug:needs-info`, says exactly what is missing, and
    unassigns itself.
 
@@ -252,6 +256,40 @@ is open, done means closed as completed.
     the loop gives up, the PR gets `needs-hardware` and waits for the
     maintainer.
 
+17. **An easy bug goes from its report to `main` without waiting for the
+    maintainer.** Two checks by `.agents/scripts/fast-track.mjs` decide
+    "easy". Both read facts; neither asks an agent how sure it is.
+    *Entry.* The triage report ends with a Fast track section of five
+    lines, each `yes` or `no — <why>`:
+    - **Defect**: the code does the wrong thing; not a gap, not a decision.
+    - **Fix tried**: the Simplest fix, applied in the working tree, made
+      the reproduction pass and kept the tests next to it green, and was
+      then discarded.
+    - **Nothing public added or broken**: no command, flag, config key,
+      route, tool, event, error code or wire field is added or removed, and
+      nothing a caller does today stops working.
+    - **No ADR or rule changed**: the fix follows every accepted ADR and
+      rule as written.
+    - **One fix**: no rejected alternative would change what a user sees,
+      and no other repository could carry the fix.
+
+    Five times `yes` in a report posted from an account that can write to
+    the repo, a `bug/<n>-repro` branch, and no person's comment after the
+    report: the script sets `bug:ready` and `fast-track`. One
+    `no`: the bug stays `bug:new` and waits for the maintainer, as any bug
+    did before. *Exit.* The gate (rule 15) runs the script on the fix's PR
+    and refuses one that changes more than 250 lines or 8 files, touches
+    a surface file `docs-surface-check.mjs` lists (the command tree, the
+    config, the error table, the MCP tools, an HTTP source, the client
+    exports, the event map), the protocol version or an ADR, or carries a
+    `## Decision taken` comment. A fix elsewhere, a console screen or a
+    command's output included, is not held for its path.
+    An `Assumption:` line is a minor decision and passes. A held PR stays
+    open and ready: the maintainer merges it, or removes `fast-track` and
+    lets the gate through. The orchestrator runs the script, never the
+    agent that wrote the report or the fix, and no sub-agent removes
+    `fast-track` (the tool guard refuses both).
+
 ## Procedures
 
 **Claiming work.** Find it, claim it, branch, and finish with a PR that
@@ -316,7 +354,7 @@ rules mechanically, so nobody has to remember them:
   fails it, and so does a PR that closes a task or a bug from any branch
   but that issue's `<kind>/<n>`.
 
-The judgment call stays manual by design: `bug:new` → `bug:ready`, once
-the maintainer has read the triage report. A task needs none: the spec
-session the maintainer sits through sets `task:ready` once its check
-passes (rule 1).
+`bug:new` → `bug:ready` is the maintainer's call once they have read the
+triage report, except for a bug the fast track passes (rule 17). A task
+needs none: the spec session the maintainer sits through sets
+`task:ready` once its check passes (rule 1).
