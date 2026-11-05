@@ -25,6 +25,8 @@ export function unsupportedTunnelMessage(platform: string, physical: boolean): s
 // opens to that port arrives on `onConnection`, until `close` removes the rule and the listener.
 export interface DeviceReverse {
   readonly hostPort: number;
+  // why: false when `close` only closes listeners on the worker, so a lease end whose signal is aborted still runs it, because no reclaim of the device will; absent means a rule on the device that its reclaim removes.
+  readonly holdsDeviceRule?: boolean;
   onConnection(listener: (stream: TcpStream) => void): void;
   close(): Promise<void>;
 }

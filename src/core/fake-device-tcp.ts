@@ -15,6 +15,7 @@ class FakeReverse implements DeviceReverse {
     private readonly onClose: () => void,
     private readonly failure: () => Error | undefined,
     private readonly gate: () => Promise<void> | undefined,
+    readonly holdsDeviceRule: boolean,
   ) {}
 
   onConnection(listener: (stream: TcpStream) => void): void {
@@ -54,6 +55,8 @@ export class FakeDeviceTcp implements DeviceTcp {
   sweepGate: Promise<void> | undefined;
   // why: a test sets a device port's failure to make its `connect` refuse with that error, as a device that never answers does.
   readonly connectFailures = new Map<number, Error>();
+  // why: a test sets this false to play a driver whose reverse sets no rule on the device, as the iOS simulator's does.
+  holdsDeviceRule = true;
   readonly listening = new Set<number>();
   readonly connections: { readonly devicePort: number; readonly peer: FakeTcpPeer }[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
@@ -90,6 +93,7 @@ export class FakeDeviceTcp implements DeviceTcp {
       },
       () => this.closeFailure,
       () => this.closeGate,
+      this.holdsDeviceRule,
     );
     this.#reverses.set(devicePort, reverse);
     return reverse;

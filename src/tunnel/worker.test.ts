@@ -758,6 +758,27 @@ describe("a worker's tunnel socket", () => {
     expect(abortedRace.deviceTcp.reversed).toEqual([5173]);
   });
 
+  it("closes at an aborted lease end the reverses whose close needs no reclaim and leaves the others to it", async () => {
+    const tunnel = { devicePort: 5173, kind: "reverse" };
+    for (const [holdsDeviceRule, reversedAfter] of [
+      [false, []],
+      [true, [5173]],
+    ] as const) {
+      const { deviceTcp, worker } = await setup();
+      deviceTcp.holdsDeviceRule = holdsDeviceRule;
+      const socket = await attach(worker);
+      socket.receive(hello(tunnel));
+      await vi.waitFor(() => expect(deviceTcp.reversed).toEqual([5173]));
+      const aborted = new AbortController();
+      aborted.abort();
+      await worker.hooks?.beforeDeviceReclaim?.(ending("device-lost"), aborted.signal);
+      expect(socket.closed).toEqual({ code: 4001, reason: "device-lost" });
+      expect(deviceTcp.reversed, `holdsDeviceRule ${String(holdsDeviceRule)}`).toEqual(
+        reversedAfter,
+      );
+    }
+  });
+
   it("keeps an idle relay alive with a heartbeat every 5 s and closes it with an 0xF1 {code, reason}", async () => {
     const { clock, worker } = await setup();
     const toGateway = new TransformStream<Uint8Array, Uint8Array>();
