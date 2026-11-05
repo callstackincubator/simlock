@@ -36,8 +36,7 @@ Both modes: the data directory (`prepareDataDirectory`: created `0700` when miss
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
-  `discoverDrivers` (validates each root; a refused root costs that platform only) →
-  `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
+  `discoverDrivers` (validates each root; a refused root costs that platform only) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
   HTTP starts only when `http.enabled` (default on for a standalone worker, off for a joined one).
