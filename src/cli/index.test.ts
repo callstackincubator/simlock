@@ -10734,7 +10734,7 @@ describe("CLI: daemon install (#830)", () => {
     expect(JSON.parse(stubborn.output.stderr)).toEqual({
       error: {
         code: "SERVICE_FAILED",
-        message: "The running daemon did not stop within 300 s; nothing was changed.",
+        message: "The running daemon did not stop within 300 s.",
       },
     });
     expect(stubborn.serviceManager.installs).toEqual([]);
