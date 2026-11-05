@@ -3449,6 +3449,36 @@ describe("CLI: config set validates with the real config loader (ADR 0003 §11, 
     },
   );
 
+  it.each([
+    ["ios.simulator.audio", "false", "loud"],
+    ["android.emulator.headless", "true", "yes"],
+  ])(
+    "writes a good value of %s, a key its driver declares, and refuses a bad one naming the key",
+    async (key, good, bad) => {
+      const run = async (value: string) => {
+        const output = outputCapture(realCliEnvironmentPorts());
+        let wrote = false;
+        const exitCode = await runCli(
+          ["config", "set", key, value],
+          output.environmentWith({
+            readConfigFile: async () => ({}),
+            writeConfigFile: async () => {
+              wrote = true;
+            },
+          }),
+        );
+        return { exitCode, stderr: output.stderr, wrote };
+      };
+
+      const accepted = await run(good);
+      const refused = await run(bad);
+
+      expect([accepted.exitCode, accepted.wrote]).toEqual([0, true]);
+      expect([refused.exitCode, refused.wrote]).toEqual([2, false]);
+      expect(refused.stderr).toContain(key);
+    },
+  );
+
   it("--gateway config set validates against the gateway's rules, not the worker's", async () => {
     const gatewayHome = {
       role: "gateway",

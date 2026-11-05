@@ -53,9 +53,9 @@ import {
   COLD_BOOT_ESTIMATE_MS,
   DEFAULT_EMULATOR_LAUNCH,
   Emulator,
-  type AndroidEmulatorLaunchOptions,
   type SnapshotColdBootDiagnostic,
 } from "./emulator.js";
+import type { AndroidDriverConfig, AndroidEmulatorLaunchOptions } from "./definition.js";
 import { ADB_DEVICES_TIMEOUT_MS, AdbTools } from "./adb-tools.js";
 import { ANDROID_DEFAULT_MODELS, Catalog } from "./catalog.js";
 import { AdbServerSupervisor, AdbServerUnavailableError } from "./adb-server.js";
@@ -81,7 +81,11 @@ import { type AndroidSdkPaths, locateSdk } from "./sdk-paths.js";
 
 export { AdbServerUnavailableError } from "./adb-server.js";
 export { AndroidLicenseNotAcceptedError } from "./system-images.js";
-export type { AndroidEmulatorLaunchOptions } from "./emulator.js";
+export {
+  type AndroidDriverConfig,
+  androidDriverConfig,
+  type AndroidEmulatorLaunchOptions,
+} from "./definition.js";
 export {
   ANDROID_PASSTHROUGH_TOOLS,
   REFUSED_ADB_SEQUENCES,
@@ -137,7 +141,8 @@ export interface AndroidDriverOptions {
   readonly uid?: number;
   /** why: the daemon's pid is named in the staging directory of a new root. */
   readonly pid?: number;
-  readonly emulator?: AndroidEmulatorLaunchOptions | undefined;
+  /** why: the driver's own keys of the `android` config section; without it emulators launch with the section's defaults. */
+  readonly config?: AndroidDriverConfig | undefined;
 }
 
 export type AndroidDriverDiagnostic = SnapshotColdBootDiagnostic | DeviceProfileSourceDiagnostic;
@@ -206,7 +211,7 @@ export class AndroidDriver implements Driver {
       adbTools: this.#adbTools,
       filesystem: options.filesystem,
       idGenerator: options.idGenerator ?? new SequentialIdGenerator(),
-      seedLaunchInputs: seedLaunchInputs(options.emulator),
+      seedLaunchInputs: seedLaunchInputs(options.config?.emulator),
     });
     this.#ownership = new Ownership({
       adb: sdk.adb,
@@ -324,7 +329,7 @@ export class AndroidDriver implements Driver {
       clock: options.clock,
       deviceRoot,
       emulator: sdk.emulator,
-      emulatorLaunch: options.emulator,
+      emulatorLaunch: options.config?.emulator,
       filesystem: options.filesystem,
       onDiagnostic: options.onDiagnostic,
       ownership: this.#ownership,

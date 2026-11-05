@@ -2,7 +2,7 @@
 
 Does: one process per data directory — composes a worker or a gateway and serves the contract on a unix socket.
 Entry: `main.ts` → `startDaemon(options)` → a started `DaemonServer`.
-Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry, updater (`checkInstall`, `socketHeld`); gateway and alerts from `main.ts` only.
+Uses: contract, daemon-protocol, ports, bus, history, link, core, leasing, drivers, http, host-load, modules, module-registry, driver-registry, updater (`checkInstall`, `socketHeld`); gateway and alerts from `main.ts` only.
 Never imports: gateway or alerts outside `main.ts`. `dispatch.ts` imports no core, drivers or http.
 Imported by: http (`dispatcher.ts`, `error-code.ts`, `owner-routed-facts.ts`); gateway (`dispatch.ts` only).
 Started by: cli and mcp spawn `main.ts` as a detached process.
@@ -36,7 +36,7 @@ Both modes: the data directory (`prepareDataDirectory`: created `0700` when miss
 The role (`StartDaemonOptions.role`; the entry reads it from `--gateway` through `parseDaemonArgv`) then picks one branch; a gateway builds none of the worker's parts. The data directory is `daemonDataDirectory(resolveSimlockHome(), role)`: `<root>` for a worker, `<root>/gateway` for a gateway. The daemon never reads the other role's folder.
 
 - **Worker** — `openStateDatabase` (`state.db`, before the token checks) → `Registry` → instance id (`instance.json`) →
-  `discoverDrivers` (validates each root; a refused root costs that platform only) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
+  `discoverDrivers` (validates each root; a refused root costs that platform only; each driver gets its own section of the config whole, `driverConfig`) → `ComponentInstaller` → `createCore` → `createLeasing` → `core.connect` →
   `CleanupReaper`, `Nuke`, `TokenStore`, `AdminSecretManager` → `GatewayUplink`
   when `gateway.url` and `gateway.token` are both set → `DaemonServer` with `Dispatcher`.
   HTTP starts only when `http.enabled` (default on for a standalone worker, off for a joined one).

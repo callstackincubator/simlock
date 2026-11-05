@@ -31,7 +31,7 @@ Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device sele
    A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
 2. **Scope every command to the root.** Ownership is membership in the root, never a name prefix;
    under iOS `deviceSet: "default"` it is the instance id in the device's durable mark.
-3. **Opaque to core.** `address`, `driverData`, `deviceRoot` and `drivers.<platform>.*` are carried unread. Each driver package exports a `DeviceDataTable` (`iosDeviceDataTable`, `androidDeviceDataTable`) that stores its `driverData` in its own `state.db` table, built without a driver instance so it loads where the driver is refused; `daemon/main.ts` `productionDeviceDataTables` passes both on every host.
+3. **Opaque to core.** `address`, `driverData`, `deviceRoot`, `drivers.<platform>.*` and the keys a driver's definition file (`ios/definition.ts`, `android/definition.ts`) declares under `ios.*` or `android.*` (`DriverConfigEntry`: type, validators, defaults; listed in `src/driver-registry`, handed to the driver whole as its `config` option) are carried unread. Each driver package exports a `DeviceDataTable` (`iosDeviceDataTable`, `androidDeviceDataTable`) that stores its `driverData` in its own `state.db` table, built without a driver instance so it loads where the driver is refused; `daemon/main.ts` `productionDeviceDataTables` passes both on every host.
 4. **Prerequisites** — `iosPrerequisites`, `androidPrerequisites` return a `PrerequisiteCheck`, not a
    `Driver` method; built even when the driver did not start, run only by `doctor`.
 5. **Installers** — `installer-process.ts`: `runInstallerProcess` parses `%` progress from both

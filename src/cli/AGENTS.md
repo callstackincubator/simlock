@@ -3,7 +3,7 @@
 Does: the `simlock` command surface over `simlock/admin` — parse, render, hold a lease while alive.
 Entry: `main.ts` (the `simlock` bin) → `index.ts` `runCli(argv)`.
 Uses: admin, bus (event key, type), client (types), agent-identity, lease-policy, history (reader), core
-(`loadConfig` only), contract, ports, module-registry (`optionalModules` only); instructions
+(`loadConfig` only), contract, ports, module-registry (`optionalModules` only), driver-registry (`driverConfigEntries` only); instructions
 (`commands/instructions.ts` and `commands/setup.ts` for values; `types.ts` for a type; `index.ts` and
 `errors.ts` load it on demand); mcp, loaded on demand. Never imports: daemon, drivers, gateway, http.
 
