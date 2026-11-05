@@ -19,6 +19,9 @@ import {
   WebSocketRefusedError,
   MemoryFilesystem,
   MemoryIpcTransport,
+  ProcessSpawnError,
+  ScriptedProcessRunner,
+  type ScriptedProcessExpectation,
 } from "../ports/index.js";
 
 type Listener = () => void;
@@ -41,7 +44,26 @@ class TestSignals {
   }
 }
 
-function command(env: NodeJS.ProcessEnv) {
+// why: stands in for the caller's machine: only the commands in `present` start, as a real runner throws ProcessSpawnError for an adb that is not there.
+class CallerAdb extends ScriptedProcessRunner {
+  constructor(
+    expectations: readonly ScriptedProcessExpectation[],
+    private readonly present: readonly string[] = ["adb"],
+  ) {
+    super(expectations);
+  }
+
+  override spawn(
+    command: string,
+    args: readonly string[],
+    options?: Parameters<ScriptedProcessRunner["spawn"]>[2],
+  ) {
+    if (!this.present.includes(command)) throw new ProcessSpawnError(command, args);
+    return super.spawn(command, args, options);
+  }
+}
+
+function command(env: NodeJS.ProcessEnv, processRunner: CallerAdb = new CallerAdb([])) {
   const signals = new TestSignals();
   const out: string[] = [];
   const err: string[] = [];
@@ -60,6 +82,7 @@ function command(env: NodeJS.ProcessEnv) {
       httpJson,
       ipc: new MemoryIpcTransport(),
       launcher: new FakeDaemonLauncher(),
+      processRunner,
       runTool: async () => ({ outcome: "not-found" }),
       signals,
       stderr: { write: (value) => err.push(value) },
@@ -986,3 +1009,43 @@ async function listenersCloseAfter(
 }
 
 type Peer = ReturnType<typeof command>["webSocket"]["connections"][number]["peer"];
+
+describe("simlock tunnel emulator adb", () => {
+  const emulatorOpen = JSON.stringify({ kind: "emulator", emulatorPort: "adb" });
+
+  it("prints the tunnel line and connects the caller's own adb to the caller's port, which opens an emulator connection for each connection to it", async () => {
+    const adb = new CallerAdb([
+      {
+        match: { args: ["connect", "127.0.0.1:49152"], command: "adb" },
+        stdoutLines: ["connected to 127.0.0.1:49152"],
+      },
+    ]);
+    const cli = command(ENV, adb);
+    const exit = cli.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+    await vi.waitFor(() => expect(sentFrames(cli)).toHaveLength(1));
+    expect(new TextDecoder().decode(sentFrames(cli)[0]?.payload)).toBe(
+      '{"tunnels":[{"kind":"emulator","emulatorPort":"adb"}]}',
+    );
+    expect(cli.out).toEqual([]);
+
+    firstPeer(cli).receive(READY);
+    await vi.waitFor(() =>
+      expect(cli.out.join("")).toBe(
+        "emulator localhost:49152 -> emulator:adb (lease L1)\nadb: connected to 127.0.0.1:49152\n",
+      ),
+    );
+    expect(adb.calls.map(({ args, command: bin }) => [bin, ...args])).toEqual([
+      ["adb", "connect", "127.0.0.1:49152"],
+    ]);
+
+    cli.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(cli).at(-1)?.conn).toBe(2));
+    expect(sentFrames(cli).at(-1)?.tag).toBe(TUNNEL_TAG.open);
+    expect(new TextDecoder().decode(sentFrames(cli).at(-1)?.payload)).toBe(emulatorOpen);
+
+    cli.signals.emit("SIGINT");
+    cli.clock.advance(2_000);
+    expect(await exit).toBe(0);
+  });
+});
