@@ -120,7 +120,15 @@ export class ManagedDeviceLifecycle {
         purpose: "prepare",
       });
     } catch (error: unknown) {
-      await this.#release(claimed);
+      // why: the device is half way between two boots, so it is recorded as shut down for the caller to destroy; the claim ends either way.
+      try {
+        await this.#commitWithoutRelease(claimed, ["ready"], "shutdown", {
+          event: "device.shutdown",
+          payload: { deviceId: claimed.device.id, initiator: "lease-engine" },
+        });
+      } finally {
+        await this.#release(claimed);
+      }
       throw error;
     }
     const device = await this.decisions.run(async () => {

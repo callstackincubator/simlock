@@ -995,7 +995,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         reservation,
       });
     } catch (error: unknown) {
-      if (error instanceof BootTimeoutError) {
+      if (error instanceof BootTimeoutError && exceptOption(waiter).except === undefined) {
         await this.options.decisions.run(async () => {
           if (waiter.state !== "rejected") this.#reject(waiter, error, "boot-timeout");
         });
@@ -1010,27 +1010,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      const retry = await this.options.decisions.run(async () => {
-        if (waiter.state === "rejected") return false;
-        waiter.failures += 1;
-        if (waiter.failures === 1) {
-          this.options.queue.markNew(waiter);
-          return true;
-        }
-        // why: ADR 0021 §1 declines a probe instead of rejecting it, and its caller (the gateway) reads the code.
-        this.#reject(
-          waiter,
-          new ProvisionFailedError(error),
-          waiter.options.fleetRequestId === undefined ? "unresolvable-spec" : "no-wait",
-        );
-        return false;
-      });
-      if (retry) {
-        this.#driving.delete(waiter);
-        await this.#drive(waiter);
-      } else {
-        this.#wakeQueue();
-      }
+      await this.#countFailure(waiter, error);
       return;
     }
     await this.#grantHandoff(waiter, handoff, "provision");
@@ -1236,14 +1216,104 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     device: VirtualDevice,
     claim: DeviceOperationClaim,
   ): Promise<void> {
-    this.options.queue.notifyProgress(waiter, {
-      stage: "booting",
-      etaMs: waiter.timing.estimatedBootMs,
+    let handoff: ReadyDeviceHandoff;
+    try {
+      this.options.queue.notifyProgress(waiter, {
+        stage: "booting",
+        etaMs: waiter.timing.estimatedBootMs,
+      });
+      const except = exceptOption(waiter).except ?? [];
+      const ready = await this.options.lifecycle.rebootForLease(device, claim, except);
+      if (ready === undefined) throw new Error(`Reboot target is no longer safe: ${device.id}`);
+      handoff = ready;
+    } catch (error: unknown) {
+      this.#logFailure(
+        "rebooting a warm device for a waiter failed",
+        waiter,
+        device,
+        "reboot",
+        error,
+      );
+      await this.#destroyFailedBoot(waiter, device, "shutdown");
+      await this.#countFailure(waiter, error);
+      return;
+    }
+    await this.#grantHandoff(waiter, handoff, "reboot-ready");
+  }
+
+  /** why: a device that failed to boot is destroyed, or quarantined when the destroy fails too, before the waiter's slot is freed (see below). */
+  async #destroyFailedBoot(
+    waiter: AcquisitionWaiter,
+    device: VirtualDevice,
+    state: VirtualDevice["state"],
+  ): Promise<void> {
+    let destroyed = true;
+    try {
+      await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
+    } catch (destroyError: unknown) {
+      this.#logFailure(
+        "destroying a device that failed to boot failed",
+        waiter,
+        device,
+        "destroy",
+        destroyError,
+      );
+      destroyed = false;
+    }
+    // why: a device the destroy could not retire may still be running, so it is handed to
+    // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
+    // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
+    // first would leave a window where the next planner boots a device that may be running.
+    if (!destroyed) {
+      try {
+        const quarantined = await this.options.quarantine.enterFromStalledTransition(
+          device.id,
+          state,
+        );
+        if (!quarantined) {
+          this.#logger.warn(
+            "a device that failed to be destroyed was not quarantined: something else owns it now",
+            { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
+          );
+        }
+      } catch (quarantineError: unknown) {
+        this.#logFailure(
+          "quarantining a device that failed to boot and to be destroyed failed",
+          waiter,
+          device,
+          "quarantine",
+          quarantineError,
+        );
+      }
+    }
+  }
+
+  /**
+   * why: a failed boot of an except lease counts like a failed provision (ADR 0066 §3): the first
+   * plans again, the second rejects `PROVISION_FAILED`, one count for provision, boot and reboot.
+   */
+  async #countFailure(waiter: AcquisitionWaiter, error: unknown): Promise<void> {
+    const retry = await this.options.decisions.run(async () => {
+      if (waiter.state === "rejected") return false;
+      waiter.failures += 1;
+      if (waiter.failures === 1) {
+        this.options.queue.markNew(waiter);
+        return true;
+      }
+      // why: ADR 0021 §1 declines a probe instead of rejecting it, and its caller (the gateway) reads the code.
+      this.#reject(
+        waiter,
+        new ProvisionFailedError(error),
+        waiter.options.fleetRequestId === undefined ? "unresolvable-spec" : "no-wait",
+      );
+      return false;
     });
-    const except = exceptOption(waiter).except ?? [];
-    const ready = await this.options.lifecycle.rebootForLease(device, claim, except);
-    if (ready === undefined) throw new Error(`Reboot target is no longer safe: ${device.id}`);
-    await this.#grantHandoff(waiter, ready, "reboot-ready");
+    if (retry) {
+      this.#driving.delete(waiter);
+      await this.#drive(waiter);
+    } else {
+      this.#wakeQueue();
+    }
   }
 
   async #bootShutdown(
@@ -1258,7 +1328,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         stage: "booting",
         etaMs: waiter.timing.estimatedBootMs,
       });
-      const ready = await this.options.lifecycle.bootForLease(device, claim);
+      const ready = await this.options.lifecycle.bootForLease(
+        device,
+        claim,
+        exceptOption(waiter).except,
+      );
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
       handoff = ready;
     } catch (error: unknown) {
@@ -1269,44 +1343,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         "boot",
         error,
       );
-      let destroyed = true;
-      try {
-        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
-      } catch (destroyError: unknown) {
-        this.#logFailure(
-          "destroying a device that failed to boot failed",
-          waiter,
-          device,
-          "destroy",
-          destroyError,
-        );
-        destroyed = false;
-      }
-      // why: a device the destroy could not retire may still be running, so it is handed to
-      // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
-      // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
-      // first would leave a window where the next planner boots a device that may be running.
-      if (!destroyed) {
-        try {
-          const quarantined = await this.options.quarantine.enterFromStalledTransition(
-            device.id,
-            device.state,
-          );
-          if (!quarantined) {
-            this.#logger.warn(
-              "a device that failed to be destroyed was not quarantined: something else owns it now",
-              { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
-            );
-          }
-        } catch (quarantineError: unknown) {
-          this.#logFailure(
-            "quarantining a device that failed to boot and to be destroyed failed",
-            waiter,
-            device,
-            "quarantine",
-            quarantineError,
-          );
-        }
+      await this.#destroyFailedBoot(waiter, device, device.state);
+      if (exceptOption(waiter).except !== undefined) {
+        await this.options.decisions.run(() => capacityReservation.release());
+        await this.#countFailure(waiter, error);
+        return;
       }
       await this.options.decisions.run(async () => {
         capacityReservation.release();
