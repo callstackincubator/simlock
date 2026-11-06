@@ -99,6 +99,30 @@ describe("FleetLeaseCoordinator stored requests", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
+  it("keeps a request out of the granted state in its book until the granting worker's view has been read, so a replay or a watcher never sees a grant before lease.list lists it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    let finishRead: () => void = () => {};
+    directory.refreshGates.set("wrk_a", new Promise<void>((resolve) => (finishRead = resolve)));
+    let requestId: string | undefined;
+
+    const granting = coordinator.request(
+      REQUEST,
+      requestOptions({ onAdmitted: (id) => (requestId = id) }),
+    );
+    await tick();
+
+    if (requestId === undefined) throw new Error("expected the request to be admitted");
+    expect(coordinator.requests.get(requestId)?.record.state).not.toBe("granted");
+    finishRead();
+    await granting;
+    await tick();
+    expect(coordinator.requests.get(requestId)?.record.state).toBe("granted");
+  });
+
   it("reads a request back through its in-memory book once the fleet grants it, and names it on lease.requested", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
