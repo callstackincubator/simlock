@@ -122,6 +122,12 @@ export interface StreamingProcessResult {
 
 export interface StreamingProcessHandle {
   readonly pid: number;
+  /**
+   * why: Only on a child spawned with `inputStream`: rejects when that stream fails to be read
+   * to its end, with the bytes written to the child by then. A child that closes its stdin
+   * early is not a failure and never rejects it.
+   */
+  readonly inputFailed?: Promise<never>;
   kill(signal?: NodeJS.Signals): void;
   wait(): Promise<StreamingProcessResult>;
 }
