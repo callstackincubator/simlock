@@ -641,12 +641,13 @@ describe("GatewayDispatcher", () => {
       };
       client.requestLeaseQueue.push({ grant: grantFixture({ lease: workerLease }), kind: "grant" });
       // why: the worker lists the lease once the gateway reads its view again; the read its `lease.granted` push starts has not landed.
-      directory.onRefresh.set("wrk_1", () =>
+      directory.onRefresh.set("wrk_1", async () => {
+        await new Promise((resolve) => setImmediate(resolve));
         workers.refresh("wrk_1", {
           devices: [deviceFixture("dev_1", "leased")],
           leases: [workerLease],
-        }),
-      );
+        });
+      });
 
       const grant = await dispatcher.dispatch(
         "lease.request",
