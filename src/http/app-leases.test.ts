@@ -1636,7 +1636,7 @@ describe("a lease's files on a worker", () => {
     const text = async (response: Response) =>
       new TextDecoder().decode(await response.arrayBuffer());
 
-    expect((await rig.put("kept.bin", "12345")).status).toBe(201);
+    expect((await rig.put("kept.bin", "1234567890")).status).toBe(201);
     const tooBig = await rig.put("kept.bin", big);
     expect(tooBig.status).toBe(413);
     expect((await refusal(tooBig)).error).toEqual({
@@ -1644,21 +1644,22 @@ describe("a lease's files on a worker", () => {
       message: "File kept.bin is over the 2 GiB limit for one file",
       name: "kept.bin",
     });
-    expect(await text(await rig.get("kept.bin"))).toBe("12345");
+    expect(await text(await rig.get("kept.bin"))).toBe("1234567890");
     expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
 
     let pulled = false;
-    const unread = new ReadableStream<Uint8Array>(
-      {
-        pull(c) {
-          pulled = true;
-          c.close();
+    const unread = () =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull(c) {
+            pulled = true;
+            c.close();
+          },
         },
-      },
-      { highWaterMark: 0 },
-    );
+        { highWaterMark: 0 },
+      );
     const declared = await rig.app.request("/v1/leases/lse_1/files/declared.bin", {
-      body: unread,
+      body: unread(),
       duplex: "half",
       headers: { ...agentAuth, "content-length": "11" },
       method: "PUT",
@@ -1685,6 +1686,16 @@ describe("a lease's files on a worker", () => {
       });
       expect(await folderEntries(full.leaseFolder)).toEqual(["my file.png"]);
     }
+    pulled = false;
+    const declaredFull = await full.app.request("/v1/leases/lse_1/files/over.bin", {
+      body: unread(),
+      duplex: "half",
+      headers: { ...agentAuth, "content-length": "50" },
+      method: "PUT",
+    } as RequestInit);
+    expect(declaredFull.status).toBe(413);
+    expect((await refusal(declaredFull)).error.code).toBe("LEASE_FILES_FULL");
+    expect(pulled).toBe(false);
 
     const together = await filesRig({ limits: roomy });
     const first = liveBody();
