@@ -363,7 +363,6 @@ describe("Registry", () => {
         ownerId: "agent-1",
         request: {
           class: "phone",
-          except: ["store", "other"],
           imageTag: "default",
           mode: "slim",
           model: "iPhone 16",
@@ -381,7 +380,6 @@ describe("Registry", () => {
       });
       const lease = await registry.createLease({
         deviceId: full.id,
-        except: ["store", "other"],
         leaseId: "lse_chosen",
         ownerId: "agent-1",
         request: { environment: { SIMLOCK_UDID: "abc", OTHER: "x" }, id: "req_granted", timing },
@@ -447,7 +445,6 @@ describe("Registry", () => {
         createdAt: 1_000,
         driverData: { fakeDeviceId: "fk-full-booted" },
         driverDeviceId: "drv-full",
-        except: ["store", "other"],
         foreignProvenanceDetectedAt: 1_012,
         foreignStateDetectedAt: 1_011,
         id: full.id,
@@ -480,7 +477,6 @@ describe("Registry", () => {
         ownerId: "agent-1",
         request: {
           class: "phone",
-          except: ["store", "other"],
           imageTag: "default",
           mode: "slim",
           model: "iPhone 16",

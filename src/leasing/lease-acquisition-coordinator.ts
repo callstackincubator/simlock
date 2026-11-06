@@ -1,12 +1,23 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import {
-  compareVersions,
-  type OsRange,
-  parseOsConstraint,
-  requestedClass,
-  satisfies,
-} from "../contract/index.js";
+import { type OsRange, requestedClass } from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
+import {
+  downloadingProgress,
+  type DownloadingProgress,
+  fullSpec,
+  matchingRuntimes,
+  newestRuntime,
+  physicalRequestOf,
+  requestedRange,
+  requiredOs,
+  sameDownloadingProgress,
+} from "./acquisition-requests.js";
+import {
+  estimatedBootTiming,
+  estimatedTiming,
+  grantReadyTiming,
+  releaseReclaimEstimateMs,
+} from "./acquisition-timing.js";
 import {
   type CapacityReservation,
   type DeviceOperationClaim,
@@ -15,7 +26,6 @@ import {
   classCandidates,
   findCatalogModel,
   modelClass,
-  pairedRuntimes,
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
@@ -30,7 +40,6 @@ import {
   type VirtualSpec,
   exactRequirement,
   type LeaseGrant,
-  type LeaseProgress,
   type LeaseRecord,
   type MaxPerRequester,
   type LeaseTiming,
@@ -40,7 +49,6 @@ import {
   specMode,
   ComponentBeingRemovedError,
   type ComponentInstaller,
-  type ComponentInstallerProgress,
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -1544,51 +1552,6 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedProvisionMs = driver.estimate({ operation: "provision" }, spec);
-  const estimatedBootMs = driver.estimate({ operation: "boot" }, spec);
-  return {
-    estimatedBootMs,
-    estimatedProvisionMs,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: estimatedProvisionMs + estimatedBootMs,
-  };
-}
-
-async function estimatedBootTiming(driver: Driver, device: DeviceRecord): Promise<LeaseTiming> {
-  const spec = device.spec;
-  // why: The quote is advisory. A driver that cannot read the device's own boot path (a failed
-  // `emulator -version`, say) must not strand the claim and capacity reservation that the boot
-  // below releases, so the device-less figure stands in.
-  const estimatedBootMs = await Promise.resolve(
-    driver.estimate(
-      { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
-      spec,
-    ),
-  ).catch(() => driver.estimate({ operation: "boot" }, spec));
-  return {
-    estimatedBootMs,
-    estimatedProvisionMs: 0,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: estimatedBootMs,
-  };
-}
-
-/** A device that is already ready costs nothing to hand over; only its reclaim lies ahead. */
-function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  return {
-    estimatedBootMs: 0,
-    estimatedProvisionMs: 0,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: 0,
-  };
-}
-
-/** `standard`: every release path asks for it; a holder cannot request another clean level. */
-function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
-  return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
-}
-
 /**
  * why: a plan handed out the capacity or device claim its operation needs; dropping the plan has
  * to give it back, or the resource stays held with nobody left to release it.
@@ -1612,39 +1575,6 @@ function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
     plan.kind === "no-capacity"
     ? undefined
     : plan;
-}
-
-function physicalRequestOf(request: DeviceRequest): PhysicalRequest {
-  return {
-    platform: request.platform,
-    ...(request.model === undefined ? {} : { model: request.model }),
-    ...(request.class === undefined ? {} : { class: request.class }),
-    ...(request.osVersion === undefined ? {} : { osVersion: request.osVersion }),
-  };
-}
-
-function fullSpec(spec: VirtualSpec): VirtualSpec {
-  if (spec.mode === undefined) return spec;
-  const { mode: _mode, ...full } = spec;
-  return full;
-}
-
-type DownloadingProgress = Extract<LeaseProgress, { readonly stage: "downloading" }>;
-
-function downloadingProgress(
-  component: string,
-  progress: ComponentInstallerProgress,
-): DownloadingProgress {
-  if (progress.stage === "waiting") return { component, stage: "downloading", waiting: true };
-  const { percent } = progress;
-  return percent === undefined
-    ? { component, stage: "downloading", waiting: false }
-    : { component, percent: Math.floor(percent), stage: "downloading", waiting: false };
-}
-
-/** Both reports are for the one component a `#resolveOrInstall` call downloads. */
-function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
-  return left.waiting === right.waiting && left.percent === right.percent;
 }
 
 /**
@@ -1683,49 +1613,3 @@ interface ResolvedTarget {
  * in its range, or any when it names none; and only runtimes that have an image of the requested
  * tag when it names one (the rule the gateway's `matchRequest` applies).
  */
-function matchingRuntimes(
-  entry: DriverCatalogEntry,
-  model: string,
-  { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
-  range: OsRange | undefined,
-): string[] {
-  return pairedRuntimes(entry, model).filter(
-    (runtime) =>
-      (range === undefined
-        ? osVersion === undefined || runtime === osVersion
-        : satisfies(runtime, range)) &&
-      (imageTag === undefined ||
-        (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
-  );
-}
-
-/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
-function newestRuntime(
-  entry: DriverCatalogEntry,
-  model: string,
-  request: DeviceRequest,
-  range: OsRange,
-): string {
-  const newest = matchingRuntimes(entry, model, request, range).sort(compareVersions).at(-1);
-  if (newest === undefined) throw new RuntimeMissingError(request.platform, range.text);
-  return newest;
-}
-
-/** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
-function requiredOs(
-  entry: DriverCatalogEntry,
-  { osVersion }: DeviceRequest,
-  range: OsRange | undefined,
-): DeviceRequirement["osVersion"] {
-  if (range !== undefined) return range;
-  return osVersion === undefined
-    ? { kind: "installed", versions: entry.runtimes }
-    : { kind: "exact", version: osVersion };
-}
-
-/** The request's OS range, when its `osVersion` is one rather than an exact version. */
-function requestedRange(request: DeviceRequest): OsRange | undefined {
-  if (request.osVersion === undefined) return undefined;
-  const parsed = parseOsConstraint(request.osVersion);
-  return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
-}
