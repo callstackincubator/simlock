@@ -618,7 +618,9 @@ function slotShort(
 /** What the capacity strategy's refusal means for a target's report. */
 function shortOf(refusal: CapacityRefusalReason | undefined): TargetShort | undefined {
   if (refusal === undefined) return undefined;
-  return refusal === "device-limit" || refusal === "ram-budget" ? refusal : "running-limit";
+  return refusal === "device-limit" || refusal === "ram-budget" || refusal === "memory-pressure"
+    ? refusal
+    : "running-limit";
 }
 
 /** What `planTargets` shares across targets: the room left, the devices taken, the boots begun. */
