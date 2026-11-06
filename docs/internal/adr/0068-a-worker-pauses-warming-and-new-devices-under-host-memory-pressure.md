@@ -7,7 +7,9 @@
 - **Supersedes:** nothing. Narrows [ADR
   0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md):
   its Context line "Nothing in Simlock acts on them" no longer holds for
-  memory, and §7's "no event per reading" gains one event per step change.
+  memory, §1's "Nothing that decides anything reads the readings" gains one
+  reader (the step tracker, §2) and the module's tracker reads one config
+  section, and §7's "no event per reading" gains one event per step change.
   Adds a rank stage to [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md).
 
 ## Context
@@ -93,8 +95,13 @@ flowchart LR
 ```
 
 The step tracker lives in host-load and is fed by the sampler's readings;
-it holds the hold timers on the `Clock`. The daemon builds it beside the
-sampler and passes core a read port answering the current step. Core
+it holds the hold timers on the `Clock`. It reads the `memoryPressure`
+thresholds through an options type host-load declares for itself, as
+`HostLoadSamplerOptions` does, and never imports core (ADR 0029 §1, rule
+`host-load-imports-ports-only`). Core owns the config section's type (the
+`memoryPressure` slice of its `Config`, ADR 0065 §1); the daemon's worker
+composition passes `config.memoryPressure` to the tracker, builds it beside
+the sampler and passes core a read port answering the current step. Core
 stays clear of host-load. The step is memory only: a restart starts at
 none and the first reading sets it.
 
@@ -148,16 +155,18 @@ gateway's view of the worker, and a change to it is a change to the view
 key a remembered refusal is held against, so the gateway asks the worker
 again once it lifts. A gateway reads it from the worker's view and applies no
 threshold of its own: it ranks a worker at `new-devices-paused` below one
-that is not, in a rank stage after `free-slot` (so a warm hit on a paused
-worker still wins), and explains it as `full` with `capacityReason:
+that is not, in a new rank stage named `memory-pressure`, placed after `free-slot` (so
+a warm hit on a paused worker still wins) and before `ram-budget`, and explains it as `full` with `capacityReason:
 "memory-pressure"`. The CLI (`simlock status`, `simlock worker list`,
 `simlock list --requests`) and the console show it. This is a contract
 change and bumps the protocol.
 
 ## Consequences
 
-- A worker under pressure stops adding devices within one reading (15 s),
-  and gives memory back one idle device per reading.
+- A worker under pressure stops warming within one reading (15 s) and
+  gives memory back one idle device per reading. At `new-devices-paused` it
+  also stops adding devices for leases; at `warming-paused`, the default at
+  `warn`, leasing's own creates and boots go on (§3).
 - Readings now decide something. A pick still never reads raw load: the
   gateway reads the worker's step, which can be up to one refresh old;
   the step-change event refreshes the view at once.
