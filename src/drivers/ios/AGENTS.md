@@ -51,11 +51,17 @@ Boot — `makeReady`:
    labels into `/private/var/tmp/com.apple.CoreSimulator.SimDevice.<udid>/disabled.plist` (labels of
    the configured categories `true`, every other managed label `false`, other entries kept),
    skipped when the file already says so. A failed write is logged and the boot goes on.
-   Too old → skipped, returned `full`.
+   Too old → skipped, returned `full`. With an `except` list (ADR 0066, `slim-except.ts`) the
+   categories written `true` are the configured ones minus the excepted; every label of an excepted
+   category is written `false`, also one a slimmed category lists. A name the worker does not slim
+   is refused at `resolveSpec` (`BadDeviceRequestError`, `BAD_REQUEST`). An except list naming the
+   whole slim set still writes the file, every managed label `false`.
 3. After the boot, `simctl spawn <udid> launchctl print-disabled system` (120 s) is compared with
    what was written. A label not as written → `full`; a readback that fails → `slim`; both
    → `onSlimSkipped` (logged only). Every label as written, and the write ok → `slim`, `onSlimmed` →
-   `device.slimmed`.
+   `device.slimmed`. With an except list a failed write, a failed readback, or a kept label not read
+   back enabled throws `KeptCategoriesError` instead; any other mismatch is `full` as above, and so is
+   a boot whose smaller list is empty (no `device.slimmed`).
 4. `purpose: "recover"`: boot only, no write, no readback.
 5. With `ios.simulator.audio: false`, after every boot (prepare and recover, slim or full) and before the readback: `simctl spawn <udid> notifyutil -s com.apple.springboard.volumestate 0`, then `-p` (30 s each). The first call that exits non-zero, times out or cannot start stops the step: the device stays in use and `onSilenceFailed` gets `{ deviceId, detail }` (stderr, `timed out`, or the spawn error), which the daemon logs at `warn` as `Could not silence iOS simulator`. Nothing is read back; apps keep playing at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does.
 

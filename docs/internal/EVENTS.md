@@ -103,7 +103,7 @@ Simlock registry (ADR 0002, `docs/internal/adr/0002-opt-in-slim-ios-simulators.m
 only") is satisfied by waiting for that commit to become observable, not by waiting on a registry
 write: the driver writes the launchd overrides file while the simulator is shut down, boots it once, and only fires
 `onSlimmed` once the readback shows the overrides in force. The registry's own `device.ready` for that same boot is a separate,
-later event, emitted through the normal readiness path once the driver call returns. A slim
+later event, emitted through the normal readiness path once the driver call returns. A boot with a lease's except list (ADR 0066) reports `categories` as the smaller list (the worker's slim set minus the excepted categories), `signature` as that list's signature and `labelCount` as the labels written `true`, so a kept label that a slimmed category also lists is not counted; a boot whose smaller list is empty is granted `full` and emits none. A slim
 request on a runtime older than iOS 18.5 is resolved to a full spec before planning (ADR 0007
 §4), so it never reaches a slim boot. A *skipped* slim on a slim-spec device -- its runtime id
 didn't parse, the overrides file could not be written, or the readback disagreed or failed -- is deliberately not an event: it isn't a fact worth putting in front of every event-bus
