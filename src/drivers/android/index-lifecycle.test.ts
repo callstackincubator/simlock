@@ -1463,6 +1463,29 @@ describe("AndroidDriver image fit", () => {
         await expect(adoptedSaving).resolves.toMatchObject({ sourceId: "baseline_four" });
         await kept({ ...restarted, driver: adopted.driver });
       });
+
+      it("saves a device whose config.ini has spaces around `=`, as avdmanager writes it, with the model and image it names", async () => {
+        const spaced =
+          "hw.device.name = pixel_6\nimage.sysdir.1 = system-images/android-34/google_apis/arm64-v8a/\nhw.ramSize = 2048\n";
+        const harness = await seedHarness([...leasing(true), ...savingSteps, ...sourceBoot()], {
+          config: spaced,
+          ids,
+        });
+        const ready = await harness.driver.makeReady(await harness.driver.provision(harness.spec));
+
+        await expect(
+          harness.driver.saveSource({ ...ready, physical: false as const }),
+        ).resolves.toMatchObject({ imageTag: "google_apis", sourceId: "baseline_four" });
+
+        expect(
+          (await harness.driver.listSources()).find((source) => source.id === "baseline_four"),
+        ).toMatchObject({
+          imageTag: "google_apis",
+          kind: "baseline",
+          model: "pixel_6",
+          osVersion: "34",
+        });
+      });
     });
 
     describe("saveSource failures", () => {
