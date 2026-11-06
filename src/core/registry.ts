@@ -296,6 +296,24 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     return this.#committed(deviceId);
   }
 
+  /**
+   * why: a ready device shut down and prepared again for a lease (ADR 0066 §2) keeps its state, so this is no transition and emits no event (`ready → ready` is no edge); it records only what the new boot produced.
+   */
+  async recordRebootedDevice(
+    deviceId: string,
+    update: Required<Pick<DeviceTransitionUpdate, "address" | "driverData" | "mode">>,
+  ): Promise<DeviceRecord> {
+    const { device, index } = this.#requireDeviceRecord(deviceId);
+    if (device.physical || device.state !== "ready") {
+      throw new RegistryEventError(`Only a ready virtual device can be rebooted: ${deviceId}`);
+    }
+    const updated = { ...device, ...update };
+    const devices = [...this.#devices];
+    devices[index] = updated;
+    this.#commit(devices, this.#leases);
+    return this.#committed(deviceId);
+  }
+
   async completeReclaimWithoutPurge(deviceId: string): Promise<DeviceRecord> {
     const { device, index } = this.#requireDeviceRecord(deviceId);
     if (device.state !== "reclaiming") {

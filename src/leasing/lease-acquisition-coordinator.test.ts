@@ -1316,6 +1316,7 @@ describe("LeaseAcquisitionCoordinator", () => {
     const harness = await createHarness({
       lifecycle: (lifecycle) => ({
         bootForLease: (...args) => lifecycle.bootForLease(...args),
+        rebootForLease: (...args) => lifecycle.rebootForLease(...args),
         dispose: (...args) => {
           // why: an eviction is the waiter's own device work, so this is where a real one spends
           // the seconds its `timeoutMs` covers. The clock moves here to land the armed deadline
@@ -1898,6 +1899,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       const harness = await createHarness({
         lifecycle: (lifecycle) => ({
           bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+          rebootForLease: (...args) => lifecycle.rebootForLease(...args),
           dispose: (...args) => lifecycle.dispose(...args),
           shutdown: (...args) => lifecycle.shutdown(...args),
           destroy: () => Promise.reject(new DriverCrashError("simulator would not delete")),
@@ -1928,6 +1930,7 @@ describe("LeaseAcquisitionCoordinator", () => {
       maxRunning: 2,
       lifecycle: (lifecycle, { capacity, claims, registry }) => ({
         bootForLease: (device, claim) => lifecycle.bootForLease(device, claim),
+        rebootForLease: (...args) => lifecycle.rebootForLease(...args),
         dispose: (...args) => lifecycle.dispose(...args),
         shutdown: (...args) => lifecycle.shutdown(...args),
         destroy: (device, initiator, operation, claim) => {

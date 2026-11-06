@@ -40,6 +40,10 @@ export interface ManagedDeviceRegistry {
         },
     update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
+  recordRebootedDevice(
+    deviceId: string,
+    update: Required<Pick<DeviceTransitionUpdate, "address" | "driverData" | "mode">>,
+  ): Promise<DeviceRecord>;
 }
 
 interface ClaimedDevice {
@@ -90,6 +94,52 @@ export class ManagedDeviceLifecycle {
     if (handoff === undefined) return undefined;
     await this.#release({ release: claim.release });
     return handoff.device;
+  }
+
+  /**
+   * why: Shuts a ready device down and prepares it again with a lease's except list under the `boot`
+   * claim the caller took, and keeps the claim for the handoff. The record stays `ready`
+   * throughout, so capacity and the warm pool see no change; the new boot is recorded in one
+   * write with no transition and no event. `undefined` when the device is no longer a ready,
+   * unleased one.
+   */
+  async rebootForLease(
+    target: VirtualDevice,
+    claim: DeviceOperationClaim,
+    except: readonly string[],
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    const claimed = await this.#claim(target, ["ready"], "boot", claim);
+    if (claimed === undefined) return undefined;
+    const driver = this.catalog.get(claimed.device.spec.platform);
+    let ready: DriverDevice;
+    try {
+      await driver.shutdown(toDriverDevice(claimed.device));
+      ready = await driver.makeReady(toDriverDevice(claimed.device), {
+        except,
+        mode: specMode(claimed.device.spec),
+        purpose: "prepare",
+      });
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+    const device = await this.decisions.run(async () => {
+      const current = this.#registeredTarget(claimed.device, ["ready"]);
+      if (current === undefined) return undefined;
+      // why: `mode` defaults to full here as `readyTransitionUpdate` does, so a reboot granted full records full.
+      return assertVirtual(
+        await this.registry.recordRebootedDevice(current.id, {
+          address: ready.address,
+          driverData: ready.driverData,
+          mode: ready.mode ?? "full",
+        }),
+      );
+    });
+    if (device === undefined) {
+      await this.#release(claimed);
+      return undefined;
+    }
+    return { claim: claimed.claim, device };
   }
 
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */

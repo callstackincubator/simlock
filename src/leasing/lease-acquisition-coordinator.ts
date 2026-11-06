@@ -176,7 +176,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
-    "bootForLease" | "destroy" | "dispose" | "shutdown"
+    "bootForLease" | "destroy" | "dispose" | "rebootForLease" | "shutdown"
   >;
   /**
    * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
@@ -201,13 +201,19 @@ interface AcquisitionWaiter extends Waiter {
   timing: LeaseTiming;
 }
 
-type GrantingPlanKind = "grant-ready" | "grant-physical" | "boot-shutdown" | "provision";
+type GrantingPlanKind =
+  | "grant-ready"
+  | "grant-physical"
+  | "boot-shutdown"
+  | "reboot-ready"
+  | "provision";
 
 const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
   "boot-shutdown": "booted",
   "grant-physical": "warm",
   "grant-ready": "warm",
   provision: "provisioned",
+  "reboot-ready": "booted",
 };
 
 type OperationPlan = Exclude<
@@ -950,6 +956,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
       return;
     }
+    if (action.kind === "reboot-ready") {
+      waiter.timing = await estimatedBootTiming(
+        this.options.drivers.get(action.device.spec.platform),
+        action.device,
+      );
+      await this.#rebootReady(waiter, action.device, action.claim);
+      return;
+    }
     if (action.kind === "evict-running") {
       await this.#evictRunning(waiter, action.device, action.claim, action.reason);
       return;
@@ -1082,6 +1096,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       spec: waiter.spec,
       requirement: waiter.requirement,
       classOf: waiter.classOf,
+      rebootReady: exceptOption(waiter).except !== undefined,
     });
   }
 
@@ -1205,6 +1220,21 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       step,
       error: stableError(error),
     });
+  }
+
+  async #rebootReady(
+    waiter: AcquisitionWaiter,
+    device: VirtualDevice,
+    claim: DeviceOperationClaim,
+  ): Promise<void> {
+    this.options.queue.notifyProgress(waiter, {
+      stage: "booting",
+      etaMs: waiter.timing.estimatedBootMs,
+    });
+    const except = exceptOption(waiter).except ?? [];
+    const ready = await this.options.lifecycle.rebootForLease(device, claim, except);
+    if (ready === undefined) throw new Error(`Reboot target is no longer safe: ${device.id}`);
+    await this.#grantHandoff(waiter, ready, "reboot-ready");
   }
 
   async #bootShutdown(
