@@ -223,7 +223,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
     expect(outcome).toBe("still-pending");
     expect(coordinator.queueDepth).toBe(2);
-    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+    expect(directory.refreshCalls).toEqual(["wrk_a", "wrk_a"]);
   });
 
   it("gives a waiter passed over by the per-pass cap a guaranteed next look once the claiming attempt settles terminally, even when that failure produces no worker-side event at all (C1, round 3 review)", async () => {
@@ -268,7 +268,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(outcome).toBe("resolved");
     const w2Grant = await w2;
     expect(w2Grant.lease.worker?.id).toBe("wrk_a");
-    expect(directory.refreshCalls).toEqual([]);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
   });
 
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {

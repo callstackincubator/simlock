@@ -287,7 +287,22 @@ export class FleetLeaseCoordinator {
     });
     if ("replay" in admitted) return admitted.replay;
     this.#admit(admitted.waiter);
-    return admitted.waiter.promise;
+    const grant = await admitted.waiter.promise;
+    // why: the worker's own `lease.granted` push starts this read later, so without it a `lease.list`
+    // right after the grant answers from a view that lacks the lease (#1370); a failed read is the next tick's.
+    const entry = this.options.leaseIndex.resolve(grant.lease.id);
+    if (entry !== undefined) {
+      await this.options.directory
+        .target(entry.workerId)
+        ?.refresh()
+        .catch((error: unknown) => {
+          this.#logger.debug("Failed to refresh a worker's view after granting it a lease", {
+            error: String(error),
+            workerId: entry.workerId,
+          });
+        });
+    }
+    return grant;
   }
 
   #refuseIfAlreadyLeased(
