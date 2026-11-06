@@ -108,8 +108,9 @@ function restatedCode(doc: string, text = lines(doc)): string[] {
 }
 
 describe("module manuals, flow docs and the architecture map", () => {
-  it("are found, the leasing manual and the startup flow among them", () => {
+  it("are found, the leasing manual, the console manual and the startup flow among them", () => {
     expect(manuals).toContain("src/leasing/AGENTS.md");
+    expect(manuals).toContain("ui/AGENTS.md");
     expect(flows).toContain("docs/internal/flows/startup.md");
   });
 
@@ -174,13 +175,19 @@ describe("module manuals, flow docs and the architecture map", () => {
       "## Files",
       "| `a.ts` | Role |",
       "- Waits 30 s, then `lease.endWaitMs`; answers a 2xx.",
+      "- Keeps 5 MiB free.",
+      "- Stops at 90% of the budget.",
+      "- Fails 3 reads in a row, at 0700.",
     ];
     expect(restatedCode("sample.md", sample)).toEqual([
       "sample.md:2: an entry or import line",
       "sample.md:3: a files or defaults section",
       "sample.md:4: a file table row",
       "sample.md:5: a copied value",
+      "sample.md:6: a copied value",
+      "sample.md:7: a copied value",
     ]);
+    expect(restatedCode("fits.md", ["x".repeat(MANUAL_CHARACTERS)])).toEqual([]);
     expect(restatedCode("long.md", ["x".repeat(MANUAL_CHARACTERS + 1)])).toEqual([
       `long.md: ${MANUAL_CHARACTERS + 1} characters`,
     ]);

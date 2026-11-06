@@ -21,7 +21,7 @@ What a stream does to the device:
 
 Start and stop:
 
-- No `adb forward`: the session speaks adb's host protocol through the target (`host:transport:<serial>`, then `localabstract:scrcpy_<scid>`), so a daemon that dies leaves no listening port on the host.
+- No `adb forward`: the session speaks adb's host protocol through the target, so a daemon that dies leaves no listening port on the host.
 - `FAIL` on the second request (nothing listening yet), a refused connect, or a socket that closes before the server's zero byte is retried. `FAIL` on the first refuses.
 - The start budget (`START_DEADLINE_MS` in `scrcpy-link.ts`) counts from the moment the server's process started, so a phone's check before the spawn does not spend it. Each step keeps its own limit; there is no overall budget.
 - A phone's worst case is the sum of those limits. The console's wait for a stream's headers (`STREAM_HEAD_TIMEOUT_MS` in `ui/src/state/screen.ts`) must stay above it.

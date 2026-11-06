@@ -21,8 +21,8 @@ Resolve and boot:
 - A recovery boot writes no overrides and reads nothing back.
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
-- Volume (`ios.simulator.audio: false`): `notifyutil -s com.apple.springboard.volumestate 0`, then `-p`, in the simulator. Nothing is read back; apps keep playing at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does it.
-- Window (`ios.simulator.headless: false`): `open -g` DeviceHub (`com.apple.dt.Devices`) with `-shutdownStartedDevicesOnQuit NO`, then `devices://manage/select?id=<udid>`. A non-zero exit means no DeviceHub: Simulator.app is opened with `-DetachOnWindowClose YES -DetachOnAppQuit YES`. `-g` keeps the front app in front.
+- Volume (`ios.simulator.audio: false`): the step sets the volume state inside the simulator and reads nothing back. Apps keep playing, at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does it.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. When opening DeviceHub fails, Simulator.app is opened instead, detached, so closing its window or quitting it leaves the simulator running.
 
 Seeds (ADR 0061):
 
