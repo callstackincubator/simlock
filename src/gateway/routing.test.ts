@@ -7,6 +7,7 @@ import {
   freeSlot,
   healthy,
   idleQueue,
+  memoryPressure,
   ramBudget,
   takesRequests,
   warmHit,
@@ -411,7 +412,7 @@ describe("the warm-then-free policy for a physical request", () => {
     expect(policy.select(REQUEST, [queued])).toBeUndefined();
   });
 
-  it("picks, for a physical request, a worker that idle-queue and free-slot would drop and ram-budget would demote, by warm-hit; the four stages are the ones that skip a physical request", () => {
+  it("picks, for a physical request, a worker that idle-queue and free-slot would drop and ram-budget would demote, by warm-hit; the five stages are the ones that skip a physical request", () => {
     const blocked = view("wrk_a", {
       capacity: withIos({ atRamBudget: true, maxRunning: 0 }),
       devices: [iphone()],
@@ -435,6 +436,7 @@ describe("the warm-then-free policy for a physical request", () => {
       freeSlot,
       healthy,
       idleQueue,
+      memoryPressure,
       ramBudget,
       takesRequests,
       warmHit,
@@ -443,7 +445,13 @@ describe("the warm-then-free policy for a physical request", () => {
       .filter(([, stage]) => (stage as { appliesToPhysical?: boolean }).appliesToPhysical === false)
       .map(([name]) => name)
       .sort();
-    expect(skipped).toEqual(["freeCapacity", "freeSlot", "idleQueue", "ramBudget"]);
+    expect(skipped).toEqual([
+      "freeCapacity",
+      "freeSlot",
+      "idleQueue",
+      "memoryPressure",
+      "ramBudget",
+    ]);
   });
 
   it("gives a virtual request the same pick, reason and stage with and without a ready physical device of its model in the views", () => {
