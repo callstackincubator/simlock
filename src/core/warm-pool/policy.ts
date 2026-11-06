@@ -745,6 +745,18 @@ function heldByPressure(filling: boolean): { added: number; short?: TargetShort 
   return filling ? { added: 0 } : { added: 0, short: "memory-pressure" };
 }
 
+/** why: what stops a target from adding anything this pass (pressure, a waiter it could not serve, a retry delay), or undefined when it may add. */
+function holdFill(
+  plan: TargetPlan,
+  spec: VirtualSpec,
+  filling: boolean,
+): { added: number; short?: TargetShort } | undefined {
+  if (plan.view.pressure.step !== "none") return heldByPressure(filling);
+  if (plan.stuck.has(spec.platform)) return { added: 0 };
+  if (plan.view.retry.mayAttempt(spec, plan.view.now)) return undefined;
+  return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
+}
+
 /**
  * why: adds the boots and creations a target is missing, after the queue's. A target with a boot
  * already running or one proposed here is still filling, and one on a platform where a waiter
@@ -757,11 +769,8 @@ function fillTarget(
   filling: boolean,
   count: "configured" | "learned",
 ): { added: number; short?: TargetShort } {
-  if (plan.view.pressure.step !== "none") return heldByPressure(filling);
-  if (plan.stuck.has(spec.platform)) return { added: 0 };
-  if (!plan.view.retry.mayAttempt(spec, plan.view.now)) {
-    return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
-  }
+  const held = holdFill(plan, spec, filling);
+  if (held !== undefined) return held;
   let added = 0;
   for (let left = missing; left > 0 && plan.started < plan.view.config.maxConcurrentBoots; left--) {
     const refused = addDisplacing(plan, spec, count);
