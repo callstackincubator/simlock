@@ -1185,7 +1185,13 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
   }
 
   it("routes an except request by each worker's slim set and default mode, and gives the chosen worker the except list", async () => {
-    const cases = [
+    const cases: {
+      label: string;
+      request: { except: string[]; mode?: "slim" | "full" };
+      routedTo?: string;
+      rejected?: string;
+      workers: Parameters<typeof fleet>[0];
+    }[] = [
       {
         label: "one worker slims the name",
         request: { except: ["mdm"], mode: "slim" as const },
@@ -1204,11 +1210,39 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
           wrk_b: { categories: every, defaultMode: "slim" as const },
         },
       },
+      {
+        label: "no worker slims the name",
+        request: { except: ["other"], mode: "slim" as const },
+        rejected: "no worker slims every category in except: other",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const },
+          wrk_b: { categories: ["store"], defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "no mode, every worker defaults to full",
+        request: { except: ["store"] },
+        rejected: "no worker can keep slim categories store (default mode is full on every worker)",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "full" as const },
+        },
+      },
     ];
 
-    for (const { label, request, routedTo, workers: slims } of cases) {
+    for (const { label, request, routedTo, rejected, workers: slims } of cases) {
       const { clients, coordinator } = fleet(slims);
 
+      if (rejected !== undefined || routedTo === undefined) {
+        await expect(
+          coordinator.request({ ...REQUEST, ...request }, requestOptions({ noWait: true })),
+          label,
+        ).rejects.toMatchObject({ code: "BAD_REQUEST", message: rejected });
+        for (const client of Object.values(clients)) {
+          expect(client.lastRequestLeaseInput, label).toBeUndefined();
+        }
+        continue;
+      }
       await coordinator.request({ ...REQUEST, ...request }, requestOptions());
 
       const received = Object.entries(clients)
