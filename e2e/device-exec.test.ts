@@ -1,4 +1,6 @@
+import { realpath } from "node:fs/promises";
 import { createServer } from "node:net";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
@@ -181,6 +183,7 @@ describe("device.exec over HTTP", () => {
     // device root is prepended and the driver's environment reached the child's own process.
     expect(JSON.parse(chunksOf(frames, "stdout"))).toEqual({
       argv: ["/fake/ios", "list", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
+      cwd: expect.any(String),
       platform: "ios",
     });
     expect(chunksOf(frames, "stderr")).toBe("a warning");
@@ -196,6 +199,95 @@ describe("device.exec over HTTP", () => {
     const echoedFrames = await readSse(echoed);
     expect(echoedFrames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
     expect(JSON.parse(chunksOf(echoedFrames, "stdout"))).toMatchObject({ stdin: "piped payload" });
+
+    await env.cli(["release", leaseId]);
+  });
+
+  it("runs exec with stdinFile and the command reads the file's bytes, then end of input", async () => {
+    const { baseUrl, env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
+    const upload = async (name: string, body: string): Promise<void> => {
+      const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/${name}`, {
+        body,
+        headers: { ...auth, "content-type": "application/octet-stream" },
+        method: "PUT",
+      });
+      expect(uploaded.status).toBe(201);
+    };
+    const nineMiB = "0123456789abcdef".repeat(9 * 65_536);
+    await upload("fixture.txt", "stored payload");
+    await upload("big.bin", nineMiB);
+    await upload("empty.bin", "");
+
+    const reads = [
+      { name: "fixture.txt", stdin: "stored payload" },
+      { name: "big.bin", stdin: nineMiB },
+      { name: "empty.bin", stdin: "" },
+      { name: "FIXTURE.TXT", stdin: "stored payload" },
+    ];
+    for (const { name, stdin } of reads) {
+      const response = await exec(
+        leaseId,
+        { args: ["list", "--fake-exec-echo-stdin"], stdinFile: name, tool: "simctl" },
+        auth,
+      );
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+      expect((JSON.parse(chunksOf(frames, "stdout")) as { stdin: string }).stdin === stdin).toBe(
+        true,
+      );
+    }
+    const none = await exec(
+      leaseId,
+      { args: ["list"], stdin: null, stdinFile: null, tool: "simctl" },
+      auth,
+    );
+    expect(none.status).toBe(200);
+    expect((await readSse(none)).at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+
+    const refusals = [
+      { body: { stdinFile: ".hidden" }, code: "BAD_REQUEST", status: 400 },
+      { body: { stdinFile: "missing.tar" }, code: "UNKNOWN_FILE", status: 404 },
+      { body: { stdin: "x", stdinFile: "fixture.txt" }, code: "BAD_REQUEST", status: 400 },
+    ];
+    for (const { body, code, status } of refusals) {
+      const refused = await exec(leaseId, { args: ["list"], tool: "simctl", ...body }, auth);
+      expect(refused.status).toBe(status);
+      expect(await errorCodeOf(refused)).toBe(code);
+    }
+
+    await env.cli(["release", leaseId]);
+  });
+
+  it("runs every exec with the lease's folder as its working folder", async () => {
+    const { baseUrl, env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
+    const report = async (args: string[]): Promise<{ cwd: string; fileSize?: number }> => {
+      const response = await exec(leaseId, { args, tool: "simctl" }, auth);
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+      return JSON.parse(chunksOf(frames, "stdout")) as { cwd: string; fileSize?: number };
+    };
+
+    // why: no file was uploaded yet, so this shows the folder is made for the command.
+    const first = await report(["list"]);
+    expect(dirname(await realpath(first.cwd))).toBe(
+      join(await realpath(env.dataDirectory), "lease-files"),
+    );
+
+    const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/fixture.bin`, {
+      body: "x".repeat(1234),
+      headers: { ...auth, "content-type": "application/octet-stream" },
+      method: "PUT",
+    });
+    expect(uploaded.status).toBe(201);
+    const second = await report(["list", "--fake-exec-read-file=fixture.bin"]);
+    expect(second.fileSize).toBe(1234);
+    expect(await realpath(second.cwd)).toBe(await realpath(first.cwd));
 
     await env.cli(["release", leaseId]);
   });

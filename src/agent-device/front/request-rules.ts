@@ -137,7 +137,7 @@ function checkTypes(unit: Unit): void {
 function ruleLeaseKeys(check: Check, unit: Unit): void {
   if (isFlat(unit)) return;
   for (const place of places(unit)) {
-    for (const key of ["osVersion", "imageTag", "deviceBaseline", "deviceMode"]) {
+    for (const key of ["osVersion", "imageTag", "deviceBaseline", "deviceMode", "deviceExcept"]) {
       if (!(key in place)) continue;
       delete place[key];
       check.changed = true;

@@ -105,6 +105,7 @@ export const leaseStatusOutputSchema = leaseRecordSchema.partial().extend({ held
 export const runOnDeviceInputSchema = OPERATIONS["device.exec"].input.omit({
   leaseId: true,
   requesterId: true,
+  stdinFile: true,
 });
 
 export const runOnDeviceOutputSchema = z.object({

@@ -1,3 +1,4 @@
+import { testLeaseFiles } from "./test-lease-files.js";
 import { testConfig as configWithDefaults } from "../core/testing.js";
 import {
   FakeDriver,
@@ -152,6 +153,7 @@ export async function buildDispatcher(
     readonly passthroughTool?: string;
     readonly lease?: Partial<Config["lease"]>;
     readonly processRunner?: ProcessRunner;
+    readonly leaseFiles?: DispatcherOptions["leaseFiles"];
     readonly exec?: Partial<Config["exec"]>;
     readonly passthroughContextSink?: unknown[];
     readonly clock?: FakeClock;
@@ -165,6 +167,8 @@ export async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
+    /** why: the `ios.defaultMode` `catalog.get` reports. */
+    readonly iosDefaultMode?: "slim" | "full";
     /** why: the two boot deadlines `config.get` reports. */
     readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
     readonly components?: Pick<
@@ -222,6 +226,9 @@ export async function buildDispatcher(
   const config: Config = {
     ...baseConfig,
     warmPool: { ...baseConfig.warmPool, ...overrides.warmPool },
+    ...(overrides.iosDefaultMode === undefined
+      ? {}
+      : { ios: { ...baseConfig.ios, defaultMode: overrides.iosDefaultMode } }),
     ...(overrides.bootTimeouts === undefined
       ? {}
       : {
@@ -312,6 +319,7 @@ export async function buildDispatcher(
     ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
     ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
+    leaseFiles: overrides.leaseFiles ?? testLeaseFiles,
     execEnv: overrides.execEnv ?? { PATH: "/usr/bin" },
     queue: engine,
     ...(overrides.presence === undefined ? {} : { presence: overrides.presence }),

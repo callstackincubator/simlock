@@ -56,10 +56,10 @@ describe("the agent-device front's `deviceMode`", () => {
     expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1), hex(2), hex(3)]);
   });
 
-  it("a command with `deviceMode` on `flags`, on `input` or inside a batch step reaches agent-device without it", async () => {
+  it("a command with `deviceMode` or `deviceExcept` on `flags`, on `input` or inside a batch step reaches agent-device without it", async () => {
     const rig = await setUp();
     await granted(rig, 1);
-    const sent = { deviceMode: "full", platform: "ios" };
+    const sent = { deviceExcept: ["store"], deviceMode: "full", platform: "ios" };
 
     const onFlags = await forwarded(rig, () => runCommand(rig, "snapshot", 1, { flags: sent }));
     const onInput = await forwarded(rig, () => runCommand(rig, "snapshot", 1, { input: sent }));
@@ -73,5 +73,36 @@ describe("the agent-device front's `deviceMode`", () => {
     expect(onInput["input"]).toEqual({ platform: "ios" });
     const steps = (inStep["flags"] as { batchSteps: { flags: unknown }[] }).batchSteps;
     expect(steps[0]?.flags).toEqual({ platform: "ios" });
+  });
+
+  it("allocate with `deviceExcept` makes a lease request whose `except` is it and sends an allocate the agent-device daemon receives without it; `deviceExcept: null` is absent; an invalid name or a non-list answers `refused by simlock:` with the message `lease.request` gives it and no lease", async () => {
+    const rig = await setUp({
+      drivers: (clock) => [iosDriver(clock, ["26.5"])],
+      maxRunning: 8,
+    });
+
+    await granted(rig, 1, { deviceExcept: ["store", "other"], deviceMode: "slim" });
+    await granted(rig, 2, { deviceExcept: null, deviceMode: "slim" });
+    for (const deviceExcept of [["Store"], "store"]) {
+      const expected = await simlockMessage(rig, {
+        except: deviceExcept,
+        leaseId: hex(9),
+        mode: "slim",
+        platform: "ios",
+      });
+      await refused(
+        rig,
+        () => allocate(rig, 3, { deviceExcept, deviceMode: "slim" }),
+        `refused by simlock: ${expected}`,
+      );
+    }
+
+    expect(await requestedSpecs(rig, hex(1))).toEqual([
+      { except: ["store", "other"], mode: "slim", platform: "ios" },
+    ]);
+    expect(await requestedSpecs(rig, hex(2))).toEqual([{ mode: "slim", platform: "ios" }]);
+    expect(receivedAllocate(rig, 1)).not.toHaveProperty("deviceExcept");
+    expect(receivedAllocate(rig, 2)).not.toHaveProperty("deviceExcept");
+    expect((await leases(rig)).map((lease) => lease.id)).toEqual([hex(1), hex(2)]);
   });
 });

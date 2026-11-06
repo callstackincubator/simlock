@@ -40,6 +40,10 @@ export interface ManagedDeviceRegistry {
         },
     update?: DeviceTransitionUpdate,
   ): Promise<DeviceRecord>;
+  recordRebootedDevice(
+    deviceId: string,
+    update: Required<Pick<DeviceTransitionUpdate, "address" | "driverData" | "mode">>,
+  ): Promise<DeviceRecord>;
 }
 
 interface ClaimedDevice {
@@ -71,8 +75,9 @@ export class ManagedDeviceLifecycle {
   async bootForLease(
     target: VirtualDevice,
     claim: DeviceOperationClaim,
+    except?: readonly string[],
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "shutdown", claim);
+    return this.#makeReadyForLease(target, "shutdown", claim, except);
   }
 
   /**
@@ -91,12 +96,73 @@ export class ManagedDeviceLifecycle {
     return handoff.device;
   }
 
+  /**
+   * why: Shuts a ready device down and prepares it again with a lease's except list under the `boot`
+   * claim the caller took, and keeps the claim for the handoff. The record stays `ready`
+   * throughout, so capacity and the warm pool see no change; the new boot is recorded in one
+   * write with no transition and no event. `undefined` when the device is no longer a ready,
+   * unleased one.
+   */
+  async rebootForLease(
+    target: VirtualDevice,
+    claim: DeviceOperationClaim,
+    except: readonly string[],
+  ): Promise<ReadyDeviceHandoff | undefined> {
+    const claimed = await this.#claim(target, ["ready"], "boot", claim);
+    if (claimed === undefined) return undefined;
+    const driver = this.catalog.get(claimed.device.spec.platform);
+    let ready: DriverDevice;
+    try {
+      await driver.shutdown(toDriverDevice(claimed.device));
+      ready = await driver.makeReady(toDriverDevice(claimed.device), {
+        except,
+        mode: specMode(claimed.device.spec),
+        purpose: "prepare",
+      });
+    } catch (error: unknown) {
+      // why: the device is half way between two boots, so it is recorded as shut down for the caller to destroy; the claim ends either way.
+      try {
+        await this.#commitWithoutRelease(claimed, ["ready"], "shutdown", {
+          event: "device.shutdown",
+          payload: { deviceId: claimed.device.id, initiator: "lease-engine" },
+        });
+      } finally {
+        await this.#release(claimed);
+      }
+      throw error;
+    }
+    let device: VirtualDevice | undefined;
+    try {
+      device = await this.decisions.run(async () => {
+        const current = this.#registeredTarget(claimed.device, ["ready"]);
+        if (current === undefined) return undefined;
+        // why: `mode` defaults to full here as `readyTransitionUpdate` does, so a reboot granted full records full.
+        return assertVirtual(
+          await this.registry.recordRebootedDevice(current.id, {
+            address: ready.address,
+            driverData: ready.driverData,
+            mode: ready.mode ?? "full",
+          }),
+        );
+      });
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
+    if (device === undefined) {
+      await this.#release(claimed);
+      return undefined;
+    }
+    return { claim: claimed.claim, device };
+  }
+
   /** Makes a provisioned device ready while retaining its claim for lease handoff. */
   async readyProvisionedForLease(
     target: VirtualDevice,
     claim?: DeviceOperationClaim,
+    except?: readonly string[],
   ): Promise<ReadyDeviceHandoff | undefined> {
-    return this.#makeReadyForLease(target, "provisioning", claim);
+    return this.#makeReadyForLease(target, "provisioning", claim, except);
   }
 
   async shutdown(
@@ -231,6 +297,7 @@ export class ManagedDeviceLifecycle {
     target: VirtualDevice,
     expectedState: "provisioning" | "shutdown",
     existingClaim?: DeviceOperationClaim,
+    except?: readonly string[],
   ): Promise<ReadyDeviceHandoff | undefined> {
     const claimed = await this.#claim(target, [expectedState], "boot", existingClaim);
     if (claimed === undefined) return undefined;
@@ -242,6 +309,7 @@ export class ManagedDeviceLifecycle {
         .makeReady(toDriverDevice(claimed.device), {
           mode: specMode(claimed.device.spec),
           purpose: "prepare",
+          ...(except === undefined ? {} : { except }),
         });
     } catch (error: unknown) {
       await this.#release(claimed);

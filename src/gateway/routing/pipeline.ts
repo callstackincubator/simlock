@@ -12,6 +12,7 @@ export interface RoutableRequest {
   readonly physical?: boolean;
   readonly baseline?: string;
   readonly requires?: readonly string[];
+  readonly except?: readonly string[];
 }
 
 export type CapacityReason =
@@ -35,6 +36,7 @@ export type WorkerReasonCode =
   | "baseline-mismatch"
   | "baseline-stale"
   | "capability-missing"
+  | "cannot-keep-except"
   | "full"
   | "no-free-physical"
   | "not-chosen";

@@ -104,9 +104,9 @@ The **Gateway** column below says what a gateway shows for each event:
 
 | Event | When it fires | Payload | Gateway |
 | --- | --- | --- | --- |
-| `lease.requested` | A lease request was accepted and stored. | `requestId`, `requestSpec` (the request as sent, with `baseline` when it named one), `requester`, `waitPolicy` (`wait` or `no-wait`), `fleetRequestId` on a worker when the request came from a gateway | Own and relayed |
+| `lease.requested` | A lease request was accepted and stored. | `requestId`, `requestSpec` (the request as sent, with `baseline` and `except` when it named them), `requester`, `waitPolicy` (`wait` or `no-wait`), `fleetRequestId` on a worker when the request came from a gateway | Own and relayed |
 | `lease.queued` | No device was free, so the request started waiting. | `requestId`, `queuePosition` (counted among requests of the same kind: physical requests wait in a line of their own) | Own and relayed |
-| `lease.granted` | A device was handed to a request. | `leaseId`, `deviceId`, `requester`, `requestId`, `source` (`warm`: ready device; `booted`: shut-down device booted; `provisioned`: device created), `platform`, `baseline` (`{ name, version }`) when the device is a copy of a baseline, `fleetRequestId` when it served a gateway | Relayed |
+| `lease.granted` | A device was handed to a request. | `leaseId`, `deviceId`, `requester`, `requestId`, `source` (`warm`: ready device; `booted`: shut-down device booted, or a ready device booted again for a request with `except`; `provisioned`: device created), `platform`, `baseline` (`{ name, version }`) when the device is a copy of a baseline, `fleetRequestId` when it served a gateway | Relayed |
 | `lease.renewed` | A lease was renewed. | `leaseId`, `newDeadline` | Relayed |
 | `lease.released` | A lease ended because someone or something ended it. | `leaseId`, `deviceId`, `reason` (`explicit`: released; `killed`: `release --all` or `nuke`; `device-lost`: the device crashed and could not be brought back, or a physical device went away), `ownerId` | Relayed |
 | `lease.expired` | A lease reached its deadline without a renew. | `leaseId`, `deviceId`, `ownerId` | Relayed |

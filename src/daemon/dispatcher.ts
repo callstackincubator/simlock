@@ -39,6 +39,7 @@ import {
   type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
+  type PassthroughCommand,
   type PassthroughResolver,
   isUnavailableInput,
   createUsageReader,
@@ -60,9 +61,21 @@ import type {
   Logger,
   ProcessRunner,
   StreamingProcessHandle,
+  StreamingProcessResult,
   TimerHandle,
 } from "../ports/index.js";
-import { exitCodeOf, NoopLogger } from "../ports/index.js";
+import {
+  LeaseFilesError,
+  type LeaseFileView,
+  type LeaseFiles,
+  type LeaseFilesGrant,
+} from "../lease-files/index.js";
+import {
+  exitCodeOf,
+  InputStreamFailedError,
+  NoopLogger,
+  ProcessSpawnError,
+} from "../ports/index.js";
 import {
   capabilityReason,
   type capabilitySchema,
@@ -159,6 +172,7 @@ export interface DispatcherOptions {
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
   readonly inputs?: ModuleInputs;
   readonly processRunner?: ProcessRunner;
+  readonly leaseFiles?: Pick<LeaseFiles, "folderOf" | "openFile">;
   /**
    * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
    * layered on top. Injected rather than read from `process.env` here (architecture rule 9),
@@ -362,7 +376,14 @@ export class Dispatcher {
   // already did, per the ADR's ordering.
 
   #catalogGet: Handler<"catalog.get"> = async (input) => ({
-    platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
+    platforms: (await this.options.catalog.listCatalog(input.platform))
+      .map(fitPlatformCatalog)
+      .map((entry) =>
+        // why: ADR 0066 §5: a gateway routes an `except` lease by the iOS worker's default mode.
+        entry.platform === "ios"
+          ? { ...entry, defaultMode: this.options.config.ios.defaultMode }
+          : entry,
+      ),
   });
 
   #statusGet: Handler<"status.get"> = async (_input, session) => {
@@ -734,8 +755,13 @@ export class Dispatcher {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
     }
-    if (this.options.processRunner === undefined) {
+    const processRunner = this.options.processRunner;
+    if (processRunner === undefined) {
       throw new DispatchError("INTERNAL", "Command execution is unavailable");
+    }
+    // why: checked here, not as a refinement on the shared input, which `.omit()` could no longer build `run_on_device` from.
+    if (input.stdin !== undefined && input.stdinFile !== undefined) {
+      throw new DispatchError("BAD_REQUEST", "Give stdin or stdinFile, not both");
     }
     const lease = this.options.registry.snapshot.leases.find(
       (candidate) => candidate.id === input.leaseId,
@@ -750,37 +776,114 @@ export class Dispatcher {
     // here, with pipes and no pty (ADR 0005 §19c), so a driver may refuse something it allows
     // a local `simlock <tool>` invocation -- a bare `adb shell` would otherwise sit on those
     // pipes until `exec.timeoutMs` killed it. `platform` is the leased device's own.
+    const files = this.options.leaseFiles;
+    if (files === undefined) throw new DispatchError("INTERNAL", "Lease files are unavailable");
     const command = await this.options.passthrough.passthrough(
       input.tool,
       toDriverDevice(record),
       input.args,
       { hasTerminal: false, platform: record.spec.platform },
     );
+    return this.#runExec(
+      {
+        command,
+        files,
+        grant: { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform },
+        input,
+        processRunner,
+      },
+      session,
+    );
+  };
+
+  async #runExec(
+    run: {
+      readonly command: PassthroughCommand;
+      readonly files: Pick<LeaseFiles, "folderOf" | "openFile">;
+      readonly grant: LeaseFilesGrant;
+      readonly input: z.infer<(typeof OPERATIONS)["device.exec"]["input"]>;
+      readonly processRunner: ProcessRunner;
+    },
+    session: DispatchSession,
+  ): Promise<{ readonly exitCode: number }> {
+    const { command, files, grant, input, processRunner } = run;
     const execEnv: NodeJS.ProcessEnv = { ...this.options.execEnv, ...command.env };
     for (const key of command.unsetEnv ?? []) {
       // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
-    const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
-      env: execEnv,
-      // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
-      // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
-      onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
-      ...(input.stdin === undefined ? {} : { input: input.stdin }),
-    });
-    // why: Announced before the first chunk can arrive, because "it started" is what a transport
-    // needs to decide its response shape on -- see `DispatchSession.onStarted`.
-    session.onStarted?.();
-    return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
-  };
+    const cwd = await this.#folderOf(files, grant);
+    const file =
+      input.stdinFile === undefined
+        ? undefined
+        : await this.#openStdinFile(files, grant, input.stdinFile);
+    try {
+      const handle = processRunner.spawnStreaming(command.command, command.args, {
+        cwd,
+        env: execEnv,
+        // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
+        // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
+        onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
+        ...(input.stdin === undefined ? {} : { input: input.stdin }),
+        ...(file === undefined ? {} : { inputStream: file.read() }),
+      });
+      // why: Announced before the first chunk can arrive, because "it started" is what a transport
+      // needs to decide its response shape on -- see `DispatchSession.onStarted`.
+      session.onStarted?.();
+      return {
+        exitCode: await this.#awaitExec(handle, input.tool, input.args, input.stdinFile),
+      };
+    } catch (error) {
+      if (error instanceof ProcessSpawnError) {
+        // why: Node reports no reason for a start that failed, so the folder is asked again: a lease that ended after `folderOf` made the working folder vanish (404), anything else is the spawn's own failure.
+        await this.#folderOf(files, grant);
+      }
+      throw error;
+    } finally {
+      await file?.close();
+    }
+  }
+
+  async #folderOf(files: Pick<LeaseFiles, "folderOf">, grant: LeaseFilesGrant): Promise<string> {
+    try {
+      return await files.folderOf(grant);
+    } catch (error) {
+      if (error instanceof LeaseFilesError) {
+        throw new DispatchError(error.code, error.message, error.details);
+      }
+      throw error;
+    }
+  }
+
+  async #openStdinFile(
+    files: Pick<LeaseFiles, "openFile">,
+    grant: LeaseFilesGrant,
+    name: string,
+  ): Promise<LeaseFileView> {
+    try {
+      return await files.openFile(grant, name);
+    } catch (error) {
+      if (error instanceof LeaseFilesError) {
+        throw new DispatchError(error.code, error.message, error.details);
+      }
+      // why: the file was listed and then deleted before the open, so it is gone, not a failure of the daemon.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new DispatchError("UNKNOWN_FILE", `No file ${name} in this lease`, { name });
+      }
+      throw error;
+    }
+  }
 
   async #awaitExec(
     handle: StreamingProcessHandle,
     tool: string,
     args: readonly string[],
+    stdinFile: string | undefined,
   ): Promise<number> {
     const timeoutMs = this.options.config.exec.timeoutMs;
     const waited = handle.wait();
+    // why: `inputFailed` only ever rejects, so the race below hears it as a value and never as a second way for the command to finish.
+    const inputFailed = handle.inputFailed?.catch((error: unknown) => error);
     let timer: TimerHandle | undefined;
     const expired = new Promise<typeof EXEC_EXPIRED>((resolve) => {
       timer = this.options.clock.setTimer(timeoutMs, () => resolve(EXEC_EXPIRED));
@@ -791,8 +894,14 @@ export class Dispatcher {
       // turn the timer fires has *finished*, and reporting that as a timeout would blame the
       // limit for a command that met it. `Promise.race` settles on whichever actually
       // happened first, which is exactly the question.
-      const outcome = await Promise.race([waited, expired]);
-      if (outcome !== EXEC_EXPIRED) return exitCodeOf(outcome);
+      const outcome = await Promise.race([
+        waited,
+        expired,
+        ...(inputFailed === undefined ? [] : [inputFailed]),
+      ]);
+      if (outcome !== EXEC_EXPIRED && !(outcome instanceof InputStreamFailedError)) {
+        return exitCodeOf(outcome as StreamingProcessResult);
+      }
 
       // why: SIGTERM first, SIGKILL after a grace window: a tool that ignores the first must not be
       // able to hold this operation -- and the caller's connection -- open forever. The same
@@ -808,6 +917,13 @@ export class Dispatcher {
       // timeout, not a competing answer to it. Swallowed here rather than left to reject
       // this `await` and skip the throw below.
       await waited.catch(() => undefined);
+      if (outcome instanceof InputStreamFailedError && stdinFile !== undefined) {
+        throw new DispatchError(
+          "STDIN_FILE_FAILED",
+          `Reading ${stdinFile} failed after ${String(outcome.bytesWritten)} bytes; the command was stopped`,
+          { bytesRead: outcome.bytesWritten, name: stdinFile },
+        );
+      }
       // why: `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
       // failed" are different facts, and only the first tells a caller to raise the limit.
       throw new DispatchError(

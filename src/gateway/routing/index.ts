@@ -13,6 +13,7 @@ export { freeCapacity } from "./stages/free-capacity.js";
 export { freeSlot } from "./stages/free-slot.js";
 export { hasBaseline } from "./stages/has-baseline.js";
 export { hasCapabilities } from "./stages/has-capabilities.js";
+export { keepsExcept } from "./stages/keeps-except.js";
 export { healthy } from "./stages/healthy.js";
 export { idleQueue } from "./stages/idle-queue.js";
 export { ramBudget } from "./stages/ram-budget.js";

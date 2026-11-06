@@ -54,6 +54,7 @@ interface Plan {
   readonly imageTag?: string;
   readonly osVersion?: string;
   readonly mode?: "slim" | "full";
+  readonly except?: readonly string[];
   readonly physical?: true;
   readonly ttlMs?: number;
 }
@@ -122,6 +123,7 @@ function stringFields(fields: ReturnType<typeof leaseCallFields>) {
     ...(typeof fields.imageTag === "string" ? { imageTag: fields.imageTag } : {}),
     ...(typeof fields.osVersion === "string" ? { osVersion: fields.osVersion } : {}),
     ...(present(fields.deviceMode) ? { mode: fields.deviceMode as "slim" | "full" } : {}),
+    ...(present(fields.deviceExcept) ? { except: fields.deviceExcept as readonly string[] } : {}),
   };
 }
 
@@ -278,6 +280,7 @@ function forwardedBody(
   const {
     device: _device,
     deviceBaseline: _deviceBaseline,
+    deviceExcept: _deviceExcept,
     deviceKey: _deviceKey,
     deviceMode: _deviceMode,
     imageTag: _imageTag,

@@ -49,6 +49,7 @@ async function runLease(
     detach: { type: "boolean" },
     device: { type: "string" },
     "export-env": { type: "boolean" },
+    except: { type: "string" },
     help: { type: "boolean", short: "h" },
     "image-tag": { type: "string" },
     "lease-id": { type: "string" },
@@ -64,7 +65,7 @@ async function runLease(
     environment.stdout.write(
       "Usage: simlock lease --platform <ios|android> [--device <model> | --class <class>]\n" +
         "                     [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]\n" +
-        "                     [--baseline <name>]\n" +
+        "                     [--except <category,...>] [--baseline <name>]\n" +
         "                     [--timeout <duration>] [--lease-id <id>] [--physical]\n" +
         "                     [--no-wait] [--detach] [--ttl <duration>] [--allow-download]\n" +
         "                     [--export-env] [--bind-pid <pid>]\n",
@@ -202,6 +203,7 @@ async function runLease(
           ...(values.physical === true ? { physical: true } : {}),
           platform,
           ...(typeof values.mode === "string" ? { mode: values.mode as "slim" | "full" } : {}),
+          ...(typeof values.except === "string" ? { except: values.except.split(",") } : {}),
           ...(typeof values["image-tag"] === "string" ? { imageTag: values["image-tag"] } : {}),
           ...(baseline === undefined ? {} : { baseline }),
           ...(typeof values["lease-id"] === "string" ? { leaseId: values["lease-id"] } : {}),

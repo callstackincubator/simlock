@@ -614,6 +614,55 @@ describe("GatewayDispatcher", () => {
     );
   });
 
+  it.each([
+    ["an agent", session({ principal: "agent-1", role: "agent" })],
+    ["an admin", session({ principal: "claude-code:1", role: "admin" })],
+  ])(
+    "lease.list lists the lease to %s that asked for it as soon as lease.request answers, before the worker's own lease event has refreshed the view",
+    async (_who, asker) => {
+      const { directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        devices: [deviceFixture("dev_1")],
+        downloads: { policy: "on-request" },
+        health: "running",
+        leases: [],
+        queueDepth: 0,
+      });
+      const workerLease = {
+        ...grantFixture().lease,
+        ownerId: asker.principal,
+        requesterId: `${GATEWAY_REQUESTER_PREFIX}${asker.principal}`,
+      };
+      client.requestLeaseQueue.push({ grant: grantFixture({ lease: workerLease }), kind: "grant" });
+      // why: the worker lists the lease once the gateway reads its view again; the read its `lease.granted` push starts has not landed.
+      directory.onRefresh.set("wrk_1", async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        workers.refresh("wrk_1", {
+          devices: [deviceFixture("dev_1", "leased")],
+          leases: [workerLease],
+        });
+      });
+
+      const grant = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17", platform: "ios" },
+        asker,
+      );
+      const { leases } = await dispatcher.dispatch("lease.list", {}, asker);
+
+      expect((grant as { lease: { id: string } }).lease.id).toBe("wrk_1.lse_1");
+      expect(leases.map(({ id, requesterId }) => ({ id, requesterId }))).toEqual([
+        { id: "wrk_1.lse_1", requesterId: asker.principal },
+      ]);
+    },
+  );
+
   it("lists no device or lease for a worker that is starting, whether the session is an admin or the owner of a lease the gateway indexed on it, and answers worker.list with the view as it is", async () => {
     const { dispatcher, workers } = harness();
     workers.connected("wrk_1", "mac-mini-1", undefined);
@@ -2241,6 +2290,43 @@ describe("GatewayDispatcher", () => {
 
       await expect(exec("A".repeat(8_388_609))).rejects.toMatchObject({ code: "BAD_REQUEST" });
       expect(forwarded()).toHaveLength(1);
+    });
+
+    it("forwards a device.exec's stdinFile to the lease's worker under the same name, and nothing when it is omitted", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      const exec = (extra: { stdinFile?: string }) => {
+        client.execQueue.push({ exitCode: 0, kind: "ok" });
+        return dispatcher.dispatch(
+          "device.exec",
+          { args: ["spawn", "booted", "untar"], leaseId: grant.lease.id, tool: "simctl", ...extra },
+          session({ principal: "agent-1", role: "agent" }),
+        );
+      };
+
+      await exec({ stdinFile: "fixture.tar" });
+      await exec({});
+
+      expect(client.execInputs.map((forwarded) => forwarded.stdinFile)).toEqual([
+        "fixture.tar",
+        undefined,
+      ]);
+      expect("stdinFile" in (client.execInputs[1] ?? {})).toBe(false);
     });
 
     it("calls onStarted for a silent device.exec from the worker's own started push (ADR §19a/§19b/§19e)", async () => {

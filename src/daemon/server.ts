@@ -101,6 +101,7 @@ export interface DaemonServerEngineOptions {
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
+  readonly leaseFiles?: DispatcherOptions["leaseFiles"];
   readonly relayTargets?: RelayTargets;
   readonly relayTwoWayTargets?: TwoWayRelayTargets;
   readonly execEnv?: NodeJS.ProcessEnv;
@@ -255,6 +256,7 @@ function buildDispatcher(
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
+    ...(options.leaseFiles === undefined ? {} : { leaseFiles: options.leaseFiles }),
     ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
     queue: options.queue,
     ...(options.presence === undefined ? {} : { presence: options.presence }),

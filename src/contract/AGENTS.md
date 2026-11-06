@@ -9,6 +9,7 @@ Shapes:
 - Public types are `z.infer`red from these schemas, never written a second time.
 - The daemon parses every handler result through the output schema; a core field the schema does not declare is stripped, never sent.
 - `config.get` carries a driver's own keys under `ios` and `android`, and a module's under `capabilities`, as sent: a new one is no shape change.
+- `lease.request` holds `except` (a slim iOS simulator lease keeping slim categories running, ADR 0066) to one object-level refinement with no path (`exceptRefusal`, `operations.ts`), so every transport answers `BAD_REQUEST` with the message as written: 1 to 16 names matching `EXCEPT_NAME_PATTERN`, none twice, never with `physical`, a platform but iOS or `mode: full`. The worker's default mode and a baseline's mode are checked in leasing.
 - Wire input is a claim: every field a gateway parses from a worker is bounded here (`fit*`, `CONSOLE_URL_MAX_LENGTH`, `relay.ts`).
 - One OS grammar (`os-range.ts`), one duration parser (`duration.ts`), one usage window (`usageWindow`, `usage-window.ts`), one events page query (`eventsPageQuery`, `events-page.ts`). Nobody else parses.
 - `inbox.ts` and `version-order.ts` import nothing at run time: the console imports each by its own path, not the index (the index carries zod).

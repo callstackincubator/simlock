@@ -120,6 +120,8 @@ export interface ErrorDetailsMap {
   PASSTHROUGH_REFUSED: { readonly tool: string };
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   EXEC_TIMEOUT: Record<string, never>;
+  /** why: ADR 0067 §5: the lease file named by `stdinFile` could not be read to its end after `bytesRead` bytes, and the command was stopped. */
+  STDIN_FILE_FAILED: { readonly name: string; readonly bytesRead: number };
   /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator; `class` is the physical class, the simulator's model family, or `emulator`. */
   ROTATION_UNSUPPORTED: {
     readonly leaseId: string;
@@ -129,6 +131,15 @@ export interface ErrorDetailsMap {
   };
   /** why: `device.rotate` could not reach the lease's input helper; `reason` is the driver's text, cut to 200 characters. */
   INPUT_UNAVAILABLE: { readonly leaseId: string; readonly reason: string };
+  /** why: ADR 0067 §4: a lease's file upload passed 2 GiB. */
+  FILE_TOO_LARGE: { readonly name: string };
+  /** why: ADR 0067 §4: an upload would take a lease's folder past 4 GiB. */
+  LEASE_FILES_FULL: { readonly leaseId: string; readonly usedBytes: number };
+  UNKNOWN_FILE: { readonly name: string };
+  /** why: ADR 0067 §6: no byte of an upload's body arrived for 330 s. */
+  UPLOAD_STALLED: { readonly name: string };
+  /** why: ADR 0067 §2: another request is uploading the same file name. */
+  FILE_BUSY: { readonly name: string };
   DOCTOR_UNAVAILABLE: Record<string, never>;
   HISTORY_NOT_KEPT: { readonly oldestTs: number };
   HISTORY_UNAVAILABLE: Record<string, never>;
@@ -217,6 +228,12 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   UNKNOWN_MODEL: true,
   HISTORY_NOT_KEPT: true,
   INSUFFICIENT_DISK_SPACE: true,
+  FILE_TOO_LARGE: true,
+  LEASE_FILES_FULL: true,
+  UNKNOWN_FILE: true,
+  STDIN_FILE_FAILED: true,
+  UPLOAD_STALLED: true,
+  FILE_BUSY: true,
   LICENSE_NOT_ACCEPTED: true,
   DOWNLOAD_TIMEOUT: true,
   DOWNLOADS_DISABLED: true,
@@ -350,6 +367,13 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
     httpStatus: 422,
   },
   UNKNOWN_LEASE: { code: "UNKNOWN_LEASE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  // why: a lease's file routes (ADR 0067): a refused upload or a missing file is a fact about the request, not a state of the host.
+  FILE_TOO_LARGE: { code: "FILE_TOO_LARGE", kind: "domain", cliExitCode: 1, httpStatus: 413 },
+  LEASE_FILES_FULL: { code: "LEASE_FILES_FULL", kind: "domain", cliExitCode: 1, httpStatus: 413 },
+  UNKNOWN_FILE: { code: "UNKNOWN_FILE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  STDIN_FILE_FAILED: { code: "STDIN_FILE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
+  UPLOAD_STALLED: { code: "UPLOAD_STALLED", kind: "domain", cliExitCode: 1, httpStatus: 408 },
+  FILE_BUSY: { code: "FILE_BUSY", kind: "domain", cliExitCode: 1, httpStatus: 409 },
   // why: a lease's tunnel socket refuses with these (ADR 0054 section 7), so every surface reports them alike.
   TUNNEL_UNSUPPORTED: {
     code: "TUNNEL_UNSUPPORTED",

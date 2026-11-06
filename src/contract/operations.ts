@@ -25,6 +25,8 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   EVENT_ID_PATTERN,
+  EXCEPT_MAX_NAMES,
+  EXCEPT_NAME_PATTERN,
   hostFactsSchema,
   requesterIdSchema,
   historyStatusSchema,
@@ -158,6 +160,8 @@ const leaseRequestBaseSchema = z
     // before the handler, and its error would stand in for `BAD_REQUEST`.
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: A plain array of plain strings, bounded by `refuseBadExcept` as the one object-level check, like `osVersion`: a bound on the field itself would be checked by the MCP SDK before the handler.
+    except: z.array(z.string()).optional(),
     imageTag: imageTagSchema.optional(),
     baseline: baselineNameSchema.optional(),
     physical: z.boolean().optional(),
@@ -263,6 +267,46 @@ function refuseRequiresWithIdempotencyKey(): <
   };
 }
 
+/** why: one object-level check with no path (like `osVersion`), so every transport, MCP included, answers `BAD_REQUEST` with the message as written. */
+function refuseBadExcept(): <
+  T extends {
+    readonly except?: readonly string[] | undefined;
+    readonly mode?: unknown;
+    readonly physical?: boolean | undefined;
+    readonly platform: string;
+  },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    const { except } = input;
+    if (except === undefined) return;
+    const message = exceptRefusal(input, except);
+    if (message !== undefined) context.addIssue({ code: "custom", message });
+  };
+}
+
+function exceptRefusal(
+  input: {
+    readonly mode?: unknown;
+    readonly physical?: boolean | undefined;
+    readonly platform: string;
+  },
+  except: readonly string[],
+): string | undefined {
+  if (except.length < 1 || except.length > EXCEPT_MAX_NAMES) {
+    return `except names 1 to ${EXCEPT_MAX_NAMES} categories`;
+  }
+  const bad = except.find((name) => !EXCEPT_NAME_PATTERN.test(name));
+  if (bad !== undefined) return `except: "${bad}" is not a category name`;
+  const twice = except.find((name, index) => except.indexOf(name) !== index);
+  if (twice !== undefined) return `except names "${twice}" twice`;
+  if (input.physical === true || input.platform !== "ios") return "except is for iOS simulators";
+  if (input.mode === "full") return "except needs a slim lease (mode is full)";
+  return undefined;
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -297,6 +341,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseModelWithClass())
   .superRefine(refuseBaselineWithClass())
   .superRefine(refuseBadOsVersion())
+  .superRefine(refuseBadExcept())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 
@@ -311,13 +356,18 @@ export const leaseRequest = defineOperation({
   // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
-export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
+export function requestedDevice(
+  input: Omit<z.infer<typeof leaseRequestInputSchema>, "except"> & {
+    readonly except?: readonly string[] | undefined;
+  },
+) {
   return {
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.class === undefined ? {} : { class: input.class }),
     platform: input.platform,
     ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(input.except === undefined ? {} : { except: [...input.except] }),
     ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
     ...(input.baseline === undefined ? {} : { baseline: input.baseline }),
     ...(input.physical === true ? { physical: true as const } : {}),
@@ -422,6 +472,9 @@ export const driverPassthrough = defineOperation({
   output: passthroughCommandSchema,
 });
 
+/** why: the File name rule of a lease's files (1 to 128 characters), shared by the upload routes and exec's `stdinFile`. */
+export const LEASE_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 // why: the daemon parses a request as one string, so unbounded stdin exhausts the heap (#1242).
 export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
 
@@ -445,6 +498,12 @@ export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
  * no terminal to attach it to and it would otherwise sit until `exec.timeoutMs` -- the same
  * `PASSTHROUGH_REFUSED` a lifecycle verb gets. Locally, where the CLI hands the tool its own
  * terminal, it stays allowed and interactive.
+ *
+ * Every command runs with the lease's folder on the worker as its working folder (ADR 0067 §5),
+ * so a relative path names a file the holder uploaded. `stdinFile` names such a file to pipe to
+ * the command's stdin instead of `stdin`; the two together are `BAD_REQUEST`, checked by the
+ * worker's dispatcher, not here, because `.omit()` cannot build `run_on_device`'s input from an
+ * object carrying a refinement.
  *
  * `stdin` is a **one-shot string**, not a stream: it is written to the child's stdin and the
  * pipe is then closed. ADR §19c is explicit that there is no pseudo-terminal here, so
@@ -472,6 +531,7 @@ export const deviceExec = defineOperation({
       tool: z.string().min(1),
       args: z.array(z.string()),
       stdin: z.string().max(EXEC_STDIN_MAX_LENGTH).optional(),
+      stdinFile: z.string().regex(LEASE_FILE_NAME_PATTERN).optional(),
       /**
        * why: Who this command is being run *for* -- the requester the lease is attributed to (ADR
        * 0003 §4), not the connection's principal. Read **only on an admin session**, where it

@@ -43,7 +43,8 @@ Relay:
 
 - `relay.*` runs only on a worker's uplink session. A gateway refuses them from everyone.
 - A worker never holds a gateway credential: `relayHeaderPairs` (`../contract/relay.ts`) drops the credential headers and the configured `http.proxyAuth.header`.
-- Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body, so a live body is never cut. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
+- Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
+- A file upload (`upload` on the call) is bounded by `UPLOAD_STALLED` silence of the caller instead; its head deadline starts at the body's end.
 - A two-way relay keeps both directions open after a 2xx head; ending one ends only that one.
 - Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. Bytes the gateway writes never reset it, and it stops while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
 - On an uplink close the worker aborts that connection's relays. Leases, requests and exec keep running.
@@ -55,7 +56,7 @@ Relay:
 3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
 5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.
-6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted.
+6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted. The worker's view is read again before any answer.
 7. Afterwards renew, release, exec, rotate and baseline save go to the worker the index names; with no live link they answer `WORKER_UNREACHABLE`.
 8. The worker's relayed `lease.expired` or `lease.released` removes the entry and pushes `lease-lost` to the owner.
 
@@ -69,9 +70,9 @@ Relay:
 - **A dispatched request whose uplink drops may have granted a lease anyway.** Client sees
   `WORKER_UNREACHABLE`; the lease stands until TTL. A re-request may name it or get a second lease.
 - **A lease survives a gateway restart, but nothing renews it until the gateway is back.** Renew, release and exec fail meanwhile; past the TTL it expires. Knob: `lease.defaultTtlMs`/`--ttl`.
-- **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`; the request waits elsewhere. `worker drain` leaves it to the owner.
+- **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
-- **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`, so the usage projection's shared fleet clock can move forward; amending the ADR is the maintainer's call.
+- **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`; amending the ADR is the maintainer's call.
 - **Gateway warm hits miss some devices.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a
   mode-less request; a `--mode slim` request there is no hit on a ready full device.

@@ -17,6 +17,7 @@ A worker can take a request only when it:
 - has every optional capability the request needs (for example, a lease through the agent-device integration needs a worker with that integration turned on);
 - offers the model or device class asked for, with a matching OS version already installed;
 - holds a fresh copy of the baseline, when the request names one (see [Baselines through a gateway](/simlock/docs/gateway/managing-workers#baselines-through-a-gateway));
+- slims every category in the request's `except` list and would give a slim device: the request's mode, or the baseline's, or else the worker's `ios.defaultMode` is `slim`;
 - has no requests waiting in its own queue, for example from agents on that machine. This doesn't apply to physical devices.
 
 Among those workers, the gateway prefers:
@@ -53,6 +54,7 @@ The gateway doesn't queue a request that no worker could serve. It fails at once
 | `UNKNOWN_MODEL` | 12 | 422 | No worker offers that model or device class, or, for a physical device, no worker has one enrolled. | Check the name with `simlock --gateway catalog`. |
 | `RUNTIME_MISSING` | 12 | 422 | Workers offer the model, but none has a matching OS version installed. The gateway never downloads one. | Install it on the workers. See [Install runtimes and images on workers](/simlock/docs/gateway/managing-workers#install-runtimes-and-images-on-workers). |
 | `CAPABILITY_MISSING` | 12 | 422 | No worker that could serve the request has the optional capability it needs turned on. | Turn the capability on for a worker. |
+| `BAD_REQUEST` | 2 | 400 | The request names `except` categories, and no worker slims all of them, or none would give a slim device (every worker's default mode is `full` and the request names no mode, or the baseline is `full`). | Name categories the workers slim (`ios.slim.categories`), pass `--mode slim`, or set `ios.defaultMode` to `slim`. |
 | `UNKNOWN_BASELINE` | 12 | 404 | No worker holds the baseline the request names. | List the baselines with `simlock --gateway baseline list`. |
 | `BASELINE_MISMATCH` | 2 | 422 | Every worker that holds the baseline has a copy that differs from a platform, model, OS, mode or image tag the request names. The message is from the first worker, by worker id. | Drop the field, or change it to the baseline's own value. |
 | `BASELINE_STALE` | 12 | 422 | Every copy that fits the request is stale, for example its runtime is no longer installed. The message gives the first worker's reason. | Fix what the reason names, or save the baseline again. |

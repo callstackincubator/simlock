@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 // Data source: simslim (https://github.com/mobai-app/simslim), MIT licensed.
 // Category names, descriptions, and launchd label lists below are copied
 // verbatim from `Categories` in profiles.go at commit
-// d594c230fe9ed5080189b0ce76afabda6104bae0 (v0.13.0), the source simslim
-// uses to disable background daemons; Simlock writes them into the
-// simulator's launchd overrides file before its one boot (ADR 0060).
+// 7e374b38 (v0.14.0), the source simslim uses to disable background
+// daemons; Simlock writes them into the simulator's launchd overrides file
+// before its one boot (ADR 0060, ADR 0066).
 //
 // Apple renames, adds, and removes these daemons between iOS runtime
 // versions, so this list is versioned *data*, not code: it is expected to
@@ -266,8 +266,18 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
     ],
   },
   {
+    name: "mdm",
+    description: "Declarative device management and managed asset services.",
+    labels: [
+      "com.apple.remotemanagementd",
+      "com.apple.RemoteManagementAgent",
+      "com.apple.managedassetsd",
+    ],
+  },
+  {
     name: "other",
-    description: "Wallet, business services, assets, and miscellaneous background daemons.",
+    description:
+      "Wallet, App Clips, business services, assets, and miscellaneous background daemons.",
     labels: [
       "com.apple.financed",
       "com.apple.passd",
@@ -283,6 +293,8 @@ export const SLIM_CATEGORIES: readonly SlimCategory[] = [
       "com.apple.countryd",
       "com.apple.mobileassetd",
       "com.apple.managedconfiguration.passcodenagd",
+      "com.apple.accessibility.axassetsd",
+      "com.apple.ClipServices.clipserviced",
     ],
   },
 ];
@@ -331,9 +343,13 @@ export const NEVER_DISABLE_LABELS: readonly string[] = [
 
 /**
  * why: Every managed label (all categories plus the never-disable labels) mapped to what the overrides
- * file must say: `true` (off) for a label of a configured category, `false` for the rest.
+ * file must say: `true` (off) for a label of a configured category, `false` for the rest and for
+ * every label of a kept category.
  */
-export function overridesFor(categories: readonly SlimCategory[]): ReadonlyMap<string, boolean> {
+export function overridesFor(
+  categories: readonly SlimCategory[],
+  keep: readonly SlimCategory[] = [],
+): ReadonlyMap<string, boolean> {
   const wanted = new Map<string, boolean>();
   for (const category of SLIM_CATEGORIES) {
     for (const label of category.labels) wanted.set(label, false);
@@ -342,6 +358,8 @@ export function overridesFor(categories: readonly SlimCategory[]): ReadonlyMap<s
   for (const label of labelsFor(categories)) {
     if (!NEVER_DISABLE_LABELS.includes(label)) wanted.set(label, true);
   }
+  // why: an excepted category wins over a slimmed one that lists the same label (ADR 0066 §2).
+  for (const label of labelsFor(keep)) wanted.set(label, false);
   return wanted;
 }
 

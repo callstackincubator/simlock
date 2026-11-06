@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { Server } from "node:http";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,7 +12,7 @@ import type { Identity } from "../auth/index.js";
 import { fakeAuth, tokenIdentity } from "../auth/testing.js";
 import { createHttpApp } from "./app.js";
 import { CONSOLE_CONTENT_SECURITY_POLICY, HttpGateway, withConsole } from "./server.js";
-import { FakeDispatcher, FakeRegistry, sequenceIdGenerator } from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, noLeaseFiles, sequenceIdGenerator } from "./test-fakes.js";
 
 const PAGE = '<!doctype html><title>Simlock</title><div id="root"></div>';
 const SCRIPT = "console.log('console');";
@@ -60,6 +61,7 @@ function harness(root: string) {
     ownerRoutedFacts: new OwnerRoutedFactBus(eventBus, registry),
     registry,
     auth,
+    leaseFiles: noLeaseFiles,
   });
   const site = withConsole(app, { logger, root });
   const get = (path: string, init: RequestInit = {}) =>
@@ -200,12 +202,18 @@ describe("withConsole", () => {
 });
 
 describe("HttpGateway", () => {
-  async function started(root: string) {
+  async function started(root: string, onServerCreated?: (server: Server) => void) {
     const logSink = new MemoryLogSink();
     const logger = new JsonLinesLogger({ clock: new FakeClock(0), sink: logSink });
     const gateway = new HttpGateway(
       { fetch: () => new Response("api") },
-      { consoleRoot: root, host: "127.0.0.1", logger, port: 0 },
+      {
+        consoleRoot: root,
+        host: "127.0.0.1",
+        logger,
+        port: 0,
+        ...(onServerCreated === undefined ? {} : { onServerCreated }),
+      },
     );
     const { port } = await gateway.start();
     const warnings = () =>
@@ -223,6 +231,18 @@ describe("HttpGateway", () => {
       expect(await page.text()).toBe(PAGE);
       expect(await api.text()).toBe("api");
       expect(warnings()).toEqual([]);
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("the HTTP listener has no total request time limit, so a slow upload that keeps moving is not cut", async () => {
+    let created: Server | undefined;
+    const { gateway } = await started(await emptyRoot(), (server) => {
+      created = server;
+    });
+    try {
+      expect(created?.requestTimeout).toBe(0);
     } finally {
       await gateway.stop();
     }

@@ -124,8 +124,13 @@ const REGISTRY_V3 = `
 ALTER TABLE lease_requests ADD COLUMN baseline TEXT;
 `;
 
+const REGISTRY_V4 = `
+ALTER TABLE devices ADD COLUMN except_categories TEXT;
+ALTER TABLE lease_requests ADD COLUMN except_categories TEXT;
+`;
+
 export const registryOwner: SqliteSchemaOwner = {
-  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3],
+  migrations: [REGISTRY_V1, REGISTRY_V2, REGISTRY_V3, REGISTRY_V4],
   name: "registry",
-  version: 3,
+  version: 4,
 };

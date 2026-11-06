@@ -151,10 +151,11 @@ export class DeviceTable {
    * scanner would do for everyone's.
    *
    * An emulator announces itself exactly once, at its own startup, to the server that
-   * existed then. A clean `daemon stop` reaps that server, and with `ADB_EMU=0` the next one
-   * has no scanner to rediscover anything -- so every emulator that survived the restart
-   * (which is by design: a released device may stay running, kept by the warm pool) would be
-   * invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
+   * existed then. A `daemon stop` keeps that server only while `adb devices` lists an
+   * emulator (`AndroidDriver#dispose`); one that is reaped or dies is replaced by a server
+   * that, with `ADB_EMU=0`, has no scanner to rediscover anything -- so every emulator that
+   * survived the restart (which is by design: a leased device keeps running across a stop)
+   * would be invisible forever. Invisible is worse than gone: `listManaged` reports no process, so
    * `doctor` can never call it an orphan and several gigabytes of RSS leak permanently.
    *
    * `connect_emulator` is idempotent (adb keys transports by port), a port with nothing on

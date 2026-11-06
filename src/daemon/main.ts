@@ -29,6 +29,7 @@ import { androidSourceDataOwner } from "../drivers/android/index.js";
 import { iosSourceDataOwner } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
+import { createGatewayLeaseFiles } from "./gateway-lease-files.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -73,6 +74,7 @@ import {
   FetchWebhookPoster,
   type WebhookPoster,
   type WorkerLockHandle,
+  type SqliteSchemaOwner,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -127,6 +129,8 @@ export interface StartDaemonOptions extends WorkerOptions {
   readonly configPath?: string;
   readonly dataDirectory?: string;
   readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
+  /** why: test-only, a gateway's silence bound on a relayed file upload, so a rig reaches 408 without waiting 330 s. */
+  readonly fileSilenceMs?: number;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
@@ -184,6 +188,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
     await workerLock?.release().catch(() => undefined);
     throw error;
   }
+}
+
+// why: the schema owners each role's state.db opens, one place so a test reads the list the daemon uses.
+export function stateOwners(
+  role: DaemonMode,
+  deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>,
+): readonly SqliteSchemaOwner[] {
+  return role === "gateway"
+    ? [tokensOwner, drainedWorkersOwner]
+    : [
+        registryOwner,
+        warmPoolOwner,
+        baselinesOwner,
+        tokensOwner,
+        iosSourceDataOwner,
+        androidSourceDataOwner,
+        ...new Set(deviceDataTables.values()),
+      ];
 }
 
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
@@ -265,18 +287,7 @@ async function composeDaemon(
     filesystem: new NodeFilesystem(),
     logger: logger.child("state"),
     oldFiles: role === "gateway" ? ["tokens.json", "workers.json"] : ["state.json", "tokens.json"],
-    owners:
-      role === "gateway"
-        ? [tokensOwner, drainedWorkersOwner]
-        : [
-            registryOwner,
-            warmPoolOwner,
-            baselinesOwner,
-            tokensOwner,
-            iosSourceDataOwner,
-            androidSourceDataOwner,
-            ...new Set(deviceDataTables.values()),
-          ],
+    owners: stateOwners(role, deviceDataTables),
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
@@ -313,6 +324,7 @@ async function composeDaemon(
       eventHistory,
       filesystem,
       ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
+      ...(options.fileSilenceMs === undefined ? {} : { fileSilenceMs: options.fileSilenceMs }),
       ...(options.gatewayUplinks === undefined ? {} : { gatewayUplinks: options.gatewayUplinks }),
       hostSystem,
       ...(options.hostLoadProbe === undefined ? {} : { hostLoadProbe: options.hostLoadProbe }),
@@ -369,6 +381,8 @@ interface GatewayDaemonOptions {
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
+  /** why: test-only, see `StartDaemonOptions.fileSilenceMs`. */
+  readonly fileSilenceMs?: number;
   readonly eventHistory: EventHistoryHandle;
   readonly filesystem: Filesystem;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
@@ -621,6 +635,11 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       dispatch,
       eventBus,
       idGenerator,
+      leaseFiles: createGatewayLeaseFiles({
+        relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+        requesterPrefix: gatewayRequesterPrefix,
+        ...(options.fileSilenceMs === undefined ? {} : { silenceMs: options.fileSilenceMs }),
+      }),
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
       leaseRoutes: [...moduleHost.leaseRoutes()],
