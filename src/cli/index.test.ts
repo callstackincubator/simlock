@@ -6098,6 +6098,52 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print(EMPTY_STATUS)).not.toContain("Load:");
       expect(await print(STARTING)).not.toContain("Load:");
     });
+
+    it("simlock status prints the Memory pressure line with the step, when it began and why, and none when there is no step", async () => {
+      const at = (hours: number, minutes: number) =>
+        new Date(2026, 10, 6, hours, minutes).getTime();
+      const memoryLine = async (memoryPressure: unknown) => {
+        const stdout = await print({
+          ...EMPTY_STATUS,
+          capacity: { ...EMPTY_STATUS.capacity, memoryPressure },
+          load: LOAD,
+        } as StatusGetOutput);
+        return stdout.split("\n").find((line) => line.startsWith("Memory pressure:"));
+      };
+
+      expect(
+        await memoryLine({
+          cause: { availablePercent: 34, level: "warn", trigger: "level" },
+          since: at(9, 12),
+          step: "warming-paused",
+        }),
+      ).toBe("Memory pressure: warming paused since 09:12 (pressure warn)");
+      expect(
+        await memoryLine({
+          cause: { availablePercent: 8, floorPercent: 10, trigger: "floor" },
+          since: at(9, 40),
+          step: "new-devices-paused",
+        }),
+      ).toBe("Memory pressure: new devices paused since 09:40 (8% available, floor 10%)");
+      expect(await memoryLine({ step: "none" })).toBeUndefined();
+      expect(await memoryLine(undefined)).toBeUndefined();
+
+      const stdout = await print({
+        ...EMPTY_STATUS,
+        capacity: {
+          ...EMPTY_STATUS.capacity,
+          memoryPressure: {
+            cause: { availablePercent: 34, level: "warn", trigger: "level" },
+            since: at(9, 12),
+            step: "warming-paused",
+          },
+        },
+        load: LOAD,
+      } as StatusGetOutput);
+      expect(stdout).toContain(
+        `${FULL_LINE}Memory pressure: warming paused since 09:12 (pressure warn)\nRunning global`,
+      );
+    });
   });
 
   it("simlock status prints the console address when HTTP is enabled", async () => {
