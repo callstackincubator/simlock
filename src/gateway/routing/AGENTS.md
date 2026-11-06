@@ -11,7 +11,6 @@ Stages:
 - A filter returns its own reason and a rank its own zero reason. The pipeline and the policy
   name no stage and compare no stage name.
 - `gateway.routing` names a whole list; stage order is code, never config.
-- `memory-pressure` reads only the step a worker reports (`new-devices-paused` scores 0, `warming-paused` ranks as calm); the gateway applies no threshold.
 - A rank abstains when its best score is 0 or less, and a settling rank ends the walk. A worker
   is picked only if some rank decided: filters alone pick no one.
 - Workers are walked in id order, and the pick is the first one left.
