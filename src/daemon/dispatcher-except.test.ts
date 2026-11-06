@@ -160,7 +160,11 @@ describe("Dispatcher: lease.request with an except list", () => {
       ],
       ["physical", { ...ask, physical: true }, "except is for iOS simulators"],
       ["android", { ...ask, platform: "android" }, "except is for iOS simulators"],
-      ["a name the driver refuses", { ...ask, except: ["wallet"] }, ""],
+      [
+        "a name the driver refuses",
+        { ...ask, except: ["wallet"] },
+        'unknown slim category "wallet"',
+      ],
     ];
     for (const [label, input, message, defaultMode] of refusals) {
       const error = await attempt(input, defaultMode);
@@ -203,6 +207,15 @@ describe("Dispatcher: lease.request with an except list", () => {
       session({ principal: "tok_d" }),
     );
     expect(fromSlim.device).toMatchObject({ except: ["store"], mode: "slim" });
+    const unknownFromSlim = await dispatcher
+      .dispatch(
+        "lease.request",
+        { baseline: "slim-base", except: ["wallet"], platform: "ios" },
+        session({ principal: "tok_e" }),
+      )
+      .catch((error: unknown) => error);
+    expect(classifyError(unknownFromSlim)).toBe("BAD_REQUEST");
+    expect((unknownFromSlim as Error).message).toContain('unknown slim category "wallet"');
   });
 
   it("a failed except boot is never granted", async () => {

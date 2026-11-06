@@ -46,7 +46,8 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    `allowDownload`. Physical requests skip this. See device selection.
    A request naming a baseline resolves against `core.baselines` instead: unknown,
    mismatch (`baselineMismatch`) or stale fails at once, and the spec is the
-   baseline's, with its name and version; no download is attempted.
+   baseline's, with its name and version; no download is attempted. A slim baseline's `except`
+   names go to `driver.resolveSpec` too, so an unknown name is `BAD_REQUEST`.
 3. **Plan** (lock) — `AcquisitionPlanner.plan`; first that applies wins:
    grant a ready fitting device (a slim request with `except` takes it with a `boot` claim and no capacity reservation instead, `reboot-ready`) → wait for one the warm pool is booting →
    boot a shut-down one → provision → evict an

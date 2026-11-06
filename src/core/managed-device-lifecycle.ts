@@ -131,18 +131,24 @@ export class ManagedDeviceLifecycle {
       }
       throw error;
     }
-    const device = await this.decisions.run(async () => {
-      const current = this.#registeredTarget(claimed.device, ["ready"]);
-      if (current === undefined) return undefined;
-      // why: `mode` defaults to full here as `readyTransitionUpdate` does, so a reboot granted full records full.
-      return assertVirtual(
-        await this.registry.recordRebootedDevice(current.id, {
-          address: ready.address,
-          driverData: ready.driverData,
-          mode: ready.mode ?? "full",
-        }),
-      );
-    });
+    let device: VirtualDevice | undefined;
+    try {
+      device = await this.decisions.run(async () => {
+        const current = this.#registeredTarget(claimed.device, ["ready"]);
+        if (current === undefined) return undefined;
+        // why: `mode` defaults to full here as `readyTransitionUpdate` does, so a reboot granted full records full.
+        return assertVirtual(
+          await this.registry.recordRebootedDevice(current.id, {
+            address: ready.address,
+            driverData: ready.driverData,
+            mode: ready.mode ?? "full",
+          }),
+        );
+      });
+    } catch (error: unknown) {
+      await this.#release(claimed);
+      throw error;
+    }
     if (device === undefined) {
       await this.#release(claimed);
       return undefined;

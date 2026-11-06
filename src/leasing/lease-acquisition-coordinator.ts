@@ -558,7 +558,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline, request);
+    if (request.baseline !== undefined) {
+      return this.#resolveBaseline(driver, request.baseline, request);
+    }
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
     if (request.except !== undefined && mode !== "slim") {
@@ -586,6 +588,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
   async #resolveBaseline(
+    driver: Driver,
     name: string,
     request: DeviceRequest,
   ): Promise<{
@@ -604,6 +607,17 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     const spec = baselineSpec(current);
     if (request.except !== undefined && spec.mode !== "slim") {
       throw new BadDeviceRequestError(`except needs a slim lease (baseline "${name}" is full)`);
+    }
+    if (request.except !== undefined) {
+      // why: the driver judges the names (ADR 0066 §2); its answer is dropped, the baseline's spec stands.
+      await driver.resolveSpec({
+        except: request.except,
+        mode: "slim",
+        model: spec.model,
+        osVersion: spec.osVersion,
+        platform: spec.platform,
+        ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+      });
     }
     return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
