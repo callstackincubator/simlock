@@ -61,10 +61,16 @@ A top-level `memoryPressure` config section, beside `diskPressure`:
   (0 never meets). Linux and Windows report no level, so only the floor
   applies there. Under a cgroup limit, total is the limit, as the probe
   already reports it.
-- Each step is **on** from the first reading that meets it until
-  `clearAfterMs` has passed with no reading meeting it. The worker's step
-  is the highest one on. `pauseNewDevices` implies everything
-  `pauseWarming` does.
+- Each step is **on** from the first reading that meets it. It lifts
+  `clearAfterMs` after the first reading that no longer meets it, on a
+  timer, unless a reading meets it again meanwhile: `critical` at 09:00
+  and calm from 09:00:15 lifts at 09:01:15. The worker's step is the
+  highest one on. `pauseNewDevices` implies everything `pauseWarming`
+  does.
+- Each step keeps the time and the reading that turned it on (its
+  `since` and `cause`); the worker reports those of its current step. A
+  reading that meets a step by its level and its floor both is a `level`
+  trigger. At `none` there is neither.
 - **No reading is no step.** With `enabled: false`, with host load off,
   with a reading that has no memory part, or with one older than 60 s,
   every step is off at once, without the hold. A broken probe never stops
@@ -111,7 +117,9 @@ reservation that adds RAM (`tryReserveProvisioning`, `tryReserveBoot`,
 `tryReserveRewarm`) with a new refusal reason `memory-pressure`, before
 the strategy is asked. Leasing and the warm pool both reserve through it,
 so neither creates or boots. A ready device is still granted: it adds no
-memory. As with `ram-budget`, the refusal evicts nothing; the request
+memory. A plan that reboots a ready device without a reservation (the
+`reboot-ready` plan of an `--except` slim lease, #1330) waits too: the
+planner asks the same step check before it chooses it. As with `ram-budget`, the refusal evicts nothing; the request
 waits with reason `memory-pressure`, and a `noWait` request gets
 `NO_CAPACITY` with `capacityReason: "memory-pressure"`. Running leases are
 untouched, and a leased device's crash reboot stays outside any
@@ -119,18 +127,23 @@ reservation, as today.
 
 ### 5. One event per step change
 
-`memory.pressure-changed` `{ from, to, cause }`, emitted by the step
+`memory.pressure-changed` `{ from, to, cause? }`, emitted by the step
 tracker when the worker's step changes, never per reading. `cause` is the
-reading that decided it: `availablePercent` (whole percent) and, on
-macOS, `level`. On it leasing wakes its queue and the warm pool runs a
-pass, so a lifted step serves waiters at once. A gateway lists it among
+new step's: `trigger` (`level` or `floor`), `availablePercent` (whole
+percent, rounded down, clamped to 0-100), on macOS `level`, and for a
+floor trigger `floorPercent`. It is absent when `to` is `none`. On it core wakes leasing's queue and the warm pool runs a pass, so a
+lifted step serves waiters at once. While warming is paused, the warm pool
+also runs a pass on each reading, through the read port, once it has
+started. A gateway lists it among
 the events that refresh a worker's view at once, and alert destinations
 may list it.
 
 ### 6. The worker's verdict rides on status; the gateway reads it
 
 `status.get`'s `capacity` block carries `memoryPressure: { step, since,
-cause }` (absent when host load is off). Being in `capacity`, it reaches the
+cause }` (absent when host load is off; `since` and `cause` absent at
+`none`), fitted on the worker before its own output check, as the load
+block is. Being in `capacity`, it reaches the
 gateway's view of the worker, and a change to it is a change to the view
 key a remembered refusal is held against, so the gateway asks the worker
 again once it lifts. A gateway reads it from the worker's view and applies no
