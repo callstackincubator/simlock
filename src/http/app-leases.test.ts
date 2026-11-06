@@ -1510,28 +1510,45 @@ async function folderEntries(folder: string): Promise<string[]> {
   return readdir(folder).catch(() => []);
 }
 
-// why: a request body the test feeds by hand, so a test can hold an upload open after its first bytes arrived.
-function heldBody(first: Uint8Array) {
-  let release!: () => void;
-  const firstConsumed = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+// why: a request body the test feeds by hand: `push` resolves once the upload has taken the bytes and asks for more, so a test acts only after the store has seen them.
+function liveBody() {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  let pulls = 0;
+  let waiting: (() => void)[] = [];
+  let pulled!: () => void;
+  const firstPull = new Promise<void>((resolve) => {
+    pulled = resolve;
+  });
   const stream = new ReadableStream<Uint8Array>(
     {
       start(c) {
         controller = c;
       },
-      pull(c) {
-        pulls += 1;
-        if (pulls === 1) c.enqueue(first);
-        else release();
+      pull() {
+        pulled();
+        for (const resume of waiting.splice(0)) resume();
       },
     },
     { highWaterMark: 0 },
   );
-  return { firstConsumed, finish: () => controller.close(), stream };
+  return {
+    fail: (error: Error) => controller.error(error),
+    finish: () => controller.close(),
+    firstPull,
+    push: (bytes: Uint8Array) =>
+      new Promise<void>((resolve) => {
+        controller.enqueue(bytes);
+        waiting = [...waiting, resolve];
+      }),
+    stream,
+  };
+}
+
+// why: a request the code under test must answer; when it never does, the assertion on `undefined` fails by name where an await would time the whole test out.
+function answered(response: Promise<Response> | Response): Promise<Response | undefined> {
+  return Promise.race([
+    Promise.resolve(response),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000)),
+  ]);
 }
 
 class LowDiskFilesystem extends NodeFilesystem {
@@ -1654,14 +1671,14 @@ describe("a lease's files on a worker", () => {
     }
 
     const together = await filesRig({ limits: roomy });
-    const first = heldBody(new Uint8Array(60));
+    const first = liveBody();
     const running = together.app.request("/v1/leases/lse_1/files/a.bin", {
       body: first.stream,
       duplex: "half",
       headers: agentAuth,
       method: "PUT",
     } as RequestInit);
-    await first.firstConsumed;
+    await first.push(new Uint8Array(60));
     const second = await together.put("b.bin", new Uint8Array(60));
     expect(second.status).toBe(413);
     expect((await refusal(second)).error.code).toBe("LEASE_FILES_FULL");
@@ -1688,5 +1705,87 @@ describe("a lease's files on a worker", () => {
       requiredBytes: 10 * 1024 ** 3,
     });
     expect(await folderEntries(lowDisk.leaseFolder)).toEqual([]);
+  });
+
+  it("a lease holder whose PUT is cut or goes silent keeps the previous file or none; a second PUT to a name being uploaded gets 409 FILE_BUSY", async () => {
+    const rig = await filesRig();
+    const uploading = (name: string, body: ReadableStream<Uint8Array>) =>
+      rig.app.request(`/v1/leases/lse_1/files/${name}`, {
+        body,
+        duplex: "half",
+        headers: agentAuth,
+        method: "PUT",
+      } as RequestInit);
+    const text = async (response: Response) =>
+      new TextDecoder().decode(await response.arrayBuffer());
+    const bytes = new TextEncoder().encode("new");
+
+    const cutFresh = liveBody();
+    const cutting = uploading("fresh.bin", cutFresh.stream);
+    await cutFresh.push(bytes);
+    cutFresh.fail(new Error("socket hang up"));
+    expect(await answered(cutting)).toBeDefined();
+    expect(await folderEntries(rig.leaseFolder)).toEqual([]);
+
+    expect((await rig.put("kept.bin", "old")).status).toBe(201);
+    const cutKept = liveBody();
+    const cuttingKept = uploading("kept.bin", cutKept.stream);
+    await cutKept.push(bytes);
+    cutKept.fail(new Error("socket hang up"));
+    expect(await answered(cuttingKept)).toBeDefined();
+    expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
+    expect(await text(await rig.get("kept.bin"))).toBe("old");
+
+    const silent = liveBody();
+    const silentRequest = uploading("kept.bin", silent.stream);
+    await silent.push(bytes);
+    rig.clock.advance(330_000);
+    const stalled = await answered(silentRequest);
+    expect(stalled?.status).toBe(408);
+    expect(await stalled?.json()).toEqual({
+      error: {
+        code: "UPLOAD_STALLED",
+        message: "No bytes of kept.bin arrived for 330 s",
+        name: "kept.bin",
+      },
+    });
+    expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
+    expect(await text(await rig.get("kept.bin"))).toBe("old");
+
+    const mute = liveBody();
+    const muteRequest = uploading("mute.bin", mute.stream);
+    await mute.firstPull;
+    rig.clock.advance(330_000);
+    expect((await answered(muteRequest))?.status).toBe(408);
+
+    const moving = liveBody();
+    const movingRequest = uploading("moving.bin", moving.stream);
+    for (const chunk of ["a", "b", "c"]) {
+      await moving.push(new TextEncoder().encode(chunk));
+      rig.clock.advance(200_000);
+    }
+    moving.finish();
+    expect((await movingRequest).status).toBe(201);
+    expect(await text(await rig.get("moving.bin"))).toBe("abc");
+
+    for (const [firstName, secondName] of [
+      ["x.bin", "x.bin"],
+      ["A.tar", "a.tar"],
+    ] as const) {
+      const running = liveBody();
+      const runningRequest = uploading(firstName, running.stream);
+      await running.push(bytes);
+      const refused = await rig.put(secondName, "other");
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({
+        error: {
+          code: "FILE_BUSY",
+          message: `File ${secondName} is being uploaded by another request`,
+          name: secondName,
+        },
+      });
+      running.finish();
+      expect((await runningRequest).status).toBe(201);
+    }
   });
 });

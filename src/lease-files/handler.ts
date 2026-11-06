@@ -1,11 +1,12 @@
 import { ERROR_TABLE } from "../contract/index.js";
 import { LeaseFilesError } from "./errors.js";
-import type { LeaseFileStore } from "./lease-files.js";
+import { BodyCutError } from "./guarded-body.js";
+import type { LeaseFolders } from "./store.js";
 import { requireFileName } from "./names.js";
 import type { LeaseFilesLease } from "./types.js";
 
 export async function handleRequest(
-  store: LeaseFileStore,
+  store: LeaseFolders,
   request: Request,
   lease: LeaseFilesLease,
   name: string | undefined,
@@ -13,6 +14,8 @@ export async function handleRequest(
   try {
     return await serve(store, request, lease, name);
   } catch (error: unknown) {
+    // why: a caller that went away mid-upload cannot be answered, and is no fault of the daemon's.
+    if (error instanceof BodyCutError) return new Response(null, { status: 499 });
     if (!(error instanceof LeaseFilesError)) throw error;
     const refusal: LeaseFilesError = error;
     return Response.json(
@@ -23,7 +26,7 @@ export async function handleRequest(
 }
 
 async function serve(
-  store: LeaseFileStore,
+  store: LeaseFolders,
   request: Request,
   lease: LeaseFilesLease,
   name: string | undefined,
