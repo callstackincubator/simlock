@@ -204,22 +204,56 @@ describe("device.exec over HTTP", () => {
     const { baseUrl, env, exec, lease, token } = await fleet();
     const auth = await token("agent");
     const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
-    const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/fixture.txt`, {
-      body: "stored payload",
-      headers: { ...auth, "content-type": "application/octet-stream" },
-      method: "PUT",
-    });
-    expect(uploaded.status).toBe(201);
+    const upload = async (name: string, body: string): Promise<void> => {
+      const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/${name}`, {
+        body,
+        headers: { ...auth, "content-type": "application/octet-stream" },
+        method: "PUT",
+      });
+      expect(uploaded.status).toBe(201);
+    };
+    const nineMiB = "0123456789abcdef".repeat(9 * 65_536);
+    await upload("fixture.txt", "stored payload");
+    await upload("big.bin", nineMiB);
+    await upload("empty.bin", "");
 
-    const response = await exec(
+    const reads = [
+      { name: "fixture.txt", stdin: "stored payload" },
+      { name: "big.bin", stdin: nineMiB },
+      { name: "empty.bin", stdin: "" },
+      { name: "FIXTURE.TXT", stdin: "stored payload" },
+    ];
+    for (const { name, stdin } of reads) {
+      const response = await exec(
+        leaseId,
+        { args: ["list", "--fake-exec-echo-stdin"], stdinFile: name, tool: "simctl" },
+        auth,
+      );
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+      expect((JSON.parse(chunksOf(frames, "stdout")) as { stdin: string }).stdin === stdin).toBe(
+        true,
+      );
+    }
+    const none = await exec(
       leaseId,
-      { args: ["list", "--fake-exec-echo-stdin"], stdinFile: "fixture.txt", tool: "simctl" },
+      { args: ["list"], stdin: null, stdinFile: null, tool: "simctl" },
       auth,
     );
-    expect(response.status).toBe(200);
-    const frames = await readSse(response);
-    expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
-    expect(JSON.parse(chunksOf(frames, "stdout"))).toMatchObject({ stdin: "stored payload" });
+    expect(none.status).toBe(200);
+    expect((await readSse(none)).at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+
+    const refusals = [
+      { body: { stdinFile: ".hidden" }, code: "BAD_REQUEST", status: 400 },
+      { body: { stdinFile: "missing.tar" }, code: "UNKNOWN_FILE", status: 404 },
+      { body: { stdin: "x", stdinFile: "fixture.txt" }, code: "BAD_REQUEST", status: 400 },
+    ];
+    for (const { body, code, status } of refusals) {
+      const refused = await exec(leaseId, { args: ["list"], tool: "simctl", ...body }, auth);
+      expect(refused.status).toBe(status);
+      expect(await errorCodeOf(refused)).toBe(code);
+    }
 
     await env.cli(["release", leaseId]);
   });
