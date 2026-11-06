@@ -38,6 +38,7 @@ export interface ErrorDetailsMap {
     readonly capacityReason?:
       | "device-limit"
       | "ram-budget"
+      | "memory-pressure"
       | "global-running-limit"
       | "platform-running-limit";
   };

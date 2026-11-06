@@ -81,6 +81,7 @@ const warmPoolShortSchema = z.enum([
   "running-limit",
   "reserve",
   "ram-budget",
+  "memory-pressure",
 ]);
 
 const warmPoolTargetSchema = z.object({

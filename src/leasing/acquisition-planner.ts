@@ -62,6 +62,7 @@ export type WaitingReason =
 const CAPACITY_WAITING_REASON: Record<CapacityRefusalReason, WaitingReason> = {
   "device-limit": "device-limit",
   "global-running-limit": "global-running-limit",
+  "memory-pressure": "memory-pressure",
   "platform-running-limit": "platform-running-limit",
   "ram-budget": "ram-budget",
 };
