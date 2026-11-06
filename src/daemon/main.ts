@@ -29,6 +29,7 @@ import { androidSourceDataOwner } from "../drivers/android/index.js";
 import { iosSourceDataOwner } from "../drivers/ios/index.js";
 import { type Auth, createAuth, tokensOwner } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
+import { createGatewayLeaseFiles } from "./gateway-lease-files.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -629,6 +630,10 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       dispatch,
       eventBus,
       idGenerator,
+      leaseFiles: createGatewayLeaseFiles({
+        relay: (workerId, call) => gatewayRelay.relay(workerId, call),
+        requesterPrefix: gatewayRequesterPrefix,
+      }),
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
       leaseRoutes: [...moduleHost.leaseRoutes()],

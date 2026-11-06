@@ -50,6 +50,8 @@ export interface LeaseFiles {
     lease: LeaseFilesLease,
     name: string | undefined,
   ): Promise<Response>;
+  /** why: the worker end of a gateway's relayed file request; the path names the worker's own lease id. */
+  relayTarget(request: Request): Promise<Response>;
   folderOf(grant: LeaseFilesGrant): Promise<string>;
   openFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView>;
   readonly leaseEnd: LeaseEndParticipant;

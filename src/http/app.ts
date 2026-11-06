@@ -39,7 +39,6 @@ import {
   badRequest,
   errorResponse,
   forbidden,
-  HttpApiError,
   mapError,
   requestNotCancellable,
   unknownLease,
@@ -123,8 +122,7 @@ export interface HttpGatewayDeps {
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];
   readonly leaseRoutes?: readonly HttpLeaseRoute[];
-  // why: absent on a gateway, whose file routes answer 501 until it relays them.
-  readonly leaseFiles?: HttpLeaseFiles | undefined;
+  readonly leaseFiles: HttpLeaseFiles;
 }
 
 export interface HttpLeaseFiles {
@@ -842,17 +840,6 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
 
   // why: the lease is resolved with `lease.get` (owner or operator) before the files handler runs, so it never checks an owner.
   const serveLeaseFiles = async (c: Context<Env>, id: string, name: string | undefined) => {
-    if (deps.leaseFiles === undefined) {
-      return errorResponse(
-        c,
-        new HttpApiError(
-          501,
-          "UNSUPPORTED_IN_GATEWAY_MODE",
-          "Lease files are not served through a gateway",
-          { operation: "lease.files" },
-        ),
-      );
-    }
     const identity = c.get("identity");
     const lease = await findOwnedLease(deps, buildHttpSession(identity), id);
     return deps.leaseFiles.handle(

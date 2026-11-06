@@ -9,7 +9,7 @@ import type { LeaseFileView, LeaseFilesLease } from "./types.js";
 export async function handleRequest(
   store: LeaseFolders,
   request: Request,
-  lease: LeaseFilesLease,
+  lease: Pick<LeaseFilesLease, "id">,
   name: string | undefined,
 ): Promise<Response> {
   try {
@@ -29,7 +29,7 @@ export async function handleRequest(
 async function serve(
   store: LeaseFolders,
   request: Request,
-  lease: LeaseFilesLease,
+  lease: Pick<LeaseFilesLease, "id">,
   name: string | undefined,
 ): Promise<Response> {
   const grant = store.findGrant(lease.id);

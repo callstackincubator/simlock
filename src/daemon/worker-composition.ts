@@ -517,6 +517,8 @@ export async function composeWorker(
     relayTargets: {
       ...moduleHost.relayTargets,
       ...options.relayTargets,
+      // why: `files` is reserved as a module name (ADR 0067 §7), so the core target never shadows a module's.
+      files: (request) => leaseFiles.relayTarget(request),
     },
     relayTwoWayTargets: {
       ...moduleHost.relayTwoWayTargets,
