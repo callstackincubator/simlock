@@ -96,7 +96,7 @@ Lease a device. The command waits for a device, prints the grant, then stays run
 ```text
 simlock lease --platform <ios|android> [--device <model> | --class <class>]
               [--os <version|range>] [--mode <slim|full>] [--image-tag <tag>] [--agent-id <id>]
-              [--baseline <name>]
+              [--except <category,...>] [--baseline <name>]
               [--timeout <duration>] [--lease-id <id>] [--physical]
               [--no-wait] [--detach] [--ttl <duration>] [--allow-download]
               [--export-env] [--bind-pid <pid>]
@@ -109,6 +109,7 @@ simlock lease --platform <ios|android> [--device <model> | --class <class>]
 | `--class <class>` | Any model of this class: `phone`, `tablet`, `watch`, `tv`, `vision`, `auto` or `desktop`. | `phone` when `--device` is not given |
 | `--os <version or range>` | An exact OS version (`18.4`, `35`), or a range such as `>=18 <26` or `18 - 26`. A range never downloads. | The newest runtime installed for the platform |
 | `--mode <slim or full>` | The device mode. `full` is guaranteed; `slim` is best effort and falls back to `full`. | The serving worker's default mode (`full` unless configured) |
+| `--except <category,...>` | iOS only: keep these slim categories running on a slim simulator, such as `store,other`. One to 16 names, each lowercase letters, digits and `-`, starting with a letter, none twice. Needs a slim lease: a `--mode full`, a worker whose default mode is `full` with no `--mode`, a full `--baseline`, `--physical` and `--platform android` are each a `BAD_REQUEST`. The grant's `device.except` lists them; on a runtime older than iOS 18.5 you get a `full` device with no `except`. See [Keep a category running](/simlock/docs/using-devices/choosing-a-device#keep-a-category-running). | None: the worker's whole slim set is turned off |
 | `--image-tag <tag>` | Android only: the system image type, such as `google_apis_playstore`. Never downloads. | Simlock picks an installed image |
 | `--baseline <name>` | Start from a saved baseline: the device is a new copy of it, with the operator's apps, files and settings. The `SIMLOCK_BASELINE` environment variable sets it when the flag is absent; an empty value sends nothing. Cannot be combined with `--class` or `--physical`. See [Start from a baseline](/simlock/docs/using-devices/choosing-a-device#start-from-a-baseline). | None: a plain device |
 | `--agent-id <id>` | The requester identity for this lease. Must not be empty, hold no control characters, and be at most 256 characters. | See [Requester identity](#requester-identity) |

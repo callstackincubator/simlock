@@ -120,6 +120,27 @@ What to expect:
 
 If a test fails because a push notification, a Spotlight result, an App Store sheet or a system picker never appears, check `device.mode`. Ask for `--mode full` when your app needs those features.
 
+### Keep a category running
+
+When a test needs one part of what slim turns off, name its category with `--except` instead of giving up the whole saving:
+
+```sh
+simlock lease --platform ios --mode slim --except store,other
+```
+
+The simulator boots with those categories running and the rest of the slim set off, and the grant reports `device.except` beside `device.mode`:
+
+```json
+{ "device": { "mode": "slim", "except": ["store", "other"] } }
+```
+
+- `--except` needs a slim lease. With `--mode full`, a worker whose default is `full` and no `--mode`, or a full `--baseline`, it is refused with `BAD_REQUEST`. A slim baseline on a worker whose default is `full` is granted.
+- A name the worker does not slim is refused with `BAD_REQUEST`, as is a name given twice, a name that is not lowercase letters, digits and `-`, and more than 16 names.
+- It is for iOS simulators: `--platform android` and `--physical` are refused.
+- On a runtime older than iOS 18.5 you get a `full` device with no `except`.
+- A device the worker holds warm is shut down and booted again with your list before you get it, so the lease can take a little longer than one without `--except`. If that boot fails, the device is deleted and Simlock tries once more with another; a second failure is `PROVISION_FAILED`.
+- Over HTTP the body takes `except` as a list, and over MCP `lease_simulator` takes the same `except`.
+
 ## Choose the system image (Android)
 
 `--image-tag` picks the kind of Android system image, such as `google_apis_playstore` for Google Play or `default` for plain Android. You can use the tags that `simlock catalog --platform android` lists under images.

@@ -77,7 +77,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 ## How it works
 
 1. **Lifecycle** — `bootForLease`, `readyProvisionedForLease` keep the `boot` claim for the
-   grant; `bootWarm` drops it at `ready`. `shutdown`, `destroy`, `dispose` answer `undefined` for a
+   grant; `rebootForLease` shuts a `ready` device down and prepares it again with a lease's `except` list under that claim, keeps the record `ready` (one `recordRebootedDevice` write, no event) and, on a failure, commits `ready → shutdown` first; `bootWarm` drops it at `ready`. `shutdown`, `destroy`, `dispose` answer `undefined` for a
    leased, gone or moved device. `recoverLeased` reboots under the lease: no commit, no event.
 2. **Provision** — `claimProvision` (lock) → `driver.provision` → `registerDevice` (`provisioning`,
    `device.provisioned`, optional `boot` claim) → ready. Boot failure: destroy, `BootTimeoutError` carrying the driver's message.
@@ -128,7 +128,7 @@ Events: → `absent` `device.absence-detected`; `absent` → `reclaiming` `devic
 | Removal, startup read per platform | 5 min, 60 s                 | `COMPONENT_REMOVAL_TIMEOUT_MS`, `STARTUP_READ_LIMIT_MS` |
 | Host facts max age, tool read      | 60 s, 30 s                  | none                                                    |
 
-`state.db`, owner `registry`: `devices` (a physical device is `physical = 1`, its apps in `device_enrolled_apps`), `leases`, `lease_requests`, `lease_grants` with `lease_grant_environment`, `components` with `component_receipt`. A driver keeps its own `DeviceDataTable` (`driver.ts`) for a virtual device's `driverData`; a physical device has none. A granted request's `grant.device` is read as the device is now.
+`state.db`, owner `registry`: `devices` (`except_categories`: the list a lease kept running, written in the grant commit; a physical device is `physical = 1`, its apps in `device_enrolled_apps`), `leases`, `lease_requests`, `lease_grants` with `lease_grant_environment`, `components` with `component_receipt`. A driver keeps its own `DeviceDataTable` (`driver.ts`) for a virtual device's `driverData`; a physical device has none. A granted request's `grant.device` is read as the device is now.
 
 ## Rules
 

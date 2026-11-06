@@ -47,7 +47,7 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    mismatch (`baselineMismatch`) or stale fails at once, and the spec is the
    baseline's, with its name and version; no download is attempted.
 3. **Plan** (lock) — `AcquisitionPlanner.plan`; first that applies wins:
-   grant a ready fitting device → wait for one the warm pool is booting →
+   grant a ready fitting device (a slim request with `except` takes it with a `boot` claim and no capacity reservation instead, `reboot-ready`) → wait for one the warm pool is booting →
    boot a shut-down one → provision → evict an
    idle device (device or running limit) → wait, or `NO_CAPACITY` under `noWait`.
    Only the head of the virtual line plans; every physical waiter plans.
@@ -63,11 +63,12 @@ and registry writers. Read-decide-commit runs under it; driver I/O never does.
    waiter with `ProvisionFailedError` (the driver's message; `PROVISION_FAILED`), a probe
    included, and wakes the queue.
 4. **Perform** (no lock) — provision, boot or evict through core, then plan again.
-   A boot failure destroys the device and rejects `boot-timeout`; a destroy
+   A request with `except` (ADR 0066) boots with the list: a ready warm device is shut down and prepared again under its `boot` claim (`ManagedDeviceLifecycle.rebootForLease`; its record stays `ready`, and the grant is `booted`), a shut-down or new device boots with it. Any failure of those boots destroys the device (a failed reboot first records it `shutdown`) and counts one failure with a failed provision: the first plans again, the second rejects `PROVISION_FAILED`.
+   A boot failure of a request without `except` destroys the device and rejects `boot-timeout`; a destroy
    that fails hands the device to core's quarantine through a port leasing
    declares, and the waiter's slot is freed either way.
 5. **Grant** (lock) — `LeaseLifecycle.grant` → one registry commit: device
-   `leased` + lease + request granted. Emits `lease.granted`. Arms the TTL. A grant of a ready
+   `leased` (with the request's `except` when the device is slim) + lease + request granted. Emits `lease.granted`. Arms the TTL. A grant of a ready
    device wakes the queue, so the next waiter plans without another event.
 6. **Renew** — moves `ttlDeadline`; emits `lease.renewed`. The gateway forwards
    renews; it runs no timers of its own.
@@ -123,6 +124,8 @@ Writes go through core's `Registry` (`state.db`). Request states: `open` →
 - A waiting reason is never stored: not in `state.db`, not in an event.
 
 ## Known gaps
+
+- **A crash mid-reboot of a warm device for an `except` lease** leaves the request failed at startup (`daemon-restarted`) and a `ready` record whose simulator may be shut down; startup's reconcile only reports that drift. A later grant of it is caught by the health monitor, which reboots it under the lease.
 
 - **A SIGKILLed holder keeps its device until the TTL.** It runs no release.
   Bound it with `lease.defaultTtlMs` or `--ttl`; `simlock release <id>` ends it now.
