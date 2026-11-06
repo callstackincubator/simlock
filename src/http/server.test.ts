@@ -12,7 +12,7 @@ import type { Identity } from "../auth/index.js";
 import { fakeAuth, tokenIdentity } from "../auth/testing.js";
 import { createHttpApp } from "./app.js";
 import { CONSOLE_CONTENT_SECURITY_POLICY, HttpGateway, withConsole } from "./server.js";
-import { FakeDispatcher, FakeRegistry, sequenceIdGenerator } from "./test-fakes.js";
+import { FakeDispatcher, FakeRegistry, noLeaseFiles, sequenceIdGenerator } from "./test-fakes.js";
 
 const PAGE = '<!doctype html><title>Simlock</title><div id="root"></div>';
 const SCRIPT = "console.log('console');";
@@ -61,6 +61,7 @@ function harness(root: string) {
     ownerRoutedFacts: new OwnerRoutedFactBus(eventBus, registry),
     registry,
     auth,
+    leaseFiles: noLeaseFiles,
   });
   const site = withConsole(app, { logger, root });
   const get = (path: string, init: RequestInit = {}) =>

@@ -158,28 +158,28 @@ The command runs on the worker, as the user who runs the worker's daemon. Treat 
 
 ## Lease files
 
-A lease holder (or an operator) can put files into its lease's folder on the worker and read them back, with raw bytes in the request body and no base64. Nothing is held in memory: the body streams to disk, and the file appears under its name once the whole body has arrived.
+A lease holder (or an operator) can put files into its lease's folder on the worker and read them back, with raw bytes in the request body and no base64. Nothing is held in memory: the body streams to disk, and the file appears under its name once the whole body has arrived. The same calls work against a worker and against a gateway, which relays each one to the lease's worker; `$SIMLOCK_URL` is either.
 
 ```bash
-curl -X PUT "$W/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T" --data-binary @fixture.tar
+curl -X PUT "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T" --data-binary @fixture.tar
 # {"name":"fixture.tar","size":70000000}   (201)
 
-curl "$W/v1/leases/$LEASE/files/fixture.tar" -H "Range: bytes=0-99" -H "Authorization: Bearer $T" -o head.bin
+curl "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Range: bytes=0-99" -H "Authorization: Bearer $T" -o head.bin
 # 206, Content-Range: bytes 0-99/70000000, 100 bytes
 
-curl "$W/v1/leases/$LEASE/files" -H "Authorization: Bearer $T"
+curl "$SIMLOCK_URL/v1/leases/$LEASE/files" -H "Authorization: Bearer $T"
 # {"files":[{"name":"fixture.tar","size":70000000}]}
 
-curl -X DELETE "$W/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T"
+curl -X DELETE "$SIMLOCK_URL/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T"
 # 204
 ```
 
 - **Names.** 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit, so `.hidden`, `-rf` and `my file.tar` are refused with `400 BAD_REQUEST`. Names match ignoring case: `A.tar` and `a.tar` are one file, and a `PUT` replaces it.
 - **Limits.** 2 GiB a file and 4 GiB a lease folder (files a command wrote there count). A larger file is refused with `413 FILE_TOO_LARGE`, a full folder with `413 LEASE_FILES_FULL`, and nothing is stored when the worker's free disk is under its `diskPressure.freeBytesThreshold` (`422 INSUFFICIENT_DISK_SPACE`).
 - **One upload per name.** A second `PUT` to a name being uploaded gets `409 FILE_BUSY`. A `PUT` that is cut leaves the previous file untouched.
-- **No total time limit.** An upload is cut only when no byte of its body arrives for 330 seconds (`408 UPLOAD_STALLED`).
+- **No total time limit.** An upload is cut only when no byte of its body arrives for 330 seconds (`408 UPLOAD_STALLED`), also through a gateway. Through a gateway, a `Content-Length` over 2 GiB is refused at the gateway, and a worker that is not connected answers `503 WORKER_UNREACHABLE`.
 - **Downloads.** `GET` answers the whole file or one `Range` (`bytes=a-b`, `a-` or `-n`) as `206`; a start past the end is `416`. An unknown name is `404 UNKNOWN_FILE`.
-- **The folder goes with the lease.** The files are deleted when the lease ends. Through a gateway these routes answer `501 UNSUPPORTED_IN_GATEWAY_MODE` for now.
+- **The folder goes with the lease.** The files are deleted when the lease ends.
 
 ## More calls
 

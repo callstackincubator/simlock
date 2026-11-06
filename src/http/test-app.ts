@@ -10,6 +10,7 @@ import {
   FakeRegistry,
   sequenceIdGenerator,
   waitForDispatch,
+  noLeaseFiles,
 } from "./test-fakes.js";
 
 export function buildHarness(
@@ -75,9 +76,7 @@ export function buildHarness(
     registry: overrides.registry ?? registry,
     auth,
     ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
-    ...(overrides.leaseFiles === undefined
-      ? {}
-      : { leaseFiles: overrides.leaseFiles({ clock, logger }) }),
+    leaseFiles: overrides.leaseFiles?.({ clock, logger }) ?? noLeaseFiles,
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),

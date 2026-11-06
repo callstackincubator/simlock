@@ -38,7 +38,7 @@ import { androidDriverConfig } from "../drivers/android/index.js";
 import { iosDriverConfig } from "../drivers/ios/index.js";
 import { type Auth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
-import { createLeaseFiles } from "../lease-files/index.js";
+import { createLeaseFiles, type LeaseFilesLimits } from "../lease-files/index.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -86,6 +86,8 @@ export interface WorkerOptions {
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
   readonly hostLoadProbe?: HostLoadProbe | null;
+  /** why: test-only, lower file and folder limits so a rig reaches a refusal without gigabytes. */
+  readonly leaseFilesLimits?: LeaseFilesLimits;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   /** why: test-only, the protocol range the worker daemon announces. */
   readonly protocolVersion?: number | ProtocolRange;
@@ -340,6 +342,7 @@ export async function composeWorker(
         : { grantedAt: lease.grantedAt, id: lease.id, platform: device.spec.platform };
     },
     idGenerator,
+    ...(options.leaseFilesLimits === undefined ? {} : { limits: options.leaseFilesLimits }),
     logger: logger.child("lease-files"),
   });
   const leasing = createLeasing({
@@ -518,6 +521,8 @@ export async function composeWorker(
     relayTargets: {
       ...moduleHost.relayTargets,
       ...options.relayTargets,
+      // why: `files` is reserved as a module name (ADR 0067 §7), so the core target never shadows a module's.
+      files: (request) => leaseFiles.relayTarget(request),
     },
     relayTwoWayTargets: {
       ...moduleHost.relayTwoWayTargets,

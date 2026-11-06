@@ -334,6 +334,10 @@ export interface FleetOptions {
   readonly gatewayUrl?: (gatewayPort: number) => string | Promise<string>;
   // why: a test starts the gateway behind an identity-aware proxy, so http.proxyAuth is set.
   readonly proxyAuth?: Record<string, unknown>;
+  // why: a test gives the worker options of its own, such as lower lease file limits.
+  readonly worker?: Partial<StartDaemonOptions>;
+  // why: a test gives the gateway options of its own, such as a lower file silence bound.
+  readonly gateway?: Partial<StartDaemonOptions>;
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
@@ -374,6 +378,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     },
     logger: new NoopLogger(),
     version: "1.0.0-e2e",
+    ...options.gateway,
   });
   daemons.push(gateway);
   const { secret } = await gateway.dispatch(
@@ -389,6 +394,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     { "agent-device": target, echo: target },
     {
       ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
+      ...options.worker,
       configOverrides: {
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },
