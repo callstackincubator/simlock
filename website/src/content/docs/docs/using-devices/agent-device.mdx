@@ -126,7 +126,7 @@ Each agent-device session holds one device. To use a second device, open a secon
 - `--device-mode` (the `deviceMode` key of an allocate) asks for a `full` or `slim` iOS simulator. It needs the agent-device release that adds the flag. Without it, you get the worker's default. [Slim is best effort](/simlock/docs/using-devices/choosing-a-device#choose-slim-or-full-ios): below iOS 18.5 you get a full simulator.
 - `--physical` leases an enrolled phone (see [Use a real phone](#use-a-real-phone)).
 
-The reply to `open` names the model, OS and image tag you got, and the baseline name and version when you asked for one. If every matching device is taken, `open` waits for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
+The reply to `open` names the model, OS and image tag you got, and the baseline name and version when you asked for one. On a simulator or emulator, `data.lease.device` in the `agent_device.lease.allocate` reply also carries `deviceMode`, the mode the device has (`slim` or `full`); the agent-device CLI doesn't show it yet. If every matching device is taken, `open` waits for up to 330 seconds, then fails with `timed out waiting for a device; nothing was leased`.
 
 ### What to expect
 

@@ -83,6 +83,7 @@ describe("the agent-device front's `deviceBaseline`", () => {
 
     expect(result.data.lease["device"]).toEqual({
       baseline: { name: "logged-in", version: 2 },
+      deviceMode: "full",
       model: "iPhone 16",
       osVersion: "26.5",
       physical: false,

@@ -3,6 +3,7 @@ name: implementer
 description: Implements one claimed issue tests-first, or applies review or hardware findings to its branch, and ends with a fixed report block. Spawned by the deliver orchestrator in the background, or through the implement skill.
 model: sonnet
 effort: medium
+autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Edit, Write, Grep, Glob, Agent, WebFetch, WebSearch
 ---

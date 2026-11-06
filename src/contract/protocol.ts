@@ -10,7 +10,7 @@ export interface ProtocolRange {
 const protocolRangeSchema = z.object({ min: z.number().int(), max: z.number().int() });
 
 /** Widen only once a second version is kept alive side by side with the first; a bump that leaves no shim behind moves both ends. */
-export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 77, max: 77 };
+export const PROTOCOL_VERSION_RANGE: ProtocolRange = { min: 78, max: 78 };
 
 const LEGACY_DAEMON_PROTOCOL_VERSION = 2;
 
@@ -62,7 +62,7 @@ export const helloRequestSchema = z
 /**
  * What the daemon replies with. `role` is declared now (every field a client will eventually
  * need to assert it got what it asked for, per ADR §5) but is a fixed value until PR 2 resolves
- * it from a real credential -- see `DaemonServer#handleHello`.
+ * it from a real credential -- see `Handshake.handle` (`src/daemon/server-hello.ts`).
  *
  * `principal` is the connection's resolved, fixed-for-its-lifetime identity (ADR §4): what a
  * `hello` request supplied, or the daemon's own default (today: `defaultRequesterId`) when it

@@ -906,7 +906,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(reached()).toBe(4);
   });
 
-  it('allocate through the gateway with `osVersion` ">=18" or a `deviceBaseline` reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device` (with `baseline` for the baseline); an unknown `deviceBaseline` answers `refused by simlock:`', async () => {
+  it('allocate through the gateway with `osVersion` ">=18" or a `deviceBaseline` reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device` with the granted `deviceMode` (with `baseline` for the baseline); an unknown `deviceBaseline` answers `refused by simlock:`', async () => {
     const rig = await setUp();
     const tap = tapDispatch(rig.gateway);
     const worker = await first(rig).daemon;
@@ -937,7 +937,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(requests[1]?.input).toMatchObject({ baseline: "logged-in", requires: ["agent-device"] });
     const leaseOf = (reply: typeof answer) =>
       (reply.result as { data: { lease: Record<string, unknown> } }).data.lease;
-    expect(leaseOf(answer)["device"]).toMatchObject({ osVersion: "26.5" });
+    expect(leaseOf(answer)["device"]).toMatchObject({ deviceMode: "full", osVersion: "26.5" });
     expect(leaseOf(based)["device"]).toMatchObject({ baseline: { name: "logged-in", version: 1 } });
     expect(unknown.error?.message).toContain("refused by simlock: ");
   });
@@ -1751,6 +1751,26 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
       "first",
       "second",
     ]);
+  });
+
+  it("through the gateway, `devices` with two leases on one worker, sent with a `meta.requestId` as the agent-device CLI does, answers both devices", async () => {
+    const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
+    await granted(rig, 1);
+    await granted(rig, 2);
+    await listedByGateway(rig, 2);
+    const member = first(rig);
+    member.fake.listDevices([
+      { id: addressOfLease(rig, 1), name: "first" },
+      { id: addressOfLease(rig, 2), name: "second" },
+    ]);
+    member.fake.holdCommand();
+    const answer = track(
+      command(rig, "devices", undefined, {}, { meta: { requestId: "req-devices-1" } }),
+    );
+    await expect.poll(() => member.fake.rpcRequests("agent_device.command").length).toBe(2);
+    member.fake.releaseCommand();
+
+    expect(await listedNames(await answer.promise)).toEqual(["first", "second"]);
   });
 
   it("through the gateway, `devices` leaves out a lease that was released, and a lease the gateway's `lease.list` omits from that one answer while still holding it", async () => {

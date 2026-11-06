@@ -3,7 +3,7 @@
 Does: runs two agent-device daemons per worker (the simulator daemon over Simlock's simulator set, the phone daemon beside it with no set) and serves the agent-device CLI at `/v1/agent-device/*`, one simlock lease per agent-device lease.
 Entry: `index.ts` → `agentDeviceModule`. The front parts live in `front/edge-parts.ts` (`createGatewayAgentDeviceFrontParts`, `createAgentDeviceFront`, `disposeAgentDeviceEdge`, `cancelWaitingAllocates`). The gateway half is `gateway.ts` (`createGateway`, builds the `FleetPort` from the gateway context); the worker half is `worker.ts` (`createAgentDeviceEdgeParts`, builds one `AgentDeviceSupervisor` per role). The module host loads both.
 Uses: ports, auth (`Identity`), http (session, errors), contract types, core and leasing types. Never imports: gateway, drivers, `fs`, `child_process`.
-Imported by: the module registry (`index.ts` only); `daemon/main.ts` imports nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
+Imported by: the module registry (`index.ts` only); `daemon/main.ts` and its parts (`daemon/worker-composition.ts`, `daemon/driver-discovery.ts`, `daemon/composition-support.ts`, `daemon/entry-support.ts`) import nothing from it (tests may use `testing.ts`). Pinned in `lint-rules.test.ts`.
 On unless `capabilities.agent-device.enabled` is set false, on a standalone worker (`definition.ts` declares `enabledByDefault: "standalone-worker"`); off on a joined worker and a gateway unless set true. Off: nothing mounted, no daemon. When on only by default and the command is not found, the capability reads `off` and `agentDeviceFindings` says nothing (`isAbsentByDefault`); every other trouble, and a not-found with `enabled: true` set, stays `unavailable` with its finding.
 
 ## Files
@@ -32,6 +32,7 @@ On unless `capabilities.agent-device.enabled` is set false, on a standalone work
 | `gateway.ts`                                                  | Gateway side: `FleetPort` from the gateway context, the mount, `beforeDrain`                                                                                                           |
 | `shared/`                                                     | Paths, routes, RPC reader, replies, compatibility, daemon env, release scope                                                                                                           |
 | `testing.ts`                                                  | `FakeAgentDevice` (in-memory daemon), `FakeAgentDeviceHealth`                                                                                                                          |
+| `test-support.ts`, `test-edge.ts`                             | The whole-daemon rig; helpers the `edge*.test.ts` files share                                                                                                                          |
 
 ## How it works
 
@@ -97,7 +98,7 @@ under leasing's signal (`lease.endWaitMs`).
    queue wait 330 s. CLI hangs up → `lease.cancel`, retried every 1 s.
 4. Grant → allocate forwarded with the device address (`udid`/`serial`; a phone's is its enrolled id), to the phone daemon for a phone and the simulator daemon otherwise (`RoutedHostLink`, which remembers each lease's daemon until the lease ends), no
    `device`/`deviceKey`/`target`/`osVersion`/`imageTag`/`deviceBaseline`/`deviceMode`/`physical` (commands lose `osVersion`, `imageTag`, `deviceBaseline` and `deviceMode` too), `ttlMs` = max(24 h, 2 × `lease.maxTtlMs`).
-5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag?, baseline? { name, version } }` added from the grant.
+5. agent-device error → simlock lease released. Success → front map entry; reply relayed with `data.lease.device` `{ model, osVersion, physical, imageTag?, baseline? { name, version }, deviceMode? }` added from the grant (`deviceMode` is the device's reported mode; a phone has none).
 6. Commands carry the lease id; rules check, renewals run, `devices` filtered.
 7. Release → agent-device first, then `lease.release` → the device is deleted; lease-end finds no scope left.
 
@@ -140,7 +141,7 @@ Local profile: a standalone worker with HTTP and this module on keeps `<data dir
 - A pid is signalled only after its role's whole marker matches (`--simlock-home`, and `--simlock-role=phones` for the phone daemon).
 - The edge names no gateway type; the gateway side builds `FleetPort` from its gateway context.
 - A daemon stop cancels waiting allocates (`cancelWaitingAllocates`) and stops renewals.
-- Tests: `edge.test.ts`, `baseline.test.ts` (both on the rig in `test-support.ts`), `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.
+- Tests: `edge.test.ts`, `edge-request-rules.test.ts` (the front's request rules), `edge-lease-end.test.ts` (a lease end ends the session; capabilities) and `baseline.test.ts`, all on the rig in `test-support.ts`, the first three also on `test-edge.ts`; `gateway-front.test.ts`, `front/*.test.ts`, `host/*.test.ts`.
 
 ## Known gaps
 
