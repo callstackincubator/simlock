@@ -113,7 +113,7 @@ Run it with a TypeScript runner, for example `npx tsx lease-and-launch.mts`.
 | `requestLease(request, { onProgress, signal })` | Waits for a device and resolves with the grant: `device`, `environment`, `lease` and `timing`, the same fields `simlock lease` prints. |
 | `renewLease({ leaseId, ttlMs? })` | Moves the deadline to now plus the TTL. Resolves with the lease, including the new `ttlDeadline`. |
 | `releaseLease({ leaseId })` | Ends the lease. A simulator or emulator is then deleted; a physical device is cleaned. |
-| `exec({ leaseId, tool, args, stdin? }, { onOutput })` | Runs `simctl` or `adb` (or `devicectl` on a physical iPhone or iPad) on the device, and resolves with `{ exitCode }`. `stdin` holds at most 8,388,608 characters. |
+| `exec({ leaseId, tool, args, stdin?, stdinFile? }, { onOutput })` | Runs `simctl` or `adb` (or `devicectl` on a physical iPhone or iPad) on the device, and resolves with `{ exitCode }`. `stdin` holds at most 8,388,608 characters. `stdinFile` names a file of the lease's folder to send on stdin instead; give one of the two. |
 | `rotate(leaseId, orientation)` | Turns an iPhone or iPad simulator. See [Rotate without a socket](/simlock/docs/using-devices/watching-the-screen#rotate-without-a-socket). |
 | `listLeases()` | Your leases. |
 | `getCatalog({ platform? })` | What you can ask for, as `simlock catalog --json` prints it. |

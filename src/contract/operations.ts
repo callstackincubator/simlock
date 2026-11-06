@@ -499,6 +499,12 @@ export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
  * `PASSTHROUGH_REFUSED` a lifecycle verb gets. Locally, where the CLI hands the tool its own
  * terminal, it stays allowed and interactive.
  *
+ * Every command runs with the lease's folder on the worker as its working folder (ADR 0067 §5),
+ * so a relative path names a file the holder uploaded. `stdinFile` names such a file to pipe to
+ * the command's stdin instead of `stdin`; the two together are `BAD_REQUEST`, checked by the
+ * worker's dispatcher, not here, because `.omit()` cannot build `run_on_device`'s input from an
+ * object carrying a refinement.
+ *
  * `stdin` is a **one-shot string**, not a stream: it is written to the child's stdin and the
  * pipe is then closed. ADR §19c is explicit that there is no pseudo-terminal here, so
  * line-oriented commands (`adb shell getprop`, `simctl spawn`) work and full-screen or
