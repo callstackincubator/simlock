@@ -17,7 +17,8 @@ unless the maintainer explicitly authorizes its amendment. See
    the public surface updates in the same change (documentation rule 9) —
    the maintainer docs under `docs/internal/`, and the manual
    (`src/<module>/AGENTS.md`) of every module the change touches
-   (documentation rule 7).
+   (documentation rule 7). A manual gains a line only for what the code
+   cannot say; a line that restates code is deleted, not fixed.
 2. **What the tool prints.** Help text, usage banners, error messages and
    HTTP error bodies the change makes false are fixed in the same change
    (architecture rule 13), and none of them names a file path in this repo

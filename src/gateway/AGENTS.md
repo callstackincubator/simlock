@@ -1,141 +1,68 @@
 # Gateway
 
 Does: a daemon started with `--gateway` (it lives in `<root>/gateway`): owns no devices, fronts the workers that dial in.
-Entry: `index.ts`; `startGatewayDaemon` (`../daemon/main.ts`) wires `GatewayService`, `FleetLeaseCoordinator`, `GatewayDispatcher`, `GatewayRelay`, `GatewayOwnerRoutedFacts`.
-Uses: auth (`TokenOperations`), bus, history (type), contract, ports, link, admin, simlock-client, `../daemon/dispatch.ts`, and from core (`redactConfig` among them) and leasing only the names `.oxlintrc.json` allows (request book, in-memory store, wait queue).
-Never imports: drivers, the rest of daemon, core's registry, capacity or lifecycle.
-Imported by: `../daemon/main.ts`. This manual also covers the worker's end of the uplink.
 Flows: [device selection](../../docs/internal/flows/device-selection.md), [device.exec](../../docs/internal/flows/device-exec.md), [worker update](../../docs/internal/flows/worker-update.md), [leasing](../leasing/AGENTS.md).
 
-## Files
-
-| File                                       | Role                                                                                                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `service.ts`                               | `GatewayService`: uplink listener, one `WorkerLink` per worker, 30 s tick                                                                        |
-| `worker-link.ts`                           | One uplink, gateway side: admin client, view reads, event relay                                                                                  |
-| `worker-registry.ts`                       | `WorkerRegistry`: views, drain, retention, `worker.*` events                                                                                     |
-| `drain-store.ts`                           | `StateDrainStore`: the drained ids in the `drained_workers` table of `state.db`; `drainedWorkersOwner`                                           |
-| `dispatcher.ts`                            | `GatewayDispatcher`: the contract's handlers, answered from the fleet; `alerts.test` through `testDestination`, `daemon.update` through `update` |
-| `fleet-coordinator.ts`                     | `FleetLeaseCoordinator`: admit, dispatch, retry; delegates to its parts                                                                          |
-| `fleet-refusals.ts`, `fleet-forwarding.ts` | Its parts: refusal memos and why each worker is passed over; the forwarded renew, release, exec, rotate, baseline save                           |
-| `queue.ts`                                 | `FleetQueue`: leasing's `WaitQueue`, two lines                                                                                                   |
-| `lease-index.ts`                           | `FleetLeaseIndex`: gateway lease id → worker, worker lease id, owner                                                                             |
-| `routing.ts`, `routing/`                   | `createRoutingPolicy`: `assess` and the stage list                                                                                               |
-| `owner-routed-facts.ts`                    | Relayed lease facts → `lease-lost` and device pushes to the owner                                                                                |
-| `aggregate.ts`                             | `aggregateStatus`, `aggregateCatalog`: pure, over views                                                                                          |
-| `component-relay.ts`                       | `relayComponentInstall`: `worker.install-component` fan-out                                                                                      |
-| `relay.ts`                                 | `GatewayRelay`: one HTTP exchange, or a two-way channel, to a worker's relay target                                                              |
-| `fleet-ports.ts`                           | `WorkerDirectory`, `FleetViews`, `liveClient`, `isUplinkLost`                                                                                    |
-| `../daemon/gateway-uplink.ts`              | Worker: `GatewayUplink`, dial and redial                                                                                                         |
-| `../daemon/relay.ts`                       | Worker: `RelayConnection`, serves `relay.request`                                                                                                |
-| `../link/`                                 | Both ends: text messages plus byte channels on one WebSocket                                                                                     |
-
-## How it works
-
-**Uplink, worker side.** `../daemon/worker-composition.ts` builds `GatewayUplink` only when `gateway.url` and `gateway.token` are both set, and starts it after the socket is claimed and the first host load reading.
-
-1. Dial `<gateway.url>/v1/uplink` (`WebSocketUplinkConnector`): `Authorization: Bearer <join token>`,
-   `x-simlock-worker-id` (the worker's `instance.json` id), `x-simlock-worker-label`.
-2. Wrap it in `createLink(..., { end: "worker" })` → `DaemonServer.acceptUplink`: one more
-   connection, role forced to `admin`, `isGatewayUplink: true`, its own `RelayConnection`.
-3. Any failure or close → redial: 1 s × 2, cap 30 s, jitter ×[0.5, 1]. Backoff resets after 30 s up.
-4. On close the worker aborts that connection's relays. Leases, requests and exec keep running.
-
-**Uplink, gateway side.**
-
-1. `GatewayService.start`: `registry.load()` (drained ids) before the listener opens.
-2. Upgrade auth (`../daemon/main.ts`, `authenticateUplink` with the claimed id, cut to `MAX_CLAIMED_FIELD_LENGTH`):
-   unknown token `401`, non-`worker` role or `worker-mismatch` `403` (this includes a claimed id outside `[A-Za-z0-9_-]{1,128}`). Refusals emit `worker.rejected`, coalesced per reason and claimed id over 1 s.
-3. A new uplink under a live worker id (so with the token pinned to it) closes and replaces the old link.
-4. `WorkerLink.start`: `hello` as `gw:<instance id>`, `status.get`. Protocol mismatch → view `incompatible`; role not `admin` → close. Then `worker.connected`, `events.subscribe`,
-   first refresh with catalog. Each of these reads waits at most 10 s (`WORKER_CALL_TIMEOUT_MS`).
-5. Refresh: an `incompatible` worker is asked `daemon.update {query}` only (its `update`, `lastUpdateFailure`,
-   `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus `catalog.get`, `config.get` and `baseline.list` on the tick, after `component.installed`, `baseline.saved`, `baseline.removed` or `baseline.stale`, or with no catalog yet. One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
-6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*` and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped. An event whose payload nests deeper than 64 levels (`MAX_RELAYED_PAYLOAD_DEPTH`) or cannot be serialized is dropped with one `error`.
-
-**Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's `assess` and ten stages are in [routing](routing/AGENTS.md)):
-
-1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs` from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
-2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index (not counting a lease past its last reported deadline on a disconnected worker) plus a pending request
-   (`already-leased`, `requesterLimitDecision`) → `leaseId` held by the index or an open request (`lease-id-taken`) →
-   `requests.admit` stores it, creates the waiter. Emits `lease.requested`.
-3. Walk (on admit, on any view change, after each settled attempt), oldest first: `assess` the
-   request over views minus workers that said cannot-serve. A reject ends the request. Else
-   `select` over workers not claimed this pass and not refused at their current `viewLoadKey`.
-4. No pick: `noWait` → `NO_CAPACITY`; else queue (`lease.queued`). A walk also keeps a reason per view (`routing.explain`, then the memos) as the entry's `workers`.
-5. Attempt: `requestLease` on the picked worker with `requesterId: gw:<id>:<requester>`, `owner`,
-   `noWait: true`, `allowDownload: false`, `fleetRequestId`, the worker's own model name.
-   Bounded by `gateway.leaseRequestTimeoutMs`. First progress push → `request.dispatched`.
-6. Answers before any progress: `NO_CAPACITY` → remember refusal, refresh view, re-queue
-   (`noWait`: one more walk). `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`, `CAPABILITY_MISSING`, `UNKNOWN_BASELINE`, `BASELINE_MISMATCH`, `BASELINE_STALE` → exclude that worker for this request, refresh its catalog and baselines, walk again. `PROVISION_FAILED` →
-   a refusal; every worker that could take it failed so (one that is full, busy, not ready or unhealthy could, later) → reject
-   with the last. After a progress push it is relayed as a failure after progress. Anything else,
-   or a failure after progress → `lease.rejected` `worker-failed`. `DAEMON_UPDATING` is handled as `NO_CAPACITY` (the worker began an update the view did not show yet).
-7. Grant: a lease id unlike the forwarded `leaseId` → release it on the worker, retry. Gateway lease id = the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. `leaseIndex.add`, then
-   `request.granted`; a clash → release on worker, `LEASE_ID_TAKEN`.
-
-**After the grant.** Renew, release, release-all and exec go to the worker named by the index; no live link → `WORKER_UNREACHABLE`; a worker `UNKNOWN_LEASE` drops the entry. The gateway runs
-no TTL timer. Relayed `lease.expired`/`lease.released` remove the entry and push `lease-lost`.
-Exec forwards the namespaced requester; `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`.
-The lease index is in memory, rebuilt from each view's leases whose requester starts `gw:<id>:`;
-missing from 2 snapshots in a row → dropped; kept across a disconnect, forgotten with the view. A lease the worker answered released or `UNKNOWN_LEASE` (even if its relayed event already forgot it) is not added back by a later snapshot that still lists it.
-
-**HTTP relay** (`GatewayRelay.relay`, used by `../agent-device/front/relay-host-link.ts` and `../stream/`):
-
-1. `openChannel`, then `relay.request` (ids, target, method, url, headers minus credentials (`authorization`, `x-agent-device-token`, `cookie` and the configured `http.proxyAuth.header`), `tenant`, `channel`).
-2. Request body up and response body down on that byte channel; head from the `relay-head` push.
-3. Caller abort or cancel → `relay.cancel`. Deadline for the channel and head, then an idle bound on
-   the body (a live body runs while bytes come), both on the Clock → `WORKER_UNREACHABLE`, `relay.cancel`.
-4. Worker: `relay.*` only on the uplink session (`FORBIDDEN` elsewhere; a gateway refuses them
-   from everyone). Target from `relayTargets`; unknown → `RELAY_TARGET_MISSING`.
-
-**Two-way relay** (`GatewayRelay.relayTwoWay`, `GatewayContext.relayTwoWay`): the same open and head, with
-`relay.request {twoWay: true}` (GET, no body), but both directions of the channel stay open after the head.
-A non-2xx head is a `Response` with its body, as above; a 2xx head is a `TwoWayRelay`
-(`{status, headers, readable, writable}`). The relay reads the worker's direction itself into `readable`,
-at most 64 KiB ahead; past that it stops reading, and the silence bound stops with it. Ending one
-direction ends only that direction; the relay ends when both have, or when either side aborts (cancel
-`readable`, abort `writable`). While the worker's direction is open, 15 s with no byte read from it, counted
-from the head or the last byte, → `WORKER_UNREACHABLE`, `relay.cancel`; bytes the gateway writes never reset it.
-The target is the worker module's `relayTwoWay`, keyed by module name; unknown → `RELAY_TARGET_MISSING`.
-
-**Baselines.** A view carries the worker's `baselines` (`baseline.list`, read with the catalog; a `starting` view has none, and `routingViews` puts the last ones back, as the catalog). `baseline.list` answers from the views, each entry with its `workerId`, in worker id order. `baseline.save` goes to the lease's worker by its own lease id, drops the index entry and awaits a view read with baselines. `baseline.remove` needs `workerId` (`BAD_REQUEST` without it, `UNKNOWN_WORKER`, `WORKER_NOT_CONNECTED` as `worker.update`) and strips it before the call.
-
-**Reads.** `status.get`, `catalog.get`, `list.get`, `lease.list` and `lease.get` (one lease, as `lease.list` would hold it for the caller) answer from views; a gateway lease record also carries `workerLeaseId`, the worker's own id (not on `status.get`).
-`lease.list` and `status.get`'s `leases`: admin all; else the index's entries it owns. `status.get`'s `waiting`: admin all; else the fleet requests it owns. For a non-admin, `workers[]` drops each worker's own `leases` and `waiting`. `inbox.get` runs `inboxItems` (contract) over the worker views, the fleet's leases and waiting requests (what `list.get` returns for `leases` and `requests`) and the token list (an unavailable store leaves holders named by id). `worker.install-component` fans out. `nuke.run`, `cleanup.run`, `warm.forget`, `doctor.run`, `driver.passthrough`, `component.*`, `device.add`, `device.remove` → `UNSUPPORTED_IN_GATEWAY_MODE`. `usage.get` reads this gateway's `history.db` rows through `core/usage`: fleet totals, one entry per registry or named worker; `dispose` stops its read thread.
-
-**Uplink drop.** View → `disconnected`, kept; `worker.disconnected`. In-flight calls → `WORKER_UNREACHABLE`, an in-flight lease request → `worker-failed`. `token.revoke` closes its uplinks.
-
-## State and timers
-
-| What                                   | Default                                  | Key                                                   |
-| -------------------------------------- | ---------------------------------------- | ----------------------------------------------------- |
-| View refresh tick (+ prune)            | 30 s                                     | `WORKER_VIEW_REFRESH_INTERVAL_MS`                     |
-| One view read                          | 10 s                                     | `WORKER_CALL_TIMEOUT_MS`                              |
-| `worker.update` over the uplink        | 90 s                                     | `UPDATE_UPLINK_BOUND_MS` (`dispatcher.ts`)            |
-| Forwarded `lease.request`              | 5 min                                    | `gateway.leaseRequestTimeoutMs`                       |
-| Forwarded `device.exec`                | 11 min                                   | `gateway.execTimeoutMs`                               |
-| Disconnected view kept                 | 24 h, held while a gateway lease is live | `gateway.disconnectedRetentionMs`                     |
-| Relay: channel + head / silent body    | 330 s / 330 s                            | `GatewayRelayOptions.deadlineMs` / `.idleMs`          |
-| Two-way relay: silent worker direction | 15 s                                     | `TWO_WAY_SILENCE_MS` (`relay.ts`)                     |
-| Link: channels per side, accept, stall | 64, 30 s, 60 s                           | `../link/` constants                                  |
-| Request records                        | 10 000, 10 min                           | `lease.maxRequestRecords`, `lease.requestRetentionMs` |
-
-Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.json`. Nothing else.
+This manual also covers the worker's end of the uplink.
 
 ## Rules
 
-- The gateway never decides a lease is gone; only the worker's relayed fact or answer ends it.
+Trust in a worker:
+
+- A worker must not be able to crash, stall or corrupt its gateway. A bad worker reply fails that call. Every view read is bounded, and a link whose refreshes keep timing out is closed.
+- Only `WorkerLink` republishes onto the bus (`boundary.test.ts`). It adds `workerId` and keeps the worker's own event id, name and timestamp.
+- A worker event named like a fact only a gateway authors (`GATEWAY_OWN_EVENTS` in `worker-link.ts`) is dropped; any other name is forwarded, known here or not. An event nested past `MAX_RELAYED_PAYLOAD_DEPTH`, or one that cannot be serialized, is dropped.
+- Only a `worker` token pinned to the claimed worker id opens an uplink. A new uplink under a live worker id closes and replaces the old link. `token.revoke` closes the token's uplinks.
+- A protocol mismatch does not close the link: the view is `incompatible`, and that worker is asked only `daemon.update` with `query`.
+- A gateway refuses `fleetRequestId` and `owner` on `lease.request` from everyone: only a gateway sets them, on its own dispatch to a worker.
+
+Leases:
+
+- The gateway never decides a lease is gone; only the worker's relayed fact or answer ends it. It runs no TTL timer.
 - No gateway request waits in a worker queue: every dispatch is `noWait: true`.
 - A gateway forwards `allowDownload: false`, always.
-- Only the gateway's prefix `gw:<instance id>:` marks its leases; `release-all` and retention read it.
-- Only `WorkerLink` republishes onto the bus (`boundary.test.ts`).
-- A worker must not be able to crash, stall or corrupt its gateway: a bad worker reply fails that call, and a relayed event nested past 64 levels or unserializable is dropped in `worker-link.ts`.
+- Only the gateway's prefix `gw:<instance id>:` marks its leases; the lease index (and so `release-all`) and retention read it.
+- The lease index is rebuilt from each view's leases. An entry goes only when consecutive snapshots lack it; it is kept across a disconnect and forgotten with the view.
+- A lease the worker answered released or `UNKNOWN_LEASE` is not added back by a later snapshot that still lists it. A worker's `UNKNOWN_LEASE` drops the entry.
+- A refusal is remembered against the worker's `viewLoadKey`, so the worker is asked again only once its view changes. `DAEMON_UPDATING` is handled as `NO_CAPACITY`.
+- A worker's failure before its first progress push sends the request on to another worker or back to the queue. After a progress push it is the request's own end (`worker-failed`): device work had started.
+- A granted lease id unlike the forwarded `leaseId` is not believed: it is released on the worker and the request tries again.
+- `lease.maxPerRequester` counts the index plus a pending request, but not a lease past its last reported deadline on a disconnected worker.
+- `gateway.execTimeoutMs` is a backstop over the worker's `exec.timeoutMs`, not the limit.
+
+State and reads:
+
+- Persisted: the drained ids and the tokens in `state.db`, `instance.json` and the event history. The lease index, the views and the fleet requests live in memory only.
+- The registry loads the drained ids before the uplink listener opens.
+- A disconnected view is kept for `gateway.disconnectedRetentionMs`, and for as long as one of this gateway's leases on it is live.
+- Reads answer from the views, never from a worker call. A `starting` view has no catalog and no baselines, and `routingViews` puts the last ones back.
+- A non-admin sees only what its principal owns: its index entries, its waiting fleet requests, and `workers[]` without each worker's own `leases` and `waiting`.
+- An uplink drop keeps the view as `disconnected`. In-flight calls answer `WORKER_UNREACHABLE`, and an in-flight lease request ends `worker-failed`.
+
+Relay:
+
+- `relay.*` runs only on a worker's uplink session. A gateway refuses them from everyone.
+- A worker never holds a gateway credential: `relayHeaderPairs` (`../contract/relay.ts`) drops the credential headers and the configured `http.proxyAuth.header`.
+- Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body, so a live body is never cut. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
+- A two-way relay keeps both directions open after a 2xx head; ending one ends only that one.
+- Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. Bytes the gateway writes never reset it, and it stops while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
+- On an uplink close the worker aborts that connection's relays. Leases, requests and exec keep running.
+
+## Flow: a lease through a gateway
+
+1. `GatewayDispatcher` fills and caps `ttlMs` from the gateway's own `lease` config and drops `allowDownload`.
+2. `FleetLeaseCoordinator` admits under its own `SerializedDecision`: replay, requester limit, taken lease id, then it stores the request and emits `lease.requested`.
+3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
+4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
+5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.
+6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted.
+7. Afterwards renew, release, exec, rotate and baseline save go to the worker the index names; with no live link they answer `WORKER_UNREACHABLE`.
+8. The worker's relayed `lease.expired` or `lease.released` removes the entry and pushes `lease-lost` to the owner.
 
 ## Known gaps
 
 - **A starting worker's leases are hidden from their owner.** `lease.list` and `lease.get` omit them
-  for the startup checks plus one refresh (up to about 60 s). Meanwhile remote commands fail with
+  for the startup checks plus one refresh. Meanwhile remote commands fail with
   "No lease is held by …" and MCP `status()` reports none; the lease stands. Don't request a new device.
 - **A fleet request is stored only once a worker takes it.** A gateway restart loses every open request;
   ids answer `404`, a repeated `Idempotency-Key` is new (maybe `REQUESTER_ALREADY_LEASED`).
@@ -145,6 +72,6 @@ Persisted: the `drained_workers` and `tokens` tables of `state.db`, `instance.js
 - **Local agents and the gateway share a worker's capacity.** A busy machine answers `NO_CAPACITY`; the request waits elsewhere. `worker drain` leaves it to the owner.
 - **`device.exec` backpressure through a gateway does not slow the worker's own process.** Output is relayed with `void session.onOutput(...)`; a slow fleet client is buffered in the gateway.
 - **A worker's future-stamped event keeps its own timestamp.** ADR 0014 §2 has the gateway republish the worker's `timestamp`, so the usage projection's shared fleet clock can move forward; amending the ADR is the maintainer's call.
-- **Three gaps in gateway warm hits.** A slim-pool device that failed its slim pass reports `full`
+- **Gateway warm hits miss some devices.** A slim-pool device that failed its slim pass reports `full`
   and counts for `full`; a default-slim worker's full device on an unslimmable runtime is no hit for a
   mode-less request; a `--mode slim` request there is no hit on a ready full device.
