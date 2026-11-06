@@ -287,7 +287,7 @@ Each destination:
 | `name`   | yes                               | Lowercase letters, digits and dashes, starting with a letter, at most 32 characters. Unique.                  |
 | `format` | yes                               | `generic` (signed JSON) or `slack` (a message for a Slack incoming webhook).                                  |
 | `url`    | yes                               | `https://`, or `http://` to `localhost`, `127.0.0.1` or `[::1]`. No user name or password in it.              |
-| `events` | yes                               | Non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `component.install-failed`. |
+| `events` | yes                               | Non-empty list, each event once, from: `worker.connected`, `worker.disconnected`, `worker.rejected`, `worker.drain-started`, `worker.drain-ended`, `device.quarantine-abandoned`, `device.quarantine-stranded`, `device.recovery-failed`, `device.stalled-transition-detected`, `disk.pressure-detected`, `memory.pressure-changed`, `component.install-failed`. |
 | `secret` | `generic`: yes; `slack`: not allowed | The key the gateway signs each `generic` message with.                                                     |
 
 ```json title="~/.simlock/gateway/config.json"

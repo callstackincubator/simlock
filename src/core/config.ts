@@ -104,6 +104,7 @@ export const ALERT_EVENTS = [
   "device.recovery-failed",
   "device.stalled-transition-detected",
   "disk.pressure-detected",
+  "memory.pressure-changed",
   "component.install-failed",
 ] as const;
 export type AlertEventName = (typeof ALERT_EVENTS)[number];
