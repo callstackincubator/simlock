@@ -2953,6 +2953,91 @@ describe("Dispatcher: device mode on every surface", () => {
     ).not.toHaveProperty("except");
   });
 
+  it("a client's except request is refused with BAD_REQUEST and the reason, and a slim baseline on a full-default worker is granted", async () => {
+    const ask = {
+      except: ["store"],
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    const { mode: _mode, ...noMode } = ask;
+    const driverOptions = { slimCategories: ["store", "other"], slimmableOsVersions: ["26.5"] };
+    const attempt = async (input: unknown, defaultMode: "slim" | "full" = "slim") => {
+      const built = await buildDispatcher({
+        driverOptions,
+        engine: { defaultModes: { ios: defaultMode } },
+      });
+      return built.dispatcher.dispatch("lease.request", input as never, session()).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    };
+
+    expect(await attempt(ask)).toBeUndefined();
+    const refusals: readonly [string, unknown, string, ("slim" | "full")?][] = [
+      ["duplicate", { ...ask, except: ["store", "store"] }, 'except names "store" twice'],
+      ["bad characters", { ...ask, except: ["Store"] }, 'except: "Store" is not a category name'],
+      ["none named", { ...ask, except: [] }, "except names 1 to 16 categories"],
+      [
+        "too many",
+        { ...ask, except: Array.from({ length: 17 }, (_, index) => `c${index}`) },
+        "except names 1 to 16 categories",
+      ],
+      ["mode full", { ...ask, mode: "full" }, "except needs a slim lease (mode is full)"],
+      [
+        "default full",
+        noMode,
+        "except needs a slim lease (this worker's default mode is full)",
+        "full",
+      ],
+      ["physical", { ...ask, physical: true }, "except is for iOS simulators"],
+      ["android", { ...ask, platform: "android" }, "except is for iOS simulators"],
+      ["a name the driver refuses", { ...ask, except: ["wallet"] }, ""],
+    ];
+    for (const [label, input, message, defaultMode] of refusals) {
+      const error = await attempt(input, defaultMode);
+      expect(classifyError(error), label).toBe("BAD_REQUEST");
+      expect((error as Error).message, label).toContain(message);
+    }
+
+    const { dispatcher } = await buildDispatcher({
+      driverOptions,
+      engine: { defaultModes: { ios: "full" } },
+    });
+    const save = async (name: string, mode: "slim" | "full", principal: string) => {
+      const lease = await dispatcher.dispatch(
+        "lease.request",
+        { model: "iPhone 17 Pro", mode, osVersion: "26.5", platform: "ios" },
+        session({ principal }),
+      );
+      await dispatcher.dispatch(
+        "baseline.save",
+        { leaseId: lease.lease.id, name },
+        session({ principal, role: "admin" }),
+      );
+    };
+    await save("slim-base", "slim", "tok_a");
+    await save("full-base", "full", "tok_b");
+    const fromFull = await dispatcher
+      .dispatch(
+        "lease.request",
+        { baseline: "full-base", except: ["store"], platform: "ios" },
+        session({ principal: "tok_c" }),
+      )
+      .catch((error: unknown) => error);
+    expect(classifyError(fromFull)).toBe("BAD_REQUEST");
+    expect((fromFull as Error).message).toContain(
+      'except needs a slim lease (baseline "full-base" is full)',
+    );
+    const fromSlim = await dispatcher.dispatch(
+      "lease.request",
+      { baseline: "slim-base", except: ["store"], platform: "ios" },
+      session({ principal: "tok_d" }),
+    );
+    expect(fromSlim.device).toMatchObject({ except: ["store"], mode: "slim" });
+  });
+
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
     const granted = await dispatcher.dispatch("lease.request", request, session());

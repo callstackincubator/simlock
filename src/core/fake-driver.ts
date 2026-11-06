@@ -98,6 +98,8 @@ export interface FakeDriverOptions {
   readonly fullCleanReclaimEstimateMs?: number;
   readonly mode?: DeviceMode | undefined;
   readonly slimmableOsVersions?: readonly string[];
+  /** why: the categories this worker slims; a request's `except` naming another is refused at resolve, as the iOS driver does. Absent: every name is accepted. */
+  readonly slimCategories?: readonly string[];
   readonly knownModels?: readonly string[];
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
