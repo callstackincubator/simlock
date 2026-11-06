@@ -385,18 +385,73 @@ describe("startDaemon memory pressure", () => {
     };
 
   it("reports in status.get the memory pressure step the worker's reading meets", async () => {
-    const cases = [
+    const level = (availablePercent: number, name: "warn" | "critical") => ({
+      availablePercent,
+      level: name,
+      trigger: "level",
+    });
+    const floor = (availablePercent: number, floorPercent: number) => ({
+      availablePercent,
+      floorPercent,
+      trigger: "floor",
+    });
+    const cases: readonly {
+      readonly reading: HostLoadCounters;
+      readonly expected: unknown;
+      readonly overrides?: NonNullable<StartDaemonOptions["configOverrides"]>["memoryPressure"];
+    }[] = [
+      { reading: memoryReading("normal", 34), expected: { step: "none" } },
       {
         reading: memoryReading("warn", 34),
-        expected: {
-          cause: { availablePercent: 34, level: "warn", trigger: "level" },
-          since: 1_000,
-          step: "warming-paused",
+        expected: { cause: level(34, "warn"), since: 1_000, step: "warming-paused" },
+      },
+      {
+        reading: memoryReading("critical", 34),
+        expected: { cause: level(34, "critical"), since: 1_000, step: "new-devices-paused" },
+      },
+      {
+        reading: memoryReading("warn", 8),
+        expected: { cause: floor(8, 10), since: 1_000, step: "new-devices-paused" },
+      },
+      {
+        reading: memoryReading("critical", 8),
+        expected: { cause: level(8, "critical"), since: 1_000, step: "new-devices-paused" },
+      },
+      {
+        reading: memoryReading("normal", 8),
+        expected: { cause: floor(8, 10), since: 1_000, step: "new-devices-paused" },
+      },
+      { reading: memoryReading(undefined, 25), expected: { step: "none" } },
+      {
+        reading: memoryReading(undefined, 15),
+        expected: { cause: floor(15, 20), since: 1_000, step: "warming-paused" },
+      },
+      {
+        reading: memoryReading(undefined, 9.9),
+        expected: { cause: floor(9, 10), since: 1_000, step: "new-devices-paused" },
+      },
+      {
+        reading: memoryReading("critical", 5),
+        overrides: {
+          pauseNewDevices: { level: "off", minAvailablePercent: 0 },
+          pauseWarming: { level: "off", minAvailablePercent: 0 },
         },
+        expected: { step: "none" },
+      },
+      {
+        reading: memoryReading("critical", 5),
+        overrides: { enabled: false },
+        expected: { step: "none" },
       },
     ];
-    for (const { reading, expected } of cases) {
-      const { daemon } = await startOnClock({ hostLoadProbe: new FakeHostLoadProbe(reading) });
+    for (const { reading, expected, overrides } of cases) {
+      const { daemon } = await startOnClock({
+        configOverrides: {
+          ...STANDALONE_OFF,
+          ...(overrides === undefined ? {} : { memoryPressure: overrides }),
+        },
+        hostLoadProbe: new FakeHostLoadProbe(reading),
+      });
       await expect
         .poll(async () => (await statusOf(daemon)).capacity?.memoryPressure)
         .toEqual(expected);
