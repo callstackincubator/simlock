@@ -89,6 +89,8 @@ describe("Dispatcher: lease.request with an except list", () => {
       session(),
     );
     expect(grantedWarm.device).toMatchObject({ except, id: registered.id, mode: "slim" });
+    // why: the seed's boot was the device's first, so the reboot's address is the second boot's.
+    expect(grantedWarm.device.address).toBe(`${registered.driverDeviceId}-addr-2`);
     expect(
       warm.driver.calls
         .slice(seededCalls)
