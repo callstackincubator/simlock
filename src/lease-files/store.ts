@@ -6,7 +6,7 @@ import { DEFAULT_LIMITS } from "./limits.js";
 import { isFileName } from "./names.js";
 import type { LeaseFileView, LeaseFilesDeps, LeaseFilesGrant } from "./types.js";
 
-export function folderKey(id: string, grantedAt: number): string {
+function folderKey(id: string, grantedAt: number): string {
   return `${Buffer.from(id, "utf8").toString("hex")}-${String(grantedAt)}`;
 }
 

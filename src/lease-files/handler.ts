@@ -4,7 +4,7 @@ import { BodyCutError } from "./guarded-body.js";
 import type { LeaseFolders } from "./store.js";
 import { requireFileName } from "./names.js";
 import { parseRange } from "./range.js";
-import type { LeaseFilesLease } from "./types.js";
+import type { LeaseFileView, LeaseFilesLease } from "./types.js";
 
 export async function handleRequest(
   store: LeaseFolders,
@@ -50,7 +50,10 @@ async function serve(
     await store.remove(grant, name);
     return new Response(null, { status: 204 });
   }
-  const file = await store.openFile(grant, name);
+  return serveFile(request, await store.openFile(grant, name));
+}
+
+async function serveFile(request: Request, file: LeaseFileView): Promise<Response> {
   const answer = parseRange(request.headers.get("range"), file.size);
   if (answer.kind === "unsatisfiable") {
     await file.close();
