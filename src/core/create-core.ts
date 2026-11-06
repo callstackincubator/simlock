@@ -272,6 +272,8 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
+  // why: a waiting request is only planned again by an event; the step lifting is the one that frees it.
+  options.eventBus.subscribe("memory.pressure-changed", notifyAvailability);
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {

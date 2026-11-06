@@ -1415,4 +1415,29 @@ describe("Dispatcher: lease.request at new-devices-paused", () => {
       "ready",
     );
   });
+
+  it.each(["none", "warming-paused"] as const)(
+    "a request waiting on memory pressure reads memory-pressure, then is served when the step lifts to %s with no other event",
+    async (lifted) => {
+      const built = await buildDispatcher({ memoryPressureStep: "new-devices-paused" });
+      let granted: unknown;
+      void built.dispatcher.dispatch("lease.request", ask, asker()).then((grant) => {
+        granted = grant;
+      });
+      await flush();
+      const before = await waiting(built);
+
+      built.setMemoryPressure(lifted);
+      built.eventBus.emit(
+        "memory.pressure-changed",
+        { from: "new-devices-paused", to: lifted },
+        "test",
+      );
+
+      await flush();
+
+      expect(before).toMatchObject([{ reason: "memory-pressure" }]);
+      expect(granted).toMatchObject({ lease: { ownerId: "tok_asker" } });
+    },
+  );
 });
