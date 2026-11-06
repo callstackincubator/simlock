@@ -1,4 +1,5 @@
 import type { Identity } from "../auth/index.js";
+import { withCallersLeaseId } from "./callers-lease-id.js";
 import { MAX_FILE_BYTES } from "../lease-files/index.js";
 import type { HttpLeaseFiles } from "../http/app.js";
 
@@ -37,7 +38,7 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
       const path = `/files/leases/${encodeURIComponent(workerLeaseId)}${
         name === undefined ? "" : `/${encodeURIComponent(name)}`
       }`;
-      const answer = await options.relay(lease.workerId ?? "", {
+      const relayed = await options.relay(lease.workerId ?? "", {
         leaseId: workerLeaseId,
         request: new Request(`http://simlock-worker${path}`, {
           headers: request.headers,
@@ -48,6 +49,7 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
         target: "files",
         tenant: `${options.requesterPrefix}${identity.principal}`,
       });
+      const answer = await withCallersLeaseId(relayed, workerLeaseId, lease.id);
       const length = answer.headers.get("simlock-content-length");
       if (length === null || !/^\d{1,16}$/.test(length)) return answer;
       // why: the relay carries no `Content-Length`, so the worker sent the body's length under its own header and the gateway gives it back to the caller.
