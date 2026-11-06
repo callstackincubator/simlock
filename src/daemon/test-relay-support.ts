@@ -24,8 +24,6 @@ import type { DaemonServer } from "./server.js";
 import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
 
-export { freeLoopbackPort } from "../test-support/loopback-port.js";
-
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
 
