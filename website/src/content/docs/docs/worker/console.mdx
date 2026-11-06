@@ -103,8 +103,8 @@ The square shows the worst thing wrong with the worker, and always has a word be
 
 | Colour | When |
 | --- | --- |
-| Red | The worker's health is `failed`, its memory pressure is `critical`, or its CPU, memory or disk is 95% full or more. |
-| Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, or a figure is 85% full or more. |
+| Red | The worker's health is `failed`, its memory pressure is `critical`, it has `new devices paused`, or its CPU, memory or disk is 95% full or more. |
+| Amber | The worker is `starting` or `over RAM budget`, its memory pressure is `warn`, it has `warming paused`, or a figure is 85% full or more. |
 | Green | Nothing is wrong. The word is `connected`. |
 
 **Issues** shows only workers whose square is not green. **Busy** shows workers using three quarters of their device slots or more.
