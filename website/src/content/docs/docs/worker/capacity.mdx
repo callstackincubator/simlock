@@ -178,6 +178,7 @@ What the warm pool does and does not do:
 - Your targets come first. To fill a target, it may shut down an idle device that only a learned kind keeps.
 - It never downloads a runtime or system image. A target whose runtime is missing stays short.
 - A booted device that nobody leases and nothing keeps warm is shut down after `idle.shutdownAfterMs` (10 minutes). See [Cleanup](/simlock/docs/worker/cleanup).
+- When host memory pressure pauses warming, it starts nothing, a target left short reports `memory-pressure`, and each new memory reading it shuts down one idle device. It fills its targets again when the pause lifts.
 - A target that fails to boot is tried again after 1, 2, 4 and so on minutes, at most 10 minutes apart.
 
 | Key | Meaning | Default |

@@ -327,6 +327,7 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    memoryPressure,
     provisioner,
     registry,
     state: options.state,
