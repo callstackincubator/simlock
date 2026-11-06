@@ -465,6 +465,17 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const listed = await call("");
     const deleted = await call("/fixture.tar", { method: "DELETE" });
     const after = await call("");
+    const names = Array.from({ length: 10 }, (_, index) => `many-${String(index)}.bin`);
+    const many = await Promise.all(
+      names.map((name, index) =>
+        call(`/${name}`, {
+          body: patternStream(20 * MIB, 20 + index),
+          duplex: "half",
+          method: "PUT",
+        } as RequestInit),
+      ),
+    );
+    const stored = await (await call("")).json();
     const busy = new TransformStream<Uint8Array>();
     const holding = call("/busy.bin", {
       body: busy.readable,
@@ -499,6 +510,8 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
     expect(deleted.status).toBe(204);
     expect(await after.json()).toEqual({ files: [] });
+    expect(many.map((response) => response.status)).toEqual(names.map(() => 201));
+    expect(stored).toMatchObject({ files: names.map((name) => ({ name, size: 20 * MIB })) });
     expect(missing.status).toBe(404);
     expect(await missing.json()).toMatchObject({ error: { code: "UNKNOWN_FILE" } });
     expect(oversized.status).toBe(413);
