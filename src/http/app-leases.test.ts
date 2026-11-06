@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1510,6 +1510,36 @@ async function folderEntries(folder: string): Promise<string[]> {
   return readdir(folder).catch(() => []);
 }
 
+// why: a request body the test feeds by hand, so a test can hold an upload open after its first bytes arrived.
+function heldBody(first: Uint8Array) {
+  let release!: () => void;
+  const firstConsumed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(c) {
+        controller = c;
+      },
+      pull(c) {
+        pulls += 1;
+        if (pulls === 1) c.enqueue(first);
+        else release();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return { firstConsumed, finish: () => controller.close(), stream };
+}
+
+class LowDiskFilesystem extends NodeFilesystem {
+  override diskFree(): Promise<number> {
+    return Promise.resolve(5 * 1024 ** 3);
+  }
+}
+
 // why: comparing megabytes with `toEqual` walks them one by one and takes seconds; their digests say the same.
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -1604,5 +1634,59 @@ describe("a lease's files on a worker", () => {
     expect((await refusal(declared)).error.code).toBe("FILE_TOO_LARGE");
     expect(pulled).toBe(false);
     expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
+
+    const roomy = { fileBytes: 1000, leaseBytes: 100, silenceMs: 330_000 };
+    const full = await filesRig({ limits: roomy });
+    await mkdir(full.leaseFolder, { recursive: true });
+    await writeFile(join(full.leaseFolder, "my file.png"), new Uint8Array(60));
+    expect((await full.put("fits.bin", new Uint8Array(40))).status).toBe(201);
+    await rm(join(full.leaseFolder, "fits.bin"));
+    for (const headers of [agentAuth, { ...agentAuth, "content-length": "50" }]) {
+      const over = await full.put("over.bin", new Uint8Array(50), headers);
+      expect(over.status).toBe(413);
+      expect((await refusal(over)).error).toEqual({
+        code: "LEASE_FILES_FULL",
+        leaseId: "lse_1",
+        message: "Lease lse_1 holds 60 bytes of files; this upload would pass the 4 GiB limit",
+        usedBytes: 60,
+      });
+      expect(await folderEntries(full.leaseFolder)).toEqual(["my file.png"]);
+    }
+
+    const together = await filesRig({ limits: roomy });
+    const first = heldBody(new Uint8Array(60));
+    const running = together.app.request("/v1/leases/lse_1/files/a.bin", {
+      body: first.stream,
+      duplex: "half",
+      headers: agentAuth,
+      method: "PUT",
+    } as RequestInit);
+    await first.firstConsumed;
+    const second = await together.put("b.bin", new Uint8Array(60));
+    expect(second.status).toBe(413);
+    expect((await refusal(second)).error.code).toBe("LEASE_FILES_FULL");
+    first.finish();
+    expect((await running).status).toBe(201);
+    expect(await folderEntries(together.leaseFolder)).toEqual(["a.bin"]);
+
+    const replacing = await filesRig({ limits: roomy });
+    expect((await replacing.put("x.bin", new Uint8Array(80))).status).toBe(201);
+    expect((await replacing.put("x.bin", new Uint8Array(80))).status).toBe(201);
+
+    const lowDisk = await filesRig({
+      diskPressureThreshold: 10 * 1024 ** 3,
+      filesystem: new LowDiskFilesystem(),
+    });
+    const noDisk = await lowDisk.put("fixture.tar", "x");
+    expect(noDisk.status).toBe(422);
+    expect((await refusal(noDisk)).error).toEqual({
+      availableBytes: 5 * 1024 ** 3,
+      code: "INSUFFICIENT_DISK_SPACE",
+      message:
+        "Not enough free disk space to store fixture.tar: the worker keeps 10.0 GiB free, only 5.0 GiB available",
+      platform: "ios",
+      requiredBytes: 10 * 1024 ** 3,
+    });
+    expect(await folderEntries(lowDisk.leaseFolder)).toEqual([]);
   });
 });
