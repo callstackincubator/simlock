@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1467,7 +1468,7 @@ afterEach(async () => {
   await Promise.all(filesRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-// why: a worker's HTTP app over a real lease-files store in a temporary folder, with lease `lse_1` held by `tok_agent`. */
+// why: a worker's HTTP app over a real lease-files store in a temporary folder, with lease `lse_1` held by `tok_agent`.
 async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-lease-files-"));
   filesRoots.push(dataDirectory);
@@ -1493,6 +1494,11 @@ async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
   return { ...rig, dataDirectory, get, put };
 }
 
+// why: comparing megabytes with `toEqual` walks them one by one and takes seconds; their digests say the same.
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 describe("a lease's files on a worker", () => {
   it("a lease holder PUTs a file and gets 201 with its name and size; a GET returns the same bytes", async () => {
     const { get, put } = await filesRig();
@@ -1504,6 +1510,6 @@ describe("a lease's files on a worker", () => {
     expect(await response.json()).toEqual({ name: "fixture.tar", size: bytes.length });
     const download = await get("fixture.tar");
     expect(download.status).toBe(200);
-    expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
+    expect(sha256(new Uint8Array(await download.arrayBuffer()))).toBe(sha256(bytes));
   });
 });
