@@ -107,6 +107,7 @@ export {
   UnknownModelError,
   BaselineMismatchError,
   BaselineStaleError,
+  KeptCategoriesError,
   UnsupportedRequestOptionError,
 } from "./driver.js";
 export {

@@ -599,6 +599,14 @@ export class UnsupportedRequestOptionError extends Error {
   }
 }
 
+/** why: A device booted with a lease's except list but a kept category's service is not running, or that could not be shown (ADR 0066 §2): the driver refuses the device rather than tell the lease it is on. */
+export class KeptCategoriesError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeptCategoriesError";
+  }
+}
+
 export class UnknownModelError extends Error {
   readonly class: DeviceClass | undefined;
   readonly model: string | undefined;

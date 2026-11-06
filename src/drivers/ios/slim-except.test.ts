@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { KeptCategoriesError } from "../../core/index.js";
 import { FakeClock, ScriptedProcessRunner } from "../../ports/index.js";
 import { SLIM_CATEGORIES, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import {
@@ -48,11 +49,21 @@ function readbackOf(wanted: ReadonlyMap<string, boolean>): string {
 async function bootWithExcept(options: {
   readonly categories?: readonly string[];
   readonly except: readonly string[];
-  readonly readback: string;
+  readonly readback: string | { readonly code: number; readonly stderr: string };
+  readonly writeFails?: boolean;
 }) {
   const filesystem = new FaultyFilesystem();
   await plantManagedDevice(filesystem);
-  const runner = new ScriptedProcessRunner(slimBootCalls(slim18_5.udid, options.readback));
+  if (options.writeFails === true) filesystem.failing = "writeFileAtomic";
+  const calls = slimBootCalls(slim18_5.udid, "");
+  const readbackCall =
+    typeof options.readback === "string"
+      ? { match: calls[3]!.match, result: { code: 0, stderr: "", stdout: options.readback } }
+      : {
+          match: calls[3]!.match,
+          result: { code: options.readback.code, stderr: options.readback.stderr, stdout: "" },
+        };
+  const runner = new ScriptedProcessRunner([...calls.slice(0, 3), readbackCall]);
   const onSlimmed = vi.fn<(fact: SlimmedFact) => void>();
   const onSlimSkipped = vi.fn<(fact: SlimSkippedFact) => void>();
   const driver = await createSlimDriver(
@@ -67,28 +78,59 @@ async function bootWithExcept(options: {
     false,
     new FakeClock(),
   );
-  const result = await driver.makeReady(
-    { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
-    { except: options.except, mode: "slim", purpose: "prepare" },
-  );
-  const written = parseOverrides(await filesystem.readFile(overridesPath(slim18_5.udid)));
-  return { onSlimSkipped, onSlimmed, result, written };
+  const outcome = await driver
+    .makeReady(
+      { address: slim18_5.udid, deviceId: slim18_5.udid, driverData: slim18_5 },
+      { except: options.except, mode: "slim", purpose: "prepare" },
+    )
+    .then(
+      (result) => ({ result }) as const,
+      (error: unknown) => ({ error }) as const,
+    );
+  const file = overridesPath(slim18_5.udid);
+  const written = (await filesystem.exists(file))
+    ? parseOverrides(await filesystem.readFile(file))
+    : undefined;
+  return { onSlimSkipped, onSlimmed, outcome, written };
 }
 
 describe("IosSimctlDriver makeReady with an except list", () => {
+  const allNames = SLIM_CATEGORIES.map((category) => category.name);
+
   it("boots a slim device with an except list and grants only when every kept label reads back enabled", async () => {
-    const allNames = SLIM_CATEGORIES.map((category) => category.name);
     const wanted = expectedWrite(allNames, ["store", "other"]);
+    const kept = readbackOf(wanted);
+    const firstKept = [...labelsOf(["store", "other"])].sort()[0]!;
+    const keptDisabled = readbackOf(new Map([...wanted, [firstKept, true]]));
 
-    const { onSlimSkipped, result, written } = await bootWithExcept({
-      except: ["store", "other"],
-      readback: readbackOf(wanted),
-    });
+    const granted = await bootWithExcept({ except: ["store", "other"], readback: kept });
+    expect(granted.written).toEqual(Object.fromEntries(wanted));
+    expect(granted.written?.["com.apple.amsaccountsd"]).toBe(false);
+    expect(granted.written?.["com.apple.passd"]).toBe(false);
+    expect(granted.outcome).toEqual({ result: expect.objectContaining({ mode: "slim" }) });
+    expect(granted.onSlimSkipped).not.toHaveBeenCalled();
 
-    expect(written).toEqual(Object.fromEntries(wanted));
-    expect(written["com.apple.amsaccountsd"]).toBe(false);
-    expect(written["com.apple.passd"]).toBe(false);
-    expect(result.mode).toBe("slim");
-    expect(onSlimSkipped).not.toHaveBeenCalled();
+    const refusals = [
+      {
+        name: "a kept label reads back disabled",
+        run: { except: ["store", "other"], readback: keptDisabled },
+        message: `1 kept labels are not enabled; first: ${firstKept}`,
+      },
+      {
+        name: "the overrides write fails",
+        run: { except: ["store", "other"], readback: kept, writeFails: true },
+        message: "could not write the launchd overrides file: disk full",
+      },
+      {
+        name: "the readback fails",
+        run: { except: ["store", "other"], readback: { code: 1, stderr: "boom\n" } },
+        message: "could not read back the launchd overrides: exit 1: boom",
+      },
+    ];
+    for (const refusal of refusals) {
+      const { outcome, onSlimmed } = await bootWithExcept(refusal.run);
+      expect(outcome, refusal.name).toEqual({ error: new KeptCategoriesError(refusal.message) });
+      expect(onSlimmed, refusal.name).not.toHaveBeenCalled();
+    }
   });
 });
