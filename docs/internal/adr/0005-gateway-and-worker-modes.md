@@ -1,6 +1,6 @@
 # 0005. Gateway and worker modes
 
-- **Status:** Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by [0039](0039-joined-workers-refuse-their-own-http-listener.md); §19c's piped stdin narrowed by [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md); Non-goals (port forwarding) narrowed by [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) and [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md)
+- **Status:** Accepted — partly implemented: §16, §19a', §19c and §27a; requirement 1, the `mode` key and the two-homes setup superseded by 0034; requirement 3's joined-worker HTTP permission superseded by [0039](0039-joined-workers-refuse-their-own-http-listener.md); §19c's piped stdin narrowed by [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md); Non-goals (file transfer) and §19b′ narrowed by [0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md); Non-goals (port forwarding) narrowed by [0054](0054-a-lease-holder-tunnels-device-ports-to-its-own-machine.md) and [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md)
 - **Date:** 2026-09-05
 - **Issue:** [#115](https://github.com/callstackincubator/simlock/issues/115)
   (sub-issues #116–#120, one per sequenced PR)

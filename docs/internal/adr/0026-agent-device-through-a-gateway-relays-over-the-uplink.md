@@ -1,6 +1,6 @@
 # 0026. agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink
 
-- **Status:** Accepted; §3's in-process link narrowed by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md)
+- **Status:** Accepted; §3's in-process link narrowed by [ADR 0043](0043-physical-devices-reach-agent-device-through-a-second-daemon.md); §1's "the core names no module" narrowed by [ADR 0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md) for one core relay target, `files`
 - **Date:** 2026-10-13
 - **Issue:** [#511](https://github.com/callstackincubator/simlock/issues/511)
 - **Narrows:** [ADR 0023](0023-agent-device-is-served-by-an-optional-edge-module.md)
