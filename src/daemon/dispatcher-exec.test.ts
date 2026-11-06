@@ -8,9 +8,11 @@ import {
   ExecOutputDeliveryStalledError,
   FakeClock,
   NodeProcessRunner,
+  ProcessSpawnError,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
+import { LeaseFilesError } from "../lease-files/index.js";
 import { classifyError } from "./error-code.js";
 import { buildDispatcher, flush, session } from "./test-dispatcher.js";
 
@@ -34,6 +36,10 @@ function recordingResolver(
   };
   return resolver as unknown as PassthroughResolver;
 }
+
+type LeaseFilesOverride = NonNullable<
+  NonNullable<Parameters<typeof buildDispatcher>[0]>["leaseFiles"]
+>;
 
 describe("Dispatcher: device.exec", () => {
   const command = { args: ["--set", "/root", "list", "devices"], command: "simctl" };
@@ -238,6 +244,67 @@ describe("Dispatcher: device.exec", () => {
         message: `Reading fixture.tar failed after ${String(bytes)} bytes; the command was stopped`,
       });
       expect(closed).toBe(true);
+    }
+  });
+
+  it("answers 404 for a lease that ended, a folder that vanished before the spawn or a stdinFile deleted before the open", async () => {
+    const ended = () =>
+      Promise.reject(new LeaseFilesError("UNKNOWN_LEASE", "Unknown lease: x", { leaseId: "x" }));
+    const cases: readonly [string, LeaseFilesOverride, boolean, string][] = [
+      [
+        "folderOf on an ended grant",
+        { folderOf: ended, openFile: () => Promise.reject(new Error("unused")) },
+        false,
+        "UNKNOWN_LEASE",
+      ],
+      [
+        "spawn after the lease ended",
+        {
+          folderOf: vi.fn().mockResolvedValueOnce("/gone").mockImplementation(ended),
+          openFile: () => Promise.reject(new Error("unused")),
+        },
+        false,
+        "UNKNOWN_LEASE",
+      ],
+      [
+        "open of a file deleted after the listing",
+        {
+          folderOf: () => Promise.resolve("/lease-folder"),
+          openFile: () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+        },
+        true,
+        "UNKNOWN_FILE",
+      ],
+    ];
+    for (const [title, leaseFiles, withFile, code] of cases) {
+      const spawnFails: ProcessRunner = {
+        run: () => Promise.reject(new Error("unused")),
+        spawn: () => {
+          throw new Error("unused");
+        },
+        spawnStreaming: () => {
+          throw new ProcessSpawnError("simctl", []);
+        },
+      };
+      const { dispatcher, leaseId } = await withLease({ leaseFiles, processRunner: spawnFails });
+
+      const failure = await dispatcher
+        .dispatch(
+          "device.exec",
+          {
+            args: ["list", "devices"],
+            leaseId,
+            ...(withFile ? { stdinFile: "fixture.tar" } : {}),
+            tool: "simctl",
+          },
+          session({ principal: "tok_agent" }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+      expect(classifyError(failure), title).toBe(code);
     }
   });
 
