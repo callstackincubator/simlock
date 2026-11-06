@@ -1,8 +1,7 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { constants } from "node:os";
-import { Readable } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import type { Writable } from "node:stream";
 
 import { childLaunch } from "./windows-command.js";
 
@@ -127,7 +126,7 @@ export interface StreamingProcessHandle {
    * to its end, with the bytes written to the child by then. A child that closes its stdin
    * early is not a failure and never rejects it.
    */
-  readonly inputFailed?: Promise<never>;
+  inputFailed?: Promise<never>;
   kill(signal?: NodeJS.Signals): void;
   wait(): Promise<StreamingProcessResult>;
 }
@@ -330,13 +329,69 @@ export class NodeProcessRunner implements ProcessRunner {
       child.stdin?.on("error", () => undefined);
       child.stdin?.end(options.input);
     } else if (options.inputStream !== undefined && child.stdin) {
-      child.stdin.on("error", () => undefined);
-      void Readable.fromWeb(options.inputStream as NodeReadableStream<Uint8Array>)
-        .on("error", () => undefined)
-        .pipe(child.stdin);
+      const inputFailed = pumpInput(options.inputStream, child.stdin);
+      // why: a caller that never looks at `inputFailed` must not turn a read error into an unhandled rejection that ends the daemon.
+      inputFailed.catch(() => undefined);
+      handle.inputFailed = inputFailed;
     }
     return handle;
   }
+}
+
+/** why: the input stream of a streamed child failed to be read to its end; `bytesWritten` is what the child's stdin had been handed by then. */
+export class InputStreamFailedError extends Error {
+  constructor(
+    readonly bytesWritten: number,
+    cause: unknown,
+  ) {
+    super(`Reading the input stream failed after ${String(bytesWritten)} bytes`, { cause });
+    this.name = "InputStreamFailedError";
+  }
+}
+
+/**
+ * why: writes the stream to the child's stdin chunk by chunk, waiting for `drain` so a slow child holds the read back (nothing is buffered, ADR 0005 §19e), then closes stdin. A child that closes its stdin early (EPIPE) cancels the read quietly; only a read error rejects the returned promise, which never resolves otherwise.
+ */
+function pumpInput(source: ReadableStream<Uint8Array>, stdin: Writable): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const reader = source.getReader();
+    let written = 0;
+    let closed = false;
+    const onClosed = (): void => {
+      closed = true;
+      void reader.cancel().catch(() => undefined);
+    };
+    stdin.on("error", onClosed);
+    stdin.on("close", onClosed);
+    void (async () => {
+      for (;;) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (error) {
+          if (!closed) reject(new InputStreamFailedError(written, error));
+          return;
+        }
+        if (closed) return;
+        if (result.done) {
+          stdin.end();
+          return;
+        }
+        written += result.value.byteLength;
+        if (!stdin.write(result.value) && !closed) {
+          await new Promise<void>((resolve) => {
+            const done = (): void => {
+              stdin.off("drain", done);
+              stdin.off("close", done);
+              resolve();
+            };
+            stdin.once("drain", done);
+            stdin.once("close", done);
+          });
+        }
+      }
+    })();
+  });
 }
 
 /**
@@ -396,6 +451,7 @@ export class ExecOutputDeliveryStalledError extends Error {
  */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;
+  inputFailed?: Promise<never>;
   readonly #result: Promise<StreamingProcessResult>;
   #chunkCount = 0;
   #pendingDeliveries = 0;
