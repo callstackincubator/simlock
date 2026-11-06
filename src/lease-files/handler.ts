@@ -3,6 +3,7 @@ import { LeaseFilesError } from "./errors.js";
 import { BodyCutError } from "./guarded-body.js";
 import type { LeaseFolders } from "./store.js";
 import { requireFileName } from "./names.js";
+import { parseRange } from "./range.js";
 import type { LeaseFilesLease } from "./types.js";
 
 export async function handleRequest(
@@ -50,15 +51,28 @@ async function serve(
     return new Response(null, { status: 204 });
   }
   const file = await store.openFile(grant, name);
-  const length = String(file.size);
-  return new Response(file.read(), {
+  const answer = parseRange(request.headers.get("range"), file.size);
+  if (answer.kind === "unsatisfiable") {
+    await file.close();
+    return new Response(null, {
+      headers: { "content-range": `bytes */${String(file.size)}` },
+      status: 416,
+    });
+  }
+  const [start, end] = answer.kind === "range" ? [answer.start, answer.end] : [0, file.size - 1];
+  const length = String(answer.kind === "range" ? end - start + 1 : file.size);
+  return new Response(file.read(answer.kind === "range" ? { end, start } : undefined), {
     headers: {
       "accept-ranges": "bytes",
       "cache-control": "no-store",
       "content-length": length,
+      ...(answer.kind === "range"
+        ? { "content-range": `bytes ${String(start)}-${String(end)}/${String(file.size)}` }
+        : {}),
       "content-type": "application/octet-stream",
       "simlock-content-length": length,
     },
+    status: answer.kind === "range" ? 206 : 200,
   });
 }
 
