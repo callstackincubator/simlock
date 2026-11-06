@@ -188,6 +188,7 @@ function leaseRequestOptionFields(body: z.infer<typeof leaseRequestBodySchema>) 
     ...(body.noWait === undefined ? {} : { noWait: body.noWait }),
     ...(body.allowDownload === undefined ? {} : { allowDownload: body.allowDownload }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
+    ...(body.except === undefined ? {} : { except: body.except }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
     ...leaseRequestImageFields(body),
   };

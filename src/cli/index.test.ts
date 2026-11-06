@@ -6858,7 +6858,7 @@ describe("CLI: lease pushes and exit codes (own logic, not the dispatcher's)", (
       );
       await runCli(lease, outputCapture().environmentWith({ connectAdmin: async () => client }));
 
-      expect(inputs[0]?.[field]).toBe(value);
+      expect(inputs[0]?.[field]).toEqual(value);
       expect(inputs[1]).not.toHaveProperty(field);
     },
   );
