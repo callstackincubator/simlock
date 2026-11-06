@@ -49,16 +49,24 @@ grounds for rejecting a change even if the prose reads well.
    link to a website page for the same feature (by its full URL under
    `https://callstackincubator.github.io/simlock/docs/`); a website page
    never links into `docs/internal/` (see rule 2).
-7. **Every module has a manual, beside its code.** `src/<module>/AGENTS.md`
-   says what the module does today, how, and what a change must not break,
-   in the shape of [../templates/manual.md](../templates/manual.md), in at
-   most 150 lines. A `CLAUDE.md` beside it holds only `@AGENTS.md`, so Claude
-   Code loads the manual when it reads a file in the module; other agents load
-   it by the rule in the root `AGENTS.md`. A path that runs
-   through several modules (startup, device selection, `device.exec`) is a
-   flow doc under `docs/internal/flows/`, linked from each module's manual.
-   A manual and a flow doc hold no rationale (the ADR does) and no history
-   (git does); a known gap lives in its module's manual.
+7. **A manual says what the code cannot, or it goes.**
+   `src/<module>/AGENTS.md` (and `ui/AGENTS.md`) opens with one `Does:`
+   line, then holds what a change must not break and an agent would not
+   see in the file it is editing: an invariant that spans files, an order
+   to keep, a "never", a trap, a known gap. It holds no file list, no import list, no inventory
+   of commands, components or fields, no default (rule 8) and no steps
+   that follow one function's body: the code says those, and a copy is
+   edited with every change. A line that restates code is deleted, not
+   fixed. The shape and the budget are in
+   [../templates/manual.md](../templates/manual.md), and
+   `src/docs-manuals.test.ts` holds them. A `CLAUDE.md` beside a manual
+   holds only `@AGENTS.md`, so Claude Code loads the manual when it reads
+   a file in the module; other agents load it by the rule in the root
+   `AGENTS.md`. A path that runs through several modules (startup,
+   device selection, `device.exec`) is a flow doc under
+   `docs/internal/flows/`, linked from each module's manual. A manual and
+   a flow doc hold no rationale (the ADR does) and no history (git does);
+   a known gap lives in its module's manual.
 
 8. **Point at a value's source; never copy it.** A doc, manual or comment
    that needs a number, default, limit or version that code defines names
@@ -81,3 +89,10 @@ grounds for rejecting a change even if the prose reads well.
    change to the surface files its header lists that changes no page under
    `website/src/content/docs/`, unless a commit carries the trailer
    `Docs: none (<reason>)`.
+10. **A rule goes in the strongest place that can hold it.** In this
+    order: a test or a lint rule; a hook's refusal message; a `why:`
+    comment at the one spot it binds (architecture rule 17); the module's
+    manual (rule 7); a rule file in this directory. Before writing prose,
+    ask whether a check could hold the rule instead. Once a check holds
+    it, the prose is one line that names the check, not a description of
+    what the check does.

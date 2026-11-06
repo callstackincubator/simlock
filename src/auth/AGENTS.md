@@ -1,71 +1,42 @@
 # Auth
 
 Does: turns a credential into an identity. The token store, the per-start admin secret, the socket `hello` check, the uplink join-token check and the HTTP request check live here and nowhere else.
-Entry: `index.ts` → `createAuth(options)` → `Auth`; `testing.ts` (`createAuthWith`, `fakeAuth`, `tokenIdentity`).
-Uses: ports, contract only, jose (`auth-imports-little`).
-Never imports: any other component.
-Imported by: daemon (`src/daemon/main.ts`, `src/daemon/worker-composition.ts` (types), `src/daemon/server.ts`, `src/daemon/dispatcher.ts`, `src/daemon/error-code.ts`), http, gateway (types), core (`src/core/config.ts` reads the strategy registry), agent-device (`Identity`).
-Decision: [ADR 0033](../../docs/internal/adr/0033-a-sign-in-proxy-is-a-second-way-to-sign-in-and-auth-is-one-module.md).
 
-## Files
+## Rules
 
-| File                                | Role                                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `index.ts`                          | `createAuth`, `Auth`, `AuthError`, `AdminAuthenticationFailedError`                                              |
-| `identity.ts`                       | `Identity`: principal, name, role, via, expiry, ambient, sign-out URL                                            |
-| `strategy.ts`                       | `AuthStrategyDefinition`, `AuthStrategy`, `StrategyAnswer`, `AuthConfig`                                         |
-| `strategies/index.ts`               | The registry: ordered definitions (`token`, then `proxy`)                                                        |
-| `strategies/token/index.ts`         | The Simlock token strategy: `Authorization: Bearer slk_…`                                                        |
-| `strategies/proxy-jwt/index.ts`     | The proxy strategy: a sign-in proxy's JWT in `http.proxyAuth.header`; owns the `proxyAuth` config schema         |
-| `strategies/proxy-jwt/key-cache.ts` | `KeyCache`: the proxy's published keys, on the `Clock`                                                           |
-| `strategies/conformance.test.ts`    | Every registered strategy: `not-mine` without its credential, `via` = name                                       |
-| `token-store.ts`                    | `TokenStore`: hashed tokens in the `tokens` table of `state.db`; one read per verify; `pinWorker`; `tokensOwner` |
-| `admin-secret.ts`                   | `AdminSecretManager`: per-start secret, `admin.token`                                                            |
-| `hello.ts`                          | `SessionRoleResolver`, `resolveAgentRole`, `AdminAuthenticationFailedError`                                      |
-| `tokens.ts`                         | `TokenRole`, `TokenRecord`, `TokenOperations`                                                                    |
+Strategies (ADR 0033):
 
-## Auth
+- `authenticateRequest` asks the enabled strategies in registry order (`strategies/index.ts`): `token`, then `proxy`, so a good `slk_` token wins. The first answer other than `not-mine` ends the list, and the refusal's message and details come from the strategy.
+- `not-mine` means the strategy's credential is absent. It is not a refusal: the next strategy is asked.
+- `strategies/conformance.test.ts` runs every registered strategy: `not-mine` without its credential, `via` equal to its name.
 
-| Member                | Does                                                                                                                                                                                                                                                                                                                                    |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `authenticateRequest` | Asks the enabled strategies in registry order; returns `Identity` or throws `AuthError`                                                                                                                                                                                                                                                 |
-| `resolveHelloRole`    | No credential → `agent`; operator token or admin secret → `admin`; else `AdminAuthenticationFailedError`                                                                                                                                                                                                                                |
-| `authenticateUplink`  | None or unknown → `unauthenticated`; not a `worker` token → `forbidden`; claimed worker id not `[A-Za-z0-9_-]{1,128}` (so `*`, `.`, `..` and empty are refused before any pin), or not the one the token is pinned to (an unpinned token pins it now, unless another token holds it) → `worker-mismatch`; else accept with the token id |
-| `tokens`              | `create`, `list`, `revoke` (both dispatchers); `verify` (the module host, for a local profile)                                                                                                                                                                                                                                          |
-| `adminSecret`         | `persist`, `remove` (`DaemonServer`)                                                                                                                                                                                                                                                                                                    |
+The proxy strategy:
 
-## Strategies
+- With `header: authorization`, only a `Bearer` value that does not start `slk_` is its credential.
+- A credential over `HEADER_MAX_LENGTH` (`strategies/proxy-jwt/index.ts`) is `malformed`, and nothing is fetched for it.
+- A verified JWT with no person claims is `not-mine`, not a refusal.
+- A refusal is one `warn` log line with the reason and jose's message, never the JWT.
+- A proxy identity is `ambient` and carries `expiresAt`: http's cross-site check and the stream deadlines read them.
+- `KeyCache` is ours, not jose's remote set, so it runs on the `Clock`.
+- It fails closed: a failed fetch keeps the keys while they are younger than `KEY_KEEP_MS` (`strategies/proxy-jwt/key-cache.ts`); past that they are dropped and every proxy JWT is `keys-unavailable` until a fetch works.
+- An unknown key id refetches at most once per `UNKNOWN_KEY_REFETCH_MS`, counted from the last good fetch.
+- The fetch goes through the `KeySetFetcher` port, which never follows a redirect and caps the body.
 
-A strategy answers `identified`, `not-mine` (its credential is absent; `sawCredential` when an
-unclaimed bearer value was present), `rejected` (401) or `forbidden` (403). The first answer other
-than `not-mine` ends the list, and the refusal's message and details come from the strategy.
-When all answer `not-mine`: 401 "Unknown bearer token" if any saw a credential, else "Missing
-bearer token". Adding one: a directory under `strategies/` with its `testing.ts` fixture, one line
-in `strategies/index.ts`, and (if it owns a config key under `http`) the mirror in the contract's
-`configSchema`; `src/core/config.ts` validates and defaults the key from the definition.
-
-## The proxy strategy
-
-Enabled when `http.proxyAuth` is set; after `token`, so a good `slk_` token wins. No configured
-header → `not-mine` (with `header: authorization`, only a `Bearer` value not starting `slk_` is
-its credential). A value over 8 KiB is `malformed` and nothing is fetched. Otherwise `jwtVerify`
-(RS256, ES256, issuer, audience, 60 s tolerance, `exp` required) against the key cache's set. A
-person (`sub` non-empty and at most 120 characters, `email` non-empty) is `identified`:
-`proxy:<iss>#<sub>`, role `operator`, `via` `proxy`, `expiresAt` = `exp`×1000 + 60 s, `ambient`.
-A verified JWT with no person claims is `not-mine`. Anything else is `rejected` "Sign-in proxy
-identity refused: <reason>" with `details.reason` (the reasons are in `strategies/proxy-jwt/`),
-and one `warn` log line with the reason and jose's message, never the JWT.
-
-`KeyCache` is ours, not jose's remote set, so it runs on the `Clock`: keys are kept 10 minutes
-from a good fetch; a fetch is cut off at 5 s by a `Clock` timer; an unknown key id refetches at
-most once per 30 s from the last good fetch; one fetch is in flight at a time and every waiting
-request shares it. A failed fetch keeps keys under 10 minutes old; past that they are dropped and
-every proxy JWT is `keys-unavailable` until a fetch works (fails closed). The fetch goes through
-the `KeySetFetcher` port, which never follows a redirect and caps the body at 64 KiB.
-
-## Facts
+Tokens and the uplink:
 
 - A worker join token is `forbidden` on HTTP and accepted only by `authenticateUplink`.
-- A join token is pinned to the first worker id it is accepted with (`tokens.worker_id`, unique): `pinWorker` is one transaction (`UPDATE OR IGNORE ... WHERE worker_id IS NULL`, then a re-read), so of two first joins at once one wins. Re-pairing is `token revoke` + `token create`; `token.list` shows `workerId`.
-- Every verify reads the `tokens` table, so a `token revoke` takes effect at once. `create` and `revoke` are each one transaction, so two at once never lose one another. `createAuth` takes the daemon's `SqliteDatabase`, never the state module.
-- The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` (0600, atomic) only by `persist`, after the socket claim.
+- The claimed worker id is checked against the id alphabet before any pin, so `*`, `.`, `..` and an empty id never reach the store.
+- A join token is pinned to the first worker id it is accepted with, and a worker id to one live token. Re-pairing is `token revoke` + `token create`.
+- Every verify reads the `tokens` table, so a `token revoke` takes effect at once.
+- `createAuth` takes the daemon's `SqliteDatabase`, never the state module.
+
+Socket:
+
+- At `hello`, no credential is `agent`. A credential that is neither an operator token nor the admin secret is `AdminAuthenticationFailedError`, never a quiet `agent`.
+- The admin secret's hash lives in memory from construction; the plaintext is written to `admin.token` only by `persist`, which the daemon calls after the socket claim.
+
+## Adding a strategy
+
+1. A directory under `strategies/`, and one line in `strategies/index.ts`: its place in the list is its priority.
+2. A fixture in `strategies/conformance.test.ts`.
+3. If it owns a config key under `http`: the mirror in the contract's `configSchema`. `src/core/config.ts` validates and defaults the key from the definition.

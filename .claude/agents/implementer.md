@@ -61,7 +61,9 @@ report until it ends.
    both event catalogs for a changed event; a port and a fake for a new
    external API; wire input validated for shape and bounds; a module's
    surface through `index.ts` and one factory; a manual and an
-   ARCHITECTURE row for a new module; Fallow entries for files nothing
+   ARCHITECTURE row for a new module; a manual line only for what the
+   code cannot say, and one that restates code deleted
+   (`documentation.md` 7); Fallow entries for files nothing
    imports; every comment starts with `why:` or goes; a vendored
    artifact's notice and rows (`always-in-scope.md`).
 6. Never `git stash`, never the slow lane, never a check listed under
