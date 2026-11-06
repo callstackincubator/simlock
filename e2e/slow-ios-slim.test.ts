@@ -391,6 +391,12 @@ describe.skipIf(process.platform !== "darwin")(
             "--except",
             category.name,
           ]);
+          await expectSlim(
+            env,
+            grant.mode,
+            `a --mode slim lease excepting ${category.name} must be slim`,
+          );
+          expect(grant.except).toEqual([category.name]);
           const disabled = await printDisabled(grant);
           expect(
             labelsFor([category]).filter((label) => disabled.has(label)),

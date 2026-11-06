@@ -29,7 +29,9 @@ async function seedSlimDevice(
     platform: "ios",
   } as const;
   const driverDevice = await built.driver.provision(spec);
-  const ready = await built.driver.makeReady(driverDevice, { mode: "slim", purpose: "prepare" });
+  const driven = await built.driver.makeReady(driverDevice, { mode: "slim", purpose: "prepare" });
+  // why: the seed is a slim device whatever the fake reports on its boot, so a test whose driver answers `full` still starts from slim.
+  const ready = { ...driven, mode: "slim" as const };
   const registered = await built.registry.registerDevice({
     driverData: driverDevice.driverData,
     driverDeviceId: driverDevice.deviceId,
@@ -218,6 +220,30 @@ describe("Dispatcher: lease.request with an except list", () => {
     expect((unknownFromSlim as Error).message).toContain('unknown slim category "wallet"');
   });
 
+  it("a slim except boot the driver grants full leaves the device full with no except, on a reboot and on a boot", async () => {
+    const ask = {
+      except: ["store"],
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    const build = () =>
+      buildDispatcher({ driverOptions: { mode: "full", slimmableOsVersions: ["26.5"] } });
+
+    for (const state of ["ready", "shutdown"] as const) {
+      const built = await build();
+      const seeded = await seedSlimDevice(built, state);
+      const granted = await built.dispatcher.dispatch("lease.request", ask, session());
+
+      expect(granted.device.id, state).toBe(seeded.id);
+      expect(granted.device, state).not.toHaveProperty("except");
+      const record = built.registry.snapshot.devices.find((d) => d.id === seeded.id);
+      expect(record, state).toMatchObject({ mode: "full", state: "leased" });
+      expect(record, state).not.toHaveProperty("except");
+    }
+  });
+
   it("a failed except boot is never granted", async () => {
     const ask = {
       except: ["store"],
@@ -304,6 +330,44 @@ describe("Dispatcher: lease.request with an except list", () => {
       .dispatch("lease.request", { ...keyed, except: ["other"] }, session())
       .catch((error: unknown) => error);
     expect(classifyError(conflict)).toBe("IDEMPOTENCY_CONFLICT");
+
+    // why: each failed boot or reboot counts toward the one retry, so a provision failure after it is the second.
+    for (const state of ["ready", "shutdown"] as const) {
+      const counted = await build();
+      await seedSlimDevice(counted, state);
+      // why: call 1 of makeReady and of provision is the seed's own; call 2 of each is the waiter's.
+      counted.driver.failOn("makeReady", 2, crash);
+      counted.driver.failOn("provision", 2, crash);
+      const countedRefusal = await grantedOnceSettled(
+        counted.dispatcher.dispatch("lease.request", ask, session()).then(
+          () => undefined,
+          (error: unknown) => error ?? "granted",
+        ),
+      );
+      expect(classifyError(countedRefusal), state).toBe("PROVISION_FAILED");
+    }
+
+    // why: a worker with one running slot is granted after a failed boot only when that boot released the slot it reserved.
+    const oneSlot = await buildDispatcher({
+      capacity: {
+        config: {
+          limits: {
+            android: { maxDevices: 1, maxRunning: 1 },
+            ios: { maxDevices: 1, maxRunning: 1 },
+            maxRunning: 1,
+          },
+          ramBudget: { androidBytesPerDevice: 4 * 1024 ** 3, iosBytesPerDevice: 1024 ** 3 },
+        },
+        strategy: "resource",
+      },
+      driverOptions: { slimmableOsVersions: ["26.5"] },
+    });
+    await seedSlimDevice(oneSlot, "shutdown");
+    oneSlot.driver.failOn("makeReady", 2, crash);
+    const afterOneSlot = await grantedOnceSettled(
+      oneSlot.dispatcher.dispatch("lease.request", ask, session()),
+    );
+    expect(afterOneSlot.device).toMatchObject({ except: ask.except, mode: "slim" });
 
     const rebooting = await build();
     const seededWarm = await seedSlimDevice(rebooting, "ready");
