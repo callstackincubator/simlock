@@ -29,6 +29,7 @@ Flows: [startup](../../docs/internal/flows/startup.md), [device.exec](../../docs
 | `ios-driver-logging.ts` | `logSilenceFailure`, `logWindowFailure`: the iOS driver's silence and window failures as `warn` lines                                                                                                                                                |
 | `exec-env.ts`           | `execBaseEnvironment`: the allowlisted keys of `process.env` a `device.exec` child starts from                                                                                                                                                       |
 | `test-relay-support.ts` | Test helpers for relay e2e tests                                                                                                                                                                                                                     |
+| `test-dispatcher.ts`    | `buildDispatcher`, `session` and the other helpers the dispatcher test files share                                                                                                                                                                   |
 
 ## Composition (`main.ts`)
 

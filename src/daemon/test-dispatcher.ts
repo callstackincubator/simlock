@@ -41,14 +41,14 @@ import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 export const gibibyte = 1024 ** 3;
 export const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
 
-export function resolvePassthroughOverride(
+function resolvePassthroughOverride(
   engine: TestEngine,
   override: PassthroughResolver | undefined,
 ): PassthroughResolver {
   return override ?? engine;
 }
 
-export function stallOptions(
+function stallOptions(
   engine: TestEngine,
   driver: FakeDriver,
   overrides: {
@@ -62,14 +62,14 @@ export function stallOptions(
   };
 }
 
-export function resolveEventHistoryOverride(
+function resolveEventHistoryOverride(
   eventBus: EventBus,
   override: Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> | undefined,
 ): Pick<EventHistoryHandle, "replay" | "replayPage" | "status"> {
   return override ?? ringEventHistory(eventBus);
 }
 
-export function fakePassthroughOptions(
+function fakePassthroughOptions(
   tool: string | undefined,
   contextSink: unknown[] | undefined,
 ): Partial<FakeDriverOptions> {
@@ -127,11 +127,11 @@ export class SettableClock extends FakeClock {
   }
 }
 
-export function withGatewayLabel(config: Config, label: string | undefined): Config {
+function withGatewayLabel(config: Config, label: string | undefined): Config {
   return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
 }
 
-export function withHttp(config: Config, http: Config["http"] | undefined): Config {
+function withHttp(config: Config, http: Config["http"] | undefined): Config {
   return http === undefined ? config : { ...config, http };
 }
 
@@ -146,10 +146,7 @@ export interface SeededPhysicalDevice {
   readonly state: string;
 }
 
-export function seedPhysicalDevices(
-  state: StateDatabase,
-  devices: readonly SeededPhysicalDevice[],
-): void {
+function seedPhysicalDevices(state: StateDatabase, devices: readonly SeededPhysicalDevice[]): void {
   for (const device of devices) {
     state.database
       .prepare(
@@ -380,12 +377,12 @@ export function session(overrides: Partial<DispatchSession> = {}): DispatchSessi
   };
 }
 
-export function sequence() {
+function sequence() {
   let next = 1;
   return { generate: () => `${next++}` };
 }
 
-export function testConfig(
+function testConfig(
   downloadsPolicy: Config["downloads"]["policy"] = "on-request",
   leaseOverrides: Partial<Config["lease"]> = {},
   execOverrides: Partial<Config["exec"]> = {},
