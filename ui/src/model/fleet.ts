@@ -43,10 +43,9 @@ function stateFindings(worker: WorkerView): Toned[] {
 }
 
 // why: the step comes before the pressure and figure findings so that, at equal tone, the square
-// names what the worker refuses rather than the reading behind it; a worker not connected has its
-// own word already.
+// names what the worker refuses rather than the reading behind it. A worker not connected needs no
+// guard: its error finding comes first and wins.
 function stepFindings(worker: WorkerView): Toned[] {
-  if (worker.connection !== "connected") return [];
   switch (worker.capacity?.memoryPressure?.step) {
     case "new-devices-paused":
       return [{ tone: "error", word: "new devices paused" }];
