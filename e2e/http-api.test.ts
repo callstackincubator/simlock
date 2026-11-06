@@ -1,37 +1,7 @@
-import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon, withHttpDaemon } from "./helpers/index.js";
 import type { TestEnv } from "./helpers/env.js";
-
-/**
- * why: Reserves a free TCP port by binding to port 0 and releasing it immediately. Config
- * validation rejects `http.port: 0` (it requires 1-65535, see the configuration reference),
- * so the daemon itself can't pick its own ephemeral port -- this is the test's own
- * stand-in for that. There is a small window between release and the daemon binding
- * the same port, same as any "reserve a port for a subprocess" approach; nothing else
- * on this machine is expected to be racing for it during a test run.
- */
-async function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const address = probe.address();
-      probe.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
-          return;
-        }
-        if (address === null || typeof address === "string") {
-          reject(new Error("failed to reserve a port: no AddressInfo"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-  });
-}
 
 interface RequestResource {
   readonly id: string;
@@ -57,10 +27,9 @@ interface LeasePayload {
 
 describe("HTTP API", () => {
   it("token create -> healthz -> catalog -> lease-request -> granted -> renew -> release, with auth enforced throughout", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
-    });
+    }));
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -213,13 +182,12 @@ describe("HTTP API", () => {
   it("refuses a ttlMs above lease.maxTtlMs on both routes, whatever shape the request takes", async () => {
     // why: ADR 0004 §4: over the cap is `400 BAD_REQUEST`, never a silent
     // clamp and never a `201` that fails later on the request resource.
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port },
         lease: { defaultTtlMs: 60_000, maxTtlMs: 120_000 },
       },
-    });
+    }));
     await env.driverScript.set({
       ios: { knownModels: ["iPhone 16"], availableOsVersions: ["18.4"] },
     });
@@ -312,11 +280,10 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/lease-requests refuses a malformed os range as BAD_REQUEST naming the accepted forms", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-    });
+    }));
     const baseUrl = `http://127.0.0.1:${port}`;
     const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
       secret: string;
@@ -345,8 +312,7 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/lease-requests takes a class, or only a platform, and refuses a device beside a class", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       driverScript: {
         ios: {
@@ -356,7 +322,7 @@ describe("HTTP API", () => {
           modelClasses: { "iPhone 16": "phone" },
         },
       },
-    });
+    }));
     const baseUrl = `http://127.0.0.1:${port}`;
     const tokenResult = await env.cli(["token", "create", "--role", "agent"]);
     const { secret } = tokenResult.json as { secret: string };
@@ -417,11 +383,10 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/lease-requests with leaseId grants a lease with exactly that ID, and renew and release name it", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-    });
+    }));
     const baseUrl = `http://127.0.0.1:${port}`;
     const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
       secret: string;
@@ -466,11 +431,10 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/lease-requests answers 400 BAD_REQUEST for each leaseId the pattern rejects, and 201 for a 64-character one", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-    });
+    }));
     const baseUrl = `http://127.0.0.1:${port}`;
     const { secret } = (await env.cli(["token", "create", "--role", "agent"])).json as {
       secret: string;
@@ -509,11 +473,10 @@ describe("HTTP API", () => {
   });
 
   it("POST /v1/lease-requests answers 409 LEASE_ID_TAKEN, naming the ID, for an ID an active lease holds", async () => {
-    const port = await reservePort();
-    const env = await withDaemon({
+    const { env, port } = await withHttpDaemon((port) => ({
       configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
       driverScript: { ios: { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] } },
-    });
+    }));
     const baseUrl = `http://127.0.0.1:${port}`;
     const tokens: string[] = [];
     for (const _ of [0, 1]) {
