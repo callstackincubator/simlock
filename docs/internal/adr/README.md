@@ -76,7 +76,7 @@ the status is stale.
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
-| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062 |
+| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062; §2 and §3 narrowed by 0069 (proposed) |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
@@ -102,3 +102,4 @@ the status is stale.
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
 | [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |
+| [0069](0069-a-learned-kind-keeps-one-ready-copy-while-its-copies-are-leased.md) | A learned kind keeps one ready copy while its copies are leased | Proposed; narrows 0038 §2 and §3 |
