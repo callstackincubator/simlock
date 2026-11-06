@@ -15,7 +15,7 @@ import type {
   SqliteDatabase,
 } from "../../ports/index.js";
 import { ADB_DEVICES_TIMEOUT_MS, SEED_AVD_NAME, type AdbTools } from "./adb-tools.js";
-import { assertLibraryProfileWritable, type AvdConfig } from "./avd-config.js";
+import { assertLibraryProfileWritable, iniValues, type AvdConfig } from "./avd-config.js";
 import type { Catalog } from "./catalog.js";
 import type { ConsolePorts } from "./console-ports.js";
 import type { AndroidDriverData, DeviceState, SystemImage } from "./data.js";
@@ -60,15 +60,14 @@ function savedKindOf(config: string):
       readonly packageName: string;
     }
   | undefined {
-  const image =
-    /^image\.sysdir\.1\s*=\s*system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?\s*$/m.exec(
-      config,
-    );
+  const image = /^system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?$/.exec(
+    iniValues(config, /^image\.sysdir\.1$/)[0] ?? "",
+  );
   const [, osVersion, imageTag, abi] = image ?? [];
   if (osVersion === undefined || imageTag === undefined || abi === undefined) return undefined;
   return {
     imageTag,
-    model: /^hw\.device\.name\s*=\s*(.+?)\s*$/m.exec(config)?.[1] ?? "unknown",
+    model: iniValues(config, /^hw\.device\.name$/)[0] ?? "unknown",
     osVersion,
     packageName: systemImagePackage(osVersion, imageTag, abi),
   };
