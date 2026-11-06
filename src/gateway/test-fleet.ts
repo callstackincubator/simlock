@@ -30,6 +30,8 @@ class FakeDirectory implements WorkerDirectory {
   readonly refreshCalls: string[] = [];
   readonly catalogRefreshCalls: string[] = [];
   readonly failingRefresh = new Set<string>();
+  /** why: a worker id in here holds its view read open until the test resolves it, as a slow real read does. */
+  readonly refreshGates = new Map<string, Promise<void>>();
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -46,6 +48,7 @@ class FakeDirectory implements WorkerDirectory {
       refresh: async (options) => {
         this.refreshCalls.push(workerId);
         if (options?.includeCatalog === true) this.catalogRefreshCalls.push(workerId);
+        await this.refreshGates.get(workerId);
         if (this.failingRefresh.has(workerId)) throw new Error("refresh failed");
       },
       workerId,

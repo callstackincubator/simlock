@@ -55,7 +55,7 @@ Relay:
 3. It walks the open requests, oldest first, on admit, on any view change and after each settled attempt. [Routing](routing/AGENTS.md)'s `assess` ends a request no worker can serve; `select` picks among workers not claimed this pass and not refused at their current view.
 4. No pick: a `noWait` request ends `NO_CAPACITY`; any other queues in the gateway (`lease.queued`).
 5. A pick: `lease.request` goes to that worker's [leasing](../leasing/AGENTS.md) over its uplink, as requester `gw:<id>:<requester>`, bounded by `gateway.leaseRequestTimeoutMs`. The first progress push emits `request.dispatched`; a refusal before it starts another walk without that worker.
-6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted.
+6. Grant: the gateway lease id is the caller's `leaseId`, else `<workerId>.<workerLeaseId>`. The index entry is added, then `request.granted` is emitted. The worker's view is read again before any answer.
 7. Afterwards renew, release, exec, rotate and baseline save go to the worker the index names; with no live link they answer `WORKER_UNREACHABLE`.
 8. The worker's relayed `lease.expired` or `lease.released` removes the entry and pushes `lease-lost` to the owner.
 
