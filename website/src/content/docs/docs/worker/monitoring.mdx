@@ -44,6 +44,7 @@ What each line means:
 | `Console` | The web console's address. Shown only when HTTP is on. |
 | `Host` | The operating system, the CPU architecture, and the Xcode version the iOS tools report. |
 | `Load` | CPU, memory, swap and free disk, and how many seconds ago they were read. A part that could not be read says `unavailable`. |
+| `Memory pressure` | Shown only while the worker has paused warming or new devices because the host is short of memory: the step, when it began (local time) and why, either `pressure warn` or the available memory against its floor. See `memoryPressure.*` in the [configuration reference](/simlock/docs/reference/configuration). |
 | `History` | Shown only when something is wrong with the event history. See [Troubleshooting](/simlock/docs/worker/troubleshooting#the-event-history-is-not-written). |
 | `Running global` | Devices running now, plus slots held for devices that are booting, out of the most that may run at once, and how many of the running ones are warm. |
 | `Capacity ios` / `Capacity android` | Per platform: `managed` is devices that exist out of the device limit; `running` is as above. `(over limit)` means more devices exist than the limit allows, for example after you lowered it. `(at RAM budget)` means no more devices fit in the memory set aside for them. |

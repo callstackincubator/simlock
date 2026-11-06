@@ -37,7 +37,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. |
+| `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. The details name a `capacityReason`: `device-limit`, `ram-budget`, `memory-pressure`, `global-running-limit` or `platform-running-limit`. |
 | `DAEMON_UPDATING` | 1 | 503 | The daemon is updating (`simlock update`) and takes no new leases. A request that was waiting when the update began gets it too. A lease you already hold renews and releases as usual. | Run the command again once the daemon is back, or lease from another worker. |
 | `QUEUE_TIMEOUT` | 10 | 500 | The request waited in the queue for its whole `--timeout` and got no device. | Raise `--timeout`, or check `simlock list --requests` for why requests wait. |
 | `REQUESTER_ALREADY_LEASED` | 13 | 409 | Your requester identity already holds or waits for its limit of leases (`lease.maxPerRequester`, 1 by default, counted per platform when the operator sets a limit for each), or, with a limit per platform, has a request waiting on that platform. The message names your lease. | Release that lease first, or give each agent session its own identity. |
