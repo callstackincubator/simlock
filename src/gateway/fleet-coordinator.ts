@@ -270,12 +270,16 @@ export class FleetLeaseCoordinator {
       const requestId = newLeaseRequestId(this.options.idGenerator);
       this.#refuseIfAlreadyLeased(deviceRequest, options.requesterId, requestId);
       this.#refuseIfLeaseIdTaken(deviceRequest, options, requestId);
-      const { id, started: created } = await this.requests.admit(
+      const { id, started } = await this.requests.admit(
         deviceRequest,
         options,
-        (id, onProgress) => this.#queue.create(deviceRequest, { ...options, onProgress }, id),
+        (id, onProgress) => {
+          const waiter = this.#queue.create(deviceRequest, { ...options, onProgress }, id);
+          return { promise: this.#afterViewRead(waiter.promise), waiter };
+        },
         requestId,
       );
+      const created = started.waiter;
       this.#createdAt.set(created, this.options.clock.now());
       this.#emit("lease.requested", {
         requestId: id,
@@ -283,11 +287,34 @@ export class FleetLeaseCoordinator {
         requester: options.requesterId,
         waitPolicy: options.noWait === true ? "no-wait" : "wait",
       });
-      return { waiter: created };
+      return { promise: started.promise, waiter: created };
     });
     if ("replay" in admitted) return admitted.replay;
     this.#admit(admitted.waiter);
-    return admitted.waiter.promise;
+    return admitted.promise;
+  }
+
+  /**
+   * why: the request book stores `granted` and wakes its watchers when this promise settles, and the
+   * worker's own `lease.granted` push starts its view read later; so the grant waits for one read of the
+   * granting worker's view here, and a `lease.list` right after any answer lists the lease (#1370). A
+   * failed read is the next tick's.
+   */
+  async #afterViewRead(grant: Promise<FleetLeaseGrant>): Promise<FleetLeaseGrant> {
+    const granted = await grant;
+    const entry = this.options.leaseIndex.resolve(granted.lease.id);
+    if (entry !== undefined) {
+      await this.options.directory
+        .target(entry.workerId)
+        ?.refresh()
+        .catch((error: unknown) => {
+          this.#logger.debug("Failed to refresh a worker's view after granting it a lease", {
+            error: String(error),
+            workerId: entry.workerId,
+          });
+        });
+    }
+    return granted;
   }
 
   #refuseIfAlreadyLeased(

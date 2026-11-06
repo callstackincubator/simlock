@@ -99,6 +99,30 @@ describe("FleetLeaseCoordinator stored requests", () => {
     expect(client.calls.filter((call) => call.startsWith("lease.request"))).toHaveLength(1);
   });
 
+  it("keeps a request out of the granted state in its book until the granting worker's view has been read, so a replay or a watcher never sees a grant before lease.list lists it", async () => {
+    const { coordinator, directory, workers } = harness();
+    const client = new ScriptedWorkerClient();
+    directory.add("wrk_a", client);
+    client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+    connectWorker(workers, "wrk_a");
+    let finishRead: () => void = () => {};
+    directory.refreshGates.set("wrk_a", new Promise<void>((resolve) => (finishRead = resolve)));
+    let requestId: string | undefined;
+
+    const granting = coordinator.request(
+      REQUEST,
+      requestOptions({ onAdmitted: (id) => (requestId = id) }),
+    );
+    await tick();
+
+    if (requestId === undefined) throw new Error("expected the request to be admitted");
+    expect(coordinator.requests.get(requestId)?.record.state).not.toBe("granted");
+    finishRead();
+    await granting;
+    await tick();
+    expect(coordinator.requests.get(requestId)?.record.state).toBe("granted");
+  });
+
   it("reads a request back through its in-memory book once the fleet grants it, and names it on lease.requested", async () => {
     const { coordinator, directory, eventBus, workers } = harness();
     const client = new ScriptedWorkerClient();
@@ -223,7 +247,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     ]);
     expect(outcome).toBe("still-pending");
     expect(coordinator.queueDepth).toBe(2);
-    expect(directory.refreshCalls).toEqual(["wrk_a"]);
+    expect(directory.refreshCalls).toEqual(["wrk_a", "wrk_a"]);
   });
 
   it("gives a waiter passed over by the per-pass cap a guaranteed next look once the claiming attempt settles terminally, even when that failure produces no worker-side event at all (C1, round 3 review)", async () => {
@@ -268,7 +292,7 @@ describe("FleetLeaseCoordinator dispatch", () => {
     expect(outcome).toBe("resolved");
     const w2Grant = await w2;
     expect(w2Grant.lease.worker?.id).toBe("wrk_a");
-    expect(directory.refreshCalls).toEqual([]);
+    expect(directory.refreshCalls).toEqual(["wrk_a"]);
   });
 
   it("re-dispatches a waiter whose attempt found a reachable-but-not-yet-connected target, instead of parking it forever", async () => {

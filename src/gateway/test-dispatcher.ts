@@ -76,6 +76,8 @@ class FakeDirectory implements WorkerDirectory {
   readonly refreshCalls: string[] = [];
   /** why: the workers whose refresh asked for the catalog, baselines and config read as well. */
   readonly catalogRefreshCalls: string[] = [];
+  /** why: what a worker reports when the gateway reads its view again; none leaves the view as it is; it may take a tick, as a real read does. */
+  readonly onRefresh = new Map<string, () => void | Promise<void>>();
 
   add(workerId: string, client: ScriptedWorkerClient): void {
     this.clients.set(workerId, client);
@@ -90,6 +92,7 @@ class FakeDirectory implements WorkerDirectory {
       refresh: async (options) => {
         this.refreshCalls.push(workerId);
         if (options?.includeCatalog === true) this.catalogRefreshCalls.push(workerId);
+        await this.onRefresh.get(workerId)?.();
       },
       workerId,
     };
