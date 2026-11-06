@@ -29,6 +29,6 @@ Serviceability (`assess`):
 - `can-serve` and `assess` ask the same helpers in the same order, so the reason
   `can-serve` gives is the code the table would reject with. `has-baseline` and `assess` share
   `baselineEntry` and `withBaseline`; no field of a baseline is compared in the gateway.
-- A request with `except` (ADR 0066 §5) is checked after the model and runtime rows and before the capacity row (`assessFleet`, `serviceability.ts`). The `keeps-except` stage (`cannot-keep-except`) drops a worker whose catalog `slimCategories` lacks a name or whose mode (the baseline's, else the request's, else the catalog's `defaultMode`) is not `slim`; the capacity row runs again over the workers that keep the names (`assessExcept`). When none can serve: `NO_CAPACITY` if a known worker that keeps the names serves the model and runtime but cannot take requests now, else `BAD_REQUEST`, saying whether no worker slims the names or none would give a slim device.
+- A request with `except` (ADR 0066 §5) is checked after the model and runtime rows and before the capacity row.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.
