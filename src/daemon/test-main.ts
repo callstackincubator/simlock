@@ -30,6 +30,11 @@ export async function start(
   const sink = new MemoryLogSink();
   const clock = new FakeClock(1_000);
   const logger = new JsonLinesLogger({ clock, level: "debug", sink });
+  // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+  const gatewayDefaults =
+    overrides.role === "gateway"
+      ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
+      : {};
   const daemon = await startDaemon({
     clock,
     dataDirectory: directory,
@@ -41,7 +46,9 @@ export async function start(
     version: "1.2.3",
     ...rest,
     configOverrides:
-      overrides.role === "gateway" ? configOverrides : { ...STANDALONE_OFF, ...configOverrides },
+      overrides.role === "gateway"
+        ? { ...gatewayDefaults, ...configOverrides }
+        : { ...STANDALONE_OFF, ...configOverrides },
   } as StartDaemonOptions);
   runningDaemons.push(daemon);
   return { daemon, directory, sink };

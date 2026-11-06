@@ -46,7 +46,11 @@ describe("startDaemon version check", () => {
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
-      configOverrides: overrides.role === "gateway" ? {} : STANDALONE_OFF,
+      // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+      configOverrides:
+        overrides.role === "gateway"
+          ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
+          : STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
