@@ -28,42 +28,53 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
     handle: async (request, identity: Identity, lease, name) => {
       const declared = request.headers.get("content-length");
       if (name !== undefined && declared !== null && Number(declared) > MAX_FILE_BYTES) {
-        return Response.json(
-          {
-            error: {
-              code: "FILE_TOO_LARGE",
-              message: `File ${name} is over the 2 GiB limit for one file`,
-              name,
-            },
-          },
-          { status: 413 },
-        );
+        return tooLarge(name);
       }
       const workerLeaseId = lease.workerLeaseId ?? lease.id;
-      const path = `/files/leases/${encodeURIComponent(workerLeaseId)}${
-        name === undefined ? "" : `/${encodeURIComponent(name)}`
-      }`;
       const relayed = await options.relay(lease.workerId ?? "", {
         leaseId: workerLeaseId,
-        request: new Request(`http://simlock-worker${path}`, {
-          headers: request.headers,
-          method: request.method,
-          signal: request.signal,
-          ...(request.body === null ? {} : { body: request.body, duplex: "half" }),
-        } as RequestInit),
+        request: workerRequest(request, workerLeaseId, name),
         target: "files",
         tenant: `${options.requesterPrefix}${identity.principal}`,
         ...(request.method === "PUT" && name !== undefined
           ? { upload: { name, silenceMs: options.silenceMs ?? UPLOAD_SILENCE_MS } }
           : {}),
       });
-      const answer = await withCallersLeaseId(relayed, workerLeaseId, lease.id);
-      const length = answer.headers.get("simlock-content-length");
-      if (length === null || !/^\d{1,16}$/.test(length)) return answer;
-      // why: the relay carries no `Content-Length`, so the worker sent the body's length under its own header and the gateway gives it back to the caller.
-      const headers = new Headers(answer.headers);
-      headers.set("content-length", length);
-      return new Response(answer.body, { headers, status: answer.status });
+      return withContentLength(await withCallersLeaseId(relayed, workerLeaseId, lease.id));
     },
   };
+}
+
+function tooLarge(name: string): Response {
+  return Response.json(
+    {
+      error: {
+        code: "FILE_TOO_LARGE",
+        message: `File ${name} is over the 2 GiB limit for one file`,
+        name,
+      },
+    },
+    { status: 413 },
+  );
+}
+
+function workerRequest(request: Request, workerLeaseId: string, name: string | undefined): Request {
+  const path = `/files/leases/${encodeURIComponent(workerLeaseId)}${
+    name === undefined ? "" : `/${encodeURIComponent(name)}`
+  }`;
+  return new Request(`http://simlock-worker${path}`, {
+    headers: request.headers,
+    method: request.method,
+    signal: request.signal,
+    ...(request.body === null ? {} : { body: request.body, duplex: "half" }),
+  } as RequestInit);
+}
+
+// why: the relay carries no `Content-Length`, so the worker sent the body's length under its own header and the gateway gives it back to the caller.
+function withContentLength(answer: Response): Response {
+  const length = answer.headers.get("simlock-content-length");
+  if (length === null || !/^\d{1,16}$/.test(length)) return answer;
+  const headers = new Headers(answer.headers);
+  headers.set("content-length", length);
+  return new Response(answer.body, { headers, status: answer.status });
 }

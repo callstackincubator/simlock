@@ -171,8 +171,9 @@ class Exchange {
     });
   }
 
-  #armSilence(upload: { readonly name: string; readonly silenceMs: number }): void {
-    this.#disarmSilence();
+  #armSilence(): void {
+    const { upload } = this.init.call;
+    if (upload === undefined) return;
     this.#silenceTimer = this.init.clock.setTimer(upload.silenceMs, () => {
       this.#fail(
         new DispatchError(
@@ -208,13 +209,21 @@ class Exchange {
       return;
     }
     this.#channel = channel;
-    // why: an upload's time is bounded by silence from here on, so the start deadline ends once the channel is open.
-    if (this.init.call.upload !== undefined && this.#timer !== undefined) {
-      this.init.clock.cancel(this.#timer);
-      this.#timer = undefined;
-    }
+    this.#endStartDeadlineOfUpload();
     this.#reader = channel.readable.getReader();
     this.#look();
+    this.#sendRequest(client, channel);
+    if (!this.init.twoWay) await this.#upload(channel, this.init.call.request.body);
+  }
+
+  // why: an upload's time is bounded by silence from here on, so the start deadline ends once the channel is open.
+  #endStartDeadlineOfUpload(): void {
+    if (this.init.call.upload === undefined || this.#timer === undefined) return;
+    this.init.clock.cancel(this.#timer);
+    this.#timer = undefined;
+  }
+
+  #sendRequest(client: GatewayWorkerClient, channel: LinkChannel): void {
     const { request } = this.init.call;
     const body = request.body;
     this.#requestSent = true;
@@ -246,12 +255,10 @@ class Exchange {
         (answer) => this.#onAnswer(answer),
         (error: unknown) => this.#onCallError(error),
       );
-    if (!this.init.twoWay) await this.#upload(channel, body);
   }
 
   async #upload(channel: LinkChannel, body: ReadableStream<Uint8Array> | null): Promise<void> {
     const writer = channel.writable.getWriter();
-    const { upload } = this.init.call;
     if (body === null) {
       await writer.close().catch(() => undefined);
       this.#armHeadDeadline();
@@ -261,7 +268,7 @@ class Exchange {
     this.#callerBody = reader;
     try {
       for (;;) {
-        if (upload !== undefined) this.#armSilence(upload);
+        this.#armSilence();
         const step = await reader.read();
         this.#disarmSilence();
         if (this.#done) return;
@@ -271,15 +278,19 @@ class Exchange {
       await writer.close();
       this.#armHeadDeadline();
     } catch (error: unknown) {
-      if (this.#done) return;
-      if (error instanceof LinkChannelError) {
-        // why: the worker stopped reading this direction, so the caller's body is no longer read.
-        if (error.reason === "stopped") reader.cancel().catch(() => undefined);
-        else this.#onChannelError(error);
-        return;
-      }
-      this.#fail(error);
+      this.#uploadFailed(error, reader);
     }
+  }
+
+  #uploadFailed(error: unknown, reader: ReadableStreamDefaultReader<Uint8Array>): void {
+    if (this.#done) return;
+    if (error instanceof LinkChannelError) {
+      // why: the worker stopped reading this direction, so the caller's body is no longer read.
+      if (error.reason === "stopped") reader.cancel().catch(() => undefined);
+      else this.#onChannelError(error);
+      return;
+    }
+    this.#fail(error);
   }
 
   // why: an upload's head can arrive only after its body, so its deadline counts from the body's end.

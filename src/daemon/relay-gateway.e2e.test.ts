@@ -565,7 +565,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     ];
 
     const refused = await Promise.all(routes(asStranger).map((send) => send()));
-    const full = await rig.call("/big.bin", { body: new Uint8Array(2 * MIB), method: "PUT" });
+    const full = await rig.call("/big.bin", { body: new Uint8Array(MIB + 1), method: "PUT" });
     const feed = new TransformStream<Uint8Array>();
     const writer = feed.writable.getWriter();
     const running = rig.call("/running.bin", {
