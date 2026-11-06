@@ -158,6 +158,8 @@ const leaseRequestBaseSchema = z
     // before the handler, and its error would stand in for `BAD_REQUEST`.
     osVersion: z.string().optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: A plain array of plain strings, bounded by `refuseBadExcept` as the one object-level check, like `osVersion`: a bound on the field itself would be checked by the MCP SDK before the handler.
+    except: z.array(z.string()).optional(),
     imageTag: imageTagSchema.optional(),
     baseline: baselineNameSchema.optional(),
     physical: z.boolean().optional(),
@@ -311,13 +313,18 @@ export const leaseRequest = defineOperation({
   // `requesterId` (printable, at most 256 characters), and `owner` is gated by role in the handler (the resource does not exist yet).
 });
 
-export function requestedDevice(input: z.infer<typeof leaseRequestInputSchema>) {
+export function requestedDevice(
+  input: Omit<z.infer<typeof leaseRequestInputSchema>, "except"> & {
+    readonly except?: readonly string[] | undefined;
+  },
+) {
   return {
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.class === undefined ? {} : { class: input.class }),
     platform: input.platform,
     ...(input.osVersion === undefined ? {} : { osVersion: input.osVersion }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(input.except === undefined ? {} : { except: [...input.except] }),
     ...(input.imageTag === undefined ? {} : { imageTag: input.imageTag }),
     ...(input.baseline === undefined ? {} : { baseline: input.baseline }),
     ...(input.physical === true ? { physical: true as const } : {}),

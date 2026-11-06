@@ -34,6 +34,12 @@ const devicePresenceSchema = z.discriminatedUnion("present", [
 
 const deviceModeSchema = z.enum(["slim", "full"]);
 
+/** why: the category names a slim lease kept running (ADR 0066 §1); the same bounds as the request's `except`. */
+export const exceptCategoriesSchema = z
+  .array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/))
+  .min(1)
+  .max(16);
+
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
 export const physicalClassSchema = z.enum(["phone", "tablet"]);
@@ -258,6 +264,7 @@ export const deviceRecordSchema = z
     absentReason: absentReasonSchema.optional(),
     physical: z.boolean(),
     mode: deviceModeSchema.optional(),
+    except: exceptCategoriesSchema.optional(),
     class: physicalClassSchema.optional(),
     leaseIdentity: leaseIdentitySchema.optional(),
     transitionAgeMs: z.number().optional(),
@@ -279,6 +286,7 @@ export const statusDeviceSchema = z
     state: deviceStateSchema,
     physical: z.boolean(),
     mode: deviceModeSchema.optional(),
+    except: exceptCategoriesSchema.optional(),
     class: physicalClassSchema.optional(),
     driverDeviceId: z.string().optional(),
     servesDefaultMode: z.boolean(),
@@ -317,6 +325,7 @@ export const grantedDeviceSchema = z
     address: z.string().optional(),
     physical: z.boolean(),
     mode: deviceModeSchema.optional(),
+    except: exceptCategoriesSchema.optional(),
     class: physicalClassSchema.optional(),
   })
   .superRefine((device, context) => checkDeviceType(device, context, false));

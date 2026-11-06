@@ -2867,6 +2867,24 @@ describe("Dispatcher: device mode on every surface", () => {
     });
   });
 
+  it("a client leases slim with except and is granted a device reporting it", async () => {
+    const { dispatcher, driver } = await buildDispatcher({
+      driverOptions: { slimmableOsVersions: ["26.5"] },
+    });
+    const except = ["store", "other"];
+
+    const granted = await dispatcher.dispatch(
+      "lease.request",
+      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", mode: "slim", except },
+      session(),
+    );
+
+    expect(granted.device).toMatchObject({ except, mode: "slim" });
+    expect(driver.calls.find((call) => call.operation === "makeReady")?.arguments[1]).toMatchObject(
+      { except, mode: "slim", purpose: "prepare" },
+    );
+  });
+
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
     const { dispatcher, registry } = await buildDispatcher({ driverOptions: { mode: "slim" } });
     const granted = await dispatcher.dispatch("lease.request", request, session());
