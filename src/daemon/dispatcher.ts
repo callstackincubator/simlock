@@ -780,15 +780,17 @@ export class Dispatcher {
       // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
+    const files = this.options.leaseFiles;
+    if (files === undefined) throw new DispatchError("INTERNAL", "Lease files are unavailable");
+    const grant = { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform };
+    const cwd = await files.folderOf(grant);
     const file =
       input.stdinFile === undefined
         ? undefined
-        : await this.#openStdinFile(
-            { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform },
-            input.stdinFile,
-          );
+        : await this.#openStdinFile(files, grant, input.stdinFile);
     try {
       const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
+        cwd,
         env: execEnv,
         // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
         // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
@@ -807,12 +809,13 @@ export class Dispatcher {
     }
   };
 
-  async #openStdinFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView> {
-    if (this.options.leaseFiles === undefined) {
-      throw new DispatchError("INTERNAL", "Lease files are unavailable");
-    }
+  async #openStdinFile(
+    files: Pick<LeaseFiles, "openFile">,
+    grant: LeaseFilesGrant,
+    name: string,
+  ): Promise<LeaseFileView> {
     try {
-      return await this.options.leaseFiles.openFile(grant, name);
+      return await files.openFile(grant, name);
     } catch (error) {
       if (error instanceof LeaseFilesError) {
         throw new DispatchError(error.code, error.message, error.details);

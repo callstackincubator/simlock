@@ -8,7 +8,13 @@ import { expect, vi } from "vitest";
 
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayRelay } from "../gateway/index.js";
-import { MemoryFilesystem, NoopLogger, SystemClock, type Logger } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NodeFilesystem,
+  NoopLogger,
+  SystemClock,
+  type Logger,
+} from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
@@ -181,7 +187,8 @@ export async function startWorker(
         platform: "android",
       }),
     ],
-    filesystem: new MemoryFilesystem(),
+    // why: some tests run a real command on this worker, in a lease folder that has to exist on disk.
+    filesystem: new NodeFilesystem(),
     logger,
     relayTargets,
     version: "1.0.0-e2e",

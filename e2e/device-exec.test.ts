@@ -1,4 +1,6 @@
+import { realpath } from "node:fs/promises";
 import { createServer } from "node:net";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { waitFor, withDaemon, type TestEnv } from "./helpers/index.js";
@@ -181,6 +183,7 @@ describe("device.exec over HTTP", () => {
     // device root is prepended and the driver's environment reached the child's own process.
     expect(JSON.parse(chunksOf(frames, "stdout"))).toEqual({
       argv: ["/fake/ios", "list", "devices", "--fake-exec-stderr=a warning", "--fake-exec-exit=3"],
+      cwd: expect.any(String),
       platform: "ios",
     });
     expect(chunksOf(frames, "stderr")).toBe("a warning");
@@ -254,6 +257,37 @@ describe("device.exec over HTTP", () => {
       expect(refused.status).toBe(status);
       expect(await errorCodeOf(refused)).toBe(code);
     }
+
+    await env.cli(["release", leaseId]);
+  });
+
+  it("runs every exec with the lease's folder as its working folder", async () => {
+    const { baseUrl, env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
+    const report = async (args: string[]): Promise<{ cwd: string; fileSize?: number }> => {
+      const response = await exec(leaseId, { args, tool: "simctl" }, auth);
+      expect(response.status).toBe(200);
+      const frames = await readSse(response);
+      expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+      return JSON.parse(chunksOf(frames, "stdout")) as { cwd: string; fileSize?: number };
+    };
+
+    // why: no file was uploaded yet, so this shows the folder is made for the command.
+    const first = await report(["list"]);
+    expect(dirname(await realpath(first.cwd))).toBe(
+      join(await realpath(env.dataDirectory), "lease-files"),
+    );
+
+    const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/fixture.bin`, {
+      body: "x".repeat(1234),
+      headers: { ...auth, "content-type": "application/octet-stream" },
+      method: "PUT",
+    });
+    expect(uploaded.status).toBe(201);
+    const second = await report(["list", "--fake-exec-read-file=fixture.bin"]);
+    expect(second.fileSize).toBe(1234);
+    expect(await realpath(second.cwd)).toBe(await realpath(first.cwd));
 
     await env.cli(["release", leaseId]);
   });
