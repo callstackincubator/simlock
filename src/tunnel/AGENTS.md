@@ -1,46 +1,39 @@
 # Tunnel
 
 Does: lets a lease's holder (or an operator) reverse device ports of its Android device or iOS simulator to its own machine, forward its own loopback ports to the device's, or reach an Android emulator's adb port (the `emulator` kind), over `WS /v1/leases/{id}/tunnel`, on a lone worker or through a gateway.
-Entry: `index.ts` -> `tunnelModule`, an optional module (ADR 0054): `worker.ts` `createWorker` and `gateway.ts` `createGateway`, loaded by the module host only when turned on.
-Uses: contract (`src/contract/tunnel-frames.ts`), core (`DeviceReverse`, `DeviceTcpError`, `closeReason`), modules (the context, socket and relay types, and `modules/relay-channel.ts`: the channel framing, `channelSocket`, the close mapping and the 404, 426 and 503 bodies), ports (`LeaseSocket`, `Clock`).
-Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
-Off unless `capabilities.tunnel.enabled` (false). Off: nothing loaded, and the `tunnel` capability reads `off`.
-
-## Files
-
-| File                | Role                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| `definition.ts`     | `tunnelModule`: name `tunnel`, empty config section, `http` route data, the two loaders                |
-| `worker.ts`         | The worker side from the host's context: capability, hooks, lease route (426), socket, relay           |
-| `gateway.ts`        | The gateway side: lease route (426), socket, `beforeDrain`                                             |
-| `gateway-link.ts`   | Gateway: the module's path, bounds and 503 texts for `createGatewayChannelLink`                        |
-| `pending-stream.ts` | A forwarded connection's stream before its device connect settles: writes, END and close wait in order |
-| `limits.ts`         | `MAX_TUNNEL_MESSAGE_BYTES` (65541): the longest message a channel frame carries                        |
-| `sessions.ts`       | One session per socket: HELLO, rules, connections, window and credit, lease end, drain                 |
-
-## How it works
-
-The HTTP layer resolves the lease for the caller, then `socket.open` finds the lease and its device in the worker's registry (404 `UNKNOWN_LEASE` when gone) and attaches a session to the upgraded socket.
-
-1. The first frame must be `HELLO`. It is checked whole: bad port, more than 8 tunnels per lease (counted across sockets), a lease whose driver has no `deviceTcp` or does not `supports` it (an iPhone: `the lease is on an iPhone; tunnels need an Android emulator or phone, or an iOS simulator`; a simulator on a driver built without tunnel ports: `this worker's iOS driver takes no tunnels`). A refusal sends `REFUSED {code, message}` and closes 4003 (the close reason is cut to 123 bytes, the message is whole).
-2. Each reverse tunnel is `ctx.deviceTcp.reverse`; a forward tunnel sets nothing on the device. A failure removes the tunnels set before it and refuses with the driver's `DeviceTcpError` code (`TUNNEL_PORT_IN_USE`, `TUNNEL_FAILED`), else `TUNNEL_FAILED`. Then `READY`.
-3. A device connection is `OPEN` with the next odd id; its bytes go out as `DATA` only while the caller's window allows, and the worker grants `CREDIT` as it writes to the device. `END` half-closes one direction; a connection ends when both have. A 257th device connection is closed at once, with no frame.
-   3b. An emulator tunnel is `{kind:"emulator", emulatorPort:"adb"}` in HELLO (any other `emulatorPort`, or none, is `BAD_REQUEST`; it counts toward the 8 and has no device port to range-check). It needs `ctx.deviceTcp.supportsEmulatorPort`: a phone, an iOS simulator or an iPhone is refused `TUNNEL_UNSUPPORTED` with `unsupportedEmulatorPortMessage`. A caller `OPEN {kind:"emulator", emulatorPort:"adb"}` (even id above the last, and only when HELLO named it) calls `ctx.deviceTcp.connectEmulatorPort` and relays like a forward connection: a failed connect is `RESET {reason}`.
-   3a. A forward connection is the caller's `OPEN` with an even id above its last, `{kind:"forward", devicePort}` naming one of the socket's forward tunnels (else `BAD_REQUEST`, close 4003). `ctx.deviceTcp.connect` opens the device port while `pendingStream` holds the caller's `DATA` and `END` in order; a failed connect is `RESET {reason}`, and a caller's `OPEN` as the 257th connection is `RESET` at once.
-4. A bad frame (a `CREDIT` that is not 4 bytes, a `DATA` of 0 or over 65536 bytes included) is `BAD_REQUEST`, close 4003, never a throw; a frame for a connection already closed is ignored; a device stream that fails resets its own connection.
-5. The socket closing, the lease ending (`beforeDeviceReclaim`, close 4001 with the reason) and a drain (`beforeDrain`, close 1001) close the session's connections and remove its rules, the hook returning when they are done, a removal the socket's close began included (10 s per removal); on an emulator a signal that is aborted, or aborts between removals, skips the rest and reclaim does them; on a phone the removals run anyway, because its reclaim removes no rules, and so does the close of a reverse whose `holdsDeviceRule` is false (an iOS simulator's: two local listeners and no rule).
-
-## Through a gateway
-
-The gateway's `socket.open` calls `relayTwoWay` (`tunnel` target) with the worker's lease id; the worker's `relayTwoWay` finds the lease and device and attaches a `channelSocket` to the same session. The worker sends `0xF0` every 5 s and `0xF1 {code, reason}` when its session closes.
-
-- Holder frames up to 65541 bytes go to the channel; a longer one is refused `BAD_REQUEST` by the gateway, close 4003.
-- The channel goes to the holder except `0xF0`. `0xF1` closes the holder with its code and reason (1001 from a stopping worker is reported as 1011). A channel that ends or breaks closes 1011 `Worker <id> stopped answering`.
-- `leases.onRemoved` waits 2 s for the worker's `0xF1`, then closes 4001 `lease ended`. `beforeDrain` closes 1001 `Simlock is stopping`.
-- Before the upgrade: `RELAY_TARGET_MISSING` is 503 `TUNNEL_UNAVAILABLE`; no head in 10 s is 503 `WORKER_UNREACHABLE`.
 
 ## Rules
 
-- The module never checks an owner; the HTTP layer does.
-- The module never imports a driver; `ctx.deviceTcp` is the only door to a device.
+Boundaries:
+
+- The module imports nothing from http, gateway, drivers, daemon or leasing; `ctx.deviceTcp` is the only door to a device. No dependency rule holds this.
+- The module never checks an owner; the HTTP layer does. The worker's own registry decides whether the lease and its device still exist.
+- Tags, limits and the refusal close code come from `src/contract/tunnel-frames.ts`, which the caller's side shares.
+
+A session:
+
+- The first frame must be `HELLO`, and it is checked whole before anything is set on the device.
+- The tunnel limit counts every socket of one lease, not one socket.
+- A failed reverse removes the tunnels set before it, then refuses with the driver's `DeviceTcpError` code.
+- A refusal sends `REFUSED` with the whole message, then closes; only the close reason is cut, because `ws` throws on a long one.
+- Wire input never throws: a bad frame is `BAD_REQUEST` and a close, and the daemon goes on.
+- The worker opens odd connection ids and the caller even ones, each rising. A frame for an id that was never opened is `BAD_REQUEST`; one for a connection already closed is ignored.
+- A caller's `OPEN` is trusted only when it names a forward tunnel of this socket, or the emulator port when `HELLO` named it.
+- A caller's connection exists from its `OPEN`: `pendingStream` holds its `DATA`, `END` and close in order until the device connect settles. A failed connect is `RESET`, not a refusal.
+- A connection reads from its device only while the caller's window allows, so a slow reader stops its own connection and no other. A device stream that fails resets its own connection.
+- An emulator port is named by what it serves (`adb`), never by number, and needs `ctx.deviceTcp.supportsEmulatorPort`.
+
+Ends:
+
+- The socket closing, the lease ending (`beforeDeviceReclaim`) and a drain (`beforeDrain`) close the session's connections and remove its rules. Each session finishes once.
+- The hook returns only when the removals are done, a removal the socket's close began included. One removal waits at most `REMOVAL_TIMEOUT_MS` (`sessions.ts`).
+- On an emulator, a lease-end signal that is aborted, or aborts between removals, skips the rest: reclaim removes them.
+- On a phone the removals run anyway, because its reclaim removes no rules.
+- A reverse whose `holdsDeviceRule` is false (an iOS simulator's: local listeners and no rule on the device) is closed anyway, because no reclaim will.
 - A removal that fails is logged at `warn`; the driver keeps the loopback port reserved until reclaim, and on a phone until no rule there points to it.
+
+Through a gateway:
+
+- The gateway's `socket.open` relays to the worker's `tunnel` target with the worker's lease id; the worker's `relayTwoWay` attaches a `channelSocket` to a session as a local socket would. The bridge is [modules](../modules/AGENTS.md)'s `createGatewayChannelLink`.
+- A holder frame longer than `MAX_TUNNEL_MESSAGE_BYTES` (`limits.ts`) would break the channel for the whole lease, so the gateway refuses it itself, as the worker refuses a bad frame.
+- A worker closes a socket only with a code `closeOf` (`modules/relay-channel.ts`) lets through; any other reaches the holder as "the worker stopped answering".
