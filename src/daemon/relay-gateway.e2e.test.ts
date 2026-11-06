@@ -418,6 +418,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       method: "PUT",
     } as RequestInit);
     const get = await call("/fixture.tar");
+    const ranged = await call("/fixture.tar", { headers: { range: "bytes=10-19" } });
     const listed = await call("");
     const deleted = await call("/fixture.tar", { method: "DELETE" });
     const after = await call("");
@@ -426,6 +427,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(await put.json()).toEqual({ name: "fixture.tar", size: 20 * MIB });
     expect(get.status).toBe(200);
     expect(digestOf([new Uint8Array(await get.arrayBuffer())])).toBe(digestOf([bytes]));
+    expect(get.headers.get("content-length")).toBe(String(20 * MIB));
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-length")).toBe("10");
+    expect(ranged.headers.get("content-range")).toBe(`bytes 10-19/${String(20 * MIB)}`);
+    expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(bytes.subarray(10, 20));
     expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
     expect(deleted.status).toBe(204);
     expect(await after.json()).toEqual({ files: [] });
