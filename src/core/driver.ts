@@ -29,6 +29,7 @@ export interface ExactDeviceRequest {
   readonly osVersion?: string;
   readonly mode?: DeviceMode;
   readonly imageTag?: string;
+  readonly except?: readonly string[];
 }
 
 export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
@@ -596,6 +597,14 @@ export class UnsupportedRequestOptionError extends Error {
   ) {
     super(`${platform} lease requests do not take ${option}`);
     this.name = "UnsupportedRequestOptionError";
+  }
+}
+
+/** why: A refusal that carries its own message, where `UnsupportedRequestOptionError` builds a fixed one. */
+export class BadDeviceRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadDeviceRequestError";
   }
 }
 

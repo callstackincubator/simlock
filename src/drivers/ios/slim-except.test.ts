@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
-import { KeptCategoriesError } from "../../core/index.js";
-import { FakeClock, ScriptedProcessRunner } from "../../ports/index.js";
+import { BadDeviceRequestError, KeptCategoriesError } from "../../core/index.js";
+import { FakeClock, MemoryFilesystem, ScriptedProcessRunner } from "../../ports/index.js";
 import { SLIM_CATEGORIES, slimSignature, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import {
   createSlimDriver,
@@ -11,6 +13,7 @@ import {
   parseOverrides,
   plantManagedDevice,
   printDisabled,
+  simctl,
   slimBootCalls,
 } from "./test-slim.js";
 
@@ -167,5 +170,52 @@ describe("IosSimctlDriver makeReady with an except list", () => {
       expect(outcome, refusal.name).toEqual({ error: new KeptCategoriesError(refusal.message) });
       expect(onSlimmed, refusal.name).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("IosSimctlDriver resolveSpec with an except list", () => {
+  const listFixture = readFileSync(new URL("./fixtures/simctl-list.json", import.meta.url), "utf8");
+
+  async function resolveWith(categories: readonly string[] | undefined, except: readonly string[]) {
+    const driver = await createSlimDriver(
+      new ScriptedProcessRunner([
+        {
+          match: simctl("list", "-j", "devicetypes", "runtimes"),
+          result: { code: 0, stderr: "", stdout: listFixture },
+        },
+      ]),
+      new MemoryFilesystem(),
+      { bootTimeoutMs: 300_000, ...(categories === undefined ? {} : { categories }) },
+    );
+    return await driver
+      .resolveSpec({
+        except,
+        mode: "slim",
+        model: "iPhone 16",
+        osVersion: "26.5",
+        platform: "ios",
+      })
+      .then(
+        (spec) => ({ spec }) as const,
+        (error: unknown) => ({ error }) as const,
+      );
+  }
+
+  it("refuses an except list it cannot serve at resolve", async () => {
+    const names = SLIM_CATEGORIES.map((category) => category.name);
+    for (const name of [names[0]!, names.at(-1)!]) {
+      const accepted = await resolveWith(undefined, [name]);
+      expect(accepted, name).toEqual({ spec: expect.objectContaining({ mode: "slim" }) });
+    }
+    expect(await resolveWith(["store"], ["store"])).toEqual({
+      spec: expect.objectContaining({ mode: "slim" }),
+    });
+
+    expect(await resolveWith(["store"], ["wallet"])).toEqual({
+      error: new BadDeviceRequestError('unknown slim category "wallet"'),
+    });
+    expect(await resolveWith(["store"], ["mdm"])).toEqual({
+      error: new BadDeviceRequestError('"mdm" is not in this worker\'s slim categories (store)'),
+    });
   });
 });
