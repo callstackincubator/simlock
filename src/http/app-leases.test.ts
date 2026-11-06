@@ -1870,6 +1870,12 @@ describe("a lease's files on a worker", () => {
       expect(await text(await get("a.tar"))).toBe("second");
       expect(await text(await get("A.TAR"))).toBe("first");
       expect(await names()).toEqual(["A.tar", "a.tar"]);
+
+      expect((await remove("a.tar")).status).toBe(204);
+      expect(await names()).toEqual([]);
+      expect(await folderEntries(leaseFolder)).toEqual([]);
+      expect((await get("a.tar")).status).toBe(404);
+      expect((await get("A.tar")).status).toBe(404);
     }
   });
 
