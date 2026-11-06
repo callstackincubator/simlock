@@ -38,9 +38,12 @@ flowchart LR
 
 1. **Each lease has a file folder on its worker.** It holds flat files the
    lease's holder (or an operator) puts there and commands write there. It
-   is created on first use and deleted when the lease ends, before the
-   device is reclaimed (a lease-end participant, ADR 0024). Startup deletes
-   the folder of every lease that is no longer live. It is built into the
+   belongs to one grant: its name is the lease id in hex and the grant
+   time, so two leases whose ids differ only by case, or a lease id used
+   again, never share a folder on a case-insensitive disk. It is created on
+   first use and deleted when the lease ends, before the device is
+   reclaimed (a lease-end participant, ADR 0024); a write for an ended
+   grant is refused. Startup deletes every folder no live grant names. It is built into the
    daemon, not an optional module, and is always on.
 2. **HTTP is the way in.** On a worker and on a gateway:
    - `PUT /v1/leases/{id}/files/{name}`: the raw body, streamed, becomes
@@ -53,24 +56,32 @@ flowchart LR
    - `DELETE /v1/leases/{id}/files/{name}`: `204`.
    A gateway relays each to the lease's worker over the existing relay
    channel, so no request holds a whole file in memory on either side.
-3. **Names are flat:** `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Anything else
-   is `400 BAD_REQUEST`.
+3. **Names are flat:** `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`, compared
+   ignoring case, as the worker's disk does. Anything else is
+   `400 BAD_REQUEST`. The list shows only such files; anything else a
+   command writes there still counts toward the lease limit.
 4. **Limits are fixed:** a file may not pass 2 GiB (`413 FILE_TOO_LARGE`);
    the bytes in a lease's folder may not pass 4 GiB, counting files a
    command wrote (`413 LEASE_FILES_FULL`); an upload is refused while the
    worker's free disk is below its disk-pressure threshold
    (`422 INSUFFICIENT_DISK_SPACE`). An unknown name is
-   `404 UNKNOWN_FILE`.
+   `404 UNKNOWN_FILE`. A download is always `application/octet-stream`
+   with `Cache-Control: no-store`.
 5. **`device.exec` uses the folder.** Every `device.exec` runs with the
    lease's folder as its working directory, so a relative path in its
    arguments names a stored file and a command can write one for download.
    A new optional `stdinFile` names a stored file that is piped to the
    command's stdin; with `stdin` too, it is `400 BAD_REQUEST`. `stdin`
    keeps its one-shot string and its cap; ADR 0058 is untouched.
-6. **A relayed file request is bounded by silence while its body flows.**
-   Through a gateway, the relay's 330 s deadline for the worker's answer
-   starts once the request body has been fully sent; while bytes flow, only
-   the 330 s idle bound applies. Other relays keep today's deadline.
+6. **An upload is bounded by silence, not by total time.** The HTTP
+   listener drops Node's 300 s total request limit. An upload whose body
+   brings no byte for 330 s is cut, `408 UPLOAD_STALLED`, on a worker and
+   through a gateway; there the relay's 330 s deadline for the worker's
+   answer starts once the body has been fully sent. Other relays keep
+   today's deadline. Through a gateway the gateway refuses a
+   `Content-Length` over 2 GiB itself, since the relay does not carry that
+   header, and restores a download's length from a size header the worker
+   sends.
 7. **The relay target `files` is the core's.** The worker serves it beside
    the modules' targets, and no optional module may be named `files`.
 8. **No business events.** A transfer is a request, logged like any other.
