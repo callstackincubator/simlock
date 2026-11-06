@@ -10,7 +10,7 @@ import {
   statusDeviceSchema,
 } from "./device-schemas.js";
 import { leaseRecordSchema, waitingRequestSchema } from "./lease-schemas.js";
-import { CONTROL_CHARACTERS } from "./schema-parts.js";
+import { CONTROL_CHARACTERS, deviceModeSchema } from "./schema-parts.js";
 
 const runningCapacityEntrySchema = z.object({
   running: z.number(),
@@ -276,6 +276,11 @@ export const platformCatalogSchema = z.object({
    */
   modelWorkers: z.record(z.string(), z.array(z.string())).optional(),
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
+  slimCategories: z
+    .array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/))
+    .max(32)
+    .optional(),
+  defaultMode: deviceModeSchema.optional(),
 });
 
 /**

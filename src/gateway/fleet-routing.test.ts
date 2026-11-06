@@ -1155,6 +1155,48 @@ describe("FleetLeaseCoordinator: requires", () => {
   });
 });
 
+describe("FleetLeaseCoordinator routes an except request by each worker's slim set and default mode (ADR 0066 §5)", () => {
+  const every = ["widgets", "store", "mdm", "other"];
+
+  function fleet(
+    slims: Readonly<Record<string, { categories: string[]; defaultMode: "slim" | "full" }>>,
+  ) {
+    const made = harness();
+    const clients: Record<string, ScriptedWorkerClient> = {};
+    for (const [id, slim] of Object.entries(slims)) {
+      const client = new ScriptedWorkerClient();
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      clients[id] = client;
+      made.directory.add(id, client);
+      connectWorker(made.workers, id);
+      made.workers.refresh(id, {
+        catalog: catalogFixture([
+          {
+            defaultMode: slim.defaultMode,
+            models: ["iPhone 17"],
+            platform: "ios",
+            runtimes: ["26.0"],
+            slimCategories: slim.categories,
+          },
+        ]).platforms,
+      });
+    }
+    return { ...made, clients };
+  }
+
+  it("sends an except request to a worker that slims every name and gives it the except list", async () => {
+    const { clients, coordinator } = fleet({
+      wrk_a: { categories: ["store"], defaultMode: "full" },
+      wrk_b: { categories: every, defaultMode: "full" },
+    });
+
+    await coordinator.request({ ...REQUEST, except: ["mdm"], mode: "slim" }, requestOptions());
+
+    expect(clients["wrk_a"]?.lastRequestLeaseInput).toBeUndefined();
+    expect(clients["wrk_b"]?.lastRequestLeaseInput).toMatchObject({ except: ["mdm"] });
+  });
+});
+
 describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   const gatewayLease = {
     deviceId: "dev_1",
