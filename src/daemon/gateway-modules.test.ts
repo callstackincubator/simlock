@@ -71,10 +71,14 @@ function gatewayOptions(
 async function startGateway(
   modules: readonly OptionalModuleDefinition<unknown>[],
   on: readonly string[],
+  resetCounts: () => void = () => undefined,
 ): Promise<Gateway> {
-  const directory = await mkdtemp(join(tmpdir(), "simlock-gw-modules-"));
-  directories.push(directory);
-  const startAt = async (port: number, clock: FakeClock, sink: MemoryLogSink) => {
+  const startAt = async (
+    directory: string,
+    port: number,
+    clock: FakeClock,
+    sink: MemoryLogSink,
+  ) => {
     const daemon = await startUnlessPortLost(
       sink,
       startDaemon(gatewayOptions(modules, on, directory, port, clock, sink)),
@@ -82,14 +86,17 @@ async function startGateway(
     daemons.push(daemon);
     return daemon;
   };
-  // why: each first attempt has its own clock and sink, so a start that lost its port leaves no line in the sink the test reads.
+  // why: each attempt has its own data folder, clock, sink and counts: a start that lost its port is still stopping in its folder, and leaves no line or count in what the test reads.
   const { port, started } = await startOnFreePort(async (candidate) => {
+    resetCounts();
+    const directory = await mkdtemp(join(tmpdir(), "simlock-gw-modules-"));
+    directories.push(directory);
     const clock = new FakeClock(1_000);
     const sink = new MemoryLogSink();
-    return { clock, daemon: await startAt(candidate, clock, sink), sink };
+    return { clock, daemon: await startAt(directory, candidate, clock, sink), directory, sink };
   });
-  const { clock, daemon, sink } = started;
-  const start = () => startAt(port, clock, sink);
+  const { clock, daemon, directory, sink } = started;
+  const start = () => startAt(directory, port, clock, sink);
   const agent = await daemon.dispatch("token.create", { label: "agent", role: "agent" }, admin);
   return {
     agentSecret: agent.secret,
@@ -157,7 +164,7 @@ describe("a gateway's optional modules", () => {
   it("a gateway with agent-device off mounts no /v1/agent-device, and never calls agent-device's loadGateway, while one with it on does", async () => {
     const definition = agentDeviceModuleWith({});
     const loadGateway = vi.spyOn(definition, "loadGateway");
-    const on = await startGateway([definition], ["agent-device"]);
+    const on = await startGateway([definition], ["agent-device"], () => loadGateway.mockClear());
     expect((await get(on, "/v1/agent-device/health")).status).toBe(200);
     expect(loadGateway).toHaveBeenCalledTimes(1);
     await on.daemon.stop("test");
@@ -173,7 +180,10 @@ describe("a gateway's optional modules", () => {
     const bare = fakeModule({ name: "bare" });
     const sided = fakeModule({ gateway: { module: pong }, name: "sided" });
 
-    const gateway = await startGateway(definitionsOf(bare, sided), ["bare", "sided"]);
+    const gateway = await startGateway(definitionsOf(bare, sided), ["bare", "sided"], () => {
+      bare.loads = 0;
+      sided.gatewayLoads = 0;
+    });
 
     expect(await (await get(gateway, "/v1/sided/x")).text()).toBe("pong");
     expect((await get(gateway, "/v1/bare/x")).status).toBe(404);
@@ -209,7 +219,10 @@ describe("a gateway's optional modules", () => {
       relayTarget: answering("mine"),
     });
     const other = fakeModule({ name: "other", relayTarget: answering("other") });
-    const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    const gateway = await startGateway(definitionsOf(mine), ["mine"], () => {
+      mine.gatewayCreates = 0;
+      mine.gatewayContexts.length = 0;
+    });
     await joinWorker(gateway, definitionsOf(mine, other), ["mine", "other"], "w1");
     expect(mine.gatewayCreates).toBe(1);
     const context = mine.gatewayContexts[0];
@@ -223,7 +236,10 @@ describe("a gateway's optional modules", () => {
 
   it("a fake gateway module's serving() lists only connected workers whose capability named after it is available, a drained one included", async () => {
     const mine = fakeModule({ gateway: { module: pong }, name: "mine" });
-    const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    const gateway = await startGateway(definitionsOf(mine), ["mine"], () => {
+      mine.gatewayCreates = 0;
+      mine.gatewayContexts.length = 0;
+    });
     await joinWorker(gateway, definitionsOf(mine), ["mine"], "serves");
     await joinWorker(gateway, definitionsOf(mine), [], "off");
     const unavailable = fakeModule({ name: "mine", state: "unavailable" });

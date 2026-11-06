@@ -91,13 +91,14 @@ describe("startDaemon stopped while starting", () => {
 
 describe("startDaemon HTTP gateway startup readiness", () => {
   it("parks an HTTP request until convergence completes, instead of refusing the connection", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
-    temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const filesystem = new MemoryFilesystem();
     const secret = "slk_test_agent";
-    await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
+    // why: each attempt has its own data folder, since a daemon that lost the port is still stopping in its folder and holds `daemon.sock`.
     await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-slow-"));
+      temporaryDirectories.push(directory);
+      const clock = new FakeClock(1_000);
+      const filesystem = new MemoryFilesystem();
+      await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
       const sink = new MemoryLogSink();
       const startPromise = startDaemon({
         clock,
@@ -485,10 +486,10 @@ describe("startDaemon stop with a health recovery in flight (#1000)", () => {
 
 describe("startDaemon stop with a warm target", () => {
   it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
-    temporaryDirectories.push(directory);
-    // why: each attempt has its own driver, so the calls of a start that lost its port are not counted.
+    // why: each attempt has its own driver and data folder: the calls of a start that lost its port are not counted, and that daemon is still stopping in its folder.
     const { started } = await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
+      temporaryDirectories.push(directory);
       const clock = new FakeClock(1_000);
       const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
       driver.hangMakeReady();
@@ -533,9 +534,10 @@ describe("startDaemon stop with a warm target", () => {
 
 describe("startDaemon HTTP gateway stop-during-start race (review finding S5)", () => {
   it("never lets the HTTP gateway outlive full teardown when daemon.stop lands while the gateway is still mid-bind", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
-    temporaryDirectories.push(directory);
+    // why: each attempt has its own data folder, since a daemon that lost the port is still stopping in its folder and holds `daemon.sock`.
     await startOnFreePort(async (port) => {
+      const directory = await mkdtemp(join(tmpdir(), "simlock-main-http-race-"));
+      temporaryDirectories.push(directory);
       const clock = new FakeClock(1_000);
       const sink = new MemoryLogSink();
       const logger = new JsonLinesLogger({ clock, level: "debug", sink });
