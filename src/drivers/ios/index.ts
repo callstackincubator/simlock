@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 
 import {
   BootTimeoutError,
+  KeptCategoriesError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
@@ -80,8 +81,13 @@ import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import type { IosDriverConfig } from "./definition.js";
-import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
-import { splitByExcept } from "./slim-except.js";
+import {
+  overridesFor,
+  resolveSlimCategories,
+  slimSignature,
+  type SlimCategory,
+} from "./slim-labels.js";
+import { keptLabelsFailure, splitByExcept } from "./slim-except.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
@@ -242,6 +248,7 @@ type SlimWrite =
       readonly kind: "written";
       readonly resolved: ReturnType<typeof resolveSlimCategories>;
       readonly wanted: ReadonlyMap<string, boolean>;
+      readonly kept: readonly SlimCategory[];
       readonly startedAt: number;
       readonly writeError: string | undefined;
     };
@@ -1270,7 +1277,7 @@ export class IosSimctlDriver implements Driver {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
-    return { kind: "written", resolved, startedAt, wanted, writeError };
+    return { kept, kind: "written", resolved, startedAt, wanted, writeError };
   }
 
   async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
@@ -1290,6 +1297,10 @@ export class IosSimctlDriver implements Driver {
     data: IosDriverData,
     write: Extract<SlimWrite, { readonly kind: "written" }>,
   ): Promise<DriverDevice> {
+    // why: with an except list the lease is told a category is on, so a write that failed refuses the device.
+    if (write.kept.length > 0 && write.writeError !== undefined) {
+      throw new KeptCategoriesError(write.writeError);
+    }
     const outcome = await this.#invokeSimctl(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],
       READBACK_TIMEOUT_MS,
@@ -1302,10 +1313,13 @@ export class IosSimctlDriver implements Driver {
           ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
           : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
       details.push(`could not read back the launchd overrides: ${reason}`);
+      if (write.kept.length > 0) throw new KeptCategoriesError(details.join("; "));
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
 
     const read = parsePrintDisabled(outcome.result.stdout);
+    const keptFailure = keptLabelsFailure(write.kept, read);
+    if (keptFailure !== undefined) throw new KeptCategoriesError(keptFailure);
     const mismatched = [...write.wanted.keys()]
       .sort()
       .filter((label) => (read.get(label) ?? false) !== write.wanted.get(label));
