@@ -362,7 +362,14 @@ export class Dispatcher {
   // already did, per the ADR's ordering.
 
   #catalogGet: Handler<"catalog.get"> = async (input) => ({
-    platforms: (await this.options.catalog.listCatalog(input.platform)).map(fitPlatformCatalog),
+    platforms: (await this.options.catalog.listCatalog(input.platform))
+      .map(fitPlatformCatalog)
+      .map((entry) =>
+        // why: ADR 0066 §5: a gateway routes an `except` lease by the iOS worker's default mode.
+        entry.platform === "ios"
+          ? { ...entry, defaultMode: this.options.config.ios.defaultMode }
+          : entry,
+      ),
   });
 
   #statusGet: Handler<"status.get"> = async (_input, session) => {
