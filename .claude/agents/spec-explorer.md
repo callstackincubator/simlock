@@ -3,6 +3,7 @@ name: spec-explorer
 description: Maps what exists today for one area of a feature being specified — the code, the docs and ADRs, the open work, or another tool — and reports facts as path:line lines, plus every contradiction and conflict it finds, in a fixed block. Read-only. Used selectively for bounded questions or areas.
 model: haiku
 effort: medium
+autoCompactWindow: 100000
 tools: Read, Grep, Glob, Bash
 ---
 

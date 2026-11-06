@@ -8,22 +8,22 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [start
 
 ## Files
 
-| File                                      | Role                                                                                              |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`                                           |
-| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant                                            |
-| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back                                      |
-| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel; `requesterLimitDecision`                   |
-| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once                               |
-| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                                                            |
-| `lease-expiry-scheduler.ts`               | TTL timers                                                                                        |
-| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim                                    |
-| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease                                           |
-| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                                                     |
-| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                                                             |
-| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request                                       |
-| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`                                            |
-| `testing.ts`                              | Builds core + leasing for other modules' tests; `TestEngineConfig` is the config slice that takes |
+| File                                      | Role                                                                                                                                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create-leasing.ts`                       | Composition root; builds `corePorts` for `core.connect`                                                                                                     |
+| `lease-acquisition-coordinator.ts`        | Admission, spec resolution, plan → perform loop, grant                                                                                                      |
+| `acquisition-planner.ts`                  | Read-only plan; takes the claim or reservation it hands back                                                                                                |
+| `wait-queue.ts`                           | FIFO, two lines (virtual, physical), timeouts, cancel; `requesterLimitDecision`                                                                             |
+| `lease-request-book.ts`                   | Request records: store before queue, idempotent replay, settle once                                                                                         |
+| `lease-lifecycle.ts`                      | Registry half of grant, renew, release                                                                                                                      |
+| `lease-expiry-scheduler.ts`               | TTL timers                                                                                                                                                  |
+| `lease-release-coordinator.ts`            | Every lease ending; lease-end participants; background reclaim                                                                                              |
+| `lease-health-monitor.ts`                 | Reboots a crashed leased virtual device under its lease                                                                                                     |
+| `physical-device-watcher.ts`              | Presence polling of enrolled physical devices                                                                                                               |
+| `lease-startup.ts`, `lease-reconciler.ts` | Lease half of startup                                                                                                                                       |
+| `lease-refusal.ts`                        | `lease.rejected`, or `lease.declined` for a gateway request                                                                                                 |
+| `lease-ports.ts`                          | `LeaseCommands`, `QueueControl`, `LeaseEndParticipant`                                                                                                      |
+| `testing.ts`, `test-lease-acquisition.ts` | Builds core + leasing for other modules' tests; `TestEngineConfig` is the config slice that takes; the harness the `lease-acquisition*.test.ts` parts share |
 
 ## The update hold
 

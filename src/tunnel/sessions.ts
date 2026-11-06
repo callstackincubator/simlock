@@ -16,6 +16,7 @@ import {
   DeviceTcpError,
   stableError,
   toDriverDevice,
+  unsupportedEmulatorPortMessage,
   unsupportedTunnelMessage,
   type DeviceRecord,
   type DeviceReverse,
@@ -32,10 +33,18 @@ const CLOSE_REASON_MAX_BYTES = 123;
 const REMOVAL_TIMEOUT_MS = 10_000;
 const CREDIT_BYTES = 4;
 
-interface Tunnel {
+interface PortTunnel {
   readonly kind: "reverse" | "forward";
   readonly devicePort: number;
 }
+
+// why: a port the emulator program opens for one emulator, named by what it serves, never by number; `adb` is the only name.
+interface EmulatorTunnel {
+  readonly kind: "emulator";
+  readonly emulatorPort: "adb";
+}
+
+type Tunnel = PortTunnel | EmulatorTunnel;
 
 interface Connection {
   readonly stream: TcpStream;
@@ -49,6 +58,8 @@ interface Connection {
   callerEnded: boolean;
   wake: (() => void) | undefined;
 }
+
+type OpenTarget = { readonly kind: "forward"; readonly devicePort: number } | EmulatorTunnel;
 
 interface Refusal {
   readonly code: string;
@@ -76,6 +87,12 @@ function parseHello(payload: Uint8Array): readonly Tunnel[] | string {
   const tunnels: Tunnel[] = [];
   for (const entry of named) {
     const kind = field(entry, "kind");
+    if (kind === "emulator") {
+      if (field(entry, "emulatorPort") !== "adb")
+        return "HELLO emulator tunnels must name the port adb";
+      tunnels.push({ kind, emulatorPort: "adb" });
+      continue;
+    }
     const devicePort = field(entry, "devicePort");
     if (
       (kind !== "reverse" && kind !== "forward") ||
@@ -84,7 +101,7 @@ function parseHello(payload: Uint8Array): readonly Tunnel[] | string {
     ) {
       return "HELLO tunnels must each be {kind, devicePort}";
     }
-    tunnels.push({ devicePort, kind });
+    tunnels.push({ kind, devicePort });
   }
   return tunnels;
 }
@@ -102,7 +119,9 @@ function refusal(tunnels: readonly Tunnel[], held: number): Refusal | undefined 
       message: `the lease already has ${String(held)} tunnels; at most ${String(TUNNEL_MAX_TUNNELS)}`,
     };
   }
-  for (const { devicePort, kind } of tunnels) {
+  for (const tunnel of tunnels) {
+    if (tunnel.kind === "emulator") continue;
+    const { devicePort, kind } = tunnel;
     if (devicePort < TUNNEL_MIN_DEVICE_PORT || devicePort > TUNNEL_MAX_DEVICE_PORT) {
       return {
         code: "TUNNEL_BAD_PORT",
@@ -147,6 +166,7 @@ export function createTunnelSessions(options: {
     const connections = new Map<number, Connection>();
     const reverses: DeviceReverse[] = [];
     const forwards = new Set<number>();
+    let emulatorNamed = false;
 
     // why: a phone's reclaim removes no rules, so an end whose signal is aborted still removes this session's own; only an emulator's reclaim does that for it.
     const phone = toDriverDevice(device).physical;
@@ -164,10 +184,11 @@ export function createTunnelSessions(options: {
         }
         connections.clear();
         try {
-          if (!removeRules) return;
-          // why: one after another, so on an emulator a lease-end signal that aborts mid-way stops the removals that reclaim is about to do.
+          // why: one after another, so on an emulator a lease-end signal that aborts mid-way stops the removals that reclaim is about to do; a reverse with no rule on the device is closed anyway, because no reclaim will.
           for (const reverse of reverses) {
-            if (signal?.aborted === true) return;
+            if (reverse.holdsDeviceRule !== false && (!removeRules || signal?.aborted === true)) {
+              continue;
+            }
             await bounded(removeRule(reverse));
           }
         } finally {
@@ -268,16 +289,21 @@ export function createTunnelSessions(options: {
     }
 
     // why: the OPEN is wire input from the caller, so its JSON may be anything; the port it names is trusted only when it is one of this socket's forward tunnels.
-    function forwardPortOf(payload: Uint8Array): number | undefined {
+    function openedTarget(payload: Uint8Array): OpenTarget | undefined {
       let parsed: unknown;
       try {
         parsed = JSON.parse(new TextDecoder().decode(payload));
       } catch {
         return undefined;
       }
+      if (field(parsed, "kind") === "emulator") {
+        return emulatorNamed && field(parsed, "emulatorPort") === "adb"
+          ? { kind: "emulator", emulatorPort: "adb" }
+          : undefined;
+      }
       const devicePort = field(parsed, "devicePort");
       const named = field(parsed, "kind") === "forward" && typeof devicePort === "number";
-      return named && forwards.has(devicePort) ? devicePort : undefined;
+      return named && forwards.has(devicePort) ? { devicePort, kind: "forward" } : undefined;
     }
 
     function openForward(conn: number, payload: Uint8Array): void {
@@ -286,8 +312,8 @@ export function createTunnelSessions(options: {
         badRequest("OPEN needs an even connection id above the last");
         return;
       }
-      const devicePort = forwardPortOf(payload);
-      if (devicePort === undefined) {
+      const target = openedTarget(payload);
+      if (target === undefined) {
         badRequest("OPEN must name a forward tunnel of this socket");
         return;
       }
@@ -302,12 +328,20 @@ export function createTunnelSessions(options: {
         );
         return;
       }
-      const connecting = options.deviceTcp.connect(
-        device.spec.platform,
-        toDriverDevice(device),
-        devicePort,
-        new AbortController().signal,
-      );
+      const connecting =
+        target.kind === "emulator"
+          ? options.deviceTcp.connectEmulatorPort(
+              device.spec.platform,
+              toDriverDevice(device),
+              target.emulatorPort,
+              new AbortController().signal,
+            )
+          : options.deviceTcp.connect(
+              device.spec.platform,
+              toDriverDevice(device),
+              target.devicePort,
+              new AbortController().signal,
+            );
       register(conn, pendingStream(connecting));
       connecting.catch((error: unknown) => {
         const connection = connections.get(conn);
@@ -374,7 +408,7 @@ export function createTunnelSessions(options: {
         badRequest(named);
         return;
       }
-      const tunnels = named.map(({ devicePort, kind }) => ({ kind, devicePort }));
+      const tunnels = named;
       const held = counts.get(leaseId) ?? 0;
       const refused = refusal(tunnels, held);
       if (refused !== undefined) {
@@ -382,19 +416,31 @@ export function createTunnelSessions(options: {
         return;
       }
       const target = toDriverDevice(device);
-      if (!options.deviceTcp.supports(device.spec.platform, target)) {
+      const wantsPorts = tunnels.some(({ kind }) => kind !== "emulator");
+      if (wantsPorts && !options.deviceTcp.supports(device.spec.platform, target)) {
         refuse({
           code: "TUNNEL_UNSUPPORTED",
           message: unsupportedTunnelMessage(device.spec.platform, target.physical),
         });
         return;
       }
-      for (const { devicePort, kind } of tunnels) if (kind === "forward") forwards.add(devicePort);
+      const wantsEmulator = tunnels.some(({ kind }) => kind === "emulator");
+      if (wantsEmulator && !options.deviceTcp.supportsEmulatorPort(device.spec.platform, target)) {
+        refuse({
+          code: "TUNNEL_UNSUPPORTED",
+          message: unsupportedEmulatorPortMessage("adb", device.spec.platform, target.physical),
+        });
+        return;
+      }
+      for (const tunnel of tunnels) {
+        if (tunnel.kind === "forward") forwards.add(tunnel.devicePort);
+        if (tunnel.kind === "emulator") emulatorNamed = true;
+      }
       counts.set(leaseId, held + tunnels.length);
       reserved = tunnels.length;
       for (const tunnel of tunnels) {
         // why: a forward tunnel sets nothing on the device; each caller connection opens its own device socket.
-        if (tunnel.kind === "forward") continue;
+        if (tunnel.kind !== "reverse") continue;
         let reverse: DeviceReverse;
         try {
           reverse = await options.deviceTcp.reverse(
@@ -418,7 +464,10 @@ export function createTunnelSessions(options: {
         }
         // why: the socket can close while `reverse` is awaited, after `finish` read the list; a rule that arrives then is removed here.
         if (finished !== undefined) {
-          if (endedWith?.remove === true && endedWith.signal?.aborted !== true) {
+          if (
+            reverse.holdsDeviceRule === false ||
+            (endedWith?.remove === true && endedWith.signal?.aborted !== true)
+          ) {
             await bounded(removeRule(reverse));
           }
           return;

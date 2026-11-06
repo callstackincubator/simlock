@@ -15,6 +15,7 @@ class FakeReverse implements DeviceReverse {
     private readonly onClose: () => void,
     private readonly failure: () => Error | undefined,
     private readonly gate: () => Promise<void> | undefined,
+    readonly holdsDeviceRule: boolean,
   ) {}
 
   onConnection(listener: (stream: TcpStream) => void): void {
@@ -54,7 +55,12 @@ export class FakeDeviceTcp implements DeviceTcp {
   sweepGate: Promise<void> | undefined;
   // why: a test sets a device port's failure to make its `connect` refuse with that error, as a device that never answers does.
   readonly connectFailures = new Map<number, Error>();
+  // why: a test sets this false to play a driver whose reverse sets no rule on the device, as the iOS simulator's does.
+  holdsDeviceRule = true;
   readonly listening = new Set<number>();
+  // why: the emulator port names a `connectEmulatorPort` from the worker reaches, each answered by a peer in `emulatorConnections`.
+  readonly emulatorPortsListening = new Set<string>();
+  readonly emulatorConnections: { readonly name: string; readonly peer: FakeTcpPeer }[] = [];
   readonly connections: { readonly devicePort: number; readonly peer: FakeTcpPeer }[] = [];
   readonly #reverses = new Map<number, FakeReverse>();
   #nextHostPort = 47_000;
@@ -90,6 +96,7 @@ export class FakeDeviceTcp implements DeviceTcp {
       },
       () => this.closeFailure,
       () => this.closeGate,
+      this.holdsDeviceRule,
     );
     this.#reverses.set(devicePort, reverse);
     return reverse;
@@ -101,6 +108,22 @@ export class FakeDeviceTcp implements DeviceTcp {
     if (!this.listening.has(devicePort)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
     const peer = new FakeTcpPeer();
     this.connections.push({ devicePort, peer });
+    return peer.stream;
+  }
+
+  // fallow-ignore-next-line unused-class-member -- called through the DeviceTcp interface by DriverCatalog.
+  supportsEmulatorPort(): boolean {
+    return true;
+  }
+
+  async connectEmulatorPort(
+    _device: unknown,
+    name: string,
+    _signal?: AbortSignal,
+  ): Promise<TcpStream> {
+    if (!this.emulatorPortsListening.has(name)) throw new DeviceTcpError("TUNNEL_FAILED", "closed");
+    const peer = new FakeTcpPeer();
+    this.emulatorConnections.push({ name, peer });
     return peer.stream;
   }
 

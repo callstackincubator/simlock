@@ -13,6 +13,7 @@ import type {
   HttpJsonClient,
   IpcConnector,
   ParentWatch,
+  ProcessRunner,
   ServiceDefinition,
   ServiceManager,
   SystemStats,
@@ -103,6 +104,10 @@ export interface CliEnvironment {
   readonly tcpStreams: TcpStreamConnector;
   /** why: a `forward` tunnel listens on the caller's loopback port; the adapter loads on first use. */
   readonly tcpListeners: TcpListenerFactory;
+  /** why: `simlock tunnel emulator adb` runs the caller's own adb; absent, adb is not found. */
+  readonly processRunner?: ProcessRunner | undefined;
+  /** why: the commands that may be the caller's adb, in the order they are tried: `adb` on the PATH, then each Android SDK folder's `platform-tools`. */
+  readonly adbCandidates?: readonly string[] | undefined;
   /** why: `SIMLOCK_URL` and `SIMLOCK_TOKEN` name the daemon `simlock tunnel` calls and the credential it sends. */
   readonly tunnelUrl?: string;
   readonly tunnelToken?: string;
@@ -134,4 +139,5 @@ export interface CliEnvironmentPorts {
   readonly httpJson?: HttpJsonClient;
   readonly tcpStreams?: TcpStreamConnector;
   readonly tcpListeners?: TcpListenerFactory;
+  readonly processRunner?: ProcessRunner;
 }

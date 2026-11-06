@@ -116,6 +116,7 @@ export {
   FakeTcpPeer,
   FakeTcpStreamConnector,
   NodeTcpStreamConnector,
+  type LoopbackHost,
   type TcpStream,
   type TcpStreamConnector,
 } from "./tcp-stream.js";
