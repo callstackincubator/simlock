@@ -3,6 +3,7 @@ name: code-reviewer
 description: The code review from delivery rule 14, behaviour and tests lenses. Spawned only by the reviewer agent, which passes the inputs directory, a worktree of the reviewed commit, the round and the lens.
 model: opus
 effort: high
+autoCompactWindow: 300000
 tools: Read, Grep, Glob, Bash, Edit, Write
 ---
 
