@@ -137,11 +137,14 @@ const CATALOG_CUSTOM_MODELS_MAX = CATALOG_ALIASED_MODELS_MAX;
  * why: the list bounds above, for a producer that merges lists the schema checked one by one: a
  * gateway's union of valid worker catalogs must itself fit, or its own clients refuse it.
  */
+const CATALOG_SLIM_CATEGORIES_MAX = 32;
+
 export const CATALOG_LIST_LIMITS = {
   aliasedModels: CATALOG_ALIASED_MODELS_MAX,
   aliasesPerModel: CATALOG_ALIASES_PER_MODEL_MAX,
   customModels: CATALOG_CUSTOM_MODELS_MAX,
   images: CATALOG_IMAGES_MAX,
+  slimCategories: CATALOG_SLIM_CATEGORIES_MAX,
 } as const;
 
 const catalogImageSchema = z.object({
