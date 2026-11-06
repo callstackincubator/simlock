@@ -34,6 +34,8 @@ export interface EndedLease {
   readonly ownerId: string;
   readonly deviceId: string;
   readonly platform: Platform;
+  // why: with the lease id it names the grant, so a file folder of an earlier lease with the same id is never touched.
+  readonly grantedAt: number;
   readonly reason: "explicit" | "killed" | "expired" | "device-lost";
 }
 

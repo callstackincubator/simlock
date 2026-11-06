@@ -13,6 +13,7 @@ export interface BodyGuard {
   readonly silenceMs: number;
   readonly onStalled: () => Error;
   readonly onChunk: (chunk: Uint8Array) => void;
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -37,6 +38,10 @@ export function guardedBody(
       rejectStall(stall);
     });
   let timer = arm();
+  guard.signal.addEventListener("abort", () => {
+    stall = guard.signal.reason as Error;
+    rejectStall(stall);
+  });
   const disarm = () => guard.clock.cancel(timer);
 
   return new ReadableStream<Uint8Array>(

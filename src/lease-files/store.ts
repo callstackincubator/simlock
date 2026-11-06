@@ -12,10 +12,14 @@ export function folderKey(id: string, grantedAt: number): string {
 
 interface RunningUpload {
   received: number;
+  readonly abort: AbortController;
 }
 
 interface GrantState {
+  ended: boolean;
   readonly uploads: Set<RunningUpload>;
+  // why: every folder, upload and rename of a grant, so the lease end waits for what already started before it removes the folder.
+  readonly inFlight: Set<Promise<unknown>>;
   // why: file names compare ignoring case, so a name's writer slot is its lowercase spelling.
   readonly writers: Set<string>;
 }
@@ -41,6 +45,10 @@ function sameName(names: readonly string[], name: string): string[] {
 // why: the exact spelling wins; else the first spelling in byte order, which `names` is sorted by.
 function lookup(names: readonly string[], name: string): string | undefined {
   return names.includes(name) ? name : sameName(names, name)[0];
+}
+
+function unknownLease(grant: LeaseFilesGrant): LeaseFilesError {
+  return new LeaseFilesError("UNKNOWN_LEASE", `Unknown lease: ${grant.id}`, { leaseId: grant.id });
 }
 
 function unknownFile(name: string): LeaseFilesError {
@@ -72,8 +80,67 @@ export class LeaseFolders {
 
   async folderOf(grant: LeaseFilesGrant): Promise<string> {
     const folder = this.#pathOf(grant);
-    await this.#deps.filesystem.mkdirp(folder, { mode: 0o700 });
+    await this.#track(this.#stateOf(grant), grant, () =>
+      this.#deps.filesystem.mkdirp(folder, { mode: 0o700 }),
+    );
     return folder;
+  }
+
+  /** why: the lease ended: nothing more is written, a running upload answers `UNKNOWN_LEASE`, and what was already running settles before the folder goes. */
+  async end(grant: LeaseFilesGrant): Promise<void> {
+    const state = this.#stateOf(grant);
+    state.ended = true;
+    for (const upload of state.uploads) upload.abort.abort(unknownLease(grant));
+    while (state.inFlight.size > 0) await Promise.allSettled(state.inFlight);
+    try {
+      await this.#deps.filesystem.rm(this.#pathOf(grant));
+    } catch (error: unknown) {
+      this.#deps.logger.warn("A lease's file folder could not be removed; startup removes it", {
+        error: error instanceof Error ? error.message : String(error),
+        leaseId: grant.id,
+      });
+    }
+  }
+
+  /** why: startup removes the folder of every lease no longer live and the upload files a restart left in the rest. */
+  async sweep(live: readonly { readonly id: string; readonly grantedAt: number }[]): Promise<void> {
+    const { filesystem, logger } = this.#deps;
+    const root = join(this.#deps.dataDirectory, "lease-files");
+    const kept = new Set(live.map((grant) => folderKey(grant.id, grant.grantedAt)));
+    const entries = await filesystem.readdir(root).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      try {
+        const folder = join(root, entry);
+        if (!kept.has(entry)) {
+          await filesystem.rm(folder);
+          continue;
+        }
+        for (const inner of await filesystem.readdir(folder)) {
+          if (inner.startsWith(".upload-")) await filesystem.rm(join(folder, inner));
+        }
+      } catch (error: unknown) {
+        logger.warn("A lease file folder could not be swept", {
+          entry,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  async #track<T>(state: GrantState, grant: LeaseFilesGrant, work: () => Promise<T>): Promise<T> {
+    const running = (async () => {
+      if (state.ended) throw unknownLease(grant);
+      return work();
+    })();
+    state.inFlight.add(running);
+    try {
+      return await running;
+    } finally {
+      state.inFlight.delete(running);
+    }
   }
 
   async openFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView> {
@@ -137,7 +204,9 @@ export class LeaseFolders {
     }
     state.writers.add(slot);
     try {
-      return await this.#receive(grant, name, state, body, contentLength);
+      return await this.#track(state, grant, () =>
+        this.#receive(grant, name, state, body, contentLength),
+      );
     } finally {
       state.writers.delete(slot);
     }
@@ -161,7 +230,7 @@ export class LeaseFolders {
       );
     }
     const stored = await this.#folderBytes(folder, name.toLowerCase());
-    const upload: RunningUpload = { received: 0 };
+    const upload: RunningUpload = { abort: new AbortController(), received: 0 };
     const others = () => [...state.uploads].reduce((sum, running) => sum + running.received, 0);
     if (stored + others() + (contentLength ?? 0) > this.#limits.leaseBytes) {
       throw leaseFull(grant, stored + others());
@@ -187,6 +256,7 @@ export class LeaseFolders {
               `No bytes of ${name} arrived for ${String(this.#limits.silenceMs / 1000)} s`,
               { name },
             ),
+          signal: upload.abort.signal,
           silenceMs: this.#limits.silenceMs,
         }),
         { mode: 0o600 },
@@ -194,6 +264,7 @@ export class LeaseFolders {
       for (const other of sameName(await this.#names(grant), name)) {
         if (other !== name) await filesystem.rm(join(folder, other));
       }
+      if (state.ended) throw unknownLease(grant);
       await filesystem.rename(temporary, join(folder, name));
       return { name, size };
     } catch (error: unknown) {
@@ -212,7 +283,7 @@ export class LeaseFolders {
     const key = folderKey(grant.id, grant.grantedAt);
     let state = this.#states.get(key);
     if (state === undefined) {
-      state = { uploads: new Set(), writers: new Set() };
+      state = { ended: false, inFlight: new Set(), uploads: new Set(), writers: new Set() };
       this.#states.set(key, state);
     }
     return state;

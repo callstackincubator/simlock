@@ -13,8 +13,11 @@ export function createLeaseFiles(deps: LeaseFilesDeps): LeaseFiles {
       lease: LeaseFilesLease,
       name: string | undefined,
     ) => handleRequest(folders, request, lease, name),
-    leaseEnd: { leaseEnded: () => Promise.resolve() },
+    leaseEnd: {
+      leaseEnded: (ended) =>
+        folders.end({ grantedAt: ended.grantedAt, id: ended.leaseId, platform: ended.platform }),
+    },
     openFile: (grant, name) => folders.openFile(grant, name),
-    sweep: () => Promise.resolve(),
+    sweep: (live) => folders.sweep(live),
   };
 }
