@@ -1,6 +1,6 @@
 /**
- * why: the core names no relay target (ADR 0026); a module's function is registered under its capability name through
- * `relayTargets`, and each uplink connection carries its own relays.
+ * why: the core names one relay target, `files` (ADR 0067 §7, narrowing ADR 0026); a module's function is registered under
+ * its capability name through `relayTargets`, and each uplink connection carries its own relays.
  */
 import type { z } from "zod";
 
@@ -208,17 +208,24 @@ export class RelayConnection {
   #requestBody(active: ActiveRelay): ReadableStream<Uint8Array> {
     const reader = active.channel.readable.getReader();
     active.reader = reader;
+    let cancelled = false;
     return new ReadableStream<Uint8Array>(
       {
-        cancel: () => reader.cancel().catch(() => undefined),
+        cancel: () => {
+          cancelled = true;
+          return reader.cancel().catch(() => undefined);
+        },
         pull: async (controller) => {
           try {
             const step = await reader.read();
+            // why: a target that stopped reading its body (a lease file upload cut by the lease's end) is no channel failure, and the read it left in flight ends with the cancel.
+            if (cancelled) return;
             if (active.abandoned) {
               controller.error(new Error("The relay answered before its request body ended"));
             } else if (step.done) controller.close();
             else controller.enqueue(step.value);
           } catch (error: unknown) {
+            if (cancelled) return;
             this.#note(active, error);
             controller.error(error);
           }

@@ -22,7 +22,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 | Exit | Error codes | Meaning |
 | --- | --- | --- |
 | 0 | — | Success. For a `simlock lease` that stayed running: the lease ended because you asked. |
-| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `BASELINE_SAVE_FAILED`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `INPUT_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED`, `TUNNEL_UNSUPPORTED`, `TUNNEL_PORT_IN_USE`, `TUNNEL_BAD_PORT`, `TUNNEL_LIMIT`, `TUNNEL_FAILED`, `TUNNEL_UNAVAILABLE`, `TUNNEL_DISCONNECTED`, `TUNNEL_CALLER_PORT_IN_USE` | The command failed. Read the code and the message. |
+| 1 | `INTERNAL`, `PROVISION_FAILED`, `UNKNOWN_LEASE`, `UNKNOWN_FILE`, `STDIN_FILE_FAILED`, `FILE_TOO_LARGE`, `LEASE_FILES_FULL`, `FILE_BUSY`, `UPLOAD_STALLED`, `BASELINE_SAVE_FAILED`, `FORBIDDEN`, `ADMIN_AUTHENTICATION_FAILED`, `SETUP_MCP_FAILED`, `DAEMON_STARTUP_FAILED`, `DAEMON_CONNECTION_LOST`, `DAEMON_STOPPING`, `DAEMON_UPDATING`, `HANDSHAKE_REQUIRED`, `PROTOCOL_VERSION_UNSUPPORTED`, `WORKER_UNREACHABLE`, `RELAY_TARGET_MISSING`, `ALERT_SEND_FAILED`, `UPDATE_RESOLVE_FAILED`, `HISTORY_UNAVAILABLE`, `DOCTOR_UNAVAILABLE`, `INPUT_UNAVAILABLE`, `NUKE_UNAVAILABLE`, `UNKNOWN_DAEMON_ERROR`, `SERVICE_FAILED`, `CANCELLED`, `TUNNEL_UNSUPPORTED`, `TUNNEL_PORT_IN_USE`, `TUNNEL_BAD_PORT`, `TUNNEL_LIMIT`, `TUNNEL_FAILED`, `TUNNEL_UNAVAILABLE`, `TUNNEL_DISCONNECTED`, `TUNNEL_CALLER_PORT_IN_USE` | The command failed. Read the code and the message. |
 | 2 | `USAGE`, `BAD_REQUEST`, `BASELINE_MISMATCH`, `BAD_FRAME`, `UNKNOWN_REQUEST`, `IDEMPOTENCY_CONFLICT`, `PASSTHROUGH_REFUSED`, `UNKNOWN_PASSTHROUGH_TOOL`, `SETUP_REFUSED`, `GATEWAY_NOT_PRESENT`, `UPDATE_UNSUPPORTED_INSTALL`, `UPDATE_SHARED_INSTALL`, `UNSUPPORTED_IN_GATEWAY_MODE`, `UNSUPPORTED_IN_WORKER_MODE`, `WORKER_CONNECTED`, `WORKER_NOT_CONNECTED` | The request was wrong. Running it again unchanged fails again. |
 | 10 | `QUEUE_TIMEOUT`, `EXEC_TIMEOUT`, `DOWNLOAD_TIMEOUT` | A deadline ran out. |
 | 11 | `NO_CAPACITY`, `DEVICE_BUSY`, `COMPONENT_BUSY` | Busy right now. The same request can pass later. |
@@ -37,7 +37,7 @@ In a script, check `code`, not the message: the wording of a message can change,
 
 | Code | Exit | HTTP | Meaning | What to do |
 | --- | --- | --- | --- | --- |
-| `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. |
+| `NO_CAPACITY` | 11 | 503 | No device can start now, and the request was told not to wait (`--no-wait`). Through a gateway: no worker that takes requests can serve it. | Try again later, or drop `--no-wait` to queue. Over HTTP the answer carries `Retry-After: 5`. The details name a `capacityReason`: `device-limit`, `ram-budget`, `memory-pressure`, `global-running-limit` or `platform-running-limit`. |
 | `DAEMON_UPDATING` | 1 | 503 | The daemon is updating (`simlock update`) and takes no new leases. A request that was waiting when the update began gets it too. A lease you already hold renews and releases as usual. | Run the command again once the daemon is back, or lease from another worker. |
 | `QUEUE_TIMEOUT` | 10 | 500 | The request waited in the queue for its whole `--timeout` and got no device. | Raise `--timeout`, or check `simlock list --requests` for why requests wait. |
 | `REQUESTER_ALREADY_LEASED` | 13 | 409 | Your requester identity already holds or waits for its limit of leases (`lease.maxPerRequester`, 1 by default, counted per platform when the operator sets a limit for each), or, with a limit per platform, has a request waiting on that platform. The message names your lease. | Release that lease first, or give each agent session its own identity. |
@@ -102,6 +102,19 @@ A lease's tunnel socket (`GET /v1/leases/{id}/tunnel`, on a worker with `capabil
 | `EXEC_TIMEOUT` | 10 | 504 | A command run on a device through a gateway ran longer than `exec.timeoutMs` (10 minutes by default) and was stopped. | Split the work, or raise `exec.timeoutMs` on the worker. |
 | `ROTATION_UNSUPPORTED` | 12 | 422 | The lease is not on an iOS phone or tablet simulator, so `POST /v1/leases/{id}/rotate` has nothing to turn. The message names what it is on: an Apple TV, Apple Watch or Apple Vision simulator, another iOS model, an Android emulator or phone or tablet, an iPhone or an iPad. | Rotate a lease on an iPhone or iPad simulator. |
 | `INPUT_UNAVAILABLE` | 1 | 503 | The lease's simulator cannot take input right now: for a rotate, the part of Simlock that sends input to it did not start within 10 seconds or failed, and the message ends with the reason. Through a gateway, the same code answers an input socket when the lease's worker has input off. | Run it again. If it repeats, check `simlock daemon logs`. |
+
+## Lease files
+
+| Code | Exit | HTTP | Meaning | What to do |
+| --- | --- | --- | --- | --- |
+| `FILE_TOO_LARGE` | 1 | 413 | An upload to a lease is over 2 GiB: its `Content-Length`, or the bytes received when it has none. Nothing is stored. | Send a smaller file. |
+| `LEASE_FILES_FULL` | 1 | 413 | The upload would take the lease's folder past 4 GiB, counting every file in it and the uploads running at the same time. The message gives the bytes held. | Delete files with `DELETE /v1/leases/{id}/files/{name}`, or finish the other uploads first. |
+| `UNKNOWN_FILE` | 1 | 404 | The lease has no file with this name (names match ignoring case). | List the files with `GET /v1/leases/{id}/files`. |
+| `FILE_BUSY` | 1 | 409 | Another request is uploading a file with this name. | Wait for it to finish, then upload again. |
+| `STDIN_FILE_FAILED` | 1 | 500 | The stored file named by `stdinFile` could not be read to its end, so the command was stopped. The stream ends with this error. | Run the command again. Upload the file again if it keeps failing. |
+| `UPLOAD_STALLED` | 1 | 408 | No byte of the upload's body arrived for 330 seconds. The previous file is kept. | Send the upload again from the start. |
+
+A bad file name is `BAD_REQUEST`, and a worker whose free disk is under `diskPressure.freeBytesThreshold` answers an upload with `INSUFFICIENT_DISK_SPACE`.
 
 ## Daemon and connection
 

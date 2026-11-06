@@ -155,6 +155,32 @@ describe("AcquisitionPlanner", () => {
     claim.release();
   });
 
+  it("waits or rejects with memory-pressure when capacity refuses a new device for it", () => {
+    const real = createCapacityStrategy(
+      config.capacity,
+      new FakeSystemStats({ cpuCount: 8, totalRamBytes: 32 * gibibyte }),
+    );
+    const claims = new DeviceOperationClaims();
+    const refusing = new AcquisitionPlanner(
+      new CapacityCoordinator({
+        canBoot: (target, devices) => real.canBoot(target, devices),
+        canProvision: () => ({ ok: false, reason: "memory-pressure" }),
+        canReserveRunning: (platform, devices, reservations) =>
+          real.canReserveRunning(platform, devices, reservations),
+        deviceLimit: (platform) => real.deviceLimit(platform),
+        ramBudget: (devices) => real.ramBudget(devices),
+        runningCapacity: (devices, reservations) => real.runningCapacity(devices, reservations),
+      }),
+      claims,
+    );
+
+    expect(plan(refusing, [])).toEqual({ kind: "wait", reason: "memory-pressure" });
+    expect(plan(refusing, [], { noWait: true })).toEqual({
+      kind: "no-capacity",
+      reason: "memory-pressure",
+    });
+  });
+
   it("waits or rejects when policy cannot reserve capacity", () => {
     const { planner: acquisitionPlanner } = planner();
     const leased = device("leased", "leased");

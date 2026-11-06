@@ -28,6 +28,7 @@ import {
   booleanValue,
   ConfigError,
   integerInRange,
+  numberInRange,
   invalidValue,
   nonNegativeNumber,
   numberAtLeast,
@@ -103,6 +104,7 @@ export const ALERT_EVENTS = [
   "device.recovery-failed",
   "device.stalled-transition-detected",
   "disk.pressure-detected",
+  "memory.pressure-changed",
   "component.install-failed",
 ] as const;
 export type AlertEventName = (typeof ALERT_EVENTS)[number];
@@ -256,6 +258,11 @@ export type MaxPerRequester = number | { readonly ios?: number; readonly android
  */
 export type DaemonMode = "worker" | "gateway";
 
+interface MemoryPressureRule {
+  readonly level: "normal" | "warn" | "critical" | "off";
+  readonly minAvailablePercent: number;
+}
+
 export interface Config {
   readonly capabilities: Readonly<
     Record<string, { readonly enabled: boolean } & Readonly<Record<string, unknown>>>
@@ -339,6 +346,13 @@ export interface Config {
    */
   readonly exec: { readonly timeoutMs: number };
   readonly diskPressure: { readonly freeBytesThreshold: number };
+  /** why: ADR 0068 §1: when host memory pauses a worker's warming and its new devices; worker only. */
+  readonly memoryPressure: {
+    readonly enabled: boolean;
+    readonly pauseWarming: MemoryPressureRule;
+    readonly pauseNewDevices: MemoryPressureRule;
+    readonly clearAfterMs: number;
+  };
   readonly eventBuffer: { readonly capacity: number };
   readonly log: { readonly level: LogLevel; readonly rotateBytes: number };
   readonly eventLog: {
@@ -994,6 +1008,12 @@ function defaultConfig(
     },
     exec: { timeoutMs: DEFAULT_EXEC_TIMEOUT_MS },
     diskPressure: { freeBytesThreshold: 10 * 1024 ** 3 },
+    memoryPressure: {
+      enabled: true,
+      pauseWarming: { level: "warn", minAvailablePercent: 20 },
+      pauseNewDevices: { level: "critical", minAvailablePercent: 10 },
+      clearAfterMs: 60_000,
+    },
     eventBuffer: { capacity: 1_000 },
     log: { level: "info", rotateBytes: 5 * 1024 * 1024 },
     eventLog: {
@@ -1145,6 +1165,12 @@ export function configValidators(
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
+    memoryPressure: objectValidator({
+      enabled: booleanValue,
+      pauseWarming: memoryPressureRuleValidator,
+      pauseNewDevices: memoryPressureRuleValidator,
+      clearAfterMs: nonNegativeNumber,
+    }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
     eventLog: objectValidator({
@@ -1187,6 +1213,11 @@ export function configValidators(
     }),
   };
 }
+
+const memoryPressureRuleValidator = objectValidator({
+  level: stringUnion(["normal", "warn", "critical", "off"]),
+  minAvailablePercent: numberInRange(0, 100),
+});
 
 function driverValidators(
   driverSections: readonly DriverConfigEntry[],

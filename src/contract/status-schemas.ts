@@ -26,6 +26,24 @@ const platformCapacityEntrySchema = runningCapacityEntrySchema.extend({
   atRamBudget: z.boolean(),
 });
 
+const memoryPressureStepSchema = z.enum(["none", "warming-paused", "new-devices-paused"]);
+
+/** why: the reading that turned the current step on; a floor trigger names the floor it fell under. */
+const memoryPressureCauseSchema = z.object({
+  trigger: z.enum(["level", "floor"]),
+  availablePercent: z.number().int().min(0).max(100),
+  level: z.enum(["normal", "warn", "critical"]).optional(),
+  floorPercent: z.number().min(0).max(100).optional(),
+});
+
+const statusMemoryPressureSchema = z.object({
+  step: memoryPressureStepSchema,
+  since: z.number().finite().nonnegative().optional(),
+  cause: memoryPressureCauseSchema.optional(),
+});
+
+export type StatusMemoryPressure = z.infer<typeof statusMemoryPressureSchema>;
+
 export const statusCapacitySchema = z.object({
   ios: platformCapacityEntrySchema,
   android: platformCapacityEntrySchema,
@@ -39,6 +57,8 @@ export const statusCapacitySchema = z.object({
       overLimit: z.boolean(),
     })
     .optional(),
+  /** why: present only while host load is on and a reading has been taken. */
+  memoryPressure: statusMemoryPressureSchema.optional(),
 });
 
 /** why: a gateway parses the warm pool block off the wire from every worker, so it is bounded. */
@@ -61,6 +81,7 @@ const warmPoolShortSchema = z.enum([
   "running-limit",
   "reserve",
   "ram-budget",
+  "memory-pressure",
 ]);
 
 const warmPoolTargetSchema = z.object({

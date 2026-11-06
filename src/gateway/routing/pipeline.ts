@@ -18,6 +18,7 @@ export interface RoutableRequest {
 export type CapacityReason =
   | "device-limit"
   | "ram-budget"
+  | "memory-pressure"
   | "global-running-limit"
   | "platform-running-limit";
 

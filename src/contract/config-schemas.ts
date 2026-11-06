@@ -52,6 +52,11 @@ const proxyAuthSchema = z.object({
   signOutUrl: z.string().optional(),
 });
 
+const memoryPressureRuleSchema = z.object({
+  level: z.enum(["normal", "warn", "critical", "off"]),
+  minAvailablePercent: z.number(),
+});
+
 export const configSchema = z.object({
   mode: z.enum(["worker", "gateway"]),
   capabilities: z.record(
@@ -108,6 +113,12 @@ export const configSchema = z.object({
   }),
   exec: z.object({ timeoutMs: z.number() }),
   diskPressure: z.object({ freeBytesThreshold: z.number() }),
+  memoryPressure: z.object({
+    enabled: z.boolean(),
+    pauseWarming: memoryPressureRuleSchema,
+    pauseNewDevices: memoryPressureRuleSchema,
+    clearAfterMs: z.number(),
+  }),
   eventBuffer: z.object({ capacity: z.number() }),
   log: z.object({
     level: z.enum(["debug", "info", "warn", "error"]),

@@ -1,3 +1,4 @@
+import { testLeaseFiles } from "./test-lease-files.js";
 import { testConfig as configWithDefaults } from "../core/testing.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -317,6 +318,7 @@ export async function createHarness(
     leases: engine,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     passthrough: engine,
+    leaseFiles: testLeaseFiles,
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
     ...(options.protocolVersion === undefined ? {} : { protocolVersion: options.protocolVersion }),
     queue: engine,

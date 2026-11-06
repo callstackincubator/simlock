@@ -16,6 +16,7 @@ export { hasCapabilities } from "./stages/has-capabilities.js";
 export { keepsExcept } from "./stages/keeps-except.js";
 export { healthy } from "./stages/healthy.js";
 export { idleQueue } from "./stages/idle-queue.js";
+export { memoryPressure } from "./stages/memory-pressure.js";
 export { ramBudget } from "./stages/ram-budget.js";
 export { takesRequests } from "./stages/takes-requests.js";
 export { warmHit } from "./stages/warm-hit.js";

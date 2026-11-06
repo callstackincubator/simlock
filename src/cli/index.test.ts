@@ -6098,6 +6098,49 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print(EMPTY_STATUS)).not.toContain("Load:");
       expect(await print(STARTING)).not.toContain("Load:");
     });
+
+    it("simlock status prints the Memory pressure line with the step, when it began and why, and none when there is no step", async () => {
+      const line = async (memoryPressure: unknown) =>
+        (
+          await print({
+            ...EMPTY_STATUS,
+            capacity: { ...EMPTY_STATUS.capacity, memoryPressure },
+            load: LOAD,
+          } as StatusGetOutput)
+        )
+          .split("\n")
+          .find((row) => row.startsWith("Memory pressure:"));
+      const since = new Date(2026, 10, 6, 9, 12).getTime();
+      const warn = { availablePercent: 34, level: "warn", trigger: "level" };
+      const floor = (availablePercent: number, extra = {}) =>
+        line({
+          cause: { availablePercent, floorPercent: 10, trigger: "floor", ...extra },
+          since,
+          step: "new-devices-paused",
+        });
+
+      expect(await line({ cause: warn, since, step: "warming-paused" })).toBe(
+        "Memory pressure: warming paused since 09:12 (pressure warn)",
+      );
+      const floored = "Memory pressure: new devices paused since 09:12 (8% available, floor 10%)";
+      expect(await floor(8)).toBe(floored);
+      expect(await floor(8, { level: "warn" })).toBe(floored);
+      expect(await floor(9)).toBe(floored.replace("8%", "9%"));
+      expect(await line({ step: "none" })).toBeUndefined();
+      expect(await line(undefined)).toBeUndefined();
+
+      const stdout = await print({
+        ...EMPTY_STATUS,
+        capacity: {
+          ...EMPTY_STATUS.capacity,
+          memoryPressure: { cause: warn, since, step: "warming-paused" },
+        },
+        load: LOAD,
+      } as StatusGetOutput);
+      expect(stdout).toContain(
+        `${FULL_LINE}Memory pressure: warming paused since 09:12 (pressure warn)\nRunning global`,
+      );
+    });
   });
 
   it("simlock status prints the console address when HTTP is enabled", async () => {
@@ -9524,6 +9567,7 @@ describe("simlock list --requests", () => {
       ["behind-earlier-request", "ios", "behind an earlier request"],
       ["device-limit", "ios", "full: device limit"],
       ["ram-budget", "ios", "full: RAM budget"],
+      ["memory-pressure", "ios", "full: host memory pressure"],
       ["global-running-limit", "ios", "full: running limit"],
       ["platform-running-limit", "ios", "full: running limit for iOS"],
       ["platform-running-limit", "android", "full: running limit for Android"],
@@ -9640,6 +9684,7 @@ describe("simlock list --requests", () => {
       ["full", "ios", undefined, "full"],
       ["full", "ios", "device-limit", "full: device limit"],
       ["full", "ios", "ram-budget", "full: RAM budget"],
+      ["full", "ios", "memory-pressure", "full: host memory pressure"],
       ["full", "ios", "global-running-limit", "full: running limit"],
       ["full", "ios", "platform-running-limit", "full: running limit for iOS"],
       ["full", "android", "platform-running-limit", "full: running limit for Android"],
@@ -10004,6 +10049,43 @@ describe("CLI: a worker's capabilities", () => {
       /^wrk_3 .* -- agent-device unavailable: found 0\.20\.1, need 0\.21\.28 or later$/m,
     );
     expect(shown).toMatch(/^wrk_4 .* -- agent-device unavailable: starting$/m);
+  });
+
+  it("simlock worker list shows each worker's memory step as the end of its first line, and nothing at none, with no field, or for a disconnected worker", async () => {
+    const withStep = (
+      id: string,
+      step: "none" | "warming-paused" | "new-devices-paused",
+      extra = {},
+    ) =>
+      worker({
+        capabilities: [{ name: "agent-device", state: "available" }],
+        capacity: { ...worker().capacity, memoryPressure: { step } },
+        id,
+        ...extra,
+      });
+    const shown = await listed([
+      withStep("wrk_1", "warming-paused"),
+      withStep("wrk_2", "new-devices-paused"),
+      withStep("wrk_3", "none"),
+      worker({ id: "wrk_4" }),
+      withStep("wrk_5", "new-devices-paused", { connection: "disconnected" }),
+    ]);
+
+    const lines = shown.trimEnd().split("\n");
+    const first = (id: string) => lines.find((line) => line.startsWith(`${id} `));
+    expect(first("wrk_1")).toBe(
+      "wrk_1 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available -- memory: warming paused",
+    );
+    expect(first("wrk_2")).toBe(
+      "wrk_2 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available -- memory: new devices paused",
+    );
+    expect(first("wrk_3")).toBe(
+      "wrk_3 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available",
+    );
+    expect(first("wrk_4")).toBe("wrk_4 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s)");
+    expect(first("wrk_5")).toBe(
+      "wrk_5 (mac-mini): disconnected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available",
+    );
   });
 
   it("worker list prints two entries in the order the worker sent them", async () => {

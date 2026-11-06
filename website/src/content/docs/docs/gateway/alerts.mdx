@@ -23,6 +23,7 @@ Only a gateway sends alerts. A worker on its own sends none; to watch a single w
 | `device.recovery-failed` | A device crashed during a lease and could not be brought back. |
 | `device.stalled-transition-detected` | A device has been booting or being cleaned for far longer than expected. |
 | `disk.pressure-detected` | A worker's free disk space fell below its `diskPressure.freeBytesThreshold`. |
+| `memory.pressure-changed` | A worker's memory pressure step changed: it paused warming, paused new devices, or is no longer under pressure. |
 | `component.install-failed` | Installing a runtime or system image on a worker failed. |
 
 When the gateway itself stops, it sends no `worker.disconnected` for its workers.
