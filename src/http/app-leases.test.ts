@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1469,7 +1469,13 @@ afterEach(async () => {
 });
 
 // why: a worker's HTTP app over a real lease-files store in a temporary folder, with lease `lse_1` held by `tok_agent`.
-async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
+async function filesRig(
+  options: {
+    readonly limits?: LeaseFilesLimits;
+    readonly filesystem?: NodeFilesystem;
+    readonly diskPressureThreshold?: number;
+  } = {},
+) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-lease-files-"));
   filesRoots.push(dataDirectory);
   const rig = buildHarness({
@@ -1477,8 +1483,8 @@ async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
       createLeaseFiles({
         clock,
         dataDirectory,
-        diskPressureThreshold: 0,
-        filesystem: new NodeFilesystem(),
+        diskPressureThreshold: options.diskPressureThreshold ?? 0,
+        filesystem: options.filesystem ?? new NodeFilesystem(),
         findGrant: (leaseId) =>
           leaseId === "lse_1" ? { grantedAt: 1_000, id: leaseId, platform: "ios" } : undefined,
         idGenerator: sequenceIdGenerator("up"),
@@ -1491,7 +1497,17 @@ async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
     rig.app.request(`/v1/leases/lse_1/files/${name}`, { body, headers, method: "PUT" });
   const get = (name: string, headers: Record<string, string> = agentAuth) =>
     rig.app.request(`/v1/leases/lse_1/files/${name}`, { headers });
-  return { ...rig, dataDirectory, get, put };
+  const leaseFolder = join(
+    dataDirectory,
+    "lease-files",
+    `${Buffer.from("lse_1").toString("hex")}-1000`,
+  );
+  return { ...rig, dataDirectory, get, leaseFolder, put };
+}
+
+// why: what a lease folder holds, temporary upload files included, so "nothing stored" means nothing on disk.
+async function folderEntries(folder: string): Promise<string[]> {
+  return readdir(folder).catch(() => []);
 }
 
 // why: comparing megabytes with `toEqual` walks them one by one and takes seconds; their digests say the same.
@@ -1546,5 +1562,47 @@ describe("a lease's files on a worker", () => {
     expect((await app.request("/v1/leases/lse_1/files/..", { headers: agentAuth })).status).toBe(
       404,
     );
+  });
+
+  it("a lease holder PUTs past a limit and gets the limit's code, with nothing stored and the previous file kept", async () => {
+    const limits = { fileBytes: 10, leaseBytes: 100, silenceMs: 330_000 };
+    const big = new Uint8Array(11);
+    const rig = await filesRig({ limits });
+    const refusal = async (response: Response) =>
+      (await response.json()) as { error: { code: string; message: string } };
+    const text = async (response: Response) =>
+      new TextDecoder().decode(await response.arrayBuffer());
+
+    expect((await rig.put("kept.bin", "12345")).status).toBe(201);
+    const tooBig = await rig.put("kept.bin", big);
+    expect(tooBig.status).toBe(413);
+    expect((await refusal(tooBig)).error).toEqual({
+      code: "FILE_TOO_LARGE",
+      message: "File kept.bin is over the 2 GiB limit for one file",
+      name: "kept.bin",
+    });
+    expect(await text(await rig.get("kept.bin"))).toBe("12345");
+    expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
+
+    let pulled = false;
+    const unread = new ReadableStream<Uint8Array>(
+      {
+        pull(c) {
+          pulled = true;
+          c.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const declared = await rig.app.request("/v1/leases/lse_1/files/declared.bin", {
+      body: unread,
+      duplex: "half",
+      headers: { ...agentAuth, "content-length": "11" },
+      method: "PUT",
+    } as RequestInit);
+    expect(declared.status).toBe(413);
+    expect((await refusal(declared)).error.code).toBe("FILE_TOO_LARGE");
+    expect(pulled).toBe(false);
+    expect(await folderEntries(rig.leaseFolder)).toEqual(["kept.bin"]);
   });
 });
