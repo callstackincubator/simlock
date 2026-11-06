@@ -8,9 +8,11 @@ import {
   ExecOutputDeliveryStalledError,
   FakeClock,
   NodeProcessRunner,
+  ProcessSpawnError,
   ScriptedProcessRunner,
   type ProcessRunner,
 } from "../ports/index.js";
+import { LeaseFilesError } from "../lease-files/index.js";
 import { classifyError } from "./error-code.js";
 import { buildDispatcher, flush, session } from "./test-dispatcher.js";
 
@@ -34,6 +36,10 @@ function recordingResolver(
   };
   return resolver as unknown as PassthroughResolver;
 }
+
+type LeaseFilesOverride = NonNullable<
+  NonNullable<Parameters<typeof buildDispatcher>[0]>["leaseFiles"]
+>;
 
 describe("Dispatcher: device.exec", () => {
   const command = { args: ["--set", "/root", "list", "devices"], command: "simctl" };
@@ -147,6 +153,159 @@ describe("Dispatcher: device.exec", () => {
     );
 
     expect(runner.calls[0]?.options.input).toBe("yes\n");
+  });
+
+  it("refuses stdin and stdinFile together with BAD_REQUEST and spawns nothing", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const calls: RecordedPassthrough[] = [];
+    const { dispatcher, leaseId } = await withLease({
+      passthroughOverride: recordingResolver(calls, () =>
+        Promise.resolve({ args: ["--set", "/root", "list", "devices"], command: "simctl" }),
+      ),
+      processRunner: runner,
+    });
+    const run = (extra: Record<string, string>) =>
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl", ...extra },
+        session({ principal: "tok_agent" }),
+      );
+
+    await expect(run({ stdin: "yes\n" })).resolves.toEqual({ exitCode: 0 });
+    const spawned = runner.calls.length;
+    const asked = calls.length;
+
+    const refusal = await run({ stdin: "yes\n", stdinFile: "fixture.tar" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toMatchObject({ message: "Give stdin or stdinFile, not both" });
+    expect(classifyError(refusal)).toBe("BAD_REQUEST");
+    expect(runner.calls).toHaveLength(spawned);
+    expect(calls).toHaveLength(asked);
+  });
+
+  it("stops the command and fails with STDIN_FILE_FAILED when the stdinFile cannot be read to its end", async () => {
+    const oneMiB = 1024 * 1024;
+    for (const bytes of [oneMiB, 0]) {
+      let closed = false;
+      const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
+      const { dispatcher, leaseId } = await withLease({
+        leaseFiles: {
+          folderOf: () => Promise.resolve("/lease-folder"),
+          openFile: (_grant, name) =>
+            Promise.resolve({
+              close: () => {
+                closed = true;
+                return Promise.resolve();
+              },
+              name,
+              read: () => {
+                let sent = 0;
+                return new ReadableStream<Uint8Array>({
+                  pull(controller) {
+                    if (sent >= bytes) {
+                      controller.error(new Error("disk went away"));
+                      return;
+                    }
+                    controller.enqueue(new Uint8Array(bytes));
+                    sent += bytes;
+                  },
+                });
+              },
+              size: bytes,
+            }),
+        },
+        processRunner: runner,
+      });
+
+      let settled = false;
+      const outcome = dispatcher
+        .dispatch(
+          "device.exec",
+          { args: ["list", "devices"], leaseId, stdinFile: "fixture.tar", tool: "simctl" },
+          session({ principal: "tok_agent" }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await flush();
+      expect(settled).toBe(true);
+      const failure = await outcome;
+
+      expect(classifyError(failure)).toBe("STDIN_FILE_FAILED");
+      expect(failure).toMatchObject({
+        details: { bytesRead: bytes, name: "fixture.tar" },
+        message: `Reading fixture.tar failed after ${String(bytes)} bytes; the command was stopped`,
+      });
+      expect(closed).toBe(true);
+    }
+  });
+
+  it("answers 404 for a lease that ended, a folder that vanished before the spawn or a stdinFile deleted before the open", async () => {
+    const ended = () =>
+      Promise.reject(new LeaseFilesError("UNKNOWN_LEASE", "Unknown lease: x", { leaseId: "x" }));
+    const cases: readonly [string, LeaseFilesOverride, boolean, string][] = [
+      [
+        "folderOf on an ended grant",
+        { folderOf: ended, openFile: () => Promise.reject(new Error("unused")) },
+        false,
+        "UNKNOWN_LEASE",
+      ],
+      [
+        "spawn after the lease ended",
+        {
+          folderOf: vi.fn().mockResolvedValueOnce("/gone").mockImplementation(ended),
+          openFile: () => Promise.reject(new Error("unused")),
+        },
+        false,
+        "UNKNOWN_LEASE",
+      ],
+      [
+        "open of a file deleted after the listing",
+        {
+          folderOf: () => Promise.resolve("/lease-folder"),
+          openFile: () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+        },
+        true,
+        "UNKNOWN_FILE",
+      ],
+    ];
+    for (const [title, leaseFiles, withFile, code] of cases) {
+      const spawnFails: ProcessRunner = {
+        run: () => Promise.reject(new Error("unused")),
+        spawn: () => {
+          throw new Error("unused");
+        },
+        spawnStreaming: () => {
+          throw new ProcessSpawnError("simctl", []);
+        },
+      };
+      const { dispatcher, leaseId } = await withLease({ leaseFiles, processRunner: spawnFails });
+
+      const failure = await dispatcher
+        .dispatch(
+          "device.exec",
+          {
+            args: ["list", "devices"],
+            leaseId,
+            ...(withFile ? { stdinFile: "fixture.tar" } : {}),
+            tool: "simctl",
+          },
+          session({ principal: "tok_agent" }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+      expect(classifyError(failure), title).toBe(code);
+    }
   });
 
   it("kills a command that outruns exec.timeoutMs and fails with EXEC_TIMEOUT", async () => {

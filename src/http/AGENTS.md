@@ -8,7 +8,7 @@ Surface: [remote-agents.mdx](../../website/src/content/docs/docs/using-devices/r
 Dispatch:
 
 - Never a second dispatcher and never the unix socket: `deps.dispatch` is the daemon's own dispatcher, called in process. Role check, `authorize` and readiness parking run there.
-- No role or `authorize` check here. The exceptions: the cross-site check on a proxy-signed identity (`requireAuth`), the lease lookup of a module's lease route, and request ownership (`requireOwnRequest`): a stored request is read or cancelled by its owner or an operator, else 403.
+- No role or `authorize` check here. The exceptions: the cross-site check on a proxy-signed identity (`requireAuth`), the lease lookup of a module's lease route and of the lease file routes, and request ownership (`requireOwnRequest`): a stored request is read or cancelled by its owner or an operator, else 403.
 - `app.ts` is a pure request → response function; the console lives in `server.ts`.
 - Never imports drivers or gateway. No lint rule holds this.
 - The listener starts right after the socket claim, before startup convergence. Early requests park in the dispatcher.

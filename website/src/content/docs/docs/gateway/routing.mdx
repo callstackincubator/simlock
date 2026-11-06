@@ -23,7 +23,7 @@ A worker can take a request only when it:
 Among those workers, the gateway prefers:
 
 1. **A worker with a warm device.** A booted, unleased device that matches the request, including its slim or full mode, means the agent gets a device without waiting for a boot. For a request that names a baseline, only a copy of the baseline's current version counts.
-2. **A worker with room to boot one.** It needs a free device slot, or a warm device it can shut down to make room. Workers under their RAM budget come first, then the worker with the most free device slots.
+2. **A worker with room to boot one.** It needs a free device slot, or a warm device it can shut down to make room. Workers whose new devices are not paused by host memory pressure come first (a worker that only paused warming still counts as calm), then workers under their RAM budget, then the worker with the most free device slots. A worker that paused new devices still gets the request when it has a warm match or when every worker is paused.
 
 A request for a physical device goes only to a worker with a matching enrolled device that is free now. If none is free, the request waits.
 

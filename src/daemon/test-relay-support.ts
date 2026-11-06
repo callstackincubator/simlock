@@ -8,7 +8,13 @@ import { expect, vi } from "vitest";
 
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayRelay } from "../gateway/index.js";
-import { MemoryFilesystem, NoopLogger, SystemClock, type Logger } from "../ports/index.js";
+import {
+  MemoryFilesystem,
+  NodeFilesystem,
+  NoopLogger,
+  SystemClock,
+  type Logger,
+} from "../ports/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { linkPair, TappedTransport, type LinkPair } from "../link/testing.js";
 import type { DispatchSession } from "./dispatch.js";
@@ -181,7 +187,8 @@ export async function startWorker(
         platform: "android",
       }),
     ],
-    filesystem: new MemoryFilesystem(),
+    // why: some tests run a real command on this worker, in a lease folder that has to exist on disk.
+    filesystem: new NodeFilesystem(),
     logger,
     relayTargets,
     version: "1.0.0-e2e",
@@ -327,6 +334,10 @@ export interface FleetOptions {
   readonly gatewayUrl?: (gatewayPort: number) => string | Promise<string>;
   // why: a test starts the gateway behind an identity-aware proxy, so http.proxyAuth is set.
   readonly proxyAuth?: Record<string, unknown>;
+  // why: a test gives the worker options of its own, such as lower lease file limits.
+  readonly worker?: Partial<StartDaemonOptions>;
+  // why: a test gives the gateway options of its own, such as a lower file silence bound.
+  readonly gateway?: Partial<StartDaemonOptions>;
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
@@ -335,7 +346,6 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
   const port = await freeLoopbackPort();
-  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
   const gateway = await startDaemon({
@@ -367,8 +377,11 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     },
     logger: new NoopLogger(),
     version: "1.0.0-e2e",
+    ...options.gateway,
   });
   daemons.push(gateway);
+  // why: the hook may open its own listener, and listen(0) can draw the port freeLoopbackPort freed; the gateway holds it first.
+  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   const { secret } = await gateway.dispatch(
     "token.create",
     { label: "worker-a", role: "worker" },
@@ -382,6 +395,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     { "agent-device": target, echo: target },
     {
       ...(twoWayTarget === undefined ? {} : { relayTwoWayTargets: { echo: twoWayTarget } }),
+      ...options.worker,
       configOverrides: {
         gateway: { label: "worker-a", token: secret, url: workerDials },
       },

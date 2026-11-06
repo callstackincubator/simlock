@@ -195,6 +195,8 @@ export class HttpGateway {
         this.#sockets.add(socket);
         socket.once("close", () => this.#sockets.delete(socket));
       });
+      // why: Node cuts any request that lasts over 300 s by default, which would cut a big upload that keeps moving; a stalled one is cut by the upload's own silence bound, and headers stay bounded by `headersTimeout`.
+      server.requestTimeout = 0;
       this.#server = server;
       // Before `listening` fires deliberately: an upgrade cannot arrive until the server is
       // listening, and wiring it here means there is no window where a connection is accepted

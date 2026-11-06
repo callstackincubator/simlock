@@ -41,6 +41,7 @@ import {
   type ProtocolRange,
   type Role,
   type StatusLoad,
+  type StatusMemoryPressure,
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { DaemonAlreadyRunningError, type ConnectionHost } from "./connection-host.js";
@@ -101,6 +102,7 @@ export interface DaemonServerEngineOptions {
   readonly passthrough?: PassthroughResolver;
   readonly inputs?: DispatcherOptions["inputs"];
   readonly processRunner?: ProcessRunner;
+  readonly leaseFiles?: DispatcherOptions["leaseFiles"];
   readonly relayTargets?: RelayTargets;
   readonly relayTwoWayTargets?: TwoWayRelayTargets;
   readonly execEnv?: NodeJS.ProcessEnv;
@@ -122,6 +124,7 @@ export interface DaemonServerCommonOptions {
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly hostLoad?: { start(): void; dispose(): void };
+  readonly memoryPressure?: { current(): StatusMemoryPressure | undefined; dispose(): void };
   readonly logger?: Logger;
   readonly protocolVersion?: number | ProtocolRange;
   readonly version: string;
@@ -245,6 +248,9 @@ function buildDispatcher(
     health: hooks.health,
     hostFacts: options.hostFacts,
     ...(options.load === undefined ? {} : { load: options.load }),
+    ...(options.memoryPressure === undefined
+      ? {}
+      : { memoryPressure: () => options.memoryPressure?.current() }),
     instanceId: options.instanceId,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -255,6 +261,7 @@ function buildDispatcher(
     ...(options.passthrough === undefined ? {} : { passthrough: options.passthrough }),
     ...(options.inputs === undefined ? {} : { inputs: options.inputs }),
     ...(options.processRunner === undefined ? {} : { processRunner: options.processRunner }),
+    ...(options.leaseFiles === undefined ? {} : { leaseFiles: options.leaseFiles }),
     ...(options.execEnv === undefined ? {} : { execEnv: options.execEnv }),
     queue: options.queue,
     ...(options.presence === undefined ? {} : { presence: options.presence }),
@@ -651,6 +658,7 @@ export class DaemonServer {
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
     this.options.hostLoad?.dispose();
+    this.options.memoryPressure?.dispose();
     this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();
