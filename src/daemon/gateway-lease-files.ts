@@ -1,4 +1,5 @@
 import type { Identity } from "../auth/index.js";
+import { MAX_FILE_BYTES } from "../lease-files/index.js";
 import type { HttpLeaseFiles } from "../http/app.js";
 
 // why: only `main.ts` imports the gateway, so the relay is typed by the shape of the call it takes.
@@ -19,6 +20,19 @@ export interface GatewayLeaseFilesOptions {
 export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): HttpLeaseFiles {
   return {
     handle: async (request, identity: Identity, lease, name) => {
+      const declared = request.headers.get("content-length");
+      if (name !== undefined && declared !== null && Number(declared) > MAX_FILE_BYTES) {
+        return Response.json(
+          {
+            error: {
+              code: "FILE_TOO_LARGE",
+              message: `File ${name} is over the 2 GiB limit for one file`,
+              name,
+            },
+          },
+          { status: 413 },
+        );
+      }
       const workerLeaseId = lease.workerLeaseId ?? lease.id;
       const path = `/files/leases/${encodeURIComponent(workerLeaseId)}${
         name === undefined ? "" : `/${encodeURIComponent(name)}`
@@ -35,7 +49,7 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
         tenant: `${options.requesterPrefix}${identity.principal}`,
       });
       const length = answer.headers.get("simlock-content-length");
-      if (length === null) return answer;
+      if (length === null || !/^\d{1,16}$/.test(length)) return answer;
       // why: the relay carries no `Content-Length`, so the worker sent the body's length under its own header and the gateway gives it back to the caller.
       const headers = new Headers(answer.headers);
       headers.set("content-length", length);
