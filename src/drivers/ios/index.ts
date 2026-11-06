@@ -1301,16 +1301,21 @@ export class IosSimctlDriver implements Driver {
     const details = write.writeError === undefined ? [] : [write.writeError];
 
     if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-      const reason =
-        outcome.kind === "timed-out"
-          ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
-          : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
-      details.push(`could not read back the launchd overrides: ${reason}`);
+      details.push(`could not read back the launchd overrides: ${readBackFailure(outcome)}`);
       if (write.kept.length > 0) throw new KeptCategoriesError(details.join("; "));
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
+    return this.#judgeReadBack(device, data, write, details, outcome.result.stdout);
+  }
 
-    const read = parsePrintDisabled(outcome.result.stdout);
+  #judgeReadBack(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+    details: string[],
+    stdout: string,
+  ): DriverDevice {
+    const read = parsePrintDisabled(stdout);
     assertKeptEnabled(write.kept, read);
     const mismatched = [...write.wanted.keys()]
       .sort()
@@ -1327,19 +1332,24 @@ export class IosSimctlDriver implements Driver {
 
     // why: an except list naming the whole slim set slims nothing: full, no `device.slimmed`.
     if (write.resolved.categories.length === 0) return this.#asIs(device, data, "full");
+    this.#reportSlimmed(device, data, write);
+    return this.#asIs(device, data, "slim");
+  }
 
-    const labelCount = [...write.wanted.values()].filter(Boolean).length;
+  #reportSlimmed(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): void {
     this.#onSlimmed?.({
       address: data.udid,
       categories: write.resolved.categories.map((category) => category.name),
       deviceId: device.deviceId,
       durationMs: this.#clock.now() - write.startedAt,
-      labelCount,
+      labelCount: [...write.wanted.values()].filter(Boolean).length,
       signature: slimSignature(write.resolved.categories),
       unknownLabels: [...write.resolved.unknown],
     });
-
-    return this.#asIs(device, data, "slim");
   }
 
   #skipApply(
@@ -2531,6 +2541,16 @@ function alreadyShutdown(stderr: string): boolean {
 
 function unknownDevice(result: ProcessResult): boolean {
   return /^Invalid device:/m.test(result.stderr);
+}
+
+function readBackFailure(
+  outcome:
+    | { readonly kind: "timed-out" }
+    | { readonly kind: "finished"; readonly result: { code: number | null; stderr: string } },
+): string {
+  return outcome.kind === "timed-out"
+    ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
+    : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
 }
 
 function alreadyBooted(stderr: string): boolean {
