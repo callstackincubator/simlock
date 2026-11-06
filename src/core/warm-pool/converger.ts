@@ -680,7 +680,7 @@ export class WarmPool {
       pressure: {
         mayShed:
           reading !== undefined && reading.readingAt > (this.#shedAt ?? Number.NEGATIVE_INFINITY),
-        shedFailed: new Set(),
+        shedFailed: this.#recentShutdownFailures(),
         step: reading?.step ?? "none",
       },
       resetDevices: new Set(this.#reset),
@@ -874,6 +874,14 @@ export class WarmPool {
       osVersion: target.osVersion,
       platform: target.platform,
     });
+  }
+
+  /** why: the devices whose shutdown failed less than a tick ago, which a shed skips so the next reading takes the next device. */
+  #recentShutdownFailures(): ReadonlySet<string> {
+    const now = this.options.clock.now();
+    return new Set(
+      [...this.#retryAfter].flatMap(([deviceId, after]) => (after > now ? [deviceId] : [])),
+    );
   }
 
   /** The device, when it is still in `state`, has no lease and no operation claim on it. */
