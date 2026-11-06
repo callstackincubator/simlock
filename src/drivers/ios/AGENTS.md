@@ -72,9 +72,7 @@ Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simul
 
 Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`. `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
-Catalog — models are device type names; class from product family (iPhone `phone`, iPad
-`tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired
-installed versions. No aliases, no images.
+Catalog — models are device type names; class from product family (iPhone `phone`, iPad `tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired installed versions. No aliases, no images.
 
 Components — a component is a runtime version or `latest`.
 `installComponent`: `xcodebuild -downloadPlatform iOS [-buildVersion <v>]`, 8 GiB reserved under
@@ -82,10 +80,7 @@ Components — a component is a runtime version or `latest`.
 while it deletes, reports any download left in the asset store as `residue`.
 `foreignDevices` counts devices in the default set (under `deviceSet: default`, those this instance's mark does not name).
 
-Physical — `devicectl list devices` with `--json-output` to `$SIMLOCK_HOME/devicectl/`
-(file deleted after). Id matches identifier, UDID, serial or ECID; wired only.
-Refused: simulator, network-only, not iPhone/iPad, below iOS 17, untrusted, Developer Mode
-off, locked. Present = listed, paired, unlocked.
+Physical — `devicectl list devices` with `--json-output` to `$SIMLOCK_HOME/devicectl/` (file deleted after). Id matches identifier, UDID, serial or ECID; wired only. Refused: simulator, network-only, not iPhone/iPad, below iOS 17, untrusted, Developer Mode off, locked. Present = listed, paired, unlocked.
 
 Passthrough —
 
@@ -106,8 +101,7 @@ The config is always `portrait`, a rotation included, with `keyboardUnavailable:
 
 Tunnels — `deviceTcp` (`device-tcp.ts`), only when `create` got `tcpListener`, `tcpProbe` and `tcpStreamConnector`; `supports` is true for a simulator, false for an iPhone. A simulator has no network of its own: its sockets are the worker's loopback sockets. `connect` (one 5 s limit from the caller's `OPEN`, then `timeout`) runs `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fpn` through the `ProcessRunner`, then `ps eww -p <pid>` per listener, and a process is the lease's only when a word of its environment is exactly `SIMULATOR_UDID=<the lease's UDID>` (not a substring of an argument). It dials `127.0.0.1` when a lease process holds `127.0.0.1:<port>`, or holds `*:<port>` while no other process holds `127.0.0.1:<port>`; else `[::1]` by the same rule; never an address another process holds more specifically. Checked on every connection. No listener, none of the lease's, or both addresses refused: `nothing on the lease's simulator listens on port <port>`; a lookup that fails: `could not check the port's owner: <first line of stderr>`. `reverse` is refused `TUNNEL_PORT_IN_USE` when a connect to `127.0.0.1:<port>` or `[::1]:<port>` is answered (a wildcard listener included; 250 ms each), else listens on exactly the device port on both loopbacks (one in use at bind: `TUNNEL_PORT_IN_USE`, the other closed; another error: `TUNNEL_FAILED`). Its `close` closes both listeners and sets `holdsDeviceRule: false`, so a lease end with an aborted signal runs it. `sweep` does nothing: no rule sits on a simulator.
 
-Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts);
-`slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
+Advisories — `runtime-cache-unreclaimable` (asset bundles no installed runtime mounts); `slim-runtime-unsupported` (installed runtimes below 18.5, only when `ios.defaultMode` is `slim`).
 
 ## State and timers
 
