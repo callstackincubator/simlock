@@ -16,7 +16,7 @@
 
 A remote caller reaches a leased device through `device.exec`, whose
 `stdin` is one string sent with the request and capped at 8,388,608
-characters (`src/contract/operations.ts:426`), because the whole request is
+characters (`src/contract/operations.ts:425`), because the whole request is
 parsed as one string and, through a gateway, sent as one uplink message
 that may not pass 8 MiB (`src/ports/uplink-websocket.ts:414`). Two e2e
 suites send fixture archives of about 90 MB this way, base64-encoded, from
@@ -57,7 +57,10 @@ flowchart LR
    A gateway relays each to the lease's worker over the existing relay
    channel, so no request holds a whole file in memory on either side.
 3. **Names are flat:** `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`, compared
-   ignoring case, as the worker's disk does. Anything else is
+   ignoring case on every worker OS: an upload replaces every other
+   spelling of its name, and where a case-sensitive disk holds several
+   spellings a command wrote, the exact one wins, else the first in byte
+   order. Anything else is
    `400 BAD_REQUEST`. The list shows only such files; anything else a
    command writes there still counts toward the lease limit.
 4. **Limits are fixed:** a file may not pass 2 GiB (`413 FILE_TOO_LARGE`);
@@ -71,13 +74,17 @@ flowchart LR
    lease's folder as its working directory, so a relative path in its
    arguments names a stored file and a command can write one for download.
    A new optional `stdinFile` names a stored file that is piped to the
-   command's stdin; with `stdin` too, it is `400 BAD_REQUEST`. `stdin`
+   command's stdin; with `stdin` too, it is `400 BAD_REQUEST`. A file that
+   cannot be read to its end stops the command, and the exec ends with
+   `STDIN_FILE_FAILED`. MCP's `run_on_device` does not offer it, since an
+   MCP agent has no way to upload. `stdin`
    keeps its one-shot string and its cap; ADR 0058 is untouched.
 6. **An upload is bounded by silence, not by total time.** The HTTP
    listener drops Node's 300 s total request limit. An upload whose body
    brings no byte for 330 s is cut, `408 UPLOAD_STALLED`, on a worker and
-   through a gateway; there the relay's 330 s deadline for the worker's
-   answer starts once the body has been fully sent. Other relays keep
+   through a gateway; there the relay keeps its 330 s bound on opening the
+   channel, then counts silence from the caller, and its 330 s deadline
+   for the worker's answer starts once the body has been fully sent. Other relays keep
    today's deadline. Through a gateway the gateway refuses a
    `Content-Length` over 2 GiB itself, since the relay does not carry that
    header, and restores a download's length from a size header the worker
