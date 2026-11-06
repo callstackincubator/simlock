@@ -12,7 +12,9 @@ export async function freeLoopbackPort(): Promise<number> {
 }
 
 function portWasTaken(error: unknown): boolean {
-  return (error as { readonly code?: unknown } | null)?.code === "EADDRINUSE";
+  if ((error as { readonly code?: unknown } | null)?.code === "EADDRINUSE") return true;
+  // why: a daemon's start rethrows the bind failure as its own error, so only the message names it.
+  return error instanceof Error && /EADDRINUSE|address already in use/i.test(error.message);
 }
 
 // why: `freeLoopbackPort` releases the port it picked, so a process of a parallel lane can take it
