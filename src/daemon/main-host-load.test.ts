@@ -562,4 +562,43 @@ describe("startDaemon memory pressure hold", () => {
     const off = await startOnClock({ hostLoadProbe: null });
     expect((await statusOf(off.daemon)).capacity).not.toHaveProperty("memoryPressure");
   });
+
+  it("emits memory.pressure-changed once per step change with the new step's cause", async () => {
+    const level = (name: "warn" | "critical") => ({
+      availablePercent: 34,
+      level: name,
+      trigger: "level",
+    });
+    const warn = memoryReading("warn", 34);
+    const calm = memoryReading("normal", 34);
+    // why: warming comes on at +0 s, new devices at +15 s and lifts 60 s after its first non-meeting reading at +30 s; calm from +105 s lifts warming at +165 s.
+    const readings = [
+      warn,
+      memoryReading("critical", 34),
+      ...[0, 1, 2, 3, 4].map(() => warn),
+      ...[0, 1, 2, 3, 4].map(() => calm),
+      calm,
+    ];
+    const probe = new FakeHostLoadProbe();
+    const { clock, daemon } = await startOnClock({ hostLoadProbe: probe });
+    for (const [index, reading] of readings.entries()) {
+      if (index > 0) clock.advance(15_000);
+      await expect.poll(() => probe.reads).toBe(index + 1);
+      probe.answer(reading);
+      await expect.poll(async () => (await statusOf(daemon)).load?.ageMs).toBe(0);
+    }
+
+    const replayed = (await daemon.dispatch("events.replay", {}, hostLoadAdmin)) as readonly {
+      event: string;
+      payload: unknown;
+    }[];
+    expect(
+      replayed.filter((entry) => entry.event === "memory.pressure-changed").map((e) => e.payload),
+    ).toEqual([
+      { cause: level("warn"), from: "none", to: "warming-paused" },
+      { cause: level("critical"), from: "warming-paused", to: "new-devices-paused" },
+      { cause: level("warn"), from: "new-devices-paused", to: "warming-paused" },
+      { from: "warming-paused", to: "none" },
+    ]);
+  });
 });
