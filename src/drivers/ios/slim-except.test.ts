@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { KeptCategoriesError } from "../../core/index.js";
 import { FakeClock, ScriptedProcessRunner } from "../../ports/index.js";
-import { SLIM_CATEGORIES, type SlimmedFact, type SlimSkippedFact } from "./index.js";
+import { SLIM_CATEGORIES, slimSignature, type SlimmedFact, type SlimSkippedFact } from "./index.js";
 import {
   createSlimDriver,
   driverData,
@@ -127,6 +127,41 @@ describe("IosSimctlDriver makeReady with an except list", () => {
         message: "could not read back the launchd overrides: exit 1: boom",
       },
     ];
+    const nonKept = [...labelsOf(["widgets"])].find((label) => wanted.get(label) === true)!;
+    const mismatched = await bootWithExcept({
+      except: ["store", "other"],
+      readback: readbackOf(new Map([...wanted, [nonKept, false]])),
+    });
+    expect(mismatched.outcome).toEqual({ result: expect.objectContaining({ mode: "full" }) });
+    expect(mismatched.onSlimmed).not.toHaveBeenCalled();
+
+    const wholeSet = await bootWithExcept({
+      categories: ["store"],
+      except: ["store"],
+      readback: readbackOf(expectedWrite(["store"], ["store"])),
+    });
+    expect(wholeSet.written).toEqual(Object.fromEntries(expectedWrite([], [])));
+    expect(wholeSet.outcome).toEqual({ result: expect.objectContaining({ mode: "full" }) });
+    expect(wholeSet.onSlimmed).not.toHaveBeenCalled();
+
+    const sharedLabel = expectedWrite(["store", "icloud"], ["store"]);
+    const shared = await bootWithExcept({
+      categories: ["store", "icloud"],
+      except: ["store"],
+      readback: readbackOf(sharedLabel),
+    });
+    const icloud = SLIM_CATEGORIES.filter((category) => category.name === "icloud");
+    expect(shared.written?.["com.apple.amsaccountsd"]).toBe(false);
+    expect(shared.written).toEqual(Object.fromEntries(sharedLabel));
+    expect(shared.outcome).toEqual({ result: expect.objectContaining({ mode: "slim" }) });
+    expect(shared.onSlimmed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        categories: ["icloud"],
+        labelCount: [...sharedLabel.values()].filter(Boolean).length,
+        signature: slimSignature(icloud),
+      }),
+    );
+
     for (const refusal of refusals) {
       const { outcome, onSlimmed } = await bootWithExcept(refusal.run);
       expect(outcome, refusal.name).toEqual({ error: new KeptCategoriesError(refusal.message) });

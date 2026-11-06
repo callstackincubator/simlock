@@ -1252,9 +1252,8 @@ export class IosSimctlDriver implements Driver {
     except: readonly string[] = [],
   ): Promise<SlimWrite> {
     const configured = resolveSlimCategories(slim.categories);
-    const { kept, slimmed } = splitByExcept(configured.categories, except);
-    const resolved = { categories: slimmed, unknown: configured.unknown };
-    if (resolved.categories.length === 0) {
+    const { kept, resolved } = splitByExcept(configured, except);
+    if (configured.categories.length === 0) {
       return {
         detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
         kind: "no-categories",
@@ -1297,7 +1296,6 @@ export class IosSimctlDriver implements Driver {
     data: IosDriverData,
     write: Extract<SlimWrite, { readonly kind: "written" }>,
   ): Promise<DriverDevice> {
-    // why: with an except list the lease is told a category is on, so a write that failed refuses the device.
     if (write.kept.length > 0 && write.writeError !== undefined) {
       throw new KeptCategoriesError(write.writeError);
     }
@@ -1332,6 +1330,9 @@ export class IosSimctlDriver implements Driver {
     if (details.length > 0) {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
+
+    // why: an except list naming the whole slim set slims nothing: full, no `device.slimmed`.
+    if (write.resolved.categories.length === 0) return this.#asIs(device, data, "full");
 
     const labelCount = [...write.wanted.values()].filter(Boolean).length;
     this.#onSlimmed?.({
@@ -2696,4 +2697,4 @@ export { type IosDriverConfig, iosDriverConfig } from "./definition.js";
 export { iosDeviceDataTable } from "./device-data.js";
 export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
-export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";
+export { labelsFor, SLIM_CATEGORIES, slimSignature } from "./slim-labels.js";
