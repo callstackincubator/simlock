@@ -1159,7 +1159,12 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
   const every = ["widgets", "store", "mdm", "other"];
 
   function fleet(
-    slims: Readonly<Record<string, { categories: string[]; defaultMode: "slim" | "full" }>>,
+    slims: Readonly<
+      Record<
+        string,
+        { categories: string[]; defaultMode: "slim" | "full"; baseline?: "slim" | "full" }
+      >
+    >,
   ) {
     const made = harness();
     const clients: Record<string, ScriptedWorkerClient> = {};
@@ -1179,6 +1184,21 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
             slimCategories: slim.categories,
           },
         ]).platforms,
+        ...(slim.baseline === undefined
+          ? {}
+          : {
+              baselines: [
+                {
+                  mode: slim.baseline,
+                  model: "iPhone 17",
+                  name: "b",
+                  osVersion: "26.0",
+                  platform: "ios" as const,
+                  savedAt: "2026-11-02T13:10:00Z",
+                  version: 1,
+                },
+              ],
+            }),
       });
     }
     return { ...made, clients };
@@ -1187,7 +1207,7 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
   it("routes an except request by each worker's slim set and default mode, and gives the chosen worker the except list", async () => {
     const cases: {
       label: string;
-      request: { except: string[]; mode?: "slim" | "full" };
+      request: { baseline?: string; except: string[]; mode?: "slim" | "full" };
       routedTo?: string;
       rejected?: string;
       workers: Parameters<typeof fleet>[0];
@@ -1208,6 +1228,23 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
         workers: {
           wrk_a: { categories: every, defaultMode: "full" as const },
           wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "a slim baseline on a worker whose default mode is full",
+        request: { baseline: "b", except: ["store"] },
+        routedTo: "wrk_a",
+        workers: {
+          wrk_a: { baseline: "slim" as const, categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "a full baseline on a worker whose default mode is slim",
+        request: { baseline: "b", except: ["store"] },
+        rejected: 'no worker can keep slim categories store (baseline "b" is full)',
+        workers: {
+          wrk_a: { baseline: "full" as const, categories: every, defaultMode: "slim" as const },
         },
       },
       {
