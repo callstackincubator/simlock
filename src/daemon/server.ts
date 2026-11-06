@@ -124,7 +124,7 @@ export interface DaemonServerCommonOptions {
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly hostLoad?: { start(): void; dispose(): void };
-  readonly memoryPressure?: { current(): StatusMemoryPressure | undefined };
+  readonly memoryPressure?: { current(): StatusMemoryPressure | undefined; dispose(): void };
   readonly logger?: Logger;
   readonly protocolVersion?: number | ProtocolRange;
   readonly version: string;
@@ -658,6 +658,7 @@ export class DaemonServer {
     for (const unsubscribe of this.#unsubscribeLeaseLost.splice(0)) unsubscribe();
     this.#ownerRoutedFacts.dispose();
     this.options.hostLoad?.dispose();
+    this.options.memoryPressure?.dispose();
     this.#workerDispatcher?.dispose();
     this.#engine?.reaper.dispose();
     this.#engine?.healthMonitor?.dispose();

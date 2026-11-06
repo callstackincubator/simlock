@@ -512,6 +512,7 @@ export async function composeWorker(
       ? {}
       : {
           memoryPressure: {
+            dispose: () => memoryPressure.dispose(),
             current: () => {
               const state = memoryPressure.current();
               if (state === undefined) return undefined;

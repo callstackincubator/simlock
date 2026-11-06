@@ -1,4 +1,4 @@
-import type { Clock, MemoryCounters } from "../ports/index.js";
+import type { Clock, MemoryCounters, TimerHandle } from "../ports/index.js";
 
 export type MemoryPressureLevel = "normal" | "warn" | "critical";
 export type MemoryPressureStep = "none" | "warming-paused" | "new-devices-paused";
@@ -37,7 +37,10 @@ interface MemoryPressureOptions {
 interface HeldStep {
   readonly since: number;
   readonly cause: MemoryPressureCause;
+  clearTimer?: TimerHandle;
 }
+
+type StepKey = "warming" | "newDevices";
 
 const LEVEL_RANK: Record<MemoryPressureLevel, number> = { normal: 0, warn: 1, critical: 2 };
 
@@ -46,8 +49,10 @@ const LEVEL_RANK: Record<MemoryPressureLevel, number> = { normal: 0, warn: 1, cr
  * first reading that meets it and lifts `clearAfterMs` after the first reading that no longer does.
  */
 export class MemoryPressureTracker {
-  #warming: HeldStep | undefined;
-  #newDevices: HeldStep | undefined;
+  readonly #held: Record<StepKey, HeldStep | undefined> = {
+    newDevices: undefined,
+    warming: undefined,
+  };
   #readingAt: number | undefined;
 
   constructor(private readonly options: MemoryPressureOptions) {}
@@ -57,37 +62,54 @@ export class MemoryPressureTracker {
     this.#readingAt = now;
     const { config } = this.options;
     const memory = config.enabled ? reading.memory : undefined;
-    this.#warming = this.#hold(this.#warming, config.pauseWarming, memory, now);
-    this.#newDevices = this.#hold(this.#newDevices, config.pauseNewDevices, memory, now);
+    this.#hold("warming", config.pauseWarming, memory, now);
+    this.#hold("newDevices", config.pauseNewDevices, memory, now);
   }
 
   current(): MemoryPressureState | undefined {
     if (this.#readingAt === undefined) return undefined;
-    const held =
-      this.#newDevices === undefined
-        ? this.#warming === undefined
-          ? undefined
-          : ({ held: this.#warming, step: "warming-paused" } as const)
-        : ({ held: this.#newDevices, step: "new-devices-paused" } as const);
-    if (held === undefined) return { readingAt: this.#readingAt, step: "none" };
-    return {
-      cause: held.held.cause,
-      readingAt: this.#readingAt,
-      since: held.held.since,
-      step: held.step,
-    };
+    const newDevices = this.#held.newDevices;
+    const warming = this.#held.warming;
+    if (newDevices !== undefined) return state("new-devices-paused", newDevices, this.#readingAt);
+    if (warming !== undefined) return state("warming-paused", warming, this.#readingAt);
+    return { readingAt: this.#readingAt, step: "none" };
+  }
+
+  dispose(): void {
+    for (const key of ["warming", "newDevices"] as const) {
+      this.#cancelClear(this.#held[key]);
+      this.#held[key] = undefined;
+    }
   }
 
   #hold(
-    held: HeldStep | undefined,
+    key: StepKey,
     rule: MemoryPressureRule,
     memory: MemoryCounters | undefined,
     now: number,
-  ): HeldStep | undefined {
+  ): void {
+    const held = this.#held[key];
     const cause = memory === undefined ? undefined : meets(rule, memory);
-    if (cause === undefined) return held;
-    return held ?? { cause, since: now };
+    if (cause !== undefined) {
+      this.#cancelClear(held);
+      this.#held[key] ??= { cause, since: now };
+      return;
+    }
+    if (held === undefined || held.clearTimer !== undefined) return;
+    held.clearTimer = this.options.clock.setTimer(this.options.config.clearAfterMs, () => {
+      this.#held[key] = undefined;
+    });
   }
+
+  #cancelClear(held: HeldStep | undefined): void {
+    if (held?.clearTimer === undefined) return;
+    this.options.clock.cancel(held.clearTimer);
+    delete held.clearTimer;
+  }
+}
+
+function state(step: MemoryPressureStep, held: HeldStep, readingAt: number): MemoryPressureState {
+  return { cause: held.cause, readingAt, since: held.since, step };
 }
 
 function meets(rule: MemoryPressureRule, memory: MemoryCounters): MemoryPressureCause | undefined {
