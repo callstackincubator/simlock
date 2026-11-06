@@ -458,3 +458,80 @@ describe("startDaemon memory pressure", () => {
     }
   });
 });
+
+describe("startDaemon memory pressure hold", () => {
+  const statusOf = async (daemon: DaemonServer) =>
+    (await daemon.dispatch("status.get", {}, hostLoadAdmin)) as {
+      capacity?: { memoryPressure?: unknown };
+      load?: { ageMs: number };
+    };
+
+  it("lifts a memory pressure step only after clearAfterMs with no meeting reading", async () => {
+    const level = (name: "warn" | "critical") => ({
+      availablePercent: 34,
+      level: name,
+      trigger: "level",
+    });
+    const warming = (since: number) => ({
+      cause: level("warn"),
+      since,
+      step: "warming-paused",
+    });
+    const calm = memoryReading("normal", 34);
+    const scenarios = [
+      {
+        // why: calm from +15 s lifts at +75 s: 45 s after the first calm reading it still holds.
+        name: "calm for 45 s still holds, for 60 s lifts",
+        readings: [
+          { reading: memoryReading("warn", 34), expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: { step: "none" } },
+        ],
+      },
+      {
+        name: "a meeting reading restarts the hold and keeps since and cause",
+        readings: [
+          { reading: memoryReading("warn", 34), expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: memoryReading("warn", 30), expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: { step: "none" } },
+        ],
+      },
+      {
+        name: "new devices paused falls to warming paused with warming's own since and cause",
+        readings: [
+          { reading: memoryReading("warn", 34), expected: warming(1_000) },
+          {
+            reading: memoryReading("critical", 34),
+            expected: { cause: level("critical"), since: 16_000, step: "new-devices-paused" },
+          },
+          ...[0, 1, 2, 3].map(() => ({
+            reading: memoryReading("warn", 34),
+            expected: { cause: level("critical"), since: 16_000, step: "new-devices-paused" },
+          })),
+          { reading: memoryReading("warn", 34), expected: warming(1_000) },
+        ],
+      },
+    ];
+    for (const { name, readings } of scenarios) {
+      const probe = new FakeHostLoadProbe();
+      const { clock, daemon } = await startOnClock({ hostLoadProbe: probe });
+      for (const [index, { reading, expected }] of readings.entries()) {
+        if (index > 0) clock.advance(15_000);
+        await expect.poll(() => probe.reads, { message: name }).toBe(index + 1);
+        probe.answer(reading);
+        await expect.poll(async () => (await statusOf(daemon)).load?.ageMs).toBe(0);
+        expect((await statusOf(daemon)).capacity?.memoryPressure, `${name} #${index}`).toEqual(
+          expected,
+        );
+      }
+    }
+  });
+});
