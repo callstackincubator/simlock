@@ -1849,4 +1849,68 @@ describe("a lease's files on a worker", () => {
       expect(await names()).toEqual(["A.tar", "a.tar"]);
     }
   });
+
+  it("a lease holder GETs a file and gets it whole or the range it asked for", async () => {
+    const { get, put } = await filesRig();
+    const thousand = Uint8Array.from({ length: 1000 }, (_, index) => index % 251);
+    expect((await put("thousand.bin", thousand)).status).toBe(201);
+    expect((await put("empty.bin", "")).status).toBe(201);
+    const ranged = (name: string, range: string) => get(name, { ...agentAuth, range });
+    const bytesOf = async (response: Response) => new Uint8Array(await response.arrayBuffer());
+
+    const whole = await get("thousand.bin");
+    expect(whole.status).toBe(200);
+    expect(Object.fromEntries(whole.headers)).toMatchObject({
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+      "content-length": "1000",
+      "content-type": "application/octet-stream",
+      "simlock-content-length": "1000",
+    });
+    expect(await bytesOf(whole)).toEqual(thousand);
+
+    const partial = [
+      ["bytes=0-99", 0, 99],
+      ["bytes=900-", 900, 999],
+      ["bytes=-100", 900, 999],
+      ["bytes=990-5000", 990, 999],
+      ["bytes=-5000", 0, 999],
+    ] as const;
+    for (const [range, start, end] of partial) {
+      const response = await ranged("thousand.bin", range);
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-range")).toBe(`bytes ${start}-${end}/1000`);
+      expect(response.headers.get("content-length")).toBe(String(end - start + 1));
+      expect(response.headers.get("simlock-content-length")).toBe(String(end - start + 1));
+      expect(await bytesOf(response)).toEqual(thousand.subarray(start, end + 1));
+    }
+
+    for (const [name, range] of [
+      ["thousand.bin", "bytes=1000-"],
+      ["thousand.bin", "bytes=-0"],
+      ["empty.bin", "bytes=-5"],
+    ] as const) {
+      const response = await ranged(name, range);
+      expect(response.status).toBe(416);
+      expect(response.headers.get("content-range")).toBe(
+        `bytes */${name === "empty.bin" ? 0 : 1000}`,
+      );
+    }
+
+    for (const range of ["bytes=0-1,5-9", "bytes=9-5", "items=0-9", "bytes=abc", "bytes=-"]) {
+      const response = await ranged("thousand.bin", range);
+      expect(response.status).toBe(200);
+      expect(await bytesOf(response)).toEqual(thousand);
+    }
+
+    const unknown = await get("missing.bin");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({
+      error: {
+        code: "UNKNOWN_FILE",
+        message: "No file missing.bin in this lease",
+        name: "missing.bin",
+      },
+    });
+  });
 });
