@@ -1,50 +1,27 @@
 # Drivers
 
 Does: the platform half of every device verb — one driver per platform, serving its virtual and physical devices.
-Entry: `daemon/driver-discovery.ts` `discoverDrivers` → `IosSimctlDriver.create` (macOS only), `AndroidDriver.create`. `SIMLOCK_DRIVERS_MODULE` replaces both.
-Uses: core, ports. Never imports: bus, contract, leasing, gateway, daemon. Imported by: daemon, and driver-registry (each driver's definition file only).
-Manuals: [Android](android/AGENTS.md), [iOS](ios/AGENTS.md). Flows: [device selection](../../docs/internal/flows/device-selection.md).
+Flows: [device selection](../../docs/internal/flows/device-selection.md), [Android](android/AGENTS.md), [iOS](ios/AGENTS.md).
 
-## The interface core speaks (`core/driver.ts` `Driver`)
+## Rules
 
-| Verbs                                                                    | Contract                                                                                                                                                     |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `resolveSpec`                                                            | Exact request → spec. Never downloads: throws `RuntimeMissingError` with `component` when a download could fix it                                            |
-| `provision`, `makeReady`, `reclaim`, `shutdown`, `destroy`               | Lifecycle. `makeReady` returns a freshly read `address`; `reclaim` (core calls it for a physical device only) returns `ready` or `shutdown`                  |
-| `listSources`, `destroySource`, `provision(spec, {source?})`             | Sources (ADR 0061): ready ones only, never leased; a seed is copied into every virtual device. Android lists its ready seeds and the orphan folders it flags |
-| `listManaged`, `revalidateRoot`, `findLegacy`, `destroyLegacy`           | What the root holds; re-proof before a purge; pre-root devices                                                                                               |
-| `listCatalog`, `estimate`, `advisories`, `toolVersions`                  | Read-only facts for catalog, ETAs, `doctor`, `status`                                                                                                        |
-| `findComponent`, `installComponent`, `listComponents`, `removeComponent` | Runtimes / system images. Only core's `ComponentInstaller` installs or removes                                                                               |
-| `inspectPhysical`, `listPresentPhysical`                                 | Enrollment read and presence of physical devices                                                                                                             |
-| `leaseEnvironment`, `virtualLeaseEnvironment`, `passthrough`             | What a holder needs to reach its device                                                                                                                      |
-| `dispose`                                                                | Daemon stop. Android reaps its adb server here, unless an emulator is still attached                                                                         |
-| `screenCapture` (optional)                                               | A device's screen as core's frame envelope (`core/screen.ts`); absent = cannot stream                                                                        |
+What core may assume of a driver (`core/driver.ts` `Driver`):
 
-## Rules both drivers keep
+- `resolveSpec` never downloads: it throws `RuntimeMissingError` with `component` when a download could fix it.
+- Core calls `reclaim` for a physical device only. A virtual device is destroyed when its lease ends, and both drivers throw on its `reclaim`.
+- A source (ADR 0061) is never leased; a seed is copied into every virtual device.
+- Only core's `ComponentInstaller` installs or removes a component.
 
-1. **Owned root** (ADR 0001) — `create` calls `ensureOwnedRoot` (`core/device-root.ts`): when
-   nothing is there it creates the root with `.simlock-owned.json`; otherwise the marker must
-   name this instance and platform; anything else refuses. Key `drivers.<platform>.deviceRoot`
-   (absolute), default `$SIMLOCK_HOME/devices/<platform>`. iOS only: `drivers.ios.deviceSet: "default"`
-   (ADR 0048) keeps simulators in Xcode's set instead, with no owned root; a device is then this
-   instance's only when its durable mark names the instance id.
-   A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
-2. **Scope every command to the root.** Ownership is membership in the root, never a name prefix;
-   under iOS `deviceSet: "default"` it is the instance id in the device's durable mark.
-3. **Opaque to core.** `address`, `driverData`, `deviceRoot`, `drivers.<platform>.*` and the keys a driver's definition file (`ios/definition.ts`, `android/definition.ts`) declares under `ios.*` or `android.*` (`DriverConfigEntry`: type, validators, defaults; listed in `src/driver-registry`, handed to the driver whole as its `config` option) are carried unread. Each driver package exports a `DeviceDataTable` (`iosDeviceDataTable`, `androidDeviceDataTable`) that stores its `driverData` in its own `state.db` table, built without a driver instance so it loads where the driver is refused; `daemon/driver-discovery.ts` `productionDeviceDataTables` passes both on every host.
-4. **Prerequisites** — `iosPrerequisites`, `androidPrerequisites` return a `PrerequisiteCheck`, not a
-   `Driver` method; built even when the driver did not start, run only by `doctor`.
-5. **Installers** — `installer-process.ts`: `runInstallerProcess` parses `%` progress from both
-   streams, SIGTERM on abort, SIGKILL 10 s later. `runBoundedProcess` adds a deadline.
-6. **Passthrough** — the driver owns the scoping flags and the refused verbs
-   (`PassthroughRefusedError`). `DriverCatalog.passthrough` routes by `passthroughTools`.
-   With a device (`device.exec`) the driver also fills the lease's device in and refuses a
-   command naming another, through `other-device-refusal.ts` (ADR 0047).
-   `hasTerminal: false` means `device.exec`: refuse what needs a tty.
-7. **Lease environment** — set on the lease at grant from `leaseEnvironment`; values are per platform.
-8. **Facts reach the bus through callbacks.** A driver never imports the bus; `daemon/driver-discovery.ts`
-   bridges its constructor callbacks. Today only iOS `onSlimmed` → `device.slimmed`. iOS `onSlimSkipped`, `onSilenceFailed` and `onWindowFailed` go to the logger as warnings. Android `onDiagnostic` goes to the logger as
-   warnings (`logAndroidDiagnostic`), not the bus.
+What both drivers keep:
+
+- **Owned root** (ADR 0001). `create` calls `ensureOwnedRoot` (`core/device-root.ts`): when nothing is there it creates the root with `.simlock-owned.json`; otherwise the marker must name this instance and platform; anything else refuses. The key is `drivers.<platform>.deviceRoot` (absolute). A refusal (`OwnedRootError`) skips that platform only and emits `driver.root-rejected`.
+- **Scope every command to the root.** Ownership is membership in the root, never a name prefix. iOS only: under `drivers.ios.deviceSet: "default"` (ADR 0048) simulators stay in Xcode's set with no owned root, and a device is this instance's only when its durable mark names the instance id.
+- **Opaque to core.** `address`, `driverData`, `deviceRoot`, `drivers.<platform>.*` and the keys a driver's definition file declares under `ios.*` or `android.*` are carried unread.
+- A driver's `DeviceDataTable` is built without a driver instance, so a device loads where its driver is refused; `productionDeviceDataTables` (`daemon/driver-discovery.ts`) passes both tables on every host.
+- A driver imports only core and ports: never the bus, the contract, leasing, the gateway or the daemon. No lint rule holds this.
+- **Facts reach the bus through callbacks.** `daemon/driver-discovery.ts` bridges a driver's constructor callbacks to an event or to the logger.
+- **Prerequisites** (`iosPrerequisites`, `androidPrerequisites`) are no `Driver` method: they are built even when the driver did not start, and only `doctor` runs them.
+- **Passthrough.** The driver owns the scoping flags and the refused verbs (`PassthroughRefusedError`). With a device (`device.exec`) it also fills the lease's device in and refuses a command naming another, through `other-device-refusal.ts` (ADR 0047). `hasTerminal: false` means `device.exec`: refuse what needs a tty.
 
 ## Known gaps
 
