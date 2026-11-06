@@ -746,6 +746,10 @@ export class Dispatcher {
     if (this.options.processRunner === undefined) {
       throw new DispatchError("INTERNAL", "Command execution is unavailable");
     }
+    // why: checked here, not as a refinement on the shared input, which `.omit()` could no longer build `run_on_device` from.
+    if (input.stdin !== undefined && input.stdinFile !== undefined) {
+      throw new DispatchError("BAD_REQUEST", "Give stdin or stdinFile, not both");
+    }
     const lease = this.options.registry.snapshot.leases.find(
       (candidate) => candidate.id === input.leaseId,
     );
