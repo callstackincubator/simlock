@@ -1,6 +1,6 @@
 # 0067. A lease has a file folder on its worker that HTTP callers fill and read
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-06
 - **Issue:** [#1351](https://github.com/callstackincubator/simlock/issues/1351) (request [#1323](https://github.com/callstackincubator/simlock/issues/1323))
 - **Narrows:** [ADR 0005](0005-gateway-and-worker-modes.md) Non-goals
