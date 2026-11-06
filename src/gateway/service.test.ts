@@ -779,6 +779,29 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("refreshes a worker's view at once on its memory.pressure-changed", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const worker = new ScriptedWorkerClient();
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() => expect(worker.subscribed).toBe(true));
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.capacity).toBeDefined());
+    const capacity = statusFixture().capacity;
+    worker.status = statusFixture({
+      capacity: { ...capacity, memoryPressure: { step: "new-devices-paused" } },
+    });
+
+    worker.pushEvent({ event: "memory.pressure-changed" });
+
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capacity?.memoryPressure?.step).toBe(
+        "new-devices-paused",
+      ),
+    );
+
+    await harness.service.stop();
+  });
+
   it("does not re-read the fleet for an event that changes neither", async () => {
     const harness = fleet();
     await harness.service.start();
