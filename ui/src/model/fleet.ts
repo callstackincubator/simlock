@@ -16,7 +16,7 @@ const RANK: Readonly<Record<Tone, number>> = { error: 3, idle: 0, ok: 1, warn: 2
 // why: a list row has room for one square, so of everything wrong with a worker the worst is
 // shown and its word goes in the square's name; a worker with nothing wrong reads "connected".
 export function workerHealth(worker: WorkerView): Toned {
-  return [...stateFindings(worker), ...loadFindings(worker)].reduce<Toned>(
+  return [...stateFindings(worker), ...stepFindings(worker), ...loadFindings(worker)].reduce<Toned>(
     (worst, finding) => (RANK[finding.tone] > RANK[worst.tone] ? finding : worst),
     { tone: "ok", word: "connected" },
   );
@@ -40,6 +40,20 @@ function stateFindings(worker: WorkerView): Toned[] {
     findings.push({ tone: "warn", word: "over RAM budget" });
   }
   return findings;
+}
+
+// why: the step comes before the pressure and figure findings so that, at equal tone, the square
+// names what the worker refuses rather than the reading behind it. A worker not connected needs no
+// guard: its error finding comes first and wins.
+function stepFindings(worker: WorkerView): Toned[] {
+  switch (worker.capacity?.memoryPressure?.step) {
+    case "new-devices-paused":
+      return [{ tone: "error", word: "new devices paused" }];
+    case "warming-paused":
+      return [{ tone: "warn", word: "warming paused" }];
+    default:
+      return [];
+  }
 }
 
 // why: a reading from a worker that is not connected is stale, so it says nothing about the worker
