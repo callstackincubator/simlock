@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect } from "vitest";
@@ -9,6 +8,8 @@ import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import type { DaemonServer } from "../daemon/server.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
+import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
+import { sleep } from "../daemon/test-relay-support.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 // why: the edge tests and the baseline tests share one daemon rig; its daemons and data directories are cleaned after each test of whichever file imports it.
@@ -35,6 +36,8 @@ export const agentTokenOnly = "refused: agent-device through simlock needs an ag
 export const queueTimeoutMessage = "timed out waiting for a device; nothing was leased";
 export const defaultTtlMs = 600_000;
 export const maxTtlMs = 1_800_000;
+export { sleep };
+
 export const scope = { clientId: "client-1", leaseProvider: "proxy", runId: "run-1" } as const;
 
 export const adminSession = {
@@ -136,19 +139,6 @@ export function taggedAndroidDriver(clock: FakeClock): FakeDriver {
   });
 }
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
-export async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-agent-device-edge-"));
   temporaryDirectories.push(directory);
@@ -160,13 +150,12 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     ["tok_operator", secrets.operator, "operator"],
     ["tok_worker", secrets.worker, "worker"],
   ]);
-  const port = await freeLoopbackPort();
   const fake = options.upstream ?? new FakeAgentDevice();
   const phone = options.phoneUpstream ?? new FakeAgentDevice();
   const drivers = options.drivers?.(clock) ?? [iosDriver(clock)];
   const stateDbPath = join(directory, "state.db");
   const logs = new MemoryLogSink();
-  const launch = () =>
+  const launch = (port: number) =>
     startDaemon({
       clock,
       configOverrides: {
@@ -203,7 +192,11 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
       runningDaemons.push(daemon);
       return daemon;
     });
-  const started = launch();
+  // why: only the slow start knows its port first, so only a normal start can retry on another port.
+  const picked = options.slowStart === true ? await freeLoopbackPort() : undefined;
+  const first = picked === undefined ? await startOnFreePort(launch) : undefined;
+  const port = picked ?? (first as NonNullable<typeof first>).port;
+  const started = first === undefined ? launch(port) : Promise.resolve(first.started);
   const origin = `http://127.0.0.1:${port}`;
   if (options.slowStart === true) {
     await waitListening(origin);
@@ -233,7 +226,7 @@ export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     restart: async (between) => {
       await daemon.stop("test");
       between?.();
-      const next = await launch();
+      const next = await launch(port);
       return rigFor(next, Promise.resolve(next));
     },
     started: running,

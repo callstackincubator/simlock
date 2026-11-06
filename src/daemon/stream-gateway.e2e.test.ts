@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { encodeScreenFrame, encodeScreenMeta, SCREEN_FRAME_TAG } from "../core/index.js";
 import type { ScreenCapture } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
@@ -12,15 +12,6 @@ import { MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -85,18 +76,19 @@ describe("a screen stream through a gateway", () => {
   async function fleet(workerStreams: boolean) {
     const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-stream-gateway-"));
     directories.push(gatewayDirectory);
-    const port = await freeLoopbackPort();
-    const gateway = await startDaemon({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port },
-        capabilities: { stream: { enabled: true } },
-      },
-      role: "gateway",
-      dataDirectory: gatewayDirectory,
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port, started: gateway } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port },
+          capabilities: { stream: { enabled: true } },
+        },
+        role: "gateway",
+        dataDirectory: gatewayDirectory,
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(gateway);
     const token = (await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin))
       .secret;
@@ -279,27 +271,28 @@ describe("a lease stream on a standalone worker", () => {
   async function standalone(streamEnabled: boolean) {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-stream-lease-"));
     directories.push(directory);
-    const port = await freeLoopbackPort();
-    const worker = await startDaemon({
-      configOverrides: {
-        capabilities: { stream: { enabled: streamEnabled } },
-        http: { enabled: true, host: "127.0.0.1", port },
-      },
-      dataDirectory: directory,
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          clock: new SystemClock(),
-          knownModels: ["Pixel-A"],
-          platform: "android",
-          screenCapture: paintingScreen().capture,
-        }),
-      ],
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port, started: worker } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          capabilities: { stream: { enabled: streamEnabled } },
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: directory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["18.0"],
+            clock: new SystemClock(),
+            knownModels: ["Pixel-A"],
+            platform: "android",
+            screenCapture: paintingScreen().capture,
+          }),
+        ],
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(worker);
     const holder = await worker.dispatch("token.create", { label: "holder", role: "agent" }, admin);
     const other = await worker.dispatch("token.create", { label: "other", role: "agent" }, admin);

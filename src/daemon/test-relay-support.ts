@@ -21,26 +21,18 @@ import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
 
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
 
-export const adminSession: DispatchSession = {
+export const relayAdminSession: DispatchSession = {
   manageEventSubscription: () => undefined,
   principal: "test-operator",
   role: "admin",
   via: "socket",
 };
-
-export async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -345,47 +337,48 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const execCommand = options.execCommand;
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
-  const port = await freeLoopbackPort();
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
-  const gateway = await startDaemon({
-    configOverrides: {
-      http: {
-        enabled: true,
-        host: "127.0.0.1",
-        port,
-        ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+  const { port, started: gateway } = await startOnFreePort((candidate) =>
+    startDaemon({
+      configOverrides: {
+        http: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: candidate,
+          ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+        },
       },
-    },
-    role: "gateway",
-    dataDirectory: gatewayDirectory,
-    filesystem: new MemoryFilesystem(),
-    gatewayRelay: (given) => {
-      relay = given;
-    },
-    gatewayUplinks: (uplinks) => {
-      const listen = uplinks.listen.bind(uplinks);
-      uplinks.listen = (handlers) =>
-        listen({
-          ...handlers,
-          accept: (uplink) => {
-            const tap = new TappedTransport(uplink.connection);
-            taps.push(tap);
-            handlers.accept({ ...uplink, connection: tap });
-          },
-        });
-    },
-    logger: new NoopLogger(),
-    version: "1.0.0-e2e",
-    ...options.gateway,
-  });
+      role: "gateway",
+      dataDirectory: gatewayDirectory,
+      filesystem: new MemoryFilesystem(),
+      gatewayRelay: (given) => {
+        relay = given;
+      },
+      gatewayUplinks: (uplinks) => {
+        const listen = uplinks.listen.bind(uplinks);
+        uplinks.listen = (handlers) =>
+          listen({
+            ...handlers,
+            accept: (uplink) => {
+              const tap = new TappedTransport(uplink.connection);
+              taps.push(tap);
+              handlers.accept({ ...uplink, connection: tap });
+            },
+          });
+      },
+      logger: new NoopLogger(),
+      version: "1.0.0-e2e",
+      ...options.gateway,
+    }),
+  );
   daemons.push(gateway);
   // why: the hook may open its own listener, and listen(0) can draw the port freeLoopbackPort freed; the gateway holds it first.
   const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   const { secret } = await gateway.dispatch(
     "token.create",
     { label: "worker-a", role: "worker" },
-    adminSession,
+    relayAdminSession,
   );
   const driverOptions =
     execCommand === undefined ? {} : { passthrough: () => execCommand, passthroughTools: ["adb"] };
@@ -413,7 +406,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let workerId = "";
   await vi.waitFor(
     async () => {
-      const { workers } = await gateway.dispatch("worker.list", {}, adminSession);
+      const { workers } = await gateway.dispatch("worker.list", {}, relayAdminSession);
       const ready = workers.find(
         (view) => view.connection === "connected" && view.capacity && view.catalog?.length,
       );

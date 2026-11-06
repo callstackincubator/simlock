@@ -19,7 +19,7 @@ import {
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { OptionalModuleDefinition } from "../modules/index.js";
 import { pollUntil, runningDaemons, stopDaemons, temporaryDirectories } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -391,30 +391,33 @@ describe("startDaemon with the agent-device edge", () => {
   it.each([
     {
       role: "gateway",
-      config: async () => ({
+      config: (port: number) => ({
         capabilities: { "agent-device": { command, enabled: true } },
-        http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+        http: { enabled: true, host: "127.0.0.1", port },
       }),
       drivers: [],
     },
     {
       role: "worker",
-      config: async () => ({ capabilities: { "agent-device": { command, enabled: false } } }),
+      config: () => ({ capabilities: { "agent-device": { command, enabled: false } } }),
       drivers: undefined,
     },
   ] as const)(
     "a $role with no agent-device supervisor reads no command line, runs no ps and sends no signal, even with a recorded daemon on disk",
     async ({ role, config, drivers }) => {
-      const setup = await setUp(await config(), { record: { pid: 900 } });
-      const runner = new ScriptedProcessRunner([]);
-      const processSupervisor = recordedDaemonAlive(setup.directory);
-
-      const { clock } = await startEdge(setup, {
-        ...(drivers === undefined ? {} : { drivers: [...drivers] }),
-        processRunner: runner,
-        processSupervisor,
-        ...(role === "gateway" ? { role } : {}),
+      const { started } = await startOnFreePort(async (port) => {
+        const setup = await setUp(config(port), { record: { pid: 900 } });
+        const runner = new ScriptedProcessRunner([]);
+        const processSupervisor = recordedDaemonAlive(setup.directory);
+        const { clock } = await startEdge(setup, {
+          ...(drivers === undefined ? {} : { drivers: [...drivers] }),
+          processRunner: runner,
+          processSupervisor,
+          ...(role === "gateway" ? { role } : {}),
+        });
+        return { clock, processSupervisor, runner };
       });
+      const { clock, processSupervisor, runner } = started;
       clock.advance(SUPERVISOR_RETRY_MS);
       await pollUntil(() => false, 100);
 

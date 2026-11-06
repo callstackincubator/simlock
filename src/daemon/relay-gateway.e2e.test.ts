@@ -18,7 +18,7 @@ import type { StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 import {
   aborted,
-  adminSession,
+  relayAdminSession,
   cleanUp,
   digestOf,
   gate,
@@ -432,7 +432,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const { secret, token } = await fleet.gateway.dispatch(
       "token.create",
       { label: "holder", role: "agent" },
-      adminSession,
+      relayAdminSession,
     );
     const holder = agent({ principal: token.id });
     const grant = await fleet.gateway.dispatch(
@@ -501,7 +501,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       const other = await fleet.gateway.dispatch(
         "token.create",
         { label: "stranger", role: "agent" },
-        adminSession,
+        relayAdminSession,
       );
       return callOn(grant.lease.id, other.secret);
     };

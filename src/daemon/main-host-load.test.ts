@@ -25,7 +25,7 @@ import {
   stopDaemons,
   temporaryDirectories,
 } from "./test-main.js";
-import { freeLoopbackPort } from "./test-relay-support.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -303,19 +303,19 @@ describe("startDaemon in gateway mode host load", () => {
     const lost = async (hostLoadProbe: FakeHostLoadProbe | null) => {
       const clock = new FakeClock(1_000);
       await expect(
-        startDaemon({
-          clock,
-          configOverrides: {
-            http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
-          },
-          role: "gateway",
-          dataDirectory: first.directory,
-          drivers: [],
-          deviceDataTables: fakeDeviceDataTables,
-          filesystem: new MemoryFilesystem(),
-          hostLoadProbe,
-          version: "1.2.3",
-        } as StartDaemonOptions),
+        startOnFreePort((port) =>
+          startDaemon({
+            clock,
+            configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
+            role: "gateway",
+            dataDirectory: first.directory,
+            drivers: [],
+            deviceDataTables: fakeDeviceDataTables,
+            filesystem: new MemoryFilesystem(),
+            hostLoadProbe,
+            version: "1.2.3",
+          } as StartDaemonOptions),
+        ),
       ).rejects.toThrow();
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
       return clock.pendingTimerCount;
