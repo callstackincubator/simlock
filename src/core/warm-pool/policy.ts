@@ -590,7 +590,9 @@ function neverLeasedIdle(
 
 /**
  * why: ADR 0068 §3: while warming is paused each new reading gives memory back by shutting down
- * one idle device.
+ * one idle device: first one no configured target keeps, then a kept one, least recently used
+ * first, never one a waiting request would be granted (the budget's own shield) or one whose
+ * shutdown just failed.
  */
 function shedForPressure(
   view: WarmPolicyView,
@@ -598,7 +600,19 @@ function shedForPressure(
   proposed: ReadonlySet<string>,
 ): DeviceProposal[] {
   if (view.pressure.step === "none" || !view.pressure.mayShed) return [];
-  const victim = running.find((device) => !proposed.has(device.id));
+  const kept = targetedDevices({
+    ...view,
+    learned: [],
+    targets: [...view.targets, ...view.spared],
+    waiting: [],
+  });
+  const candidates = running.filter(
+    (device) =>
+      !proposed.has(device.id) &&
+      !view.pressure.shedFailed.has(device.id) &&
+      !view.waiting.some((demand) => !demand.inFlight && serves(device, demand)),
+  );
+  const victim = candidates.find((device) => !kept.has(device.id)) ?? candidates[0];
   return victim === undefined
     ? []
     : [{ action: "shutdown", deviceId: victim.id, reason: "memory-pressure" }];
