@@ -1348,35 +1348,37 @@ describe("Dispatcher: lease.request at new-devices-paused", () => {
   ] as const)(
     "a request that $name waits, or gets NO_CAPACITY under noWait, with memory-pressure",
     async (row) => {
-      const built = await buildDispatcher({
-        driverOptions: slimmable,
-        memoryPressureStep: "new-devices-paused",
-        ...row.options,
-      });
-      if (row.seed !== undefined) await seedSlimDevice(built, row.seed);
-      const seededCalls = built.driver.calls.length;
+      const start = async () => {
+        const built = await buildDispatcher({
+          driverOptions: slimmable,
+          memoryPressureStep: "new-devices-paused",
+          ...row.options,
+        });
+        if (row.seed !== undefined) await seedSlimDevice(built, row.seed);
+        return { built, seededCalls: built.driver.calls.length };
+      };
+      const driven = (world: Awaited<ReturnType<typeof start>>) =>
+        world.built.driver.calls
+          .slice(world.seededCalls)
+          .filter((call) => ["provision", "makeReady", "shutdown"].includes(call.operation));
 
-      const request = built.dispatcher.dispatch("lease.request", row.input, asker());
-      void request.catch(() => undefined);
+      const waiter = await start();
+      void waiter.built.dispatcher
+        .dispatch("lease.request", row.input, asker())
+        .catch(() => undefined);
       await flush();
-      const listed = await waiting(built);
+      const listed = await waiting(waiter.built);
+      const refused = await start();
+
       await expect(
-        built.dispatcher.dispatch(
-          "lease.request",
-          { ...row.input, noWait: true },
-          session({ principal: "tok_second" }),
-        ),
+        refused.built.dispatcher.dispatch("lease.request", { ...row.input, noWait: true }, asker()),
       ).rejects.toMatchObject({
         code: "NO_CAPACITY",
         details: { capacityReason: "memory-pressure" },
       });
-
       expect(listed).toMatchObject([{ reason: "memory-pressure", stage: "queued" }]);
-      expect(
-        built.driver.calls
-          .slice(seededCalls)
-          .filter((call) => ["provision", "makeReady", "shutdown"].includes(call.operation)),
-      ).toEqual([]);
+      expect(driven(waiter)).toEqual([]);
+      expect(driven(refused)).toEqual([]);
     },
   );
 

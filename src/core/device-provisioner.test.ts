@@ -448,6 +448,8 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("core", "test-registry.ts")]: 1,
       // why: the harness the lease-acquisition coordinator tests split out of one file share (ADR 0063).
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      // why: the dispatcher tests' seeded warm device, shared by the files that start from one.
+      [join("daemon", "test-dispatcher.ts")]: 1,
     });
     expect(callSites(/\.provision\(/g)).toEqual({
       // The driver call itself.
@@ -462,6 +464,7 @@ describe("DeviceProvisioner and a component removal (ADR 0010 §8)", () => {
       [join("drivers", "android", "testing.ts")]: 2,
       // why: the harness's fixture devices, as for registerDevice above.
       [join("leasing", "test-lease-acquisition.ts")]: 1,
+      [join("daemon", "test-dispatcher.ts")]: 1,
     });
   });
 

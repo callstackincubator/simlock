@@ -175,6 +175,8 @@ export class AcquisitionPlanner {
   // why: no capacity reservation: the device keeps its running slot and RAM, because its record stays `ready` through the reboot.
   #planReady(input: AcquisitionPlannerInput, ready: DeviceRecord): AcquisitionPlan {
     if (input.rebootReady !== true || ready.physical) return { device: ready, kind: "grant-ready" };
+    // why: a reboot boots a device as a new one does, so the pause that stops new devices stops it.
+    if (this.capacity.newDevicesPaused()) return blocked(input.noWait, "memory-pressure");
     const claim = this.claims.tryClaim(ready.id, "boot", input.owner);
     if (claim === undefined) return blocked(input.noWait, "waiting-for-device");
     return { claim, device: ready, kind: "reboot-ready" };

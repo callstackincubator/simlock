@@ -50,6 +50,8 @@ When a lease needs a device, Simlock tries these in order:
 5. At the running limit, shut down an idle device to make room.
 6. Otherwise, wait in the queue until a device frees up. With `--no-wait`, the request fails at once with `NO_CAPACITY`.
 
+When the host is short of memory enough to pause new devices, steps 2 and 3 are skipped and so is rebooting a ready device for an `--except` lease: the request waits, and is served when the pressure lifts. A ready device that fits is still handed over, and nothing is shut down for the wait.
+
 A leased device is never shut down or deleted to make room. When RAM is the only thing in the way, Simlock shuts nothing down for it; the request waits until RAM frees up, for example when an idle device shuts down on its own.
 
 Each simulator or emulator serves one lease and is deleted when that lease ends. The first lease of an iOS model and version takes longer; later ones of the same kind start faster.
@@ -224,6 +226,6 @@ warm pool: enabled, reserve ios 1 android 0
 | `device-limit` | The platform is at its device limit. |
 | `reserve` | The slot is held back by `warmPool.reserveRunning`. |
 | `ram-budget` | The device would not fit in the RAM budget. |
-| `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). |
+| `memory-pressure` | The host is short of memory and the worker has paused new devices (`memoryPressure.*`). |
 
 A line that is filling, or waiting behind a queued lease, shows no reason. `simlock doctor` warns when your targets add up to more devices than the running limit allows.

@@ -170,6 +170,7 @@ const NO_MEMORY_PRESSURE: MemoryPressureReader = {
 
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
+  const memoryPressure = options.memoryPressure ?? NO_MEMORY_PRESSURE;
   let ports: CorePorts | undefined;
   const port = <Name extends keyof CorePorts>(name: Name): CorePorts[Name] => {
     if (ports === undefined) throw new CorePortMissingError(name);
@@ -193,6 +194,7 @@ export function createCore(options: CoreOptions): Core {
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(options.config.capacity, options.systemStats),
     () => capacityObserver.changed(),
+    memoryPressure,
   );
   const devices = () => capacityDevices(registry.snapshot.virtualDevices);
   const capacityReader: CapacityReader = {
@@ -400,7 +402,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
-    memoryPressure: options.memoryPressure ?? NO_MEMORY_PRESSURE,
+    memoryPressure,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,
