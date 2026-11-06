@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import { EventBus } from "../bus/index.js";
 import { UnknownLeaseError, SerializedDecision } from "../core/index.js";
@@ -11,7 +15,8 @@ import {
 } from "../leasing/index.js";
 import { DispatchError } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
-import { FakeClock } from "../ports/index.js";
+import { createLeaseFiles, type LeaseFilesLimits } from "../lease-files/index.js";
+import { FakeClock, NodeFilesystem } from "../ports/index.js";
 import {
   agentAuth,
   type App,
@@ -1453,5 +1458,52 @@ describe("lease routes", () => {
     });
     expect(response.status).toBe(403);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FORBIDDEN");
+  });
+});
+
+const filesRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(filesRoots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+});
+
+// why: a worker's HTTP app over a real lease-files store in a temporary folder, with lease `lse_1` held by `tok_agent`. */
+async function filesRig(options: { readonly limits?: LeaseFilesLimits } = {}) {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "simlock-lease-files-"));
+  filesRoots.push(dataDirectory);
+  const rig = buildHarness({
+    leaseFiles: ({ clock, logger }) =>
+      createLeaseFiles({
+        clock,
+        dataDirectory,
+        diskPressureThreshold: 0,
+        filesystem: new NodeFilesystem(),
+        findGrant: (leaseId) =>
+          leaseId === "lse_1" ? { grantedAt: 1_000, id: leaseId, platform: "ios" } : undefined,
+        idGenerator: sequenceIdGenerator("up"),
+        logger,
+        ...(options.limits === undefined ? {} : { limits: options.limits }),
+      }),
+  });
+  rig.registry.leases = [makeLease({ id: "lse_1", ownerId: "tok_agent" })];
+  const put = (name: string, body: BodyInit, headers: Record<string, string> = agentAuth) =>
+    rig.app.request(`/v1/leases/lse_1/files/${name}`, { body, headers, method: "PUT" });
+  const get = (name: string, headers: Record<string, string> = agentAuth) =>
+    rig.app.request(`/v1/leases/lse_1/files/${name}`, { headers });
+  return { ...rig, dataDirectory, get, put };
+}
+
+describe("a lease's files on a worker", () => {
+  it("a lease holder PUTs a file and gets 201 with its name and size; a GET returns the same bytes", async () => {
+    const { get, put } = await filesRig();
+    const bytes = Uint8Array.from({ length: 3 * 1024 * 1024 }, (_, index) => index % 251);
+
+    const response = await put("fixture.tar", bytes);
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ name: "fixture.tar", size: bytes.length });
+    const download = await get("fixture.tar");
+    expect(download.status).toBe(200);
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
   });
 });

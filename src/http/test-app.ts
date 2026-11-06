@@ -20,6 +20,10 @@ export function buildHarness(
     readonly identities?: Readonly<Record<string, Identity>>;
     readonly auth?: Auth;
     readonly mounts?: HttpGatewayDeps["mounts"];
+    readonly leaseFiles?: (parts: {
+      readonly clock: FakeClock;
+      readonly logger: JsonLinesLogger;
+    }) => HttpGatewayDeps["leaseFiles"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -71,6 +75,9 @@ export function buildHarness(
     registry: overrides.registry ?? registry,
     auth,
     ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
+    ...(overrides.leaseFiles === undefined
+      ? {}
+      : { leaseFiles: overrides.leaseFiles({ clock, logger }) }),
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),

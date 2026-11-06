@@ -15,8 +15,23 @@ type RouteTag =
   | "Baselines"
   | "Tokens"
   | "Events";
-type SuccessStatus = 200 | 201 | 202 | 204;
-type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 415 | 422 | 500 | 501 | 502 | 503 | 504;
+type SuccessStatus = 200 | 201 | 202 | 204 | 206;
+type ErrorStatus =
+  | 400
+  | 401
+  | 403
+  | 404
+  | 408
+  | 409
+  | 413
+  | 415
+  | 416
+  | 422
+  | 500
+  | 501
+  | 502
+  | 503
+  | 504;
 type JsonContent<Schema extends z.ZodType> = { "application/json": { schema: Schema } };
 type ErrorBody = { error: { code: string; message: string } };
 type ErrorResponse = {
@@ -30,6 +45,8 @@ type ErrorExtras = Partial<
 >;
 
 export const BEARER_SCHEME = "bearer";
+
+const BINARY_SCHEMA = z.string().openapi({ format: "binary" });
 
 const BASE_CODES = {
   400: ["BAD_REQUEST"],
@@ -46,6 +63,8 @@ type RequestSchemas = {
   readonly headers?: z.ZodType;
   readonly json?: z.ZodType;
   readonly optionalJson?: z.ZodType;
+  // why: the body is raw bytes, which the app's validators never read; the document only names it.
+  readonly octetBody?: true;
 };
 
 type DeclaredRequest<Request extends RequestSchemas> = (Request["query"] extends z.ZodType
@@ -96,7 +115,7 @@ interface Declaration<
   Also extends SuccessStatus,
   Own extends Partial<Record<ErrorStatus, readonly string[]>>,
 > {
-  readonly method: "get" | "post" | "delete";
+  readonly method: "get" | "post" | "put" | "delete";
   readonly path: Path;
   readonly tag: RouteTag;
   readonly summary: string;
@@ -105,6 +124,8 @@ interface Declaration<
   readonly request?: Request;
   readonly reply?: Reply;
   readonly stream?: Stream;
+  // why: the success body is raw bytes, not JSON.
+  readonly binaryReply?: true;
   readonly replyHeaders?: z.ZodType;
   readonly status?: Success;
   // why: a route that answers 202 when it began the work and 200 when it only followed or found nothing to do declares both.
@@ -160,7 +181,11 @@ function declaredErrors(
 function successContent(declaration: {
   readonly reply?: z.ZodType | undefined;
   readonly stream?: z.ZodType | undefined;
+  readonly binaryReply?: true | undefined;
 }) {
+  if (declaration.binaryReply === true) {
+    return { content: { "application/octet-stream": { schema: BINARY_SCHEMA } } };
+  }
   if (declaration.stream !== undefined) {
     return { content: { "text/event-stream": { schema: declaration.stream } } };
   }
@@ -230,6 +255,14 @@ export function declareRoute<
             body: {
               required: request.json !== undefined,
               content: { "application/json": { schema: body } },
+            },
+          }),
+      ...(request.octetBody === undefined
+        ? {}
+        : {
+            body: {
+              required: false,
+              content: { "application/octet-stream": { schema: BINARY_SCHEMA } },
             },
           }),
     } as DeclaredRequest<Request>,

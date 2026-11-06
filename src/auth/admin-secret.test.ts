@@ -69,6 +69,12 @@ describe("AdminSecretManager", () => {
       copyFile: () => {
         throw new Error("verify() must not touch the filesystem");
       },
+      writeFileStream: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      openFile: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
       copyTree: () => {
         throw new Error("verify() must not touch the filesystem");
       },
@@ -148,6 +154,12 @@ describe("AdminSecretManager", () => {
         throw new Error("must not touch the filesystem");
       },
       copyFile: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      writeFileStream: () => {
+        throw new Error("verify() must not touch the filesystem");
+      },
+      openFile: () => {
         throw new Error("verify() must not touch the filesystem");
       },
       copyTree: () => {
