@@ -195,6 +195,8 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
   #streamChunks: readonly string[] | undefined;
   #restarts = 0;
   readonly #running = new Set<RunningCommand>();
+  // why: agent-device keeps one process-wide set of the `meta.requestId`s it is handling and refuses a second request carrying one already there.
+  readonly #inFlightRequestIds = new Set<string>();
   #releaseWaitsForCommands = true;
   #commandsOutliveRequests = false;
   #hangRelease = false;
@@ -446,6 +448,27 @@ export class FakeAgentDevice implements AgentDeviceUpstream {
     const call = await readRpc(request, tenantHeader);
     const { id, meta, method, params, tenant } = call;
     this.requests.push({ method: request.method, params, path: "/rpc", rpcMethod: method, tenant });
+    const requestId = meta["requestId"];
+    if (typeof requestId !== "string") return this.#dispatch(request, call);
+    if (this.#inFlightRequestIds.has(requestId)) {
+      return errorEnvelope(id, {
+        code: "INVALID_ARGS",
+        details: { reason: "duplicate_request_id", requestId },
+        message: `Request ID is already in flight: ${requestId}`,
+      });
+    }
+    this.#inFlightRequestIds.add(requestId);
+    try {
+      return await this.#dispatch(request, call);
+    } finally {
+      this.#inFlightRequestIds.delete(requestId);
+    }
+  }
+
+  async #dispatch(
+    request: Request,
+    { id, meta, method, params, tenant }: Awaited<ReturnType<typeof readRpc>>,
+  ): Promise<Response> {
     switch (method.replace(/^agent[_-]device\./, "")) {
       case "lease.allocate":
         return this.#allocate(id, params, tenant);

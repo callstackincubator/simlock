@@ -42,7 +42,7 @@ Entry: `src/daemon/main.ts` `startDaemon` → `DaemonServer.start` (`src/daemon/
 15. `onSocketClaimed`, nothing awaited: the event history starts (opens `history.db`, sets a damaged one aside, migrates the projections, writes the ring, prunes, rebuilds a projection whose check failed; a newer stored version or a failed migration stops the daemon, exit 1); agent-device starts; the uplink dials once
     the first host load reading is in; HTTP starts when `http.enabled`.
 
-Converge (`src/daemon/main.ts` `convergeStartup`), one step after another. Once a stop
+Converge (`src/daemon/worker-composition.ts` `convergeStartup`), one step after another. Once a stop
 reaches its settle step, the steps after the read are skipped. Before step 16 it
 removes the `.<name>.<pid>.<uuid>.tmp` files and `.<root>.<pid>.<id>.staging` directories of dead writers beside each device root and in
 the data directory (`sweepWriteLeftovers`).

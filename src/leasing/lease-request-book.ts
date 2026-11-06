@@ -328,7 +328,7 @@ export class LeaseRequestBook<Grant extends { readonly lease: { readonly id: str
       .some((record) => record.leaseId === leaseId && !isSettled(record));
   }
 
-  /** The id of the stored request that was granted `leaseId`, while that record is retained. */
+  // fallow-ignore-next-line unused-class-member -- reached through the HTTP tracker's `requests` option and the gateway coordinator's `requests` field, whose types Fallow does not follow.
   requestIdForLease(leaseId: string): string | undefined {
     return this.options.store
       .leaseRequests()

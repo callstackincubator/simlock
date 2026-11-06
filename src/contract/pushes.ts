@@ -18,10 +18,10 @@ import { relayHeadersSchema } from "./relay.js";
 import { eventEnvelopeSchema, leaseProgressSchema } from "./schemas.js";
 
 /**
- * Per-kind schemas are intentionally not exported individually -- `PUSH_SCHEMAS` (below) is the
- * one public surface for these, keyed by wire push kind, which is how `DaemonServer` actually
- * consumes them (`this.#parseOutput(PUSH_SCHEMAS.progress, ...)`). Frame ids are `string |
- * number` on the wire (see `daemon-protocol`'s `RequestId`).
+ * why: Per-kind schemas are intentionally not exported individually -- `PUSH_SCHEMAS` (below) is the
+ * one public surface for these, keyed by wire push kind, which is how `ConnectionPushes`
+ * (`src/daemon/server-pushes.ts`) consumes them (`parseOutput(logger, PUSH_SCHEMAS.progress,
+ * ...)`). Frame ids are `string | number` on the wire (see `daemon-protocol`'s `RequestId`).
  */
 const requestIdSchema = z.union([z.string(), z.number()]);
 

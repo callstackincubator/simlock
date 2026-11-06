@@ -27,24 +27,10 @@ type SizedFile = { path: string; lines: number };
  * only shrink. A PR that has to grow one raises its number here, as a visible line of its diff.
  */
 const SHRINK_ONLY: Record<string, number> = {
-  "src/agent-device/edge.test.ts": 4506,
   "src/cli/index.test.ts": 11610,
-  "src/contract/schemas.ts": 1503,
-  "src/core/doctor.test.ts": 3534,
-  "src/core/registry.test.ts": 2901,
-  "src/daemon/dispatcher.test.ts": 6284,
-  "src/daemon/main.test.ts": 5515,
-  "src/daemon/main.ts": 1908,
-  "src/daemon/server.test.ts": 4550,
-  "src/daemon/server.ts": 1850,
   "src/drivers/ios/index.test.ts": 5996,
   "src/drivers/ios/index.ts": 2700,
-  "src/gateway/dispatcher.test.ts": 3057,
-  "src/gateway/fleet-coordinator.test.ts": 5283,
-  "src/gateway/fleet-coordinator.ts": 1659,
-  "src/http/app.test.ts": 3488,
   "src/leasing/create-leasing.test.ts": 5276,
-  "src/leasing/lease-acquisition-coordinator.test.ts": 3691,
   "src/leasing/lease-acquisition-coordinator.ts": 1643,
 };
 

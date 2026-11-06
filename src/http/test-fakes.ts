@@ -94,11 +94,12 @@ export interface FakeDispatchCall {
 }
 
 /**
- * Test double for `HttpDispatch` (`src/http/dispatcher-session.ts`). Deliberately does not
+ * why: Test double for `HttpDispatch` (`src/http/dispatcher-session.ts`). Deliberately does not
  * reproduce the real `Dispatcher`'s input parsing, role check, `authorize` hook, or startup
- * parking -- those are covered against the real thing in `daemon/dispatcher.test.ts` and
- * `daemon/server.test.ts`. This fake exists to let HTTP's own routing/serialization tests
- * (`app.test.ts`, `tracker.test.ts`) script an operation's answer without standing up a full
+ * parking -- those are covered against the real thing in `daemon/dispatcher.test.ts`,
+ * `daemon/dispatcher-leases.test.ts` and `daemon/server.test.ts`. This fake exists to let
+ * HTTP's own routing/serialization tests (`app.test.ts`, `tracker.test.ts`) script an
+ * operation's answer without standing up a full
  * `createLeasing`/`Registry`/`CleanupReaper`.
  *
  * Two ways to script an answer: register a synchronous `handlers[operation]` for the common

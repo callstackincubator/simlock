@@ -660,9 +660,9 @@ export function gatewayNotPresentError(): SimlockError<"GATEWAY_NOT_PRESENT"> {
  * preserved, rather than throwing a parse failure. This is deliberately permissive about
  * `details` -- it trusts the caller's parsed value rather than re-validating per-code detail
  * shapes against `ErrorDetailsMap`, since the wire's `error.details` has no schema of its own
- * yet (today's daemon does not even send one for most codes -- see `DaemonServer#respondError`
- * in this PR, which now accepts but does not populate `details` for most cases). Tightening
- * this with real per-code detail schemas is left as follow-up.
+ * yet (today's daemon does not even send one for most codes -- see `respondError` in
+ * `src/daemon/server-connection.ts`, which now accepts but does not populate `details` for most
+ * cases). Tightening this with real per-code detail schemas is left as follow-up.
  */
 export function fromWireError(code: string, message: string, details?: unknown): AnySimlockError {
   const entry = (ERROR_TABLE as Record<string, ErrorTableEntry>)[code];

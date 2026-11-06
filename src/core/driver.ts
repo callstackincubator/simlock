@@ -723,7 +723,7 @@ export class LicenseNotAcceptedError extends Error {
  * disk at the instant it runs: two installs racing the same preflight (an iOS runtime download
  * and an Android system-image install, or two of either) can each observe enough free space and
  * both proceed, jointly overfilling the volume neither alone would have. A single shared
- * `DiskSpaceGuard` instance, held by `ComponentInstaller` (wired once in `src/daemon/main.ts`;
+ * `DiskSpaceGuard` instance, held by `ComponentInstaller` (wired once in `src/daemon/worker-composition.ts`;
  * drivers never see it), fixes that by tracking bytes reserved but not yet released, keyed per
  * path, and checking free space *minus* those outstanding reservations rather than free space
  * alone.

@@ -310,6 +310,33 @@ function tcpPorts(ports: CliEnvironmentPorts): Pick<CliEnvironment, "tcpListener
   };
 }
 
+// why: the commands that may be the caller's adb, in the order they are tried: the one on the PATH, then the `platform-tools` of each SDK folder Simlock's own Android driver looks in.
+function adbCandidatesFor(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  platform: NodeJS.Platform | undefined,
+): readonly string[] {
+  const windows = platform === "win32";
+  const adb = windows ? "adb.exe" : "adb";
+  const fallback = windows
+    ? join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Android", "Sdk")
+    : join(home, "Library", "Android", "sdk");
+  const roots = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT, fallback].filter(
+    (root): root is string => root !== undefined && root !== "",
+  );
+  return [adb, ...roots.map((root) => join(root, "platform-tools", adb))];
+}
+
+function callerAdbPorts(
+  ports: CliEnvironmentPorts,
+  env: NodeJS.ProcessEnv,
+): Pick<CliEnvironment, "adbCandidates" | "processRunner"> {
+  return {
+    adbCandidates: adbCandidatesFor(env, ports.homeDirectory, ports.hostPlatform),
+    processRunner: ports.processRunner,
+  };
+}
+
 export function buildCliEnvironment(
   ports: CliEnvironmentPorts,
   env: NodeJS.ProcessEnv = process.env,
@@ -448,6 +475,7 @@ export function buildCliEnvironment(
       },
     },
     ...tcpPorts(ports),
+    ...callerAdbPorts(ports, env),
     ...(env.SIMLOCK_BASELINE === undefined ? {} : { baselineFromEnv: env.SIMLOCK_BASELINE }),
     ...(env.SIMLOCK_URL === undefined ? {} : { tunnelUrl: env.SIMLOCK_URL }),
     ...(env.SIMLOCK_TOKEN === undefined ? {} : { tunnelToken: env.SIMLOCK_TOKEN }),

@@ -6,6 +6,7 @@ import {
   decodeTunnelFrame,
   encodeTunnelFrame,
 } from "../contract/index.js";
+import { promiseState } from "../test-support/promise-state.js";
 import { buildCliEnvironment, runCli } from "./index.js";
 import {
   FakeClock,
@@ -19,6 +20,9 @@ import {
   WebSocketRefusedError,
   MemoryFilesystem,
   MemoryIpcTransport,
+  ProcessSpawnError,
+  ScriptedProcessRunner,
+  type ScriptedProcessExpectation,
 } from "../ports/index.js";
 
 type Listener = () => void;
@@ -41,7 +45,26 @@ class TestSignals {
   }
 }
 
-function command(env: NodeJS.ProcessEnv) {
+// why: stands in for the caller's machine: only the commands in `present` start, as a real runner throws ProcessSpawnError for an adb that is not there.
+class CallerAdb extends ScriptedProcessRunner {
+  constructor(
+    expectations: readonly ScriptedProcessExpectation[],
+    private readonly present: readonly string[] = ["adb"],
+  ) {
+    super(expectations);
+  }
+
+  override spawn(
+    command: string,
+    args: readonly string[],
+    options?: Parameters<ScriptedProcessRunner["spawn"]>[2],
+  ) {
+    if (!this.present.includes(command)) throw new ProcessSpawnError(command, args);
+    return super.spawn(command, args, options);
+  }
+}
+
+function command(env: NodeJS.ProcessEnv, processRunner: CallerAdb = new CallerAdb([])) {
   const signals = new TestSignals();
   const out: string[] = [];
   const err: string[] = [];
@@ -60,6 +83,7 @@ function command(env: NodeJS.ProcessEnv) {
       httpJson,
       ipc: new MemoryIpcTransport(),
       launcher: new FakeDaemonLauncher(),
+      processRunner,
       runTool: async () => ({ outcome: "not-found" }),
       signals,
       stderr: { write: (value) => err.push(value) },
@@ -121,6 +145,12 @@ describe("simlock tunnel that cannot run", () => {
     floor.signals.emit("SIGINT");
     expect(await floorExit).toBe(0);
 
+    const help = command(ENV);
+    expect(await help.run(["tunnel", "--help"])).toBe(0);
+    expect(help.out.join("")).toBe(
+      "Usage: simlock tunnel reverse|forward <device-port>[:<caller-port>] | emulator adb[:<caller-port>] [reverse|forward ...] [--lease <id>] [--url <url>]\n",
+    );
+
     const cases: readonly {
       readonly argv: readonly string[];
       readonly env?: NodeJS.ProcessEnv;
@@ -166,7 +196,32 @@ describe("simlock tunnel that cannot run", () => {
       },
       {
         argv: ["sideways", "5173"],
-        message: 'Unknown tunnel kind "sideways": use reverse or forward',
+        message: 'Unknown tunnel kind "sideways": use reverse, forward or emulator',
+      },
+      {
+        argv: ["emulate", "adb"],
+        message: 'Unknown tunnel kind "emulate": use reverse, forward or emulator',
+      },
+      ...["console", "grpc", "5555", ""].map((name) => ({
+        argv: name === "" ? ["emulator"] : ["emulator", name],
+        message: `Unknown emulator port "${name}": use adb`,
+      })),
+      {
+        argv: ["emulator", "adb:80"],
+        message: 'emulator caller port "80" is below 1024',
+      },
+      {
+        argv: ["emulator", "adb:70000"],
+        message: 'caller port "70000" is not an integer from 1 to 65535',
+      },
+      {
+        argv: ["emulator", "adb:"],
+        message: 'caller port "" is not an integer from 1 to 65535',
+      },
+      { argv: ["emulator", "adb", "emulator", "adb"], message: "Name emulator adb once" },
+      {
+        argv: ["forward", "6000", "emulator", "adb:6000"],
+        message: "Caller port 6000 is named by two tunnels",
       },
       {
         argv: ["--url", "http://10.0.0.5:7300", "reverse", "5173"],
@@ -431,6 +486,40 @@ async function warningsPerTunnel(): Promise<void> {
   expect(await quiet.exit).toBe(0);
 }
 
+async function forwardResetWarnings(): Promise<void> {
+  const cli = command(ENV);
+  const exit = cli.run(["tunnel", "forward", "9229:19229", "--lease", "L1"]);
+  await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+  const peer = firstPeer(cli);
+  peer.receive(READY);
+  const reason = "nothing on the lease's simulator listens on port 9229";
+  const warnings = () =>
+    cli.err
+      .join("")
+      .split("\n")
+      .filter((text) => text !== "");
+  const resetByWorker = async (conn: number) => {
+    cli.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(cli).at(-1)?.conn).toBe(conn));
+    peer.receive(encodeTunnelFrame(TUNNEL_TAG.reset, conn, JSON.stringify({ reason })));
+    await settle();
+  };
+  await resetByWorker(2);
+  expect(warnings()).toEqual([`warning: forward 9229: ${reason}`]);
+  cli.clock.advance(9_999);
+  await resetByWorker(4);
+  expect(warnings()).toHaveLength(1);
+  cli.clock.advance(1);
+  await resetByWorker(6);
+  expect(warnings()).toEqual([
+    `warning: forward 9229: ${reason}`,
+    `warning: forward 9229: ${reason}`,
+  ]);
+  expect(peer.closedWith).toBeUndefined();
+  cli.signals.emit("SIGINT");
+  expect(await exit).toBe(0);
+}
+
 async function responseThroughTheTunnel() {
   const page = await started(["reverse", "5173:5174"]);
   page.peer.receive(open(1, 5173));
@@ -554,8 +643,9 @@ async function brokenWrite(page: Awaited<ReturnType<typeof started>>): Promise<v
 }
 
 describe("simlock tunnel carrying connections", () => {
-  it("warns once per 10 s per tunnel when nothing listens, keeps the tunnel open, and a 1 MiB response arrives whole, a connection whose both halves ended is closed and dropped, and one with a single half ended keeps relaying the other", async () => {
+  it("warns once per 10 s per tunnel when nothing listens, or the worker resets a forward connection with its reason, keeps the tunnel open, and a 1 MiB response arrives whole, a connection whose both halves ended is closed and dropped, and one with a single half ended keeps relaying the other", async () => {
     await warningsPerTunnel();
+    await forwardResetWarnings();
     const { local, page } = await responseThroughTheTunnel();
     await writesToTheCaller(page, local);
     await brokenWrite(page);
@@ -951,3 +1041,308 @@ async function listenersCloseAfter(
 }
 
 type Peer = ReturnType<typeof command>["webSocket"]["connections"][number]["peer"];
+
+describe("simlock tunnel emulator adb", () => {
+  const emulatorOpen = JSON.stringify({ kind: "emulator", emulatorPort: "adb" });
+
+  // fallow-ignore-next-line complexity -- one Tests line: each adb outcome and each way the command ends are rows of its cases.
+  it("prints the tunnel line and connects the caller's own adb to the caller's port, which opens an emulator connection for each connection to it", async () => {
+    const adb = new CallerAdb([
+      {
+        match: { args: ["connect", "127.0.0.1:49152"], command: "adb" },
+        stdoutLines: ["connected to 127.0.0.1:49152"],
+      },
+    ]);
+    const cli = command(ENV, adb);
+    const exit = cli.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(cli.webSocket.connections).toHaveLength(1));
+    await vi.waitFor(() => expect(sentFrames(cli)).toHaveLength(1));
+    expect(new TextDecoder().decode(sentFrames(cli)[0]?.payload)).toBe(
+      '{"tunnels":[{"kind":"emulator","emulatorPort":"adb"}]}',
+    );
+    expect(cli.out).toEqual([]);
+
+    firstPeer(cli).receive(READY);
+    await vi.waitFor(() =>
+      expect(cli.out.join("")).toBe(
+        "emulator localhost:49152 -> emulator:adb (lease L1)\nadb: connected to 127.0.0.1:49152\n",
+      ),
+    );
+    expect(adb.calls.map(({ args, command: bin }) => [bin, ...args])).toEqual([
+      ["adb", "connect", "127.0.0.1:49152"],
+    ]);
+
+    cli.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(cli).at(-1)?.conn).toBe(2));
+    expect(sentFrames(cli).at(-1)?.tag).toBe(TUNNEL_TAG.open);
+    expect(new TextDecoder().decode(sentFrames(cli).at(-1)?.payload)).toBe(emulatorOpen);
+
+    cli.signals.emit("SIGINT");
+    cli.clock.advance(2_000);
+    expect(await exit).toBe(0);
+
+    const target = "127.0.0.1:49152";
+    const connect = (
+      command: string,
+      output: Partial<ScriptedProcessExpectation> = {},
+    ): ScriptedProcessExpectation => ({
+      match: { args: ["connect", target], command },
+      stdoutLines: [`connected to ${target}`],
+      ...output,
+    });
+    const rerun = `run: adb connect ${target}`;
+    const outputs = [
+      {
+        adb: new CallerAdb([
+          connect("adb", {
+            stdoutLines: [],
+            stderrLines: ["* daemon not running; starting now"],
+            result: {
+              code: 0,
+              stderr: "",
+              stdout: `* daemon started successfully\nconnected to ${target}\n`,
+            },
+          }),
+        ]),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb([connect("adb", { stdoutLines: [`already connected to ${target}`] })]),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb([
+          connect("adb", { stdoutLines: [`failed to authenticate to ${target}`] }),
+        ]),
+        err: `warning: emulator adb: adb answered: failed to authenticate to ${target}; ${rerun}\n`,
+        out: "",
+      },
+      {
+        adb: new CallerAdb([
+          connect("adb", {
+            stdoutLines: [],
+            result: {
+              code: 1,
+              stderr: "",
+              stdout: `* daemon started successfully\nfailed to authenticate to ${target}\n`,
+            },
+          }),
+        ]),
+        err: `warning: emulator adb: adb answered: failed to authenticate to ${target}; ${rerun}\n`,
+        out: "",
+      },
+      {
+        adb: new CallerAdb([], []),
+        err: `warning: emulator adb: adb was not found; ${rerun}\n`,
+        out: "",
+      },
+      {
+        adb: new CallerAdb([connect("/sdk/platform-tools/adb")], ["/sdk/platform-tools/adb"]),
+        env: { ANDROID_HOME: "/sdk" },
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+      {
+        adb: new CallerAdb(
+          [connect("/home/caller/Library/Android/sdk/platform-tools/adb")],
+          ["/home/caller/Library/Android/sdk/platform-tools/adb"],
+        ),
+        err: "",
+        out: `adb: connected to ${target}\n`,
+      },
+    ];
+    for (const expected of outputs) {
+      const other = command({ ...ENV, ...expected.env }, expected.adb);
+      const otherExit = other.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+      await vi.waitFor(() => expect(other.webSocket.connections).toHaveLength(1));
+      firstPeer(other).receive(READY);
+      await vi.waitFor(() =>
+        expect(other.out.join("") + other.err.join("")).toContain(
+          expected.out === "" ? expected.err : expected.out,
+        ),
+      );
+      await settle();
+      expect(other.out.join("")).toBe(
+        `emulator localhost:49152 -> emulator:adb (lease L1)\n${expected.out}`,
+      );
+      expect(other.err.join("")).toBe(expected.err);
+      other.signals.emit("SIGINT");
+      other.clock.advance(2_000);
+      expect(await otherExit).toBe(0);
+    }
+
+    const pinned = new CallerAdb([
+      {
+        match: { args: ["connect", "127.0.0.1:6000"], command: "adb" },
+        stdoutLines: ["connected to 127.0.0.1:6000"],
+      },
+    ]);
+    const both = command(ENV, pinned);
+    const bothExit = both.run(["tunnel", "emulator", "adb:6000", "--lease", "L1"]);
+    await vi.waitFor(() => expect(both.webSocket.connections).toHaveLength(1));
+    expect(both.tcpListeners.listeners.map((listener) => listener.port)).toEqual([6000]);
+    firstPeer(both).receive(READY);
+    await vi.waitFor(() =>
+      expect(both.out.join("")).toBe(
+        "emulator localhost:6000 -> emulator:adb (lease L1)\nadb: connected to 127.0.0.1:6000\n",
+      ),
+    );
+    both.signals.emit("SIGINT");
+    both.clock.advance(2_000);
+    expect(await bothExit).toBe(0);
+
+    const busy = command(ENV, new CallerAdb([]));
+    busy.tcpListeners.busy.add(6000);
+    expect(await busy.run(["tunnel", "emulator", "adb:6000", "--lease", "L1"])).toBe(1);
+    expect(line(busy)).toEqual(
+      errorBody("TUNNEL_CALLER_PORT_IN_USE", "emulator adb: localhost:6000 is already in use"),
+    );
+
+    const mixedAdb = new CallerAdb([connect("adb")]);
+    const mixed = command(ENV, mixedAdb);
+    const mixedExit = mixed.run(["tunnel", "reverse", "8081", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(sentFrames(mixed)).toHaveLength(1));
+    expect(new TextDecoder().decode(sentFrames(mixed)[0]?.payload)).toBe(
+      '{"tunnels":[{"devicePort":8081,"kind":"reverse"},{"kind":"emulator","emulatorPort":"adb"}]}',
+    );
+    firstPeer(mixed).receive(READY);
+    await vi.waitFor(() =>
+      expect(mixed.out.join("")).toBe(
+        `reverse device:8081 -> localhost:8081 (lease L1)\nemulator localhost:49152 -> emulator:adb (lease L1)\nadb: connected to ${target}\n`,
+      ),
+    );
+    firstPeer(mixed).receive(open(1, 8081));
+    await vi.waitFor(() =>
+      expect(mixed.tcpStreams.connections.map(({ port }) => port)).toEqual([8081]),
+    );
+
+    mixed.tcpListeners.listeners[0]?.connect();
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() =>
+      expect(sentFrames(mixed).filter((f) => f.tag === TUNNEL_TAG.open)).toHaveLength(2),
+    );
+    const reset = (conn: number, reason: string) =>
+      encodeTunnelFrame(TUNNEL_TAG.reset, conn, JSON.stringify({ reason }));
+    firstPeer(mixed).receive(reset(2, "closed"));
+    firstPeer(mixed).receive(reset(4, "timeout"));
+    await vi.waitFor(() => expect(mixed.err.join("")).toBe("warning: emulator adb: closed\n"));
+    mixed.clock.advance(9_999);
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(mixed).at(-1)?.conn).toBe(6));
+    firstPeer(mixed).receive(reset(6, "timeout"));
+    await settle();
+    expect(mixed.err.join("")).toBe("warning: emulator adb: closed\n");
+    mixed.clock.advance(1);
+    mixed.tcpListeners.listeners[0]?.connect();
+    await vi.waitFor(() => expect(sentFrames(mixed).at(-1)?.conn).toBe(8));
+    firstPeer(mixed).receive(reset(8, "timeout"));
+    await vi.waitFor(() =>
+      expect(mixed.err.join("")).toBe(
+        "warning: emulator adb: closed\nwarning: emulator adb: timeout\n",
+      ),
+    );
+    mixed.signals.emit("SIGINT");
+    mixed.clock.advance(2_000);
+    expect(await mixedExit).toBe(0);
+
+    const disconnect = (
+      output: Partial<ScriptedProcessExpectation> = {},
+    ): ScriptedProcessExpectation => ({
+      match: { args: ["disconnect", target], command: "adb" },
+      stdoutLines: [`disconnected ${target}`],
+      ...output,
+    });
+    const calls = (runner: CallerAdb) => runner.calls.map(({ args }) => args.join(" "));
+    const endings: readonly {
+      readonly end: (cli: ReturnType<typeof command>, peer: Peer) => void;
+      readonly exit: number;
+    }[] = [
+      { end: (cli) => cli.signals.emit("SIGINT"), exit: 0 },
+      { end: (_cli, ended) => ended.receive(refusedFrame("TUNNEL_BAD_PORT", "no")), exit: 1 },
+      { end: (_cli, ended) => ended.dropped(4001, "device released"), exit: 14 },
+      { end: (_cli, ended) => ended.dropped(1006, ""), exit: 1 },
+    ];
+    for (const ending of endings) {
+      const runner = new CallerAdb([connect("adb"), disconnect()]);
+      const leaving = command(ENV, runner);
+      const leavingExit = leaving.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+      await vi.waitFor(() => expect(leaving.webSocket.connections).toHaveLength(1));
+      firstPeer(leaving).receive(READY);
+      await vi.waitFor(() => expect(leaving.out.join("")).toContain("adb: connected"));
+      ending.end(leaving, firstPeer(leaving));
+      expect(await leavingExit).toBe(ending.exit);
+      expect(calls(runner)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+    }
+
+    const failing = new CallerAdb([
+      connect("adb"),
+      disconnect({ result: { code: 1, stderr: "error: no such device", stdout: "" } }),
+    ]);
+    const failed = command(ENV, failing);
+    const failedExit = failed.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(failed.webSocket.connections).toHaveLength(1));
+    firstPeer(failed).receive(READY);
+    await vi.waitFor(() => expect(failed.out.join("")).toContain("adb: connected"));
+    firstPeer(failed).dropped(4001, "device released");
+    expect(await failedExit).toBe(14);
+    expect(calls(failing)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+
+    const stuckAdb = new CallerAdb([connect("adb"), disconnect({ hangs: true })]);
+    const stuck = command(ENV, stuckAdb);
+    const stuckExit = stuck.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(stuck.webSocket.connections).toHaveLength(1));
+    firstPeer(stuck).receive(READY);
+    await vi.waitFor(() => expect(stuck.out.join("")).toContain("adb: connected"));
+    stuck.signals.emit("SIGINT");
+    await vi.waitFor(() => expect(stuckAdb.calls).toHaveLength(2));
+    const stuckState = promiseState(stuckExit);
+    stuck.clock.advance(1_999);
+    await settle();
+    expect(stuckState.state).toBe("pending");
+    stuck.clock.advance(1);
+    await settle();
+    expect(stuckState.state).toBe("fulfilled");
+    expect(await stuckExit).toBe(0);
+    expect((await stuckAdb.handles[1]?.wait())?.code).toBeNull();
+
+    const early = new CallerAdb([connect("adb", { hangs: true }), disconnect()]);
+    const interrupted = command(ENV, early);
+    const interruptedExit = interrupted.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(interrupted.webSocket.connections).toHaveLength(1));
+    firstPeer(interrupted).receive(READY);
+    await vi.waitFor(() => expect(early.calls).toHaveLength(1));
+    interrupted.signals.emit("SIGINT");
+    const interruptedState = promiseState(interruptedExit);
+    await settle();
+    expect(interruptedState.state).toBe("fulfilled");
+    expect(await interruptedExit).toBe(0);
+    expect(calls(early)).toEqual([`connect ${target}`, `disconnect ${target}`]);
+    const killed = promiseState(Promise.resolve(early.handles[0]?.wait()));
+    await settle();
+    expect(killed.state).toBe("fulfilled");
+    expect((await early.handles[0]?.wait())?.code).toBeNull();
+    expect(interrupted.err).toEqual([]);
+
+    const hung = new CallerAdb([connect("adb", { hangs: true })]);
+    const slow = command(ENV, hung);
+    const slowExit = slow.run(["tunnel", "emulator", "adb", "--lease", "L1"]);
+    await vi.waitFor(() => expect(slow.webSocket.connections).toHaveLength(1));
+    firstPeer(slow).receive(READY);
+    await vi.waitFor(() => expect(hung.calls).toHaveLength(1));
+    slow.clock.advance(9_999);
+    await settle();
+    expect(slow.err).toEqual([]);
+    slow.clock.advance(1);
+    await vi.waitFor(() =>
+      expect(slow.err.join("")).toBe(
+        `warning: emulator adb: adb did not answer in 10 s; ${rerun}\n`,
+      ),
+    );
+    expect((await hung.handles[0]?.wait())?.code).toBeNull();
+    slow.signals.emit("SIGINT");
+    slow.clock.advance(2_000);
+    expect(await slowExit).toBe(0);
+  });
+});

@@ -620,6 +620,34 @@ describe("main.ts imports nothing from any module", () => {
   });
 });
 
+describe("the composition root's parts import nothing from any module", () => {
+  function partViolations(file: string): string[] {
+    const dir = join(scratch, `main-part-lazy-${counter++}`);
+    const world: Record<string, string> = {
+      "src/agent-device/index.ts": "export const value = 1;\n",
+      [file]: 'import { value } from "../agent-device/index.js";\nexport { value };\n',
+    };
+    for (const [path, contents] of Object.entries(world)) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), contents);
+    }
+    copyFileSync(join(repoRoot, ".dependency-cruiser.mjs"), join(dir, ".dependency-cruiser.mjs"));
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(dir, "tsconfig.json"));
+    return cruise(dir, ["src"])
+      .filter((v) => v.from === file)
+      .map((v) => v.rule.name);
+  }
+
+  it.each([
+    "src/daemon/worker-composition.ts",
+    "src/daemon/driver-discovery.ts",
+    "src/daemon/composition-support.ts",
+    "src/daemon/entry-support.ts",
+  ])("dependency-cruiser fails a value import of src/agent-device from %s", (file) => {
+    expect(partViolations(file)).toContain("main-loads-modules-lazily");
+  });
+});
+
 describe("src/auth imports little", () => {
   function authViolations(source: string): string[] {
     const dir = join(scratch, `auth-little-${counter++}`);

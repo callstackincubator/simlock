@@ -39,6 +39,7 @@ import { Dispatcher } from "./dispatcher.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
 export const gibibyte = 1024 ** 3;
+
 export const HOST_SYSTEM = { arch: "arm64", os: "macOS", osVersion: "15.5" };
 
 function resolvePassthroughOverride(
@@ -375,6 +376,16 @@ export function session(overrides: Partial<DispatchSession> = {}): DispatchSessi
     role: "agent",
     ...overrides,
   };
+}
+
+export async function flushPromises(): Promise<void> {
+  for (let count = 0; count < 100; count += 1) await Promise.resolve();
+}
+
+export async function flush(): Promise<void> {
+  for (let index = 0; index < 100; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function sequence() {

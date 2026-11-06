@@ -80,6 +80,7 @@ export interface CliBackgroundHandle {
   progressEvents(): readonly unknown[];
   /** Everything written to stdout so far, for a process that streams until it is stopped. */
   stdoutSoFar(): string;
+  stderrSoFar(): string;
   waitForExit(timeout?: number): Promise<CliResult>;
   kill(signal?: NodeJS.Signals): void;
   readonly pid: number | undefined;
@@ -142,6 +143,7 @@ export function cliBackground(
   return {
     pid: child.pid,
     stdoutSoFar: () => stdout,
+    stderrSoFar: () => stderr,
     async firstStdoutLine(timeout = 30_000) {
       if (firstLineSeen !== undefined) return firstLineSeen;
       if (exitedWithoutLine !== undefined) throw exitedWithoutLine;
