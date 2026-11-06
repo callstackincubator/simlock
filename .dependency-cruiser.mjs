@@ -151,6 +151,18 @@ export default {
       { path: "^src/(http|gateway|drivers|daemon|cli|mcp|leasing)/" },
     ),
     direction(
+      "not-lease-files",
+      "core, leasing, the drivers, the gateway and the contract import nothing from lease-files: the daemon builds it and the HTTP frontend serves it",
+      "^src/(core|leasing|drivers|gateway|contract)/",
+      { path: "^src/lease-files/" },
+    ),
+    direction(
+      "lease-files-imports-little",
+      "lease-files reads and writes through the Filesystem port and knows leases only by the types it takes from leasing; it imports no frontend, gateway, driver or core",
+      "^src/lease-files/",
+      { path: "^src/(http|gateway|drivers|daemon|cli|mcp|core)/" },
+    ),
+    direction(
       "host-load-imports-ports-only",
       "host-load reads the machine through the HostLoadProbe port and imports no other component",
       "^src/host-load/",

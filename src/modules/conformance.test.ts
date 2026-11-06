@@ -15,6 +15,7 @@ const HOOK_DEADLINE_MS = 30_000;
 
 const ended: ModuleEndedLease = {
   deviceId: "dev-1",
+  grantedAt: 1_000,
   leaseId: "lease-1",
   ownerId: "agent-1",
   platform: "ios",

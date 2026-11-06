@@ -149,12 +149,37 @@ The command runs on the worker, as the user who runs the worker's daemon. Treat 
 
 - **Leave the device out.** Simlock adds the lease's device to the command: the UDID for `simctl` (where the subcommand takes one), `-s <serial>` for `adb`, and `--device <UDID>` for `devicectl`. Write `["install","/builds/MyApp.app"]`, not a UDID or serial.
 - **Naming another device is refused.** A command that names a different device, such as `booted`, another UDID, `adb -s emulator-5556`, `-e`, `-d` or `-t`, is refused with `422 PASSTHROUGH_REFUSED` before anything runs. Naming the lease's own device is accepted, except on a physical Android phone, which refuses any option before the subcommand, even its own `-s <serial>`.
-- **Paths are on the worker.** `{"tool":"simctl","args":["install","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. The API can't upload files. Get the file there another way, or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
+- **Paths are on the worker.** `{"tool":"simctl","args":["install","/builds/MyApp.app"]}` needs `/builds/MyApp.app` to exist on the worker. Upload a file to the lease's folder with [lease files](#lease-files), or use [agent-device](/simlock/docs/using-devices/agent-device), which uploads apps for you.
 - **No terminal.** `stdin` in the body is sent to the command once, and may hold at most 8,388,608 characters; a longer one is refused with `BAD_REQUEST`. Interactive commands, such as a bare `adb shell`, are refused.
 - **Output is text.** Output is decoded as UTF-8, so binary output, such as a screenshot written to stdout, gets corrupted. Write it to a file on the worker instead.
 - **Time limit.** A command that runs longer than 10 minutes is stopped, and the stream ends with an `error` event carrying `EXEC_TIMEOUT`. Disconnecting doesn't stop the command.
 - **The same commands are refused as locally.** Everything `simlock simctl` and `simlock adb` refuse (see [Commands Simlock refuses](/simlock/docs/using-devices/working-with-a-device#commands-simlock-refuses)) is refused here with `422 PASSTHROUGH_REFUSED`, before anything runs. So is `simctl` on an Android lease, and `adb` on an iOS one.
 - **The command gets a short list of environment variables**: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `SHELL`, `LANG`, every `LC_*` variable, `TERM`, `DEVELOPER_DIR`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_USER_HOME`, `ANDROID_AVD_HOME`, `ANDROID_PREFS_ROOT`, `ANDROID_SDK_HOME` and `JAVA_HOME`, plus what it needs to reach the device. Other variables, such as a token the daemon was started with, aren't passed. That doesn't make them secret: the command runs as the same user and can read the daemon's environment.
+
+## Lease files
+
+A lease holder (or an operator) can put files into its lease's folder on the worker and read them back, with raw bytes in the request body and no base64. Nothing is held in memory: the body streams to disk, and the file appears under its name once the whole body has arrived.
+
+```bash
+curl -X PUT "$W/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T" --data-binary @fixture.tar
+# {"name":"fixture.tar","size":70000000}   (201)
+
+curl "$W/v1/leases/$LEASE/files/fixture.tar" -H "Range: bytes=0-99" -H "Authorization: Bearer $T" -o head.bin
+# 206, Content-Range: bytes 0-99/70000000, 100 bytes
+
+curl "$W/v1/leases/$LEASE/files" -H "Authorization: Bearer $T"
+# {"files":[{"name":"fixture.tar","size":70000000}]}
+
+curl -X DELETE "$W/v1/leases/$LEASE/files/fixture.tar" -H "Authorization: Bearer $T"
+# 204
+```
+
+- **Names.** 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit, so `.hidden`, `-rf` and `my file.tar` are refused with `400 BAD_REQUEST`. Names match ignoring case: `A.tar` and `a.tar` are one file, and a `PUT` replaces it.
+- **Limits.** 2 GiB a file and 4 GiB a lease folder (files a command wrote there count). A larger file is refused with `413 FILE_TOO_LARGE`, a full folder with `413 LEASE_FILES_FULL`, and nothing is stored when the worker's free disk is under its `diskPressure.freeBytesThreshold` (`422 INSUFFICIENT_DISK_SPACE`).
+- **One upload per name.** A second `PUT` to a name being uploaded gets `409 FILE_BUSY`. A `PUT` that is cut leaves the previous file untouched.
+- **No total time limit.** An upload is cut only when no byte of its body arrives for 330 seconds (`408 UPLOAD_STALLED`).
+- **Downloads.** `GET` answers the whole file or one `Range` (`bytes=a-b`, `a-` or `-n`) as `206`; a start past the end is `416`. An unknown name is `404 UNKNOWN_FILE`.
+- **The folder goes with the lease.** The files are deleted when the lease ends. Through a gateway these routes answer `501 UNSUPPORTED_IN_GATEWAY_MODE` for now.
 
 ## More calls
 

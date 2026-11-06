@@ -38,6 +38,7 @@ import { androidDriverConfig } from "../drivers/android/index.js";
 import { iosDriverConfig } from "../drivers/ios/index.js";
 import { type Auth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
+import { createLeaseFiles } from "../lease-files/index.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -324,6 +325,23 @@ export async function composeWorker(
     tokens: auth.tokens,
     role: "worker",
   });
+  const leaseFiles = createLeaseFiles({
+    clock,
+    dataDirectory,
+    diskPressureThreshold: config.diskPressure.freeBytesThreshold,
+    filesystem,
+    findGrant: (leaseId) => {
+      const lease = registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+      const device = registry.snapshot.devices.find(
+        (candidate) => candidate.id === lease?.deviceId,
+      );
+      return lease === undefined || device === undefined
+        ? undefined
+        : { grantedAt: lease.grantedAt, id: lease.id, platform: device.spec.platform };
+    },
+    idGenerator,
+    logger: logger.child("lease-files"),
+  });
   const leasing = createLeasing({
     clock,
     components,
@@ -333,7 +351,11 @@ export async function composeWorker(
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
+    leaseEndParticipants: [
+      leaseInputs.leaseEnd,
+      leaseFiles.leaseEnd,
+      ...moduleHost.leaseEndParticipants,
+    ],
     logger,
     modelPreferences,
   });
@@ -437,6 +459,7 @@ export async function composeWorker(
     const steps = [
       () => core.doctor.reconcile({ read }),
       () => leasing.reconcile(read),
+      () => leaseFiles.sweep(registry.snapshot.leases),
       () => core.converge(read),
     ];
     for (const step of steps) {
@@ -628,6 +651,7 @@ export async function composeWorker(
       dispatch,
       eventBus,
       idGenerator,
+      leaseFiles,
       leaseRequests: leasing.requests,
       logger: httpLogger,
       leaseRoutes: [...moduleHost.leaseRoutes()],
