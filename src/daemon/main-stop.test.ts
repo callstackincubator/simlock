@@ -33,7 +33,12 @@ import {
   stopDaemons,
   temporaryDirectories,
 } from "./test-main.js";
-import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
+import {
+  freeLoopbackPort,
+  portLostIn,
+  startOnFreePort,
+  startUnlessPortLost,
+} from "../test-support/loopback-port.js";
 
 afterEach(stopDaemons);
 
@@ -93,6 +98,7 @@ describe("startDaemon HTTP gateway startup readiness", () => {
     const secret = "slk_test_agent";
     await seedTokensDatabase(directory, [["tok_agent", secret, "agent"]]);
     await startOnFreePort(async (port) => {
+      const sink = new MemoryLogSink();
       const startPromise = startDaemon({
         clock,
         configOverrides: { http: { enabled: true, host: "127.0.0.1", port } },
@@ -107,21 +113,24 @@ describe("startDaemon HTTP gateway startup readiness", () => {
         ],
         deviceDataTables: fakeDeviceDataTables,
         filesystem,
+        logger: new JsonLinesLogger({ clock, level: "debug", sink }),
         version: "1.2.3",
       } as StartDaemonOptions).then((daemon) => {
         runningDaemons.push(daemon);
         return daemon;
       });
+      void startPromise.catch(() => undefined);
 
       // why: Polls rather than a fixed delay: the gateway binds asynchronously (`onSocketClaimed`
       // fires once the socket claim resolves, then `gateway.start()` itself awaits a real
       // `listen()`), so there is no single microtask boundary to await here the way the
       // socket-side test above can just retry-connect on the unix socket.
+      const watch = new AbortController();
       const statusBeforeConvergence = await Promise.race([
         pollUntilListening(port, secret),
-        // why: a start that lost the port rejects, and the poll would otherwise run to its own timeout.
-        startPromise.then(() => new Promise<never>(() => undefined)),
-      ]);
+        // why: a start that lost the port stays pending behind the convergence it waits for, so the loss is read from the daemon's log and the attempt runs again.
+        portLostIn(sink, watch.signal),
+      ]).finally(() => watch.abort());
       expect(statusBeforeConvergence).toMatchObject({ daemon: { health: "starting" } });
 
       const parkedStatusPromise = fetch(`http://127.0.0.1:${port}/v1/leases`, {
@@ -478,28 +487,35 @@ describe("startDaemon stop with a warm target", () => {
   it("creates no further device for a target once a stop is asked for, though the creation in flight ends while the gateway stops", async () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-main-stop-target-"));
     temporaryDirectories.push(directory);
-    const clock = new FakeClock(1_000);
-    const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
-    driver.hangMakeReady();
-    const { started: daemon } = await startOnFreePort((port) =>
-      startDaemon({
-        deviceDataTables: fakeDeviceDataTables,
-        clock,
-        configOverrides: {
-          capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
-          http: { enabled: true, host: "127.0.0.1", port },
-          warmPool: {
-            maxConcurrentBoots: 1,
-            targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+    // why: each attempt has its own driver, so the calls of a start that lost its port are not counted.
+    const { started } = await startOnFreePort(async (port) => {
+      const clock = new FakeClock(1_000);
+      const driver = new FakeDriver({ availableOsVersions: ["26.5"], clock, platform: "ios" });
+      driver.hangMakeReady();
+      const sink = new MemoryLogSink();
+      const daemon = await startUnlessPortLost(
+        sink,
+        startDaemon({
+          deviceDataTables: fakeDeviceDataTables,
+          clock,
+          configOverrides: {
+            capacity: { config: { maxRunning: 8 }, strategy: "fixed" },
+            http: { enabled: true, host: "127.0.0.1", port },
+            warmPool: {
+              maxConcurrentBoots: 1,
+              targets: [{ count: 2, model: "iPhone 16", osVersion: "26.5", platform: "ios" }],
+            },
           },
-        },
-        dataDirectory: directory,
-        drivers: [driver],
-        filesystem: new MemoryFilesystem(),
-        logger: new JsonLinesLogger({ clock, level: "debug", sink: new MemoryLogSink() }),
-        version: "1.2.3",
-      }),
-    );
+          dataDirectory: directory,
+          drivers: [driver],
+          filesystem: new MemoryFilesystem(),
+          logger: new JsonLinesLogger({ clock, level: "debug", sink }),
+          version: "1.2.3",
+        }),
+      );
+      return { daemon, driver };
+    });
+    const { daemon, driver } = started;
     runningDaemons.push(daemon);
     await expect
       .poll(() => driver.calls.filter((call) => call.operation === "makeReady").length)

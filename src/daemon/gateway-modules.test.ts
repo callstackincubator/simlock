@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startOnFreePort } from "../test-support/loopback-port.js";
+import { startOnFreePort, startUnlessPortLost } from "../test-support/loopback-port.js";
 import { agentDeviceModuleWith } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayModule, OptionalModuleDefinition } from "../modules/index.js";
@@ -74,15 +74,22 @@ async function startGateway(
 ): Promise<Gateway> {
   const directory = await mkdtemp(join(tmpdir(), "simlock-gw-modules-"));
   directories.push(directory);
-  const clock = new FakeClock(1_000);
-  const sink = new MemoryLogSink();
-  const startAt = async (port: number) => {
-    const daemon = await startDaemon(gatewayOptions(modules, on, directory, port, clock, sink));
+  const startAt = async (port: number, clock: FakeClock, sink: MemoryLogSink) => {
+    const daemon = await startUnlessPortLost(
+      sink,
+      startDaemon(gatewayOptions(modules, on, directory, port, clock, sink)),
+    );
     daemons.push(daemon);
     return daemon;
   };
-  const { port, started: daemon } = await startOnFreePort(startAt);
-  const start = () => startAt(port);
+  // why: each first attempt has its own clock and sink, so a start that lost its port leaves no line in the sink the test reads.
+  const { port, started } = await startOnFreePort(async (candidate) => {
+    const clock = new FakeClock(1_000);
+    const sink = new MemoryLogSink();
+    return { clock, daemon: await startAt(candidate, clock, sink), sink };
+  });
+  const { clock, daemon, sink } = started;
+  const start = () => startAt(port, clock, sink);
   const agent = await daemon.dispatch("token.create", { label: "agent", role: "agent" }, admin);
   return {
     agentSecret: agent.secret,
@@ -289,6 +296,8 @@ describe("a gateway's optional modules", () => {
       name: "mine",
     });
     const gateway = await startGateway(definitionsOf(mine), ["mine"]);
+    // why: a start that lost its port is stopped, and that stop ran this hook once already.
+    entered = false;
     let stopped = false;
     const stopping = gateway.daemon.stop("test").then(() => {
       stopped = true;

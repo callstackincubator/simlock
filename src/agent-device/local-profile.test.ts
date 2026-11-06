@@ -68,12 +68,13 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
   const { directory, filesystem } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
-  const logs = new MemoryLogSink();
   if (options.refuseWrite === true) {
     filesystem.defineFailure(join(directory, "agent-device-profile.json"), "EACCES");
   }
-  const start = async (port: number) =>
-    startDaemon({
+  // why: each attempt logs into its own sink, so a start that lost its port leaves no line in the rig's logs.
+  const start = async (port: number) => {
+    const logs = new MemoryLogSink();
+    const daemon = await startDaemon({
       clock,
       configOverrides:
         options.defaults === undefined
@@ -111,10 +112,13 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
       optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
       version: "1.2.3",
     } as StartDaemonOptions);
-  const { port, started: daemon } =
+    return { daemon, logs };
+  };
+  const { port, started } =
     options.port === undefined
       ? await startOnFreePort(start)
       : { port: options.port, started: await start(options.port) };
+  const { daemon, logs } = started;
   runningDaemons.push(daemon);
   return {
     daemon,

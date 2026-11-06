@@ -31,3 +31,33 @@ export async function startOnFreePort<T>(
     }
   }
 }
+
+// why: a daemon that lost its HTTP port stops itself, but its `start` settles only once that stop does,
+// and a stop held by a hung hook or a hung boot never ends; the "HTTP frontend failed to start" line the
+// daemon logs first is the signal that works in both cases.
+export async function portLostIn(
+  sink: { readonly records: readonly { readonly message: string }[] },
+  signal: AbortSignal,
+): Promise<never> {
+  while (!signal.aborted) {
+    if (sink.records.some((record) => record.message === "HTTP frontend failed to start")) {
+      throw Object.assign(new Error("address already in use"), { code: "EADDRINUSE" });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  return new Promise<never>(() => undefined);
+}
+
+// why: for a start that can stay pending after it lost its port; it rejects as soon as the daemon logs the loss.
+export async function startUnlessPortLost<T>(
+  sink: Parameters<typeof portLostIn>[0],
+  start: Promise<T>,
+): Promise<T> {
+  const watch = new AbortController();
+  void start.catch(() => undefined);
+  try {
+    return await Promise.race([start, portLostIn(sink, watch.signal)]);
+  } finally {
+    watch.abort();
+  }
+}

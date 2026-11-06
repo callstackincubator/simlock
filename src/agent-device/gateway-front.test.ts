@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -247,36 +247,45 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     const workerClock =
       spec.clockSkewMs === undefined ? clock : new FakeClock(1_000 + spec.clockSkewMs);
     const driver = driverFor(spec, workerClock, latency);
-    let directPort: number | undefined;
     if (spec.direct === true) {
-      directPort = await freeLoopbackPort();
       await seedTokensDatabase(workerDirectory, [[principals.one, secrets.direct, "agent"]]);
     }
-    const started = startDaemon({
-      clock: workerClock,
-      configOverrides: {
-        capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
-        capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
-        ...(directPort === undefined
-          ? { gateway: { label: spec.label, token: secret, url: `ws://127.0.0.1:${String(port)}` } }
-          : { http: { enabled: true, host: "127.0.0.1", port: directPort } }),
-        lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
-      },
-      dataDirectory: workerDirectory,
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [driver],
-      filesystem: workerFilesystem,
-      logger: new JsonLinesLogger({
+    const launch = (directPort: number | undefined) =>
+      startDaemon({
         clock: workerClock,
-        level: "debug",
-        sink: new MemoryLogSink(),
-      }),
-      optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
-      version: "1.2.3",
-    } as StartDaemonOptions).then((daemon) => {
-      runningDaemons.push(daemon);
-      return daemon;
-    });
+        configOverrides: {
+          capabilities: { "agent-device": { enabled: spec.capability !== "off" } },
+          capacity: { config: { maxRunning: spec.maxRunning ?? 4 }, strategy: "fixed" },
+          ...(directPort === undefined
+            ? {
+                gateway: {
+                  label: spec.label,
+                  token: secret,
+                  url: `ws://127.0.0.1:${String(port)}`,
+                },
+              }
+            : { http: { enabled: true, host: "127.0.0.1", port: directPort } }),
+          lease: { defaultTtlMs, maxTtlMs: workerMaxTtlMs },
+        },
+        dataDirectory: workerDirectory,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [driver],
+        filesystem: workerFilesystem,
+        logger: new JsonLinesLogger({
+          clock: workerClock,
+          level: "debug",
+          sink: new MemoryLogSink(),
+        }),
+        optionalModules: [agentDeviceModuleWith({ phoneUpstream: phone, upstream: fake })],
+        version: "1.2.3",
+      } as StartDaemonOptions).then((daemon) => {
+        runningDaemons.push(daemon);
+        return daemon;
+      });
+    // why: a direct worker binds a port picked a moment before, so a start that lost it runs again on another.
+    const direct = spec.direct === true ? await startOnFreePort(launch) : undefined;
+    const directPort = direct?.port;
+    const started = direct === undefined ? launch(undefined) : Promise.resolve(direct.started);
     const member: Member = {
       clock: workerClock,
       daemon: started,

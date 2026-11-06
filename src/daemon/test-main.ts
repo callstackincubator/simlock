@@ -22,15 +22,17 @@ export async function start(
   overrides: Partial<Omit<StartDaemonOptions, "deviceDataTables" | "drivers">> & {
     readonly deviceDataTables?: StartDaemonOptions["deviceDataTables"] | undefined;
     readonly drivers?: StartDaemonOptions["drivers"] | undefined;
+    // why: a test that calls its worker over HTTP asks for the port the start picked, so a retry on a taken port moves the port the test reads too.
+    readonly withHttp?: boolean;
   } = {},
 ) {
-  const { configOverrides, ...rest } = overrides;
+  const { configOverrides, withHttp, ...rest } = overrides;
   const directory = await mkdtemp(join(tmpdir(), "simlock-main-"));
   temporaryDirectories.push(directory);
   const sink = new MemoryLogSink();
   const clock = new FakeClock(1_000);
   const logger = new JsonLinesLogger({ clock, level: "debug", sink });
-  const { started: daemon } = await startOnFreePort((port) =>
+  const { port, started: daemon } = await startOnFreePort((port) =>
     startDaemon({
       clock,
       dataDirectory: directory,
@@ -45,11 +47,17 @@ export async function start(
         overrides.role === "gateway"
           ? // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
             { http: { enabled: true, host: "127.0.0.1", port }, ...configOverrides }
-          : { ...STANDALONE_OFF, ...configOverrides },
+          : withHttp === true
+            ? {
+                capabilities: STANDALONE_OFF.capabilities,
+                http: { enabled: true, host: "127.0.0.1", port },
+                ...configOverrides,
+              }
+            : { ...STANDALONE_OFF, ...configOverrides },
     } as StartDaemonOptions),
   );
   runningDaemons.push(daemon);
-  return { daemon, directory, sink };
+  return { daemon, directory, port, sink };
 }
 
 // why: a drivers module must export the device-data tables of its platforms, and the module file
