@@ -1765,12 +1765,7 @@ describe("a lease's files on a worker", () => {
     for (let piece = 0; piece < 3; piece += 1) {
       await Promise.race([chunks.push(new Uint8Array(30)), chunkedRequest]);
     }
-    // why: a refused upload has already closed its body, and the status below must name that, not a thrown close.
-    try {
-      chunks.finish();
-    } catch {
-      // why: nothing to close; the refusal below is what the test reads.
-    }
+    chunks.finish();
     expect((await chunkedRequest).status).toBe(201);
     expect(await folderEntries(chunked.leaseFolder)).toEqual(["chunks.bin"]);
 
@@ -1846,6 +1841,7 @@ describe("a lease's files on a worker", () => {
     const muteRequest = uploading("mute.bin", mute.stream);
     await mute.firstPull;
     rig.clock.advance(329_999);
+    expect(await answered(muteRequest, 50)).toBeUndefined();
     rig.clock.advance(1);
     expect((await answered(muteRequest))?.status).toBe(408);
 
