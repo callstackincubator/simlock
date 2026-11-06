@@ -154,7 +154,7 @@ describe("a lease's files at lease end", () => {
   });
 });
 
-// why: the folder-level rules of `createLeaseFiles` that the worker's HTTP routes cannot reach yet (`folderOf` is for exec) or only by luck of timing: a held mkdir or listing, and grants whose lease ids differ only in case or in grant time.
+// why: the folder-level rules of `createLeaseFiles` that the worker's HTTP routes cannot force (`folderOf` is reached by exec, which has no held mkdir) or only by luck of timing: a held mkdir or listing, and grants whose lease ids differ only in case or in grant time.
 class GatedFilesystem extends MemoryFilesystem {
   release: (() => void) | undefined;
   #gate: "mkdirp" | "readdir" | undefined;

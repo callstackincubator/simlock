@@ -158,6 +158,8 @@ async function stopAnsweringDaemon(options: RunUpdaterOptions): Promise<boolean>
 
 async function backupDatabases(options: RunUpdaterOptions): Promise<void> {
   const { dataDirectory, filesystem } = options;
+  // why: an earlier failed rollback leaves its copies here, and a stale -wal restored beside a newer database corrupts it.
+  await filesystem.rm(join(dataDirectory, BACKUP_DIRECTORY));
   await filesystem.mkdirp(join(dataDirectory, BACKUP_DIRECTORY));
   for (const name of DATABASE_FILES) {
     if (await filesystem.exists(join(dataDirectory, name))) {

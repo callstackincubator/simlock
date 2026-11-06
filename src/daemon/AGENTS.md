@@ -24,6 +24,7 @@ Start and stop:
 - `DaemonAlreadyRunningError` skips `settle` and `dispose`: the live daemon may share the drivers' adb server. The entry then exits at once (`process.exit`), since a start that lost the claim keeps its drivers' children.
 - A bind failure of the HTTP listener fails the start and stops the daemon (`http-start-failed`).
 - `daemon.stop` releases nothing; leases persist with their deadlines.
+- `device.exec` runs in the lease's folder (`LeaseFiles.folderOf`). `stdinFile` is opened before the spawn and piped to stdin; `stdin` with it is `BAD_REQUEST`, checked only in this dispatcher. A file that cannot be read to its end stops the command and ends the stream with `STDIN_FILE_FAILED`.
 - `dispose` stops the event history after the drivers are disposed, and closes `state.db` last.
 - A history file that fails costs only history. A start the history refuses (a newer stored projection version, a failed migration) stops the daemon (`history-refused`).
 - A daemon works in its own role's data directory. Its one look outside is the update's `socketHeld` probe of the other role's socket (`composition-support.ts`).

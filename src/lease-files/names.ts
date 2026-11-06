@@ -1,9 +1,8 @@
+import { LEASE_FILE_NAME_PATTERN } from "../contract/index.js";
 import { LeaseFilesError } from "./errors.js";
 
-const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
 export function isFileName(name: string): boolean {
-  return NAME_PATTERN.test(name);
+  return LEASE_FILE_NAME_PATTERN.test(name);
 }
 
 export function requireFileName(name: string): void {
