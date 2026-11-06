@@ -22,11 +22,8 @@ const memory = (pressure: "normal" | "warn" | "critical") => ({
 describe("MemoryPressureTracker", () => {
   it("drops the step at once when no reading arrives for 60 s", () => {
     const clock = new FakeClock(1_000);
-    const tracker = new MemoryPressureTracker({
-      clock,
-      config: CONFIG,
-      eventBus: new EventBus(clock),
-    });
+    const eventBus = new EventBus(clock);
+    const tracker = new MemoryPressureTracker({ clock, config: CONFIG, eventBus });
     tracker.observe({ memory: memory("warn") });
     expect(tracker.current()).toMatchObject({ since: 1_000, step: "warming-paused" });
 
@@ -38,5 +35,18 @@ describe("MemoryPressureTracker", () => {
     expect(dropped?.step).toBe("none");
     expect(dropped).not.toHaveProperty("since");
     expect(dropped).not.toHaveProperty("cause");
+    expect(
+      eventBus
+        .replay()
+        .filter((event) => event.event === "memory.pressure-changed")
+        .map((event) => event.payload),
+    ).toEqual([
+      {
+        cause: { availablePercent: 34, level: "warn", trigger: "level" },
+        from: "none",
+        to: "warming-paused",
+      },
+      { from: "warming-paused", to: "none" },
+    ]);
   });
 });

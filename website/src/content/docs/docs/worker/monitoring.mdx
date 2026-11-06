@@ -73,7 +73,7 @@ simlock list --requests
 Request req_3c8e1f52-9a4d-4b7e-8f20-6d1a5c9e3b74: codex:7a1d4e9b-2c3f-4e8a-b6d0-1f5c8a3e9d27, ios iPhone 16 18.4, queued at 1, waiting 42s — full: running limit for iOS
 ```
 
-Each waiting request shows who asked, the device it asked for, its place in the queue and the reason it waits: `full: device limit`, `full: running limit`, `full: running limit for iOS`, `full: RAM budget`, `behind an earlier request`, `a matching device is starting`, or `every matching device is leased or absent` for a physical device.
+Each waiting request shows who asked, the device it asked for, its place in the queue and the reason it waits: `full: device limit`, `full: running limit`, `full: running limit for iOS`, `full: RAM budget`, `full: host memory pressure`, `behind an earlier request`, `a matching device is starting`, or `every matching device is leased or absent` for a physical device.
 
 ## Read the event stream
 

@@ -496,6 +496,7 @@ describe("startDaemon memory pressure hold", () => {
         readings: [
           { reading: memoryReading("warn", 34), expected: warming(1_000) },
           { reading: calm, expected: warming(1_000) },
+          { reading: calm, expected: warming(1_000) },
           { reading: memoryReading("warn", 30), expected: warming(1_000) },
           { reading: calm, expected: warming(1_000) },
           { reading: calm, expected: warming(1_000) },

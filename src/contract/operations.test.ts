@@ -638,6 +638,65 @@ describe("operation input/output round trips", () => {
     expect(OPERATIONS["status.get"].output.parse(status)).toBeDefined();
   });
 
+  describe("status.get memoryPressure", () => {
+    const host = { os: "macOS", osVersion: "15.5", arch: "arm64", tools: [] };
+    const entry = {
+      atRamBudget: false,
+      limit: 1,
+      maxRunning: 1,
+      overLimit: false,
+      reserved: 0,
+      running: 0,
+      used: 0,
+      warm: 0,
+    };
+    const parse = (memoryPressure: unknown) =>
+      OPERATIONS["status.get"].output.safeParse({
+        capacity: {
+          android: entry,
+          global: { maxRunning: 2, overLimit: false, reserved: 0, running: 0, warm: 0 },
+          ios: entry,
+          memoryPressure,
+        },
+        daemon: {
+          health: "running",
+          lastUpdateFailure: null,
+          latestVersion: null,
+          mode: "worker",
+          update: null,
+          version: "0.0.0-test",
+        },
+        devices: [],
+        host,
+        leases: [],
+        queueDepth: 0,
+      }).success;
+    const floor = { availablePercent: 8, floorPercent: 10, trigger: "floor" };
+
+    it("a worker's block is bounded: the percent a whole number from 0 to 100, the floor 0 to 100, the time not negative", () => {
+      expect(parse({ step: "none" })).toBe(true);
+      expect(parse({ cause: floor, since: 0, step: "new-devices-paused" })).toBe(true);
+      expect(
+        parse({ cause: { ...floor, availablePercent: 100 }, since: 1, step: "warming-paused" }),
+      ).toBe(true);
+      for (const cause of [
+        { ...floor, availablePercent: 101 },
+        { ...floor, availablePercent: -1 },
+        { ...floor, availablePercent: 8.5 },
+        { ...floor, floorPercent: 101 },
+        { ...floor, floorPercent: -1 },
+        { ...floor, level: "bogus" },
+        { ...floor, trigger: "other" },
+      ]) {
+        expect(parse({ cause, since: 1, step: "warming-paused" })).toBe(false);
+      }
+      for (const since of [-1, Number.POSITIVE_INFINITY, Number.NaN]) {
+        expect(parse({ cause: floor, since, step: "warming-paused" })).toBe(false);
+      }
+      expect(parse({ step: "paused" })).toBe(false);
+    });
+  });
+
   describe("status.get warmPool", () => {
     const host = { os: "macOS", osVersion: "15.5", arch: "arm64", tools: [] };
     const warmPool = {
