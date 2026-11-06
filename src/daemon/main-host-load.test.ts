@@ -360,3 +360,45 @@ describe("startDaemon host load by role", () => {
     },
   );
 });
+
+function memoryReading(
+  pressure: "normal" | "warn" | "critical" | undefined,
+  availablePercent: number,
+): HostLoadCounters {
+  const { pressure: _pressure, ...memory } = COUNTERS.memory!;
+  return {
+    ...COUNTERS,
+    memory: {
+      ...memory,
+      availableBytes: Math.round(160 * availablePercent),
+      totalBytes: 16_000,
+      ...(pressure === undefined ? {} : { pressure }),
+    },
+  };
+}
+
+describe("startDaemon memory pressure", () => {
+  const statusOf = async (daemon: DaemonServer) =>
+    (await daemon.dispatch("status.get", {}, hostLoadAdmin)) as {
+      capacity?: { memoryPressure?: unknown };
+    };
+
+  it("reports in status.get the memory pressure step the worker's reading meets", async () => {
+    const cases = [
+      {
+        reading: memoryReading("warn", 34),
+        expected: {
+          cause: { availablePercent: 34, level: "warn", trigger: "level" },
+          since: 1_000,
+          step: "warming-paused",
+        },
+      },
+    ];
+    for (const { reading, expected } of cases) {
+      const { daemon } = await startOnClock({ hostLoadProbe: new FakeHostLoadProbe(reading) });
+      await expect
+        .poll(async () => (await statusOf(daemon)).capacity?.memoryPressure)
+        .toEqual(expected);
+    }
+  });
+});
