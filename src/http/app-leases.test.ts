@@ -1955,4 +1955,23 @@ describe("a lease's files on a worker", () => {
     for (const call of routes("lse_1", operatorAuth)) statuses.push((await call()).status);
     expect(statuses).toEqual([201, 200, 200, 204]);
   });
+
+  it("on a gateway, before the gateway relays them, the file routes answer 501 UNSUPPORTED_IN_GATEWAY_MODE", async () => {
+    const { app, registry } = buildHarness();
+    registry.leases = [makeLease({ id: "lse_1", ownerId: "tok_agent" })];
+    const routes = [
+      ["PUT", "/v1/leases/lse_1/files/fixture.tar"],
+      ["GET", "/v1/leases/lse_1/files/fixture.tar"],
+      ["DELETE", "/v1/leases/lse_1/files/fixture.tar"],
+      ["GET", "/v1/leases/lse_1/files"],
+    ] as const;
+
+    for (const [method, path] of routes) {
+      const response = await app.request(path, { headers: agentAuth, method });
+      expect(response.status).toBe(501);
+      expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+        "UNSUPPORTED_IN_GATEWAY_MODE",
+      );
+    }
+  });
 });
