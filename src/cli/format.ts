@@ -154,6 +154,20 @@ function formatLoadLine(
   return `Load: ${[...cpuPart, ...memoryParts, ...diskPart, age].join(" · ")}`;
 }
 
+function memoryPressureLines(status: StatusGetOutput): string[] {
+  const pressure = status.capacity?.memoryPressure;
+  if (pressure === undefined || pressure.step === "none") return [];
+  const { cause, since } = pressure;
+  const words = pressure.step === "warming-paused" ? "warming paused" : "new devices paused";
+  const at = new Date(since ?? 0);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const why =
+    cause?.trigger === "floor"
+      ? `${cause.availablePercent}% available, floor ${cause.floorPercent}%`
+      : `pressure ${cause?.level}`;
+  return [`Memory pressure: ${words} since ${pad(at.getHours())}:${pad(at.getMinutes())} (${why})`];
+}
+
 function loadLines(status: StatusGetOutput): string[] {
   return status.load === undefined
     ? []
@@ -295,6 +309,7 @@ export function formatStatus(status: StatusGetOutput, now: number, cliVersion?: 
     ...daemonLines(daemon, cliVersion),
     `Host: ${formatHost(host)}`,
     ...loadLines(status),
+    ...memoryPressureLines(status),
     ...historyLines(status.history),
     globalLine,
     ...capacityLines,
