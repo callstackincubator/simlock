@@ -7,6 +7,7 @@ import {
   imageTagSchema,
   exceptCategoriesSchema,
   EXEC_STDIN_MAX_LENGTH,
+  LEASE_FILE_NAME_PATTERN,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
@@ -143,6 +144,11 @@ const execBodySchema = z
       .max(EXEC_STDIN_MAX_LENGTH)
       .nullish()
       .transform((value) => value ?? undefined),
+    stdinFile: z
+      .string()
+      .regex(LEASE_FILE_NAME_PATTERN)
+      .nullish()
+      .transform((value) => value ?? undefined),
     requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
@@ -163,7 +169,11 @@ export const leaseExecRoute = declareRoute({
     "Answers a stream of messages: output, then exit or error. A failure before the command starts is a plain JSON error.",
   request: { params: leaseParamsSchema, json: execBodySchema },
   stream: execMessageSchema,
-  errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
+  errors: {
+    404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+    504: ["EXEC_TIMEOUT"],
+  },
 });
 
 const rotateBodySchema = z.object({ orientation: z.enum(INPUT_ORIENTATIONS) }).strict();
@@ -365,6 +375,67 @@ export const leaseReleaseRoute = declareRoute({
   errors: { 404: ["UNKNOWN_LEASE"] },
 });
 
+const leaseFileParamsSchema = z.object({ id: z.string(), name: z.string() });
+
+const leaseFileSchema = z.object({ name: z.string(), size: z.number().int() });
+
+export const leaseFilePutRoute = declareRoute({
+  method: "put",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Upload a file to the lease's folder",
+  role: "agent",
+  notes:
+    "The body is the file's raw bytes: up to 2 GiB a file and 4 GiB a lease, streamed to disk. The same name again replaces the file; names match ignoring case. An upload is cut only after 330 s with no byte.",
+  request: { params: leaseFileParamsSchema, octetBody: true },
+  reply: leaseFileSchema,
+  status: 201,
+  errors: {
+    404: ["UNKNOWN_LEASE"],
+    408: ["UPLOAD_STALLED"],
+    409: ["FILE_BUSY"],
+    413: ["FILE_TOO_LARGE", "LEASE_FILES_FULL"],
+    422: ["INSUFFICIENT_DISK_SPACE"],
+    503: ["WORKER_UNREACHABLE"],
+  },
+});
+
+export const leaseFileGetRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Download a file from the lease's folder",
+  role: "agent",
+  notes:
+    "Answers the whole file, or one byte range of it (`Range: bytes=a-b`, `a-` or `-n`) as 206. A start past the end answers 416 with `Content-Range: bytes */<size>`.",
+  request: { params: leaseFileParamsSchema },
+  binaryReply: true,
+  alsoStatus: 206,
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
+export const leaseFileDeleteRoute = declareRoute({
+  method: "delete",
+  path: "/v1/leases/{id}/files/{name}",
+  tag: "Leases",
+  summary: "Delete a file from the lease's folder",
+  role: "agent",
+  request: { params: leaseFileParamsSchema },
+  status: 204,
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
+export const leaseFileListRoute = declareRoute({
+  method: "get",
+  path: "/v1/leases/{id}/files",
+  tag: "Leases",
+  summary: "List the files in the lease's folder",
+  role: "agent",
+  request: { params: leaseParamsSchema },
+  reply: z.object({ files: z.array(leaseFileSchema) }),
+  errors: { 404: ["UNKNOWN_LEASE"], 503: ["WORKER_UNREACHABLE"] },
+});
+
 export const LEASE_ROUTES = [
   leaseRequestCreateRoute,
   leaseRequestListRoute,
@@ -376,6 +447,10 @@ export const LEASE_ROUTES = [
   leaseRenewRoute,
   leaseExecRoute,
   leaseRotateRoute,
+  leaseFilePutRoute,
+  leaseFileGetRoute,
+  leaseFileDeleteRoute,
+  leaseFileListRoute,
   leaseEventsRoute,
   leaseReleaseRoute,
 ] as const;

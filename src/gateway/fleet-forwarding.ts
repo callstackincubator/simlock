@@ -18,6 +18,7 @@ export interface FleetExecInput {
   readonly tool: string;
   readonly args: readonly string[];
   readonly stdin?: string;
+  readonly stdinFile?: string;
 }
 
 export interface FleetRotateInput {
@@ -158,6 +159,7 @@ export class FleetForwarding {
             tool: input.tool,
             args: [...input.args],
             ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+            ...(input.stdinFile === undefined ? {} : { stdinFile: input.stdinFile }),
             requesterId: namespacedRequesterId,
           },
           {

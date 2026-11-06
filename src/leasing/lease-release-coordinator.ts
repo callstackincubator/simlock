@@ -398,6 +398,7 @@ export class LeaseReleaseCoordinator
     const { clock, endWaitMs, participants } = leaseEnd;
     const ended: EndedLease = {
       deviceId: released.device.id,
+      grantedAt: released.lease.grantedAt,
       leaseId: released.lease.id,
       ownerId: released.lease.ownerId,
       platform: released.device.spec.platform,

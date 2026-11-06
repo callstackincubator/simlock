@@ -193,8 +193,13 @@ const PASSTHROUGH_PROGRAM =
   // running while the route has to decide what to answer.
   "const sleepMs = Number(flag('--fake-exec-sleep') ?? 0);" +
   "if (sleepMs > 0) setTimeout(() => {}, sleepMs);" +
+  // why: `device.exec` runs every command in the lease's folder: `cwd` shows where, and
+  // `--fake-exec-read-file=<name>` shows that a relative name finds a file stored there.
+  "const readFile = flag('--fake-exec-read-file');" +
   "const report = (stdin) => process.stdout.write(JSON.stringify({" +
   "argv," +
+  "cwd: process.cwd()," +
+  "...(readFile === undefined ? {} : { fileSize: require('node:fs').readFileSync(readFile).length })," +
   "platform: process.env.SIMLOCK_FAKE_PASSTHROUGH_PLATFORM ?? null," +
   "...(stdin === undefined ? {} : { stdin })," +
   "}));" +

@@ -16,6 +16,7 @@ import {
   requestedDevice,
   type OperationName,
 } from "../contract/index.js";
+import type { HttpLeaseFiles } from "./app.js";
 import { DispatchError } from "../daemon/dispatch.js";
 import type { DispatchSession } from "../daemon/dispatcher.js";
 import { describeLeaseRequestFailure } from "../daemon/error-code.js";
@@ -238,3 +239,7 @@ export class FakeRegistry {
     };
   }
 }
+
+export const noLeaseFiles: HttpLeaseFiles = {
+  handle: () => Promise.reject(new Error("this harness serves no lease files")),
+};

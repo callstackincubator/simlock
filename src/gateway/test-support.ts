@@ -349,6 +349,8 @@ export class ScriptedWorkerClient {
    * that keeps streaming output on a call the gateway has already given up awaiting.
    */
   lastExecOptions: ExecOptions | undefined;
+  /** why: every input a gateway forwarded to this worker, to see which fields reached it. */
+  readonly execInputs: ExecInput[] = [];
   /**
    * P4 (round 3 review): the mirror of `lastExecOptions` above, for `requestLease` -- captured
    * before `requestLeaseQueue`'s own outcome is even read, so a `"hang"` outcome leaves a test a
@@ -498,6 +500,7 @@ export class ScriptedWorkerClient {
     this.calls.push(`device.exec:${input.requesterId ?? ""}`);
     this.#throwIfFailing();
     this.lastExecOptions = options;
+    this.execInputs.push(input);
     const outcome = this.execQueue.shift();
     if (outcome?.kind === "error") throw outcome.error;
     const { onOutput, onStarted } = options;

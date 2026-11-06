@@ -134,6 +134,7 @@ export { LoggingProcessRunner } from "./logging-process-runner.js";
 export {
   exitCodeOf,
   ExecOutputDeliveryStalledError,
+  InputStreamFailedError,
   NodeProcessRunner,
   type ProcessHandle,
   ProcessSpawnError,

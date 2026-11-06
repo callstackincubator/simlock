@@ -2,7 +2,7 @@
 
 Modules: [daemon](../../../src/daemon/AGENTS.md), [gateway](../../../src/gateway/AGENTS.md).
 Contract: `src/contract/operations.ts` `deviceExec` — role `agent`, effect `write`.
-Input (strict): `{ leaseId, tool, args, stdin?, requesterId? }`. Output: `{ exitCode }`.
+Input (strict): `{ leaseId, tool, args, stdin?, stdinFile?, requesterId? }`. Output: `{ exitCode }`.
 Runs the command on the machine that owns the device and streams its output back.
 
 ## Callers
@@ -36,9 +36,14 @@ Runs the command on the machine that owns the device and streams its output back
    another device (ADR 0047), see "Resolution per platform".
 5. Env — `execBaseEnvironment(process.env)` (`src/daemon/exec-env.ts`, the allowlisted
    keys, read once at start) + the command's `env`, minus its `unsetEnv`.
-6. Spawn — `ProcessRunner.spawnStreaming`, pipes only. `stdin` (at most 8 MiB
-   of characters, refused `BAD_REQUEST` by the contract before any dispatcher
-   forwards or spawns) is written once, then closed.
+6. Spawn — `ProcessRunner.spawnStreaming`, pipes only, with the lease's folder
+   (`LeaseFiles.folderOf`) as `cwd`. `stdin` (at most 8 MiB of characters, refused
+   `BAD_REQUEST` by the contract before any dispatcher forwards or spawns) is written
+   once, then closed. `stdinFile` instead names a file of that folder, opened first
+   (`UNKNOWN_FILE` before anything starts) and piped as `inputStream`; both together
+   are `BAD_REQUEST`, checked by the worker's dispatcher. A read failure rejects the
+   handle's `inputFailed`: the command is stopped as a timeout stops it and the
+   stream ends with `STDIN_FILE_FAILED`. A gateway forwards `stdinFile` unchanged.
 7. `started` push the moment the process exists, then one `output` push per chunk
    (`{ requestId, stream, chunk }`). The push write is awaited before the child is
    read again: a slow reader slows the command. Nothing is buffered; no size cap.

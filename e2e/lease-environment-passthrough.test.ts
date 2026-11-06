@@ -96,6 +96,9 @@ describe("reaching a leased device", () => {
       expect(passthrough.code).toBe(7);
       expect(JSON.parse(passthrough.stdout)).toEqual({
         argv: [`/fake/${platform}`, ...args],
+        // why: the fake reports its working folder; a worker's passthrough keeps the CLI's own,
+        // so only that a folder was reported is asserted here.
+        cwd: expect.any(String),
         platform,
       });
     },

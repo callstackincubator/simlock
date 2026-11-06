@@ -1,3 +1,4 @@
+import { createWriteStream } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -16,6 +17,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import { NodeProcessRunner, type ProcessRunner } from "./process-runner.js";
 
@@ -52,7 +55,28 @@ export interface PathDetails {
   readonly mode: number;
 }
 
+/**
+ * why: a file opened for reading, so what a caller reads is the file it opened even when the path is
+ * replaced afterwards. `read` takes inclusive byte offsets; one of `read` or `close` ends the handle.
+ */
+export interface OpenedFile {
+  readonly size: number;
+  read(range?: { readonly start: number; readonly end: number }): ReadableStream<Uint8Array>;
+  close(): Promise<void>;
+}
+
 export interface Filesystem {
+  /**
+   * why: a body too big for memory goes to a new file piece by piece; the file must not exist.
+   * A body that errors rejects the write and leaves the partial file for the caller to remove.
+   * Answers the bytes written.
+   */
+  writeFileStream(
+    path: string,
+    body: ReadableStream<Uint8Array>,
+    options?: { readonly mode?: number },
+  ): Promise<number>;
+  openFile(path: string): Promise<OpenedFile>;
   readFile(path: string): Promise<string>;
   readFileFrom(path: string, offset: number): Promise<string>;
   writeFileAtomic(path: string, contents: string, options?: WriteFileAtomicOptions): Promise<void>;
@@ -144,6 +168,39 @@ export class NodeFilesystem implements Filesystem {
 
   async copyFile(from: string, to: string): Promise<void> {
     await copyFile(from, to);
+  }
+
+  async writeFileStream(
+    path: string,
+    body: ReadableStream<Uint8Array>,
+    options: { readonly mode?: number } = {},
+  ): Promise<number> {
+    const out = createWriteStream(path, {
+      flags: "wx",
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+    });
+    await pipeline(Readable.fromWeb(body as never), out);
+    return out.bytesWritten;
+  }
+
+  async openFile(path: string): Promise<OpenedFile> {
+    const handle = await open(path, "r");
+    try {
+      const { size } = await handle.stat();
+      return {
+        size,
+        read: (range) =>
+          Readable.toWeb(
+            handle.createReadStream(
+              range === undefined ? {} : { start: range.start, end: range.end },
+            ),
+          ) as ReadableStream<Uint8Array>,
+        close: () => handle.close().catch(() => undefined),
+      };
+    } catch (error: unknown) {
+      await handle.close();
+      throw error;
+    }
   }
 
   async copyTree(from: string, to: string, options: { readonly timeoutMs: number }): Promise<void> {
@@ -368,7 +425,7 @@ interface MemoryAttributes {
 }
 
 type MemoryEntryKind =
-  | { readonly kind: "file"; contents: string }
+  | { readonly kind: "file"; contents: string; bytes?: Uint8Array }
   | { readonly kind: "directory" }
   | { readonly kind: "symlink"; readonly target: string };
 
@@ -412,6 +469,50 @@ export class MemoryFilesystem implements Filesystem {
 
   async copyFile(from: string, to: string): Promise<void> {
     await this.writeFileAtomic(to, await this.readFile(from));
+  }
+
+  async writeFileStream(
+    path: string,
+    body: ReadableStream<Uint8Array>,
+    options: { readonly mode?: number } = {},
+  ): Promise<number> {
+    this.#failIfDefined(path);
+    path = this.#underResolvedParent(path);
+    this.#requireDirectory(parentPath(path));
+    if (this.#entries.has(path)) throw errnoError("EEXIST", `File already exists: ${path}`);
+    const chunks: Uint8Array[] = [];
+    const reader = body.getReader();
+    for (;;) {
+      const piece = await reader.read();
+      if (piece.done) break;
+      chunks.push(piece.value);
+    }
+    const bytes = Buffer.concat(chunks);
+    this.#entries.set(path, {
+      ...this.#newEntry({ kind: "file", contents: bytes.toString("utf8"), bytes }),
+      mode: options.mode ?? DEFAULT_FILE_MODE,
+    });
+    return bytes.byteLength;
+  }
+
+  async openFile(path: string): Promise<OpenedFile> {
+    this.#failIfDefined(path);
+    const entry = this.#entryAt(path);
+    if (entry.kind !== "file") throw errnoError("EISDIR", `Is a directory: ${path}`);
+    const bytes = fileBytes(entry);
+    return {
+      size: bytes.byteLength,
+      read: (range) => {
+        const piece = range === undefined ? bytes : bytes.subarray(range.start, range.end + 1);
+        return new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(piece);
+            controller.close();
+          },
+        });
+      },
+      close: async () => undefined,
+    };
   }
 
   async copyTree(
@@ -557,7 +658,7 @@ export class MemoryFilesystem implements Filesystem {
 
     return {
       kind: entry.kind === "file" ? "file" : "directory",
-      size: entry.kind === "file" ? Buffer.byteLength(entry.contents) : 0,
+      size: entry.kind === "file" ? fileBytes(entry).byteLength : 0,
       modifiedAtMs: entry.modifiedAtMs,
       mode: entry.mode,
       identity: String(entry.identity),
@@ -660,7 +761,7 @@ export class MemoryFilesystem implements Filesystem {
       this.#failIfDefined(child);
       const entry = this.#rawEntryAt(child);
       if (entry.kind === "directory") total += await this.directorySize(child);
-      else if (entry.kind === "file") total += Buffer.byteLength(entry.contents);
+      else if (entry.kind === "file") total += fileBytes(entry).byteLength;
     }
     return total;
   }
@@ -770,6 +871,10 @@ export class MemoryFilesystem implements Filesystem {
       throw errnoError("ENOTDIR", `Not a directory: ${path}`);
     }
   }
+}
+
+function fileBytes(entry: { readonly contents: string; readonly bytes?: Uint8Array }): Uint8Array {
+  return entry.bytes ?? Buffer.from(entry.contents, "utf8");
 }
 
 function joinMemoryPath(parent: string, child: string): string {

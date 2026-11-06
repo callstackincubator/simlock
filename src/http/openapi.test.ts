@@ -152,7 +152,7 @@ describe("buildOpenApiDocument", () => {
       "get /v1/lease-requests/{id}/events 404": ["UNKNOWN_LEASE_REQUEST"],
       "get /v1/leases/{id} 404": ["UNKNOWN_LEASE"],
       "get /v1/leases/{id}/events 404": ["UNKNOWN_LEASE"],
-      "post /v1/leases/{id}/exec 404": ["UNKNOWN_LEASE"],
+      "post /v1/leases/{id}/exec 404": ["UNKNOWN_LEASE", "UNKNOWN_FILE"],
       "post /v1/leases/{id}/exec 501": ["UNSUPPORTED_IN_GATEWAY_MODE"],
       "post /v1/leases/{id}/exec 504": ["EXEC_TIMEOUT"],
       "post /v1/leases/{id}/renew 404": ["UNKNOWN_LEASE"],

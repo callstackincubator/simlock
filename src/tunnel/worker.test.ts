@@ -53,6 +53,7 @@ function oversizeData(conn: number): Uint8Array {
 function ending(reason: "device-lost" | "expired" | "explicit" | "killed") {
   return {
     deviceId: "dev_1",
+    grantedAt: 1_000,
     leaseId: "L-1",
     ownerId: "tok_holder",
     platform: "android",
@@ -640,6 +641,7 @@ describe("a worker's tunnel socket", () => {
     await pair.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",
@@ -662,6 +664,7 @@ describe("a worker's tunnel socket", () => {
     await failing.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",
@@ -712,6 +715,7 @@ describe("a worker's tunnel socket", () => {
     await reclaimed.worker.hooks?.beforeDeviceReclaim?.(
       {
         deviceId: "dev_1",
+        grantedAt: 1_000,
         leaseId: "L-1",
         ownerId: "tok_holder",
         platform: "android",

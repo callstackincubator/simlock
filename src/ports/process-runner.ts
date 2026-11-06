@@ -1,6 +1,7 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { constants } from "node:os";
+import type { Writable } from "node:stream";
 
 import { childLaunch } from "./windows-command.js";
 
@@ -94,6 +95,11 @@ export interface ProcessStreamOptions {
    */
   readonly input?: string;
   /**
+   * why: Piped to the child's stdin and then closed, for input too big to hold as a string.
+   * Given together with `input`, `inputStream` is ignored.
+   */
+  readonly inputStream?: ReadableStream<Uint8Array>;
+  /**
    * Called with each chunk as it arrives. **May return a promise**, and if it does, this
    * runner stops reading that stream until it resolves -- which is how backpressure reaches
    * the child: a consumer that cannot place a chunk yet (an SSE client that is not reading, a
@@ -115,6 +121,12 @@ export interface StreamingProcessResult {
 
 export interface StreamingProcessHandle {
   readonly pid: number;
+  /**
+   * why: Only on a child spawned with `inputStream`: rejects when that stream fails to be read
+   * to its end, with the bytes written to the child by then. A child that closes its stdin
+   * early is not a failure and never rejects it.
+   */
+  inputFailed?: Promise<never>;
   kill(signal?: NodeJS.Signals): void;
   wait(): Promise<StreamingProcessResult>;
 }
@@ -316,9 +328,70 @@ export class NodeProcessRunner implements ProcessRunner {
       // swallowed below rather than left to surface as an unhandled `error` on the stream.
       child.stdin?.on("error", () => undefined);
       child.stdin?.end(options.input);
+    } else if (options.inputStream !== undefined && child.stdin) {
+      const inputFailed = pumpInput(options.inputStream, child.stdin);
+      // why: a caller that never looks at `inputFailed` must not turn a read error into an unhandled rejection that ends the daemon.
+      inputFailed.catch(() => undefined);
+      handle.inputFailed = inputFailed;
     }
     return handle;
   }
+}
+
+/** why: the input stream of a streamed child failed to be read to its end; `bytesWritten` is what the child's stdin had been handed by then. */
+export class InputStreamFailedError extends Error {
+  constructor(
+    readonly bytesWritten: number,
+    cause: unknown,
+  ) {
+    super(`Reading the input stream failed after ${String(bytesWritten)} bytes`, { cause });
+    this.name = "InputStreamFailedError";
+  }
+}
+
+/**
+ * why: writes the stream to the child's stdin chunk by chunk, waiting for `drain` so a slow child holds the read back (nothing is buffered, ADR 0005 §19e), then closes stdin. A child that closes its stdin early (EPIPE) cancels the read quietly; only a read error rejects the returned promise, which never resolves otherwise.
+ */
+function pumpInput(source: ReadableStream<Uint8Array>, stdin: Writable): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const reader = source.getReader();
+    let written = 0;
+    let closed = false;
+    const onClosed = (): void => {
+      closed = true;
+      void reader.cancel().catch(() => undefined);
+    };
+    stdin.on("error", onClosed);
+    stdin.on("close", onClosed);
+    void (async () => {
+      for (;;) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (error) {
+          if (!closed) reject(new InputStreamFailedError(written, error));
+          return;
+        }
+        if (closed) return;
+        if (result.done) {
+          stdin.end();
+          return;
+        }
+        written += result.value.byteLength;
+        if (!stdin.write(result.value) && !closed) {
+          await new Promise<void>((resolve) => {
+            const done = (): void => {
+              stdin.off("drain", done);
+              stdin.off("close", done);
+              resolve();
+            };
+            stdin.once("drain", done);
+            stdin.once("close", done);
+          });
+        }
+      }
+    })();
+  });
 }
 
 /**
@@ -378,6 +451,7 @@ export class ExecOutputDeliveryStalledError extends Error {
  */
 class NodeStreamingProcessHandle implements StreamingProcessHandle {
   readonly pid: number;
+  inputFailed?: Promise<never>;
   readonly #result: Promise<StreamingProcessResult>;
   #chunkCount = 0;
   #pendingDeliveries = 0;
@@ -801,7 +875,12 @@ export class ScriptedProcessRunner implements ProcessRunner {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
 
-    return new ScriptedStreamingProcessHandle(this.#nextPid++, expectation, options.onChunk);
+    return new ScriptedStreamingProcessHandle(
+      this.#nextPid++,
+      expectation,
+      options.onChunk,
+      options.inputStream,
+    );
   }
 }
 
@@ -813,6 +892,7 @@ export class ScriptedProcessRunner implements ProcessRunner {
  * process or a real clock.
  */
 class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
+  inputFailed?: Promise<never>;
   readonly #result: Promise<StreamingProcessResult>;
   #resolve!: (result: StreamingProcessResult) => void;
   #finished = false;
@@ -823,8 +903,10 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
     readonly pid: number,
     expectation: ScriptedProcessExpectation,
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
+    inputStream?: ReadableStream<Uint8Array>,
   ) {
     this.#ignoresSigterm = expectation.ignoresSigterm ?? false;
+    if (inputStream !== undefined) this.inputFailed = scriptedInputFailure(inputStream);
     this.#result = new Promise<StreamingProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
@@ -864,6 +946,27 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
     this.#finished = true;
     this.#resolve(result);
   }
+}
+
+/** why: the scripted child reads its whole input at once, so a test sees a failing stream reject `inputFailed` as the real adapter does. */
+function scriptedInputFailure(source: ReadableStream<Uint8Array>): Promise<never> {
+  const failed = new Promise<never>((_resolve, reject) => {
+    void (async () => {
+      const reader = source.getReader();
+      let read = 0;
+      try {
+        for (;;) {
+          const result = await reader.read();
+          if (result.done) return;
+          read += result.value.byteLength;
+        }
+      } catch (error) {
+        reject(new InputStreamFailedError(read, error));
+      }
+    })();
+  });
+  failed.catch(() => undefined);
+  return failed;
 }
 
 function scriptedChunks(

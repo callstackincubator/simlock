@@ -48,6 +48,10 @@ import {
   type leaseRequestBodySchema,
   leaseEventsRoute,
   leaseExecRoute,
+  leaseFileDeleteRoute,
+  leaseFileGetRoute,
+  leaseFileListRoute,
+  leaseFilePutRoute,
   leaseGetRoute,
   leaseListRoute,
   leaseReleaseRoute,
@@ -118,6 +122,16 @@ export interface HttpGatewayDeps {
   readonly answerDownloadsEarly?: boolean | undefined;
   readonly mounts?: readonly HttpMount[];
   readonly leaseRoutes?: readonly HttpLeaseRoute[];
+  readonly leaseFiles: HttpLeaseFiles;
+}
+
+export interface HttpLeaseFiles {
+  handle(
+    request: Request,
+    identity: Identity,
+    lease: HttpLeaseSocketLease,
+    name: string | undefined,
+  ): Promise<Response>;
 }
 
 // why: the lease is resolved here, with `lease.get`'s own owner-or-operator answer, so a module's
@@ -823,6 +837,34 @@ export function createHttpApp(deps: HttpGatewayDeps): OpenAPIHono<Env> & HttpApp
       identity.expiresAt,
     );
   });
+
+  // why: the lease is resolved with `lease.get` (owner or operator) before the files handler runs, so it never checks an owner.
+  const serveLeaseFiles = async (c: Context<Env>, id: string, name: string | undefined) => {
+    const identity = c.get("identity");
+    const lease = await findOwnedLease(deps, buildHttpSession(identity), id);
+    return deps.leaseFiles.handle(
+      c.req.raw,
+      identity,
+      {
+        deviceId: lease.deviceId,
+        id: lease.id,
+        ...(lease.workerId === undefined ? {} : { workerId: lease.workerId }),
+        ...(lease.workerLeaseId === undefined ? {} : { workerLeaseId: lease.workerLeaseId }),
+      },
+      name,
+    );
+  };
+  for (const route of [leaseFilePutRoute, leaseFileGetRoute, leaseFileDeleteRoute]) {
+    app.openapi({ ...route, middleware: [agentAuth] }, (c) => {
+      const { id, name } = c.req.valid("param");
+      return serveLeaseFiles(c as unknown as Context<Env>, id, name) as never;
+    });
+  }
+  app.openapi(
+    { ...leaseFileListRoute, middleware: [agentAuth] },
+    (c) =>
+      serveLeaseFiles(c as unknown as Context<Env>, c.req.valid("param").id, undefined) as never,
+  );
 
   for (const mount of deps.mounts ?? []) {
     const handler = (c: Context<Env>) => mount.handle(c.req.raw, c.get("identity"));
