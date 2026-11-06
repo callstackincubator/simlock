@@ -343,9 +343,13 @@ export const NEVER_DISABLE_LABELS: readonly string[] = [
 
 /**
  * why: Every managed label (all categories plus the never-disable labels) mapped to what the overrides
- * file must say: `true` (off) for a label of a configured category, `false` for the rest.
+ * file must say: `true` (off) for a label of a configured category, `false` for the rest and for
+ * every label of a kept category.
  */
-export function overridesFor(categories: readonly SlimCategory[]): ReadonlyMap<string, boolean> {
+export function overridesFor(
+  categories: readonly SlimCategory[],
+  keep: readonly SlimCategory[] = [],
+): ReadonlyMap<string, boolean> {
   const wanted = new Map<string, boolean>();
   for (const category of SLIM_CATEGORIES) {
     for (const label of category.labels) wanted.set(label, false);
@@ -354,6 +358,8 @@ export function overridesFor(categories: readonly SlimCategory[]): ReadonlyMap<s
   for (const label of labelsFor(categories)) {
     if (!NEVER_DISABLE_LABELS.includes(label)) wanted.set(label, true);
   }
+  // why: an excepted category wins over a slimmed one that lists the same label (ADR 0066 §2).
+  for (const label of labelsFor(keep)) wanted.set(label, false);
   return wanted;
 }
 

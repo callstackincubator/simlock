@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ComponentInstallerClosedError, UnsupportedRequestOptionError } from "../core/index.js";
+import {
+  BadDeviceRequestError,
+  ComponentInstallerClosedError,
+  UnsupportedRequestOptionError,
+} from "../core/index.js";
 import {
   NoCapacityError,
   ProvisionFailedError,
@@ -56,6 +60,13 @@ describe("classifyError on a request option the driver does not have", () => {
     expect(describeLeaseRequestFailure(error)).toEqual({
       code: "BAD_REQUEST",
       message: "ios lease requests do not take imageTag",
+    });
+
+    const bad = new BadDeviceRequestError('unknown slim category "wallet"');
+    expect(classifyError(bad)).toBe("BAD_REQUEST");
+    expect(describeLeaseRequestFailure(bad)).toEqual({
+      code: "BAD_REQUEST",
+      message: 'unknown slim category "wallet"',
     });
   });
 });

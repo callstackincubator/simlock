@@ -18,6 +18,7 @@ Resolve and boot:
 - `RuntimeMissingError` is only for what a download can fix: an OS outside the device type's range, an installed runtime not paired with the type, and anything below iOS 16 are refused instead.
 - A boot is `simctl boot`, `bootstatus -b`, then `listapps` until it succeeds, on one deadline: bootstatus can finish before the installer accepts requests.
 - Slim (ADR 0060), on `prepare` of a slim spec only: the managed labels are merged into the simulator's `disabled.plist` before the boot (other entries kept; a failed write is logged and the boot goes on), and `launchctl print-disabled system` is read back after it. A label not as written returns `full`; a readback that fails returns `slim`; both call `onSlimSkipped`, logged only. Every label as written and the write ok: `slim`, and `onSlimmed` becomes `device.slimmed`.
+- Slim `except` (ADR 0066, `slim-except.ts`): an excepted category's labels are written `false`; an unknown name is `BAD_REQUEST`; a kept label not read back throws `KeptCategoriesError`.
 - A recovery boot writes no overrides and reads nothing back.
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.

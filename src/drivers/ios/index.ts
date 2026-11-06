@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 
 import {
   BootTimeoutError,
+  KeptCategoriesError,
   type ComponentInstallProgress,
   type ComponentInstallResult,
   type ComponentReceipt,
@@ -35,7 +36,6 @@ import {
   type PassthroughCommand,
   type PassthroughContext,
   PassthroughRefusedError,
-  type ObservedRunState,
   removeListedComponent,
   RuntimeMissingError,
   sameReceipt,
@@ -85,7 +85,22 @@ import { iosRuntimeVersionFromId } from "./runtime-version.js";
 import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js";
 import { createIosScreenCapture } from "./screen-capture.js";
 import type { IosDriverConfig } from "./definition.js";
-import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import {
+  overridesFor,
+  resolveSlimCategories,
+  slimSignature,
+  type SlimCategory,
+} from "./slim-labels.js";
+import { assertKeptEnabled, checkExcept, splitByExcept } from "./slim-except.js";
+import {
+  isRecord,
+  parseCatalog,
+  parseManagedDevices,
+  type DeviceType,
+  type Runtime,
+  type SimctlCatalog,
+  UNBOUNDED_VERSION,
+} from "./simctl-parse.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
@@ -101,9 +116,6 @@ const PROVISION_ESTIMATE_MS = 500;
 // being deleted, which it does for a few seconds after `simctl runtime delete` answers (#259).
 const DELETING_POLL_MS = 1_000;
 const LATEST_COMPONENT = "latest";
-// why: `simctl`'s `minRuntimeVersion` / `maxRuntimeVersion` encode "no bound" as 0xFFFFFF
-// (255.255.255) rather than omitting the field.
-const UNBOUNDED_VERSION = 0xff_ff_ff;
 // why: `xcodebuild -downloadPlatform iOS -buildVersion` only reaches back to iOS 16.0 (Xcode
 // 16.1+); older runtimes must be installed through Xcode itself.
 const IOS_DOWNLOAD_FLOOR: readonly [number, number, number] = [16, 0, 0];
@@ -250,6 +262,7 @@ type SlimWrite =
       readonly kind: "written";
       readonly resolved: ReturnType<typeof resolveSlimCategories>;
       readonly wanted: ReadonlyMap<string, boolean>;
+      readonly kept: readonly SlimCategory[];
       readonly startedAt: number;
       readonly writeError: string | undefined;
     };
@@ -262,32 +275,10 @@ const PRODUCT_FAMILY_CLASSES: ReadonlyMap<string | undefined, DeviceClass> = new
   ["Apple Vision", "vision"],
 ]);
 
-interface DeviceType {
-  readonly identifier: string;
-  readonly name: string;
-  readonly minRuntimeVersion: number;
-  readonly maxRuntimeVersion: number;
-  readonly productFamily: string | undefined;
-}
-
-interface Runtime {
-  readonly identifier: string;
-  readonly name: string;
-  readonly version: string;
-  readonly build?: string;
-  readonly isAvailable: boolean;
-  readonly supportedDeviceTypeIds: ReadonlySet<string>;
-}
-
 interface RuntimeAsset {
   readonly path: string;
   readonly version: string;
   readonly build: string;
-}
-
-interface SimctlCatalog {
-  readonly deviceTypes: readonly DeviceType[];
-  readonly runtimes: readonly Runtime[];
 }
 
 interface ResolvedIosSpec {
@@ -442,6 +433,7 @@ export class IosSimctlDriver implements Driver {
     if (request.imageTag !== undefined) {
       throw new UnsupportedRequestOptionError("ios", "imageTag");
     }
+    checkExcept(request.except ?? [], resolveSlimCategories(this.#slim?.categories));
     const catalog = await this.#loadCatalog();
     const deviceType = findDeviceType(catalog, request.model);
 
@@ -1156,7 +1148,11 @@ export class IosSimctlDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly except?: readonly string[];
+    },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
     const { plan, bootstatusTimeoutMs } = planSlimBoot(
@@ -1166,7 +1162,9 @@ export class IosSimctlDriver implements Driver {
       options,
     );
     const write =
-      plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
+      plan.kind === "apply"
+        ? await this.#writeOverrides(data.udid, plan.slim, options.except)
+        : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
     await runAfterBoot(this.#afterBoot, data.udid, device.deviceId);
@@ -1243,9 +1241,14 @@ export class IosSimctlDriver implements Driver {
     return false;
   }
 
-  async #writeOverrides(udid: string, slim: SlimOptions): Promise<SlimWrite> {
-    const resolved = resolveSlimCategories(slim.categories);
-    if (resolved.categories.length === 0) {
+  async #writeOverrides(
+    udid: string,
+    slim: SlimOptions,
+    except: readonly string[] = [],
+  ): Promise<SlimWrite> {
+    const configured = resolveSlimCategories(slim.categories);
+    const { kept, resolved } = splitByExcept(configured, except);
+    if (configured.categories.length === 0) {
       return {
         detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
         kind: "no-categories",
@@ -1253,7 +1256,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     const startedAt = this.#clock.now();
-    const wanted = overridesFor(resolved.categories);
+    const wanted = overridesFor(resolved.categories, kept);
     let writeError: string | undefined;
     try {
       const folder = this.#overridesFolder(udid);
@@ -1268,7 +1271,7 @@ export class IosSimctlDriver implements Driver {
       writeError = `could not write the launchd overrides file: ${errorMessage(error)}`;
     }
 
-    return { kind: "written", resolved, startedAt, wanted, writeError };
+    return { kept, kind: "written", resolved, startedAt, wanted, writeError };
   }
 
   async #readOverrides(file: string): Promise<ReadonlyMap<string, boolean>> {
@@ -1288,6 +1291,9 @@ export class IosSimctlDriver implements Driver {
     data: IosDriverData,
     write: Extract<SlimWrite, { readonly kind: "written" }>,
   ): Promise<DriverDevice> {
+    if (write.kept.length > 0 && write.writeError !== undefined) {
+      throw new KeptCategoriesError(write.writeError);
+    }
     const outcome = await this.#invokeSimctl(
       ["spawn", data.udid, "launchctl", "print-disabled", "system"],
       READBACK_TIMEOUT_MS,
@@ -1295,15 +1301,22 @@ export class IosSimctlDriver implements Driver {
     const details = write.writeError === undefined ? [] : [write.writeError];
 
     if (outcome.kind === "timed-out" || outcome.result.code !== 0) {
-      const reason =
-        outcome.kind === "timed-out"
-          ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
-          : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
-      details.push(`could not read back the launchd overrides: ${reason}`);
+      details.push(`could not read back the launchd overrides: ${readBackFailure(outcome)}`);
+      if (write.kept.length > 0) throw new KeptCategoriesError(details.join("; "));
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
+    return this.#judgeReadBack(device, data, write, details, outcome.result.stdout);
+  }
 
-    const read = parsePrintDisabled(outcome.result.stdout);
+  #judgeReadBack(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+    details: string[],
+    stdout: string,
+  ): DriverDevice {
+    const read = parsePrintDisabled(stdout);
+    assertKeptEnabled(write.kept, read);
     const mismatched = [...write.wanted.keys()]
       .sort()
       .filter((label) => (read.get(label) ?? false) !== write.wanted.get(label));
@@ -1317,18 +1330,26 @@ export class IosSimctlDriver implements Driver {
       return this.#skipApply(device, data, details.join("; "), "slim");
     }
 
-    const labelCount = [...write.wanted.values()].filter(Boolean).length;
+    // why: an except list naming the whole slim set slims nothing: full, no `device.slimmed`.
+    if (write.resolved.categories.length === 0) return this.#asIs(device, data, "full");
+    this.#reportSlimmed(device, data, write);
+    return this.#asIs(device, data, "slim");
+  }
+
+  #reportSlimmed(
+    device: DriverDevice,
+    data: IosDriverData,
+    write: Extract<SlimWrite, { readonly kind: "written" }>,
+  ): void {
     this.#onSlimmed?.({
       address: data.udid,
       categories: write.resolved.categories.map((category) => category.name),
       deviceId: device.deviceId,
       durationMs: this.#clock.now() - write.startedAt,
-      labelCount,
+      labelCount: [...write.wanted.values()].filter(Boolean).length,
       signature: slimSignature(write.resolved.categories),
       unknownLabels: [...write.resolved.unknown],
     });
-
-    return this.#asIs(device, data, "slim");
   }
 
   #skipApply(
@@ -2135,105 +2156,6 @@ function configuredDeviceRoot(options: IosSimctlDriverOptions): string {
   return configured ?? join(options.simlockHome, "devices", "ios");
 }
 
-interface ParsedManagedDevice {
-  readonly dataPath?: string;
-  readonly name: string;
-  readonly runState: ObservedRunState;
-  readonly udid: string;
-}
-
-function parseManagedDevices(value: unknown): ParsedManagedDevice[] {
-  if (!isRecord(value) || !isRecord(value.devices)) {
-    throw new DriverCrashError("Invalid simctl device list JSON");
-  }
-  return Object.values(value.devices).flatMap((runtimeDevices) =>
-    Array.isArray(runtimeDevices) ? runtimeDevices.flatMap(parseManagedDevice) : [],
-  );
-}
-
-function parseManagedDevice(value: unknown): readonly ParsedManagedDevice[] {
-  if (!isRecord(value) || typeof value.name !== "string" || typeof value.udid !== "string") {
-    return [];
-  }
-
-  return [
-    {
-      name: value.name,
-      runState: simctlRunState(value.state),
-      udid: value.udid,
-      ...(typeof value.dataPath === "string" ? { dataPath: value.dataPath } : {}),
-    },
-  ];
-}
-
-function simctlRunState(state: unknown): ObservedRunState {
-  if (state === "Booted") return "running";
-  if (state === "Shutdown") return "stopped";
-  return "transitioning";
-}
-
-function parseCatalog(value: unknown): SimctlCatalog {
-  if (!isRecord(value) || !Array.isArray(value.devicetypes) || !Array.isArray(value.runtimes)) {
-    throw new DriverCrashError(
-      "Invalid simctl list JSON: expected devicetypes and runtimes arrays",
-    );
-  }
-
-  const deviceTypes = value.devicetypes.flatMap(parseDeviceType);
-  const runtimes = value.runtimes.flatMap(parseRuntime);
-
-  // why: Device types come from the Xcode install itself and are never empty on a working
-  // toolchain, so an empty list here means the JSON was malformed. Runtimes are different: a
-  // fresh Xcode with zero simulator runtimes installed is a normal, if unusual, starting state
-  // -- and it must be able to reach the download-latest path in `#resolveDefaultRuntime` rather
-  // than being rejected here before any resolution is attempted.
-  if (deviceTypes.length === 0) {
-    throw new DriverCrashError("Invalid simctl list JSON: no usable device types");
-  }
-
-  return { deviceTypes, runtimes };
-}
-
-function parseDeviceType(value: unknown): readonly DeviceType[] {
-  if (!isRecord(value) || typeof value.identifier !== "string" || typeof value.name !== "string") {
-    return [];
-  }
-
-  return [
-    {
-      identifier: value.identifier,
-      maxRuntimeVersion: versionIntOr(value.maxRuntimeVersion, UNBOUNDED_VERSION),
-      minRuntimeVersion: versionIntOr(value.minRuntimeVersion, 0),
-      name: value.name,
-      productFamily: typeof value.productFamily === "string" ? value.productFamily : undefined,
-    },
-  ];
-}
-
-function parseRuntime(value: unknown): readonly Runtime[] {
-  if (
-    !isRecord(value) ||
-    typeof value.identifier !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.version !== "string" ||
-    typeof value.isAvailable !== "boolean" ||
-    !value.name.toLocaleLowerCase().startsWith("ios ")
-  ) {
-    return [];
-  }
-
-  return [
-    {
-      ...(typeof value.buildversion === "string" ? { build: value.buildversion } : {}),
-      identifier: value.identifier,
-      isAvailable: value.isAvailable,
-      name: value.name,
-      supportedDeviceTypeIds: parseSupportedDeviceTypeIds(value.supportedDeviceTypes),
-      version: value.version,
-    },
-  ];
-}
-
 function runtimeMountsAsset(runtime: Runtime, asset: RuntimeAsset): boolean {
   return runtime.build === undefined
     ? runtime.version === asset.version
@@ -2254,21 +2176,6 @@ function parseRuntimeAsset(path: string, plist: string): RuntimeAsset | undefine
   const version = /<key>SimulatorVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(properties)?.[1];
 
   return build === undefined || version === undefined ? undefined : { build, path, version };
-}
-
-function versionIntOr(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function parseSupportedDeviceTypeIds(value: unknown): ReadonlySet<string> {
-  if (!Array.isArray(value)) {
-    return new Set();
-  }
-  const ids = value
-    .filter(isRecord)
-    .map((entry) => entry.identifier)
-    .filter((identifier): identifier is string => typeof identifier === "string");
-  return new Set(ids);
 }
 
 interface RuntimeImage {
@@ -2633,6 +2540,16 @@ function unknownDevice(result: ProcessResult): boolean {
   return /^Invalid device:/m.test(result.stderr);
 }
 
+function readBackFailure(
+  outcome:
+    | { readonly kind: "timed-out" }
+    | { readonly kind: "finished"; readonly result: { code: number | null; stderr: string } },
+): string {
+  return outcome.kind === "timed-out"
+    ? `timed out after ${String(READBACK_TIMEOUT_MS)}ms`
+    : `exit ${String(outcome.result.code)}: ${outcome.result.stderr.trim()}`;
+}
+
 function alreadyBooted(stderr: string): boolean {
   return /current state:\s*Booted|already booted/i.test(stderr);
 }
@@ -2668,10 +2585,6 @@ function specKey(spec: VirtualSpec): string {
   return `${spec.model.toLocaleLowerCase()}\u0000${spec.osVersion}`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -2680,4 +2593,4 @@ export { type IosDriverConfig, iosDriverConfig } from "./definition.js";
 export { iosDeviceDataTable } from "./device-data.js";
 export { iosSourceDataOwner } from "./source-data.js";
 export { iosPrerequisites } from "./prerequisites.js";
-export { labelsFor, SLIM_CATEGORIES } from "./slim-labels.js";
+export { labelsFor, SLIM_CATEGORIES, slimSignature } from "./slim-labels.js";
