@@ -232,6 +232,34 @@ export async function startDaemon(
   return started;
 }
 
+// why: split out of `startDaemonOn` so the config file's branches stay apart from the daemon's start.
+function daemonConfig(mode: "worker" | "gateway", port: number, options: StartOptions) {
+  const { http: extraHttp, ...extraConfig } = options.config ?? {};
+  // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
+  const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
+  const http = {
+    enabled: !joined,
+    host: "127.0.0.1",
+    port,
+    ...(extraHttp as object | undefined),
+  };
+  const config = {
+    ...(mode === "worker" ? FAKE_CAPACITY : {}),
+    http,
+    ...extraConfig,
+    // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
+    ...(mode === "worker"
+      ? {
+          capabilities: {
+            "agent-device": { enabled: false },
+            ...(extraConfig.capabilities as object | undefined),
+          },
+        }
+      : {}),
+  };
+  return { config, httpEnabled: http.enabled };
+}
+
 async function startDaemonOn(
   port: number,
   mode: "worker" | "gateway",
@@ -242,33 +270,9 @@ async function startDaemonOn(
   // why: a gateway lives in `<home>/gateway` and every CLI call that reaches it says `--gateway` (ADR 0034).
   const dataDirectory = mode === "gateway" ? join(home, "gateway") : home;
   const gatewayFlag = mode === "gateway" ? ["--gateway"] : [];
-  const { http: extraHttp, ...extraConfig } = options.config ?? {};
-  // why: a worker that joins a gateway may not enable HTTP (it is reached through the gateway), so it defaults off; a test's explicit `http.enabled` still wins, so an invalid override is not silently repaired.
-  const joined = (extraConfig.gateway as { url?: unknown } | undefined)?.url !== undefined;
-  const httpConfig = {
-    enabled: !joined,
-    host: "127.0.0.1",
-    port,
-    ...(extraHttp as object | undefined),
-  };
+  const { config, httpEnabled } = daemonConfig(mode, port, options);
   await mkdir(dataDirectory, { recursive: true });
-  await writeFile(
-    join(dataDirectory, "config.json"),
-    JSON.stringify({
-      ...(mode === "worker" ? FAKE_CAPACITY : {}),
-      http: httpConfig,
-      ...extraConfig,
-      // why: a standalone worker has agent-device on by default (ADR 0046); the console specs do not ask for it, and a test's own `capabilities` (a stream, say) must not replace this pin, so it merges one level deep.
-      ...(mode === "worker"
-        ? {
-            capabilities: {
-              "agent-device": { enabled: false },
-              ...(extraConfig.capabilities as object | undefined),
-            },
-          }
-        : {}),
-    }),
-  );
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify(config));
   if (options.driverScript !== undefined) {
     await writeFile(scriptPath, JSON.stringify(options.driverScript));
   }
@@ -365,7 +369,7 @@ async function startDaemonOn(
     await start();
     const status = await cli([...gatewayFlag, "status", "--json"], env);
     const url = (status.json as { daemon: { consoleUrl?: string } }).daemon.consoleUrl;
-    if (httpConfig.enabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
+    if (httpEnabled) expect(url).toBe(`http://127.0.0.1:${port}/`);
     else expect(url).toBeUndefined();
     const mint = async (role: string) => {
       const minted = await cli([...gatewayFlag, "token", "create", "--role", role], env);
