@@ -42,6 +42,9 @@ interface HeldStep {
 
 type StepKey = "warming" | "newDevices";
 
+/** why: a reading older than this says nothing about the host now (ADR 0068 §1). */
+const STALE_AFTER_MS = 60_000;
+
 const LEVEL_RANK: Record<MemoryPressureLevel, number> = { normal: 0, warn: 1, critical: 2 };
 
 /**
@@ -54,12 +57,14 @@ export class MemoryPressureTracker {
     warming: undefined,
   };
   #readingAt: number | undefined;
+  #staleTimer: TimerHandle | undefined;
 
   constructor(private readonly options: MemoryPressureOptions) {}
 
   observe(reading: { readonly memory?: MemoryCounters }): void {
     const now = this.options.clock.now();
     this.#readingAt = now;
+    this.#armStale();
     const { config } = this.options;
     const memory = config.enabled ? reading.memory : undefined;
     if (memory === undefined) {
@@ -80,7 +85,17 @@ export class MemoryPressureTracker {
   }
 
   dispose(): void {
+    if (this.#staleTimer !== undefined) this.options.clock.cancel(this.#staleTimer);
+    this.#staleTimer = undefined;
     this.#dropAll();
+  }
+
+  #armStale(): void {
+    if (this.#staleTimer !== undefined) this.options.clock.cancel(this.#staleTimer);
+    this.#staleTimer = this.options.clock.setTimer(STALE_AFTER_MS, () => {
+      this.#staleTimer = undefined;
+      this.#dropAll();
+    });
   }
 
   #dropAll(): void {
