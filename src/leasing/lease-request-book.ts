@@ -418,6 +418,7 @@ function sameDeviceRequest(left: DeviceRequest, right: DeviceRequest): boolean {
     left.mode === right.mode &&
     left.imageTag === right.imageTag &&
     left.baseline === right.baseline &&
+    (left.except ?? []).join(",") === (right.except ?? []).join(",") &&
     (left.physical === true) === (right.physical === true)
   );
 }

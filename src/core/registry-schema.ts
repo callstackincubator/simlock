@@ -126,6 +126,7 @@ ALTER TABLE lease_requests ADD COLUMN baseline TEXT;
 
 const REGISTRY_V4 = `
 ALTER TABLE devices ADD COLUMN except_categories TEXT;
+ALTER TABLE lease_requests ADD COLUMN except_categories TEXT;
 `;
 
 export const registryOwner: SqliteSchemaOwner = {

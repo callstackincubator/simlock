@@ -198,6 +198,7 @@ const REQUEST_COLUMNS = [
   "mode",
   "image_tag",
   "baseline",
+  "except_categories",
   "class",
   "physical",
   "created_at",
@@ -345,6 +346,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       request.mode ?? null,
       request.imageTag ?? null,
       request.baseline ?? null,
+      request.except === undefined ? null : request.except.join(","),
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -627,6 +629,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
     ...present("baseline", reader.optText("baseline")),
+    ...present("except", exceptOf(reader)),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };
