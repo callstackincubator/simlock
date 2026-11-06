@@ -62,6 +62,10 @@ export class MemoryPressureTracker {
     this.#readingAt = now;
     const { config } = this.options;
     const memory = config.enabled ? reading.memory : undefined;
+    if (memory === undefined) {
+      this.#dropAll();
+      return;
+    }
     this.#hold("warming", config.pauseWarming, memory, now);
     this.#hold("newDevices", config.pauseNewDevices, memory, now);
   }
@@ -76,20 +80,19 @@ export class MemoryPressureTracker {
   }
 
   dispose(): void {
+    this.#dropAll();
+  }
+
+  #dropAll(): void {
     for (const key of ["warming", "newDevices"] as const) {
       this.#cancelClear(this.#held[key]);
       this.#held[key] = undefined;
     }
   }
 
-  #hold(
-    key: StepKey,
-    rule: MemoryPressureRule,
-    memory: MemoryCounters | undefined,
-    now: number,
-  ): void {
+  #hold(key: StepKey, rule: MemoryPressureRule, memory: MemoryCounters, now: number): void {
     const held = this.#held[key];
-    const cause = memory === undefined ? undefined : meets(rule, memory);
+    const cause = meets(rule, memory);
     if (cause !== undefined) {
       this.#cancelClear(held);
       this.#held[key] ??= { cause, since: now };
