@@ -70,7 +70,12 @@ import {
   type LeaseFiles,
   type LeaseFilesGrant,
 } from "../lease-files/index.js";
-import { exitCodeOf, InputStreamFailedError, NoopLogger } from "../ports/index.js";
+import {
+  exitCodeOf,
+  InputStreamFailedError,
+  NoopLogger,
+  ProcessSpawnError,
+} from "../ports/index.js";
 import {
   capabilityReason,
   type capabilitySchema,
@@ -807,7 +812,7 @@ export class Dispatcher {
       // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
-    const cwd = await files.folderOf(grant);
+    const cwd = await this.#folderOf(files, grant);
     const file =
       input.stdinFile === undefined
         ? undefined
@@ -828,8 +833,25 @@ export class Dispatcher {
       return {
         exitCode: await this.#awaitExec(handle, input.tool, input.args, input.stdinFile),
       };
+    } catch (error) {
+      if (error instanceof ProcessSpawnError) {
+        // why: Node reports no reason for a start that failed, so the folder is asked again: a lease that ended after `folderOf` made the working folder vanish (404), anything else is the spawn's own failure.
+        await this.#folderOf(files, grant);
+      }
+      throw error;
     } finally {
       await file?.close();
+    }
+  }
+
+  async #folderOf(files: Pick<LeaseFiles, "folderOf">, grant: LeaseFilesGrant): Promise<string> {
+    try {
+      return await files.folderOf(grant);
+    } catch (error) {
+      if (error instanceof LeaseFilesError) {
+        throw new DispatchError(error.code, error.message, error.details);
+      }
+      throw error;
     }
   }
 
@@ -843,6 +865,10 @@ export class Dispatcher {
     } catch (error) {
       if (error instanceof LeaseFilesError) {
         throw new DispatchError(error.code, error.message, error.details);
+      }
+      // why: the file was listed and then deleted before the open, so it is gone, not a failure of the daemon.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new DispatchError("UNKNOWN_FILE", `No file ${name} in this lease`, { name });
       }
       throw error;
     }
