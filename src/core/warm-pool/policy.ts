@@ -185,6 +185,8 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
   const proposed = new Set([...shutdowns, ...unneeded].map((proposal) => proposal.deviceId));
+  const shed = shedForPressure(view, running, proposed);
+  for (const proposal of shed) proposed.add(proposal.deviceId);
   const sparedDevices = targetedDevices({ ...view, learned: [], targets: view.spared });
   const wanted = planTargets(
     view,
@@ -202,7 +204,7 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
       : running.filter((device) => !proposed.has(device.id) && !sparedDevices.has(device.id)),
   );
   return {
-    proposals: [...shutdowns, ...keeps, ...unneeded, ...wanted.proposals],
+    proposals: [...shutdowns, ...keeps, ...unneeded, ...shed, ...wanted.proposals],
     targets: wanted.reports,
   };
 }
@@ -579,6 +581,22 @@ function neverLeasedIdle(
     proposals.push({ action: "shutdown", deviceId: device.id, reason: "never-leased-idle" });
   }
   return proposals;
+}
+
+/**
+ * why: ADR 0068 §3: while warming is paused each new reading gives memory back by shutting down
+ * one idle device.
+ */
+function shedForPressure(
+  view: WarmPolicyView,
+  running: readonly VirtualDevice[],
+  proposed: ReadonlySet<string>,
+): DeviceProposal[] {
+  if (view.pressure.step === "none" || !view.pressure.mayShed) return [];
+  const victim = running.find((device) => !proposed.has(device.id));
+  return victim === undefined
+    ? []
+    : [{ action: "shutdown", deviceId: victim.id, reason: "memory-pressure" }];
 }
 
 /** Why a slot of `platform` is not free for an idle warm device, when it is not. */

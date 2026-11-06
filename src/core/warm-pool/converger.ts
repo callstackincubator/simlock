@@ -138,6 +138,8 @@ export class WarmPool {
   /** A graceful stop is draining: what is in flight finishes, and nothing new starts. */
   #draining = false;
   #started = false;
+  /** why: the `readingAt` of the reading the last shed was proposed for: a reading sheds once, however many passes run on it. */
+  #shedAt: number | undefined;
   /** Devices shut down under an operator reset that have not left `shutdown` since. */
   readonly #reset = new Set<string>();
   /** The targets the last pass planned for: their counts and specs, which `targeted()` also reads. */
@@ -187,6 +189,12 @@ export class WarmPool {
     for (const event of TRIGGERS) {
       this.#unsubscribe.push(this.options.eventBus.subscribe(event, () => this.#trigger()));
     }
+    this.#unsubscribe.push(
+      this.options.memoryPressure.onReading(() => {
+        const step = this.options.memoryPressure.current()?.step ?? "none";
+        if (step !== "none") this.#trigger();
+      }),
+    );
     this.#subscribeLearning();
     this.#closeOpenRows();
     this.#armTick();
@@ -452,7 +460,9 @@ export class WarmPool {
     this.#closeOpenRows();
     try {
       const refused = await this.#resolveEnabled();
-      const plan = await this.options.decisions.run(() => evaluate(this.#view()));
+      const reading = this.options.memoryPressure.current();
+      const plan = await this.options.decisions.run(() => evaluate(this.#view(reading)));
+      if (reading !== undefined && plan.proposals.some(isShed)) this.#shedAt = reading.readingAt;
       const everyReport = [...refused, ...plan.targets];
       const reports = configuredOnly(everyReport);
       this.#figured = everyReport;
@@ -620,7 +630,7 @@ export class WarmPool {
     };
   }
 
-  #view(): Parameters<typeof evaluate>[0] {
+  #view(reading: ReturnType<MemoryPressureReader["current"]>): Parameters<typeof evaluate>[0] {
     const { leases, virtualDevices: all } = this.options.registry.snapshot;
     for (const id of this.#reset) {
       if (all.find((device) => device.id === id)?.state !== "shutdown") this.#reset.delete(id);
@@ -667,7 +677,12 @@ export class WarmPool {
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),
-      pressure: { mayShed: false, shedFailed: new Set(), step: "none" },
+      pressure: {
+        mayShed:
+          reading !== undefined && reading.readingAt > (this.#shedAt ?? Number.NEGATIVE_INFINITY),
+        shedFailed: new Set(),
+        step: reading?.step ?? "none",
+      },
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
       spared: this.#spared,
@@ -885,6 +900,10 @@ export class WarmPool {
       error: stableError(error),
     });
   }
+}
+
+function isShed(proposal: WarmProposal): boolean {
+  return proposal.action === "shutdown" && proposal.reason === "memory-pressure";
 }
 
 /** why: `devices` with the ones in `down` as they are once shut down, for a capacity question about the plan so far. */
