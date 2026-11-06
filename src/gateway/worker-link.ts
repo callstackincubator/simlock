@@ -630,6 +630,7 @@ function changesCapacityOrLeases(event: string): boolean {
   return (
     event.startsWith("lease.") ||
     event.startsWith("device.") ||
+    event === "memory.pressure-changed" ||
     INSTALL_EVENTS.has(event) ||
     (WORKER_VIEW_BASELINE_EVENTS as readonly string[]).includes(event) ||
     (WORKER_VIEW_UPDATE_EVENTS as readonly string[]).includes(event)

@@ -27,6 +27,7 @@ Each worker's line shows:
 - devices running out of the limit per platform, and how many leases it holds;
 - its Simlock version, with the newest release in brackets when npm has a newer one, and `updating to <version>: <stage>` while it updates (the stage is `waiting for <n> leases`, `installing` or `restarting`);
 - its operating system, platform tools and optional modules;
+- `memory: warming paused` or `memory: new devices paused` while the worker reports host memory pressure at that step; nothing otherwise, and nothing for a disconnected worker;
 - under it, the last load reading, the baselines it holds, and any runtime or system image being installed.
 
 The `Baselines:` line gives each baseline's name and version, its device, and `stale` for one that cannot be used now, for example `Baselines: checkout v2: android Pixel 9, Android 36 (google_apis), full; smoke v1: ios iPhone 17, iOS 27.0, slim, stale`. It says `none` for a worker with no baselines, and is missing while a worker starts up.

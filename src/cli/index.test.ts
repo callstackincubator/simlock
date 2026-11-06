@@ -10051,6 +10051,43 @@ describe("CLI: a worker's capabilities", () => {
     expect(shown).toMatch(/^wrk_4 .* -- agent-device unavailable: starting$/m);
   });
 
+  it("simlock worker list shows each worker's memory step as the end of its first line, and nothing at none, with no field, or for a disconnected worker", async () => {
+    const withStep = (
+      id: string,
+      step: "none" | "warming-paused" | "new-devices-paused",
+      extra = {},
+    ) =>
+      worker({
+        capabilities: [{ name: "agent-device", state: "available" }],
+        capacity: { ...worker().capacity, memoryPressure: { step } },
+        id,
+        ...extra,
+      });
+    const shown = await listed([
+      withStep("wrk_1", "warming-paused"),
+      withStep("wrk_2", "new-devices-paused"),
+      withStep("wrk_3", "none"),
+      worker({ id: "wrk_4" }),
+      withStep("wrk_5", "new-devices-paused", { connection: "disconnected" }),
+    ]);
+
+    const lines = shown.trimEnd().split("\n");
+    const first = (id: string) => lines.find((line) => line.startsWith(`${id} `));
+    expect(first("wrk_1")).toBe(
+      "wrk_1 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available -- memory: warming paused",
+    );
+    expect(first("wrk_2")).toBe(
+      "wrk_2 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available -- memory: new devices paused",
+    );
+    expect(first("wrk_3")).toBe(
+      "wrk_3 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available",
+    );
+    expect(first("wrk_4")).toBe("wrk_4 (mac-mini): connected -- ios 0/2, android 0/2, 0 lease(s)");
+    expect(first("wrk_5")).toBe(
+      "wrk_5 (mac-mini): disconnected -- ios 0/2, android 0/2, 0 lease(s) -- agent-device available",
+    );
+  });
+
   it("worker list prints two entries in the order the worker sent them", async () => {
     const shown = await listed([
       worker({

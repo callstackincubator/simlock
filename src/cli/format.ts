@@ -45,9 +45,22 @@ export function formatWorkers(
             : ` -- ${esc(entry.name)} ${esc(entry.state)}`,
         )
         .join("");
-      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${load}${workerBaselinesLine(worker)}${installs}`;
+      const memory = memoryStep(worker);
+      return `${label}: ${state} -- ${capacity}, ${leaseCount(worker)}${skew}${workerVersion(worker)}${host}${capabilities}${memory}${load}${workerBaselinesLine(worker)}${installs}`;
     })
     .join("\n");
+}
+
+function memoryStep(worker: WorkerView): string {
+  if (worker.connection === "disconnected") return "";
+  switch (worker.capacity?.memoryPressure?.step) {
+    case "warming-paused":
+      return " -- memory: warming paused";
+    case "new-devices-paused":
+      return " -- memory: new devices paused";
+    default:
+      return "";
+  }
 }
 
 function workerLoadLine(worker: WorkerView, now: number): string {
