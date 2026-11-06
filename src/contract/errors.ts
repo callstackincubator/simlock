@@ -120,6 +120,8 @@ export interface ErrorDetailsMap {
   PASSTHROUGH_REFUSED: { readonly tool: string };
   UNKNOWN_PASSTHROUGH_TOOL: { readonly tool: string };
   EXEC_TIMEOUT: Record<string, never>;
+  /** why: ADR 0067 §5: the lease file named by `stdinFile` could not be read to its end after `bytesRead` bytes, and the command was stopped. */
+  STDIN_FILE_FAILED: { readonly name: string; readonly bytesRead: number };
   /** why: `device.rotate` on a lease that is not on an iOS phone or tablet simulator; `class` is the physical class, the simulator's model family, or `emulator`. */
   ROTATION_UNSUPPORTED: {
     readonly leaseId: string;
@@ -229,6 +231,7 @@ const CODES_WITH_DECLARED_DETAILS_BY_CODE: Record<CodeWithDeclaredDetails, true>
   FILE_TOO_LARGE: true,
   LEASE_FILES_FULL: true,
   UNKNOWN_FILE: true,
+  STDIN_FILE_FAILED: true,
   UPLOAD_STALLED: true,
   FILE_BUSY: true,
   LICENSE_NOT_ACCEPTED: true,
@@ -368,6 +371,7 @@ export const ERROR_TABLE: { readonly [Code in SimlockErrorCode]: ErrorTableEntry
   FILE_TOO_LARGE: { code: "FILE_TOO_LARGE", kind: "domain", cliExitCode: 1, httpStatus: 413 },
   LEASE_FILES_FULL: { code: "LEASE_FILES_FULL", kind: "domain", cliExitCode: 1, httpStatus: 413 },
   UNKNOWN_FILE: { code: "UNKNOWN_FILE", kind: "domain", cliExitCode: 1, httpStatus: 404 },
+  STDIN_FILE_FAILED: { code: "STDIN_FILE_FAILED", kind: "domain", cliExitCode: 1, httpStatus: 500 },
   UPLOAD_STALLED: { code: "UPLOAD_STALLED", kind: "domain", cliExitCode: 1, httpStatus: 408 },
   FILE_BUSY: { code: "FILE_BUSY", kind: "domain", cliExitCode: 1, httpStatus: 409 },
   // why: a lease's tunnel socket refuses with these (ADR 0054 section 7), so every surface reports them alike.

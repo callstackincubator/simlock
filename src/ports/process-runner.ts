@@ -875,7 +875,12 @@ export class ScriptedProcessRunner implements ProcessRunner {
       throw new Error(`Unexpected process invocation: ${command} ${args.join(" ")}`);
     }
 
-    return new ScriptedStreamingProcessHandle(this.#nextPid++, expectation, options.onChunk);
+    return new ScriptedStreamingProcessHandle(
+      this.#nextPid++,
+      expectation,
+      options.onChunk,
+      options.inputStream,
+    );
   }
 }
 
@@ -887,6 +892,7 @@ export class ScriptedProcessRunner implements ProcessRunner {
  * process or a real clock.
  */
 class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
+  inputFailed?: Promise<never>;
   readonly #result: Promise<StreamingProcessResult>;
   #resolve!: (result: StreamingProcessResult) => void;
   #finished = false;
@@ -897,8 +903,10 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
     readonly pid: number,
     expectation: ScriptedProcessExpectation,
     onChunk: (stream: "stdout" | "stderr", chunk: string) => void | Promise<void>,
+    inputStream?: ReadableStream<Uint8Array>,
   ) {
     this.#ignoresSigterm = expectation.ignoresSigterm ?? false;
+    if (inputStream !== undefined) this.inputFailed = scriptedInputFailure(inputStream);
     this.#result = new Promise<StreamingProcessResult>((resolve) => {
       this.#resolve = resolve;
     });
@@ -938,6 +946,27 @@ class ScriptedStreamingProcessHandle implements StreamingProcessHandle {
     this.#finished = true;
     this.#resolve(result);
   }
+}
+
+/** why: the scripted child reads its whole input at once, so a test sees a failing stream reject `inputFailed` as the real adapter does. */
+function scriptedInputFailure(source: ReadableStream<Uint8Array>): Promise<never> {
+  const failed = new Promise<never>((_resolve, reject) => {
+    void (async () => {
+      const reader = source.getReader();
+      let read = 0;
+      try {
+        for (;;) {
+          const result = await reader.read();
+          if (result.done) return;
+          read += result.value.byteLength;
+        }
+      } catch (error) {
+        reject(new InputStreamFailedError(read, error));
+      }
+    })();
+  });
+  failed.catch(() => undefined);
+  return failed;
 }
 
 function scriptedChunks(

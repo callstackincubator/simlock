@@ -60,6 +60,7 @@ import type {
   Logger,
   ProcessRunner,
   StreamingProcessHandle,
+  StreamingProcessResult,
   TimerHandle,
 } from "../ports/index.js";
 import {
@@ -68,7 +69,7 @@ import {
   type LeaseFiles,
   type LeaseFilesGrant,
 } from "../lease-files/index.js";
-import { exitCodeOf, NoopLogger } from "../ports/index.js";
+import { exitCodeOf, InputStreamFailedError, NoopLogger } from "../ports/index.js";
 import {
   capabilityReason,
   type capabilitySchema,
@@ -798,7 +799,9 @@ export class Dispatcher {
       // why: Announced before the first chunk can arrive, because "it started" is what a transport
       // needs to decide its response shape on -- see `DispatchSession.onStarted`.
       session.onStarted?.();
-      return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
+      return {
+        exitCode: await this.#awaitExec(handle, input.tool, input.args, input.stdinFile),
+      };
     } finally {
       await file?.close();
     }
@@ -822,9 +825,12 @@ export class Dispatcher {
     handle: StreamingProcessHandle,
     tool: string,
     args: readonly string[],
+    stdinFile: string | undefined,
   ): Promise<number> {
     const timeoutMs = this.options.config.exec.timeoutMs;
     const waited = handle.wait();
+    // why: `inputFailed` only ever rejects, so the race below hears it as a value and never as a second way for the command to finish.
+    const inputFailed = handle.inputFailed?.catch((error: unknown) => error);
     let timer: TimerHandle | undefined;
     const expired = new Promise<typeof EXEC_EXPIRED>((resolve) => {
       timer = this.options.clock.setTimer(timeoutMs, () => resolve(EXEC_EXPIRED));
@@ -835,8 +841,14 @@ export class Dispatcher {
       // turn the timer fires has *finished*, and reporting that as a timeout would blame the
       // limit for a command that met it. `Promise.race` settles on whichever actually
       // happened first, which is exactly the question.
-      const outcome = await Promise.race([waited, expired]);
-      if (outcome !== EXEC_EXPIRED) return exitCodeOf(outcome);
+      const outcome = await Promise.race([
+        waited,
+        expired,
+        ...(inputFailed === undefined ? [] : [inputFailed]),
+      ]);
+      if (outcome !== EXEC_EXPIRED && !(outcome instanceof InputStreamFailedError)) {
+        return exitCodeOf(outcome as StreamingProcessResult);
+      }
 
       // why: SIGTERM first, SIGKILL after a grace window: a tool that ignores the first must not be
       // able to hold this operation -- and the caller's connection -- open forever. The same
@@ -852,6 +864,13 @@ export class Dispatcher {
       // timeout, not a competing answer to it. Swallowed here rather than left to reject
       // this `await` and skip the throw below.
       await waited.catch(() => undefined);
+      if (outcome instanceof InputStreamFailedError && stdinFile !== undefined) {
+        throw new DispatchError(
+          "STDIN_FILE_FAILED",
+          `Reading ${stdinFile} failed after ${String(outcome.bytesWritten)} bytes; the command was stopped`,
+          { bytesRead: outcome.bytesWritten, name: stdinFile },
+        );
+      }
       // why: `EXEC_TIMEOUT` rather than the exit code the kill produced: "we stopped it" and "it
       // failed" are different facts, and only the first tells a caller to raise the limit.
       throw new DispatchError(
