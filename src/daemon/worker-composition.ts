@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventBus } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
-import { HostLoadSampler } from "../host-load/index.js";
+import { HostLoadSampler, MemoryPressureTracker } from "../host-load/index.js";
 import { type EventHistoryHandle, HISTORY_DB_NAME } from "../history/index.js";
 import {
   type Config,
@@ -240,10 +240,19 @@ export async function composeWorker(
     options.hostLoadProbe === undefined
       ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
       : options.hostLoadProbe;
+  const memoryPressure =
+    hostLoadProbe === null
+      ? undefined
+      : new MemoryPressureTracker({ clock, config: config.memoryPressure });
   const hostLoad =
     hostLoadProbe === null
       ? undefined
-      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
+      : new HostLoadSampler({
+          clock,
+          logger: logger.child("host-load"),
+          onReading: (reading) => memoryPressure?.observe(reading),
+          probe: hostLoadProbe,
+        });
   const decisions = new SerializedDecision();
   const components = new ComponentInstaller({
     clock,
@@ -499,6 +508,18 @@ export async function composeWorker(
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
+    ...(memoryPressure === undefined
+      ? {}
+      : {
+          memoryPressure: {
+            current: () => {
+              const state = memoryPressure.current();
+              if (state === undefined) return undefined;
+              const { readingAt: _readingAt, ...figures } = state;
+              return figures;
+            },
+          },
+        }),
     instanceId,
     host: new DaemonEndpointHost({
       connector: ipc,

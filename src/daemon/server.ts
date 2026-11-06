@@ -41,6 +41,7 @@ import {
   type ProtocolRange,
   type Role,
   type StatusLoad,
+  type StatusMemoryPressure,
 } from "../contract/index.js";
 import type { LinkChannel, LinkConnection } from "../link/index.js";
 import { DaemonAlreadyRunningError, type ConnectionHost } from "./connection-host.js";
@@ -123,6 +124,7 @@ export interface DaemonServerCommonOptions {
   readonly eventBus: EventBus;
   readonly host: ConnectionHost;
   readonly hostLoad?: { start(): void; dispose(): void };
+  readonly memoryPressure?: { current(): StatusMemoryPressure | undefined };
   readonly logger?: Logger;
   readonly protocolVersion?: number | ProtocolRange;
   readonly version: string;
@@ -246,6 +248,9 @@ function buildDispatcher(
     health: hooks.health,
     hostFacts: options.hostFacts,
     ...(options.load === undefined ? {} : { load: options.load }),
+    ...(options.memoryPressure === undefined
+      ? {}
+      : { memoryPressure: () => options.memoryPressure?.current() }),
     instanceId: options.instanceId,
     leases: options.leases,
     ...(options.logger === undefined ? {} : { logger: options.logger }),

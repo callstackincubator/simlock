@@ -196,14 +196,15 @@ describe("startDaemon host load", () => {
     expect(load?.ageMs).toBe(86_400_000);
   });
 
-  it("with hostLoadProbe: null answers the same as with a probe, apart from load", async () => {
+  it("with hostLoadProbe: null answers the same as with a probe, apart from load and the memory pressure step", async () => {
     const withProbe = await startOnClock({ hostLoadProbe: new FakeHostLoadProbe(COUNTERS) });
     const without = await startOnClock({ hostLoadProbe: null });
 
     await expect.poll(async () => (await workerStatus(withProbe.daemon)).load).toBeDefined();
     const { load: _load, ...probed } = await workerStatus(withProbe.daemon);
+    const { memoryPressure: _step, ...capacity } = probed.capacity as Record<string, unknown>;
 
-    expect(probed).toEqual(await workerStatus(without.daemon));
+    expect({ ...probed, capacity }).toEqual(await workerStatus(without.daemon));
   });
 
   it("starts the sampler only after the daemon holds its socket", async () => {
