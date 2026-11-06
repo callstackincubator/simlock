@@ -5,6 +5,7 @@ import {
   type DeviceTcp,
   type PhysicalDriverDevice,
   type SweptDevice,
+  unsupportedEmulatorPortMessage,
   type VirtualDriverDevice,
 } from "../../core/index.js";
 import type {
@@ -13,6 +14,7 @@ import type {
   TcpListener,
   TcpListenerFactory,
   TcpStream,
+  TcpStreamConnector,
 } from "../../ports/index.js";
 
 // why: the worker keeps these loopback ports for tunnels, so a rule into them is Simlock's own and a sweep may remove it.
@@ -25,6 +27,8 @@ const MESSAGE_LIMIT = 200;
 const CANNOT_REBIND = "cannot rebind existing socket";
 
 export interface AndroidDeviceTcpOptions {
+  // why: the daemon's loopback connector, 127.0.0.1 only; without it the driver reaches no emulator port.
+  readonly connector?: TcpStreamConnector | undefined;
   readonly listeners: TcpListenerFactory;
   readonly clock: Clock;
   // why: the driver decides which adb server a device is reached through, and for a phone which check it passes first; a target without a connector cannot open a device port.
@@ -68,6 +72,46 @@ function streamThrough(stream: TcpStream, reader: ChunkReader): TcpStream {
     }),
     write: (bytes) => stream.write(bytes),
   };
+}
+
+// why: a worker-side connect that never answers must not hold the caller's connection open, so it ends at 5 s with "timeout", and a refusal reads as the connector's own message.
+async function connectWithin(
+  options: AndroidDeviceTcpOptions,
+  port: number,
+  signal: AbortSignal,
+): Promise<TcpStream> {
+  const connector = options.connector as TcpStreamConnector;
+  return await new Promise<TcpStream>((resolve, reject) => {
+    let settled = false;
+    const finish = (settle: () => void): void => {
+      if (settled) return;
+      settled = true;
+      options.clock.cancel(timer);
+      signal.removeEventListener("abort", onAbort);
+      settle();
+    };
+    const timer = options.clock.setTimer(CONNECT_TIMEOUT_MS, () =>
+      finish(() => reject(new DeviceTcpError("TUNNEL_FAILED", "timeout"))),
+    );
+    const onAbort = (): void =>
+      finish(() => reject(new DeviceTcpError("TUNNEL_FAILED", "the tunnel closed")));
+    signal.addEventListener("abort", onAbort, { once: true });
+    connector.connect(port, CONNECT_TIMEOUT_MS).then(
+      (stream) => {
+        if (settled) stream.close();
+        finish(() => resolve(stream));
+      },
+      (error: unknown) =>
+        finish(() =>
+          reject(
+            new DeviceTcpError(
+              "TUNNEL_FAILED",
+              cut(error instanceof Error ? error.message : String(error)),
+            ),
+          ),
+        ),
+    );
+  });
 }
 
 function cut(message: string): string {
@@ -141,6 +185,12 @@ interface HeldPort {
 }
 
 export interface AndroidDeviceTcp extends DeviceTcp {
+  supportsEmulatorPort(device: VirtualDriverDevice | PhysicalDriverDevice): boolean;
+  connectEmulatorPort(
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
   // why: called by the driver's reclaim of a phone and its destroy of a device: an emulator's rules are gone, so every port held for it is free; a phone's rules are only read, and a port some rule on it still points to stays held.
   release(device: VirtualDriverDevice | PhysicalDriverDevice): Promise<void>;
 }
@@ -156,6 +206,21 @@ export function createAndroidDeviceTcp(options: AndroidDeviceTcpOptions): Androi
     new Set([...held.values()].flatMap((mine) => [...mine].map((entry) => entry.port)));
   return {
     supports: () => true,
+    supportsEmulatorPort: (device) => !device.physical,
+    // why: the emulator program serves adb on its console port + 1, on the worker's own loopback; the connector is the driver's, never a port number from the holder.
+    async connectEmulatorPort(device, name, signal): Promise<TcpStream> {
+      if (device.physical) {
+        throw new DeviceTcpError(
+          "TUNNEL_UNSUPPORTED",
+          unsupportedEmulatorPortMessage(name, "android", true),
+        );
+      }
+      const consolePort = /^emulator-(\d+)$/.exec(device.address)?.[1];
+      if (consolePort === undefined || options.connector === undefined) {
+        throw new DeviceTcpError("TUNNEL_FAILED", "the emulator has no adb port yet");
+      }
+      return await connectWithin(options, Number(consolePort) + 1, signal);
+    },
     // why: the host protocol reaches a device port through the target's adb server with no `adb forward` rule, so a worker that dies leaves nothing listening; both answers share one 5 s limit.
     async connect(device, devicePort, signal): Promise<TcpStream> {
       if (options.target === undefined) {

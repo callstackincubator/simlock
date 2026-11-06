@@ -1,9 +1,12 @@
 import { createConnection, type Socket } from "node:net";
 
+// why: a simulator's app listens on the worker's `127.0.0.1` or its `::1`, which are two sockets; every other caller keeps the IPv4 default.
+export type LoopbackHost = "127.0.0.1" | "::1";
+
 // why: `TcpProbe` answers one question and hangs up; a device's video socket reached through adb
 // keeps talking for as long as someone watches.
 export interface TcpStreamConnector {
-  connect(port: number, timeoutMs: number): Promise<TcpStream>;
+  connect(port: number, timeoutMs: number, host?: LoopbackHost): Promise<TcpStream>;
 }
 
 export interface TcpStream {
@@ -63,11 +66,11 @@ export function tcpStreamOf(socket: Socket): TcpStream {
 }
 
 export class NodeTcpStreamConnector implements TcpStreamConnector {
-  connect(port: number, timeoutMs: number): Promise<TcpStream> {
+  connect(port: number, timeoutMs: number, host: LoopbackHost = "127.0.0.1"): Promise<TcpStream> {
     return new Promise<TcpStream>((resolve, reject) => {
       let socket: Socket;
       try {
-        socket = createConnection({ host: "127.0.0.1", port });
+        socket = createConnection({ host, port });
       } catch (error: unknown) {
         reject(error instanceof Error ? error : new Error(String(error)));
         return;
@@ -77,7 +80,7 @@ export class NodeTcpStreamConnector implements TcpStreamConnector {
         reject(error);
       };
       socket.setTimeout(timeoutMs, () =>
-        fail(new Error(`No connection to 127.0.0.1:${String(port)} within ${String(timeoutMs)}ms`)),
+        fail(new Error(`No connection to ${host}:${String(port)} within ${String(timeoutMs)}ms`)),
       );
       socket.once("error", fail);
       socket.once("connect", () => {
@@ -154,17 +157,28 @@ export class FakeTcpPeer {
 }
 
 export class FakeTcpStreamConnector implements TcpStreamConnector {
-  readonly connections: { readonly port: number; readonly peer: FakeTcpPeer }[] = [];
+  readonly connections: {
+    readonly port: number;
+    readonly host: LoopbackHost;
+    readonly peer: FakeTcpPeer;
+  }[] = [];
+
+  // why: a test lists the `<host>:<port>` addresses nothing listens on, for a port that answers on one loopback and not the other.
+  readonly refusedAddresses = new Set<string>();
 
   // why: a test lists the ports nothing listens on; connecting to one rejects, as a refused loopback connection does.
   readonly refusedPorts = new Set<number>();
 
-  async connect(port: number): Promise<TcpStream> {
-    if (this.refusedPorts.has(port)) {
-      throw new Error(`connect ECONNREFUSED 127.0.0.1:${String(port)}`);
+  async connect(
+    port: number,
+    _timeoutMs?: number,
+    host: LoopbackHost = "127.0.0.1",
+  ): Promise<TcpStream> {
+    if (this.refusedPorts.has(port) || this.refusedAddresses.has(`${host}:${String(port)}`)) {
+      throw new Error(`connect ECONNREFUSED ${host}:${String(port)}`);
     }
     const peer = new FakeTcpPeer();
-    this.connections.push({ peer, port });
+    this.connections.push({ host, peer, port });
     return peer.stream;
   }
 }

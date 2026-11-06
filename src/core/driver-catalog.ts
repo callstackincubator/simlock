@@ -10,7 +10,12 @@ import type {
   PhysicalDriverDevice,
   VirtualDriverDevice,
 } from "./driver.js";
-import { DeviceTcpError, unsupportedTunnelMessage, type DeviceReverse } from "./device-tcp.js";
+import {
+  DeviceTcpError,
+  unsupportedEmulatorPortMessage,
+  unsupportedTunnelMessage,
+  type DeviceReverse,
+} from "./device-tcp.js";
 import type { DeviceInput, UnavailableDeviceInput } from "./input.js";
 import { type ScreenFeed, ScreenNotSupportedError, type ScreenSettings } from "./screen.js";
 import { stableError } from "./stable-error.js";
@@ -140,6 +145,29 @@ export class DriverCatalog {
       );
     }
     return await deviceTcp.connect(device, devicePort, signal);
+  }
+
+  supportsEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean {
+    return this.#drivers.get(platform)?.deviceTcp?.supportsEmulatorPort?.(device) ?? false;
+  }
+
+  async connectEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream> {
+    const deviceTcp = this.#drivers.get(platform)?.deviceTcp;
+    if (deviceTcp?.connectEmulatorPort === undefined) {
+      throw new DeviceTcpError(
+        "TUNNEL_UNSUPPORTED",
+        unsupportedEmulatorPortMessage(name, platform, device.physical),
+      );
+    }
+    return await deviceTcp.connectEmulatorPort(device, name, signal);
   }
 
   async screenAvailability(): Promise<readonly ScreenAvailability[]> {

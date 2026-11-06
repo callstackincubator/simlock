@@ -27,6 +27,9 @@ export interface WarmTarget {
   readonly count: number;
 }
 
+/** why: the lease count that learns a baseline kind when `warmPool.baselineLearnAfter` is not set. */
+export const DEFAULT_BASELINE_LEARN_AFTER = 3;
+
 /** The warm pool's operator-facing settings, the `warmPool` keys beside `quarantine`. */
 export interface WarmPoolConfig {
   /** `false` keeps nothing warm: every idle running device is shut down. */
@@ -37,12 +40,15 @@ export interface WarmPoolConfig {
   readonly targets: readonly WarmTarget[];
   /** why: `false` keeps only `targets` warm, not the kinds the pool learns from leases. */
   readonly learn?: boolean;
+  /** why: a baseline kind is learned on its Nth lease within 24 hours; plain kinds on their first. */
+  readonly baselineLearnAfter?: number;
   /** why: the most boots and creations in flight at once: the pool's own, for waiters and targets, and each waiting request's own. */
   readonly maxConcurrentBoots: number;
 }
 
 export function defaultWarmPoolConfig(systemStats: SystemStats): WarmPoolConfig {
   return {
+    baselineLearnAfter: DEFAULT_BASELINE_LEARN_AFTER,
     enabled: true,
     learn: true,
     maxConcurrentBoots: Math.max(1, Math.floor(systemStats.cpuCount() / 4)),
@@ -109,6 +115,7 @@ const targetsValidator: Validator = (value, path, warn) => {
 
 /** The validators for the keys this module owns, composed into the `warmPool` object. */
 export const warmPoolConfigValidator: Readonly<Record<keyof WarmPoolConfig, Validator>> = {
+  baselineLearnAfter: positiveInteger,
   enabled: booleanValue,
   learn: booleanValue,
   maxConcurrentBoots: positiveInteger,

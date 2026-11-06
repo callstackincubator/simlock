@@ -219,6 +219,16 @@ export interface ModuleDeviceTcp {
     devicePort: number,
     signal: AbortSignal,
   ): Promise<TcpStream>;
+  supportsEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+  ): boolean;
+  connectEmulatorPort(
+    platform: Platform,
+    device: VirtualDriverDevice | PhysicalDriverDevice,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<TcpStream>;
 }
 
 export interface WorkerContext<C> {
