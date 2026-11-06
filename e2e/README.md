@@ -53,6 +53,16 @@ never triggered a download" read that log.
   the point is confidence in a release, not branch coverage.
 - Never weaken an assertion to get green. If a flow trips a real bug, mark that
   assertion (`it.fails`) with a comment naming the suspected cause.
+- In the slow lane a new daemon home makes its seeds again: the first lease of
+  each platform takes 40 to 60 s, a later one 5 to 20 s. A new case joins a
+  flow whose daemon already has the device it needs, before it starts a home
+  of its own.
+- A slow case that proves how Simlock leases, queues or ends a lease, and not
+  what a device does, runs on one platform: `leasingCase` in
+  `slow-agent-device.test.ts` runs it on Android, or on iOS where no Android
+  SDK is installed.
+- A wait in a slow flow carries its own bound, a few times its slowest pass,
+  so a hang fails with the wait's name and not with the test's timeout.
 
 Hooks must be registered at module scope. Vitest resolves `beforeEach`/`afterEach`
 from the call stack active during _collection_, so a hook registered from inside a

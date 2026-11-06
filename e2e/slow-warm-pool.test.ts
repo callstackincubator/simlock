@@ -59,32 +59,32 @@ interface CatalogPlatform {
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
-/** Two real boots (one of them an emulator) and, before any lease, a hold of one pool tick: well inside it. */
-const TEST_TIMEOUT = 30 * MINUTE;
 /**
- * Two real boots, a lease and a release of each, and the wait for each to be ready again. The
- * waits alone (a 15 min readiness wait, two 10 min leases, two 3 min releases, two 15 min waits
- * for ready again) add up to 71 min, plus at most 9 one-minute queries and a 5 min nuke: 85 min,
+ * why: the warm round's waits alone (an 8 min readiness wait, the 45 s hold and its minute of
+ * slack, two 6 min leases, two 2 min releases, two 5 min waits for deleted, an 8 min wait for
+ * ready again) add up to 43.75 min, plus at most 5 one-minute queries and a 5 min nuke: 53.75 min,
  * so each of those waits names itself before this fires. The setup (`warmDaemon`: the stale
- * device-set sweep and the daemon start and stop calls) has no bound of its own; this timeout ends it.
+ * device-set sweep and the daemon start and stop calls) has no bound of its own; this timeout
+ * ends it.
  */
-const WARM_ROUND_TIMEOUT = 90 * MINUTE;
-const LEASE_TIMEOUT = 10 * MINUTE;
-const RELEASE_TIMEOUT = 3 * MINUTE;
+const WARM_ROUND_TIMEOUT = 55 * MINUTE;
+const LEASE_TIMEOUT = 6 * MINUTE;
+const RELEASE_TIMEOUT = 2 * MINUTE;
+/** why: the driver gives an emulator 3 min to exit before it kills it, and only then deletes it. */
+const DELETED_TIMEOUT = 5 * MINUTE;
 /** Every call that asks the machine or the daemon a question (`simctl`, `adb`, the CLI), so one that never answers names itself. */
 const QUERY_TIMEOUT = MINUTE;
 /**
- * The pool-off test creates each device from nothing (an Android image's first boot is a cold
- * boot), so it is two cold leases, two boots from shutdown, four releases and two end-state
- * holds. The budgets of its steps (see `step`) sum to 84.5 min. Outside any step it makes at most
- * nine one-minute queries, and on a failure `diagnose` asks for the devices (1 min) and `nuke`
- * runs for up to 5 min: 84.5 + 9 + 1 + 5 = 99.5 min, under this, so each step budget fires,
- * naming its step, before the test's own timeout, which names nothing.
+ * why: the step budgets of the pool-off test sum to 61.75 min, and so do the no-target test's.
+ * Outside any step a test makes at most nine one-minute queries, and on a failure `diagnose` asks
+ * for the devices (1 min) and `nuke` runs for up to 5 min: 61.75 + 9 + 1 + 5 = 76.75 min, under
+ * this, so each step budget fires, naming its step, before the test's own timeout, which names
+ * nothing.
  */
-const COLD_TEST_TIMEOUT = 110 * MINUTE;
+const COLD_TEST_TIMEOUT = 80 * MINUTE;
 /** The pool-off test's first step, which brings the daemon up and reads its catalog. */
 const DAEMON_START_BUDGET = 5 * MINUTE;
-const READY_TIMEOUT = 15 * MINUTE;
+const READY_TIMEOUT = 8 * MINUTE;
 /** How long a shut-down device is watched: longer than one pool tick (30s, WARM_POOL_TICK_MS), so a pool still on would have booted it. */
 const HOLD = 45 * SECOND;
 
@@ -294,16 +294,19 @@ async function holds(label: string, duration: number, check: () => Promise<void>
   if (violation !== undefined) throw violation;
 }
 
-/** Fails if the device is not in `state` at any poll within `duration`: an end state must hold, not be seen once. */
-async function holdsState(
+/** why: an end state must hold, not be seen once, so one poll that finds a device out of `state` fails. */
+async function holdState(
   env: TestEnv,
-  driverDeviceId: string,
+  driverDeviceIds: readonly string[],
   state: string,
   duration: number,
 ): Promise<void> {
-  await holds(`${driverDeviceId} stays ${state}`, duration, async () => {
-    const row = (await devices(env)).find((entry) => entry.driverDeviceId === driverDeviceId);
-    expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
+  await holds(`${driverDeviceIds.join(" and ")} stay ${state}`, duration, async () => {
+    const rows = await devices(env);
+    for (const driverDeviceId of driverDeviceIds) {
+      const row = rows.find((entry) => entry.driverDeviceId === driverDeviceId);
+      expect(row?.state, `${driverDeviceId} stays ${state}`).toBe(state);
+    }
   });
 }
 
@@ -550,12 +553,12 @@ describe(
   { tags: ["slow", "ios", "android"] },
   () => {
     it(
-      "with a target of one iPhone and one Android phone, ends with one ready simulator and one ready emulator before any lease",
-      { timeout: TEST_TIMEOUT },
+      "with a target of one iPhone and one Android phone, one simulator and one emulator are ready before any lease and stay the only devices for a pool tick; the first lease of each targeted model is granted warm with no booting progress, and after release each device is deleted, never reclaimed, and each platform still has a ready device",
+      { timeout: WARM_ROUND_TIMEOUT },
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
-        const { env } = await warmDaemon();
+        const { env, targets } = await warmDaemon();
         try {
           const rows = await untilBothReady(env);
 
@@ -564,37 +567,16 @@ describe(
           await holds("one ready device per platform", HOLD, async () => {
             expectOneReadyPerPlatform(await devices(env));
           });
-          const recorded = await recordedEvents(env);
+          const before = await recordedEvents(env);
           expect(
-            recorded.filter((entry) => entry.event.startsWith("lease.")),
+            before.filter((entry) => entry.event.startsWith("lease.")),
             "no lease was asked for before the devices were ready",
           ).toEqual([]);
-          const ready = recorded.filter((entry) => entry.event === "device.ready");
-          logDeviceReady(ready);
-          expect(
-            ready.map((entry) => (entry.payload as { deviceId: string }).deviceId).sort(),
-          ).toEqual(rows.map((row) => row.id).sort());
-        } finally {
-          await nuke(env);
-        }
-      },
-    );
-
-    it(
-      "grants the first lease of each targeted model warm with no booting progress, and after release each device is deleted, never reclaimed, and each platform still has a ready device",
-      { timeout: WARM_ROUND_TIMEOUT },
-      async (context) => {
-        const missing = await missingPlatform();
-        if (missing !== undefined) context.skip(missing);
-        const { env, targets } = await warmDaemon();
-        try {
-          await untilBothReady(env);
-          const before = await recordedEvents(env);
           const readyEvents = before.filter((entry) => entry.event === "device.ready");
-          expect(readyEvents.length, "device.ready events before the first lease").toBeGreaterThan(
-            1,
-          );
           logDeviceReady(readyEvents);
+          expect(
+            readyEvents.map((entry) => (entry.payload as { deviceId: string }).deviceId).sort(),
+          ).toEqual(rows.map((row) => row.id).sort());
 
           const granted: Grant[] = [];
           for (const platform of ["ios", "android"] as const) {
@@ -611,7 +593,7 @@ describe(
           for (const grant of granted) await release(env, grant);
           // why: a released device is deleted, never wiped and kept; the pool booted a second device of each kind while the first was leased (a target counts ready devices only), so each kind already has its ready device.
           for (const grant of granted) {
-            await untilState(env, grant.device.driverDeviceId, "deleted");
+            await untilState(env, grant.device.driverDeviceId, "deleted", DELETED_TIMEOUT);
           }
           await untilEachPlatformHasReady(env);
           const afterRelease = await recordedEvents(env);
@@ -676,11 +658,11 @@ describe(
 
           const iosUdid = first.ios.grant.device.driverDeviceId;
           const androidId = first.android.grant.device.driverDeviceId;
-          await step("the simulator is deleted", 6 * MINUTE, () =>
-            untilState(env, iosUdid, "deleted", 5 * MINUTE),
+          await step("the simulator is deleted", DELETED_TIMEOUT + MINUTE, () =>
+            untilState(env, iosUdid, "deleted", DELETED_TIMEOUT),
           );
-          await step("the emulator is deleted", 6 * MINUTE, () =>
-            untilState(env, androidId, "deleted", 5 * MINUTE),
+          await step("the emulator is deleted", DELETED_TIMEOUT + MINUTE, () =>
+            untilState(env, androidId, "deleted", DELETED_TIMEOUT),
           );
           await step("simctl no longer lists the simulator", 2 * MINUTE, () =>
             waitFor(
@@ -700,11 +682,8 @@ describe(
           );
 
           // why: deleted is an end state: the pool, if it were on, would make a device of each kind again within this window.
-          await step("the simulator stays deleted", HOLD + 2 * MINUTE, () =>
-            holdsState(env, iosUdid, "deleted", HOLD),
-          );
-          await step("the emulator stays deleted", HOLD + 2 * MINUTE, () =>
-            holdsState(env, androidId, "deleted", HOLD),
+          await step("the simulator and the emulator stay deleted", HOLD + 2 * MINUTE, () =>
+            holdState(env, [iosUdid, androidId], "deleted", HOLD),
           );
           expect(
             (await setDevices(deviceSet, { timeoutMs: QUERY_TIMEOUT })).some(
@@ -771,14 +750,24 @@ describe(
           await step("release the emulator", RELEASE_TIMEOUT + MINUTE, () =>
             release(env, first.android.grant),
           );
-          await step("both released devices are deleted", 6 * MINUTE, async () => {
-            await untilState(env, first.ios.grant.device.driverDeviceId, "deleted");
-            await untilState(env, first.android.grant.device.driverDeviceId, "deleted");
+          await step("both released devices are deleted", DELETED_TIMEOUT + MINUTE, async () => {
+            await untilState(
+              env,
+              first.ios.grant.device.driverDeviceId,
+              "deleted",
+              DELETED_TIMEOUT,
+            );
+            await untilState(
+              env,
+              first.android.grant.device.driverDeviceId,
+              "deleted",
+              DELETED_TIMEOUT,
+            );
           });
           // why: the pool learned each kind from its lease and makes a new device of it.
           const replaced = await step(
             "a new device of each kind is ready",
-            2 * READY_TIMEOUT,
+            READY_TIMEOUT,
             async () => ({
               android: await untilReadyReplacement(env, "android", first.android.grant.device.id),
               ios: await untilReadyReplacement(env, "ios", first.ios.grant.device.id),
@@ -786,10 +775,9 @@ describe(
           );
           const iosUdid = replaced.ios.driverDeviceId;
           const androidId = replaced.android.driverDeviceId;
-          await step("both stay ready", HOLD + 2 * MINUTE, async () => {
-            await holdsState(env, iosUdid, "ready", HOLD);
-            await holdsState(env, androidId, "ready", HOLD);
-          });
+          await step("both stay ready", HOLD + 2 * MINUTE, () =>
+            holdState(env, [iosUdid, androidId], "ready", HOLD),
+          );
 
           await step("the pool off shuts both down", 12 * MINUTE, async () => {
             await writeWarmPool(env, { enabled: false });
@@ -798,7 +786,7 @@ describe(
           });
           await step(
             "the pool on boots both from the record, before any lease",
-            2 * READY_TIMEOUT,
+            READY_TIMEOUT,
             async () => {
               await writeWarmPool(env, { enabled: true });
               await untilState(env, iosUdid, "ready");

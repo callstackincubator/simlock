@@ -166,7 +166,7 @@ describe.skipIf(process.platform !== "darwin")(
   { tags: ["slow", "ios"] },
   () => {
     it(
-      "on a default-slim worker, a cold lease naming no mode boots slim with every label disabled, and runs at least 30% fewer launchd jobs than a --mode full device beside it",
+      "on a default-slim worker, a cold lease naming no mode boots slim with every label disabled, and runs at least 30% fewer launchd jobs than a --mode full device beside it; a slim simulator leased after its release is a new one, slim with every label disabled after one boot",
       { timeout: 900_000 },
       async () => {
         await sweepStaleDeviceSets();
@@ -233,19 +233,7 @@ describe.skipIf(process.platform !== "darwin")(
             `${(reduction * 100).toFixed(1)}% reduction`,
         ).toBeGreaterThanOrEqual(0.3);
 
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
-      },
-    );
-
-    it(
-      "a slim simulator leased after a release is a new one, slim with every label disabled after one boot",
-      { timeout: 900_000 },
-      async () => {
-        const env = await withRealDaemon({ ios: { defaultMode: "slim" } });
-        const { model, os } = await catalogModelAndOs(env);
-        const first = await leaseDetached(env, model, os, "slim-first");
-        await expectSlim(env, first.mode, "a default-slim lease must be slim");
-        await env.cli(["release", first.lease]);
+        await env.cli(["release", slimGrant.lease]);
         // why: the release deletes the simulator, and a lease landing while it is still going provisions a second device.
         await waitFor(
           async () => {
@@ -253,14 +241,16 @@ describe.skipIf(process.platform !== "darwin")(
               driverDeviceId: string;
               state: string;
             }[];
-            return rows.some((row) => row.driverDeviceId === first.udid && row.state === "deleted");
+            return rows.some(
+              (row) => row.driverDeviceId === slimGrant.udid && row.state === "deleted",
+            );
           },
           { timeout: 60_000, label: "device is deleted after release" },
         );
 
         const second = await leaseDetached(env, model, os, "slim-second");
 
-        expect(second.udid, "a released simulator is never leased again").not.toBe(first.udid);
+        expect(second.udid, "a released simulator is never leased again").not.toBe(slimGrant.udid);
         await expectSlim(
           env,
           second.mode,
