@@ -534,4 +534,32 @@ describe("startDaemon memory pressure hold", () => {
       }
     }
   });
+
+  it("drops the step at once when there is no usable reading: a failed read or no memory part, and with host load off no field", async () => {
+    const { disk, cpu } = COUNTERS;
+    const unusable = [
+      new Error("sysctl failed"),
+      { cpu: cpu!, disk: disk! } satisfies HostLoadCounters,
+    ];
+    for (const next of unusable) {
+      const probe = new FakeHostLoadProbe();
+      const { clock, daemon } = await startOnClock({ hostLoadProbe: probe });
+      await expect.poll(() => probe.reads).toBe(1);
+      probe.answer(memoryReading("critical", 5));
+      await expect
+        .poll(async () => (await statusOf(daemon)).capacity?.memoryPressure)
+        .toMatchObject({ cause: { availablePercent: 5 }, step: "new-devices-paused" });
+
+      clock.advance(15_000);
+      await expect.poll(() => probe.reads).toBe(2);
+      probe.answer(next);
+
+      await expect
+        .poll(async () => (await statusOf(daemon)).capacity?.memoryPressure)
+        .toEqual({ step: "none" });
+    }
+
+    const off = await startOnClock({ hostLoadProbe: null });
+    expect((await statusOf(off.daemon)).capacity).not.toHaveProperty("memoryPressure");
+  });
 });
