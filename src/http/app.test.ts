@@ -829,6 +829,7 @@ describe("POST /v1/lease-requests", () => {
   it.each<[string, Record<string, unknown>, Record<string, unknown>?]>([
     ["imageTag", { imageTag: "google_apis_playstore" }],
     ["mode", { mode: "slim" }],
+    ["except", { except: ["store", "other"] }],
     ["baseline", { baseline: "checkout" }],
     ["owner field rather than silently dropping it (ADR §27a, H7)", { owner: "someone-else" }],
     ["physical true", { physical: true }],
