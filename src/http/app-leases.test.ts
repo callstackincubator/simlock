@@ -1925,4 +1925,34 @@ describe("a lease's files on a worker", () => {
       },
     });
   });
+
+  it("a caller that does not hold the lease gets 404 UNKNOWN_LEASE on every file route, and an operator is served", async () => {
+    const { app, put, list, get } = await filesRig();
+    expect((await put("mine.bin", "mine")).status).toBe(201);
+    const routes = (leaseId: string, headers: Record<string, string>) => [
+      () =>
+        app.request(`/v1/leases/${leaseId}/files/mine.bin`, { body: "x", headers, method: "PUT" }),
+      () => app.request(`/v1/leases/${leaseId}/files/mine.bin`, { headers }),
+      () => app.request(`/v1/leases/${leaseId}/files`, { headers }),
+      () => app.request(`/v1/leases/${leaseId}/files/mine.bin`, { headers, method: "DELETE" }),
+    ];
+
+    for (const [leaseId, headers] of [
+      ["lse_1", otherAgentAuth],
+      ["lse_unknown", agentAuth],
+    ] as const) {
+      for (const response of await Promise.all(routes(leaseId, headers).map((call) => call()))) {
+        expect(response.status).toBe(404);
+        expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+          "UNKNOWN_LEASE",
+        );
+      }
+    }
+    expect(await (await list()).json()).toEqual({ files: [{ name: "mine.bin", size: 4 }] });
+    expect(new TextDecoder().decode(await (await get("mine.bin")).arrayBuffer())).toBe("mine");
+
+    const statuses: number[] = [];
+    for (const call of routes("lse_1", operatorAuth)) statuses.push((await call()).status);
+    expect(statuses).toEqual([201, 200, 200, 204]);
+  });
 });
