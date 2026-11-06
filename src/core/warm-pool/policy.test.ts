@@ -1937,6 +1937,12 @@ describe("warm pool policy", () => {
           proposes: false,
         },
         {
+          name: "configured target also short for a boot that failed",
+          options: { blocked: [kind], targets: [{ count: 1, spec: kind }] },
+          other: "boot-failed",
+          proposes: false,
+        },
+        {
           name: "creation for a queued request",
           options: { maxConcurrentBoots: 3, waiting: [waiter(true), waiter(), waiter()] },
         },
