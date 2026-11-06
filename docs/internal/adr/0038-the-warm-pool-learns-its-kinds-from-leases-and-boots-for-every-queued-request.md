@@ -1,6 +1,6 @@
 # 0038. The warm pool learns its kinds from leases, and boots for every queued request
 
-- **Status:** Accepted; §3, §8 and the alternative "A `warmPool.learn` key" narrowed by 0051; §1, §4, §5 and §8 narrowed by 0062; §2 and §3 narrowed by 0069 (proposed)
+- **Status:** Accepted; §3, §8 and the alternative "A `warmPool.learn` key" narrowed by 0051; §1, §4, §5 and §8 narrowed by 0062; §2 and §3 narrowed by 0069
 - **Date:** 2026-10-20
 - **Issue:** [#771](https://github.com/callstackincubator/simlock/issues/771)
 - **Supersedes:** nothing. Narrows [ADR

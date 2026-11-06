@@ -1,6 +1,6 @@
 # 0069. A learned kind keeps one ready copy while its copies are leased
 
-- **Status:** Proposed
+- **Status:** Accepted — not yet implemented
 - **Date:** 2026-11-06
 - **Issue:** #1374 (bug #1371)
 - **Narrows:** [ADR 0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md)
