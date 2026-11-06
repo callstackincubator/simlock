@@ -2016,7 +2016,7 @@ describe("IosSimctlDriver", () => {
     });
 
     expect((await unset.listCatalog()).slimCategories).toEqual(
-      expect.arrayContaining(["widgets", "store", "mdm", "other"]),
+      SLIM_CATEGORIES.map((category) => category.name),
     );
     expect((await configured.listCatalog()).slimCategories).toEqual(["store"]);
   });

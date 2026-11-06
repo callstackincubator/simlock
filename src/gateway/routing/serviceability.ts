@@ -16,6 +16,7 @@ import {
   matchRequest,
   physicalMatch,
   wantedClass,
+  withBaseline,
 } from "./request-match.js";
 import { hasCapabilities } from "./stages/has-capabilities.js";
 import { keepsExcept } from "./stages/keeps-except.js";
@@ -131,8 +132,9 @@ function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): As
 
 /**
  * why: ADR 0066 §5: like `requires`, the table runs again over the workers that keep the `except`
- * list; when none can serve, the request is told whether no worker slims the names or none would
- * give a slim device (the default mode, or the baseline's mode, is full).
+ * list. When none can serve: a known worker that keeps the names and serves the model and runtime
+ * but cannot take requests now (drained, lost its uplink) makes it `NO_CAPACITY`; with no such
+ * worker it is `BAD_REQUEST`, told whether no worker slims the names or none would give a slim device.
  */
 function assessExcept(
   request: RoutableRequest,
@@ -142,6 +144,16 @@ function assessExcept(
   if (except === undefined) return undefined;
   const keeping = views.filter((worker) => keepsExcept.check(worker, request) === undefined);
   if (assessTable(request, keeping).kind === "route-or-wait") return undefined;
+  if (
+    keeping.some(
+      (worker) =>
+        isKnown(worker) &&
+        listsModel(worker, request) &&
+        matchRequest(worker, request) !== undefined,
+    )
+  ) {
+    return noWorker();
+  }
   const names = except.join(", ");
   const slimmers = views.filter((worker) =>
     except.every((name) => catalogOf(worker, request)?.slimCategories?.includes(name) === true),
@@ -149,15 +161,20 @@ function assessExcept(
   const message =
     slimmers.length === 0
       ? `no worker slims every category in except: ${names}`
-      : `no worker can keep slim categories ${names} (${whyNotSlim(request)})`;
+      : `no worker can keep slim categories ${names} (${whyNotSlim(request, slimmers)})`;
   return { code: "BAD_REQUEST", kind: "reject", message, reason: "unresolvable-spec" };
 }
 
-function whyNotSlim(request: RoutableRequest): string {
+// why: read off the workers that slim the names: either each would give a full device, or the ones that would give a slim one do not serve the model and runtime.
+function whyNotSlim(request: RoutableRequest, slimmers: readonly WorkerView[]): string {
+  const allFull = slimmers.every(
+    (worker) =>
+      (withBaseline(worker, request).mode ?? catalogOf(worker, request)?.defaultMode) !== "slim",
+  );
+  if (!allFull) return "no worker that slims them in slim mode serves this model and runtime";
   if (request.baseline !== undefined) return `baseline "${request.baseline}" is full`;
-  return request.mode === "slim"
-    ? "no worker that slims them can serve the request"
-    : "default mode is full on every worker";
+  if (request.mode !== undefined) return `mode is ${request.mode} on every worker that slims them`;
+  return "default mode is full on every worker that slims them";
 }
 
 function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
