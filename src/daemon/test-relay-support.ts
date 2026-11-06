@@ -329,6 +329,8 @@ export interface FleetOptions {
   readonly proxyAuth?: Record<string, unknown>;
   // why: a test gives the worker options of its own, such as lower lease file limits.
   readonly worker?: Partial<StartDaemonOptions>;
+  // why: a test gives the gateway options of its own, such as a lower file silence bound.
+  readonly gateway?: Partial<StartDaemonOptions>;
 }
 
 export async function startFleet(context: FleetContext, options: FleetOptions = {}) {
@@ -369,6 +371,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     },
     logger: new NoopLogger(),
     version: "1.0.0-e2e",
+    ...options.gateway,
   });
   daemons.push(gateway);
   const { secret } = await gateway.dispatch(

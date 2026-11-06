@@ -185,6 +185,7 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     extra: {
       readonly proxyAuth?: Record<string, unknown>;
       readonly worker?: Partial<StartDaemonOptions>;
+      readonly gateway?: Partial<StartDaemonOptions>;
     } = {},
   ) =>
     startFleet_(
@@ -393,11 +394,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(missing).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
   }, 30_000);
 
-  async function fileRig(limits?: LeaseFilesLimits) {
-    const fleet = await startFleet(
-      undefined,
-      limits === undefined ? {} : { worker: { leaseFilesLimits: limits } },
-    );
+  async function fileRig(limits?: LeaseFilesLimits, fileSilenceMs?: number) {
+    const fleet = await startFleet(undefined, {
+      ...(limits === undefined ? {} : { worker: { leaseFilesLimits: limits } }),
+      ...(fileSilenceMs === undefined ? {} : { gateway: { fileSilenceMs } }),
+    });
     const { secret, token } = await fleet.gateway.dispatch(
       "token.create",
       { label: "holder", role: "agent" },
@@ -604,6 +605,50 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       error: { code: "WORKER_UNREACHABLE" },
     });
   }, 60_000);
+
+  it("through a gateway, a file upload is cut only by 330 s of silence, not by 330 s in total", async () => {
+    const { call } = await fileRig(undefined, 1_000);
+    const pieces = 12;
+    let sent = 0;
+    const flowing = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await sleep(300);
+        controller.enqueue(new Uint8Array(KIB));
+        sent += 1;
+        if (sent === pieces) controller.close();
+      },
+    });
+    const silent = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(KIB));
+      },
+    });
+
+    const slow = await call("/slow.bin", {
+      body: flowing,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const stalled = await settleWithin(
+      call("/stalled.bin", { body: silent, duplex: "half", method: "PUT" } as RequestInit),
+      6_000,
+    );
+
+    expect(slow.status).toBe(201);
+    expect(await slow.json()).toEqual({ name: "slow.bin", size: pieces * KIB });
+    expect(stalled).toMatchObject({ state: "fulfilled", value: { status: 408 } });
+    const body = await (stalled as { value: Response }).value.json();
+    expect(body).toEqual({
+      error: {
+        code: "UPLOAD_STALLED",
+        message: "No bytes of stalled.bin arrived for 1 s",
+        name: "stalled.bin",
+      },
+    });
+    expect((await (await call("")).json()) as { files: { name: string }[] }).toEqual({
+      files: [{ name: "slow.bin", size: pieces * KIB }],
+    });
+  }, 30_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
     let received = "";

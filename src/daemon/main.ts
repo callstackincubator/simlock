@@ -129,6 +129,8 @@ export interface StartDaemonOptions extends WorkerOptions {
   readonly configPath?: string;
   readonly dataDirectory?: string;
   readonly deviceDataTables?: ReadonlyMap<Platform, DeviceDataTable>;
+  /** why: test-only, a gateway's silence bound on a relayed file upload, so a rig reaches 408 without waiting 330 s. */
+  readonly fileSilenceMs?: number;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
   /** why: test-only, hands over the gateway's uplink listener, to close one worker's socket. */
   readonly gatewayUplinks?: (uplinks: WebSocketUplinkListenerFactory) => void;
