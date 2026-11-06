@@ -4,6 +4,7 @@ import {
   capacityChangedPayload,
   FakeDriver,
   loadTestRegistry,
+  readyTransitionUpdate,
   openTestState,
   testComponentWiring,
   type FakeDriverOptions,
@@ -2868,21 +2869,88 @@ describe("Dispatcher: device mode on every surface", () => {
   });
 
   it("a client leases slim with except and is granted a device reporting it", async () => {
-    const { dispatcher, driver } = await buildDispatcher({
-      driverOptions: { slimmableOsVersions: ["26.5"] },
-    });
     const except = ["store", "other"];
+    const ask = { model: "iPhone 17 Pro", platform: "ios", mode: "slim", except } as const;
 
-    const granted = await dispatcher.dispatch(
+    const slimmed = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+    const granted = await slimmed.dispatcher.dispatch(
       "lease.request",
-      { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios", mode: "slim", except },
+      { ...ask, osVersion: "26.5" },
       session(),
     );
-
-    expect(granted.device).toMatchObject({ except, mode: "slim" });
-    expect(driver.calls.find((call) => call.operation === "makeReady")?.arguments[1]).toMatchObject(
-      { except, mode: "slim", purpose: "prepare" },
+    const listed = await slimmed.dispatcher.dispatch(
+      "list.get",
+      { kind: "devices" },
+      session({ role: "admin" }),
     );
+    const status = await slimmed.dispatcher.dispatch("status.get", {}, session());
+    expect(granted.device).toMatchObject({ except, mode: "slim" });
+    expect(
+      slimmed.driver.calls.find((call) => call.operation === "makeReady")?.arguments[1],
+    ).toMatchObject({ except, mode: "slim", purpose: "prepare" });
+    expect(
+      (listed as { id: string; except?: string[] }[]).find((d) => d.id === granted.device.id),
+    ).toMatchObject({ except });
+    expect(status.devices?.find((d) => d.id === granted.device.id)).toMatchObject({ except });
+    expect(
+      slimmed.eventBus.replay().find((event) => event.event === "lease.requested")?.payload,
+    ).toMatchObject({ requestSpec: { except } });
+
+    const warm = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+    const spec = {
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+      mode: "slim",
+    } as const;
+    const seeded = await warm.driver.provision({ ...spec, physical: false });
+    const seededReady = await warm.driver.makeReady(seeded, { mode: "slim", purpose: "prepare" });
+    const registered = await warm.registry.registerDevice({
+      driverData: seeded.driverData,
+      driverDeviceId: seeded.deviceId,
+      provisionDuration: 0,
+      spec: { ...spec, physical: false },
+    });
+    await warm.registry.transitionDevice(
+      registered.id,
+      "ready",
+      { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
+      readyTransitionUpdate(seededReady),
+    );
+    const seededCalls = warm.driver.calls.length;
+    const grantedWarm = await warm.dispatcher.dispatch(
+      "lease.request",
+      { ...ask, osVersion: "26.5" },
+      session(),
+    );
+    expect(grantedWarm.device).toMatchObject({ except, id: registered.id, mode: "slim" });
+    expect(
+      warm.driver.calls
+        .slice(seededCalls)
+        .filter((call) => call.operation === "shutdown" || call.operation === "makeReady")
+        .map((call) => call.operation),
+    ).toEqual(["shutdown", "makeReady"]);
+    expect(
+      warm.driver.calls.slice(seededCalls).find((call) => call.operation === "makeReady")
+        ?.arguments[1],
+    ).toMatchObject({ except, mode: "slim", purpose: "prepare" });
+    expect(
+      warm.eventBus.replay().find((event) => event.event === "lease.granted")?.payload,
+    ).toMatchObject({ source: "booted" });
+
+    const full = await buildDispatcher({
+      driverOptions: { availableOsVersions: ["18.4", "26.5"], slimmableOsVersions: ["26.5"] },
+    });
+    const grantedFull = await full.dispatcher.dispatch(
+      "lease.request",
+      { ...ask, osVersion: "18.4" },
+      session(),
+    );
+    expect(grantedFull.device.mode).toBe("full");
+    expect(grantedFull.device).not.toHaveProperty("except");
+    expect(
+      full.driver.calls.find((call) => call.operation === "makeReady")?.arguments[1],
+    ).not.toHaveProperty("except");
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
