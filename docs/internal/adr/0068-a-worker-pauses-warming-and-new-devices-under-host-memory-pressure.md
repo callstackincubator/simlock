@@ -1,6 +1,6 @@
 # 0068. A worker pauses warming and new devices under host memory pressure
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-06
 - **Issue:** [#1355](https://github.com/callstackincubator/simlock/issues/1355)
   (from request [#1246](https://github.com/callstackincubator/simlock/issues/1246))
