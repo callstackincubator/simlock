@@ -60,14 +60,15 @@ function savedKindOf(config: string):
       readonly packageName: string;
     }
   | undefined {
-  const image = /^image\.sysdir\.1=system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?\s*$/m.exec(
-    config,
-  );
+  const image =
+    /^image\.sysdir\.1\s*=\s*system-images\/android-([^/]+)\/([^/]+)\/([^/\s]+)\/?\s*$/m.exec(
+      config,
+    );
   const [, osVersion, imageTag, abi] = image ?? [];
   if (osVersion === undefined || imageTag === undefined || abi === undefined) return undefined;
   return {
     imageTag,
-    model: /^hw\.device\.name=(.+?)\s*$/m.exec(config)?.[1] ?? "unknown",
+    model: /^hw\.device\.name\s*=\s*(.+?)\s*$/m.exec(config)?.[1] ?? "unknown",
     osVersion,
     packageName: systemImagePackage(osVersion, imageTag, abi),
   };
