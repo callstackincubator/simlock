@@ -4,11 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { tokensOwner } from "../auth/index.js";
-import { baselinesOwner, registryOwner, warmPoolOwner } from "../core/index.js";
 import { androidSourceDataOwner } from "../drivers/android/index.js";
 import { iosSourceDataOwner } from "../drivers/ios/index.js";
-import { drainedWorkersOwner } from "../gateway/index.js";
 import {
   NodeFilesystem,
   NodeSqliteOpener,
@@ -18,6 +15,7 @@ import {
 } from "../ports/index.js";
 import { openStateDatabase } from "../state/index.js";
 import { productionDeviceDataTables } from "./driver-discovery.js";
+import { stateOwners } from "./main.js";
 
 const directories: string[] = [];
 
@@ -127,7 +125,7 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
   );
 
   it.each(seedTables)(
-    "$table: a state.db at version 1 moves to version 2 at open, keeping the newest ready seed of each kind (a tie kept by the larger source id), demoting the others to making, leaving baselines alone, and refusing a second ready seed afterwards",
+    "$table: a state.db at version 1 moves to version 2 at open, keeping the newest ready seed of each kind (a tie kept by the larger source id), demoting the others to making, leaving baselines and making rows out of the comparison, and refusing a second ready seed afterwards",
     async ({ owner, table, insert }) => {
       const directory = await newDirectory();
       const versionOne: SqliteSchemaOwner = {
@@ -143,10 +141,20 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
         ["k2-a", "seed", "k2", 30],
         ["k2-b", "seed", "k2", 30],
         ["k3", "seed", "k3", 40],
+        ["k4-seed", "seed", "k4", 45],
+        ["k4-base", "baseline", "k4", 60],
+        ["k5-ready", "seed", "k5", 46],
       ];
       for (const [id, kind, specKey, createdAt] of rows) {
         insert(old.database, { createdAt, id, kind, specKey, state: "ready" });
       }
+      insert(old.database, {
+        createdAt: 70,
+        id: "k5-making",
+        kind: "seed",
+        specKey: "k5",
+        state: "making",
+      });
       old.close();
 
       const state = await open(directory, [owner]);
@@ -167,6 +175,10 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
           { kind: "seed", source_id: "k2-a", state: "making" },
           { kind: "seed", source_id: "k2-b", state: "ready" },
           { kind: "seed", source_id: "k3", state: "ready" },
+          { kind: "baseline", source_id: "k4-base", state: "ready" },
+          { kind: "seed", source_id: "k4-seed", state: "ready" },
+          { kind: "seed", source_id: "k5-making", state: "making" },
+          { kind: "seed", source_id: "k5-ready", state: "ready" },
         ]);
         expect(() =>
           insert(state.database, {
@@ -183,20 +195,15 @@ describe("the seed tables' one-ready-seed-per-kind index (#1367)", () => {
     },
   );
 
-  it("every schema owner a worker or a gateway opens has one migration per version", () => {
-    const owners: readonly SqliteSchemaOwner[] = [
-      registryOwner,
-      warmPoolOwner,
-      baselinesOwner,
-      tokensOwner,
-      iosSourceDataOwner,
-      androidSourceDataOwner,
-      drainedWorkersOwner,
-      ...productionDeviceDataTables().values(),
-    ];
+  it.each(["worker", "gateway"] as const)(
+    "every schema owner a %s opens has one migration per version",
+    (role) => {
+      const owners = stateOwners(role, productionDeviceDataTables());
 
-    expect(
-      owners.map((owner) => ({ migrations: owner.migrations.length, name: owner.name })),
-    ).toEqual(owners.map((owner) => ({ migrations: owner.version, name: owner.name })));
-  });
+      expect(owners.length).toBeGreaterThan(1);
+      expect(
+        owners.map((owner) => ({ migrations: owner.migrations.length, name: owner.name })),
+      ).toEqual(owners.map((owner) => ({ migrations: owner.version, name: owner.name })));
+    },
+  );
 });
