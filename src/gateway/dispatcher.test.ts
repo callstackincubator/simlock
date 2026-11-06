@@ -2292,6 +2292,43 @@ describe("GatewayDispatcher", () => {
       expect(forwarded()).toHaveLength(1);
     });
 
+    it("forwards a device.exec's stdinFile to the lease's worker under the same name, and nothing when it is omitted", async () => {
+      const { coordinator, directory, dispatcher, workers } = harness();
+      const client = new ScriptedWorkerClient();
+      directory.add("wrk_1", client);
+      workers.connected("wrk_1", undefined, "0.3.0");
+      workers.refresh("wrk_1", {
+        capacity: statusFixture().capacity,
+        health: "running",
+        queueDepth: 0,
+        catalog: catalogFixture([{ models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] }])
+          .platforms,
+        downloads: { policy: "on-request" },
+      });
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      const grant = await coordinator.request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: true, ownerId: "agent-1", requesterId: "agent-1" },
+      );
+      const exec = (extra: { stdinFile?: string }) => {
+        client.execQueue.push({ exitCode: 0, kind: "ok" });
+        return dispatcher.dispatch(
+          "device.exec",
+          { args: ["spawn", "booted", "untar"], leaseId: grant.lease.id, tool: "simctl", ...extra },
+          session({ principal: "agent-1", role: "agent" }),
+        );
+      };
+
+      await exec({ stdinFile: "fixture.tar" });
+      await exec({});
+
+      expect(client.execInputs.map((forwarded) => forwarded.stdinFile)).toEqual([
+        "fixture.tar",
+        undefined,
+      ]);
+      expect("stdinFile" in (client.execInputs[1] ?? {})).toBe(false);
+    });
+
     it("calls onStarted for a silent device.exec from the worker's own started push (ADR §19a/§19b/§19e)", async () => {
       const { coordinator, directory, dispatcher, workers } = harness();
       const client = new ScriptedWorkerClient();
