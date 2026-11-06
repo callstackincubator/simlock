@@ -13,6 +13,7 @@ import type { RelayTarget, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
 import {
   aborted,
+  adminSession,
   cleanUp,
   digestOf,
   gate,
@@ -384,6 +385,51 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(await refusal.text()).toBe("not for you");
     expect(missing).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
   }, 30_000);
+
+  async function fileRig() {
+    const fleet = await startFleet();
+    const { secret, token } = await fleet.gateway.dispatch(
+      "token.create",
+      { label: "holder", role: "agent" },
+      adminSession,
+    );
+    const holder = agent({ principal: token.id });
+    const grant = await fleet.gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", noWait: true, platform: "android" },
+      holder,
+    );
+    const base = `http://127.0.0.1:${String(fleet.port)}/v1/leases/${grant.lease.id}/files`;
+    const call = (path: string, init: RequestInit = {}) =>
+      fetch(`${base}${path}`, {
+        ...init,
+        headers: { authorization: `Bearer ${secret}`, ...init.headers },
+      });
+    return { ...fleet, call, leaseId: grant.lease.id };
+  }
+
+  it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
+    const { call } = await fileRig();
+    const bytes = patternBytes(20 * MIB, 5);
+
+    const put = await call("/fixture.tar", {
+      body: patternStream(20 * MIB, 5),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const get = await call("/fixture.tar");
+    const listed = await call("");
+    const deleted = await call("/fixture.tar", { method: "DELETE" });
+    const after = await call("");
+
+    expect(put.status).toBe(201);
+    expect(await put.json()).toEqual({ name: "fixture.tar", size: 20 * MIB });
+    expect(get.status).toBe(200);
+    expect(digestOf([new Uint8Array(await get.arrayBuffer())])).toBe(digestOf([bytes]));
+    expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
+    expect(deleted.status).toBe(204);
+    expect(await after.json()).toEqual({ files: [] });
+  }, 120_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
     let received = "";
