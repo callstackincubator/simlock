@@ -1947,6 +1947,13 @@ describe("warm pool policy", () => {
         },
       ];
 
+      const refused = plan(
+        view([busy], { refuseProvision: "memory-pressure", targets: [{ count: 1, spec: kind }] }),
+      );
+      expect(refused.targets[0]?.short, "a capacity refusal for memory pressure").toBe(
+        "memory-pressure",
+      );
+
       for (const { devices = [busy], name, options, other, proposes = true } of cases) {
         const open = plan(view(devices, options));
         const held = plan(view(devices, { ...options, pressure: paused }));
