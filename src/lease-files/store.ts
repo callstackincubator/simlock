@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LeaseFilesError } from "./errors.js";
 import { guardedBody } from "./guarded-body.js";
 import { DEFAULT_LIMITS } from "./limits.js";
+import { isFileName } from "./names.js";
 import type { LeaseFileView, LeaseFilesDeps, LeaseFilesGrant } from "./types.js";
 
 export function folderKey(id: string, grantedAt: number): string {
@@ -31,6 +32,10 @@ function tooLarge(name: string): LeaseFilesError {
       name,
     },
   );
+}
+
+function unknownFile(name: string): LeaseFilesError {
+  return new LeaseFilesError("UNKNOWN_FILE", `No file ${name} in this lease`, { name });
 }
 
 function leaseFull(grant: LeaseFilesGrant, usedBytes: number): LeaseFilesError {
@@ -63,8 +68,43 @@ export class LeaseFolders {
   }
 
   async openFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView> {
-    const file = await this.#deps.filesystem.openFile(join(this.#pathOf(grant), name));
-    return { name, ...file };
+    const stored = (await this.#names(grant)).find((candidate) => candidate === name);
+    if (stored === undefined) throw unknownFile(name);
+    const file = await this.#deps.filesystem.openFile(join(this.#pathOf(grant), stored));
+    return { name: stored, ...file };
+  }
+
+  async list(
+    grant: LeaseFilesGrant,
+  ): Promise<readonly { readonly name: string; readonly size: number }[]> {
+    const folder = this.#pathOf(grant);
+    const files = [];
+    for (const name of await this.#names(grant)) {
+      files.push({ name, size: await this.#sizeOf(join(folder, name)) });
+    }
+    return files;
+  }
+
+  async remove(grant: LeaseFilesGrant, name: string): Promise<void> {
+    if (!(await this.#names(grant)).includes(name)) throw unknownFile(name);
+    await this.#deps.filesystem.rm(join(this.#pathOf(grant), name));
+  }
+
+  // why: only regular files whose names pass the name rule are the lease's files; a command may have left a subfolder or `my file.png` beside them.
+  async #names(grant: LeaseFilesGrant): Promise<string[]> {
+    const { filesystem } = this.#deps;
+    const folder = this.#pathOf(grant);
+    const entries = await filesystem.readdir(folder).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    const names: string[] = [];
+    for (const entry of entries) {
+      if (!isFileName(entry)) continue;
+      const details = await filesystem.lstat(join(folder, entry)).catch(() => undefined);
+      if (details?.kind === "file") names.push(entry);
+    }
+    return names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
   async put(

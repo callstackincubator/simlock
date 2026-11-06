@@ -32,13 +32,22 @@ async function serve(
   name: string | undefined,
 ): Promise<Response> {
   const grant = store.findGrant(lease.id);
-  if (grant === undefined || name === undefined) return new Response(null, { status: 404 });
+  if (grant === undefined) {
+    throw new LeaseFilesError("UNKNOWN_LEASE", `Unknown lease: ${lease.id}`, {
+      leaseId: lease.id,
+    });
+  }
+  if (name === undefined) return Response.json({ files: await store.list(grant) });
   requireFileName(name);
   if (request.method === "PUT") {
     const body = request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() });
     return Response.json(await store.put(grant, name, body, contentLengthOf(request)), {
       status: 201,
     });
+  }
+  if (request.method === "DELETE") {
+    await store.remove(grant, name);
+    return new Response(null, { status: 204 });
   }
   const file = await store.openFile(grant, name);
   const length = String(file.size);
