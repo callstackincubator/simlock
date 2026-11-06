@@ -203,6 +203,42 @@ describe("the registered warm-then-free policy", () => {
     expect(policy.select(REQUEST, [full])).toMatchObject({ workerId: "wrk_b" });
   });
 
+  it("ranks a worker whose new devices are paused below one that is not, still picks it for a warm device or when every worker is paused, explains it as memory-pressure, and ranks warming-paused as calm", () => {
+    const paused = (
+      id: string,
+      step: "none" | "warming-paused" | "new-devices-paused",
+      maxRunning: number,
+      devices: WorkerView["devices"] = [],
+    ) =>
+      view(id, {
+        capacity: { ...withIos({ maxRunning }), memoryPressure: { step } },
+        devices,
+      });
+    // why: wrk_a has more free capacity, so only the pressure rank can prefer wrk_b over it.
+    const pausedRoomy = paused("wrk_a", "new-devices-paused", 5);
+    const calm = paused("wrk_b", "none", 1);
+
+    expect(policy.select(REQUEST, [pausedRoomy, calm])).toMatchObject({ workerId: "wrk_b" });
+    expect(
+      policy.select(REQUEST, [
+        paused("wrk_a", "new-devices-paused", 5, [deviceFixture("dev_1", "ready")]),
+        calm,
+      ]),
+    ).toMatchObject({ reason: "warm-hit", workerId: "wrk_a" });
+    expect(
+      policy.select(REQUEST, [pausedRoomy, paused("wrk_b", "new-devices-paused", 1)]),
+    ).toMatchObject({
+      workerId: "wrk_a",
+    });
+    expect(policy.explain(REQUEST, [pausedRoomy, calm])).toMatchObject([
+      { workerId: "wrk_a", zero: { capacityReason: "memory-pressure", reason: "full" } },
+      { workerId: "wrk_b" },
+    ]);
+    expect(policy.select(REQUEST, [paused("wrk_a", "warming-paused", 5), calm])).toMatchObject({
+      workerId: "wrk_a",
+    });
+  });
+
   it("still picks a worker at its RAM budget for a warm device it holds", () => {
     const capacity = withIos({ maxRunning: 1 });
     const atBudget = view("wrk_a", {
