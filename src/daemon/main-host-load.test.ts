@@ -390,9 +390,10 @@ describe("startDaemon memory pressure", () => {
       level: name,
       trigger: "level",
     });
-    const floor = (availablePercent: number, floorPercent: number) => ({
+    const floor = (availablePercent: number, floorPercent: number, name?: "normal" | "warn") => ({
       availablePercent,
       floorPercent,
+      ...(name === undefined ? {} : { level: name }),
       trigger: "floor",
     });
     const cases: readonly {
@@ -411,7 +412,7 @@ describe("startDaemon memory pressure", () => {
       },
       {
         reading: memoryReading("warn", 8),
-        expected: { cause: floor(8, 10), since: 1_000, step: "new-devices-paused" },
+        expected: { cause: floor(8, 10, "warn"), since: 1_000, step: "new-devices-paused" },
       },
       {
         reading: memoryReading("critical", 8),
@@ -419,7 +420,7 @@ describe("startDaemon memory pressure", () => {
       },
       {
         reading: memoryReading("normal", 8),
-        expected: { cause: floor(8, 10), since: 1_000, step: "new-devices-paused" },
+        expected: { cause: floor(8, 10, "normal"), since: 1_000, step: "new-devices-paused" },
       },
       { reading: memoryReading(undefined, 25), expected: { step: "none" } },
       {

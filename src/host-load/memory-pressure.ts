@@ -173,7 +173,12 @@ function meets(rule: MemoryPressureRule, memory: MemoryCounters): MemoryPressure
     return { availablePercent, level: memory.pressure, trigger: "level" };
   }
   if (exactPercent < rule.minAvailablePercent) {
-    return { availablePercent, floorPercent: rule.minAvailablePercent, trigger: "floor" };
+    return {
+      availablePercent,
+      floorPercent: rule.minAvailablePercent,
+      ...(memory.pressure === undefined ? {} : { level: memory.pressure }),
+      trigger: "floor",
+    };
   }
   return undefined;
 }

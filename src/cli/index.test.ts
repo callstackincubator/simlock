@@ -6100,43 +6100,40 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
     });
 
     it("simlock status prints the Memory pressure line with the step, when it began and why, and none when there is no step", async () => {
-      const at = (hours: number, minutes: number) =>
-        new Date(2026, 10, 6, hours, minutes).getTime();
-      const memoryLine = async (memoryPressure: unknown) => {
-        const stdout = await print({
-          ...EMPTY_STATUS,
-          capacity: { ...EMPTY_STATUS.capacity, memoryPressure },
-          load: LOAD,
-        } as StatusGetOutput);
-        return stdout.split("\n").find((line) => line.startsWith("Memory pressure:"));
-      };
-
-      expect(
-        await memoryLine({
-          cause: { availablePercent: 34, level: "warn", trigger: "level" },
-          since: at(9, 12),
-          step: "warming-paused",
-        }),
-      ).toBe("Memory pressure: warming paused since 09:12 (pressure warn)");
-      expect(
-        await memoryLine({
-          cause: { availablePercent: 8, floorPercent: 10, trigger: "floor" },
-          since: at(9, 40),
+      const line = async (memoryPressure: unknown) =>
+        (
+          await print({
+            ...EMPTY_STATUS,
+            capacity: { ...EMPTY_STATUS.capacity, memoryPressure },
+            load: LOAD,
+          } as StatusGetOutput)
+        )
+          .split("\n")
+          .find((row) => row.startsWith("Memory pressure:"));
+      const since = new Date(2026, 10, 6, 9, 12).getTime();
+      const warn = { availablePercent: 34, level: "warn", trigger: "level" };
+      const floor = (availablePercent: number, extra = {}) =>
+        line({
+          cause: { availablePercent, floorPercent: 10, trigger: "floor", ...extra },
+          since,
           step: "new-devices-paused",
-        }),
-      ).toBe("Memory pressure: new devices paused since 09:40 (8% available, floor 10%)");
-      expect(await memoryLine({ step: "none" })).toBeUndefined();
-      expect(await memoryLine(undefined)).toBeUndefined();
+        });
+
+      expect(await line({ cause: warn, since, step: "warming-paused" })).toBe(
+        "Memory pressure: warming paused since 09:12 (pressure warn)",
+      );
+      const floored = "Memory pressure: new devices paused since 09:12 (8% available, floor 10%)";
+      expect(await floor(8)).toBe(floored);
+      expect(await floor(8, { level: "warn" })).toBe(floored);
+      expect(await floor(9)).toBe(floored.replace("8%", "9%"));
+      expect(await line({ step: "none" })).toBeUndefined();
+      expect(await line(undefined)).toBeUndefined();
 
       const stdout = await print({
         ...EMPTY_STATUS,
         capacity: {
           ...EMPTY_STATUS.capacity,
-          memoryPressure: {
-            cause: { availablePercent: 34, level: "warn", trigger: "level" },
-            since: at(9, 12),
-            step: "warming-paused",
-          },
+          memoryPressure: { cause: warn, since, step: "warming-paused" },
         },
         load: LOAD,
       } as StatusGetOutput);
