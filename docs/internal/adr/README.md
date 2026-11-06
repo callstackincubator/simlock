@@ -67,7 +67,7 @@ the status is stale.
 | [0026](0026-agent-device-through-a-gateway-relays-over-the-uplink.md) | agent-device through a gateway: workers advertise capabilities, and the host link relays over the uplink | Accepted; §2 narrowed by 0028 for relayed bodies; §3's in-process link narrowed by 0043 |
 | [0027](0027-dependency-cruiser-checks-every-component-boundary.md) | dependency-cruiser checks every component's boundary and the module graph | Accepted |
 | [0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md) | The uplink carries byte channels beside its messages, and small messages go first | Accepted; §4 narrowed by 0049 |
-| [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted |
+| [0029](0029-host-load-is-an-optional-module-whose-readings-ride-on-status.md) | Host load is an optional module whose readings ride on status | Accepted; Context's "nothing acts on them" and §7 narrowed by 0068 (proposed) |
 | [0030](0030-optional-modules-share-one-contract-and-load-only-when-turned-on.md) | Optional modules share one contract and load only when turned on | Accepted; §2 narrowed by 0046; §3 narrowed by 0049 |
 | [0031](0031-a-physical-iphone-streams-through-coredevice-behind-a-screen-source-seam.md) | A physical iPhone streams through CoreDevice's media stream, behind a screen-source seam | Accepted |
 | [0032](0032-the-event-history-is-a-sqlite-database-with-projections-beside-it.md) | The event history is a SQLite database, with projections beside it | Accepted — not yet implemented; §1 narrowed by 0036 |
@@ -101,3 +101,4 @@ the status is stale.
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
+| [0068](0068-a-worker-pauses-warming-and-new-devices-under-host-memory-pressure.md) | A worker pauses warming and new devices under host memory pressure | Proposed; narrows 0029, adds a rank stage to 0009 |
