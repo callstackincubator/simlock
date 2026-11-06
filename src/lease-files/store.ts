@@ -231,7 +231,11 @@ export class LeaseFolders {
     }
     const stored = await this.#folderBytes(folder, name.toLowerCase());
     const upload: RunningUpload = { abort: new AbortController(), received: 0 };
-    const others = () => [...state.uploads].reduce((sum, running) => sum + running.received, 0);
+    const others = () =>
+      [...state.uploads].reduce(
+        (sum, running) => (running === upload ? sum : sum + running.received),
+        0,
+      );
     if (stored + others() + (contentLength ?? 0) > this.#limits.leaseBytes) {
       throw leaseFull(grant, stored + others());
     }

@@ -1548,11 +1548,52 @@ function liveBody() {
 }
 
 // why: a request the code under test must answer; when it never does, the assertion on `undefined` fails by name where an await would time the whole test out.
-function answered(response: Promise<Response> | Response): Promise<Response | undefined> {
+function answered(
+  response: Promise<Response> | Response,
+  waitMs = 2_000,
+): Promise<Response | undefined> {
   return Promise.race([
     Promise.resolve(response),
-    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000)),
+    new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs)),
   ]);
+}
+
+// why: counts the files opened and not yet closed, so a test sees a response that left one open.
+class CountingFilesystem extends NodeFilesystem {
+  open = 0;
+  override async openFile(path: string) {
+    const file = await super.openFile(path);
+    this.open += 1;
+    let closed = false;
+    const release = () => {
+      if (!closed) this.open -= 1;
+      closed = true;
+    };
+    return {
+      size: file.size,
+      read: (range?: { readonly start: number; readonly end: number }) => {
+        const stream = file.read(range);
+        const reader = stream.getReader();
+        return new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            const piece = await reader.read();
+            if (piece.done) {
+              release();
+              controller.close();
+            } else controller.enqueue(piece.value);
+          },
+          async cancel(reason) {
+            release();
+            await reader.cancel(reason);
+          },
+        });
+      },
+      close: async () => {
+        release();
+        await file.close();
+      },
+    };
+  }
 }
 
 class LowDiskFilesystem extends NodeFilesystem {
@@ -1713,6 +1754,26 @@ describe("a lease's files on a worker", () => {
     expect((await running).status).toBe(201);
     expect(await folderEntries(together.leaseFolder)).toEqual(["a.bin"]);
 
+    const chunked = await filesRig({ limits: roomy });
+    const chunks = liveBody();
+    const chunkedRequest = chunked.app.request("/v1/leases/lse_1/files/chunks.bin", {
+      body: chunks.stream,
+      duplex: "half",
+      headers: agentAuth,
+      method: "PUT",
+    } as RequestInit);
+    for (let piece = 0; piece < 3; piece += 1) {
+      await Promise.race([chunks.push(new Uint8Array(30)), chunkedRequest]);
+    }
+    // why: a refused upload has already closed its body, and the status below must name that, not a thrown close.
+    try {
+      chunks.finish();
+    } catch {
+      // why: nothing to close; the refusal below is what the test reads.
+    }
+    expect((await chunkedRequest).status).toBe(201);
+    expect(await folderEntries(chunked.leaseFolder)).toEqual(["chunks.bin"]);
+
     const replacing = await filesRig({ limits: roomy });
     expect((await replacing.put("x.bin", new Uint8Array(80))).status).toBe(201);
     expect((await replacing.put("x.bin", new Uint8Array(80))).status).toBe(201);
@@ -1766,7 +1827,9 @@ describe("a lease's files on a worker", () => {
     const silent = liveBody();
     const silentRequest = uploading("kept.bin", silent.stream);
     await silent.push(bytes);
-    rig.clock.advance(330_000);
+    rig.clock.advance(329_999);
+    expect(await answered(silentRequest, 50)).toBeUndefined();
+    rig.clock.advance(1);
     const stalled = await answered(silentRequest);
     expect(stalled?.status).toBe(408);
     expect(await stalled?.json()).toEqual({
@@ -1782,7 +1845,8 @@ describe("a lease's files on a worker", () => {
     const mute = liveBody();
     const muteRequest = uploading("mute.bin", mute.stream);
     await mute.firstPull;
-    rig.clock.advance(330_000);
+    rig.clock.advance(329_999);
+    rig.clock.advance(1);
     expect((await answered(muteRequest))?.status).toBe(408);
 
     const moving = liveBody();
@@ -1842,6 +1906,20 @@ describe("a lease's files on a worker", () => {
     expect(await unknown.json()).toEqual({
       error: { code: "UNKNOWN_FILE", message: "No file a.txt in this lease", name: "a.txt" },
     });
+  });
+
+  it("a lease holder's HEAD answers a GET's headers with no body and leaves no file open", async () => {
+    const filesystem = new CountingFilesystem();
+    const { app, put } = await filesRig({ filesystem });
+    expect((await put("head.bin", "twelve bytes")).status).toBe(201);
+    const head = await app.request("/v1/leases/lse_1/files/head.bin", {
+      headers: agentAuth,
+      method: "HEAD",
+    });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe("12");
+    expect(await head.text()).toBe("");
+    expect(filesystem.open).toBe(0);
   });
 
   it("a lease holder's file names match ignoring case", async () => {

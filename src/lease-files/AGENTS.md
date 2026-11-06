@@ -9,6 +9,4 @@ Does: stores the files a lease's holder (or an operator) uploads over `PUT /v1/l
 - An upload goes to `.upload-<id>` in the folder and is renamed into place only after the whole body arrived. A cut or stalled body leaves nothing visible.
 - Names are compared ignoring case: a PUT removes the other spellings, a lookup prefers the exact spelling, a DELETE removes every spelling. One writer per lowercase name (`FILE_BUSY`).
 - A lease's bytes count what is stored plus the other running uploads' received bytes; the file a PUT replaces is not counted. The disk check runs once per upload, before the first byte is stored.
-- A body that sends nothing for `silenceMs` (`DEFAULT_LIMITS`, `limits.ts`) is `UPLOAD_STALLED`; a body the client cut gets no answer, because nobody listens (the handler returns status 499 for the server's own log).
 - `end` marks the lease ended, aborts its running uploads, waits for them and removes the folder; an upload or folder creation that finishes after that removes its own work. `sweep` at startup removes every folder whose lease is not live, upload temporary files included.
-- Errors are `LeaseFilesError`s; the handler turns them into responses with the contract's `ERROR_TABLE`.

@@ -64,7 +64,11 @@ async function serveFile(request: Request, file: LeaseFileView): Promise<Respons
   }
   const [start, end] = answer.kind === "range" ? [answer.start, answer.end] : [0, file.size - 1];
   const length = String(answer.kind === "range" ? end - start + 1 : file.size);
-  return new Response(file.read(answer.kind === "range" ? { end, start } : undefined), {
+  // why: a HEAD gets a GET's headers and no body, and a body nobody reads would keep the file open.
+  const head = request.method === "HEAD";
+  if (head) await file.close();
+  const body = head ? null : file.read(answer.kind === "range" ? { end, start } : undefined);
+  return new Response(body, {
     headers: {
       "accept-ranges": "bytes",
       "cache-control": "no-store",
