@@ -1,134 +1,61 @@
 # Warm pool
 
 Does: decides which idle virtual devices stay booted, and keeps `warmPool.targets` and the kinds it learned from leases filled.
-Entry: `index.ts` → `WarmPool`, built by `createCore`; `start()` runs at the end of `core.converge`.
-Uses: core (capacity, lifecycle, provisioner, claims, registry, lock), bus, ports, contract.
-Leasing reaches it only through `CorePorts.warmPoolDemand` and `core.passWarmPool()`.
 Flows: [startup](../../../docs/internal/flows/startup.md). Parent: [core](../AGENTS.md).
-
-## Files
-
-| File               | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `converger.ts`     | `WarmPool`: triggers, one pass at a time, acts, `figures()`, `warm-pool.target-missed`                                                                                                                                                                                                                                                                                                                                                                                          |
-| `policy.ts`        | `evaluate`: pure; proposals and per-target reports; `targetedDevices`, `reservedRunning`                                                                                                                                                                                                                                                                                                                                                                                        |
-| `learned.ts`       | `warmPoolOwner` (version 3; `state.db` tables `warm_kinds`, `warm_kind_leases`), `LearnedKinds`: the kinds leased (a baseline kind is one row per baseline name, learned on its `warmPool.baselineLearnAfter`th grant in 24 h, a plain kind on its first), their 24 h peak, `forgetMatching`; each pass warms a baseline kind as the baseline's newest version (platform, model, OS, mode, image tag, version), and `CatalogCheck` drops one whose baseline is removed or stale |
-| `catalog-check.ts` | `CatalogCheck`: one catalog read per platform beside a pass, 30 s limit; says which learned kinds are gone or unanswered                                                                                                                                                                                                                                                                                                                                                        |
-| `retry.ts`         | `RetrySchedule`: a target's failed boot or creation, keyed by resolved spec                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `config.ts`        | `WarmPoolConfig`, `defaultWarmPoolConfig(systemStats)`, validators                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `figures.ts`       | `WarmPoolFigures`, `WarmTargetFigures`                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-
-## How it works
-
-Warm = virtual, `ready`, unleased. Budget = running limit minus every slot a leased, reclaiming,
-quarantined or reserved device holds (`RunningCapacity`), per platform and global.
-
-1. **Trigger** — bus facts `daemon.started`, `device.reclaimed`, `device.quarantine-recovered`,
-   `lease.granted`, `lease.released`, `lease.queued`, `device.shutdown`, `device.deleted`,
-   `cleanup.executed`, `capacity.changed`; a 30 s tick; the retry timer; `core.passWarmPool()` (leasing, once a
-   background reclaim drops its claim). A trigger during a pass asks for one more pass.
-2. **Fence** — while nuke holds acquisition closed: do nothing, and remember each `shutdown`
-   device; it is never booted back unasked. Nuke also clears the learned record (`forget()`).
-   **Learn** — on `lease.granted` the leased device's kind is recorded (not a physical device, not
-   with the pool off); `lease.released` and `lease.expired` close its lease row; `start()` closes
-   rows whose lease the registry no longer holds. Each kind's count is its peak of leases held at
-   once in the last 24 h, at least 1; 32 kinds per platform, the oldest dropped. A baseline row is learned (stored mark, never worked out again) when its grants in the last 24 h reach `warmPool.baselineLearnAfter`; until then it counts and is neither planned, listed in `figures()`, `targeted()` nor matched by `forgetKinds`.
-   **Forget** (ADR 0050) — `forgetKinds(match)` (`warm.forget`, through `core.warmKinds`) forgets every
-   kind of a platform's model, narrowed by OS, mode and image tag, drops each one's failed-boot count unless a configured target
-   shares its spec, logs one `info` line each and asks for a pass; the devices it kept are left to the reaper's idle rules, and one
-   that never served a lease to the never-leased idle rule (Plan, below).
-3. **Resolve** — each target (a learned kind needs none; the catalog check forgets one whose model,
-   OS, image tag or driver is gone, and a third failed boot in a row forgets it too) through `warmPoolDemand.resolve`, downloads off, every pass.
-   A kind whose platform has no catalog answer yet (read pending, failed or timed out) is kept and planned for nothing that pass.
-   A refusal is a report. An `unresolvable` target keeps its last spec, so its devices stay spared.
-   A device of a platform whose driver was refused at discovery is never proposed — boot or
-   shutdown — but still holds its capacity slot, and `targeted()` still lists it to the reaper.
-4. **Plan** (lock) — `evaluate(view)`, first to last:
-   - pool off: shut down every idle `ready` device (`disabled`);
-   - over budget: shut down idle devices, LRU first, never one a waiting request would take;
-     none while a booted device is on its way to a lease;
-   - the queue, oldest first, one device per waiter and one waiter per device: an idle ready device or
-     one on its way (`onItsWay`: `provisioning` or shut down under an ownerless `boot` claim) that
-     serves it, else a shut-down device that serves it is booted, else a device of its spec is
-     created (`waiting-request`), under `maxConcurrentBoots` counting the pool's flights, each
-     in-flight waiter and the head's own work. No creation for the head or for a waiter every
-     earlier waiter of which is matched to a ready device: leasing creates for those. A boot or
-     creation the capacity strategy or the retry schedule refuses is not proposed;
-   - shut down a device never leased, `ready` longer than `idle.shutdownAfterMs`, no target or
-     learned kind keeps;
-   - targets: merge those of one spec (counts summed); boot a shut-down device of the kind, else
-     create one, after the queue's devices. Not while a waiter on its platform is one the pass could not
-     serve, not while `RetrySchedule` holds the spec, not past running slots, reserve, device limit,
-     RAM or `maxConcurrentBoots`. Every configured count fills before any learned count. One short for a
-     running slot or the reserve displaces the least recently used idle ready device of another kind that
-     no configured count keeps (a learned kind's, or a copy past its kind's configured count).
-   - learned kinds (none with `warmPool.learn: false`), newest first, after the configured counts: the same fill, a kind having its
-     ready idle, leased and reclaiming devices. One short for a running slot displaces the least
-     recently used idle ready device of an older learned kind (`displaced`; never a configured
-     target's device, a spared target's, or when the capacity strategy would still refuse the kind after the shutdown).
-5. **Act** — each proposal revalidated (same state, no lease, no claim):
-   - shutdown: `lifecycle.shutdown`, initiator `warm-pool`, `cleanup` claim;
-   - boot (lock: `tryReserveBoot` + `boot` claim) → `bootWarm` → release both;
-   - creation (lock: `tryReserveProvisioning`) → `provisioner.provision` with an ownerless `boot`
-     claim, dropped once ready, so a request may wait on it.
-     Target and `waiting-request` boots and creations run beside the pass. Every attempted action
-     ends in `kick()`.
-6. **Report** — emit `warm-pool.target-missed`, arm the retry timer.
-
-`targeted()`: per target and learned kind, its ready unleased unclaimed devices, oldest first, up to its count.
-It also includes every ready unleased unclaimed device a current non-in-flight waiter could
-be granted, using the pool's requirement, mode and fresh-identity checks. Demand is read on
-every call, so cancellation removes this protection. The reaper's `idle-shutdown` spares
-these devices. With no pass yet, it resolves the targets first. With the pool off it returns none.
-
-Figures (`figures()`, read by `status.get`, doctor's `warm-pool-target-unreachable`, the console):
-`enabled`, `reserveRunning`, and per kind `platform`, `model`, `osVersion`, `mode`, `imageTag`, `origin`
-(`configured` or `learned`), `count`, `ready`, `booting`, `short`; learned kinds included, a merged kind once
-with the larger count. Before the first pass, or with the pool off, they are the configured targets from config.
-
-`short`, the first that applies: `disabled`; set in the converger `no-driver`, `runtime-missing`,
-`unknown-model`, `unresolvable`; set in the policy `boot-failed`, `device-limit`, `running-limit`,
-`reserve`, `ram-budget`. None while filling or waiting behind a queued request the pass could not serve.
-
-`warm-pool.target-missed`: once per report that is short now and whose configured targets have not
-missed since they were last met (ready ≥ count). Configured targets only, by the configured count. Payload:
-platform, model, osVersion, mode, origin (`configured`), count, ready, reason.
-
-Stop: `close()` at stop start; `drain()` finishes the pass and running boots, starts nothing;
-`dispose()` cancels the timers.
-
-## State and timers
-
-| What                                    | Default                             | Key                              |
-| --------------------------------------- | ----------------------------------- | -------------------------------- |
-| Pool on                                 | `true`                              | `warmPool.enabled`               |
-| Plan learned kinds                      | `true`                              | `warmPool.learn`                 |
-| Leases in 24 h that learn a baseline    | `3`                                 | `warmPool.baselineLearnAfter`    |
-| Running slots idle devices may not fill | 0 per platform, capped at its limit | `warmPool.reserveRunning`        |
-| Targets                                 | none, at most 256                   | `warmPool.targets`               |
-| Boots and creations in flight at once   | `max(1, floor(cpuCount / 4))`       | `warmPool.maxConcurrentBoots`    |
-| Never-leased idle                       | 10 min                              | `idle.shutdownAfterMs`           |
-| Tick; pause after a failed shutdown     | 30 s                                | `WARM_POOL_TICK_MS`              |
-| Target retry                            | 60 s, doubling, cap 10 min          | `RETRY_FIRST_MS`, `RETRY_MAX_MS` |
-
-Target keys: `platform`, `model`, `count` required; `osVersion` (version or range), `mode`.
-Any other key, a class included, fails the load. Targets are config; the learned kinds are the
-pool's own `state.db` tables, kept across restarts and cleared by nuke.
 
 ## Rules
 
-- `policy.ts` is pure. The converger revalidates every proposal before it acts.
-- Acts only through `ManagedDeviceLifecycle` and `DeviceProvisioner`, never on a leased or
-  claimed device.
-- Never installs: a missing runtime is a report, not a download.
-- Only displacement shuts a device down for a target or learned kind, and never one a configured count keeps; what does not fit is reported short.
-- `reserveRunning` holds slots from idle devices only; it never holds back a request.
+Warm means virtual, `ready` and unleased.
+
+Boundaries:
+
+- `policy.ts` is pure. The converger revalidates every proposal (same state, no lease, no claim) before it acts.
+- Acts only through `ManagedDeviceLifecycle` and `DeviceProvisioner`, never on a leased or claimed device.
+- Leasing reaches the pool only through `CorePorts.warmPoolDemand` and `core.passWarmPool()`.
+- The pool learns from committed facts on the bus, never from the lease path (ADR 0017 §3).
+- Never installs: every target resolves through `warmPoolDemand.resolve` with downloads off, on every pass, and a missing runtime is a report, not a download.
 - Reclaim commits the driver's state and decides nothing; keep or shut down is decided here.
+
+Passes:
+
+- One pass at a time; a trigger during a pass asks for one more pass.
+- The plan runs under the lock; driver work runs outside it. A boot takes `tryReserveBoot` and a `boot` claim under the lock. A creation takes `tryReserveProvisioning` and provisions with an ownerless `boot` claim, dropped once ready, so a request may wait on it.
+- Target and `waiting-request` boots and creations run beside the pass. Every attempted action ends in `kick()`, whether it worked or not.
+- While nuke holds acquisition closed the pool does nothing, and a device shut down then is never booted back unasked. Nuke also clears the learned record.
+- A device of a platform whose driver was refused at discovery is never proposed, boot or shutdown. It still holds its capacity slot, and `targeted()` still lists it to the reaper.
+- Stop: `close()` at stop start; `drain()` finishes the pass and running boots and starts nothing; `dispose()` cancels the timers.
+
+The plan (`evaluate`), in this order: pool off → over budget → the queue → never-leased idle devices → configured targets → learned kinds.
+
+- Over budget shuts down idle devices only, never one a waiting request would take, and none while a booted device is on its way to a lease.
+- The queue is served oldest first, one device per waiter and one waiter per device. Nothing is created for the head, or for a waiter whose earlier waiters are all matched to a ready device: leasing creates for those.
+- No target is filled while a waiter on its platform is one the pass could not serve.
+- Every configured count fills before any learned count.
+- Only displacement shuts a device down for a target or learned kind, and never one a configured count keeps; what does not fit is reported short. Nothing is displaced when the capacity strategy would still refuse the kind after the shutdown.
+- `reserveRunning` holds slots from idle devices only; it never holds back a request.
+- An `unresolvable` target keeps its last spec, so its devices stay spared.
+
+Learned kinds:
+
+- A kind is learned on `lease.granted`, never for a physical device and never with the pool off. A plain kind is learned on its first lease.
+- A baseline kind is one row per baseline name, learned once its grants in the window reach `warmPool.baselineLearnAfter`. The mark is stored and never worked out again. Until then the row counts but is not planned, not in `figures()` or `targeted()`, and not matched by `forgetKinds`. Each pass warms it as the baseline's newest version.
+- `start()` closes the lease rows whose lease the registry no longer holds.
+- The catalog check forgets a kind whose model, OS, image tag or driver is gone, or whose baseline is removed or stale. `LEARNED_FAILURES_LIMIT` (`converger.ts`) failed boots in a row forget it too.
+- A kind whose platform has no catalog answer yet (read pending, failed or timed out) is kept and planned for nothing that pass.
+- `forgetKinds` (ADR 0050) drops a kind's failed-boot count unless a configured target shares its spec. The devices the kind kept are left to the reaper's idle rules.
+- The learned kinds are the pool's own `state.db` tables (`warmPoolOwner`), kept across restarts and cleared by nuke. Targets are config.
+
+What others read:
+
+- `targeted()` lists what the reaper's `idle-shutdown` spares: each target's and learned kind's ready, unleased, unclaimed devices up to its count, and every such device a waiter not in flight could be granted. Demand is read on every call, so a cancellation removes that protection. With no pass yet it resolves the targets first; with the pool off it returns none.
+- `figures()`: before the first pass, or with the pool off, they are the configured targets from config. A merged kind is listed once, with the larger count.
+- `warm-pool.target-missed` covers configured targets only, by the configured count: once per report that is short now and has not missed since it was last met.
+- A target key outside the known ones, a class included, fails the config load.
 
 ## Known gaps
 
 - **A warm target costs one create per lease.** Every virtual device serves one lease (ADR 0061 §2), so each grant spends a
   device; the pool creates and boots the next one off the lease path. It holds a slot and RAM while
   it waits; a burst larger than `count` pays the boot.
-- **A failing target retries forever.** 1, 2, 4 … minutes, at most 10 apart, no attempt limit; each
+- **A failing target retries forever.** The delay doubles from `RETRY_FIRST_MS` up to `RETRY_MAX_MS`, with no attempt limit; each
   try boots or creates a device. `retry.ts` is the one place to add a limit.

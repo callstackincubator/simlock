@@ -43,8 +43,8 @@ grounds for rejecting a change even if it works.
    `ProcessRunner`, `Clock`, `SystemStats`, …) injected at startup — never
    import `fs`/`child_process` or call `Date.now()`/`setTimeout` directly in
    application code. Tests use the in-memory/fake implementations; if a new
-   external dependency appears, define its port first. The ports are listed
-   in [the ports manual](../../../src/ports/AGENTS.md).
+   external dependency appears, define its port first:
+   [the ports manual](../../../src/ports/AGENTS.md) says how.
 10. **A rule is enforced in exactly one place.** Never implement the same
     decision twice — not in two modules, not on two code paths through one
     module, not "once for the fast path and once for the general path". If
@@ -119,8 +119,7 @@ grounds for rejecting a change even if it works.
     by its own path (#825 Decisions, `.dependency-cruiser.mjs`). A single-file
     component's surface is what the file exports, and a component whose
     surface has grown past one file becomes a directory with an index, not
-    a second file others reach into. Each module's manual,
-    `src/<module>/AGENTS.md`, names its files and its surface.
+    a second file others reach into.
 15. **Dependencies point from the optional to the required, never back.**
     The lease transaction (request book, queue, acquisition, planner,
     provisioner, lifecycle, release, reclaim, registry, capacity) is the
