@@ -85,7 +85,7 @@ const ADB_SELECTION_KEYS = new Set([
 export interface AgentDeviceSupervisorOptions {
   readonly baseEnvironment: NodeJS.ProcessEnv;
   readonly clock: Clock;
-  readonly config: { readonly command: string };
+  readonly config: { readonly command: string; readonly iosRunnerIdleStopMs?: number };
   readonly driverEnvironment: Readonly<Record<string, string>>;
   readonly filesystem: Filesystem;
   readonly healthProbe: AgentDeviceHealthProbe;
@@ -560,6 +560,8 @@ export class AgentDeviceSupervisor {
         stateDir: this.#stateDir,
       }),
     );
+    const idleStop = o.config.iosRunnerIdleStopMs;
+    if (idleStop !== undefined) env["AGENT_DEVICE_IOS_RUNNER_IDLE_STOP_MS"] = String(idleStop);
     if (phones) Object.assign(env, this.#phoneEnvironment());
     await this.#hideUnusedPlatforms(env);
     return env;
