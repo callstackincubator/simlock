@@ -60,6 +60,7 @@ export class MemoryPressureTracker {
   };
   #readingAt: number | undefined;
   #staleTimer: TimerHandle | undefined;
+  readonly #listeners = new Set<() => void>();
 
   constructor(private readonly options: MemoryPressureOptions) {}
 
@@ -77,6 +78,7 @@ export class MemoryPressureTracker {
       this.#hold("warming", config.pauseWarming, memory, now);
       this.#hold("newDevices", config.pauseNewDevices, memory, now);
     });
+    for (const listener of this.#listeners) listener();
   }
 
   current(): MemoryPressureState | undefined {
@@ -88,7 +90,14 @@ export class MemoryPressureTracker {
     return { readingAt: this.#readingAt, step: "none" };
   }
 
+  /** why: a reader acts once per reading, after the step has been updated and its event sent. */
+  onReading(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   dispose(): void {
+    this.#listeners.clear();
     if (this.#staleTimer !== undefined) this.options.clock.cancel(this.#staleTimer);
     this.#staleTimer = undefined;
     this.#dropAll();

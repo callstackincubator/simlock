@@ -17,6 +17,7 @@ import type {
   WarmPoolReader,
   CatalogReader,
   LeaseExpirer,
+  MemoryPressureReader,
   PassthroughResolver,
 } from "./core-ports.js";
 import { DeviceOperationClaims } from "./device-operation-claims.js";
@@ -47,6 +48,8 @@ export type CoreConfig = DoctorConfig & Pick<Config, "capacity" | "health" | "id
 
 interface CoreOptions {
   readonly clock: Clock;
+  /** why: the worker's memory pressure step; absent when host load is off, so a reader sees no step. */
+  readonly memoryPressure?: MemoryPressureReader;
   /**
    * The daemon's one `ComponentInstaller`, built and closed by the composition root. Warm-pool
    * provisioning and startup convergence never install through it (safety rule 4); every device
@@ -112,6 +115,7 @@ class CorePortMissingError extends Error {
 }
 
 export interface Core {
+  readonly memoryPressure: MemoryPressureReader;
   readonly capacity: CapacityCoordinator;
   readonly capacityReader: CapacityReader;
   readonly warmPoolReader: WarmPoolReader;
@@ -158,6 +162,11 @@ export interface Core {
   closeWarmPool(): void;
   dispose(): void;
 }
+
+const NO_MEMORY_PRESSURE: MemoryPressureReader = {
+  current: () => undefined,
+  onReading: () => () => undefined,
+};
 
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
@@ -391,6 +400,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
+    memoryPressure: options.memoryPressure ?? NO_MEMORY_PRESSURE,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,
