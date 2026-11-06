@@ -510,6 +510,7 @@ export async function composeWorker(
     passthrough: core.catalog,
     inputs: leaseInputs,
     processRunner,
+    leaseFiles,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,
     presence: latestPresence,

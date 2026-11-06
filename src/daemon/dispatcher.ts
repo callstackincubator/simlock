@@ -62,6 +62,7 @@ import type {
   StreamingProcessHandle,
   TimerHandle,
 } from "../ports/index.js";
+import type { LeaseFileView, LeaseFiles, LeaseFilesGrant } from "../lease-files/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
   capabilityReason,
@@ -159,6 +160,7 @@ export interface DispatcherOptions {
   /** why: the lease's device input, which `device.rotate` writes to; optional so tests that never rotate need none. */
   readonly inputs?: ModuleInputs;
   readonly processRunner?: ProcessRunner;
+  readonly leaseFiles?: Pick<LeaseFiles, "folderOf" | "openFile">;
   /**
    * why: The environment a `device.exec` child starts from, before the driver's own scoping keys are
    * layered on top. Injected rather than read from `process.env` here (architecture rule 9),
@@ -768,18 +770,37 @@ export class Dispatcher {
       // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
-    const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
-      env: execEnv,
-      // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
-      // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
-      onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
-      ...(input.stdin === undefined ? {} : { input: input.stdin }),
-    });
-    // why: Announced before the first chunk can arrive, because "it started" is what a transport
-    // needs to decide its response shape on -- see `DispatchSession.onStarted`.
-    session.onStarted?.();
-    return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
+    const file =
+      input.stdinFile === undefined
+        ? undefined
+        : await this.#openStdinFile(
+            { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform },
+            input.stdinFile,
+          );
+    try {
+      const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
+        env: execEnv,
+        // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
+        // the child until the chunk has actually gone somewhere (ADR 0005 §19e).
+        onChunk: (stream, chunk) => session.onOutput?.(stream, chunk),
+        ...(input.stdin === undefined ? {} : { input: input.stdin }),
+        ...(file === undefined ? {} : { inputStream: file.read() }),
+      });
+      // why: Announced before the first chunk can arrive, because "it started" is what a transport
+      // needs to decide its response shape on -- see `DispatchSession.onStarted`.
+      session.onStarted?.();
+      return { exitCode: await this.#awaitExec(handle, input.tool, input.args) };
+    } finally {
+      await file?.close();
+    }
   };
+
+  async #openStdinFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView> {
+    if (this.options.leaseFiles === undefined) {
+      throw new DispatchError("INTERNAL", "Lease files are unavailable");
+    }
+    return this.options.leaseFiles.openFile(grant, name);
+  }
 
   async #awaitExec(
     handle: StreamingProcessHandle,

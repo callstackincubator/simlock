@@ -1,2 +1,2 @@
 export { createLeaseFiles } from "./lease-files.js";
-export type { LeaseFilesLimits } from "./types.js";
+export type { LeaseFilesGrant, LeaseFileView, LeaseFiles, LeaseFilesLimits } from "./types.js";

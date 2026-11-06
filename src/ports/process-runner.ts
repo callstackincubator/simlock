@@ -1,6 +1,8 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { constants } from "node:os";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
 import { childLaunch } from "./windows-command.js";
 
@@ -93,6 +95,11 @@ export interface ProcessStreamOptions {
    * own timeout), matching `ProcessRunOptions.input`.
    */
   readonly input?: string;
+  /**
+   * why: Piped to the child's stdin and then closed, for input too big to hold as a string.
+   * Given together with `input`, `inputStream` is ignored.
+   */
+  readonly inputStream?: ReadableStream<Uint8Array>;
   /**
    * Called with each chunk as it arrives. **May return a promise**, and if it does, this
    * runner stops reading that stream until it resolves -- which is how backpressure reaches
@@ -316,6 +323,11 @@ export class NodeProcessRunner implements ProcessRunner {
       // swallowed below rather than left to surface as an unhandled `error` on the stream.
       child.stdin?.on("error", () => undefined);
       child.stdin?.end(options.input);
+    } else if (options.inputStream !== undefined && child.stdin) {
+      child.stdin.on("error", () => undefined);
+      void Readable.fromWeb(options.inputStream as NodeReadableStream<Uint8Array>)
+        .on("error", () => undefined)
+        .pipe(child.stdin);
     }
     return handle;
   }

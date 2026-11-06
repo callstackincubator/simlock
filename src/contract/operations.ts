@@ -472,6 +472,9 @@ export const driverPassthrough = defineOperation({
   output: passthroughCommandSchema,
 });
 
+/** why: the File name rule of a lease's files (1 to 128 characters), shared by the upload routes and exec's `stdinFile`. */
+export const LEASE_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 // why: the daemon parses a request as one string, so unbounded stdin exhausts the heap (#1242).
 export const EXEC_STDIN_MAX_LENGTH = 8_388_608;
 
@@ -522,6 +525,7 @@ export const deviceExec = defineOperation({
       tool: z.string().min(1),
       args: z.array(z.string()),
       stdin: z.string().max(EXEC_STDIN_MAX_LENGTH).optional(),
+      stdinFile: z.string().regex(LEASE_FILE_NAME_PATTERN).optional(),
       /**
        * why: Who this command is being run *for* -- the requester the lease is attributed to (ADR
        * 0003 §4), not the connection's principal. Read **only on an admin session**, where it
