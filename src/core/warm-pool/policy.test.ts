@@ -1739,7 +1739,7 @@ describe("warm pool policy", () => {
         target: wanted,
       });
 
-      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating, and counts a learned kind's leased, reclaiming and claimed devices as had", () => {
+      it("fills configured targets in config order, then learned kinds newest first, booting a shut-down device of the kind before creating", () => {
         const learned = [learnedOf(kind, 1, now - minute), learnedOf(older, 1, now - 2 * minute)];
 
         const first = plan(view([], { learned, limit: 1, maxConcurrentBoots: 2 }));
@@ -1761,24 +1761,6 @@ describe("warm pool policy", () => {
           { action: "boot", deviceId: "shut", reason: "target", target: kind },
         ]);
 
-        const held = [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")];
-        expect(evaluate(view(held, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
-        const claimed = ofKind("claimed", "ready");
-        expect(
-          evaluate(view([claimed], { claimed: ["claimed"], learned: [learnedOf(kind, 1, now)] })),
-        ).toEqual([]);
-        const reclaiming = [
-          ofKind("a", "leased"),
-          ofKind("b", "leased"),
-          ofKind("c", "reclaiming"),
-        ];
-        expect(evaluate(view(reclaiming, { learned: [learnedOf(kind, 3, now)] }))).toEqual([]);
-
-        const mixed = [ofKind("a", "leased"), ofKind("b", "ready")];
-        expect(
-          evaluate(view(mixed, { learned: [learnedOf(kind, 3, now)], maxConcurrentBoots: 3 })),
-        ).toEqual([provision(kind)]);
-
         const merged = plan(
           view([ofKind("a", "leased")], {
             learned: [learnedOf(kind, 2, now), learnedOf(older, 1, now - minute)],
@@ -1793,6 +1775,97 @@ describe("warm pool policy", () => {
           ["configured", 2, 1],
           ["learned", 1, 0],
         ]);
+      });
+
+      it("plans enough copies to keep max(peak - leased, 1) of a learned kind ready, counting copies on their way, for a plain kind and a baseline kind alike", () => {
+        const baselined = { ...kind, baseline: { name: "demo", version: 1 } };
+        const cases = [
+          ["peak 1, 1 leased", [ofKind("a", "leased")], 1, kind, [], [provision(kind)]],
+          ["peak 1, 1 reclaiming", [ofKind("a", "reclaiming")], 1, kind, [], [provision(kind)]],
+          [
+            "peak 1, 1 ready under a claim",
+            [ofKind("a", "ready")],
+            1,
+            kind,
+            ["a"],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 3 leased",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 2 leased + 1 reclaiming",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "reclaiming")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 1 leased + 1 ready",
+            [ofKind("a", "leased"), ofKind("b", "ready")],
+            3,
+            kind,
+            [],
+            [provision(kind)],
+          ],
+          [
+            "peak 3, 3 leased + 1 boot in flight",
+            [ofKind("a", "leased"), ofKind("b", "leased"), ofKind("c", "leased")],
+            3,
+            kind,
+            [],
+            [],
+            [kind],
+          ],
+          [
+            "baseline kind, peak 1, 1 leased",
+            [ofKind("a", "leased", { spec: baselined })],
+            1,
+            baselined,
+            [],
+            [provision(baselined)],
+          ],
+        ] as const;
+
+        for (const [name, devices, peak, wanted, claimed, expected, inFlight = []] of cases) {
+          expect(
+            evaluate(
+              view(devices, {
+                claimed,
+                inFlight,
+                learned: [learnedOf(wanted, peak, now)],
+                maxConcurrentBoots: 3,
+              }),
+            ),
+            name,
+          ).toEqual(expected);
+        }
+      });
+
+      it("plans the larger of what the configured count and the learned count each lack for a kind both configured and learned", () => {
+        const cases = [
+          ["configured 1 + peak 2, 1 leased", 1, 2, 1],
+          ["configured 2 + peak 1, 1 leased", 2, 1, 2],
+        ] as const;
+
+        for (const [name, configuredCount, peak, created] of cases) {
+          expect(
+            evaluate(
+              view([ofKind("a", "leased")], {
+                learned: [learnedOf(kind, peak, now)],
+                maxConcurrentBoots: 3,
+                targets: [{ count: configuredCount, spec: kind }],
+              }),
+            ),
+            name,
+          ).toEqual(Array.from({ length: created }, () => provision(kind)));
+        }
       });
 
       it("keeps a learned kind's never-leased device out of never-leased-idle while the kind wants it, and proposes one beyond its count after idle.shutdownAfterMs", () => {

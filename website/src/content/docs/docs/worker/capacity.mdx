@@ -153,7 +153,7 @@ A device counts at the full size until it has booted and been checked as slim. S
 
 The warm pool keeps idle devices booted, so a lease starts without waiting for a boot. It is on by default and needs no setup: it learns from your leases.
 
-- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps as many booted as were leased at the same time at the busiest moment of the last 24 hours, at least one. What it learned survives a daemon restart.
+- **It learns what you lease.** For each kind of device leased (platform, model, OS version, mode), it keeps ready as many as were leased at the same time at the busiest moment of the last 24 hours (its peak) while none is leased. While some of its copies are leased, it keeps the peak less those leased ready, at least one spare. What it learned survives a daemon restart.
 - **A baseline is learned on its Nth lease within 24 hours.** N is `warmPool.baselineLearnAfter` (3 by default). Until then a lease of it leaves nothing booted. Once learned, it stays learned and is kept warm like any other kind, as the baseline's newest version: if you save a version from another model, the next pass warms that model.
 - **You can add targets.** `warmPool.targets` names devices to keep booted before anyone asks:
 
