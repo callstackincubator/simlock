@@ -74,6 +74,8 @@ interface Status {
 }
 
 const IOS = { availableOsVersions: ["18.4"], knownModels: ["iPhone 16"] };
+// why: a leased learned kind keeps a spare ready copy (ADR 0069); these tests count the leased device alone.
+const NO_WARM_POOL = { warmPool: { enabled: false } };
 
 async function workerList(daemon: RunningDaemon): Promise<readonly WorkerView[]> {
   const listed = await daemon.cli(["worker", "list", "--json"]);
@@ -331,7 +333,7 @@ test.describe("the workers page", () => {
     page,
   }) => {
     const fleet = await startFleet([
-      { driverScript: { ios: IOS }, label: "worker-a" },
+      { config: NO_WARM_POOL, driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
     ]);
     let hangUp = () => {};
@@ -984,7 +986,7 @@ test.describe("the workers page", () => {
     page,
   }) => {
     const fleet = await startFleet([
-      { driverScript: { ios: IOS }, label: "worker-a" },
+      { config: NO_WARM_POOL, driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: { ...IOS, knownModels: ["iPhone 17"] } }, label: "worker-b" },
     ]);
     try {
@@ -1247,7 +1249,7 @@ test.describe("the workers page", () => {
     page,
   }) => {
     const fleet = await startFleet([
-      { driverScript: { ios: IOS }, label: "worker-a" },
+      { config: NO_WARM_POOL, driverScript: { ios: IOS }, label: "worker-a" },
       { driverScript: { ios: IOS }, label: "worker-b" },
     ]);
     let hangUp = () => {};
