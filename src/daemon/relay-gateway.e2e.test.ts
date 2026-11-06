@@ -409,12 +409,15 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       { model: "Pixel-A", noWait: true, platform: "android" },
       holder,
     );
+    const callOn =
+      (leaseId: string, bearer: string) =>
+      (path: string, init: RequestInit = {}) =>
+        fetch(`http://127.0.0.1:${String(fleet.port)}/v1/leases/${leaseId}/files${path}`, {
+          ...init,
+          headers: { authorization: `Bearer ${bearer}`, ...init.headers },
+        });
+    const call = callOn(grant.lease.id, secret);
     const base = `http://127.0.0.1:${String(fleet.port)}/v1/leases/${grant.lease.id}/files`;
-    const call = (path: string, init: RequestInit = {}) =>
-      fetch(`${base}${path}`, {
-        ...init,
-        headers: { authorization: `Bearer ${secret}`, ...init.headers },
-      });
     // why: `fetch` refuses a `Content-Length` that does not match its body, and the 2 GiB refusal is decided on the header alone.
     const declare = (path: string, bytes: number) =>
       new Promise<{ status: number; body: string }>((resolve, reject) => {
@@ -444,7 +447,32 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
         request.flushHeaders();
       });
     const channelsOpened = () => fleet.taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length;
-    return { ...fleet, call, channelsOpened, declare, leaseId: grant.lease.id };
+    const newLease = async () => {
+      const next = await fleet.gateway.dispatch(
+        "lease.request",
+        { model: "Pixel-A", noWait: true, platform: "android" },
+        holder,
+      );
+      return { call: callOn(next.lease.id, secret), leaseId: next.lease.id };
+    };
+    const stranger = async () => {
+      const other = await fleet.gateway.dispatch(
+        "token.create",
+        { label: "stranger", role: "agent" },
+        adminSession,
+      );
+      return callOn(grant.lease.id, other.secret);
+    };
+    return {
+      ...fleet,
+      call,
+      channelsOpened,
+      declare,
+      holder,
+      leaseId: grant.lease.id,
+      newLease,
+      stranger,
+    };
   }
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
@@ -524,6 +552,58 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     });
     expect(channelsOpened()).toBe(opened);
   }, 120_000);
+
+  it("through a gateway, a caller that does not hold the lease gets 404 UNKNOWN_LEASE, and a lease whose worker is gone gets 503 WORKER_UNREACHABLE", async () => {
+    const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: MIB, silenceMs: 330_000 });
+    const asStranger = await rig.stranger();
+    const routes = (call: typeof rig.call) => [
+      () => call("/fixture.tar", { body: "x", method: "PUT" }),
+      () => call("/fixture.tar"),
+      () => call("/fixture.tar", { method: "DELETE" }),
+      () => call(""),
+    ];
+
+    const refused = await Promise.all(routes(asStranger).map((send) => send()));
+    const full = await rig.call("/big.bin", { body: new Uint8Array(2 * MIB), method: "PUT" });
+    const feed = new TransformStream<Uint8Array>();
+    const writer = feed.writable.getWriter();
+    const running = rig.call("/running.bin", {
+      body: feed.readable,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    await writer.write(new Uint8Array(1));
+    await poll(async () => (await rig.call("")).status).toBe(200);
+    await rig.gateway.dispatch("lease.release", { leaseId: rig.leaseId }, rig.holder);
+    await writer.write(new Uint8Array(1));
+    await writer.close();
+    const ended = await running;
+    const next = await rig.newLease();
+    await rig.worker.worker.stop("test");
+    await poll(async () => (await next.call("")).status).toBe(503);
+
+    expect(refused.map((response) => response.status)).toEqual([404, 404, 404, 404]);
+    for (const response of refused) {
+      expect(await response.json()).toMatchObject({
+        error: { code: "UNKNOWN_LEASE", leaseId: rig.leaseId },
+      });
+    }
+    expect(full.status).toBe(413);
+    const fullBody = (await full.json()) as {
+      error: { code: string; message: string; leaseId: string };
+    };
+    expect(fullBody.error).toMatchObject({ code: "LEASE_FILES_FULL", leaseId: rig.leaseId });
+    expect(fullBody.error.message).toContain(`Lease ${rig.leaseId} holds`);
+    expect(ended.status).toBe(404);
+    const endedBody = (await ended.json()) as {
+      error: { code: string; message: string; leaseId: string };
+    };
+    expect(endedBody.error).toMatchObject({ code: "UNKNOWN_LEASE", leaseId: rig.leaseId });
+    expect(endedBody.error.message).toBe(`Unknown lease: ${rig.leaseId}`);
+    expect(await (await next.call("")).json()).toMatchObject({
+      error: { code: "WORKER_UNREACHABLE" },
+    });
+  }, 60_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
     let received = "";
