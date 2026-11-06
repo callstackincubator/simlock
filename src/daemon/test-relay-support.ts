@@ -15,7 +15,10 @@ import type { DispatchSession } from "./dispatch.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { RelayTarget, RelayTargets, TwoWayRelayTarget } from "./relay.js";
 import type { DaemonServer } from "./server.js";
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { SimlockWire, type CallHooks, type RelayHead } from "../simlock-client/wire.js";
+
+export { freeLoopbackPort } from "../test-support/loopback-port.js";
 
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
@@ -26,15 +29,6 @@ export const adminSession: DispatchSession = {
   role: "admin",
   via: "socket",
 };
-
-export async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -334,39 +328,44 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const execCommand = options.execCommand;
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
-  const port = await freeLoopbackPort();
-  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
-  const gateway = await startDaemon({
-    configOverrides: {
-      http: {
-        enabled: true,
-        host: "127.0.0.1",
-        port,
-        ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+  const {
+    port,
+    started: { gateway, workerDials },
+  } = await startOnFreePort(async (candidate) => {
+    const dials = (await options.gatewayUrl?.(candidate)) ?? `ws://127.0.0.1:${String(candidate)}`;
+    const started = await startDaemon({
+      configOverrides: {
+        http: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: candidate,
+          ...(options.proxyAuth === undefined ? {} : { proxyAuth: options.proxyAuth }),
+        },
       },
-    },
-    role: "gateway",
-    dataDirectory: gatewayDirectory,
-    filesystem: new MemoryFilesystem(),
-    gatewayRelay: (given) => {
-      relay = given;
-    },
-    gatewayUplinks: (uplinks) => {
-      const listen = uplinks.listen.bind(uplinks);
-      uplinks.listen = (handlers) =>
-        listen({
-          ...handlers,
-          accept: (uplink) => {
-            const tap = new TappedTransport(uplink.connection);
-            taps.push(tap);
-            handlers.accept({ ...uplink, connection: tap });
-          },
-        });
-    },
-    logger: new NoopLogger(),
-    version: "1.0.0-e2e",
+      role: "gateway",
+      dataDirectory: gatewayDirectory,
+      filesystem: new MemoryFilesystem(),
+      gatewayRelay: (given) => {
+        relay = given;
+      },
+      gatewayUplinks: (uplinks) => {
+        const listen = uplinks.listen.bind(uplinks);
+        uplinks.listen = (handlers) =>
+          listen({
+            ...handlers,
+            accept: (uplink) => {
+              const tap = new TappedTransport(uplink.connection);
+              taps.push(tap);
+              handlers.accept({ ...uplink, connection: tap });
+            },
+          });
+      },
+      logger: new NoopLogger(),
+      version: "1.0.0-e2e",
+    });
+    return { gateway: started, workerDials: dials };
   });
   daemons.push(gateway);
   const { secret } = await gateway.dispatch(
