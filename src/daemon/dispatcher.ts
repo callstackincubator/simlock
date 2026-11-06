@@ -39,6 +39,7 @@ import {
   type WarmKindForgetter,
   type WarmPoolReader,
   type CatalogReader,
+  type PassthroughCommand,
   type PassthroughResolver,
   isUnavailableInput,
   createUsageReader,
@@ -749,7 +750,8 @@ export class Dispatcher {
     if (this.options.passthrough === undefined) {
       throw new DispatchError("INTERNAL", "Tool passthrough is unavailable");
     }
-    if (this.options.processRunner === undefined) {
+    const processRunner = this.options.processRunner;
+    if (processRunner === undefined) {
       throw new DispatchError("INTERNAL", "Command execution is unavailable");
     }
     // why: checked here, not as a refinement on the shared input, which `.omit()` could no longer build `run_on_device` from.
@@ -769,27 +771,49 @@ export class Dispatcher {
     // here, with pipes and no pty (ADR 0005 §19c), so a driver may refuse something it allows
     // a local `simlock <tool>` invocation -- a bare `adb shell` would otherwise sit on those
     // pipes until `exec.timeoutMs` killed it. `platform` is the leased device's own.
+    const files = this.options.leaseFiles;
+    if (files === undefined) throw new DispatchError("INTERNAL", "Lease files are unavailable");
     const command = await this.options.passthrough.passthrough(
       input.tool,
       toDriverDevice(record),
       input.args,
       { hasTerminal: false, platform: record.spec.platform },
     );
+    return this.#runExec(
+      {
+        command,
+        files,
+        grant: { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform },
+        input,
+        processRunner,
+      },
+      session,
+    );
+  };
+
+  async #runExec(
+    run: {
+      readonly command: PassthroughCommand;
+      readonly files: Pick<LeaseFiles, "folderOf" | "openFile">;
+      readonly grant: LeaseFilesGrant;
+      readonly input: z.infer<(typeof OPERATIONS)["device.exec"]["input"]>;
+      readonly processRunner: ProcessRunner;
+    },
+    session: DispatchSession,
+  ): Promise<{ readonly exitCode: number }> {
+    const { command, files, grant, input, processRunner } = run;
     const execEnv: NodeJS.ProcessEnv = { ...this.options.execEnv, ...command.env };
     for (const key of command.unsetEnv ?? []) {
       // why: the base comes from the daemon's environment, so a key it kept could re-aim the command.
       delete execEnv[key];
     }
-    const files = this.options.leaseFiles;
-    if (files === undefined) throw new DispatchError("INTERNAL", "Lease files are unavailable");
-    const grant = { grantedAt: lease.grantedAt, id: lease.id, platform: record.spec.platform };
     const cwd = await files.folderOf(grant);
     const file =
       input.stdinFile === undefined
         ? undefined
         : await this.#openStdinFile(files, grant, input.stdinFile);
     try {
-      const handle = this.options.processRunner.spawnStreaming(command.command, command.args, {
+      const handle = processRunner.spawnStreaming(command.command, command.args, {
         cwd,
         env: execEnv,
         // why: Returned, not fired and forgotten: whatever the transport hands back is what pauses
@@ -807,7 +831,7 @@ export class Dispatcher {
     } finally {
       await file?.close();
     }
-  };
+  }
 
   async #openStdinFile(
     files: Pick<LeaseFiles, "openFile">,

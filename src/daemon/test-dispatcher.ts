@@ -1,4 +1,4 @@
-import { tmpdir } from "node:os";
+import { testLeaseFiles } from "./test-lease-files.js";
 import { testConfig as configWithDefaults } from "../core/testing.js";
 import {
   FakeDriver,
@@ -139,12 +139,6 @@ function seedPhysicalDevices(state: StateDatabase, devices: readonly SeededPhysi
     });
   }
 }
-
-/** why: lease files for a test that runs exec but not their routes: every command runs in the temp folder, and no file exists. */
-export const testLeaseFiles: NonNullable<DispatcherOptions["leaseFiles"]> = {
-  folderOf: () => Promise.resolve(tmpdir()),
-  openFile: () => Promise.reject(new Error("no lease file in this test")),
-};
 
 // fallow-ignore-next-line complexity -- one test harness builder; each option is a plain pass-through to a collaborator.
 export async function buildDispatcher(

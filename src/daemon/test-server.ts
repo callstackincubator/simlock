@@ -1,4 +1,4 @@
-import { testLeaseFiles } from "./test-dispatcher.js";
+import { testLeaseFiles } from "./test-lease-files.js";
 import { testConfig as configWithDefaults } from "../core/testing.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
