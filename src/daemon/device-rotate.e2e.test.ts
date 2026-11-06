@@ -1,25 +1,16 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, FakeInputFactory, fakeDeviceDataTables } from "../core/testing.js";
 import { FakeSystemStats, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/index.js";
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const holder: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -346,8 +337,10 @@ describe("device.rotate", () => {
   );
 
   async function holderWithSocketAccess(input: FakeInputFactory) {
-    const httpPort = await freeLoopbackPort();
-    const { daemon } = await worker({ httpPort, input, inputModule: true });
+    const {
+      port: httpPort,
+      started: { daemon },
+    } = await startOnFreePort((port) => worker({ httpPort: port, input, inputModule: true }));
     const admin: DispatchSession = { ...holder, principal: "operator", role: "admin" };
     const created = await daemon.dispatch(
       "token.create",
@@ -565,28 +558,29 @@ describe("device.rotate", () => {
         }
       }
 
-      const workerPort = await freeLoopbackPort();
       const workerInput = new FakeInputFactory(screen);
-      const { daemon: standalone } = await startWorker({
-        httpPort: workerPort,
-        input: workerInput,
-        inputModule: false,
-      });
+      const {
+        port: workerPort,
+        started: { daemon: standalone },
+      } = await startOnFreePort((port) =>
+        startWorker({ httpPort: port, input: workerInput, inputModule: false }),
+      );
       await exercise(standalone, workerPort, workerInput, () => Promise.resolve());
       await daemons.pop()?.stop("test");
 
-      const gatewayPort = await freeLoopbackPort();
       const admin: DispatchSession = { ...holder, principal: "operator", role: "admin" };
       const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-rotate-gateway-"));
       directories.push(gatewayDirectory);
-      const gateway = await startDaemon({
-        configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
-        dataDirectory: gatewayDirectory,
-        filesystem: new MemoryFilesystem(),
-        logger: new NoopLogger(),
-        role: "gateway",
-        version: "1.0.0-e2e",
-      });
+      const { port: gatewayPort, started: gateway } = await startOnFreePort(async (gatewayPort) =>
+        startDaemon({
+          configOverrides: { http: { enabled: true, host: "127.0.0.1", port: gatewayPort } },
+          dataDirectory: gatewayDirectory,
+          filesystem: new MemoryFilesystem(),
+          logger: new NoopLogger(),
+          role: "gateway",
+          version: "1.0.0-e2e",
+        }),
+      );
       daemons.push(gateway);
       const workerToken = (
         await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin)

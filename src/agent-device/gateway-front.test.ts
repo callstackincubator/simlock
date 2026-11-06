@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import { startDaemon, type StartDaemonOptions } from "../daemon/main.js";
 import { DispatchError } from "../daemon/dispatch.js";
@@ -142,15 +142,6 @@ interface SetUpOptions {
   readonly workers?: readonly WorkerSpec[];
 }
 
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -199,7 +190,6 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     [principals.two, secrets.two, "agent"],
     ["tok_operator", secrets.operator, "operator"],
   ]);
-  const port = await freeLoopbackPort();
   const logs = new MemoryLogSink();
   let relay: GatewayRelay | undefined;
   let uplinks: WebSocketUplinkListenerFactory | undefined;
@@ -208,7 +198,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     ...(options.command === undefined ? {} : { command: options.command }),
     ...(options.leaseTtlCapMs === undefined ? {} : { leaseTtlCapMs: options.leaseTtlCapMs }),
   };
-  const startGateway = async (): Promise<DaemonServer> => {
+  const startGateway = async (port: number): Promise<DaemonServer> => {
     const started = await startDaemon({
       clock,
       configOverrides: {
@@ -237,7 +227,8 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     runningDaemons.push(started);
     return started;
   };
-  let gateway = await startGateway();
+  const { port, started: firstGateway } = await startOnFreePort(startGateway);
+  let gateway = firstGateway;
   const members: Member[] = [];
   // fallow-ignore-next-line complexity -- one worker daemon with its own token, directory, fake agent-device and optional direct port.
   const addWorker = async (spec: WorkerSpec, existing?: Member): Promise<Member> => {
@@ -320,7 +311,7 @@ async function setUp(options: SetUpOptions = {}): Promise<Rig> {
     restart: async () => {
       await gateway.stop("test");
       runningDaemons.splice(runningDaemons.indexOf(gateway), 1);
-      gateway = await startGateway();
+      gateway = await startGateway(port);
     },
     get uplinks() {
       if (uplinks === undefined) throw new Error("the gateway never handed over its uplinks");

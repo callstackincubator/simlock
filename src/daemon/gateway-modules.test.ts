@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { agentDeviceModuleWith } from "../agent-device/testing.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
 import type { GatewayModule, OptionalModuleDefinition } from "../modules/index.js";
@@ -29,15 +29,6 @@ afterEach(async () => {
     directories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
   );
 });
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 function definitionsOf(...modules: FakeModule[]): OptionalModuleDefinition<unknown>[] {
   return modules.map((module) => module.definition as OptionalModuleDefinition<unknown>);
@@ -85,13 +76,13 @@ async function startGateway(
   directories.push(directory);
   const clock = new FakeClock(1_000);
   const sink = new MemoryLogSink();
-  const port = await freeLoopbackPort();
-  const start = async () => {
+  const startAt = async (port: number) => {
     const daemon = await startDaemon(gatewayOptions(modules, on, directory, port, clock, sink));
     daemons.push(daemon);
     return daemon;
   };
-  const daemon = await start();
+  const { port, started: daemon } = await startOnFreePort(startAt);
+  const start = () => startAt(port);
   const agent = await daemon.dispatch("token.create", { label: "agent", role: "agent" }, admin);
   return {
     agentSecret: agent.secret,

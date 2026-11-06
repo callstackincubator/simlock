@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import { encodeTunnelFrame, TUNNEL_TAG } from "../contract/index.js";
 import {
   FakeDeviceTcp,
@@ -17,15 +17,6 @@ import { FakeClock, MemoryFilesystem, NoopLogger, SystemClock } from "../ports/i
 import type { DispatchSession } from "./dispatch.js";
 import { startDaemon } from "./main.js";
 import type { DaemonServer } from "./server.js";
-
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
 
 const admin: DispatchSession = {
   manageEventSubscription: () => undefined,
@@ -130,29 +121,30 @@ describe("a lease's tunnel socket", () => {
   }
 
   async function standalone(enabled: boolean) {
-    const port = await freeLoopbackPort();
     const path = await mkdtemp(join(tmpdir(), "simlock-e2e-tunnel-"));
     directories.push(path);
-    const daemon = await startDaemon({
-      configOverrides: {
-        capabilities: { tunnel: { enabled } },
-        http: { enabled: true, host: "127.0.0.1", port },
-      },
-      dataDirectory: path,
-      deviceDataTables: fakeDeviceDataTables,
-      drivers: [
-        new FakeDriver({
-          availableOsVersions: ["18.0"],
-          clock: new SystemClock(),
-          deviceTcp: new FakeDeviceTcp(),
-          knownModels: ["Pixel-A"],
-          platform: "android",
-        }),
-      ],
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          capabilities: { tunnel: { enabled } },
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: path,
+        deviceDataTables: fakeDeviceDataTables,
+        drivers: [
+          new FakeDriver({
+            availableOsVersions: ["18.0"],
+            clock: new SystemClock(),
+            deviceTcp: new FakeDeviceTcp(),
+            knownModels: ["Pixel-A"],
+            platform: "android",
+          }),
+        ],
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(daemon);
     const make = (label: string, role: "agent" | "operator") =>
       daemon.dispatch("token.create", { label, role }, admin);
@@ -182,21 +174,22 @@ describe("a lease's tunnel socket", () => {
     readonly input?: FakeInputFactory;
     readonly clock?: FakeClock;
   }) {
-    const port = await freeLoopbackPort();
     const input = { enabled: options.input !== undefined };
     const clock = options.clock === undefined ? {} : { clock: options.clock };
-    const gateway = await startDaemon({
-      ...clock,
-      configOverrides: {
-        capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
-        http: { enabled: true, host: "127.0.0.1", port },
-      },
-      dataDirectory: await directory("gateway"),
-      filesystem: new MemoryFilesystem(),
-      logger: new NoopLogger(),
-      role: "gateway",
-      version: "1.0.0-e2e",
-    });
+    const { port, started: gateway } = await startOnFreePort(async (port) =>
+      startDaemon({
+        ...clock,
+        configOverrides: {
+          capabilities: { input, tunnel: { enabled: options.gatewayTunnel } },
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        dataDirectory: await directory("gateway"),
+        filesystem: new MemoryFilesystem(),
+        logger: new NoopLogger(),
+        role: "gateway",
+        version: "1.0.0-e2e",
+      }),
+    );
     daemons.push(gateway);
     const token = (await gateway.dispatch("token.create", { label: "w", role: "worker" }, admin))
       .secret;

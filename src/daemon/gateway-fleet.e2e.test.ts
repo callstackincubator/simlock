@@ -24,12 +24,12 @@
 import { createHmac } from "node:crypto";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { startOnFreePort } from "../test-support/loopback-port.js";
 import type { ProtocolRange } from "../contract/index.js";
 import type { AlertDestination, PassthroughCommand } from "../core/index.js";
 import { FakeDriver, fakeDeviceDataTables } from "../core/testing.js";
@@ -59,15 +59,6 @@ function passthroughOptions(command: PassthroughCommand): object {
  * this file overlap -- two worktrees running the suite at once, or Stryker's parallel runners
  * -- with an `EADDRINUSE` that has nothing to do with the code under test.
  */
-async function freeLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (typeof address !== "object" || address === null) throw new Error("no port bound");
-  return address.port;
-}
-
 const GATEWAY_HOST = { arch: "x64", os: "Linux", osVersion: "6.8.0" };
 /** Picked by `startGateway`/`startRestartableGateway` just before each gateway listens, so the
  * port is free for as short a time as possible; the restart test reuses its own port across
@@ -141,23 +132,25 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
   ): Promise<DaemonServer> {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-"));
     directories.push(directory);
-    gatewayPort = await freeLoopbackPort();
-    const daemon = await startDaemon({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: gatewayPort },
-        ...(alerts.destinations === undefined
-          ? {}
-          : { gateway: { alerts: { destinations: alerts.destinations } } }),
-      },
-      role: "gateway",
-      dataDirectory: directory,
-      filesystem: new MemoryFilesystem(),
-      hostInfo: new FakeHostInfo(GATEWAY_HOST),
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-      ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
-      ...extra,
-    });
+    const { port: picked, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port },
+          ...(alerts.destinations === undefined
+            ? {}
+            : { gateway: { alerts: { destinations: alerts.destinations } } }),
+        },
+        role: "gateway",
+        dataDirectory: directory,
+        filesystem: new MemoryFilesystem(),
+        hostInfo: new FakeHostInfo(GATEWAY_HOST),
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+        ...(alerts.poster === undefined ? {} : { webhookPoster: alerts.poster }),
+        ...extra,
+      }),
+    );
+    gatewayPort = picked;
     daemons.push(daemon);
     return daemon;
   }
@@ -178,17 +171,19 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     const directory = await mkdtemp(join(tmpdir(), "simlock-e2e-gateway-restart-"));
     directories.push(directory);
     const filesystem = new MemoryFilesystem();
-    restartGatewayPort = await freeLoopbackPort();
-    const daemon = await startDaemon({
-      configOverrides: {
-        http: { enabled: true, host: "127.0.0.1", port: restartGatewayPort },
-      },
-      role: "gateway",
-      dataDirectory: directory,
-      filesystem,
-      logger: new NoopLogger(),
-      version: "1.0.0-e2e",
-    });
+    const { port: picked, started: daemon } = await startOnFreePort(async (port) =>
+      startDaemon({
+        configOverrides: {
+          http: { enabled: true, host: "127.0.0.1", port },
+        },
+        role: "gateway",
+        dataDirectory: directory,
+        filesystem,
+        logger: new NoopLogger(),
+        version: "1.0.0-e2e",
+      }),
+    );
+    restartGatewayPort = picked;
     daemons.push(daemon);
     return { daemon, filesystem, directory };
   }
