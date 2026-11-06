@@ -1,4 +1,5 @@
 import { request as httpRequest } from "node:http";
+import { createServer } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -266,6 +267,35 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     expect(body).toBe("over a channel");
     expect(taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  it("startFleet starts its gateway when the gatewayUrl hook opens a listener on the gateway's port, and the hook's listener does not get that port", async () => {
+    // why: the timing file's hook starts a proxy with listen(0), which may draw the port startFleet picked; listening on that port makes the draw certain.
+    const squatter = createServer();
+    let squatterBound = false;
+
+    const outcome = await startFleet_(
+      { daemons, directories, target },
+      {
+        gatewayUrl: async (port) => {
+          await new Promise<void>((resolve) => {
+            squatter.once("error", () => resolve());
+            squatter.listen(port, "127.0.0.1", () => {
+              squatterBound = true;
+              resolve();
+            });
+          });
+          return `ws://127.0.0.1:${String(port)}`;
+        },
+      },
+    ).then(
+      () => "started",
+      (error: unknown) => String((error as { code?: unknown }).code ?? error),
+    );
+    if (squatterBound) await new Promise<void>((resolve) => squatter.close(() => resolve()));
+
+    expect(outcome).toBe("started");
+    expect(squatterBound).toBe(false);
   }, 30_000);
 
   it("a gateway module's two-way relay carries bytes both ways at once until either side ends", async () => {
