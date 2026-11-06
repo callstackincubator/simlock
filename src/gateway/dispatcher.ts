@@ -799,6 +799,7 @@ export class GatewayDispatcher {
         tool: input.tool,
         args: input.args,
         ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+        ...(input.stdinFile === undefined ? {} : { stdinFile: input.stdinFile }),
       },
       session,
     );

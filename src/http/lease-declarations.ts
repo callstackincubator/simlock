@@ -7,6 +7,7 @@ import {
   imageTagSchema,
   exceptCategoriesSchema,
   EXEC_STDIN_MAX_LENGTH,
+  LEASE_FILE_NAME_PATTERN,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
   OPERATIONS,
@@ -143,6 +144,11 @@ const execBodySchema = z
       .max(EXEC_STDIN_MAX_LENGTH)
       .nullish()
       .transform((value) => value ?? undefined),
+    stdinFile: z
+      .string()
+      .regex(LEASE_FILE_NAME_PATTERN)
+      .nullish()
+      .transform((value) => value ?? undefined),
     requesterId: requesterIdSchema.nullish().transform((value) => value ?? undefined),
   })
   .strict();
@@ -163,7 +169,11 @@ export const leaseExecRoute = declareRoute({
     "Answers a stream of messages: output, then exit or error. A failure before the command starts is a plain JSON error.",
   request: { params: leaseParamsSchema, json: execBodySchema },
   stream: execMessageSchema,
-  errors: { 404: ["UNKNOWN_LEASE"], 501: ["UNSUPPORTED_IN_GATEWAY_MODE"], 504: ["EXEC_TIMEOUT"] },
+  errors: {
+    404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"],
+    501: ["UNSUPPORTED_IN_GATEWAY_MODE"],
+    504: ["EXEC_TIMEOUT"],
+  },
 });
 
 const rotateBodySchema = z.object({ orientation: z.enum(INPUT_ORIENTATIONS) }).strict();
