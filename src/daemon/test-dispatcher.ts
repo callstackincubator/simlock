@@ -95,39 +95,6 @@ function fakePassthroughOptions(
   return options;
 }
 
-export interface RecordedPassthrough {
-  readonly args: readonly string[];
-  readonly context: unknown;
-  readonly device: unknown;
-  readonly tool: string;
-}
-
-export function recordingResolver(
-  calls: RecordedPassthrough[],
-  answer: () => Promise<unknown> = () =>
-    Promise.resolve({ args: ["list", "devices"], command: "simctl", env: {} }),
-): PassthroughResolver {
-  const resolver = {
-    passthrough: (tool: string, device: unknown, args: readonly string[], context?: unknown) => {
-      calls.push({ args, context, device, tool });
-      return answer();
-    },
-  };
-  return resolver as unknown as PassthroughResolver;
-}
-
-export class SettableClock extends FakeClock {
-  #offset = 0;
-
-  setBack(ms: number): void {
-    this.#offset -= ms;
-  }
-
-  override now(): number {
-    return super.now() + this.#offset;
-  }
-}
-
 function withGatewayLabel(config: Config, label: string | undefined): Config {
   return label === undefined ? config : { ...config, gateway: { ...config.gateway, label } };
 }
