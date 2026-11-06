@@ -55,6 +55,7 @@ import {
   type CurrentBaseline,
   UnknownBaselineError,
   BaselineMismatchError,
+  BadDeviceRequestError,
   BaselineStaleError,
   baselineMismatch,
   type AcquisitionMaintenance,
@@ -552,6 +553,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline, request);
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
+    if (request.except !== undefined && mode !== "slim") {
+      throw new BadDeviceRequestError(
+        "except needs a slim lease (this worker's default mode is full)",
+      );
+    }
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -588,6 +594,9 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec = baselineSpec(current);
+    if (request.except !== undefined && spec.mode !== "slim") {
+      throw new BadDeviceRequestError(`except needs a slim lease (baseline "${name}" is full)`);
+    }
     return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
 

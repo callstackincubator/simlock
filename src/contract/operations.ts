@@ -25,6 +25,8 @@ import {
   doctorReportSchema,
   eventEnvelopeSchema,
   EVENT_ID_PATTERN,
+  EXCEPT_MAX_NAMES,
+  EXCEPT_NAME_PATTERN,
   hostFactsSchema,
   requesterIdSchema,
   historyStatusSchema,
@@ -265,6 +267,46 @@ function refuseRequiresWithIdempotencyKey(): <
   };
 }
 
+/** why: one object-level check with no path (like `osVersion`), so every transport, MCP included, answers `BAD_REQUEST` with the message as written. */
+function refuseBadExcept(): <
+  T extends {
+    readonly except?: readonly string[] | undefined;
+    readonly mode?: unknown;
+    readonly physical?: boolean | undefined;
+    readonly platform: string;
+  },
+>(
+  input: T,
+  context: z.RefinementCtx,
+) => void {
+  return (input, context) => {
+    const { except } = input;
+    if (except === undefined) return;
+    const message = exceptRefusal(input, except);
+    if (message !== undefined) context.addIssue({ code: "custom", message });
+  };
+}
+
+function exceptRefusal(
+  input: {
+    readonly mode?: unknown;
+    readonly physical?: boolean | undefined;
+    readonly platform: string;
+  },
+  except: readonly string[],
+): string | undefined {
+  if (except.length < 1 || except.length > EXCEPT_MAX_NAMES) {
+    return `except names 1 to ${EXCEPT_MAX_NAMES} categories`;
+  }
+  const bad = except.find((name) => !EXCEPT_NAME_PATTERN.test(name));
+  if (bad !== undefined) return `except: "${bad}" is not a category name`;
+  const twice = except.find((name, index) => except.indexOf(name) !== index);
+  if (twice !== undefined) return `except names "${twice}" twice`;
+  if (input.physical === true || input.platform !== "ios") return "except is for iOS simulators";
+  if (input.mode === "full") return "except needs a slim lease (mode is full)";
+  return undefined;
+}
+
 function refuseBadOsVersion(): <T extends { readonly osVersion?: string | undefined }>(
   input: T,
   context: z.RefinementCtx,
@@ -299,6 +341,7 @@ const leaseRequestInputSchema = leaseRequestBaseSchema
   .superRefine(refuseModelWithClass())
   .superRefine(refuseBaselineWithClass())
   .superRefine(refuseBadOsVersion())
+  .superRefine(refuseBadExcept())
   .superRefine(refusePhysicalWithImageFields())
   .superRefine(refuseRequiresWithIdempotencyKey());
 

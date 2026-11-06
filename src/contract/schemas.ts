@@ -35,10 +35,12 @@ const devicePresenceSchema = z.discriminatedUnion("present", [
 const deviceModeSchema = z.enum(["slim", "full"]);
 
 /** why: the category names a slim lease kept running (ADR 0066 §1); the same bounds as the request's `except`. */
+export const EXCEPT_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+export const EXCEPT_MAX_NAMES = 16;
 export const exceptCategoriesSchema = z
-  .array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/))
+  .array(z.string().regex(EXCEPT_NAME_PATTERN))
   .min(1)
-  .max(16);
+  .max(EXCEPT_MAX_NAMES);
 
 const leaseIdentitySchema = z.enum(["reusable", "fresh"]);
 
