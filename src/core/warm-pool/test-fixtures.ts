@@ -4,6 +4,7 @@ import { EventBus } from "../../bus/index.js";
 import { FakeClock, JsonLinesLogger, MemoryLogSink } from "../../ports/index.js";
 import type { CurrentBaseline } from "../baselines.js";
 import type { RunningCapacity } from "../capacity/index.js";
+import type { MemoryPressureReader } from "../core-ports.js";
 import { DeviceOperationClaims } from "../device-operation-claims.js";
 import {
   exactRequirement,
@@ -107,6 +108,28 @@ export type BaselineFixture = Partial<
   Pick<CurrentBaseline, "imageTag" | "mode" | "model" | "osVersion" | "platform" | "staleReason">
 > & { readonly version: number };
 
+type PressureReading = ReturnType<MemoryPressureReader["current"]>;
+
+/** why: a memory pressure port the test drives: `reading` sets the state and calls every listener, as the sampler does after each reading. */
+export function fakeMemoryPressure(initial?: PressureReading) {
+  let current = initial;
+  const listeners = new Set<() => void>();
+  return {
+    reader: {
+      current: () => current,
+      onReading: (listener: () => void) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+    } satisfies MemoryPressureReader,
+    reading(next: PressureReading): void {
+      current = next;
+      for (const listener of listeners) listener();
+    },
+    listeners: () => listeners.size,
+  };
+}
+
 export function harness(
   initial: readonly VirtualDevice[],
   options: {
@@ -142,6 +165,8 @@ export function harness(
     baselines?: Readonly<Record<string, BaselineFixture>>;
     /** why: what a platform's catalog read answers; by default a catalog that lists nothing. */
     catalog?: (platform?: Platform) => Promise<readonly PlatformCatalog[]>;
+    /** why: the worker's memory pressure; by default none, so no step is held. */
+    memoryPressure?: MemoryPressureReader;
   } = {},
 ) {
   const clock = new FakeClock(now);
@@ -313,6 +338,7 @@ export function harness(
       },
     },
     logger: new JsonLinesLogger({ clock, sink }),
+    memoryPressure: options.memoryPressure ?? fakeMemoryPressure().reader,
     provisioner: {
       provision: async (spec, provisionOptions) => {
         const record: (typeof provisionCalls)[number] = {

@@ -6,6 +6,7 @@ import { WARM_POOL_TICK_MS } from "./converger.js";
 import { LearnedKinds } from "./learned.js";
 import {
   device,
+  fakeMemoryPressure,
   harness,
   iphone15,
   learnedState,
@@ -533,6 +534,36 @@ describe("warm pool converger", () => {
     rig.clock.advance(WARM_POOL_TICK_MS);
     await rig.pool.settle();
     expect(rig.waitingDemand.mock.calls.length).toBe(afterDispose);
+  });
+});
+
+describe("warm pool memory pressure", () => {
+  const paused = (readingAt: number) => ({
+    cause: { availablePercent: 12, level: "warn" as const, trigger: "level" as const },
+    readingAt,
+    since: now,
+    step: "warming-paused" as const,
+  });
+
+  it("each reading while warming is paused shuts down one idle device", async () => {
+    const pressure = fakeMemoryPressure(paused(now));
+    const rig = harness(
+      [
+        device("old", "ready", 90 * minute),
+        device("mid", "ready", 60 * minute),
+        device("new", "ready", 5 * minute),
+      ],
+      { memoryPressure: pressure.reader },
+    );
+    rig.pool.start();
+
+    pressure.reading(paused(now + 15_000));
+    await rig.pool.settle();
+    expect(rig.shutdownCalls).toEqual(["old"]);
+
+    pressure.reading(paused(now + 30_000));
+    await rig.pool.settle();
+    expect(rig.shutdownCalls).toEqual(["old", "mid"]);
   });
 });
 

@@ -170,6 +170,7 @@ const NO_MEMORY_PRESSURE: MemoryPressureReader = {
 
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
+  const memoryPressure = options.memoryPressure ?? NO_MEMORY_PRESSURE;
   let ports: CorePorts | undefined;
   const port = <Name extends keyof CorePorts>(name: Name): CorePorts[Name] => {
     if (ports === undefined) throw new CorePortMissingError(name);
@@ -323,6 +324,7 @@ export function createCore(options: CoreOptions): Core {
     idle: options.config.idle,
     lifecycle: deviceLifecycle,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
+    memoryPressure,
     provisioner,
     registry,
     state: options.state,
@@ -400,7 +402,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
-    memoryPressure: options.memoryPressure ?? NO_MEMORY_PRESSURE,
+    memoryPressure,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,

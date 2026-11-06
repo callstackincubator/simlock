@@ -30,7 +30,8 @@ export type WarmProposal =
         | "waiting-request"
         | "displaced"
         | "target"
-        | "never-leased-idle";
+        | "never-leased-idle"
+        | "memory-pressure";
       readonly target?: VirtualSpec;
     }
   | {
@@ -132,6 +133,12 @@ export interface WarmPolicyView {
    * the reset's point is that they stay down, so they are never booted back unasked.
    */
   readonly resetDevices: ReadonlySet<string>;
+  /** why: the worker's memory pressure step (ADR 0068), whether a reading not yet used may shed a device, and the devices whose shutdown failed in the last 30 s. */
+  readonly pressure: {
+    readonly step: "none" | "warming-paused" | "new-devices-paused";
+    readonly mayShed: boolean;
+    readonly shedFailed: ReadonlySet<string>;
+  };
 }
 
 type Slots = { global: number; ios: number; android: number };

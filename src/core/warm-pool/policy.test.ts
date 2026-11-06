@@ -185,6 +185,11 @@ function view(
     /** why: a creation the capacity strategy refuses until the plan has shut a device down. */
     refuseProvisionUntilDown?: CapacityRefusalReason;
     unplanned?: readonly VirtualSpec[];
+    pressure?: {
+      step?: WarmPolicyView["pressure"]["step"];
+      mayShed?: boolean;
+      shedFailed?: readonly string[];
+    };
   } = {},
 ): WarmPolicyView {
   return {
@@ -217,6 +222,11 @@ function view(
     devices,
     handoffInFlight: options.handoffInFlight ?? false,
     resetDevices: new Set(options.reset ?? []),
+    pressure: {
+      mayShed: options.pressure?.mayShed ?? true,
+      shedFailed: new Set(options.pressure?.shedFailed ?? []),
+      step: options.pressure?.step ?? "none",
+    },
     isClaimed: (id) => options.claimed?.includes(id) ?? false,
     leases: (options.leased ?? devices.filter((item) => item.state === "leased")).map(leaseOn),
     now,

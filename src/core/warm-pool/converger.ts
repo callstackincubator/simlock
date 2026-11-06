@@ -7,6 +7,7 @@ import {
   type CapacityCoordinator,
   plannedCapacityDevice,
 } from "../capacity/index.js";
+import type { MemoryPressureReader } from "../core-ports.js";
 import type { DeviceOperationClaims } from "../device-operation-claims.js";
 import type { DeviceProvisioner } from "../device-provisioner.js";
 import {
@@ -81,6 +82,8 @@ export interface WarmPoolOptions {
   readonly catalog: Pick<DriverCatalog, "listCatalog">;
   readonly lifecycle: Pick<ManagedDeviceLifecycle, "bootWarm" | "shutdown">;
   readonly logger?: Logger;
+  /** why: ADR 0068 §3: the pool starts nothing at `warming-paused` and sheds one idle device per reading. */
+  readonly memoryPressure: MemoryPressureReader;
   readonly provisioner: Pick<DeviceProvisioner, "provision">;
   readonly state: StateDatabase;
   readonly registry: {
@@ -664,6 +667,7 @@ export class WarmPool {
       leases,
       now: this.options.clock.now(),
       onItsWay: this.#onItsWay(devices),
+      pressure: { mayShed: false, shedFailed: new Set(), step: "none" },
       resetDevices: new Set(this.#reset),
       retry: this.#schedule,
       spared: this.#spared,
