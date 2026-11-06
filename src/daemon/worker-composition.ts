@@ -243,7 +243,7 @@ export async function composeWorker(
   const memoryPressure =
     hostLoadProbe === null
       ? undefined
-      : new MemoryPressureTracker({ clock, config: config.memoryPressure });
+      : new MemoryPressureTracker({ clock, config: config.memoryPressure, eventBus });
   const hostLoad =
     hostLoadProbe === null
       ? undefined

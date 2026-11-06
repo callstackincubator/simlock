@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { EventBus } from "../bus/index.js";
 import { FakeClock } from "../ports/index.js";
 import { MemoryPressureTracker } from "./index.js";
 
@@ -21,7 +22,11 @@ const memory = (pressure: "normal" | "warn" | "critical") => ({
 describe("MemoryPressureTracker", () => {
   it("drops the step at once when no reading arrives for 60 s", () => {
     const clock = new FakeClock(1_000);
-    const tracker = new MemoryPressureTracker({ clock, config: CONFIG });
+    const tracker = new MemoryPressureTracker({
+      clock,
+      config: CONFIG,
+      eventBus: new EventBus(clock),
+    });
     tracker.observe({ memory: memory("warn") });
     expect(tracker.current()).toMatchObject({ since: 1_000, step: "warming-paused" });
 

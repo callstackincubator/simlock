@@ -52,6 +52,7 @@ const EVENT_NAMES: Record<EventName, true> = {
   "daemon.update-failed": true,
   "daemon.update-started": true,
   "disk.pressure-detected": true,
+  "memory.pressure-changed": true,
   "cleanup.executed": true,
   "doctor.reconciled": true,
   "driver.root-rejected": true,

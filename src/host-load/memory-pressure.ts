@@ -1,3 +1,4 @@
+import type { EventBus } from "../bus/index.js";
 import type { Clock, MemoryCounters, TimerHandle } from "../ports/index.js";
 
 export type MemoryPressureLevel = "normal" | "warn" | "critical";
@@ -32,6 +33,7 @@ export interface MemoryPressureState {
 interface MemoryPressureOptions {
   readonly clock: Clock;
   readonly config: MemoryPressureConfig;
+  readonly eventBus: EventBus;
 }
 
 interface HeldStep {
@@ -67,12 +69,14 @@ export class MemoryPressureTracker {
     this.#armStale();
     const { config } = this.options;
     const memory = config.enabled ? reading.memory : undefined;
-    if (memory === undefined) {
-      this.#dropAll();
-      return;
-    }
-    this.#hold("warming", config.pauseWarming, memory, now);
-    this.#hold("newDevices", config.pauseNewDevices, memory, now);
+    this.#changing(() => {
+      if (memory === undefined) {
+        this.#dropAll();
+        return;
+      }
+      this.#hold("warming", config.pauseWarming, memory, now);
+      this.#hold("newDevices", config.pauseNewDevices, memory, now);
+    });
   }
 
   current(): MemoryPressureState | undefined {
@@ -94,8 +98,25 @@ export class MemoryPressureTracker {
     if (this.#staleTimer !== undefined) this.options.clock.cancel(this.#staleTimer);
     this.#staleTimer = this.options.clock.setTimer(STALE_AFTER_MS, () => {
       this.#staleTimer = undefined;
-      this.#dropAll();
+      this.#changing(() => this.#dropAll());
     });
+  }
+
+  /** why: the event follows the change it reports, and only a change of step is one. */
+  #changing(mutate: () => void): void {
+    const from = this.current();
+    mutate();
+    const to = this.current();
+    if (from === undefined || to === undefined || from.step === to.step) return;
+    this.options.eventBus.emit(
+      "memory.pressure-changed",
+      {
+        from: from.step,
+        to: to.step,
+        ...(to.cause === undefined ? {} : { cause: to.cause }),
+      },
+      "host-load",
+    );
   }
 
   #dropAll(): void {
@@ -115,7 +136,9 @@ export class MemoryPressureTracker {
     }
     if (held === undefined || held.clearTimer !== undefined) return;
     held.clearTimer = this.options.clock.setTimer(this.options.config.clearAfterMs, () => {
-      this.#held[key] = undefined;
+      this.#changing(() => {
+        this.#held[key] = undefined;
+      });
     });
   }
 
