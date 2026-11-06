@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventBus } from "../bus/index.js";
 import { fitHostFacts, fitHostLoad, type ProtocolRange } from "../contract/index.js";
-import { HostLoadSampler } from "../host-load/index.js";
+import { HostLoadSampler, MemoryPressureTracker } from "../host-load/index.js";
 import { type EventHistoryHandle, HISTORY_DB_NAME } from "../history/index.js";
 import {
   type Config,
@@ -38,6 +38,7 @@ import { androidDriverConfig } from "../drivers/android/index.js";
 import { iosDriverConfig } from "../drivers/ios/index.js";
 import { type Auth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
+import { createLeaseFiles, type LeaseFilesLimits } from "../lease-files/index.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -85,6 +86,8 @@ export interface WorkerOptions {
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
   readonly hostLoadProbe?: HostLoadProbe | null;
+  /** why: test-only, lower file and folder limits so a rig reaches a refusal without gigabytes. */
+  readonly leaseFilesLimits?: LeaseFilesLimits;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   /** why: test-only, the protocol range the worker daemon announces. */
   readonly protocolVersion?: number | ProtocolRange;
@@ -237,10 +240,19 @@ export async function composeWorker(
     options.hostLoadProbe === undefined
       ? productionHostLoadProbe({ dataDirectory, platform: process.platform })
       : options.hostLoadProbe;
+  const memoryPressure =
+    hostLoadProbe === null
+      ? undefined
+      : new MemoryPressureTracker({ clock, config: config.memoryPressure, eventBus });
   const hostLoad =
     hostLoadProbe === null
       ? undefined
-      : new HostLoadSampler({ clock, logger: logger.child("host-load"), probe: hostLoadProbe });
+      : new HostLoadSampler({
+          clock,
+          logger: logger.child("host-load"),
+          onReading: (reading) => memoryPressure?.observe(reading),
+          probe: hostLoadProbe,
+        });
   const decisions = new SerializedDecision();
   const components = new ComponentInstaller({
     clock,
@@ -255,6 +267,14 @@ export async function composeWorker(
   });
   const modelPreferences = modelPreferenceWiring(config, drivers);
   const core = createCore({
+    ...(memoryPressure === undefined
+      ? {}
+      : {
+          memoryPressure: {
+            current: () => memoryPressure.current(),
+            onReading: (listener: () => void) => memoryPressure.onReading(listener),
+          },
+        }),
     clock,
     components,
     config,
@@ -324,6 +344,24 @@ export async function composeWorker(
     tokens: auth.tokens,
     role: "worker",
   });
+  const leaseFiles = createLeaseFiles({
+    clock,
+    dataDirectory,
+    diskPressureThreshold: config.diskPressure.freeBytesThreshold,
+    filesystem,
+    findGrant: (leaseId) => {
+      const lease = registry.snapshot.leases.find((candidate) => candidate.id === leaseId);
+      const device = registry.snapshot.devices.find(
+        (candidate) => candidate.id === lease?.deviceId,
+      );
+      return lease === undefined || device === undefined
+        ? undefined
+        : { grantedAt: lease.grantedAt, id: lease.id, platform: device.spec.platform };
+    },
+    idGenerator,
+    ...(options.leaseFilesLimits === undefined ? {} : { limits: options.leaseFilesLimits }),
+    logger: logger.child("lease-files"),
+  });
   const leasing = createLeasing({
     clock,
     components,
@@ -333,7 +371,11 @@ export async function composeWorker(
     describeFailure: describeLeaseRequestFailure,
     eventBus,
     idGenerator,
-    leaseEndParticipants: [leaseInputs.leaseEnd, ...moduleHost.leaseEndParticipants],
+    leaseEndParticipants: [
+      leaseInputs.leaseEnd,
+      leaseFiles.leaseEnd,
+      ...moduleHost.leaseEndParticipants,
+    ],
     logger,
     modelPreferences,
   });
@@ -437,6 +479,7 @@ export async function composeWorker(
     const steps = [
       () => core.doctor.reconcile({ read }),
       () => leasing.reconcile(read),
+      () => leaseFiles.sweep(registry.snapshot.leases),
       () => core.converge(read),
     ];
     for (const step of steps) {
@@ -473,6 +516,19 @@ export async function composeWorker(
     physicalDeviceWatcher: leasing.physicalDeviceWatcher,
     hostFacts: () => fitHostFacts(hostFacts.current()),
     ...(hostLoad === undefined ? {} : { hostLoad, load: () => fitHostLoad(hostLoad.current()) }),
+    ...(memoryPressure === undefined
+      ? {}
+      : {
+          memoryPressure: {
+            dispose: () => memoryPressure.dispose(),
+            current: () => {
+              const state = memoryPressure.current();
+              if (state === undefined) return undefined;
+              const { readingAt: _readingAt, ...figures } = state;
+              return figures;
+            },
+          },
+        }),
     instanceId,
     host: new DaemonEndpointHost({
       connector: ipc,
@@ -487,6 +543,7 @@ export async function composeWorker(
     passthrough: core.catalog,
     inputs: leaseInputs,
     processRunner,
+    leaseFiles,
     execEnv: execBaseEnvironment(process.env),
     queue: leasing,
     presence: latestPresence,
@@ -494,6 +551,8 @@ export async function composeWorker(
     relayTargets: {
       ...moduleHost.relayTargets,
       ...options.relayTargets,
+      // why: `files` is reserved as a module name (ADR 0067 §7), so the core target never shadows a module's.
+      files: (request) => leaseFiles.relayTarget(request),
     },
     relayTwoWayTargets: {
       ...moduleHost.relayTwoWayTargets,
@@ -628,6 +687,7 @@ export async function composeWorker(
       dispatch,
       eventBus,
       idGenerator,
+      leaseFiles,
       leaseRequests: leasing.requests,
       logger: httpLogger,
       leaseRoutes: [...moduleHost.leaseRoutes()],

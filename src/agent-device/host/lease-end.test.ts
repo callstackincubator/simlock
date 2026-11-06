@@ -11,6 +11,7 @@ const tenant = "tok_one";
 function ended(n: number): EndedLease {
   return {
     deviceId: "dev_1",
+    grantedAt: 1_000,
     leaseId: hex(n),
     ownerId: tenant,
     platform: "ios",

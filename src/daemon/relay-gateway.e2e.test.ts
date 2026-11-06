@@ -1,3 +1,6 @@
+import { request as httpRequest } from "node:http";
+import { createServer } from "node:net";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -6,13 +9,16 @@ import {
   type TwoWayRelay,
   type WorkerDirectory,
 } from "../gateway/index.js";
+import type { LeaseFilesLimits } from "../lease-files/index.js";
 import { linkPair, TYPE } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import type { DispatchSession } from "./dispatch.js";
 import type { RelayTarget, TwoWayRelayTarget } from "./relay.js";
+import type { StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 import {
   aborted,
+  relayAdminSession,
   cleanUp,
   digestOf,
   gate,
@@ -177,7 +183,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
   const startFleet = (
     execCommand?: FleetExec,
-    extra: { readonly proxyAuth?: Record<string, unknown> } = {},
+    extra: {
+      readonly proxyAuth?: Record<string, unknown>;
+      readonly worker?: Partial<StartDaemonOptions>;
+      readonly gateway?: Partial<StartDaemonOptions>;
+    } = {},
   ) =>
     startFleet_(
       { daemons, directories, target, twoWayTarget },
@@ -257,6 +267,35 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
     expect(body).toBe("over a channel");
     expect(taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  it("startFleet starts its gateway when the gatewayUrl hook opens a listener on the gateway's port, and the hook's listener does not get that port", async () => {
+    // why: the timing file's hook starts a proxy with listen(0), which may draw the port startFleet picked; listening on that port makes the draw certain.
+    const squatter = createServer();
+    let squatterBound = false;
+
+    const outcome = await startFleet_(
+      { daemons, directories, target },
+      {
+        gatewayUrl: async (port) => {
+          await new Promise<void>((resolve) => {
+            squatter.once("error", () => resolve());
+            squatter.listen(port, "127.0.0.1", () => {
+              squatterBound = true;
+              resolve();
+            });
+          });
+          return `ws://127.0.0.1:${String(port)}`;
+        },
+      },
+    ).then(
+      () => "started",
+      (error: unknown) => String((error as { code?: unknown }).code ?? error),
+    );
+    if (squatterBound) await new Promise<void>((resolve) => squatter.close(() => resolve()));
+
+    expect(outcome).toBe("started");
+    expect(squatterBound).toBe(false);
   }, 30_000);
 
   it("a gateway module's two-way relay carries bytes both ways at once until either side ends", async () => {
@@ -383,6 +422,273 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(refusal.headers.get("x-why")).toBe("no");
     expect(await refusal.text()).toBe("not for you");
     expect(missing).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
+  }, 30_000);
+
+  async function fileRig(limits?: LeaseFilesLimits, fileSilenceMs?: number) {
+    const fleet = await startFleet(undefined, {
+      ...(limits === undefined ? {} : { worker: { leaseFilesLimits: limits } }),
+      ...(fileSilenceMs === undefined ? {} : { gateway: { fileSilenceMs } }),
+    });
+    const { secret, token } = await fleet.gateway.dispatch(
+      "token.create",
+      { label: "holder", role: "agent" },
+      relayAdminSession,
+    );
+    const holder = agent({ principal: token.id });
+    const grant = await fleet.gateway.dispatch(
+      "lease.request",
+      { model: "Pixel-A", noWait: true, platform: "android" },
+      holder,
+    );
+    const callOn =
+      (leaseId: string, bearer: string) =>
+      (path: string, init: RequestInit = {}) =>
+        fetch(`http://127.0.0.1:${String(fleet.port)}/v1/leases/${leaseId}/files${path}`, {
+          ...init,
+          headers: { authorization: `Bearer ${bearer}`, ...init.headers },
+        });
+    const call = callOn(grant.lease.id, secret);
+    const base = `http://127.0.0.1:${String(fleet.port)}/v1/leases/${grant.lease.id}/files`;
+    // why: `fetch` refuses a `Content-Length` that does not match its body, and the 2 GiB refusal is decided on the header alone.
+    const declare = (path: string, bytes: number) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = httpRequest(
+          `${base}${path}`,
+          {
+            headers: { authorization: `Bearer ${secret}`, "content-length": String(bytes) },
+            method: "PUT",
+          },
+          (response) => {
+            const parts: Buffer[] = [];
+            response.on("data", (part: Buffer) => parts.push(part));
+            response.on("end", () =>
+              resolve({
+                body: Buffer.concat(parts).toString(),
+                status: response.statusCode ?? 0,
+              }),
+            );
+          },
+        );
+        request.on("error", reject);
+        // why: a gateway that waits for the body instead of refusing the header must fail the assertion, not the test's timeout.
+        request.setTimeout(5_000, () => {
+          request.destroy();
+          resolve({ body: "no answer within 5 s", status: 0 });
+        });
+        request.flushHeaders();
+      });
+    const channelsOpened = () => fleet.taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length;
+    // why: CI saw NO_CAPACITY for a request right after the release, so the helper retries until the fleet can grant.
+    const newLease = async () => {
+      let granted: string | undefined;
+      await poll(async () => {
+        granted = await fleet.gateway
+          .dispatch(
+            "lease.request",
+            { model: "Pixel-A", noWait: true, platform: "android" },
+            holder,
+          )
+          .then(
+            (next) => next.lease.id,
+            () => undefined,
+          );
+        return granted !== undefined;
+      }, 15_000).toBe(true);
+      const leaseId = granted as string;
+      return { call: callOn(leaseId, secret), leaseId };
+    };
+    const stranger = async () => {
+      const other = await fleet.gateway.dispatch(
+        "token.create",
+        { label: "stranger", role: "agent" },
+        relayAdminSession,
+      );
+      return callOn(grant.lease.id, other.secret);
+    };
+    return {
+      ...fleet,
+      call,
+      channelsOpened,
+      declare,
+      holder,
+      leaseId: grant.lease.id,
+      newLease,
+      stranger,
+    };
+  }
+
+  it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
+    const { call, channelsOpened, declare } = await fileRig({
+      fileBytes: 32 * MIB,
+      leaseBytes: 512 * MIB,
+      silenceMs: 330_000,
+    });
+    const bytes = patternBytes(20 * MIB, 5);
+
+    const put = await call("/fixture.tar", {
+      body: patternStream(20 * MIB, 5),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const get = await call("/fixture.tar");
+    const ranged = await call("/fixture.tar", { headers: { range: "bytes=10-19" } });
+    const listed = await call("");
+    const deleted = await call("/fixture.tar", { method: "DELETE" });
+    const after = await call("");
+    const names = Array.from({ length: 10 }, (_, index) => `many-${String(index)}.bin`);
+    const many = await Promise.all(
+      names.map((name, index) =>
+        call(`/${name}`, {
+          body: patternStream(20 * MIB, 20 + index),
+          duplex: "half",
+          method: "PUT",
+        } as RequestInit),
+      ),
+    );
+    const stored = await (await call("")).json();
+    const busy = new TransformStream<Uint8Array>();
+    const holding = call("/busy.bin", {
+      body: busy.readable,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const feed = busy.writable.getWriter();
+    await feed.write(new Uint8Array(1));
+    await poll(async () => (await call("/busy.bin", { method: "PUT", body: "x" })).status).toBe(
+      409,
+    );
+    const missing = await call("/missing.bin");
+    const oversized = await call("/large.bin", {
+      body: patternStream(33 * MIB, 6),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    await feed.close();
+    await holding;
+    const opened = channelsOpened();
+    const tooLarge = await declare("/huge.bin", 2 * 1024 * MIB + 1);
+
+    expect(put.status).toBe(201);
+    expect(await put.json()).toEqual({ name: "fixture.tar", size: 20 * MIB });
+    expect(get.status).toBe(200);
+    expect(digestOf([new Uint8Array(await get.arrayBuffer())])).toBe(digestOf([bytes]));
+    expect(get.headers.get("content-length")).toBe(String(20 * MIB));
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("content-length")).toBe("10");
+    expect(ranged.headers.get("content-range")).toBe(`bytes 10-19/${String(20 * MIB)}`);
+    expect(new Uint8Array(await ranged.arrayBuffer())).toEqual(bytes.subarray(10, 20));
+    expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
+    expect(deleted.status).toBe(204);
+    expect(await after.json()).toEqual({ files: [] });
+    expect(many.map((response) => response.status)).toEqual(names.map(() => 201));
+    expect(stored).toMatchObject({ files: names.map((name) => ({ name, size: 20 * MIB })) });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: "UNKNOWN_FILE" } });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toMatchObject({
+      error: { code: "FILE_TOO_LARGE", name: "large.bin" },
+    });
+    expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(tooLarge.body)).toMatchObject({
+      error: { code: "FILE_TOO_LARGE", name: "huge.bin" },
+    });
+    expect(channelsOpened()).toBe(opened);
+  }, 120_000);
+
+  it("through a gateway, a caller that does not hold the lease gets 404 UNKNOWN_LEASE, and a lease whose worker is gone gets 503 WORKER_UNREACHABLE", async () => {
+    const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: MIB, silenceMs: 330_000 });
+    const asStranger = await rig.stranger();
+    const routes = (call: typeof rig.call) => [
+      () => call("/fixture.tar", { body: "x", method: "PUT" }),
+      () => call("/fixture.tar"),
+      () => call("/fixture.tar", { method: "DELETE" }),
+      () => call(""),
+    ];
+
+    const refused = await Promise.all(routes(asStranger).map((send) => send()));
+    const full = await rig.call("/big.bin", { body: new Uint8Array(MIB + 1), method: "PUT" });
+    const feed = new TransformStream<Uint8Array>();
+    const writer = feed.writable.getWriter();
+    const running = rig.call("/running.bin", {
+      body: feed.readable,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    await writer.write(new Uint8Array(1));
+    await poll(async () => (await rig.call("")).status).toBe(200);
+    await rig.gateway.dispatch("lease.release", { leaseId: rig.leaseId }, rig.holder);
+    await writer.write(new Uint8Array(1));
+    await writer.close();
+    const ended = await running;
+    const next = await rig.newLease();
+    await rig.worker.worker.stop("test");
+    await poll(async () => (await next.call("")).status).toBe(503);
+
+    expect(refused.map((response) => response.status)).toEqual([404, 404, 404, 404]);
+    for (const response of refused) {
+      expect(await response.json()).toMatchObject({
+        error: { code: "UNKNOWN_LEASE", leaseId: rig.leaseId },
+      });
+    }
+    expect(full.status).toBe(413);
+    const fullBody = (await full.json()) as {
+      error: { code: string; message: string; leaseId: string };
+    };
+    expect(fullBody.error).toMatchObject({ code: "LEASE_FILES_FULL", leaseId: rig.leaseId });
+    expect(fullBody.error.message).toContain(`Lease ${rig.leaseId} holds`);
+    expect(ended.status).toBe(404);
+    const endedBody = (await ended.json()) as {
+      error: { code: string; message: string; leaseId: string };
+    };
+    expect(endedBody.error).toMatchObject({ code: "UNKNOWN_LEASE", leaseId: rig.leaseId });
+    expect(endedBody.error.message).toBe(`Unknown lease: ${rig.leaseId}`);
+    expect(await (await next.call("")).json()).toMatchObject({
+      error: { code: "WORKER_UNREACHABLE" },
+    });
+  }, 60_000);
+
+  it("through a gateway, a file upload is cut only by 330 s of silence, not by 330 s in total", async () => {
+    const { call } = await fileRig(undefined, 1_000);
+    const pieces = 12;
+    let sent = 0;
+    const flowing = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await sleep(300);
+        controller.enqueue(new Uint8Array(KIB));
+        sent += 1;
+        if (sent === pieces) controller.close();
+      },
+    });
+    const silent = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(KIB));
+      },
+    });
+
+    const slow = await call("/slow.bin", {
+      body: flowing,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const stalled = await settleWithin(
+      call("/stalled.bin", { body: silent, duplex: "half", method: "PUT" } as RequestInit),
+      6_000,
+    );
+
+    expect(slow.status).toBe(201);
+    expect(await slow.json()).toEqual({ name: "slow.bin", size: pieces * KIB });
+    expect(stalled).toMatchObject({ state: "fulfilled", value: { status: 408 } });
+    const body = await (stalled as { value: Response }).value.json();
+    expect(body).toEqual({
+      error: {
+        code: "UPLOAD_STALLED",
+        message: "No bytes of stalled.bin arrived for 1 s",
+        name: "stalled.bin",
+      },
+    });
+    expect((await (await call("")).json()) as { files: { name: string }[] }).toEqual({
+      files: [{ name: "slow.bin", size: pieces * KIB }],
+    });
   }, 30_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {

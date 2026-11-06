@@ -273,8 +273,8 @@ describe("optional modules: HTTP routes", () => {
     );
   });
 
-  it("a module named like a core lease sub-route (renew, exec, rotate) fails the start, and POST /v1/leases/{id}/renew still renews", async () => {
-    for (const name of ["renew", "exec", "rotate"]) {
+  it("a module named like a core lease sub-route (renew, exec, rotate, files) fails the start, and POST /v1/leases/{id}/renew still renews", async () => {
+    for (const name of ["renew", "exec", "rotate", "files"]) {
       await expect(start({ modules: definitions(fakeModule({ name })) })).rejects.toThrow(name);
     }
 
@@ -283,6 +283,9 @@ describe("optional modules: HTTP routes", () => {
       modules: definitions(fakeModule({ name: "alpha" })),
       on: ["alpha"],
     });
+    expect(
+      (await start({ modules: definitions(fakeModule({ name: "stream" })) })).daemon,
+    ).toBeDefined();
     const { secret } = await daemon.dispatch(
       "token.create",
       { label: "o", role: "operator" },

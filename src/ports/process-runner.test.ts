@@ -232,6 +232,67 @@ describe("NodeProcessRunner: spawnStreaming", () => {
     expect(seen.join("").length).toBe(64 * 16 * 1024);
   });
 
+  it("rejects inputFailed with the bytes written when the input stream cannot be read to its end, and not when the child closes its stdin early", async () => {
+    const runner = new NodeProcessRunner();
+    const oneMiB = 1024 * 1024;
+    const failingAfter = (bytes: number): ReadableStream<Uint8Array> => {
+      let sent = 0;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent >= bytes) {
+            controller.error(new Error("disk went away"));
+            return;
+          }
+          controller.enqueue(new Uint8Array(Math.min(64 * 1024, bytes - sent)));
+          sent += 64 * 1024;
+        },
+      });
+    };
+    const drainingChild = [
+      "-e",
+      "process.stdin.on('data', () => {}); setInterval(() => {}, 1_000)",
+    ];
+
+    for (const bytes of [oneMiB, 0]) {
+      const handle = runner.spawnStreaming(process.execPath, drainingChild, {
+        inputStream: failingAfter(bytes),
+        onChunk: () => {},
+      });
+      const outcome = await Promise.race([
+        handle.inputFailed?.catch((error: unknown) => error),
+        new Promise((resolve) => setTimeout(() => resolve("no failure"), 1_000)),
+      ]);
+      handle.kill("SIGKILL");
+      await handle.wait();
+      expect(outcome).toMatchObject({ bytesWritten: bytes });
+    }
+
+    let cancelled = false;
+    let chunks = 0;
+    const early = runner.spawnStreaming(process.execPath, ["-e", "process.exit(0)"], {
+      inputStream: new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+        },
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          chunks += 1;
+          controller.enqueue(new Uint8Array(64 * 1024));
+        },
+      }),
+      onChunk: () => {},
+    });
+    let failed = false;
+    early.inputFailed?.catch(() => {
+      failed = true;
+    });
+    expect((await early.wait()).code).toBe(0);
+    await waitUntil(() => cancelled);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(failed).toBe(false);
+    expect(chunks).toBeGreaterThan(0);
+  });
+
   it("does not settle wait() while a chunk's delivery is still pending past the exit grace window, even though a real pipe already delivered what the child wrote after it", async () => {
     // The defect this guards: a paused readable never emits `close`, so the exit-to-close
     // grace window used to treat "quiet because we paused it" the same as "quiet because the

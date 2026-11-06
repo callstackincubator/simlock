@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { readyTransitionUpdate } from "../core/testing.js";
 import { DriverCrashError } from "../core/index.js";
 import { classifyError } from "./error-code.js";
-import { buildDispatcher, session } from "./test-dispatcher.js";
+import { buildDispatcher, seedSlimDevice, session } from "./test-dispatcher.js";
 
 /** why: the answer of a request that must settle by itself once the event loop has run to rest; a hang fails here, on a named assertion, rather than by the test's timeout. */
 async function grantedOnceSettled<T>(request: Promise<T>): Promise<T> {
@@ -14,43 +13,6 @@ async function grantedOnceSettled<T>(request: Promise<T>): Promise<T> {
   const answer = await Promise.race([request, rest]);
   expect(answer, "the request settled").toBeDefined();
   return answer as T;
-}
-
-/** why: a slim device a worker already holds, ready or shut down, as the warm pool or an earlier lease leaves one. */
-async function seedSlimDevice(
-  built: Awaited<ReturnType<typeof buildDispatcher>>,
-  state: "ready" | "shutdown",
-) {
-  const spec = {
-    mode: "slim",
-    model: "iPhone 17 Pro",
-    osVersion: "26.5",
-    physical: false,
-    platform: "ios",
-  } as const;
-  const driverDevice = await built.driver.provision(spec);
-  const driven = await built.driver.makeReady(driverDevice, { mode: "slim", purpose: "prepare" });
-  // why: the seed is a slim device whatever the fake reports on its boot, so a test whose driver answers `full` still starts from slim.
-  const ready = { ...driven, mode: "slim" as const };
-  const registered = await built.registry.registerDevice({
-    driverData: driverDevice.driverData,
-    driverDeviceId: driverDevice.deviceId,
-    provisionDuration: 0,
-    spec,
-  });
-  await built.registry.transitionDevice(
-    registered.id,
-    "ready",
-    { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
-    readyTransitionUpdate(ready),
-  );
-  if (state === "ready") return registered;
-  await built.driver.shutdown(driverDevice);
-  await built.registry.transitionDevice(registered.id, "shutdown", {
-    event: "device.shutdown",
-    payload: { deviceId: registered.id, initiator: "test" },
-  });
-  return registered;
 }
 
 describe("Dispatcher: lease.request with an except list", () => {

@@ -10,6 +10,7 @@ import {
   FakeRegistry,
   sequenceIdGenerator,
   waitForDispatch,
+  noLeaseFiles,
 } from "./test-fakes.js";
 
 export function buildHarness(
@@ -20,6 +21,10 @@ export function buildHarness(
     readonly identities?: Readonly<Record<string, Identity>>;
     readonly auth?: Auth;
     readonly mounts?: HttpGatewayDeps["mounts"];
+    readonly leaseFiles?: (parts: {
+      readonly clock: FakeClock;
+      readonly logger: JsonLinesLogger;
+    }) => HttpGatewayDeps["leaseFiles"];
   } = {},
 ) {
   const clock = new FakeClock(1_000);
@@ -71,6 +76,7 @@ export function buildHarness(
     registry: overrides.registry ?? registry,
     auth,
     ...(overrides.mounts === undefined ? {} : { mounts: overrides.mounts }),
+    leaseFiles: overrides.leaseFiles?.({ clock, logger }) ?? noLeaseFiles,
     ...(overrides.answerDownloadsEarly === undefined
       ? {}
       : { answerDownloadsEarly: overrides.answerDownloadsEarly }),

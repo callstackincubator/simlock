@@ -39,6 +39,7 @@ import {
   FakeNpmCli,
   FakeUpdaterLauncher,
   MemoryFilesystem,
+  NodeFilesystem,
   NodeIpcTransport,
   NoopLogger,
   resolveDaemonSocketPath,
@@ -210,12 +211,16 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
     /** why: a worker on another protocol range is the gateway's `incompatible` worker. */
     readonly protocolVersion?: ProtocolRange;
     readonly npm?: NpmCli;
+    /** why: a worker that runs a real command runs it in its lease folder, which has to exist on disk. */
+    readonly realFilesystem?: boolean;
   }): Promise<{ daemon: DaemonServer; filesystem: Filesystem; directory: string }> {
     const directory =
       options.existing?.directory ??
       (await mkdtemp(join(tmpdir(), `simlock-e2e-${options.label}-`)));
     if (options.existing === undefined) directories.push(directory);
-    const filesystem = options.existing?.filesystem ?? new MemoryFilesystem();
+    const filesystem =
+      options.existing?.filesystem ??
+      (options.realFilesystem === true ? new NodeFilesystem() : new MemoryFilesystem());
     const driver = new FakeDriver({
       availableOsVersions: ["18.0"],
       // why: a real command, so `device.exec` proves a real child process actually ran on
@@ -375,6 +380,7 @@ describe("gateway fleet smoke (ADR 0005 §35)", () => {
       model: "Pixel-B",
       token: tokenB,
       stdout: "hello-from-b",
+      realFilesystem: true,
     });
 
     // why: Both uplinks dial on their own schedule outside `startDaemon`'s own returned promise

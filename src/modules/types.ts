@@ -50,6 +50,7 @@ export interface ModuleEndedLease {
   readonly ownerId: string;
   readonly deviceId: string;
   readonly platform: Platform;
+  readonly grantedAt: number;
   readonly reason: "explicit" | "killed" | "expired" | "device-lost";
 }
 
