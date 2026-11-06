@@ -438,11 +438,18 @@ function plannedKinds(
   return kinds;
 }
 
-/** why: the kind's devices under an open lease; the pool keeps a spare while they are held. */
+/**
+ * why: the kind's devices under an open lease; the pool keeps a spare while they are held. A
+ * baseline kind is one row per name, so it counts the leased copies of every version of it, as its
+ * peak does, not only those of the newest.
+ */
 function leasedOfKind(view: WarmPolicyView, spec: VirtualSpec): number {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));
-  return view.devices.filter((device) => sameSpec(device.spec, spec) && leased.has(device.id))
-    .length;
+  const ofKind = (device: VirtualDevice): boolean =>
+    spec.baseline && device.spec.baseline?.name === spec.baseline.name
+      ? sameSpec({ ...device.spec, baseline: spec.baseline }, spec)
+      : sameSpec(device.spec, spec);
+  return view.devices.filter((device) => ofKind(device) && leased.has(device.id)).length;
 }
 
 /** The targets with those that resolved to one spec merged into one, counts summed. */
@@ -657,7 +664,7 @@ function planTargets(
       const missing =
         Math.max(
           configuredCount - ready,
-          learnedCount > 0 ? Math.max(learnedCount - leasedOfKind(view, spec), 1) - ready : 0,
+          Math.max(learnedCount - leasedOfKind(view, spec), 1) - ready,
         ) -
         filling -
         configured.added;
