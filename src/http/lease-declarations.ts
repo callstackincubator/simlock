@@ -263,7 +263,13 @@ export const leaseRequestCreateRoute = declareRoute({
     503: {
       fields: {
         capacityReason: z
-          .enum(["device-limit", "ram-budget", "global-running-limit", "platform-running-limit"])
+          .enum([
+            "device-limit",
+            "ram-budget",
+            "memory-pressure",
+            "global-running-limit",
+            "platform-running-limit",
+          ])
           .optional(),
       },
       headers: {

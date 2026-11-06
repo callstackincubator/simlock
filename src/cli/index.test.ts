@@ -6098,6 +6098,49 @@ describe("CLI: status renders the fleet a gateway reports (ADR 0005 §20)", () =
       expect(await print(EMPTY_STATUS)).not.toContain("Load:");
       expect(await print(STARTING)).not.toContain("Load:");
     });
+
+    it("simlock status prints the Memory pressure line with the step, when it began and why, and none when there is no step", async () => {
+      const line = async (memoryPressure: unknown) =>
+        (
+          await print({
+            ...EMPTY_STATUS,
+            capacity: { ...EMPTY_STATUS.capacity, memoryPressure },
+            load: LOAD,
+          } as StatusGetOutput)
+        )
+          .split("\n")
+          .find((row) => row.startsWith("Memory pressure:"));
+      const since = new Date(2026, 10, 6, 9, 12).getTime();
+      const warn = { availablePercent: 34, level: "warn", trigger: "level" };
+      const floor = (availablePercent: number, extra = {}) =>
+        line({
+          cause: { availablePercent, floorPercent: 10, trigger: "floor", ...extra },
+          since,
+          step: "new-devices-paused",
+        });
+
+      expect(await line({ cause: warn, since, step: "warming-paused" })).toBe(
+        "Memory pressure: warming paused since 09:12 (pressure warn)",
+      );
+      const floored = "Memory pressure: new devices paused since 09:12 (8% available, floor 10%)";
+      expect(await floor(8)).toBe(floored);
+      expect(await floor(8, { level: "warn" })).toBe(floored);
+      expect(await floor(9)).toBe(floored.replace("8%", "9%"));
+      expect(await line({ step: "none" })).toBeUndefined();
+      expect(await line(undefined)).toBeUndefined();
+
+      const stdout = await print({
+        ...EMPTY_STATUS,
+        capacity: {
+          ...EMPTY_STATUS.capacity,
+          memoryPressure: { cause: warn, since, step: "warming-paused" },
+        },
+        load: LOAD,
+      } as StatusGetOutput);
+      expect(stdout).toContain(
+        `${FULL_LINE}Memory pressure: warming paused since 09:12 (pressure warn)\nRunning global`,
+      );
+    });
   });
 
   it("simlock status prints the console address when HTTP is enabled", async () => {
@@ -9524,6 +9567,7 @@ describe("simlock list --requests", () => {
       ["behind-earlier-request", "ios", "behind an earlier request"],
       ["device-limit", "ios", "full: device limit"],
       ["ram-budget", "ios", "full: RAM budget"],
+      ["memory-pressure", "ios", "full: host memory pressure"],
       ["global-running-limit", "ios", "full: running limit"],
       ["platform-running-limit", "ios", "full: running limit for iOS"],
       ["platform-running-limit", "android", "full: running limit for Android"],
@@ -9640,6 +9684,7 @@ describe("simlock list --requests", () => {
       ["full", "ios", undefined, "full"],
       ["full", "ios", "device-limit", "full: device limit"],
       ["full", "ios", "ram-budget", "full: RAM budget"],
+      ["full", "ios", "memory-pressure", "full: host memory pressure"],
       ["full", "ios", "global-running-limit", "full: running limit"],
       ["full", "ios", "platform-running-limit", "full: running limit for iOS"],
       ["full", "android", "platform-running-limit", "full: running limit for Android"],

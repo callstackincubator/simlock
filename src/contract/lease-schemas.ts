@@ -94,6 +94,7 @@ const waitingReasonSchema = z.enum([
   "behind-earlier-request",
   "device-limit",
   "ram-budget",
+  "memory-pressure",
   "global-running-limit",
   "platform-running-limit",
   "waiting-for-device",
@@ -103,6 +104,7 @@ const waitingReasonSchema = z.enum([
 export const capacityReasonSchema = z.enum([
   "device-limit",
   "ram-budget",
+  "memory-pressure",
   "global-running-limit",
   "platform-running-limit",
 ]);

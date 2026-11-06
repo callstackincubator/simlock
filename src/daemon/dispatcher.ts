@@ -88,6 +88,7 @@ import {
   type ComponentProgress,
   type OperationName,
   type StatusLoad,
+  type StatusMemoryPressure,
   waitingRequestSchema,
   WORKER_VIEW_CATALOG_EVENTS,
   WORKER_VIEW_REFRESH_INTERVAL_MS,
@@ -199,6 +200,7 @@ export interface DispatcherOptions {
   readonly health: () => "starting" | "running" | "failed";
   readonly hostFacts: () => HostFacts;
   readonly load?: () => StatusLoad | undefined;
+  readonly memoryPressure?: () => StatusMemoryPressure | undefined;
   readonly awaitReady: () => Promise<void>;
   readonly instanceId: string;
   readonly version: string;
@@ -397,6 +399,7 @@ export class Dispatcher {
     const host = this.options.hostFacts();
     const load = this.options.load?.();
     const loadField = load === undefined ? {} : { load };
+    const memoryPressure = this.options.memoryPressure?.();
     // why: while starting, the registry has not been checked against the machine, so what it holds
     // is a claim nobody has looked at; the answer is the daemon, its host and the load reading.
     const history = this.options.eventHistory.status();
@@ -405,7 +408,10 @@ export class Dispatcher {
     const snapshot = this.options.registry.snapshot;
     const answer = {
       ...(capabilities === undefined ? {} : { capabilities }),
-      capacity: buildCapacityFigures(snapshot.virtualDevices, this.options.capacity),
+      capacity: {
+        ...buildCapacityFigures(snapshot.virtualDevices, this.options.capacity),
+        ...(memoryPressure === undefined ? {} : { memoryPressure }),
+      },
       devices: snapshot.devices.map((device) => this.#decorateDevice(device)),
       daemon,
       history,

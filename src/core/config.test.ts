@@ -1924,6 +1924,42 @@ describe("loadConfig modes (ADR 0005)", () => {
     expect((await load({}, { role: "worker" })).mode).toBe("worker");
   });
 
+  it("defaults the memoryPressure section, refuses a bad value naming its key, and warns a gateway it is worker-only", async () => {
+    expect((await load({})).memoryPressure).toEqual({
+      clearAfterMs: 60_000,
+      enabled: true,
+      pauseNewDevices: { level: "critical", minAvailablePercent: 10 },
+      pauseWarming: { level: "warn", minAvailablePercent: 20 },
+    });
+    const accepted = await load({
+      memoryPressure: { pauseWarming: { level: "off", minAvailablePercent: 0 }, clearAfterMs: 0 },
+    });
+    expect(accepted.memoryPressure).toMatchObject({
+      clearAfterMs: 0,
+      pauseWarming: { level: "off", minAvailablePercent: 0 },
+    });
+
+    const refused = [
+      { memoryPressure: { pauseWarming: { level: "bogus" } } },
+      { memoryPressure: { pauseNewDevices: { minAvailablePercent: 101 } } },
+      { memoryPressure: { pauseNewDevices: { minAvailablePercent: -1 } } },
+      { memoryPressure: { clearAfterMs: -1 } },
+    ];
+    const keys = [
+      "memoryPressure.pauseWarming.level",
+      "memoryPressure.pauseNewDevices.minAvailablePercent",
+      "memoryPressure.pauseNewDevices.minAvailablePercent",
+      "memoryPressure.clearAfterMs",
+    ];
+    for (const [index, file] of refused.entries()) {
+      await expect(load(file)).rejects.toThrow(keys[index]!);
+    }
+
+    const warn = vi.fn();
+    await load({ memoryPressure: { enabled: false } }, { role: "gateway", warn });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring "memoryPressure"'));
+  });
+
   it("HTTP defaults to port 4700 for a gateway and 4701 for a worker", async () => {
     expect((await load({}, { role: "gateway" })).http.port).toBe(4700);
     expect((await load({})).http.port).toBe(4701);

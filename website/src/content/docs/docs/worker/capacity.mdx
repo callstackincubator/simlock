@@ -224,5 +224,6 @@ warm pool: enabled, reserve ios 1 android 0
 | `device-limit` | The platform is at its device limit. |
 | `reserve` | The slot is held back by `warmPool.reserveRunning`. |
 | `ram-budget` | The device would not fit in the RAM budget. |
+| `memory-pressure` | The host is short of memory and warming is paused (`memoryPressure.*`). |
 
 A line that is filling, or waiting behind a queued lease, shows no reason. `simlock doctor` warns when your targets add up to more devices than the running limit allows.
