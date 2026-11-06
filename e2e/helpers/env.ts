@@ -259,15 +259,7 @@ function seedConfig(
 async function buildEnv(
   options: WithDaemonOptions,
 ): Promise<{ testEnv: TestEnv; state: TeardownState }> {
-  const keepSeeds = options.keepSeeds === true;
-  if (keepSeeds && options.role === "gateway") {
-    throw new Error("keepSeeds is a worker's: a gateway has no drivers and no seeds");
-  }
-  const home = keepSeeds ? await claimLaneHome() : await mkdtemp(join(tmpdir(), "simlock-e2e-"));
-  // why: the lane home's name is the same for every env, and a kept log is never replaced.
-  const logName = keepSeeds
-    ? `${basename(home)}-${randomBytes(3).toString("hex")}`
-    : basename(home);
+  const { home, keepSeeds, logName } = await allocateHome(options);
   const gatewayFlag: readonly string[] = options.role === "gateway" ? ["--gateway"] : [];
   const dataDirectory = options.role === "gateway" ? join(home, "gateway") : home;
   const socketPath = join(dataDirectory, "daemon.sock");
@@ -279,14 +271,7 @@ async function buildEnv(
   const env = processEnv(options, home, scriptPath, logCallPath);
 
   const adbServerPort = options.driver === "real" ? await freeLoopbackPort() : undefined;
-  if (keepSeeds && hasKeptSeeds(home)) {
-    try {
-      await putKeptSeedsBack(home, env, configPath, socketPath, adbServerPort);
-    } catch (error: unknown) {
-      await releaseLaneHome(home);
-      throw error;
-    }
-  }
+  if (keepSeeds) await putKeptSeedsBack(home, env, configPath, socketPath, adbServerPort);
   const seededConfig = seedConfig(options, adbServerPort);
   if (seededConfig !== undefined) {
     await mkdir(dataDirectory, { recursive: true });
@@ -420,12 +405,49 @@ async function buildEnv(
   };
 }
 
+interface AllocatedHome {
+  readonly home: string;
+  readonly keepSeeds: boolean;
+  readonly logName: string;
+}
+
+async function allocateHome(options: WithDaemonOptions): Promise<AllocatedHome> {
+  if (options.keepSeeds !== true) {
+    const home = await mkdtemp(join(tmpdir(), "simlock-e2e-"));
+    return { home, keepSeeds: false, logName: basename(home) };
+  }
+  if (options.role === "gateway") {
+    throw new Error("keepSeeds is a worker's: a gateway has no drivers and no seeds");
+  }
+  const home = await claimLaneHome();
+  // why: the lane home's name is the same for every env, and a kept log is never replaced.
+  const logName = `${basename(home)}-${randomBytes(3).toString("hex")}`;
+  return { home, keepSeeds: true, logName };
+}
+
+/** why: a failure here comes before the env exists, so nothing else would free the lane home for the next flow. */
+async function putKeptSeedsBack(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  configPath: string,
+  socketPath: string,
+  adbServerPort: number | undefined,
+): Promise<void> {
+  if (!hasKeptSeeds(home)) return;
+  try {
+    await startStopAndRestore(home, env, configPath, socketPath, adbServerPort);
+  } catch (error: unknown) {
+    await releaseLaneHome(home);
+    throw error;
+  }
+}
+
 /**
  * why: the seed tables exist only once a daemon has started in the home, and no device may be
  * made before their rows are back; so a daemon with the pool off starts and stops, the rows go
  * in, and what that daemon wrote besides `state.db` is removed.
  */
-async function putKeptSeedsBack(
+async function startStopAndRestore(
   home: string,
   env: NodeJS.ProcessEnv,
   configPath: string,
@@ -448,6 +470,19 @@ async function putKeptSeedsBack(
   );
   await clearAllButState(home);
   await restoreKeptSeeds(home);
+}
+
+/** why: a stopped daemon leaves its leased devices running, and the lane home's next flow must not find an emulator of this one on a console port. Without `--delete-devices`, which deletes the seeds as well. */
+async function stopLeftDevices(state: TeardownState): Promise<void> {
+  if (!state.keepSeeds || !existsSync(state.socketPath)) return;
+  await cli([...state.gatewayFlag, "nuke", "--yes"], state.env, { timeout: 60_000 }).catch(
+    () => undefined,
+  );
+}
+
+async function discardHome(state: TeardownState): Promise<void> {
+  if (state.keepSeeds) await releaseLaneHome(state.home);
+  else await removeHome(state.home);
 }
 
 export interface SharedTestEnv extends TestEnv {
@@ -574,7 +609,6 @@ async function teardown(state: TeardownState): Promise<void> {
     env,
     gatewayFlag,
     home,
-    keepSeeds,
     logName,
     mcpClients,
     realDrivers,
@@ -588,12 +622,7 @@ async function teardown(state: TeardownState): Promise<void> {
   }
   await Promise.all([...backgroundProcesses].map((handle) => handle.waitForExit(10_000)));
 
-  // why: a stopped daemon leaves its leased devices running, and the lane home's next flow must not find an emulator of this one on a console port. Without `--delete-devices`, which deletes the seeds as well.
-  if (keepSeeds && existsSync(socketPath)) {
-    await cli([...gatewayFlag, "nuke", "--yes"], env, {
-      timeout: 60_000,
-    }).catch(() => undefined);
-  }
+  await stopLeftDevices(state);
 
   const stopResult = await stopDaemonForTeardown(socketPath, env, gatewayFlag);
   const strayPids = await killAndVerifyDaemonPids(socketPath, stopResult.pidsBeforeStop);
@@ -608,8 +637,7 @@ async function teardown(state: TeardownState): Promise<void> {
   // why: a timed-out test may still be running and writing into its simulator home
   if (realDrivers) await emptyDeviceSet(iosDeviceSet(home));
   await keepDaemonLogs(dataDirectory, logName);
-  if (keepSeeds) await releaseLaneHome(home);
-  else await removeHome(home);
+  await discardHome(state);
 
   if (stopResult.stopError !== undefined) throw stopResult.stopError;
   if (strayPids.length > 0) {
