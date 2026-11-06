@@ -129,8 +129,11 @@ may list it.
 
 ### 6. The worker's verdict rides on status; the gateway reads it
 
-`status.get` carries `memoryPressure: { step, since, cause }` (absent when
-host load is off). A gateway reads it from the worker's view and applies no
+`status.get`'s `capacity` block carries `memoryPressure: { step, since,
+cause }` (absent when host load is off). Being in `capacity`, it reaches the
+gateway's view of the worker, and a change to it is a change to the view
+key a remembered refusal is held against, so the gateway asks the worker
+again once it lifts. A gateway reads it from the worker's view and applies no
 threshold of its own: it ranks a worker at `new-devices-paused` below one
 that is not, in a rank stage after `free-slot` (so a warm hit on a paused
 worker still wins), and explains it as `full` with `capacityReason:
