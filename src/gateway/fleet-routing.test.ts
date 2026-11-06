@@ -1227,6 +1227,15 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
         },
       },
       {
+        label: "two names, one worker slims only the first",
+        request: { except: ["store", "mdm"], mode: "slim" as const },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
         label: "no mode, mixed default modes",
         request: { except: ["store"] },
         routedTo: "wrk_b",

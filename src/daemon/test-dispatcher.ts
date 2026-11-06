@@ -165,9 +165,9 @@ export async function buildDispatcher(
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
     readonly warmPool?: Partial<Config["warmPool"]>;
-    /** why: the two boot deadlines `config.get` reports. */
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
+    /** why: the two boot deadlines `config.get` reports. */
     readonly bootTimeouts?: { readonly iosFull: number; readonly android: number };
     readonly components?: Pick<
       ComponentInstaller,
