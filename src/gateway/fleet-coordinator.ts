@@ -1055,16 +1055,27 @@ function physicalMatchKey(request: FleetWaiter["request"]): string {
   return [request.platform, target, request.osVersion ?? ""].join("\u0000");
 }
 
+// why: a request field that is absent stays absent in the routable request (never `undefined`), as `exactOptionalPropertyTypes` needs.
+function present<T extends object>(fields: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
+}
+
 function routable(waiter: FleetWaiter): RoutableRequest {
+  const { request, options } = waiter;
   return {
-    platform: waiter.request.platform as Platform,
-    ...(waiter.request.model === undefined ? {} : { model: waiter.request.model }),
-    ...(waiter.request.class === undefined ? {} : { class: waiter.request.class }),
-    ...(waiter.request.osVersion === undefined ? {} : { osVersion: waiter.request.osVersion }),
-    ...(waiter.request.imageTag === undefined ? {} : { imageTag: waiter.request.imageTag }),
-    ...(waiter.request.baseline === undefined ? {} : { baseline: waiter.request.baseline }),
-    ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
-    ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
-    ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
+    platform: request.platform as Platform,
+    ...present({
+      model: request.model,
+      class: request.class,
+      osVersion: request.osVersion,
+      imageTag: request.imageTag,
+      baseline: request.baseline,
+      mode: request.mode,
+      requires: options.requires,
+      except: request.except,
+    }),
+    ...(lineOf(request) === "physical" ? { physical: true as const } : {}),
   };
 }

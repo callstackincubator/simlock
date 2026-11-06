@@ -122,6 +122,7 @@ const gatewayWaitingReasonSchema = z.enum([
   "baseline-mismatch",
   "baseline-stale",
   "capability-missing",
+  "cannot-keep-except",
   "full",
   "no-free-physical",
   "not-chosen",

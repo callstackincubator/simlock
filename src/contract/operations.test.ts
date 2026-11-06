@@ -1065,7 +1065,7 @@ describe("operation input/output round trips", () => {
     ]);
   });
 
-  it("catalog.get bounds every string and list in modelAliases, customModels and images", () => {
+  it("catalog.get bounds every string and list in modelAliases, customModels, images and slimCategories", () => {
     const base = {
       platform: "android",
       models: ["Pixel 8"],
@@ -1099,6 +1099,10 @@ describe("operation input/output round trips", () => {
       [{ modelClasses: classedModels(4096) }, { modelClasses: classedModels(4097) }],
       [{ customModels: ["x".repeat(256)] }, { customModels: ["x".repeat(257)] }],
       [{ customModels: names(4096) }, { customModels: names(4097) }],
+      [{ slimCategories: names(32) }, { slimCategories: names(33) }],
+      [{ slimCategories: ["a" + "x".repeat(31)] }, { slimCategories: ["a" + "x".repeat(32)] }],
+      [{ slimCategories: ["a-1"] }, { slimCategories: ["Store"] }],
+      [{ defaultMode: "slim" }, { defaultMode: "lean" }],
       [
         { images: [{ ...image, runtime: "x".repeat(128) }] },
         { images: [{ ...image, runtime: "x".repeat(129) }] },

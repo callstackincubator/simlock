@@ -23,7 +23,7 @@ Resolve and boot:
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
 - Volume (`ios.simulator.audio: false`): the step sets the volume state inside the simulator and reads nothing back. Apps keep playing, at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does it.
-- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so closing its window or quitting it leaves the simulator running. Any other failure opens nothing.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so quitting it leaves the simulator running. Any other failure opens nothing.
 
 Seeds (ADR 0061):
 
@@ -52,7 +52,7 @@ Tunnels (`device-tcp.ts`):
 - **A runtime download outlives the runtime (#79).** `simctl runtime delete` leaves its asset bundle in `/System/Library/AssetsV2`. Simlock never deletes it; `doctor` and `component remove` report it. Reclaim in Xcode → Settings → Platforms.
 - **Slim costs (#87, #172).** Below iOS 18.5 a slim request gets `full`. Slim devices lose push, Spotlight, StoreKit, universal links, Siri, iCloud sync. Use `--mode full` when a test needs them.
 - **Folders of simulators deleted before ADR 0060 stay** in `/private/var/tmp`.
-- **The overrides file is an undocumented CoreSimulator file.** If Apple ignores it the readback shows it and the device is granted `full`.
+- **The overrides file is an undocumented CoreSimulator file.** If Apple ignores it, the readback grants `full`.
 - **A recovered slim device runs full but its record says `slim` (#174)** until its next `makeReady`.
 - **A cold slim lease takes a full cold boot.** MCP clients need `resetTimeoutOnProgress` or a longer timeout.
 - **Two simulators made ready at once on the Simulator.app path:** the second may get no window and no warning.

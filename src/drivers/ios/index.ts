@@ -1501,6 +1501,9 @@ export class IosSimctlDriver implements Driver {
       ),
       models,
       runtimes: installedRuntimes.map((runtime) => runtime.version),
+      slimCategories: resolveSlimCategories(this.#slim?.categories).categories.map(
+        (category) => category.name,
+      ),
     };
   }
 

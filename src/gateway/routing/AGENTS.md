@@ -29,5 +29,6 @@ Serviceability (`assess`):
 - `can-serve` and `assess` ask the same helpers in the same order, so the reason
   `can-serve` gives is the code the table would reject with. `has-baseline` and `assess` share
   `baselineEntry` and `withBaseline`; no field of a baseline is compared in the gateway.
+- A request with `except` (ADR 0066 §5) is checked after the model and runtime rows and before the capacity row.
 - Downloads never make a worker able to serve: only installed runtimes count.
 - `matchRequest` gives the model name the gateway forwards, so the worker resolves what routing matched.

@@ -662,6 +662,7 @@ export class FakeDriver implements Driver {
       defaultRuntime: newestVersion(this.#availableOsVersions),
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
       ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
+      ...(this.#slimCategories === undefined ? {} : { slimCategories: [...this.#slimCategories] }),
       modelAliases: { ...this.#modelAliases },
       modelClasses: { ...this.#modelClasses },
       modelRuntimes: Object.fromEntries(

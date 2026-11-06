@@ -1155,6 +1155,219 @@ describe("FleetLeaseCoordinator: requires", () => {
   });
 });
 
+describe("FleetLeaseCoordinator routes an except request by each worker's slim set and default mode (ADR 0066 §5)", () => {
+  const every = ["widgets", "store", "mdm", "other"];
+
+  function fleet(
+    slims: Readonly<
+      Record<
+        string,
+        {
+          categories: string[];
+          defaultMode: "slim" | "full";
+          baseline?: "slim" | "full";
+          busy?: true;
+          drained?: true;
+          models?: string[];
+        }
+      >
+    >,
+  ) {
+    const made = harness();
+    const clients: Record<string, ScriptedWorkerClient> = {};
+    for (const [id, slim] of Object.entries(slims)) {
+      const client = new ScriptedWorkerClient();
+      client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
+      clients[id] = client;
+      made.directory.add(id, client);
+      connectWorker(made.workers, id, slim.busy === true ? { capacity: saturatedIos() } : {});
+      if (slim.drained === true) made.workers.setDrained(id, true);
+      made.workers.refresh(id, {
+        catalog: catalogFixture([
+          {
+            defaultMode: slim.defaultMode,
+            models: slim.models ?? ["iPhone 17"],
+            platform: "ios",
+            runtimes: ["26.0"],
+            slimCategories: slim.categories,
+          },
+        ]).platforms,
+        ...(slim.baseline === undefined
+          ? {}
+          : {
+              baselines: [
+                {
+                  mode: slim.baseline,
+                  model: "iPhone 17",
+                  name: "b",
+                  osVersion: "26.0",
+                  platform: "ios" as const,
+                  savedAt: "2026-11-02T13:10:00Z",
+                  version: 1,
+                },
+              ],
+            }),
+      });
+    }
+    return { ...made, clients };
+  }
+
+  it("routes an except request by each worker's slim set and default mode, and gives the chosen worker the except list", async () => {
+    const cases: {
+      label: string;
+      request: { baseline?: string; except: string[]; mode?: "slim" | "full" };
+      routedTo?: string;
+      rejected?: string;
+      rejectedCode?: "BAD_REQUEST" | "NO_CAPACITY";
+      workers: Parameters<typeof fleet>[0];
+    }[] = [
+      {
+        label: "one worker slims the name",
+        request: { except: ["mdm"], mode: "slim" as const },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "full" as const },
+        },
+      },
+      {
+        label: "two names, one worker slims only the first",
+        request: { except: ["store", "mdm"], mode: "slim" as const },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "no mode, mixed default modes",
+        request: { except: ["store"] },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "a slim baseline on a worker whose default mode is full",
+        request: { baseline: "b", except: ["store"] },
+        routedTo: "wrk_a",
+        workers: {
+          wrk_a: { baseline: "slim" as const, categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "a full baseline on a worker whose default mode is slim",
+        request: { baseline: "b", except: ["store"] },
+        rejected: 'no worker can keep slim categories store (baseline "b" is full)',
+        workers: {
+          wrk_a: { baseline: "full" as const, categories: every, defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "no worker slims the name",
+        request: { except: ["other"], mode: "slim" as const },
+        rejected: "no worker slims every category in except: other",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const },
+          wrk_b: { categories: ["store"], defaultMode: "slim" as const },
+        },
+      },
+      {
+        label: "no mode, every worker defaults to full",
+        request: { except: ["store"] },
+        rejected:
+          "no worker can keep slim categories store (default mode is full on every worker that slims them)",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "full" as const },
+        },
+      },
+      {
+        label: "the workers that would give a slim device do not serve the model",
+        request: { except: ["store"] },
+        rejected:
+          "no worker can keep slim categories store (no worker that slims them in slim mode serves this model and runtime)",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "slim" as const, models: ["iPhone 16"] },
+          wrk_b: { categories: every, defaultMode: "full" as const },
+        },
+      },
+      {
+        label:
+          "the one worker that keeps the names is drained, another serves the model without them",
+        request: { except: ["mdm"], mode: "slim" as const },
+        rejectedCode: "NO_CAPACITY" as const,
+        rejected: "No worker in the fleet can currently serve this request",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "slim" as const, drained: true as const },
+          wrk_b: { categories: ["store"], defaultMode: "slim" as const },
+        },
+      },
+      {
+        label:
+          "the only worker that serves the model is drained and does not keep the names, a taker that keeps them does not serve it",
+        request: { except: ["mdm"], mode: "slim" as const },
+        rejected:
+          "no worker can keep slim categories mdm (no worker that slims them in slim mode serves this model and runtime)",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const, drained: true as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const, models: ["iPhone 16"] },
+        },
+      },
+    ];
+
+    for (const { label, request, routedTo, rejected, rejectedCode, workers: slims } of cases) {
+      const { clients, coordinator } = fleet(slims);
+
+      if (rejected !== undefined || routedTo === undefined) {
+        // why: no `noWait`, so a request the coordinator would only queue shows as "waiting", not as a rejection.
+        const outcome = await Promise.race([
+          coordinator.request({ ...REQUEST, ...request }, requestOptions()).then(
+            () => "granted",
+            (error: unknown) => error,
+          ),
+          tick().then(() => "waiting"),
+        ]);
+        expect(outcome, label).toMatchObject({
+          code: rejectedCode ?? "BAD_REQUEST",
+          message: rejected,
+        });
+        for (const client of Object.values(clients)) {
+          expect(client.lastRequestLeaseInput, label).toBeUndefined();
+        }
+        continue;
+      }
+      await coordinator.request({ ...REQUEST, ...request }, requestOptions());
+
+      const received = Object.entries(clients)
+        .filter(([, client]) => client.lastRequestLeaseInput !== undefined)
+        .map(([id]) => id);
+      expect(received, label).toEqual([routedTo]);
+      expect(clients[routedTo]?.lastRequestLeaseInput, label).toMatchObject({
+        except: request.except,
+      });
+    }
+
+    const waiting = fleet({
+      wrk_a: { busy: true, categories: every, defaultMode: "slim" },
+      wrk_b: { categories: ["store"], defaultMode: "slim" },
+    });
+    void waiting.coordinator
+      .request({ ...REQUEST, except: ["mdm"] }, requestOptions())
+      .catch(() => undefined);
+    await tick();
+
+    expect(
+      (waiting.coordinator.waitingRequests()[0] as { workers?: unknown } | undefined)?.workers,
+    ).toEqual([
+      { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_a" },
+      { reason: "cannot-keep-except", workerId: "wrk_b" },
+    ]);
+  });
+});
+
 describe("FleetLeaseCoordinator: a worker that is still starting", () => {
   const gatewayLease = {
     deviceId: "dev_1",
