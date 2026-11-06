@@ -34,6 +34,15 @@ function tooLarge(name: string): LeaseFilesError {
   );
 }
 
+function sameName(names: readonly string[], name: string): string[] {
+  return names.filter((candidate) => candidate.toLowerCase() === name.toLowerCase());
+}
+
+// why: the exact spelling wins; else the first spelling in byte order, which `names` is sorted by.
+function lookup(names: readonly string[], name: string): string | undefined {
+  return names.includes(name) ? name : sameName(names, name)[0];
+}
+
 function unknownFile(name: string): LeaseFilesError {
   return new LeaseFilesError("UNKNOWN_FILE", `No file ${name} in this lease`, { name });
 }
@@ -68,7 +77,7 @@ export class LeaseFolders {
   }
 
   async openFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView> {
-    const stored = (await this.#names(grant)).find((candidate) => candidate === name);
+    const stored = lookup(await this.#names(grant), name);
     if (stored === undefined) throw unknownFile(name);
     const file = await this.#deps.filesystem.openFile(join(this.#pathOf(grant), stored));
     return { name: stored, ...file };
@@ -86,8 +95,11 @@ export class LeaseFolders {
   }
 
   async remove(grant: LeaseFilesGrant, name: string): Promise<void> {
-    if (!(await this.#names(grant)).includes(name)) throw unknownFile(name);
-    await this.#deps.filesystem.rm(join(this.#pathOf(grant), name));
+    const spellings = sameName(await this.#names(grant), name);
+    if (spellings.length === 0) throw unknownFile(name);
+    for (const spelling of spellings) {
+      await this.#deps.filesystem.rm(join(this.#pathOf(grant), spelling));
+    }
   }
 
   // why: only regular files whose names pass the name rule are the lease's files; a command may have left a subfolder or `my file.png` beside them.
@@ -179,6 +191,9 @@ export class LeaseFolders {
         }),
         { mode: 0o600 },
       );
+      for (const other of sameName(await this.#names(grant), name)) {
+        if (other !== name) await filesystem.rm(join(folder, other));
+      }
       await filesystem.rename(temporary, join(folder, name));
       return { name, size };
     } catch (error: unknown) {
