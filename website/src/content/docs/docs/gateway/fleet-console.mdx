@@ -77,6 +77,7 @@ On **Queue**, a request's **Queue** field says where it waits: `the gateway's qu
 | OS not installed | The worker offers the model, but has no matching OS version installed. |
 | No iOS support, No Android support | The worker does not support the platform. |
 | Missing capability | The worker lacks an optional capability the request needs. |
+| Cannot keep these slim categories | The request names `except` categories the worker does not slim, or the worker would not give a slim device (its default mode is full and the request names no mode, or the baseline is full). |
 
 How the gateway picks a worker is in [How requests are routed](/simlock/docs/gateway/routing).
 

@@ -1066,5 +1066,6 @@ function routable(waiter: FleetWaiter): RoutableRequest {
     ...(waiter.request.mode === undefined ? {} : { mode: waiter.request.mode }),
     ...(lineOf(waiter.request) === "physical" ? { physical: true as const } : {}),
     ...(waiter.options.requires === undefined ? {} : { requires: waiter.options.requires }),
+    ...(waiter.request.except === undefined ? {} : { except: waiter.request.except }),
   };
 }

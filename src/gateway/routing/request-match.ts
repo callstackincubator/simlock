@@ -198,6 +198,7 @@ export function listsModel(worker: WorkerView, request: RoutableRequest): boolea
 
 type PlatformEntry = NonNullable<WorkerView["catalog"]>[number];
 
-function catalogOf(worker: WorkerView, request: RoutableRequest): PlatformEntry | undefined {
+/** why: the one read of a worker's catalog entry for the request's platform. */
+export function catalogOf(worker: WorkerView, request: RoutableRequest): PlatformEntry | undefined {
   return worker.catalog?.find((entry) => entry.platform === request.platform);
 }
