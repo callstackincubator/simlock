@@ -1966,7 +1966,7 @@ describe("warm pool policy", () => {
       }
     });
 
-    it("sheds one idle device a reading: a device no configured target keeps first, then a kept one, least recently used first, never one a waiter would take or one whose shutdown just failed", () => {
+    it("sheds one idle device a reading: a device no configured target keeps first, then a kept one, least recently used first, never one a waiter would take, one the budget already shuts down or one whose shutdown just failed", () => {
       const ofKind = (id: string, endedAgo: number) =>
         device(id, "ready", { endedAgo, spec: kind });
       const keptOldest = ofKind("kept", 90 * minute);
@@ -2021,6 +2021,18 @@ describe("warm pool policy", () => {
       expect(sheds([keptOldest, olderOther], {}, { mayShed: false }), "no new reading").toEqual([]);
       expect(sheds([keptOldest, olderOther], {}, { step: "none" }), "step none").toEqual([]);
       expect(sheds([device("busy", "leased")]), "nothing idle").toEqual([]);
+
+      const overBudget = evaluate(
+        view([keptOldest, olderOther, newerOther], {
+          limit: 2,
+          pressure: { step: "warming-paused" },
+          targets: [],
+        }),
+      ).flatMap((proposal) => (proposal.action === "shutdown" ? [proposal.deviceId] : []));
+      expect(overBudget, "a device the budget shuts down is not shed again").toEqual([
+        "kept",
+        "older",
+      ]);
     });
   });
 });
