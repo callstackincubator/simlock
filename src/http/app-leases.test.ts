@@ -1820,4 +1820,33 @@ describe("a lease's files on a worker", () => {
       error: { code: "UNKNOWN_FILE", message: "No file a.txt in this lease", name: "a.txt" },
     });
   });
+
+  it("a lease holder's file names match ignoring case", async () => {
+    const { get, leaseFolder, list, put, remove } = await filesRig();
+    const text = async (response: Response) =>
+      new TextDecoder().decode(await response.arrayBuffer());
+    const names = async () =>
+      ((await (await list()).json()) as { files: { name: string }[] }).files.map(
+        (file) => file.name,
+      );
+
+    expect((await put("A.tar", "upper")).status).toBe(201);
+    expect(await text(await get("a.tar"))).toBe("upper");
+
+    expect((await put("a.tar", "lower")).status).toBe(201);
+    expect(await folderEntries(leaseFolder)).toEqual(["a.tar"]);
+    expect(await names()).toEqual(["a.tar"]);
+    expect(await text(await get("A.TAR"))).toBe("lower");
+
+    expect((await remove("A.TAR")).status).toBe(204);
+    expect(await names()).toEqual([]);
+
+    await writeFile(join(leaseFolder, "A.tar"), "first");
+    await writeFile(join(leaseFolder, "a.tar"), "second");
+    if ((await folderEntries(leaseFolder)).length === 2) {
+      expect(await text(await get("a.tar"))).toBe("second");
+      expect(await text(await get("A.TAR"))).toBe("first");
+      expect(await names()).toEqual(["A.tar", "a.tar"]);
+    }
+  });
 });
