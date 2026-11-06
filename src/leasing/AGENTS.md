@@ -54,6 +54,7 @@ Boundaries:
 
 ## Known gaps
 
+- **A crash mid-reboot of a warm device for an `except` lease** leaves the request failed at startup (`daemon-restarted`) and a `ready` record whose simulator may be shut down; startup's reconcile only reports that drift. A later grant of it is caught by the health monitor, which reboots it under the lease.
 - **A SIGKILLed holder keeps its device until the TTL.** It runs no release.
   Bound it with `lease.defaultTtlMs` or `--ttl`; `simlock release <id>` ends it now.
 - **Recovery restores the disk, not the session.** Apps, log streams and
