@@ -499,6 +499,110 @@ describe("GatewayRelay on a byte channel", () => {
     expect(connection.sent.filter((frame) => frame.type === "relay.request")).toEqual([]);
   });
 
+  it("cuts a file upload only after 330 s with no byte from the caller, counts its head deadline from the body's end, and keeps the 330 s deadline for any other relay", async () => {
+    const BOUND = 330_000;
+    const upload = { name: "fixture.tar", silenceMs: BOUND };
+    async function start(options: { upload?: typeof upload; holdOpen?: boolean } = {}) {
+      const clock = new FakeClock();
+      const { connection, relay } = await setup({
+        clock,
+        deadlineMs: BOUND,
+        ...(options.holdOpen === true ? { holdOpen: true } : {}),
+      });
+      let feed!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          feed = controller;
+        },
+      });
+      let result: Awaited<ReturnType<typeof outcome<Response>>> | undefined;
+      void outcome(
+        relay.relay(WORKER_ID, {
+          ...call(body),
+          ...(options.upload === undefined ? {} : { upload: options.upload }),
+        }),
+      ).then((settled) => {
+        result = settled;
+      });
+      const pass = async (ms: number) => {
+        clock.advance(ms);
+        await sleep(20);
+        return result;
+      };
+      return {
+        clock,
+        connection,
+        feed,
+        pass,
+        request: () => connection.lastSentOf("relay.request"),
+      };
+    }
+    const stalled = {
+      code: "UPLOAD_STALLED",
+      message: "No bytes of fixture.tar arrived for 330 s",
+      state: "rejected",
+    };
+    const unreachable = {
+      code: "WORKER_UNREACHABLE",
+      message: `worker ${WORKER_ID} did not finish the relayed request within ${String(BOUND)} ms`,
+      state: "rejected",
+    };
+
+    const flowing = await start({ upload });
+    await sentFrame(flowing.connection, "relay.request");
+    flowing.feed.enqueue(new Uint8Array(KIB));
+    const flowingAt300 = await flowing.pass(300_000);
+    flowing.feed.enqueue(new Uint8Array(KIB));
+    const flowingAt600 = await flowing.pass(300_000);
+    flowing.feed.close();
+    await sleep(20);
+    const beforeHeadDeadline = await flowing.pass(BOUND - 1);
+    const atHeadDeadline = await flowing.pass(1);
+
+    const silent = await start({ upload });
+    await sentFrame(silent.connection, "relay.request");
+    silent.feed.enqueue(new Uint8Array(KIB));
+    await sleep(20);
+    const beforeSilenceBound = await silent.pass(BOUND - 1);
+    const atSilenceBound = await silent.pass(1);
+
+    const opening = await start({ holdOpen: true, upload });
+    const beforeOpenDeadline = await opening.pass(BOUND - 1);
+    const atOpenDeadline = await opening.pass(1);
+
+    const other = await start();
+    await sentFrame(other.connection, "relay.request");
+    other.feed.enqueue(new Uint8Array(KIB));
+    await other.pass(300_000);
+    other.feed.enqueue(new Uint8Array(KIB));
+    const otherBeforeDeadline = await other.pass(BOUND - 300_000 - 1);
+    const otherAtDeadline = await other.pass(1);
+
+    const refused = await start({ upload });
+    const refusal = await sentFrame(refused.connection, "relay.request");
+    await refused.pass(100_000);
+    refused.connection.push("relay-head", { headers: [], requestId: refusal.id, status: 413 });
+    await sleep(20);
+    // why: the silence bound would fire at 330 s; the response body's own idle bound runs to 430 s.
+    const afterRefusal = await refused.pass(BOUND - 100_000 + 1);
+
+    expect([flowingAt300, flowingAt600, beforeHeadDeadline]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(atHeadDeadline).toEqual(unreachable);
+    expect(beforeSilenceBound).toBeUndefined();
+    expect(atSilenceBound).toEqual(stalled);
+    expect(silent.connection.lastSentOf("relay.cancel")).toBeDefined();
+    expect(beforeOpenDeadline).toBeUndefined();
+    expect(atOpenDeadline).toEqual(unreachable);
+    expect(otherBeforeDeadline).toBeUndefined();
+    expect(otherAtDeadline).toEqual(unreachable);
+    expect(afterRefusal).toMatchObject({ state: "fulfilled" });
+    expect(refused.connection.lastSentOf("relay.cancel")).toBeUndefined();
+  });
+
   it("fails at once with the abort reason, and sends no relay.request, when the caller aborts while it waits for a channel", async () => {
     const { connection, relay } = await setup({ holdOpen: true });
     const controller = new AbortController();
