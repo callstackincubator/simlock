@@ -1512,4 +1512,39 @@ describe("a lease's files on a worker", () => {
     expect(download.status).toBe(200);
     expect(sha256(new Uint8Array(await download.arrayBuffer()))).toBe(sha256(bytes));
   });
+
+  it("a lease holder PUTs a bad file name and gets 400 BAD_REQUEST with the name rule", async () => {
+    const { get, put, app } = await filesRig();
+    const accepted = [
+      "fixture.tar",
+      "app-release.apk",
+      "Documents.tar.deflate",
+      "A",
+      "a".repeat(128),
+    ];
+    const refused = [
+      ["a".repeat(129), "a".repeat(129)],
+      [".hidden", ".hidden"],
+      ["-rf", "-rf"],
+      ["my%20file.tar", "my file.tar"],
+      ["a%2Fb.tar", "a/b.tar"],
+      ["za%C5%BC%C3%B3%C5%82%C4%87.txt", "zażółć.txt"],
+    ] as const;
+
+    for (const name of accepted) expect((await put(name, "x")).status).toBe(201);
+    for (const [encoded, decoded] of refused) {
+      for (const response of [await put(encoded, "x"), await get(encoded)]) {
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: {
+            code: "BAD_REQUEST",
+            message: `File ${decoded} must be 1 to 128 letters, digits, '.', '_' or '-', starting with a letter or digit`,
+          },
+        });
+      }
+    }
+    expect((await app.request("/v1/leases/lse_1/files/..", { headers: agentAuth })).status).toBe(
+      404,
+    );
+  });
 });
