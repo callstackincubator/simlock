@@ -22,7 +22,7 @@ Resolve and boot:
 - The overrides folder lives outside the device set (`launchdOverridesRoot`), so `destroy` removes it itself after `simctl delete`.
 - After every boot and before the readback, `runAfterBoot` (`boot-courtesies.ts`) runs the volume step, then the window step. Each only reports its failure (`onSilenceFailed`, `onWindowFailed`), and the device stays in use.
 - Volume (`ios.simulator.audio: false`): the step sets the volume state inside the simulator and reads nothing back. Apps keep playing, at volume 0. A baseline source's boot is not silenced: a copy's own `makeReady` does it.
-- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. When opening DeviceHub fails, Simulator.app is opened instead, detached, so closing its window or quitting it leaves the simulator running.
+- Window (`ios.simulator.headless: false`): DeviceHub is opened in the background, so the front app stays in front, and is told not to shut down started devices when it quits. Only a non-zero exit of that open means DeviceHub is missing: Simulator.app is then opened instead, detached, so closing its window or quitting it leaves the simulator running. Any other failure opens nothing.
 
 Seeds (ADR 0061):
 

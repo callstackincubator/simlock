@@ -19,7 +19,7 @@ On and off:
 The two daemons:
 
 - The phone daemon starts once the simulator daemon's start has settled. Simlock's start waits for neither.
-- A pid is signalled only after its role's whole marker matches the end of its command line (`--simlock-home`, and `--simlock-role=phones` for the phone daemon), and it is checked again before SIGKILL.
+- A pid taken from an earlier run's record is signalled only after its role's whole marker matches the end of its command line (`--simlock-home`, and `--simlock-role=phones` for the phone daemon), and it is checked again before SIGKILL.
 - A daemon that survives its stop keeps its pid record, so the next start reaps it.
 - The supervisor finds an installed agent-device; it never downloads one.
 - A daemon's environment takes no `AGENT_DEVICE_*` key from the operator's shell. The phone daemon's also takes no simulator set and no driver lease key, and names the host's default adb server.
