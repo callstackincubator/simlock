@@ -8,10 +8,12 @@ import {
   type TwoWayRelay,
   type WorkerDirectory,
 } from "../gateway/index.js";
+import type { LeaseFilesLimits } from "../lease-files/index.js";
 import { linkPair, TYPE } from "../link/testing.js";
 import { connectSimlockClient } from "../simlock-client/client.js";
 import type { DispatchSession } from "./dispatch.js";
 import type { RelayTarget, TwoWayRelayTarget } from "./relay.js";
+import type { StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
 import {
   aborted,
@@ -180,7 +182,10 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
 
   const startFleet = (
     execCommand?: FleetExec,
-    extra: { readonly proxyAuth?: Record<string, unknown> } = {},
+    extra: {
+      readonly proxyAuth?: Record<string, unknown>;
+      readonly worker?: Partial<StartDaemonOptions>;
+    } = {},
   ) =>
     startFleet_(
       { daemons, directories, target, twoWayTarget },
@@ -388,8 +393,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(missing).toMatchObject({ code: "RELAY_TARGET_MISSING", state: "rejected" });
   }, 30_000);
 
-  async function fileRig() {
-    const fleet = await startFleet();
+  async function fileRig(limits?: LeaseFilesLimits) {
+    const fleet = await startFleet(
+      undefined,
+      limits === undefined ? {} : { worker: { leaseFilesLimits: limits } },
+    );
     const { secret, token } = await fleet.gateway.dispatch(
       "token.create",
       { label: "holder", role: "agent" },
@@ -440,7 +448,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
   }
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
-    const { call, channelsOpened, declare } = await fileRig();
+    const { call, channelsOpened, declare } = await fileRig({
+      fileBytes: 32 * MIB,
+      leaseBytes: 512 * MIB,
+      silenceMs: 330_000,
+    });
     const bytes = patternBytes(20 * MIB, 5);
 
     const put = await call("/fixture.tar", {
@@ -453,6 +465,25 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const listed = await call("");
     const deleted = await call("/fixture.tar", { method: "DELETE" });
     const after = await call("");
+    const busy = new TransformStream<Uint8Array>();
+    const holding = call("/busy.bin", {
+      body: busy.readable,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    const feed = busy.writable.getWriter();
+    await feed.write(new Uint8Array(1));
+    await poll(async () => (await call("/busy.bin", { method: "PUT", body: "x" })).status).toBe(
+      409,
+    );
+    const missing = await call("/missing.bin");
+    const oversized = await call("/large.bin", {
+      body: patternStream(33 * MIB, 6),
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
+    await feed.close();
+    await holding;
     const opened = channelsOpened();
     const tooLarge = await declare("/huge.bin", 2 * 1024 * MIB + 1);
 
@@ -468,6 +499,12 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
     expect(deleted.status).toBe(204);
     expect(await after.json()).toEqual({ files: [] });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: { code: "UNKNOWN_FILE" } });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toMatchObject({
+      error: { code: "FILE_TOO_LARGE", name: "large.bin" },
+    });
     expect(tooLarge.status).toBe(413);
     expect(JSON.parse(tooLarge.body)).toMatchObject({
       error: { code: "FILE_TOO_LARGE", name: "huge.bin" },

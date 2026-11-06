@@ -38,7 +38,7 @@ import { androidDriverConfig } from "../drivers/android/index.js";
 import { iosDriverConfig } from "../drivers/ios/index.js";
 import { type Auth } from "../auth/index.js";
 import { createHttpApp } from "../http/app.js";
-import { createLeaseFiles } from "../lease-files/index.js";
+import { createLeaseFiles, type LeaseFilesLimits } from "../lease-files/index.js";
 import type { HttpDispatch } from "../http/dispatcher-session.js";
 import { HttpGateway } from "../http/server.js";
 import {
@@ -86,6 +86,8 @@ export interface WorkerOptions {
   readonly defaultRequesterId?: string;
   readonly drivers?: readonly Driver[];
   readonly hostLoadProbe?: HostLoadProbe | null;
+  /** why: test-only, lower file and folder limits so a rig reaches a refusal without gigabytes. */
+  readonly leaseFilesLimits?: LeaseFilesLimits;
   readonly prerequisiteChecks?: readonly PrerequisiteCheck[];
   /** why: test-only, the protocol range the worker daemon announces. */
   readonly protocolVersion?: number | ProtocolRange;
