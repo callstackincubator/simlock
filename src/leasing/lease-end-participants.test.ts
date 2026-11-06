@@ -320,6 +320,7 @@ describe("lease-end participants (#469)", () => {
     expect(participant.calls.map((call) => call.ended)).toEqual([
       {
         deviceId: grant.device.id,
+        grantedAt: 1_000,
         leaseId: grant.lease.id,
         ownerId: "agent-owner",
         platform: "ios",
