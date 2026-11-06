@@ -971,6 +971,7 @@ const TRIGGERS = [
   "cleanup.executed",
   "capacity.changed",
   "lease.queued",
+  "memory.pressure-changed",
 ] as const;
 
 function kindFields(spec: VirtualSpec): Record<string, string> {
