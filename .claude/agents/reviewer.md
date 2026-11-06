@@ -3,6 +3,7 @@ name: reviewer
 description: Runs the blind pre-merge reviews from delivery rule 14 on a PR, verifies every blocking finding, and ends with a fixed report block. Spawned by the deliver orchestrator in the background, or through the review skill.
 model: sonnet
 effort: medium
+autoCompactWindow: 300000
 background: true
 tools: Bash, Read, Write, Grep, Glob, Agent, SendMessage
 ---

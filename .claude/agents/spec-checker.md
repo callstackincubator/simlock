@@ -3,6 +3,7 @@ name: spec-checker
 description: Reads a posted feature or task spec with a fresh context and reports its gaps in a fixed block, one status per category. Read-only. Spawned by spec-session (one per task, plus one for the feature), or through the check-spec skill.
 model: opus
 effort: high
+autoCompactWindow: 300000
 background: true
 ---
 
