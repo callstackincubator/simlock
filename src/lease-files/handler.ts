@@ -1,4 +1,7 @@
+import { ERROR_TABLE } from "../contract/index.js";
+import { LeaseFilesError } from "./errors.js";
 import type { LeaseFileStore } from "./lease-files.js";
+import { requireFileName } from "./names.js";
 import type { LeaseFilesLease } from "./types.js";
 
 export async function handleRequest(
@@ -7,15 +10,30 @@ export async function handleRequest(
   lease: LeaseFilesLease,
   name: string | undefined,
 ): Promise<Response> {
+  try {
+    return await serve(store, request, lease, name);
+  } catch (error: unknown) {
+    if (!(error instanceof LeaseFilesError)) throw error;
+    const refusal: LeaseFilesError = error;
+    return Response.json(
+      { error: { code: refusal.code, message: refusal.message, ...refusal.details } },
+      { status: ERROR_TABLE[refusal.code].httpStatus },
+    );
+  }
+}
+
+async function serve(
+  store: LeaseFileStore,
+  request: Request,
+  lease: LeaseFilesLease,
+  name: string | undefined,
+): Promise<Response> {
   const grant = store.findGrant(lease.id);
   if (grant === undefined || name === undefined) return new Response(null, { status: 404 });
+  requireFileName(name);
   if (request.method === "PUT") {
-    const stored = await store.put(
-      grant,
-      name,
-      request.body ?? new ReadableStream({ start: (c) => c.close() }),
-    );
-    return Response.json(stored, { status: 201 });
+    const body = request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() });
+    return Response.json(await store.put(grant, name, body), { status: 201 });
   }
   const file = await store.openFile(grant, name);
   const length = String(file.size);
