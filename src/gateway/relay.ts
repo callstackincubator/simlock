@@ -27,6 +27,8 @@ export interface GatewayRelayCall {
   readonly request: Request;
   readonly tenant: string;
   readonly leaseId?: string;
+  /** why: a file upload may run as long as bytes keep coming; its request body is bounded by silence, and the head deadline counts from the body's end. */
+  readonly upload?: { readonly name: string; readonly silenceMs: number };
 }
 
 export interface TwoWayRelay {
@@ -127,6 +129,7 @@ class Exchange {
   #ahead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
   #timer: TimerHandle | undefined;
   #idleTimer: TimerHandle | undefined;
+  #silenceTimer: TimerHandle | undefined;
   #callerBody: ReadableStreamDefaultReader<Uint8Array> | undefined;
   #requestSent = false;
   #cancelSent = false;
@@ -144,13 +147,19 @@ class Exchange {
   constructor(private readonly init: ExchangeInit) {}
 
   start(): void {
-    const { call, deadlineMs, workerId } = this.init;
+    const { call } = this.init;
     const signal = call.request.signal;
     if (signal.aborted) {
       this.init.reject(signal.reason);
       return;
     }
     signal.addEventListener("abort", this.#abortListener, { once: true });
+    this.#armDeadline();
+    void this.#run();
+  }
+
+  #armDeadline(): void {
+    const { deadlineMs, workerId } = this.init;
     this.#timer = this.init.clock.setTimer(deadlineMs, () => {
       this.#fail(
         new DispatchError(
@@ -160,7 +169,24 @@ class Exchange {
         ),
       );
     });
-    void this.#run();
+  }
+
+  #armSilence(upload: { readonly name: string; readonly silenceMs: number }): void {
+    this.#disarmSilence();
+    this.#silenceTimer = this.init.clock.setTimer(upload.silenceMs, () => {
+      this.#fail(
+        new DispatchError(
+          "UPLOAD_STALLED",
+          `No bytes of ${upload.name} arrived for ${String(upload.silenceMs / 1000)} s`,
+          { name: upload.name },
+        ),
+      );
+    });
+  }
+
+  #disarmSilence(): void {
+    if (this.#silenceTimer !== undefined) this.init.clock.cancel(this.#silenceTimer);
+    this.#silenceTimer = undefined;
   }
 
   async #run(): Promise<void> {
@@ -182,6 +208,11 @@ class Exchange {
       return;
     }
     this.#channel = channel;
+    // why: an upload's time is bounded by silence from here on, so the start deadline ends once the channel is open.
+    if (this.init.call.upload !== undefined && this.#timer !== undefined) {
+      this.init.clock.cancel(this.#timer);
+      this.#timer = undefined;
+    }
     this.#reader = channel.readable.getReader();
     this.#look();
     const { request } = this.init.call;
@@ -220,20 +251,25 @@ class Exchange {
 
   async #upload(channel: LinkChannel, body: ReadableStream<Uint8Array> | null): Promise<void> {
     const writer = channel.writable.getWriter();
+    const { upload } = this.init.call;
     if (body === null) {
       await writer.close().catch(() => undefined);
+      this.#armHeadDeadline();
       return;
     }
     const reader = body.getReader();
     this.#callerBody = reader;
     try {
       for (;;) {
+        if (upload !== undefined) this.#armSilence(upload);
         const step = await reader.read();
+        this.#disarmSilence();
         if (this.#done) return;
         if (step.done) break;
         await writer.write(step.value);
       }
       await writer.close();
+      this.#armHeadDeadline();
     } catch (error: unknown) {
       if (this.#done) return;
       if (error instanceof LinkChannelError) {
@@ -244,6 +280,12 @@ class Exchange {
       }
       this.#fail(error);
     }
+  }
+
+  // why: an upload's head can arrive only after its body, so its deadline counts from the body's end.
+  #armHeadDeadline(): void {
+    if (this.init.call.upload === undefined || this.#done || this.#headed) return;
+    this.#armDeadline();
   }
 
   // why: a single read is kept ahead so a channel that fails before the head is seen without anyone reading the body.
@@ -275,6 +317,7 @@ class Exchange {
     this.#headed = true;
     // why: once the head is in, the body is bounded by silence, not by the deadline, so a live stream is not cut.
     if (this.#timer !== undefined) this.init.clock.cancel(this.#timer);
+    this.#disarmSilence();
     if (this.init.twoWay && this.#openOrRefuse(status, responseHeaders)) return;
     this.#armIdle();
     const method = this.init.call.request.method;
@@ -573,6 +616,7 @@ class Exchange {
     this.#done = true;
     if (this.#timer !== undefined) this.init.clock.cancel(this.#timer);
     if (this.#idleTimer !== undefined) this.init.clock.cancel(this.#idleTimer);
+    this.#disarmSilence();
     this.init.call.request.signal.removeEventListener("abort", this.#abortListener);
     this.#callerBody?.cancel().catch(() => undefined);
   }

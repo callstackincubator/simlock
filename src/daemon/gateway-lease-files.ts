@@ -12,10 +12,15 @@ export interface GatewayLeaseFilesOptions {
       readonly request: Request;
       readonly tenant: string;
       readonly leaseId?: string;
+      readonly upload?: { readonly name: string; readonly silenceMs: number };
     },
   ) => Promise<Response>;
   readonly requesterPrefix: string;
+  readonly silenceMs?: number;
 }
+
+// why: the worker cuts an upload silent for the same 330 s, so the gateway's bound is the one the caller meets first.
+const UPLOAD_SILENCE_MS = 330_000;
 
 /** why: a gateway holds no file; it relays each file request to the worker that holds the lease, through the worker's `files` target (ADR 0067 §2). */
 export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): HttpLeaseFiles {
@@ -48,6 +53,9 @@ export function createGatewayLeaseFiles(options: GatewayLeaseFilesOptions): Http
         } as RequestInit),
         target: "files",
         tenant: `${options.requesterPrefix}${identity.principal}`,
+        ...(request.method === "PUT" && name !== undefined
+          ? { upload: { name, silenceMs: options.silenceMs ?? UPLOAD_SILENCE_MS } }
+          : {}),
       });
       const answer = await withCallersLeaseId(relayed, workerLeaseId, lease.id);
       const length = answer.headers.get("simlock-content-length");

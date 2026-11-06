@@ -324,6 +324,7 @@ async function composeDaemon(
       eventHistory,
       filesystem,
       ...(options.gatewayRelay === undefined ? {} : { gatewayRelay: options.gatewayRelay }),
+      ...(options.fileSilenceMs === undefined ? {} : { fileSilenceMs: options.fileSilenceMs }),
       ...(options.gatewayUplinks === undefined ? {} : { gatewayUplinks: options.gatewayUplinks }),
       hostSystem,
       ...(options.hostLoadProbe === undefined ? {} : { hostLoadProbe: options.hostLoadProbe }),
@@ -380,6 +381,8 @@ interface GatewayDaemonOptions {
   readonly config: Config;
   readonly dataDirectory: string;
   readonly eventBus: EventBus;
+  /** why: test-only, see `StartDaemonOptions.fileSilenceMs`. */
+  readonly fileSilenceMs?: number;
   readonly eventHistory: EventHistoryHandle;
   readonly filesystem: Filesystem;
   readonly gatewayRelay?: (relay: GatewayRelay) => void;
@@ -635,6 +638,7 @@ async function startGatewayDaemon(options: GatewayDaemonOptions): Promise<Daemon
       leaseFiles: createGatewayLeaseFiles({
         relay: (workerId, call) => gatewayRelay.relay(workerId, call),
         requesterPrefix: gatewayRequesterPrefix,
+        ...(options.fileSilenceMs === undefined ? {} : { silenceMs: options.fileSilenceMs }),
       }),
       leaseRequests: fleetCoordinator.requests,
       logger: httpLogger,
