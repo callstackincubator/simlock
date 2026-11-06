@@ -200,6 +200,30 @@ describe("device.exec over HTTP", () => {
     await env.cli(["release", leaseId]);
   });
 
+  it("runs exec with stdinFile and the command reads the file's bytes, then end of input", async () => {
+    const { baseUrl, env, exec, lease, token } = await fleet();
+    const auth = await token("agent");
+    const leaseId = await lease({ device: "iPhone 16", os: "18.4", platform: "ios" }, auth);
+    const uploaded = await fetch(`${baseUrl}/v1/leases/${leaseId}/files/fixture.txt`, {
+      body: "stored payload",
+      headers: { ...auth, "content-type": "application/octet-stream" },
+      method: "PUT",
+    });
+    expect(uploaded.status).toBe(201);
+
+    const response = await exec(
+      leaseId,
+      { args: ["list", "--fake-exec-echo-stdin"], stdinFile: "fixture.txt", tool: "simctl" },
+      auth,
+    );
+    expect(response.status).toBe(200);
+    const frames = await readSse(response);
+    expect(frames.at(-1)).toEqual({ data: { exitCode: 0 }, event: "exit" });
+    expect(JSON.parse(chunksOf(frames, "stdout"))).toMatchObject({ stdin: "stored payload" });
+
+    await env.cli(["release", leaseId]);
+  });
+
   it("refuses through the fake driver's own mirrored list, and never runs what it refuses", async () => {
     // The fake driver's refusal rules are its own mirror of the real Android/iOS drivers'
     // (see `e2e/fake-driver/fake-driver.ts`'s own comment on `passthrough`), kept deliberately
