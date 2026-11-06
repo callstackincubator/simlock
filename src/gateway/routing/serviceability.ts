@@ -134,8 +134,8 @@ function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): As
 }
 
 /**
- * why: ADR 0066 §5: like `requires`, the table runs again over the workers that keep the `except`
- * list. When none can serve: a known worker that keeps the names and serves the model and runtime
+ * why: ADR 0066 §5: like `requires`, the capacity row (`assessServing`) runs again over the workers
+ * that keep the `except` list. When none can serve: a known worker that keeps the names and serves the model and runtime
  * but cannot take requests now (drained, lost its uplink) makes it `NO_CAPACITY`; with no such
  * worker it is `BAD_REQUEST`, told whether no worker slims the names or none would give a slim device.
  */
