@@ -23,7 +23,7 @@ export { freeLoopbackPort } from "../test-support/loopback-port.js";
 export const MIB = 1024 * 1024;
 export const KIB = 1024;
 
-export const adminSession: DispatchSession = {
+export const relayAdminSession: DispatchSession = {
   manageEventSubscription: () => undefined,
   principal: "test-operator",
   role: "admin",
@@ -371,7 +371,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const { secret } = await gateway.dispatch(
     "token.create",
     { label: "worker-a", role: "worker" },
-    adminSession,
+    relayAdminSession,
   );
   const driverOptions =
     execCommand === undefined ? {} : { passthrough: () => execCommand, passthroughTools: ["adb"] };
@@ -398,7 +398,7 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   let workerId = "";
   await vi.waitFor(
     async () => {
-      const { workers } = await gateway.dispatch("worker.list", {}, adminSession);
+      const { workers } = await gateway.dispatch("worker.list", {}, relayAdminSession);
       const ready = workers.find(
         (view) => view.connection === "connected" && view.capacity && view.catalog?.length,
       );

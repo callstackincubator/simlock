@@ -9,6 +9,7 @@ import type { DaemonServer } from "../daemon/server.js";
 import { FakeClock, JsonLinesLogger, MemoryFilesystem, MemoryLogSink } from "../ports/index.js";
 import { seedTokensDatabase } from "../auth/testing.js";
 import { freeLoopbackPort, startOnFreePort } from "../test-support/loopback-port.js";
+import { sleep } from "../daemon/test-relay-support.js";
 import { agentDeviceModuleWith, FakeAgentDevice } from "./testing.js";
 
 // why: the edge tests and the baseline tests share one daemon rig; its daemons and data directories are cleaned after each test of whichever file imports it.
@@ -35,6 +36,8 @@ export const agentTokenOnly = "refused: agent-device through simlock needs an ag
 export const queueTimeoutMessage = "timed out waiting for a device; nothing was leased";
 export const defaultTtlMs = 600_000;
 export const maxTtlMs = 1_800_000;
+export { sleep };
+
 export const scope = { clientId: "client-1", leaseProvider: "proxy", runId: "run-1" } as const;
 
 export const adminSession = {
@@ -134,10 +137,6 @@ export function taggedAndroidDriver(clock: FakeClock): FakeDriver {
     modelClasses: { "Pixel 8": "phone" },
     platform: "android",
   });
-}
-
-export async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 export async function setUp(options: SetUpOptions = {}): Promise<Rig> {
