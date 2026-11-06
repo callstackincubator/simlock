@@ -76,21 +76,23 @@ async function dataDirectoryFor(
   return { directory, filesystem: new MemoryFilesystem() };
 }
 
+// why: a simulator outlives a daemon restart; state.db names the devices this driver made.
+function fakeIosDriver(clock: FakeClock): FakeDriver {
+  return new FakeDriver({
+    availableOsVersions: ["26.5"],
+    clock,
+    defaultModels: { phone: ["iPhone 16"] },
+    knownModels: ["iPhone 16"],
+    modelClasses: { "iPhone 16": "phone" },
+    platform: "ios",
+  });
+}
+
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
   const { directory, filesystem, driver: resumed } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
-  // why: a simulator outlives a daemon restart; state.db names the devices this driver made.
-  const driver =
-    resumed ??
-    new FakeDriver({
-      availableOsVersions: ["26.5"],
-      clock,
-      defaultModels: { phone: ["iPhone 16"] },
-      knownModels: ["iPhone 16"],
-      modelClasses: { "iPhone 16": "phone" },
-      platform: "ios",
-    });
+  const driver = resumed ?? fakeIosDriver(clock);
   const logs = new MemoryLogSink();
   const port = options.port ?? (await freeLoopbackPort());
   if (options.refuseWrite === true) {
