@@ -335,7 +335,6 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
   const gatewayDirectory = await mkdtemp(join(tmpdir(), "simlock-e2e-relay-gateway-"));
   directories.push(gatewayDirectory);
   const port = await freeLoopbackPort();
-  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   let relay: GatewayRelay | undefined;
   const taps: TappedTransport[] = [];
   const gateway = await startDaemon({
@@ -369,6 +368,8 @@ export async function startFleet(context: FleetContext, options: FleetOptions = 
     version: "1.0.0-e2e",
   });
   daemons.push(gateway);
+  // why: the hook may open its own listener, and listen(0) can draw the port freeLoopbackPort freed; the gateway holds it first.
+  const workerDials = (await options.gatewayUrl?.(port)) ?? `ws://127.0.0.1:${String(port)}`;
   const { secret } = await gateway.dispatch(
     "token.create",
     { label: "worker-a", role: "worker" },
