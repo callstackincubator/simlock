@@ -58,7 +58,8 @@ export type TargetShort =
   | "running-limit"
   | "device-limit"
   | "ram-budget"
-  | "reserve";
+  | "reserve"
+  | "memory-pressure";
 
 /** A target's kind as reported: the platform, the exact model, and the OS and mode it names. */
 export interface TargetKind {
@@ -180,7 +181,11 @@ export function evaluate(view: WarmPolicyView): WarmPlan {
   const bootable = view.devices.filter(
     (device) => device.state === "shutdown" && mayBeGranted(device) && idle(device),
   );
-  const queued = boots(view, running, bootable, room);
+  // why: ADR 0068 §3: at `warming-paused` the pool starts nothing, for a target, a learned kind or a waiter.
+  const queued: QueuePass =
+    view.pressure.step === "none"
+      ? boots(view, running, bootable, room)
+      : { proposals: [], started: 0, stuck: new Set() };
   const keeps = queued.proposals;
   const targets = mergeTargets(view.targets);
   const unneeded = neverLeasedIdle(view, running, shutdowns, room);
@@ -731,6 +736,9 @@ function fillTarget(
   filling: boolean,
   count: "configured" | "learned",
 ): { added: number; short?: TargetShort } {
+  if (plan.view.pressure.step !== "none") {
+    return filling ? { added: 0 } : { added: 0, short: "memory-pressure" };
+  }
   if (plan.stuck.has(spec.platform)) return { added: 0 };
   if (!plan.view.retry.mayAttempt(spec, plan.view.now)) {
     return filling ? { added: 0 } : { added: 0, short: "boot-failed" };
