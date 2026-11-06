@@ -254,6 +254,24 @@ describe("Dispatcher: the fleet operations on a worker", () => {
     expect(workers[0]).not.toHaveProperty("protocol");
   });
 
+  it("catalog.get reports the iOS slim categories and the default mode", async () => {
+    for (const defaultMode of ["slim", "full"] as const) {
+      const { dispatcher } = await buildDispatcher({
+        driverOptions: { knownModels: ["iPhone 17"], slimCategories: ["store"] },
+        iosDefaultMode: defaultMode,
+      });
+
+      const { platforms } = await dispatcher.dispatch("catalog.get", {}, admin);
+
+      expect(platforms).toHaveLength(1);
+      expect(platforms[0], defaultMode).toMatchObject({
+        defaultMode,
+        platform: "ios",
+        slimCategories: ["store"],
+      });
+    }
+  });
+
   it("a worker's own worker.list carries its load with readAt taken when its status answered, not after its catalog read", async () => {
     const clock = new FakeClock(10_000);
     const base = await buildDispatcher({ clock });

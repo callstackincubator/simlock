@@ -169,6 +169,8 @@ export interface DriverCatalogEntry {
   readonly modelClasses: Readonly<Record<string, DeviceClass>>;
   readonly images?: readonly DriverCatalogImage[];
   readonly customModels?: readonly string[];
+  /** why: ADR 0066 §5: the iOS driver names the categories it slims, so a gateway routes an `except` lease by them. */
+  readonly slimCategories?: readonly string[];
 }
 
 export interface DriverCatalogImage {

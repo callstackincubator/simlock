@@ -462,6 +462,7 @@ describe("IosSimctlDriver", () => {
         modelRuntimes: { "iPhone 16": [] },
         models: ["iPhone 16"],
         runtimes: [],
+        slimCategories: expect.any(Array),
       });
     });
   });
@@ -2003,7 +2004,21 @@ describe("IosSimctlDriver", () => {
       },
       models: ["iPhone 17 Pro", "iPhone 16", "iPhone 15 Pro"],
       runtimes: ["18.4", "26.5"],
+      slimCategories: expect.any(Array),
     });
+  });
+
+  it("lists every slim category with none configured, and only the configured ones otherwise", async () => {
+    const unset = await createDriver(scriptedListRunner());
+    const configured = await createSlimDriver(scriptedListRunner(), new MemoryFilesystem(), {
+      bootTimeoutMs: 1000,
+      categories: ["store"],
+    });
+
+    expect((await unset.listCatalog()).slimCategories).toEqual(
+      expect.arrayContaining(["widgets", "store", "mdm", "other"]),
+    );
+    expect((await configured.listCatalog()).slimCategories).toEqual(["store"]);
   });
 
   describe("model classes", () => {
