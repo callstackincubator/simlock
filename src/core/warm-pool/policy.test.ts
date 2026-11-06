@@ -1965,5 +1965,62 @@ describe("warm pool policy", () => {
           expect(held.targets[0]?.short, name).toBe("memory-pressure");
       }
     });
+
+    it("sheds one idle device a reading: a device no configured target keeps first, then a kept one, least recently used first, never one a waiter would take or one whose shutdown just failed", () => {
+      const ofKind = (id: string, endedAgo: number) =>
+        device(id, "ready", { endedAgo, spec: kind });
+      const keptOldest = ofKind("kept", 90 * minute);
+      const extra = ofKind("extra", 40 * minute);
+      const olderOther = device("older", "ready", {
+        endedAgo: 60 * minute,
+        spec: spec("iPad Pro"),
+      });
+      const newerOther = device("newer", "ready", { endedAgo: 5 * minute, spec: spec("iPad Pro") });
+      const learnedOnly = device("learned", "ready", { endedAgo: 30 * minute });
+      const targets = [{ count: 1, spec: kind }];
+      const sheds = (
+        devices: readonly VirtualDevice[],
+        options: Parameters<typeof view>[1] = {},
+        pressure: NonNullable<NonNullable<Parameters<typeof view>[1]>["pressure"]> = {},
+      ): string[] =>
+        evaluate(
+          view(devices, { targets, ...options, pressure: { step: "warming-paused", ...pressure } }),
+        ).flatMap((proposal) =>
+          proposal.action === "shutdown" && proposal.reason === "memory-pressure"
+            ? [proposal.deviceId]
+            : [],
+        );
+
+      expect(sheds([keptOldest, newerOther, olderOther]), "unkept, least recently used").toEqual([
+        "older",
+      ]);
+      expect(sheds([keptOldest, extra]), "a copy past the configured count").toEqual(["extra"]);
+      expect(sheds([keptOldest]), "a kept device when nothing else is idle").toEqual(["kept"]);
+      expect(
+        sheds([learnedOnly, keptOldest], { learned: [learnedOf(learnedOnly.spec)] }),
+        "a learned kind keeps nothing",
+      ).toEqual(["learned"]);
+      expect(
+        sheds([keptOldest, extra], { spared: targets, targets: [] }),
+        "a spared target's device counts as kept",
+      ).toEqual(["extra"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], {
+          waiting: [classDemand("full", "ios", false, "iPad Pro")],
+        }),
+        "a device a waiter would take",
+      ).toEqual(["kept"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], { claimed: ["older"] }),
+        "a claimed device",
+      ).toEqual(["newer"]);
+      expect(
+        sheds([keptOldest, olderOther, newerOther], {}, { shedFailed: ["older"] }),
+        "a device whose shutdown just failed",
+      ).toEqual(["newer"]);
+      expect(sheds([keptOldest, olderOther], {}, { mayShed: false }), "no new reading").toEqual([]);
+      expect(sheds([keptOldest, olderOther], {}, { step: "none" }), "step none").toEqual([]);
+      expect(sheds([device("busy", "leased")]), "nothing idle").toEqual([]);
+    });
   });
 });
