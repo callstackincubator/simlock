@@ -1795,6 +1795,18 @@ describe("warm pool policy", () => {
         ]);
       });
 
+      // why: #1371. A copy is spent after one lease (ADR 0061 §2), so a leased or reclaiming copy never comes back ready.
+      it("creates a ready copy of a learned baseline kind of count one while its only copy is leased, and while that copy is reclaiming", () => {
+        const demo = spec("iPhone 17", { baseline: { name: "demo", version: 1 } });
+        const learned = [learnedOf(demo, 1, now)];
+
+        const held = device("held", "leased", { spec: demo });
+        expect(evaluate(view([held], { learned }))).toEqual([provision(demo)]);
+
+        const released = device("released", "reclaiming", { spec: demo });
+        expect(evaluate(view([released], { learned }))).toEqual([provision(demo)]);
+      });
+
       it("keeps a learned kind's never-leased device out of never-leased-idle while the kind wants it, and proposes one beyond its count after idle.shutdownAfterMs", () => {
         const old = now - shutdownAfterMs - 1;
         const wanted = ofKind("wanted", "ready", { createdAt: 1, readyAt: old });
