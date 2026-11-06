@@ -65,7 +65,7 @@ import { openMemoryStateDatabase } from "../auth/testing.js";
 import type { DispatcherOptions, DispatchSession } from "./dispatcher.js";
 import { Dispatcher, DispatchError } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
-import { UnknownLeaseError } from "../core/index.js";
+import { DriverCrashError, UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
 import { createTestEngine, type TestEngine } from "../leasing/testing.js";
 
@@ -419,6 +419,52 @@ async function buildDispatcher(
     state,
     tokens,
   };
+}
+
+/** why: the answer of a request that must settle by itself once the event loop has run to rest; a hang fails here, on a named assertion, rather than by the test's timeout. */
+async function grantedOnceSettled<T>(request: Promise<T>): Promise<T> {
+  const rest = (async () => {
+    for (let turn = 0; turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+    return undefined;
+  })();
+  const answer = await Promise.race([request, rest]);
+  expect(answer, "the request settled").toBeDefined();
+  return answer as T;
+}
+
+/** why: a slim device a worker already holds, ready or shut down, as the warm pool or an earlier lease leaves one. */
+async function seedSlimDevice(
+  built: Awaited<ReturnType<typeof buildDispatcher>>,
+  state: "ready" | "shutdown",
+) {
+  const spec = {
+    mode: "slim",
+    model: "iPhone 17 Pro",
+    osVersion: "26.5",
+    physical: false,
+    platform: "ios",
+  } as const;
+  const driverDevice = await built.driver.provision(spec);
+  const ready = await built.driver.makeReady(driverDevice, { mode: "slim", purpose: "prepare" });
+  const registered = await built.registry.registerDevice({
+    driverData: driverDevice.driverData,
+    driverDeviceId: driverDevice.deviceId,
+    provisionDuration: 0,
+    spec,
+  });
+  await built.registry.transitionDevice(
+    registered.id,
+    "ready",
+    { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
+    readyTransitionUpdate(ready),
+  );
+  if (state === "ready") return registered;
+  await built.driver.shutdown(driverDevice);
+  await built.registry.transitionDevice(registered.id, "shutdown", {
+    event: "device.shutdown",
+    payload: { deviceId: registered.id, initiator: "test" },
+  });
+  return registered;
 }
 
 function session(overrides: Partial<DispatchSession> = {}): DispatchSession {
@@ -2897,26 +2943,7 @@ describe("Dispatcher: device mode on every surface", () => {
     ).toMatchObject({ requestSpec: { except } });
 
     const warm = await buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
-    const spec = {
-      model: "iPhone 17 Pro",
-      osVersion: "26.5",
-      platform: "ios",
-      mode: "slim",
-    } as const;
-    const seeded = await warm.driver.provision({ ...spec, physical: false });
-    const seededReady = await warm.driver.makeReady(seeded, { mode: "slim", purpose: "prepare" });
-    const registered = await warm.registry.registerDevice({
-      driverData: seeded.driverData,
-      driverDeviceId: seeded.deviceId,
-      provisionDuration: 0,
-      spec: { ...spec, physical: false },
-    });
-    await warm.registry.transitionDevice(
-      registered.id,
-      "ready",
-      { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
-      readyTransitionUpdate(seededReady),
-    );
+    const registered = await seedSlimDevice(warm, "ready");
     const seededCalls = warm.driver.calls.length;
     const grantedWarm = await warm.dispatcher.dispatch(
       "lease.request",
@@ -3036,6 +3063,70 @@ describe("Dispatcher: device mode on every surface", () => {
       session({ principal: "tok_d" }),
     );
     expect(fromSlim.device).toMatchObject({ except: ["store"], mode: "slim" });
+  });
+
+  it("a failed except boot is never granted", async () => {
+    const ask = {
+      except: ["store"],
+      mode: "slim",
+      model: "iPhone 17 Pro",
+      osVersion: "26.5",
+      platform: "ios",
+    } as const;
+    const crash = new DriverCrashError("simulator never booted");
+    const build = () => buildDispatcher({ driverOptions: { slimmableOsVersions: ["26.5"] } });
+
+    const prepareFails = await build();
+    const seededPrepare = await seedSlimDevice(prepareFails, "ready");
+    // why: call 1 of makeReady is the seed's own boot; the reboot is call 2.
+    prepareFails.driver.failOn("makeReady", 2, crash);
+    const afterPrepare = await grantedOnceSettled(
+      prepareFails.dispatcher.dispatch("lease.request", ask, session()),
+    );
+    expect(afterPrepare.device.id).not.toBe(seededPrepare.id);
+    expect(afterPrepare.device).toMatchObject({ except: ask.except, mode: "slim" });
+    expect(
+      prepareFails.registry.snapshot.devices.find((d) => d.id === seededPrepare.id)?.state,
+    ).toBe("deleted");
+    expect(
+      prepareFails.eventBus
+        .replay()
+        .filter((event) => event.event === "lease.granted")
+        .map((event) => (event.payload as { deviceId: string }).deviceId),
+    ).toEqual([afterPrepare.device.id]);
+
+    const shutdownFails = await build();
+    const seededShutdown = await seedSlimDevice(shutdownFails, "ready");
+    shutdownFails.driver.failOn("shutdown", 1, crash);
+    const afterShutdown = await grantedOnceSettled(
+      shutdownFails.dispatcher.dispatch("lease.request", ask, session()),
+    );
+    expect(afterShutdown.device.id).not.toBe(seededShutdown.id);
+    expect(
+      shutdownFails.registry.snapshot.devices.find((d) => d.id === seededShutdown.id)?.state,
+    ).toBe("deleted");
+    expect(
+      shutdownFails.eventBus
+        .replay()
+        .filter((event) => event.event === "device.shutdown")
+        .map((event) => event.payload),
+    ).toContainEqual({ deviceId: seededShutdown.id, initiator: "lease-engine" });
+
+    const rebooting = await build();
+    const seededWarm = await seedSlimDevice(rebooting, "ready");
+    const before = (await rebooting.dispatcher.dispatch("status.get", {}, session())).capacity;
+    rebooting.driver.hangMakeReady();
+    const pending = rebooting.dispatcher.dispatch("lease.request", ask, session());
+    await vi.waitFor(() => {
+      expect(rebooting.driver.calls.filter((call) => call.operation === "makeReady")).toHaveLength(
+        2,
+      );
+    });
+    const during = await rebooting.dispatcher.dispatch("status.get", {}, session());
+    expect(during.devices?.find((d) => d.id === seededWarm.id)?.state).toBe("ready");
+    expect(during.capacity).toEqual(before);
+    rebooting.driver.releaseMakeReady();
+    expect((await pending).device.id).toBe(seededWarm.id);
   });
 
   it("status.get and list.get return mode for every device, including one still provisioning", async () => {
