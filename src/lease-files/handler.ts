@@ -33,7 +33,9 @@ async function serve(
   requireFileName(name);
   if (request.method === "PUT") {
     const body = request.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() });
-    return Response.json(await store.put(grant, name, body), { status: 201 });
+    return Response.json(await store.put(grant, name, body, contentLengthOf(request)), {
+      status: 201,
+    });
   }
   const file = await store.openFile(grant, name);
   const length = String(file.size);
@@ -46,4 +48,13 @@ async function serve(
       "simlock-content-length": length,
     },
   });
+}
+
+function contentLengthOf(request: Request): number | undefined {
+  const header = request.headers.get("content-length");
+  if (header === null) return undefined;
+  if (!/^\d+$/.test(header)) {
+    throw new LeaseFilesError("BAD_REQUEST", "Content-Length must be a non-negative integer", {});
+  }
+  return Number(header);
 }

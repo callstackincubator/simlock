@@ -1,6 +1,8 @@
 import { join } from "node:path";
 
 import type { Identity } from "../auth/index.js";
+import { LeaseFilesError } from "./errors.js";
+import { guardedBody } from "./guarded-body.js";
 import { DEFAULT_LIMITS } from "./limits.js";
 import { handleRequest } from "./handler.js";
 import type {
@@ -21,6 +23,7 @@ export interface LeaseFileStore {
     grant: LeaseFilesGrant,
     name: string,
     body: ReadableStream<Uint8Array>,
+    contentLength: number | undefined,
   ): Promise<{ readonly name: string; readonly size: number }>;
   openFile(grant: LeaseFilesGrant, name: string): Promise<LeaseFileView>;
   findGrant(leaseId: string): LeaseFilesGrant | undefined;
@@ -29,7 +32,6 @@ export interface LeaseFileStore {
 export function createLeaseFiles(deps: LeaseFilesDeps): LeaseFiles {
   const { filesystem } = deps;
   const limits = deps.limits ?? DEFAULT_LIMITS;
-  void limits;
   const rootOf = () => join(deps.dataDirectory, "lease-files");
   const pathOf = (grant: LeaseFilesGrant) => join(rootOf(), folderKey(grant.id, grant.grantedAt));
 
@@ -47,12 +49,30 @@ export function createLeaseFiles(deps: LeaseFilesDeps): LeaseFiles {
   const store: LeaseFileStore = {
     findGrant: deps.findGrant,
     openFile,
-    put: async (grant, name, body) => {
+    put: async (grant, name, body, contentLength) => {
+      const tooLarge = () =>
+        new LeaseFilesError("FILE_TOO_LARGE", `File ${name} is over the 2 GiB limit for one file`, {
+          name,
+        });
+      if (contentLength !== undefined && contentLength > limits.fileBytes) throw tooLarge();
       const folder = await folderOf(grant);
       const temporary = join(folder, `.upload-${deps.idGenerator.generate()}`);
-      const size = await filesystem.writeFileStream(temporary, body, { mode: 0o600 });
-      await filesystem.rename(temporary, join(folder, name));
-      return { name, size };
+      let received = 0;
+      try {
+        const size = await filesystem.writeFileStream(
+          temporary,
+          guardedBody(body, (chunk) => {
+            received += chunk.byteLength;
+            if (received > limits.fileBytes) throw tooLarge();
+          }),
+          { mode: 0o600 },
+        );
+        await filesystem.rename(temporary, join(folder, name));
+        return { name, size };
+      } catch (error: unknown) {
+        await filesystem.rm(temporary);
+        throw error;
+      }
     },
   };
 
