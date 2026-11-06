@@ -1842,6 +1842,17 @@ describe("warm pool policy", () => {
             [],
             [provision({ ...kind, baseline: { name: "demo", version: 2 } })],
           ],
+          [
+            "baseline kind, peak 2, 2 copies of version 1 on another model leased while version 2 is newest",
+            [
+              ofKind("a", "leased", { spec: { ...baselined, model: "iPhone 15" } }),
+              ofKind("b", "leased", { spec: { ...baselined, model: "iPhone 15" } }),
+            ],
+            2,
+            { ...kind, baseline: { name: "demo", version: 2 } },
+            [],
+            [provision({ ...kind, baseline: { name: "demo", version: 2 } })],
+          ],
         ] as const;
 
         for (const [name, devices, peak, wanted, claimed, expected, inFlight = []] of cases) {
@@ -1863,6 +1874,7 @@ describe("warm pool policy", () => {
         const cases = [
           ["configured 1 + peak 2, 1 leased", 1, 2, 1],
           ["configured 2 + peak 1, 1 leased", 2, 1, 2],
+          ["configured 1 + peak 3, 1 leased", 1, 3, 2],
         ] as const;
 
         for (const [name, configuredCount, peak, created] of cases) {
