@@ -28,6 +28,7 @@ import {
   booleanValue,
   ConfigError,
   integerInRange,
+  numberInRange,
   invalidValue,
   nonNegativeNumber,
   numberAtLeast,
@@ -1163,6 +1164,12 @@ export function configValidators(
     }),
     exec: objectValidator({ timeoutMs: positiveNumber }),
     diskPressure: objectValidator({ freeBytesThreshold: nonNegativeNumber }),
+    memoryPressure: objectValidator({
+      enabled: booleanValue,
+      pauseWarming: memoryPressureRuleValidator,
+      pauseNewDevices: memoryPressureRuleValidator,
+      clearAfterMs: nonNegativeNumber,
+    }),
     eventBuffer: objectValidator({ capacity: positiveInteger }),
     log: objectValidator({ level: stringUnion(LOG_LEVELS), rotateBytes: positiveInteger }),
     eventLog: objectValidator({
@@ -1205,6 +1212,11 @@ export function configValidators(
     }),
   };
 }
+
+const memoryPressureRuleValidator = objectValidator({
+  level: stringUnion(["normal", "warn", "critical", "off"]),
+  minAvailablePercent: numberInRange(0, 100),
+});
 
 function driverValidators(
   driverSections: readonly DriverConfigEntry[],
