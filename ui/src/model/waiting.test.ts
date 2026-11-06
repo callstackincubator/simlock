@@ -204,7 +204,7 @@ describe("why a request waits", () => {
     expect(field).toBeDefined();
     const listed = (field as { unwrap(): { options: readonly string[] } }).unwrap().options;
 
-    expect(listed).toHaveLength(7);
+    expect(listed).toHaveLength(8);
     for (const reason of listed) {
       const why = whyOf(withReason(reason));
       expect(why).toBeDefined();
