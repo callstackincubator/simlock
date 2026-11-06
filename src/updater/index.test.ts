@@ -652,6 +652,106 @@ describe("runUpdater", () => {
       await expectResultFile(expected, { filesystem, resultPath, clock, fileAtRollbackStart });
     },
   );
+
+  it("a rollback restores the database files its own backup took, not sidecars an earlier failed rollback left in update-backup", async () => {
+    const clock = new FakeClock(EPOCH);
+    const filesystem = new MemoryFilesystem();
+    const dataDirectory = "/home/.simlock";
+    const backupPath = `${dataDirectory}/update-backup`;
+    await filesystem.mkdirp(dataDirectory);
+    await filesystem.writeFileAtomic(`${dataDirectory}/state.db`, "state at attempt 1");
+    await filesystem.writeFileAtomic(`${dataDirectory}/state.db-wal`, "state wal at attempt 1");
+    await filesystem.writeFileAtomic(`${dataDirectory}/state.db-shm`, "state shm at attempt 1");
+    await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history at attempt 1");
+    await filesystem.writeFileAtomic(`${dataDirectory}/history.db-wal`, "history wal at attempt 1");
+    const update = async (
+      to: string,
+      install: readonly NpmOutcome[],
+      starts: readonly { code: number; running?: string }[],
+    ) => {
+      const probe = new FakeProbe();
+      const supervisor = new FakeProcessSupervisor([PID]);
+      probe.drain = () => {
+        probe.oldDaemonListening = false;
+        supervisor.markDead(PID);
+      };
+      const processes = new ScriptedProcessRunner(
+        starts.map(({ code, running }) => ({
+          match: { command: process.execPath, args: started() },
+          result: { code, stdout: "", stderr: code === 0 ? "" : "boom" },
+          onSpawn: () => {
+            probe.newDaemon =
+              running === undefined ? undefined : { health: "running", version: running };
+          },
+        })),
+      );
+      const errors: string[] = [];
+      const exit = await settle(
+        runUpdater({
+          from: "0.3.0",
+          to,
+          role: "worker",
+          pid: PID,
+          npm: new FakeNpmCli({ install }),
+          probe,
+          processes,
+          supervisor,
+          filesystem,
+          clock,
+          packageRoot: PACKAGE_ROOT,
+          dataDirectory,
+          stdout: { write: () => undefined },
+          stderr: { write: (chunk) => errors.push(chunk) },
+        }),
+        clock,
+      );
+      return { exit, errors: errors.join("").split("\n").filter(Boolean) };
+    };
+
+    const first = await update(
+      "0.4.0",
+      [
+        { ok: true, output: "" },
+        { ok: false, message: "registry down" },
+      ],
+      [{ code: 1 }],
+    );
+    expect(first).toEqual({ exit: 1, errors: ["rollback to 0.3.0 failed: registry down"] });
+    expect(await filesystem.exists(`${backupPath}/state.db-wal`)).toBe(true);
+
+    // why: a clean stop checkpoints the WAL, so the second backup finds no live sidecars to copy over the stale ones.
+    await filesystem.writeFileAtomic(`${dataDirectory}/state.db`, "state at attempt 2");
+    await filesystem.writeFileAtomic(`${dataDirectory}/history.db`, "history at attempt 2");
+    for (const name of ["state.db-wal", "state.db-shm", "history.db-wal"]) {
+      await filesystem.rm(`${dataDirectory}/${name}`);
+    }
+
+    const second = await update(
+      "0.5.0",
+      [{ ok: true, output: "" }],
+      [{ code: 1 }, { code: 0, running: "0.3.0" }],
+    );
+    expect(second).toEqual({ exit: 1, errors: [] });
+
+    const live = Object.fromEntries(
+      await Promise.all(
+        DATABASE_NAMES.map(async (name) => [
+          name,
+          (await filesystem.exists(`${dataDirectory}/${name}`))
+            ? await filesystem.readFile(`${dataDirectory}/${name}`)
+            : undefined,
+        ]),
+      ),
+    );
+    expect(live).toEqual({
+      "state.db": "state at attempt 2",
+      "state.db-wal": undefined,
+      "state.db-shm": undefined,
+      "history.db": "history at attempt 2",
+      "history.db-wal": undefined,
+      "history.db-shm": undefined,
+    });
+  });
 });
 
 describe("createDaemonProbe", () => {
