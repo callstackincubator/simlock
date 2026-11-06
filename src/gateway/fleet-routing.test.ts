@@ -1162,7 +1162,12 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
     slims: Readonly<
       Record<
         string,
-        { categories: string[]; defaultMode: "slim" | "full"; baseline?: "slim" | "full" }
+        {
+          categories: string[];
+          defaultMode: "slim" | "full";
+          baseline?: "slim" | "full";
+          busy?: true;
+        }
       >
     >,
   ) {
@@ -1173,7 +1178,7 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
       client.requestLeaseQueue.push({ grant: grantFixture(), kind: "grant" });
       clients[id] = client;
       made.directory.add(id, client);
-      connectWorker(made.workers, id);
+      connectWorker(made.workers, id, slim.busy === true ? { capacity: saturatedIos() } : {});
       made.workers.refresh(id, {
         catalog: catalogFixture([
           {
@@ -1290,6 +1295,22 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
         except: request.except,
       });
     }
+
+    const waiting = fleet({
+      wrk_a: { busy: true, categories: every, defaultMode: "slim" },
+      wrk_b: { categories: ["store"], defaultMode: "slim" },
+    });
+    void waiting.coordinator
+      .request({ ...REQUEST, except: ["mdm"] }, requestOptions())
+      .catch(() => undefined);
+    await tick();
+
+    expect(
+      (waiting.coordinator.waitingRequests()[0] as { workers?: unknown } | undefined)?.workers,
+    ).toEqual([
+      { capacityReason: "platform-running-limit", reason: "full", workerId: "wrk_a" },
+      { reason: "cannot-keep-except", workerId: "wrk_b" },
+    ]);
   });
 });
 
