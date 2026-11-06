@@ -114,6 +114,8 @@ export interface CreateLeaseInput {
   readonly ttlDeadline: number;
   /** why: the caller has already refused an ID that is in use: one place enforces that rule. */
   readonly leaseId?: string;
+  /** why: the categories the lease keeps running, written to the device in the commit that leases it (ADR 0066 §4). */
+  readonly except?: readonly string[];
   /**
    * why: when given, the commit that adds the lease also marks the request `granted`, so no crash can
    * fall between the two.
@@ -745,6 +747,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
     ttlMs,
     ttlDeadline,
     leaseId,
+    except,
     request,
   }: CreateLeaseInput): Promise<LeaseRecord> {
     const index = this.#devices.findIndex((device) => device.id === deviceId);
@@ -760,7 +763,8 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
       throw new RegistryEventError(`Device already has an active lease: ${deviceId}`);
     }
 
-    const leasedDevice = this.#transitioned(device, "leased");
+    const leased = this.#transitioned(device, "leased");
+    const leasedDevice = except === undefined || leased.physical ? leased : { ...leased, except };
     const grantedAt = this.options.clock.now();
     const lease: LeaseRecord = {
       deviceId,

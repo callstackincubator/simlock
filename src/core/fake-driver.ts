@@ -492,7 +492,11 @@ export class FakeDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly except?: readonly string[];
+    },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);

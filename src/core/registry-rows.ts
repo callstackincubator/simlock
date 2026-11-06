@@ -170,6 +170,7 @@ const DEVICE_COLUMNS = [
   "absent_reason",
   "baseline_name",
   "baseline_version",
+  "except_categories",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -274,6 +275,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     device.address ?? null,
     ...physicalColumns(device),
     ...baselineColumns(device),
+    device.except === undefined ? null : device.except.join(","),
   ];
 }
 
@@ -496,6 +498,7 @@ function deviceFromRow(
     ...shared,
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
+    ...present("except", exceptOf(reader)),
     mode: reader.oneOf("mode", DEVICE_MODES),
     physical: false,
     spec: {
@@ -510,6 +513,10 @@ function deviceFromRow(
     state: reader.oneOf("state", VIRTUAL_STATES),
   };
   return virtual;
+}
+
+function exceptOf(reader: RowReader): readonly string[] | undefined {
+  return reader.optText("except_categories")?.split(",");
 }
 
 function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {

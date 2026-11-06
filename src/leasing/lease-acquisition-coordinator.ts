@@ -967,6 +967,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       handoff = await this.options.provisioner.provision(spec, {
         claim: { kind: "boot", owner: waiter.id },
+        ...exceptOption(waiter),
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
@@ -1110,6 +1111,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
       timing: waiter.timing,
+      ...(device.mode === "slim" ? exceptOption(waiter) : {}),
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
       ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
       ...(waiter.options.fleetRequestId === undefined
@@ -1450,6 +1452,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       timing: noTiming,
     });
   }
+}
+
+/** why: a request's `except` reaches the driver and the device only when the resolved spec is slim; on a runtime that cannot be slimmed the lease is granted full with no `except` (ADR 0066 §1). */
+function exceptOption(waiter: AcquisitionWaiter): { readonly except?: readonly string[] } {
+  const except = waiter.request.except;
+  return except === undefined || waiter.spec?.mode !== "slim" ? {} : { except };
 }
 
 function asError(error: unknown): Error {
