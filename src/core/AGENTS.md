@@ -31,6 +31,8 @@ Devices:
 - Grant paths select by exact state. `mayBeGranted` refuses every virtual device that has ended a lease, whatever its `leaseIdentity` (ADR 0061 §2).
 - A physical device is never destroyed and never counted against capacity.
 - `bootForLease` and `readyProvisionedForLease` keep the `boot` claim for the grant; `bootWarm` drops it at `ready`.
+- `rebootForLease` shuts a `ready` device down and prepares it again with a lease's `except` list under that claim. The record stays `ready` (one `recordRebootedDevice` write, no event); on a failure it commits `ready → shutdown` first.
+- `devices.except_categories` holds the list a lease kept running, written in the grant commit (`createLease`).
 - `shutdown`, `destroy` and `dispose` answer `undefined` for a leased, gone or moved device. That is not an error.
 - Unreadable is not gone: startup skips a platform it could not list; doctor reports no drift there.
 - Warm pool and startup never install. Instance id is never regenerated.

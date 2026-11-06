@@ -351,6 +351,8 @@ export interface VirtualDevice extends DeviceRecordFields {
   readonly spec: VirtualSpec;
   readonly state: VirtualState;
   readonly mode: DeviceMode;
+  /** why: the categories the lease this device serves kept running (ADR 0066 §4); written in the grant commit and never cleared, since a virtual device serves one lease. */
+  readonly except?: readonly string[];
   /** why: a record written before this field existed loads as `reusable`. */
   readonly leaseIdentity?: LeaseIdentity;
 }
@@ -364,6 +366,7 @@ export interface PhysicalDevice extends DeviceRecordFields {
   readonly reclaimingSince?: number;
   readonly absentReason?: AbsentReason;
   readonly mode?: undefined;
+  readonly except?: undefined;
   readonly leaseIdentity?: undefined;
 }
 

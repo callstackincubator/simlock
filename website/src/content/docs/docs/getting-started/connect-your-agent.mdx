@@ -123,7 +123,7 @@ The server starts the daemon if it is not running. It renews the agent's lease w
 | Tool | What it does |
 | --- | --- |
 | `list_devices` | Lists the models, OS versions and Android system images you can lease here, and, as `physicalDevices`, the enrolled phones and tablets with their state (`ready`, `leased`, `absent`), why an absent one is absent, and, through a gateway, which worker holds it. It never downloads anything, never says who holds a phone, and `physicalDevices` is empty while the daemon is still starting. |
-| `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
+| `lease_simulator` | Leases one simulator or emulator for this session. Takes `platform` and, optionally, `model` or `class`, `osVersion`, `mode`, `except`, `ttlMs`, `noWait`, `timeoutMs` and `allowDownload`, the same options as `simlock lease`. Returns the same lease the CLI prints. |
 | `release_simulator` | Releases this session's lease. |
 | `lease_status` | Reports this session's lease, or `held: false` when it has none. Safe to call any time, for example after the agent's context was compacted. |
 | `run_on_device` | Runs one `simctl`, `adb` or `devicectl` command on this session's device. Takes `tool`, `args` and, optionally, `stdin` (at most 8,388,608 characters; a longer one fails the tool's input validation, before Simlock sees it). |

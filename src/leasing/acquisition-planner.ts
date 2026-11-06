@@ -38,6 +38,8 @@ export interface AcquisitionPlannerInput {
   readonly snapshot: AcquisitionPlannerSnapshot;
   readonly spec: VirtualSpec;
   readonly requirement?: DeviceRequirement | undefined;
+  /** why: a slim request with an except list never takes a ready warm device as it is: the device is rebooted with the list first (ADR 0066 §2). */
+  readonly rebootReady?: boolean | undefined;
   readonly classOf?: ((model: string) => DeviceClass | undefined) | undefined;
 }
 
@@ -74,6 +76,11 @@ export function capacityReasonOf(
 
 export type AcquisitionPlan =
   | { readonly kind: "grant-ready"; readonly device: DeviceRecord }
+  | {
+      readonly kind: "reboot-ready";
+      readonly claim: DeviceOperationClaim;
+      readonly device: VirtualDevice;
+    }
   | {
       readonly kind: "grant-physical";
       readonly claim: DeviceOperationClaim;
@@ -126,7 +133,7 @@ export class AcquisitionPlanner {
     const ready = snapshot.devices.find(
       (device) => device.state === "ready" && servesRequest(device),
     );
-    if (ready !== undefined) return { device: ready, kind: "grant-ready" };
+    if (ready !== undefined) return this.#planReady(input, ready);
 
     // A device the warm pool is booting for nobody in particular will serve this
     // request when it is ready: waiting for it costs less than starting a second. A device
@@ -162,6 +169,14 @@ export class AcquisitionPlanner {
       if (claim !== undefined) return { claim, device, kind: "grant-physical" };
     }
     return blocked(input.noWait, heldForOlder ? "behind-earlier-request" : "no-free-physical");
+  }
+
+  // why: no capacity reservation: the device keeps its running slot and RAM, because its record stays `ready` through the reboot.
+  #planReady(input: AcquisitionPlannerInput, ready: DeviceRecord): AcquisitionPlan {
+    if (input.rebootReady !== true || ready.physical) return { device: ready, kind: "grant-ready" };
+    const claim = this.claims.tryClaim(ready.id, "boot", input.owner);
+    if (claim === undefined) return blocked(input.noWait, "waiting-for-device");
+    return { claim, device: ready, kind: "reboot-ready" };
   }
 
   #isOnItsWay(device: VirtualDevice, serves: (device: DeviceRecord) => boolean): boolean {

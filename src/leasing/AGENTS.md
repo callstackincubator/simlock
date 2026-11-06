@@ -27,6 +27,8 @@ The queue:
 - A grant of a ready device wakes the queue, so the next waiter plans without another event.
 - A device made from an older baseline version is never granted: a copy that finishes after a save is deleted at the grant check, and its waiter plans again.
 - A request naming a baseline attempts no download.
+- A request with `except` (ADR 0066) boots with the list. A ready warm device is shut down and prepared again under its `boot` claim, with no capacity reservation (plan `reboot-ready`, `ManagedDeviceLifecycle.rebootForLease`); the grant is `booted`. Any failure of that reboot or of a boot destroys the device and counts one failure with a failed provision. A request without `except` that fails to boot rejects `boot-timeout`.
+- A slim baseline's `except` names go to `driver.resolveSpec` too, so an unknown name is `BAD_REQUEST`; a full baseline refuses `except`.
 
 Ending a lease:
 
@@ -52,6 +54,7 @@ Boundaries:
 
 ## Known gaps
 
+- **A crash mid-reboot of a warm device for an `except` lease** leaves the request failed at startup (`daemon-restarted`) and a `ready` record whose simulator may be shut down; startup's reconcile only reports that drift. A later grant of it is caught by the health monitor, which reboots it under the lease.
 - **A SIGKILLed holder keeps its device until the TTL.** It runs no release.
   Bound it with `lease.defaultTtlMs` or `--ttl`; `simlock release <id>` ends it now.
 - **Recovery restores the disk, not the session.** Apps, log streams and

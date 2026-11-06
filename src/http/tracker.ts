@@ -16,6 +16,7 @@ export interface LeaseRequestInput {
   readonly noWait?: boolean;
   readonly allowDownload?: boolean;
   readonly mode?: "slim" | "full";
+  readonly except?: readonly string[];
   readonly imageTag?: string;
   readonly baseline?: string;
   readonly physical?: boolean;
@@ -80,6 +81,7 @@ export function buildLeasePayload(
     ttlMs: lease.ttlMs,
     dataPlane: null,
     ...(device.mode === undefined ? {} : { mode: device.mode }),
+    ...(device.except === undefined ? {} : { except: device.except }),
     ...(device.spec.imageTag === undefined ? {} : { imageTag: device.spec.imageTag }),
     ...(device.spec.baseline === undefined ? {} : { baseline: device.spec.baseline }),
     // `workerId` derives from `worker` so the two never disagree.
@@ -94,11 +96,18 @@ function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: stri
     platform: body.platform,
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
+    ...(body.except === undefined ? {} : { except: body.except }),
+    ...requestImageFields(body),
+    ...requestOptions(body),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+function requestImageFields(body: LeaseRequestInput) {
+  return {
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
-    ...requestOptions(body),
-    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   };
 }
 
@@ -395,6 +404,8 @@ export interface HttpLeaseDevice {
   };
   /** Absent only for a physical device, which has no mode. */
   readonly mode?: "slim" | "full" | undefined;
+  /** why: absent when the lease keeps no category running. */
+  readonly except?: readonly string[] | undefined;
 }
 
 interface HttpLeaseRecord {
