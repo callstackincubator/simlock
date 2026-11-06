@@ -565,6 +565,31 @@ describe("warm pool memory pressure", () => {
     await rig.pool.settle();
     expect(rig.shutdownCalls).toEqual(["old", "mid"]);
   });
+
+  it("at warming-paused reports a short target memory-pressure, a target that does not resolve its own reason, and boots nothing", async () => {
+    const rig = harness([device("shut", "shutdown", 1_000)], {
+      memoryPressure: fakeMemoryPressure(paused(now)).reader,
+      resolve: (request) =>
+        request.model === "iPhone 17"
+          ? { message: "iOS 27.0 is not installed", refusal: "runtime-missing" }
+          : { spec: { model: "iPhone 15", osVersion: "26.0", physical: false, platform: "ios" } },
+      targets: [iphone15, { ...iphone15, model: "iPhone 17", osVersion: "27.0" }],
+    });
+    const reasons: Record<string, string> = {};
+    rig.eventBus.subscribe("warm-pool.target-missed", ({ payload }) => {
+      reasons[payload.model] = payload.reason;
+    });
+
+    await rig.pool.pass();
+    await rig.pool.settle();
+
+    expect(reasons).toEqual({ "iPhone 15": "memory-pressure", "iPhone 17": "runtime-missing" });
+    expect(
+      Object.fromEntries(rig.pool.figures().targets.map((target) => [target.model, target.short])),
+    ).toEqual({ "iPhone 15": "memory-pressure", "iPhone 17": "runtime-missing" });
+    expect(rig.bootCalls).toEqual([]);
+    expect(rig.provisionCalls).toEqual([]);
+  });
 });
 
 describe("warm pool targets", () => {
