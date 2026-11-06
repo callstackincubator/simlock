@@ -564,6 +564,47 @@ describe("warm pool memory pressure", () => {
     pressure.reading(paused(now + 30_000));
     await rig.pool.settle();
     expect(rig.shutdownCalls).toEqual(["old", "mid"]);
+
+    await rig.pool.pass();
+    expect(rig.shutdownCalls, "a second pass on the same reading").toEqual(["old", "mid"]);
+  });
+
+  it("sheds nothing for a reading before start, at step none, with no step reading or nothing idle, and skips a device whose shutdown just failed", async () => {
+    const idle = () => [device("old", "ready", 90 * minute), device("mid", "ready", 60 * minute)];
+    const none = { ...paused(now), step: "none" as const };
+    const cases = [
+      { name: "before start", reading: paused(now + 15_000), start: false },
+      { name: "step none", reading: none },
+      { name: "no step reading", reading: undefined },
+      {
+        devices: [device("old", "leased", 90 * minute)],
+        name: "nothing idle",
+        reading: paused(now + 15_000),
+      },
+    ];
+    for (const { devices = idle(), name, reading, start = true } of cases) {
+      const pressure = fakeMemoryPressure(reading);
+      const rig = harness(devices, { memoryPressure: pressure.reader });
+      if (start) rig.pool.start();
+      pressure.reading(reading === undefined ? undefined : { ...reading, readingAt: now + 15_000 });
+      await rig.pool.settle();
+      expect(rig.shutdownCalls, name).toEqual([]);
+    }
+
+    const pressure = fakeMemoryPressure(paused(now));
+    const failing = harness(idle(), {
+      memoryPressure: pressure.reader,
+      shutdown: async (target) => {
+        if (target.id === "old") throw new Error("the simulator would not stop");
+        return { ...target, state: "shutdown" };
+      },
+    });
+    failing.pool.start();
+    pressure.reading(paused(now + 15_000));
+    await failing.pool.settle();
+    pressure.reading(paused(now + 30_000));
+    await failing.pool.settle();
+    expect(failing.shutdownCalls, "the next reading takes the next device").toEqual(["old", "mid"]);
   });
 
   it("at warming-paused reports a short target memory-pressure, a target that does not resolve its own reason, and boots nothing", async () => {
