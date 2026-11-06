@@ -509,12 +509,29 @@ describe("GatewayRelay on a byte channel", () => {
         deadlineMs: BOUND,
         ...(options.holdOpen === true ? { holdOpen: true } : {}),
       });
-      let feed!: ReadableStreamDefaultController<Uint8Array>;
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
       const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          feed = controller;
+        start(started) {
+          controller = started;
         },
       });
+      // why: a relay that cut the upload too early cancelled this body, and the assertions below must name that, not a closed controller.
+      const feed = {
+        close: () => {
+          try {
+            controller.close();
+          } catch {
+            // why: the relay already cancelled the body.
+          }
+        },
+        enqueue: (chunk: Uint8Array) => {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            // why: the relay already cancelled the body.
+          }
+        },
+      };
       let result: Awaited<ReturnType<typeof outcome<Response>>> | undefined;
       void outcome(
         relay.relay(WORKER_ID, {
