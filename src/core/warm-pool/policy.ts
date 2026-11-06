@@ -441,15 +441,13 @@ function plannedKinds(
 /**
  * why: the kind's devices under an open lease; the pool keeps a spare while they are held. A
  * baseline kind is one row per name, so it counts the leased copies of every version of it, whatever
- * their model, OS or mode, as its peak does, not only those of the newest.
+ * their platform, model, OS or mode, as its peak does, not only those of the newest.
  */
 function leasedOfKind(view: WarmPolicyView, spec: VirtualSpec): number {
   const leased = new Set(view.leases.map((lease) => lease.deviceId));
   const ofKind = (device: VirtualDevice): boolean =>
     spec.baseline
-      ? !device.spec.physical &&
-        device.spec.platform === spec.platform &&
-        device.spec.baseline?.name === spec.baseline.name
+      ? !device.spec.physical && device.spec.baseline?.name === spec.baseline.name
       : sameSpec(device.spec, spec);
   return view.devices.filter((device) => ofKind(device) && leased.has(device.id)).length;
 }
