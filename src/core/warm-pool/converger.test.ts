@@ -607,6 +607,25 @@ describe("warm pool memory pressure", () => {
     expect(failing.shutdownCalls, "the next reading takes the next device").toEqual(["old", "mid"]);
   });
 
+  it("when warming resumes the pool fills its targets again on memory.pressure-changed, with no tick", async () => {
+    const pressure = fakeMemoryPressure(paused(now));
+    const rig = harness([], { memoryPressure: pressure.reader, targets: [iphone15] });
+    rig.pool.start();
+    await rig.pool.pass();
+    await rig.pool.settle();
+    expect(rig.provisionCalls, "nothing is created while paused").toEqual([]);
+
+    pressure.reading({ readingAt: now + 15_000, step: "none" });
+    rig.eventBus.emit(
+      "memory.pressure-changed",
+      { from: "warming-paused", to: "none" },
+      "host-load",
+    );
+    await rig.pool.settle();
+
+    expect(rig.provisionCalls).toHaveLength(1);
+  });
+
   it("at warming-paused reports a short target memory-pressure, a target that does not resolve its own reason, and boots nothing", async () => {
     const rig = harness([device("shut", "shutdown", 1_000)], {
       memoryPressure: fakeMemoryPressure(paused(now)).reader,
