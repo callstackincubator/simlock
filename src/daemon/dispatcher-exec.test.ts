@@ -149,6 +149,37 @@ describe("Dispatcher: device.exec", () => {
     expect(runner.calls[0]?.options.input).toBe("yes\n");
   });
 
+  it("refuses stdin and stdinFile together with BAD_REQUEST and spawns nothing", async () => {
+    const runner = new ScriptedProcessRunner([{ match: command }]);
+    const calls: RecordedPassthrough[] = [];
+    const { dispatcher, leaseId } = await withLease({
+      passthroughOverride: recordingResolver(calls, () =>
+        Promise.resolve({ args: ["--set", "/root", "list", "devices"], command: "simctl" }),
+      ),
+      processRunner: runner,
+    });
+    const run = (extra: Record<string, string>) =>
+      dispatcher.dispatch(
+        "device.exec",
+        { args: ["list", "devices"], leaseId, tool: "simctl", ...extra },
+        session({ principal: "tok_agent" }),
+      );
+
+    await expect(run({ stdin: "yes\n" })).resolves.toEqual({ exitCode: 0 });
+    const spawned = runner.calls.length;
+    const asked = calls.length;
+
+    const refusal = await run({ stdin: "yes\n", stdinFile: "fixture.tar" }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toMatchObject({ message: "Give stdin or stdinFile, not both" });
+    expect(classifyError(refusal)).toBe("BAD_REQUEST");
+    expect(runner.calls).toHaveLength(spawned);
+    expect(calls).toHaveLength(asked);
+  });
+
   it("kills a command that outruns exec.timeoutMs and fails with EXEC_TIMEOUT", async () => {
     const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
     const { clock, dispatcher, leaseId } = await withLease({
