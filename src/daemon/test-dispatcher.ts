@@ -152,6 +152,7 @@ export async function buildDispatcher(
     readonly passthroughTool?: string;
     readonly lease?: Partial<Config["lease"]>;
     readonly processRunner?: ProcessRunner;
+    readonly leaseFiles?: DispatcherOptions["leaseFiles"];
     readonly exec?: Partial<Config["exec"]>;
     readonly passthroughContextSink?: unknown[];
     readonly clock?: FakeClock;
@@ -317,6 +318,7 @@ export async function buildDispatcher(
     ...(overrides.includeEnrollment === true ? { enrollment: engine.core.enrollment } : {}),
     passthrough: resolvePassthroughOverride(engine, overrides.passthroughOverride),
     ...(overrides.processRunner === undefined ? {} : { processRunner: overrides.processRunner }),
+    ...(overrides.leaseFiles === undefined ? {} : { leaseFiles: overrides.leaseFiles }),
     execEnv: overrides.execEnv ?? { PATH: "/usr/bin" },
     queue: engine,
     ...(overrides.presence === undefined ? {} : { presence: overrides.presence }),

@@ -180,6 +180,67 @@ describe("Dispatcher: device.exec", () => {
     expect(calls).toHaveLength(asked);
   });
 
+  it("stops the command and fails with STDIN_FILE_FAILED when the stdinFile cannot be read to its end", async () => {
+    const oneMiB = 1024 * 1024;
+    for (const bytes of [oneMiB, 0]) {
+      let closed = false;
+      const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
+      const { dispatcher, leaseId } = await withLease({
+        leaseFiles: {
+          folderOf: () => Promise.resolve("/lease-folder"),
+          openFile: (_grant, name) =>
+            Promise.resolve({
+              close: () => {
+                closed = true;
+                return Promise.resolve();
+              },
+              name,
+              read: () => {
+                let sent = 0;
+                return new ReadableStream<Uint8Array>({
+                  pull(controller) {
+                    if (sent >= bytes) {
+                      controller.error(new Error("disk went away"));
+                      return;
+                    }
+                    controller.enqueue(new Uint8Array(bytes));
+                    sent += bytes;
+                  },
+                });
+              },
+              size: bytes,
+            }),
+        },
+        processRunner: runner,
+      });
+
+      let settled = false;
+      const outcome = dispatcher
+        .dispatch(
+          "device.exec",
+          { args: ["list", "devices"], leaseId, stdinFile: "fixture.tar", tool: "simctl" },
+          session({ principal: "tok_agent" }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .finally(() => {
+          settled = true;
+        });
+      await flush();
+      expect(settled).toBe(true);
+      const failure = await outcome;
+
+      expect(classifyError(failure)).toBe("STDIN_FILE_FAILED");
+      expect(failure).toMatchObject({
+        details: { bytesRead: bytes, name: "fixture.tar" },
+        message: `Reading fixture.tar failed after ${String(bytes)} bytes; the command was stopped`,
+      });
+      expect(closed).toBe(true);
+    }
+  });
+
   it("kills a command that outruns exec.timeoutMs and fails with EXEC_TIMEOUT", async () => {
     const runner = new ScriptedProcessRunner([{ hangs: true, match: command }]);
     const { clock, dispatcher, leaseId } = await withLease({
