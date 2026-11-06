@@ -448,13 +448,24 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
         request.flushHeaders();
       });
     const channelsOpened = () => fleet.taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length;
+    // why: CI saw NO_CAPACITY for a request right after the release, so the helper retries until the fleet can grant.
     const newLease = async () => {
-      const next = await fleet.gateway.dispatch(
-        "lease.request",
-        { model: "Pixel-A", noWait: true, platform: "android" },
-        holder,
-      );
-      return { call: callOn(next.lease.id, secret), leaseId: next.lease.id };
+      let granted: string | undefined;
+      await poll(async () => {
+        granted = await fleet.gateway
+          .dispatch(
+            "lease.request",
+            { model: "Pixel-A", noWait: true, platform: "android" },
+            holder,
+          )
+          .then(
+            (next) => next.lease.id,
+            () => undefined,
+          );
+        return granted !== undefined;
+      }, 15_000).toBe(true);
+      const leaseId = granted as string;
+      return { call: callOn(leaseId, secret), leaseId };
     };
     const stranger = async () => {
       const other = await fleet.gateway.dispatch(
