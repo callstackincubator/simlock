@@ -267,7 +267,14 @@ export async function composeWorker(
   });
   const modelPreferences = modelPreferenceWiring(config, drivers);
   const core = createCore({
-    ...(memoryPressure === undefined ? {} : { memoryPressure }),
+    ...(memoryPressure === undefined
+      ? {}
+      : {
+          memoryPressure: {
+            current: () => memoryPressure.current(),
+            onReading: (listener: () => void) => memoryPressure.onReading(listener),
+          },
+        }),
     clock,
     components,
     config,

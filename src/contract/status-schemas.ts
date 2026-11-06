@@ -36,7 +36,7 @@ const memoryPressureCauseSchema = z.object({
   floorPercent: z.number().min(0).max(100).optional(),
 });
 
-export const statusMemoryPressureSchema = z.object({
+const statusMemoryPressureSchema = z.object({
   step: memoryPressureStepSchema,
   since: z.number().finite().nonnegative().optional(),
   cause: memoryPressureCauseSchema.optional(),

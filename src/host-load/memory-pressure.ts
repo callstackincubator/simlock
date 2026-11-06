@@ -4,12 +4,12 @@ import type { Clock, MemoryCounters, TimerHandle } from "../ports/index.js";
 export type MemoryPressureLevel = "normal" | "warn" | "critical";
 export type MemoryPressureStep = "none" | "warming-paused" | "new-devices-paused";
 
-export interface MemoryPressureRule {
+interface MemoryPressureRule {
   readonly level: MemoryPressureLevel | "off";
   readonly minAvailablePercent: number;
 }
 
-export interface MemoryPressureConfig {
+interface MemoryPressureConfig {
   readonly enabled: boolean;
   readonly pauseWarming: MemoryPressureRule;
   readonly pauseNewDevices: MemoryPressureRule;
