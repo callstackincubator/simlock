@@ -32,6 +32,7 @@ Front:
 
 - The front serves the `agent` role only.
 - `checkRequest` (`front/request-rules.ts`) runs before anything is forwarded: no platform but iOS and Android, no device selector but the leased one, no device set or allowlist, `install` only from an upload, `devices` alone and not streamed.
+- The allocate's `deviceMode` and `deviceExcept` reach `lease.request` as `mode` and `except`, and are stripped from what is forwarded and from batch steps; simlock's schema refuses a bad value (`refused by simlock:`).
 - A `devices` answer is cut to the token's leases before the CLI gets it.
 - The host sets the tenant to the requester's id and overwrites the client's.
 - A heartbeat is forwarded with `ttlMs` raised to the ceiling (`agentDeviceLeaseMaxTtlMs`), then renews the simlock lease, with `lease.renew` only when it moves the deadline. When agent-device says the lease is gone, the simlock lease is released and the reply is "ended by simlock".
