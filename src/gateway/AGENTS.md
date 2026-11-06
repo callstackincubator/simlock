@@ -53,7 +53,7 @@ Flows: [device selection](../../docs/internal/flows/device-selection.md), [devic
    `latestVersion`; a failed query keeps the last view). Else `status.get`; a `starting` worker stops there. Else `list.get` devices, plus `catalog.get`, `config.get` and `baseline.list` on the tick, after `component.installed`, `baseline.saved`, `baseline.removed` or `baseline.stale`, or with no catalog yet. One at a time; refreshes asked meanwhile merge into one. 2 timed-out refreshes in a row → close.
 6. Worker events are republished with `workerId`. `lease.*`, `device.*`, `component.install*` and `daemon.update-started`/`-failed` trigger a refresh. A worker event named like a gateway fact (`worker.*`, `request.dispatched`, `request.granted`) is dropped. An event whose payload nests deeper than 64 levels (`MAX_RELAYED_PAYLOAD_DEPTH`) or cannot be serialized is dropped with one `error`.
 
-**Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's `assess` and ten stages are in [routing](routing/AGENTS.md)):
+**Fleet request** (`FleetLeaseCoordinator.request`, under its own `SerializedDecision`; routing's `assess` and eleven stages are in [routing](routing/AGENTS.md)):
 
 1. `GatewayDispatcher` refuses `fleetRequestId` and, off an uplink session, `owner`. Fills `ttlMs` from the gateway's `lease.defaultTtlMs`; rejects one above `lease.maxTtlMs`. Drops `allowDownload`.
 2. Admit: idempotent replay → `lease.maxPerRequester` (1; a number, or one per platform) over the index (not counting a lease past its last reported deadline on a disconnected worker) plus a pending request

@@ -109,6 +109,7 @@ Three identities:
 - OS constraint: a bare version is exact (string equality). A range is one or more of
   `>=`, `>`, `<=`, `<` + a dotted version, joined by single spaces, or `A - B`.
   `^`, `~`, `*`, `||` and `x` read as a range and are refused.
+- `catalog.get`'s iOS entry adds `slimCategories` (0 to 32 names, `^[a-z][a-z0-9-]{0,31}$`; the categories the worker slims) and `defaultMode` (the worker's `ios.defaultMode`); a gateway's fleet entry holds the union of `slimCategories` and no `defaultMode`.
 - `lease.request` holds `except` (a slim iOS simulator lease keeping slim categories running, ADR 0066) to one object-level refinement with no path, so every transport answers `BAD_REQUEST` with the message as written: 1 to 16 names matching `EXCEPT_NAME_PATTERN`, none twice, never with `physical`, a platform but iOS or `mode: full`. The worker's default mode and a baseline's mode are checked in leasing.
 - `lease.request` holds an exact `osVersion` to `componentVersionSchema`'s bound (1 to 64
   characters, no whitespace, control character or `;`, no leading `-`): a downloadable missing

@@ -71,7 +71,7 @@ Seeds (ADR 0061) — a simulator is a copy of the kind's seed, a shut-down simul
 
 Reclaim — a simulator is never reclaimed: `reclaim` and `reclaimStrategy` throw, and a lease's end destroys it. Physical → `devicectl device uninstall app` for every app not enrolled → `ready` / `uninstall`. `destroy` / `destroyLegacy`: shut down, `simctl delete`, then remove the overrides folder (a failed removal is logged). `listManaged`: `simctl list -j devices` in the set, plus marks.
 
-Catalog — models are device type names; class from product family (iPhone `phone`, iPad `tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired installed versions. No aliases, no images.
+Catalog — models are device type names; class from product family (iPhone `phone`, iPad `tablet`, Apple Watch `watch`, Apple TV `tv`, Apple Vision `vision`); `modelRuntimes` = paired installed versions. No aliases, no images. `slimCategories` lists the categories it slims: `ios.slim.categories`, else every one in `SLIM_CATEGORIES`.
 
 Components — a component is a runtime version or `latest`.
 `installComponent`: `xcodebuild -downloadPlatform iOS [-buildVersion <v>]`, 8 GiB reserved under

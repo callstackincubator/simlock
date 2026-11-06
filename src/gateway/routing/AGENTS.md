@@ -22,7 +22,7 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
    `NO_CAPACITY` (`no-worker`); no known worker has the platform → `NO_DRIVER`; none lists the
    model or class → `UNKNOWN_MODEL`; none pairs it with a fitting runtime → `RUNTIME_MISSING`
    (`downloadable: false`); a known worker could, but none taking requests can → `NO_CAPACITY`;
-   `requires` met by none that could → `CAPABILITY_MISSING`. Else route or wait.
+   `requires` met by none that could → `CAPABILITY_MISSING`; an `except` list (ADR 0066 §5) kept by none that could (the `keeps-except` stage over the views, the table run again) → `BAD_REQUEST`: `no worker slims every category in except: <names>` when no known worker slims them all, else `no worker can keep slim categories <names> (<why>)` (the baseline is full, or every default mode is full). Else route or wait.
    Physical: no known worker enrols a fitting device → `UNKNOWN_MODEL`. Known = not `incompatible`.
 2. **Select** (`runStages`): workers sorted by id. A filter drops; a rank keeps its best scorers,
    abstains when the best is 0 or less, and a settling rank ends the walk. Pick the first left,
@@ -35,18 +35,19 @@ Flows: [device selection](../../../docs/internal/flows/device-selection.md), [ga
 4. The reported stage is the last rank that removed a worker, else the last that decided.
    `reason` is `warm-hit` when that stage is `warm-hit`, else `free-capacity`.
 
-| Stage              | Kind          | Keeps or prefers                                                                                                                                              | Physical |
-| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held)                                                     | yes      |
-| `has-capabilities` | filter        | every `requires` entry `available`                                                                                                                            | yes      |
-| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device                                                         | yes      |
-| `has-baseline`     | filter        | a request naming a baseline: the worker holds it (`no-baseline`), it fits (`baseline-mismatch`), it is fresh (`baseline-stale`)                               | no       |
-| `healthy`          | filter        | health `running`                                                                                                                                              | yes      |
-| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                                                                            | no       |
-| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); for a baseline, a copy of its current version in its mode; physical: a pickable one | yes      |
-| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                                                                                  | no       |
-| `ram-budget`       | rank          | `atRamBudget` not true                                                                                                                                        | no       |
-| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                                                                        | no       |
+| Stage              | Kind          | Keeps or prefers                                                                                                                                                                                                                       | Physical |
+| ------------------ | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `takes-requests`   | filter        | connected, not drained, not updating, capacity and catalog read this session (`starting`: a catalog held)                                                                                                                              | yes      |
+| `has-capabilities` | filter        | every `requires` entry `available`                                                                                                                                                                                                     | yes      |
+| `can-serve`        | filter        | catalog serves model or class with an installed fitting runtime; physical: an enrolled fitting device                                                                                                                                  | yes      |
+| `keeps-except`     | filter        | a request with `except`: the catalog's `slimCategories` holds every name and the mode (the baseline's, else the request's, else the catalog's `defaultMode`) is `slim` (`cannot-keep-except`); a worker without either fact is dropped | no       |
+| `has-baseline`     | filter        | a request naming a baseline: the worker holds it (`no-baseline`), it fits (`baseline-mismatch`), it is fresh (`baseline-stale`)                                                                                                        | no       |
+| `healthy`          | filter        | health `running`                                                                                                                                                                                                                       | yes      |
+| `idle-queue`       | filter        | the worker's own `queueDepth` is 0                                                                                                                                                                                                     | no       |
+| `warm-hit`         | rank, settles | a `ready` fitting device of the asked mode (`servesDefaultMode` if none); for a baseline, a copy of its current version in its mode; physical: a pickable one                                                                          | yes      |
+| `free-slot`        | filter        | a free or evictable (warm) running slot, platform and global                                                                                                                                                                           | no       |
+| `ram-budget`       | rank          | `atRamBudget` not true                                                                                                                                                                                                                 | no       |
+| `free-capacity`    | rank          | most `maxRunning - running - reserved`                                                                                                                                                                                                 | no       |
 
 A physical request has one rank, `warm-hit`: with no pickable device nothing is picked, and it waits.
 
