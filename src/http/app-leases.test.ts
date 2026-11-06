@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomFillSync } from "node:crypto";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1569,15 +1569,27 @@ function sha256(bytes: Uint8Array): string {
 describe("a lease's files on a worker", () => {
   it("a lease holder PUTs a file and gets 201 with its name and size; a GET returns the same bytes", async () => {
     const { get, put } = await filesRig();
-    const bytes = Uint8Array.from({ length: 3 * 1024 * 1024 }, (_, index) => index % 251);
+    const patterned = (length: number): Uint8Array<ArrayBuffer> => {
+      const bytes = new Uint8Array(length);
+      randomFillSync(bytes.subarray(0, Math.min(length, 1 << 20)));
+      for (let at = 1 << 20; at < length; at += 1 << 20) bytes.copyWithin(at, 0, 1 << 20);
+      return bytes;
+    };
+    const cases: [string, Uint8Array<ArrayBuffer>][] = [
+      ["fixture.tar", patterned(3 * 1024 * 1024)],
+      ["fixture.tar", patterned(1000)],
+      ["empty.bin", new Uint8Array(0)],
+      ["big.bin", patterned(70_000_000)],
+    ];
 
-    const response = await put("fixture.tar", bytes);
-
-    expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ name: "fixture.tar", size: bytes.length });
-    const download = await get("fixture.tar");
-    expect(download.status).toBe(200);
-    expect(sha256(new Uint8Array(await download.arrayBuffer()))).toBe(sha256(bytes));
+    for (const [name, bytes] of cases) {
+      const response = await put(name, bytes);
+      expect(response.status).toBe(201);
+      expect(await response.json()).toEqual({ name, size: bytes.length });
+      const download = await get(name);
+      expect(download.status).toBe(200);
+      expect(sha256(new Uint8Array(await download.arrayBuffer()))).toBe(sha256(bytes));
+    }
   });
 
   it("a lease holder PUTs a bad file name and gets 400 BAD_REQUEST with the name rule", async () => {
