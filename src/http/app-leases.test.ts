@@ -1497,12 +1497,16 @@ async function filesRig(
     rig.app.request(`/v1/leases/lse_1/files/${name}`, { body, headers, method: "PUT" });
   const get = (name: string, headers: Record<string, string> = agentAuth) =>
     rig.app.request(`/v1/leases/lse_1/files/${name}`, { headers });
+  const remove = (name: string, headers: Record<string, string> = agentAuth) =>
+    rig.app.request(`/v1/leases/lse_1/files/${name}`, { headers, method: "DELETE" });
+  const list = (headers: Record<string, string> = agentAuth) =>
+    rig.app.request("/v1/leases/lse_1/files", { headers });
   const leaseFolder = join(
     dataDirectory,
     "lease-files",
     `${Buffer.from("lse_1").toString("hex")}-1000`,
   );
-  return { ...rig, dataDirectory, get, leaseFolder, put };
+  return { ...rig, dataDirectory, get, leaseFolder, list, put, remove };
 }
 
 // why: what a lease folder holds, temporary upload files included, so "nothing stored" means nothing on disk.
@@ -1787,5 +1791,33 @@ describe("a lease's files on a worker", () => {
       running.finish();
       expect((await runningRequest).status).toBe(201);
     }
+  });
+
+  it("a lease holder lists the lease's files and deletes one", async () => {
+    const { leaseFolder, list, put, remove } = await filesRig();
+    const files = async () => ((await (await list()).json()) as { files: unknown[] }).files;
+
+    expect((await list()).status).toBe(200);
+    expect(await files()).toEqual([]);
+
+    expect((await put("b.txt", "bb")).status).toBe(201);
+    expect((await put("a.txt", "a")).status).toBe(201);
+    await mkdir(join(leaseFolder, "sub"));
+    await writeFile(join(leaseFolder, "sub", "inner.txt"), "x");
+    await writeFile(join(leaseFolder, "my file.png"), "x");
+    expect(await files()).toEqual([
+      { name: "a.txt", size: 1 },
+      { name: "b.txt", size: 2 },
+    ]);
+
+    const removed = await remove("a.txt");
+    expect(removed.status).toBe(204);
+    expect(await files()).toEqual([{ name: "b.txt", size: 2 }]);
+
+    const unknown = await remove("a.txt");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({
+      error: { code: "UNKNOWN_FILE", message: "No file a.txt in this lease", name: "a.txt" },
+    });
   });
 });
