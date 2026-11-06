@@ -1,6 +1,6 @@
 # 0066. A slim lease may keep named categories running
 
-- **Status:** Accepted — not yet implemented
+- **Status:** Accepted
 - **Date:** 2026-11-05
 - **Issue:** [#1326](https://github.com/callstackincubator/simlock/issues/1326) (request [#1244](https://github.com/callstackincubator/simlock/issues/1244))
 - **Narrows:** [ADR 0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) §1 (the categories written come from the request too), §2 (a boot of a lease with `except` fails on a failed write, an unrunnable readback or an enabled kept label, where 0060 grants `slim` or `full`) and §6 (the label list moves to simslim v0.14.0, and gains one category); [ADR 0007](0007-a-lease-request-chooses-the-device-mode.md) §8 (the same failures grant `slim` there) and §9 (a device reports `except` beside `mode`); [ADR 0008](0008-the-catalog-pairs-models-with-runtimes-and-status-carries-host-facts.md) §4 (a gateway's `slimCategories` is the union of its workers', and it reports no `defaultMode`) and §9 (two config-derived fields join the catalog); [ADR 0009](0009-gateway-routing-is-a-list-of-stages.md) §2 (a filter, `cannot-keep-except`, can leave a request with no worker that could ever serve it) and §4 (the fast-fail table gains a `BAD_REQUEST` row, and its `NO_CAPACITY` row counts the filter).
