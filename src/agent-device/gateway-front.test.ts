@@ -1753,6 +1753,26 @@ describe("the agent-device front, through a gateway: the lease header", { timeou
     ]);
   });
 
+  it("through the gateway, `devices` with two leases on one worker, sent with a `meta.requestId` as the agent-device CLI does, answers both devices", async () => {
+    const rig = await setUp({ workers: [{ label: "w1", maxRunning: 2 }] });
+    await granted(rig, 1);
+    await granted(rig, 2);
+    await listedByGateway(rig, 2);
+    const member = first(rig);
+    member.fake.listDevices([
+      { id: addressOfLease(rig, 1), name: "first" },
+      { id: addressOfLease(rig, 2), name: "second" },
+    ]);
+    member.fake.holdCommand();
+    const answer = track(
+      command(rig, "devices", undefined, {}, { meta: { requestId: "req-devices-1" } }),
+    );
+    await expect.poll(() => member.fake.rpcRequests("agent_device.command").length).toBe(2);
+    member.fake.releaseCommand();
+
+    expect(await listedNames(await answer.promise)).toEqual(["first", "second"]);
+  });
+
   it("through the gateway, `devices` leaves out a lease that was released, and a lease the gateway's `lease.list` omits from that one answer while still holding it", async () => {
     const rig = await setUp({ workers: [{ label: "w1", maxRunning: 3 }] });
     for (const n of [1, 2, 3]) await granted(rig, n);
