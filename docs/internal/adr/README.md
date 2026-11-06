@@ -101,3 +101,4 @@ the status is stale.
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0064](0064-a-tunnel-reaches-an-ios-simulators-ports-and-an-emulators-adb-port.md) | A tunnel reaches an iOS simulator's ports and an emulator's adb port | Accepted; narrows 0054 §2, §5, §6, 0001 §4 and 0005 Non-goals |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
+| [0067](0067-a-lease-has-a-file-folder-on-its-worker-that-http-callers-fill-and-read.md) | A lease has a file folder on its worker that HTTP callers fill and read | Proposed; narrows 0005 Non-goals (file transfer) and §19b′ |
