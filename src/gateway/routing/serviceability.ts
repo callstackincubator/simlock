@@ -113,14 +113,17 @@ function baselineHolders(request: RoutableRequest, views: readonly WorkerView[])
 }
 
 function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  const answer = assessTable(request, views);
-  if (answer.kind === "reject") return answer;
+  // why: ADR 0066 §5 puts the `except` row after the model and runtime rows and before the capacity row.
+  const leading = assessLeading(request, views);
+  if (leading !== undefined) return leading;
   const except = assessExcept(request, views);
   if (except !== undefined) return except;
+  const serving = assessServing(request, views);
+  if (serving !== undefined) return serving;
   const requires = request.requires;
-  if (requires === undefined || requires.length === 0) return answer;
+  if (requires === undefined || requires.length === 0) return { kind: "route-or-wait" };
   const capable = views.filter((worker) => hasCapabilities.check(worker, request) === undefined);
-  if (assessTable(request, capable).kind === "route-or-wait") return answer;
+  if (assessTable(request, capable).kind === "route-or-wait") return { kind: "route-or-wait" };
   return {
     code: "CAPABILITY_MISSING",
     details: { capabilities: requires },
@@ -143,7 +146,7 @@ function assessExcept(
   const except = request.except;
   if (except === undefined) return undefined;
   const keeping = views.filter((worker) => keepsExcept.check(worker, request) === undefined);
-  if (assessTable(request, keeping).kind === "route-or-wait") return undefined;
+  if (assessServing(request, keeping) === undefined) return undefined;
   if (
     keeping.some(
       (worker) =>
@@ -178,12 +181,25 @@ function whyNotSlim(request: RoutableRequest, slimmers: readonly WorkerView[]): 
 }
 
 function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  // why: an updating worker comes back by itself (ADR 0042 §3), so a request that only it can serve waits instead of failing.
-  const takers = views.filter((worker) => {
+  return (
+    assessLeading(request, views) ?? assessServing(request, views) ?? { kind: "route-or-wait" }
+  );
+}
+
+// why: an updating worker comes back by itself (ADR 0042 §3), so a request that only it can serve waits instead of failing.
+function takersOf(request: RoutableRequest, views: readonly WorkerView[]): WorkerView[] {
+  return views.filter((worker) => {
     const refusal = takesRequests.check(worker, request);
     return refusal === undefined || refusal.reason === "updating";
   });
-  if (takers.length === 0) return noWorker();
+}
+
+// why: the table's first rows: no worker takes requests, no driver, unknown model, missing runtime.
+function assessLeading(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+): Rejection | undefined {
+  if (takersOf(request, views).length === 0) return noWorker();
 
   const known = views.filter(isKnown);
   const platform = request.platform;
@@ -196,7 +212,15 @@ function assessTable(request: RoutableRequest, views: readonly WorkerView[]): As
       reason: "unresolvable-spec",
     };
   }
-  if (request.physical === true) return assessPhysical(request, known, takers);
+  if (request.physical === true) {
+    if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
+    return {
+      ...noPhysicalMatch(request),
+      code: "UNKNOWN_MODEL",
+      kind: "reject",
+      reason: "unresolvable-spec",
+    };
+  }
   if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
     const osVersion = request.osVersion ?? "default";
@@ -208,26 +232,21 @@ function assessTable(request: RoutableRequest, views: readonly WorkerView[]): As
       reason: "unresolvable-spec",
     };
   }
-  if (!takers.some((worker) => matchRequest(worker, request) !== undefined)) return noWorker();
-  return { kind: "route-or-wait" };
+  return undefined;
 }
 
 // why: `presence` plays no part in the table: a device last read not present makes the request wait, not fail.
-function assessPhysical(
+// why: the capacity row: a known worker could serve, but none taking requests can.
+function assessServing(
   request: RoutableRequest,
-  known: readonly WorkerView[],
-  takers: readonly WorkerView[],
-): Assessment {
-  if (!known.some((worker) => physicalMatch(worker, request, "enrolled"))) {
-    return {
-      ...noPhysicalMatch(request),
-      code: "UNKNOWN_MODEL",
-      kind: "reject",
-      reason: "unresolvable-spec",
-    };
-  }
-  if (!takers.some((worker) => physicalMatch(worker, request, "enrolled"))) return noWorker();
-  return { kind: "route-or-wait" };
+  views: readonly WorkerView[],
+): Rejection | undefined {
+  const takers = takersOf(request, views);
+  const fits =
+    request.physical === true
+      ? takers.some((worker) => physicalMatch(worker, request, "enrolled"))
+      : takers.some((worker) => matchRequest(worker, request) !== undefined);
+  return fits ? undefined : noWorker();
 }
 
 function isKnown(worker: WorkerView): boolean {

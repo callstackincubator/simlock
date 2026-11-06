@@ -1305,16 +1305,35 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
           wrk_b: { categories: ["store"], defaultMode: "slim" as const },
         },
       },
+      {
+        label:
+          "the only worker that serves the model is drained and does not keep the names, a taker that keeps them does not serve it",
+        request: { except: ["mdm"], mode: "slim" as const },
+        rejected:
+          "no worker can keep slim categories mdm (no worker that slims them in slim mode serves this model and runtime)",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "slim" as const, drained: true as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const, models: ["iPhone 16"] },
+        },
+      },
     ];
 
     for (const { label, request, routedTo, rejected, rejectedCode, workers: slims } of cases) {
       const { clients, coordinator } = fleet(slims);
 
       if (rejected !== undefined || routedTo === undefined) {
-        await expect(
-          coordinator.request({ ...REQUEST, ...request }, requestOptions({ noWait: true })),
-          label,
-        ).rejects.toMatchObject({ code: rejectedCode ?? "BAD_REQUEST", message: rejected });
+        // why: no `noWait`, so a request the coordinator would only queue shows as "waiting", not as a rejection.
+        const outcome = await Promise.race([
+          coordinator.request({ ...REQUEST, ...request }, requestOptions()).then(
+            () => "granted",
+            (error: unknown) => error,
+          ),
+          tick().then(() => "waiting"),
+        ]);
+        expect(outcome, label).toMatchObject({
+          code: rejectedCode ?? "BAD_REQUEST",
+          message: rejected,
+        });
         for (const client of Object.values(clients)) {
           expect(client.lastRequestLeaseInput, label).toBeUndefined();
         }
