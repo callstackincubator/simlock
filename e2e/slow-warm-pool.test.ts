@@ -202,10 +202,14 @@ interface Lane {
  * learns from leases.
  */
 async function warmDaemon(
-  options: { readonly enabled?: boolean; readonly noTargets?: boolean } = {},
+  options: {
+    readonly enabled?: boolean;
+    readonly keepSeeds?: boolean;
+    readonly noTargets?: boolean;
+  } = {},
 ): Promise<Lane> {
   await sweepStaleDeviceSets();
-  const env = await withDaemon({ driver: "real" });
+  const env = await withDaemon({ driver: "real", keepSeeds: options.keepSeeds === true });
   const adbServerPort = env.adbServerPort;
   if (adbServerPort === undefined) throw new Error("the real-SDK lane must allocate an adb port");
   const reported = await env.cli(["catalog", "--json"], { timeout: QUERY_TIMEOUT });
@@ -543,9 +547,7 @@ async function expectSecondBootsRunning(
 }
 
 async function nuke(env: TestEnv): Promise<void> {
-  await env
-    .cli(["nuke", "--delete-devices", "--yes"], { timeout: 5 * MINUTE })
-    .catch(() => undefined);
+  await env.cli(["nuke", "--yes"], { timeout: 5 * MINUTE }).catch(() => undefined);
 }
 
 describe(
@@ -558,7 +560,7 @@ describe(
       async (context) => {
         const missing = await missingPlatform();
         if (missing !== undefined) context.skip(missing);
-        const { env, targets } = await warmDaemon();
+        const { env, targets } = await warmDaemon({ keepSeeds: true });
         try {
           const rows = await untilBothReady(env);
 
@@ -733,7 +735,7 @@ describe(
         let lane: Lane | undefined;
         try {
           lane = await step("start the daemon with no target", DAEMON_START_BUDGET, () =>
-            warmDaemon({ noTargets: true }),
+            warmDaemon({ keepSeeds: true, noTargets: true }),
           );
           const { env, targets } = lane;
           const first = {

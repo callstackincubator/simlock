@@ -36,7 +36,7 @@ const usedDeviceSets: string[] = [];
 
 /** Starts the real-driver daemon for one test and records its device set. */
 async function withRealDaemon(configOverrides: Record<string, unknown> = {}): Promise<TestEnv> {
-  const env = await withDaemon({ driver: "real", configOverrides });
+  const env = await withDaemon({ driver: "real", configOverrides, keepSeeds: true });
   usedDeviceSets.push(iosDeviceSet(env.home));
   return env;
 }
@@ -258,7 +258,7 @@ describe.skipIf(process.platform !== "darwin")(
         );
         const disabled = await printDisabled(second);
         expect([...ALL_LABELS].filter((label) => !disabled.has(label))).toEqual([]);
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await env.cli(["nuke", "--yes"], { timeout: 180_000 });
       },
     );
 
@@ -307,7 +307,7 @@ describe.skipIf(process.platform !== "darwin")(
         ).toBe(slimmedBefore);
 
         await env.cli(["release", grant.lease]).catch(() => undefined);
-        await env.cli(["nuke", "--delete-devices", "--yes"], { timeout: 180_000 });
+        await env.cli(["nuke", "--yes"], { timeout: 180_000 });
       },
     );
 

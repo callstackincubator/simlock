@@ -175,6 +175,7 @@ function defineSuite(target: Target): void {
     const pinned = await assertPinnedAgentDevice(platform);
     env = await withSharedDaemon({
       driver: "real",
+      keepSeeds: true,
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         capabilities: {
