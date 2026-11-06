@@ -19,11 +19,18 @@ export const iosSourceDataOwner: SqliteSchemaOwner = {
        stale_reason TEXT,
        created_at INTEGER NOT NULL
      ) STRICT`,
-    `CREATE UNIQUE INDEX ios_source_data_ready_seed ON ios_source_data (spec_key)
-       WHERE kind = 'seed' AND state = 'ready'`,
+    // why: a step per version; version 1 once listed the index as a second entry that never ran, so a v1 database may hold several ready seeds of one kind. Keep the newest (a tie: the larger source id) and demote the rest so the index can be built.
+    `UPDATE ios_source_data SET state = 'making'
+       WHERE kind = 'seed' AND state = 'ready' AND EXISTS (
+         SELECT 1 FROM ios_source_data AS newer
+         WHERE newer.kind = 'seed' AND newer.state = 'ready' AND newer.spec_key = ios_source_data.spec_key
+           AND (newer.created_at > ios_source_data.created_at
+             OR (newer.created_at = ios_source_data.created_at AND newer.source_id > ios_source_data.source_id)));
+     CREATE UNIQUE INDEX ios_source_data_ready_seed ON ios_source_data (spec_key)
+       WHERE kind = 'seed' AND state = 'ready';`,
   ],
   name: "ios-source-data",
-  version: 1,
+  version: 2,
 };
 
 export interface NewSourceRow {
