@@ -62,7 +62,12 @@ import type {
   StreamingProcessHandle,
   TimerHandle,
 } from "../ports/index.js";
-import type { LeaseFileView, LeaseFiles, LeaseFilesGrant } from "../lease-files/index.js";
+import {
+  LeaseFilesError,
+  type LeaseFileView,
+  type LeaseFiles,
+  type LeaseFilesGrant,
+} from "../lease-files/index.js";
 import { exitCodeOf, NoopLogger } from "../ports/index.js";
 import {
   capabilityReason,
@@ -803,7 +808,14 @@ export class Dispatcher {
     if (this.options.leaseFiles === undefined) {
       throw new DispatchError("INTERNAL", "Lease files are unavailable");
     }
-    return this.options.leaseFiles.openFile(grant, name);
+    try {
+      return await this.options.leaseFiles.openFile(grant, name);
+    } catch (error) {
+      if (error instanceof LeaseFilesError) {
+        throw new DispatchError(error.code, error.message, error.details);
+      }
+      throw error;
+    }
   }
 
   async #awaitExec(
