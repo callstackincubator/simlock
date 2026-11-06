@@ -59,12 +59,16 @@ interface LaunchOptions extends Switches {
   readonly host?: string;
   readonly seed?: Parameters<typeof seedTokensDatabase>[1];
   readonly port?: number;
-  readonly resume?: { readonly directory: string; readonly filesystem: MemoryFilesystem };
+  readonly resume?: {
+    readonly directory: string;
+    readonly filesystem: MemoryFilesystem;
+    readonly driver?: FakeDriver;
+  };
 }
 
 async function dataDirectoryFor(
   options: LaunchOptions,
-): Promise<{ directory: string; filesystem: MemoryFilesystem }> {
+): Promise<{ directory: string; filesystem: MemoryFilesystem; driver?: FakeDriver }> {
   if (options.resume !== undefined) return options.resume;
   const directory = await mkdtemp(join(tmpdir(), "simlock-local-profile-"));
   temporaryDirectories.push(directory);
@@ -74,8 +78,19 @@ async function dataDirectoryFor(
 
 async function launch(options: LaunchOptions = {}): Promise<Rig> {
   const host = options.host ?? "127.0.0.1";
-  const { directory, filesystem } = await dataDirectoryFor(options);
+  const { directory, filesystem, driver: resumed } = await dataDirectoryFor(options);
   const clock = new FakeClock(1_000);
+  // why: a simulator outlives a daemon restart; state.db names the devices this driver made.
+  const driver =
+    resumed ??
+    new FakeDriver({
+      availableOsVersions: ["26.5"],
+      clock,
+      defaultModels: { phone: ["iPhone 16"] },
+      knownModels: ["iPhone 16"],
+      modelClasses: { "iPhone 16": "phone" },
+      platform: "ios",
+    });
   const logs = new MemoryLogSink();
   const port = options.port ?? (await freeLoopbackPort());
   if (options.refuseWrite === true) {
@@ -104,16 +119,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
     ...(options.role === undefined ? {} : { role: options.role }),
     dataDirectory: directory,
     deviceDataTables: fakeDeviceDataTables,
-    drivers: [
-      new FakeDriver({
-        availableOsVersions: ["26.5"],
-        clock,
-        defaultModels: { phone: ["iPhone 16"] },
-        knownModels: ["iPhone 16"],
-        modelClasses: { "iPhone 16": "phone" },
-        platform: "ios",
-      }),
-    ],
+    drivers: [driver],
     filesystem,
     logger: new JsonLinesLogger({ clock, level: "debug", sink: logs }),
     optionalModules: [agentDeviceModuleWith({ upstream: new FakeAgentDevice() })],
@@ -132,7 +138,7 @@ async function launch(options: LaunchOptions = {}): Promise<Rig> {
         host,
         ...restartOptions,
         port: restartOptions.port ?? port,
-        resume: { directory, filesystem },
+        resume: { directory, driver, filesystem },
       });
     },
   };
@@ -344,7 +350,7 @@ describe("the local agent-device profile", () => {
       ],
     ];
     let current = moved;
-    for (const [name, breakIt] of breakers) {
+    for (const [index, [name, breakIt]] of breakers.entries()) {
       const lastToken = (await readProfile(current)).profile.daemonAuthToken;
       await current.daemon.dispatch("token.create", { label: LABEL, role: "agent" }, adminSession);
       await breakIt(current);
@@ -354,9 +360,10 @@ describe("the local agent-device profile", () => {
       expect(ids, name).toHaveLength(1);
       expect(replaced.profile.daemonAuthToken, name).not.toBe(lastToken);
       expect(ids[0], name).not.toBe(tokenId);
-      expect((await allocateWith(current, replaced.profile.daemonAuthToken, 2)).status, name).toBe(
-        200,
-      );
+      expect(
+        (await allocateWith(current, replaced.profile.daemonAuthToken, 2 + index)).status,
+        name,
+      ).toBe(200);
     }
   });
 
