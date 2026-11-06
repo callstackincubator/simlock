@@ -40,10 +40,12 @@ flowchart LR
 For a learned kind of count `L` (ADR 0038 §2's peak, at least one) with `H`
 of its devices under an open lease, the pool keeps
 `max(L − H, 1)` devices ready, counting the ones on their way as today.
-Only a device under an open lease is held: a reclaiming device, or one
-under a reclaim claim, is on its way to being destroyed and counts as
-neither held nor ready. Since the peak counts every lease held now, `H` is
-never above `L`, so the pool keeps between one and `L` ready.
+`H` counts every open lease of the kind that the peak counts: for a baseline
+kind, the leased copies of all its versions, not only the newest. Only a
+device under an open lease is held: a reclaiming device, or one under a
+reclaim claim, is on its way to being destroyed and counts as neither held
+nor ready. The `max(·, 1)` keeps at least one ready, and `H` at zero keeps
+`L`, so the pool keeps between one and `L` ready.
 
 | Peak `L` | Leased `H` | Ready kept, ADR 0038 §2 | Ready kept, this ADR |
 | -------- | ---------- | ----------------------- | -------------------- |
