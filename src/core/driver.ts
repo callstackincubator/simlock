@@ -301,6 +301,7 @@ export interface Driver {
     options: {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
+      readonly except?: readonly string[];
     },
   ): Promise<DriverDevice>;
   reclaim(

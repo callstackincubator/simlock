@@ -1145,7 +1145,11 @@ export class IosSimctlDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly except?: readonly string[];
+    },
   ): Promise<DriverDevice> {
     const data = iosDriverData(device);
     const { plan, bootstatusTimeoutMs } = planSlimBoot(
