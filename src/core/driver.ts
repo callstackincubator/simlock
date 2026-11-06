@@ -29,6 +29,7 @@ export interface ExactDeviceRequest {
   readonly osVersion?: string;
   readonly mode?: DeviceMode;
   readonly imageTag?: string;
+  readonly except?: readonly string[];
 }
 
 export interface DeviceRequest extends Omit<ExactDeviceRequest, "model"> {
@@ -168,6 +169,8 @@ export interface DriverCatalogEntry {
   readonly modelClasses: Readonly<Record<string, DeviceClass>>;
   readonly images?: readonly DriverCatalogImage[];
   readonly customModels?: readonly string[];
+  /** why: ADR 0066 §5: the iOS driver names the categories it slims, so a gateway routes an `except` lease by them. */
+  readonly slimCategories?: readonly string[];
 }
 
 export interface DriverCatalogImage {
@@ -301,6 +304,7 @@ export interface Driver {
     options: {
       readonly purpose: "prepare" | "recover";
       readonly mode: DeviceMode;
+      readonly except?: readonly string[];
     },
   ): Promise<DriverDevice>;
   reclaim(
@@ -595,6 +599,22 @@ export class UnsupportedRequestOptionError extends Error {
   ) {
     super(`${platform} lease requests do not take ${option}`);
     this.name = "UnsupportedRequestOptionError";
+  }
+}
+
+/** why: A refusal that carries its own message, where `UnsupportedRequestOptionError` builds a fixed one. */
+export class BadDeviceRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadDeviceRequestError";
+  }
+}
+
+/** why: A device booted with a lease's except list but a kept category's service is not running, or that could not be shown (ADR 0066 §2): the driver refuses the device rather than tell the lease it is on. */
+export class KeptCategoriesError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeptCategoriesError";
   }
 }
 

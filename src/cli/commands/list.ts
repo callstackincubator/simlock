@@ -64,6 +64,7 @@ const GATEWAY_REASON_TEXT: Readonly<
   Record<Exclude<GatewayWaitingReason, "full">, (platform: string) => string>
 > = {
   busy: () => "Busy with its own queue",
+  "cannot-keep-except": () => "Cannot keep these slim categories",
   "capability-missing": () => "Missing capability",
   disconnected: () => "Not connected",
   drained: () => "Drained",

@@ -219,6 +219,7 @@ interface CatalogBucket {
   images: Map<string, CatalogImage> | undefined;
   /** Models any worker that lists them marks custom. */
   readonly customModels: Set<string>;
+  readonly slimCategories: Set<string>;
   readonly defaults: Set<string | undefined>;
   /** Each worker's own `classDefaults`, so a class a worker has none for is seen as disagreement. */
   readonly classDefaults: Partial<Record<DeviceClass, string>>[];
@@ -258,6 +259,7 @@ function addCatalogEntry(
     modelRuntimes: new Map<string, Set<string>>(),
     models: new Map<string, string[]>(),
     runtimes: new Map<string, string[]>(),
+    slimCategories: new Set<string>(),
   };
   byPlatform.set(entry.platform, bucket);
   for (const model of entry.models) annotate(bucket.models, model, workerId);
@@ -266,6 +268,7 @@ function addCatalogEntry(
   for (const model of entry.models) addAliases(bucket.modelAliases, entry, model);
   addModelClasses(bucket.modelClasses, entry);
   addCustomModels(bucket.customModels, entry);
+  for (const category of entry.slimCategories ?? []) bucket.slimCategories.add(category);
   if (entry.images !== undefined) bucket.images = addImages(bucket.images, entry, entry.images);
   bucket.defaults.add(entry.defaultRuntime);
   bucket.classDefaults.push(listedClassDefaults(entry));
@@ -399,6 +402,13 @@ function renderPlatform(platform: Platform, bucket: CatalogBucket): PlatformCata
     platform,
     runtimes,
     runtimeWorkers: Object.fromEntries(bucket.runtimes),
+    ...(bucket.slimCategories.size === 0
+      ? {}
+      : {
+          slimCategories: [...bucket.slimCategories]
+            .sort()
+            .slice(0, CATALOG_LIST_LIMITS.slimCategories),
+        }),
     ...(agreedDefault === undefined ? {} : { defaultRuntime: agreedDefault }),
   };
 }

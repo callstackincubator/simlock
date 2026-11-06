@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-import { freeLoopbackPort, REPO_ROOT } from "./index.js";
+import { freeLoopbackPort, REPO_ROOT, withSharedDaemon, type SharedTestEnv } from "./index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -101,6 +104,111 @@ describe("withDaemon and withSharedDaemon teardown", () => {
       expect(lost).toEqual([]);
     } finally {
       await rm(work, { force: true, recursive: true });
+    }
+  });
+});
+
+async function laneEnv(): Promise<SharedTestEnv> {
+  return withSharedDaemon({
+    configOverrides: {
+      http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
+    },
+    keepSeeds: true,
+  });
+}
+
+async function tokenCount(env: SharedTestEnv): Promise<number> {
+  const listed = await env.cli(["token", "list"]);
+  expect(listed.code, listed.stderr).toBe(0);
+  return (listed.json as { tokens: unknown[] }).tokens.length;
+}
+
+// why: the iOS driver's seed key joins its two parts with a NUL, and a seed is found by that exact key.
+const SEED_KEY = "Pixel 9\u0000android-36";
+
+function sourceRows(home: string, specKey: string): Record<string, unknown>[] {
+  const database = new DatabaseSync(join(home, "state.db"));
+  try {
+    database.exec("PRAGMA busy_timeout=5000");
+    return database
+      .prepare(
+        "SELECT source_id, state, folder FROM android_source_data WHERE spec_key = ? ORDER BY source_id",
+      )
+      .all(specKey);
+  } finally {
+    database.close();
+  }
+}
+
+function insertSource(
+  home: string,
+  sourceId: string,
+  state: string,
+  folder: string,
+  specKey = `kind-of-${sourceId}`,
+): void {
+  const database = new DatabaseSync(join(home, "state.db"));
+  try {
+    database.exec("PRAGMA busy_timeout=5000");
+    database
+      .prepare(
+        `INSERT INTO android_source_data (source_id, kind, state, spec_key, model, os_version,
+           image_tag, folder, avd_name, image_identity, emulator_version, created_at)
+         VALUES (?, 'seed', ?, ?, 'Pixel 9', '36', 'google_apis', ?, 'simlock', 'image', '36.1.9', 1)`,
+      )
+      .run(sourceId, state, specKey, folder);
+  } finally {
+    database.close();
+  }
+}
+
+describe("withSharedDaemon with keepSeeds", () => {
+  it("gives the next env the same home and instance id with the ready seed's row and folder the first env left, and without its unfinished seed, device folder, token or events", async () => {
+    const laneHome = join(tmpdir(), `simlock-lane-${randomBytes(3).toString("hex")}`);
+    process.env.SIMLOCK_E2E_LANE_HOME = laneHome;
+    try {
+      const first = await laneEnv();
+      const root = join(first.home, "devices", "android");
+      const ready = join(root, "sources", "seed_ready");
+      const unfinished = join(root, "sources", "seed_making");
+      const device = join(root, "dev_1");
+      let instance: string;
+      let recorded: string;
+      try {
+        for (const folder of [ready, unfinished, device]) {
+          await mkdir(folder, { recursive: true });
+          await writeFile(join(folder, "userdata.img"), "data", "utf8");
+        }
+        // why: a driver records its root as the filesystem resolves it, which on macOS is another spelling of a home under `/tmp` or `/var`.
+        recorded = join(await realpath(join(root, "sources")), "seed_ready");
+        insertSource(first.home, "seed_ready", "ready", recorded, SEED_KEY);
+        insertSource(first.home, "seed_making", "making", unfinished);
+        const created = await first.cli(["token", "create", "--role", "operator"]);
+        expect(created.code, created.stderr).toBe(0);
+        expect(await tokenCount(first)).toBe(1);
+        instance = await readFile(join(first.home, "instance.json"), "utf8");
+      } finally {
+        await first.teardown();
+      }
+
+      const second = await laneEnv();
+      try {
+        expect(second.home).toBe(laneHome);
+        expect(await readFile(join(second.home, "instance.json"), "utf8")).toBe(instance);
+        expect(sourceRows(second.home, SEED_KEY)).toEqual([
+          { folder: recorded, source_id: "seed_ready", state: "ready" },
+        ]);
+        expect(await readFile(join(ready, "userdata.img"), "utf8")).toBe("data");
+        expect([unfinished, device].filter((folder) => existsSync(folder))).toEqual([]);
+        expect(await tokenCount(second)).toBe(0);
+        const started = (await second.events()).filter((entry) => entry.event === "daemon.started");
+        expect(started).toHaveLength(1);
+      } finally {
+        await second.teardown();
+      }
+    } finally {
+      delete process.env.SIMLOCK_E2E_LANE_HOME;
+      await rm(laneHome, { force: true, recursive: true });
     }
   });
 });

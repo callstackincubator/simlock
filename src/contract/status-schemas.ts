@@ -10,7 +10,7 @@ import {
   statusDeviceSchema,
 } from "./device-schemas.js";
 import { leaseRecordSchema, waitingRequestSchema } from "./lease-schemas.js";
-import { CONTROL_CHARACTERS } from "./schema-parts.js";
+import { CONTROL_CHARACTERS, deviceModeSchema } from "./schema-parts.js";
 
 const runningCapacityEntrySchema = z.object({
   running: z.number(),
@@ -133,6 +133,8 @@ const CATALOG_IMAGE_FIELD_MAX = 128;
 const CATALOG_IMAGES_MAX = 1024;
 const CATALOG_CUSTOM_MODELS_MAX = CATALOG_ALIASED_MODELS_MAX;
 
+const CATALOG_SLIM_CATEGORIES_MAX = 32;
+
 /**
  * why: the list bounds above, for a producer that merges lists the schema checked one by one: a
  * gateway's union of valid worker catalogs must itself fit, or its own clients refuse it.
@@ -142,6 +144,7 @@ export const CATALOG_LIST_LIMITS = {
   aliasesPerModel: CATALOG_ALIASES_PER_MODEL_MAX,
   customModels: CATALOG_CUSTOM_MODELS_MAX,
   images: CATALOG_IMAGES_MAX,
+  slimCategories: CATALOG_SLIM_CATEGORIES_MAX,
 } as const;
 
 const catalogImageSchema = z.object({
@@ -276,6 +279,11 @@ export const platformCatalogSchema = z.object({
    */
   modelWorkers: z.record(z.string(), z.array(z.string())).optional(),
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
+  slimCategories: z
+    .array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/))
+    .max(CATALOG_SLIM_CATEGORIES_MAX)
+    .optional(),
+  defaultMode: deviceModeSchema.optional(),
 });
 
 /**

@@ -5,6 +5,7 @@ import {
   deviceRecordSchema,
   baselineNameSchema,
   imageTagSchema,
+  exceptCategoriesSchema,
   EXEC_STDIN_MAX_LENGTH,
   INPUT_ORIENTATIONS,
   leaseIdSchema,
@@ -29,6 +30,7 @@ const leasePayloadSchema = z.object({
   baseline: z.object({ name: z.string(), version: z.number().int() }).optional(),
   imageTag: z.string().optional(),
   mode: z.enum(["slim", "full"]).optional(),
+  except: exceptCategoriesSchema.optional(),
   os: z.string(),
   platform: z.string(),
   requestId: z.string().optional(),
@@ -205,6 +207,8 @@ export const leaseRequestBodySchema = z
     imageTag: imageTagSchema.optional(),
     leaseId: leaseIdSchema.optional(),
     mode: z.enum(["slim", "full"]).optional(),
+    // why: a coarse bound only; `lease.request`'s own check words the refusal (count, characters, repeats), as for the CLI and MCP.
+    except: z.array(z.string().max(64)).max(64).optional(),
     noWait: z.boolean().optional(),
     // why: forwarded, not dropped: the dispatcher's `lease.request` handler alone decides whether this token may set it.
     owner: z.string().min(1).optional(),

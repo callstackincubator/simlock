@@ -441,6 +441,23 @@ describe("aggregateCatalog", () => {
     });
   });
 
+  it("carries the union of the workers' slim categories, and no default mode", () => {
+    const slimming = (slimCategories: string[], defaultMode: "slim" | "full") => ({
+      ...iosOnA,
+      defaultMode,
+      slimCategories,
+    });
+
+    const catalog = aggregateCatalog([
+      view({ catalog: [slimming(["store", "mdm"], "slim")], id: "wrk_a" }),
+      view({ catalog: [slimming(["store", "widgets"], "full")], id: "wrk_b" }),
+    ]);
+
+    expect(catalog.platforms[0]?.slimCategories).toEqual(["mdm", "store", "widgets"]);
+    expect(catalog.platforms[0]).not.toHaveProperty("defaultMode");
+    expect(() => OPERATIONS["catalog.get"].output.parse(catalog)).not.toThrow();
+  });
+
   it("carries the union of the connected workers' model classes, and keeps the class of the first worker in id order when two disagree", () => {
     const classed = (modelClasses: Record<string, "phone" | "tablet" | "tv">) => ({
       ...iosOnB,

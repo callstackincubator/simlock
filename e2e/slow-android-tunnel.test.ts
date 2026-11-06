@@ -193,6 +193,7 @@ describe.skipIf(!hasAndroidSdk)(
               warmPool: { learn: false },
             },
             driver: "real",
+            keepSeeds: true,
           });
           const reversePort = await freeLoopbackPort();
           const forwardPort = await freeLoopbackPort();
@@ -385,9 +386,7 @@ describe.skipIf(!hasAndroidSdk)(
         } finally {
           await new Promise<void>((resolve) => page.close(() => resolve()));
           // why: a gateway refuses `nuke` (UNSUPPORTED_IN_GATEWAY_MODE); the worker owns the emulator, and one left running starves the next suite's boot.
-          await worker
-            ?.cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
-            .catch(() => undefined);
+          await worker?.cli(["nuke", "--yes"], { timeout: 120_000 }).catch(() => undefined);
           await Promise.allSettled([worker?.teardown(), gateway.teardown()]);
         }
       },
@@ -485,6 +484,7 @@ describe.skipIf(!hasAndroidSdk)(
           warmPool: { learn: false },
         },
         driver: "real",
+        keepSeeds: true,
       });
       await waitForWorkerJoined(gateway);
       const granted = await gateway.cli(
@@ -517,9 +517,7 @@ describe.skipIf(!hasAndroidSdk)(
     }, DEVICE_READY_MS + 120_000);
 
     afterAll(async () => {
-      await worker
-        ?.cli(["nuke", "--delete-devices", "--yes"], { timeout: 120_000 })
-        .catch(() => undefined);
+      await worker?.cli(["nuke", "--yes"], { timeout: 120_000 }).catch(() => undefined);
       await Promise.allSettled([worker?.teardown(), gateway?.teardown()]);
     }, 240_000);
 

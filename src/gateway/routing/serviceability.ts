@@ -10,13 +10,16 @@ import type { RoutableRequest } from "./pipeline.js";
 import {
   baselineEntry,
   baselineMismatchOf,
+  catalogOf,
   hasPlatform,
   listsModel,
   matchRequest,
   physicalMatch,
   wantedClass,
+  withBaseline,
 } from "./request-match.js";
 import { hasCapabilities } from "./stages/has-capabilities.js";
+import { keepsExcept } from "./stages/keeps-except.js";
 import { takesRequests } from "./stages/takes-requests.js";
 
 export type RejectionCode =
@@ -27,7 +30,8 @@ export type RejectionCode =
   | "CAPABILITY_MISSING"
   | "UNKNOWN_BASELINE"
   | "BASELINE_MISMATCH"
-  | "BASELINE_STALE";
+  | "BASELINE_STALE"
+  | "BAD_REQUEST";
 
 /** What a request the fleet cannot serve is told: the code and details a worker gives the same
  * request, and the `lease.rejected` reason the gateway records it under. */
@@ -109,11 +113,17 @@ function baselineHolders(request: RoutableRequest, views: readonly WorkerView[])
 }
 
 function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  const answer = assessTable(request, views);
+  // why: ADR 0066 §5 puts the `except` row after the model and runtime rows and before the capacity row.
+  const leading = assessLeading(request, views);
+  if (leading !== undefined) return leading;
+  const except = assessExcept(request, views);
+  if (except !== undefined) return except;
+  const serving = assessServing(request, views);
+  if (serving !== undefined) return serving;
   const requires = request.requires;
-  if (answer.kind === "reject" || requires === undefined || requires.length === 0) return answer;
+  if (requires === undefined || requires.length === 0) return { kind: "route-or-wait" };
   const capable = views.filter((worker) => hasCapabilities.check(worker, request) === undefined);
-  if (assessTable(request, capable).kind === "route-or-wait") return answer;
+  if (assessTable(request, capable).kind === "route-or-wait") return { kind: "route-or-wait" };
   return {
     code: "CAPABILITY_MISSING",
     details: { capabilities: requires },
@@ -123,13 +133,73 @@ function assessFleet(request: RoutableRequest, views: readonly WorkerView[]): As
   };
 }
 
+/**
+ * why: ADR 0066 §5: like `requires`, the capacity row (`assessServing`) runs again over the workers
+ * that keep the `except` list. When none can serve: a known worker that keeps the names and serves the model and runtime
+ * but cannot take requests now (drained, lost its uplink) makes it `NO_CAPACITY`; with no such
+ * worker it is `BAD_REQUEST`, told whether no worker slims the names or none would give a slim device.
+ */
+function assessExcept(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+): Rejection | undefined {
+  const except = request.except;
+  if (except === undefined) return undefined;
+  const keeping = views.filter((worker) => keepsExcept.check(worker, request) === undefined);
+  if (assessServing(request, keeping) === undefined) return undefined;
+  if (
+    keeping.some(
+      (worker) =>
+        isKnown(worker) &&
+        listsModel(worker, request) &&
+        matchRequest(worker, request) !== undefined,
+    )
+  ) {
+    return noWorker();
+  }
+  const names = except.join(", ");
+  const slimmers = views.filter((worker) =>
+    except.every((name) => catalogOf(worker, request)?.slimCategories?.includes(name) === true),
+  );
+  const message =
+    slimmers.length === 0
+      ? `no worker slims every category in except: ${names}`
+      : `no worker can keep slim categories ${names} (${whyNotSlim(request, slimmers)})`;
+  return { code: "BAD_REQUEST", kind: "reject", message, reason: "unresolvable-spec" };
+}
+
+// why: read off the workers that slim the names: either each would give a full device, or the ones that would give a slim one do not serve the model and runtime.
+function whyNotSlim(request: RoutableRequest, slimmers: readonly WorkerView[]): string {
+  const allFull = slimmers.every(
+    (worker) =>
+      (withBaseline(worker, request).mode ?? catalogOf(worker, request)?.defaultMode) !== "slim",
+  );
+  if (!allFull) return "no worker that slims them in slim mode serves this model and runtime";
+  if (request.baseline !== undefined) return `baseline "${request.baseline}" is full`;
+  if (request.mode !== undefined) return `mode is ${request.mode} on every worker that slims them`;
+  return "default mode is full on every worker that slims them";
+}
+
 function assessTable(request: RoutableRequest, views: readonly WorkerView[]): Assessment {
-  // why: an updating worker comes back by itself (ADR 0042 §3), so a request that only it can serve waits instead of failing.
-  const takers = views.filter((worker) => {
+  return (
+    assessLeading(request, views) ?? assessServing(request, views) ?? { kind: "route-or-wait" }
+  );
+}
+
+// why: an updating worker comes back by itself (ADR 0042 §3), so a request that only it can serve waits instead of failing.
+function takersOf(request: RoutableRequest, views: readonly WorkerView[]): WorkerView[] {
+  return views.filter((worker) => {
     const refusal = takesRequests.check(worker, request);
     return refusal === undefined || refusal.reason === "updating";
   });
-  if (takers.length === 0) return noWorker();
+}
+
+// why: the table's first rows: no worker takes requests, no driver, unknown model, missing runtime.
+function assessLeading(
+  request: RoutableRequest,
+  views: readonly WorkerView[],
+): Rejection | undefined {
+  if (takersOf(request, views).length === 0) return noWorker();
 
   const known = views.filter(isKnown);
   const platform = request.platform;
@@ -142,7 +212,15 @@ function assessTable(request: RoutableRequest, views: readonly WorkerView[]): As
       reason: "unresolvable-spec",
     };
   }
-  if (request.physical === true) return assessPhysical(request, known, takers);
+  if (request.physical === true) {
+    if (known.some((worker) => physicalMatch(worker, request, "enrolled"))) return undefined;
+    return {
+      ...noPhysicalMatch(request),
+      code: "UNKNOWN_MODEL",
+      kind: "reject",
+      reason: "unresolvable-spec",
+    };
+  }
   if (!known.some((worker) => listsModel(worker, request))) return unknownModel(request);
   if (!known.some((worker) => matchRequest(worker, request) !== undefined)) {
     const osVersion = request.osVersion ?? "default";
@@ -154,26 +232,21 @@ function assessTable(request: RoutableRequest, views: readonly WorkerView[]): As
       reason: "unresolvable-spec",
     };
   }
-  if (!takers.some((worker) => matchRequest(worker, request) !== undefined)) return noWorker();
-  return { kind: "route-or-wait" };
+  return undefined;
 }
 
 // why: `presence` plays no part in the table: a device last read not present makes the request wait, not fail.
-function assessPhysical(
+// why: the capacity row: a known worker could serve, but none taking requests can.
+function assessServing(
   request: RoutableRequest,
-  known: readonly WorkerView[],
-  takers: readonly WorkerView[],
-): Assessment {
-  if (!known.some((worker) => physicalMatch(worker, request, "enrolled"))) {
-    return {
-      ...noPhysicalMatch(request),
-      code: "UNKNOWN_MODEL",
-      kind: "reject",
-      reason: "unresolvable-spec",
-    };
-  }
-  if (!takers.some((worker) => physicalMatch(worker, request, "enrolled"))) return noWorker();
-  return { kind: "route-or-wait" };
+  views: readonly WorkerView[],
+): Rejection | undefined {
+  const takers = takersOf(request, views);
+  const fits =
+    request.physical === true
+      ? takers.some((worker) => physicalMatch(worker, request, "enrolled"))
+      : takers.some((worker) => matchRequest(worker, request) !== undefined);
+  return fits ? undefined : noWorker();
 }
 
 function isKnown(worker: WorkerView): boolean {

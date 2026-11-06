@@ -37,6 +37,7 @@ import {
   type PresentPhysical,
   type ReclaimResult,
   removeListedComponent,
+  BadDeviceRequestError,
   RuntimeMissingError,
   UnknownModelError,
   uninstallPlan,
@@ -98,6 +99,8 @@ export interface FakeDriverOptions {
   readonly fullCleanReclaimEstimateMs?: number;
   readonly mode?: DeviceMode | undefined;
   readonly slimmableOsVersions?: readonly string[];
+  /** why: the categories this worker slims; a request's `except` naming another is refused at resolve, as the iOS driver does. Absent: every name is accepted. */
+  readonly slimCategories?: readonly string[];
   readonly knownModels?: readonly string[];
   readonly modelRuntimes?: Readonly<Record<string, readonly string[]>>;
   readonly modelAliases?: Readonly<Record<string, readonly string[]>>;
@@ -160,6 +163,7 @@ export class FakeDriver implements Driver {
   readonly #estimateMs: FakeDriverOptions["estimateMs"];
   readonly #mode: DeviceMode | undefined;
   readonly #slimmableOsVersions: ReadonlySet<string>;
+  readonly #slimCategories: ReadonlySet<string> | undefined;
   readonly #fullCleanReclaimEstimateMs: number | undefined;
   readonly #failures = new Map<string, Error>();
   #hangMakeReady = false;
@@ -204,6 +208,8 @@ export class FakeDriver implements Driver {
     this.#estimateMs = options.estimateMs;
     this.#mode = options.mode;
     this.#slimmableOsVersions = new Set(options.slimmableOsVersions ?? []);
+    this.#slimCategories =
+      options.slimCategories === undefined ? undefined : new Set(options.slimCategories);
     this.#fullCleanReclaimEstimateMs = options.fullCleanReclaimEstimateMs;
     this.#knownModels =
       options.knownModels === undefined ? undefined : new Set(options.knownModels);
@@ -261,6 +267,10 @@ export class FakeDriver implements Driver {
 
     if (this.#knownModels !== undefined && !this.#knownModels.has(request.model)) {
       throw new UnknownModelError(this.platform, request.model);
+    }
+    const unknownCategory = request.except?.find((name) => !this.#slimCategories?.has(name));
+    if (this.#slimCategories !== undefined && unknownCategory !== undefined) {
+      throw new BadDeviceRequestError(`unknown slim category "${unknownCategory}"`);
     }
 
     const osVersion =
@@ -492,7 +502,11 @@ export class FakeDriver implements Driver {
 
   async makeReady(
     device: DriverDevice,
-    options: { readonly purpose: "prepare" | "recover"; readonly mode: DeviceMode },
+    options: {
+      readonly purpose: "prepare" | "recover";
+      readonly mode: DeviceMode;
+      readonly except?: readonly string[];
+    },
   ): Promise<DriverDevice> {
     await this.#beforeCall("makeReady", device, options);
     this.#requireDevice(device);
@@ -648,6 +662,7 @@ export class FakeDriver implements Driver {
       defaultRuntime: newestVersion(this.#availableOsVersions),
       ...(this.#images === undefined ? {} : { images: [...this.#images] }),
       ...(this.#customModels === undefined ? {} : { customModels: [...this.#customModels] }),
+      ...(this.#slimCategories === undefined ? {} : { slimCategories: [...this.#slimCategories] }),
       modelAliases: { ...this.#modelAliases },
       modelClasses: { ...this.#modelClasses },
       modelRuntimes: Object.fromEntries(

@@ -170,6 +170,7 @@ const DEVICE_COLUMNS = [
   "absent_reason",
   "baseline_name",
   "baseline_version",
+  "except_categories",
 ] as const;
 
 const LEASE_COLUMNS = [
@@ -197,6 +198,7 @@ const REQUEST_COLUMNS = [
   "mode",
   "image_tag",
   "baseline",
+  "except_categories",
   "class",
   "physical",
   "created_at",
@@ -274,6 +276,7 @@ function deviceValues(device: DeviceRecord): SqliteValue[] {
     device.address ?? null,
     ...physicalColumns(device),
     ...baselineColumns(device),
+    device.except === undefined ? null : device.except.join(","),
   ];
 }
 
@@ -343,6 +346,7 @@ export function writeLeaseRequest(database: SqliteDatabase, record: LeaseRequest
       request.mode ?? null,
       request.imageTag ?? null,
       request.baseline ?? null,
+      request.except === undefined ? null : request.except.join(","),
       request.class ?? null,
       flagValue(request.physical),
       record.createdAt,
@@ -496,6 +500,7 @@ function deviceFromRow(
     ...shared,
     driverData: readDeviceData(database, deviceData, platform, id),
     ...present("leaseIdentity", reader.optOneOf("lease_identity", LEASE_IDENTITIES)),
+    ...present("except", exceptOf(reader)),
     mode: reader.oneOf("mode", DEVICE_MODES),
     physical: false,
     spec: {
@@ -510,6 +515,10 @@ function deviceFromRow(
     state: reader.oneOf("state", VIRTUAL_STATES),
   };
   return virtual;
+}
+
+function exceptOf(reader: RowReader): readonly string[] | undefined {
+  return reader.optText("except_categories")?.split(",");
 }
 
 function baselineOf(reader: RowReader): { baseline?: { name: string; version: number } } {
@@ -620,6 +629,7 @@ function requestFromRow(reader: RowReader): DeviceRequest {
     ...present("mode", reader.optOneOf("mode", DEVICE_MODES)),
     ...present("imageTag", reader.optText("image_tag")),
     ...present("baseline", reader.optText("baseline")),
+    ...present("except", exceptOf(reader)),
     ...present("class", reader.optOneOf<DeviceClass>("class", DEVICE_CLASSES)),
     ...present("physical", reader.optFlag("physical")),
   };

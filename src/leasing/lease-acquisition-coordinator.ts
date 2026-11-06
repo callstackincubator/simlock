@@ -1,12 +1,23 @@
 import type { EventBus, EventMap } from "../bus/index.js";
-import {
-  compareVersions,
-  type OsRange,
-  parseOsConstraint,
-  requestedClass,
-  satisfies,
-} from "../contract/index.js";
+import { type OsRange, requestedClass } from "../contract/index.js";
 import { type IdGenerator, type Logger, NoopLogger } from "../ports/index.js";
+import {
+  downloadingProgress,
+  type DownloadingProgress,
+  fullSpec,
+  matchingRuntimes,
+  newestRuntime,
+  physicalRequestOf,
+  requestedRange,
+  requiredOs,
+  sameDownloadingProgress,
+} from "./acquisition-requests.js";
+import {
+  estimatedBootTiming,
+  estimatedTiming,
+  grantReadyTiming,
+  releaseReclaimEstimateMs,
+} from "./acquisition-timing.js";
 import {
   type CapacityReservation,
   type DeviceOperationClaim,
@@ -15,7 +26,6 @@ import {
   classCandidates,
   findCatalogModel,
   modelClass,
-  pairedRuntimes,
   type DeviceClass,
   type DeviceMode,
   type DeviceRecord,
@@ -30,7 +40,6 @@ import {
   type VirtualSpec,
   exactRequirement,
   type LeaseGrant,
-  type LeaseProgress,
   type LeaseRecord,
   type MaxPerRequester,
   type LeaseTiming,
@@ -40,7 +49,6 @@ import {
   specMode,
   ComponentBeingRemovedError,
   type ComponentInstaller,
-  type ComponentInstallerProgress,
   BootTimeoutError,
   type DeviceRequest,
   type Driver,
@@ -55,6 +63,7 @@ import {
   type CurrentBaseline,
   UnknownBaselineError,
   BaselineMismatchError,
+  BadDeviceRequestError,
   BaselineStaleError,
   baselineMismatch,
   type AcquisitionMaintenance,
@@ -176,7 +185,7 @@ export interface LeaseAcquisitionCoordinatorOptions {
   readonly leases: Pick<LeaseLifecycle, "grant">;
   readonly lifecycle: Pick<
     ManagedDeviceLifecycle,
-    "bootForLease" | "destroy" | "dispose" | "shutdown"
+    "bootForLease" | "destroy" | "dispose" | "rebootForLease" | "shutdown"
   >;
   /**
    * The model names to try for each class, per platform, operator's list first (ADR 0015 §4),
@@ -201,13 +210,19 @@ interface AcquisitionWaiter extends Waiter {
   timing: LeaseTiming;
 }
 
-type GrantingPlanKind = "grant-ready" | "grant-physical" | "boot-shutdown" | "provision";
+type GrantingPlanKind =
+  | "grant-ready"
+  | "grant-physical"
+  | "boot-shutdown"
+  | "reboot-ready"
+  | "provision";
 
 const GRANT_SOURCE: Readonly<Record<GrantingPlanKind, EventMap["lease.granted"]["source"]>> = {
   "boot-shutdown": "booted",
   "grant-physical": "warm",
   "grant-ready": "warm",
   provision: "provisioned",
+  "reboot-ready": "booted",
 };
 
 type OperationPlan = Exclude<
@@ -543,9 +558,16 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     readonly requirement: DeviceRequirement;
     readonly classOf: ((model: string) => DeviceClass | undefined) | undefined;
   }> {
-    if (request.baseline !== undefined) return this.#resolveBaseline(request.baseline, request);
+    if (request.baseline !== undefined) {
+      return this.#resolveBaseline(driver, request.baseline, request);
+    }
     // The one place a request with no mode gets the worker's default (ADR 0007 §2).
     const mode = request.mode ?? this.defaultMode(request.platform);
+    if (request.except !== undefined && mode !== "slim") {
+      throw new BadDeviceRequestError(
+        "except needs a slim lease (this worker's default mode is full)",
+      );
+    }
     const range = requestedRange(request);
     const target =
       range === undefined
@@ -566,6 +588,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
 
   /** why: a request naming a baseline takes the baseline's own platform, model, OS, mode and image tag; no download is ever attempted. */
   async #resolveBaseline(
+    driver: Driver,
     name: string,
     request: DeviceRequest,
   ): Promise<{
@@ -582,6 +605,20 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     }
     if (current.staleReason !== undefined) throw new BaselineStaleError(name, current.staleReason);
     const spec = baselineSpec(current);
+    if (request.except !== undefined && spec.mode !== "slim") {
+      throw new BadDeviceRequestError(`except needs a slim lease (baseline "${name}" is full)`);
+    }
+    if (request.except !== undefined) {
+      // why: the driver judges the names (ADR 0066 §2); its answer is dropped, the baseline's spec stands.
+      await driver.resolveSpec({
+        except: request.except,
+        mode: "slim",
+        model: spec.model,
+        osVersion: spec.osVersion,
+        platform: spec.platform,
+        ...(spec.imageTag === undefined ? {} : { imageTag: spec.imageTag }),
+      });
+    }
     return { classOf: undefined, requirement: exactRequirement(spec), spec };
   }
 
@@ -950,6 +987,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       await this.#bootShutdown(waiter, action.device, action.capacityReservation, action.claim);
       return;
     }
+    if (action.kind === "reboot-ready") {
+      waiter.timing = await estimatedBootTiming(
+        this.options.drivers.get(action.device.spec.platform),
+        action.device,
+      );
+      await this.#rebootReady(waiter, action.device, action.claim);
+      return;
+    }
     if (action.kind === "evict-running") {
       await this.#evictRunning(waiter, action.device, action.claim, action.reason);
       return;
@@ -967,11 +1012,12 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     try {
       handoff = await this.options.provisioner.provision(spec, {
         claim: { kind: "boot", owner: waiter.id },
+        ...exceptOption(waiter),
         onProgress: (progress) => this.options.queue.notifyProgress(waiter, progress),
         reservation,
       });
     } catch (error: unknown) {
-      if (error instanceof BootTimeoutError) {
+      if (error instanceof BootTimeoutError && exceptOption(waiter).except === undefined) {
         await this.options.decisions.run(async () => {
           if (waiter.state !== "rejected") this.#reject(waiter, error, "boot-timeout");
         });
@@ -986,27 +1032,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         this.#wakeQueue();
         return;
       }
-      const retry = await this.options.decisions.run(async () => {
-        if (waiter.state === "rejected") return false;
-        waiter.failures += 1;
-        if (waiter.failures === 1) {
-          this.options.queue.markNew(waiter);
-          return true;
-        }
-        // why: ADR 0021 §1 declines a probe instead of rejecting it, and its caller (the gateway) reads the code.
-        this.#reject(
-          waiter,
-          new ProvisionFailedError(error),
-          waiter.options.fleetRequestId === undefined ? "unresolvable-spec" : "no-wait",
-        );
-        return false;
-      });
-      if (retry) {
-        this.#driving.delete(waiter);
-        await this.#drive(waiter);
-      } else {
-        this.#wakeQueue();
-      }
+      await this.#countFailure(waiter, error);
       return;
     }
     await this.#grantHandoff(waiter, handoff, "provision");
@@ -1081,6 +1107,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       spec: waiter.spec,
       requirement: waiter.requirement,
       classOf: waiter.classOf,
+      rebootReady: exceptOption(waiter).except !== undefined,
     });
   }
 
@@ -1110,6 +1137,7 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
       requesterId: waiter.options.requesterId,
       source: GRANT_SOURCE[kind],
       timing: waiter.timing,
+      ...(device.mode === "slim" ? exceptOption(waiter) : {}),
       ...(waiter.options.ttlMs === undefined ? {} : { ttlMs: waiter.options.ttlMs }),
       ...(waiter.options.leaseId === undefined ? {} : { leaseId: waiter.options.leaseId }),
       ...(waiter.options.fleetRequestId === undefined
@@ -1205,6 +1233,111 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
     });
   }
 
+  async #rebootReady(
+    waiter: AcquisitionWaiter,
+    device: VirtualDevice,
+    claim: DeviceOperationClaim,
+  ): Promise<void> {
+    let handoff: ReadyDeviceHandoff;
+    try {
+      this.options.queue.notifyProgress(waiter, {
+        stage: "booting",
+        etaMs: waiter.timing.estimatedBootMs,
+      });
+      const except = exceptOption(waiter).except ?? [];
+      const ready = await this.options.lifecycle.rebootForLease(device, claim, except);
+      if (ready === undefined) throw new Error(`Reboot target is no longer safe: ${device.id}`);
+      handoff = ready;
+    } catch (error: unknown) {
+      this.#logFailure(
+        "rebooting a warm device for a waiter failed",
+        waiter,
+        device,
+        "reboot",
+        error,
+      );
+      await this.#destroyFailedBoot(waiter, device, "shutdown");
+      await this.#countFailure(waiter, error);
+      return;
+    }
+    await this.#grantHandoff(waiter, handoff, "reboot-ready");
+  }
+
+  /** why: a device that failed to boot is destroyed, or quarantined when the destroy fails too, before the waiter's slot is freed (see below). */
+  async #destroyFailedBoot(
+    waiter: AcquisitionWaiter,
+    device: VirtualDevice,
+    state: VirtualDevice["state"],
+  ): Promise<void> {
+    let destroyed = true;
+    try {
+      await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
+    } catch (destroyError: unknown) {
+      this.#logFailure(
+        "destroying a device that failed to boot failed",
+        waiter,
+        device,
+        "destroy",
+        destroyError,
+      );
+      destroyed = false;
+    }
+    // why: a device the destroy could not retire may still be running, so it is handed to
+    // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
+    // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
+    // first would leave a window where the next planner boots a device that may be running.
+    if (!destroyed) {
+      try {
+        const quarantined = await this.options.quarantine.enterFromStalledTransition(
+          device.id,
+          state,
+        );
+        if (!quarantined) {
+          this.#logger.warn(
+            "a device that failed to be destroyed was not quarantined: something else owns it now",
+            { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
+          );
+        }
+      } catch (quarantineError: unknown) {
+        this.#logFailure(
+          "quarantining a device that failed to boot and to be destroyed failed",
+          waiter,
+          device,
+          "quarantine",
+          quarantineError,
+        );
+      }
+    }
+  }
+
+  /**
+   * why: a failed boot of an except lease counts like a failed provision (ADR 0066 §3): the first
+   * plans again, the second rejects `PROVISION_FAILED`, one count for provision, boot and reboot.
+   */
+  async #countFailure(waiter: AcquisitionWaiter, error: unknown): Promise<void> {
+    const retry = await this.options.decisions.run(async () => {
+      if (waiter.state === "rejected") return false;
+      waiter.failures += 1;
+      if (waiter.failures === 1) {
+        this.options.queue.markNew(waiter);
+        return true;
+      }
+      // why: ADR 0021 §1 declines a probe instead of rejecting it, and its caller (the gateway) reads the code.
+      this.#reject(
+        waiter,
+        new ProvisionFailedError(error),
+        waiter.options.fleetRequestId === undefined ? "unresolvable-spec" : "no-wait",
+      );
+      return false;
+    });
+    if (retry) {
+      this.#driving.delete(waiter);
+      await this.#drive(waiter);
+    } else {
+      this.#wakeQueue();
+    }
+  }
+
   async #bootShutdown(
     waiter: AcquisitionWaiter,
     device: VirtualDevice,
@@ -1217,7 +1350,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         stage: "booting",
         etaMs: waiter.timing.estimatedBootMs,
       });
-      const ready = await this.options.lifecycle.bootForLease(device, claim);
+      const ready = await this.options.lifecycle.bootForLease(
+        device,
+        claim,
+        exceptOption(waiter).except,
+      );
       if (ready === undefined) throw new Error(`Boot target is no longer safe: ${device.id}`);
       handoff = ready;
     } catch (error: unknown) {
@@ -1228,44 +1365,11 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
         "boot",
         error,
       );
-      let destroyed = true;
-      try {
-        await this.options.lifecycle.destroy(device, "lease-engine", "cleanup");
-      } catch (destroyError: unknown) {
-        this.#logFailure(
-          "destroying a device that failed to boot failed",
-          waiter,
-          device,
-          "destroy",
-          destroyError,
-        );
-        destroyed = false;
-      }
-      // why: a device the destroy could not retire may still be running, so it is handed to
-      // quarantine before the waiter's reservation is freed: `quarantined` is the one state that
-      // retries it, keeps it out of every plan and still counts it as running. Freeing the slot
-      // first would leave a window where the next planner boots a device that may be running.
-      if (!destroyed) {
-        try {
-          const quarantined = await this.options.quarantine.enterFromStalledTransition(
-            device.id,
-            device.state,
-          );
-          if (!quarantined) {
-            this.#logger.warn(
-              "a device that failed to be destroyed was not quarantined: something else owns it now",
-              { deviceId: device.id, requesterId: waiter.options.requesterId, step: "quarantine" },
-            );
-          }
-        } catch (quarantineError: unknown) {
-          this.#logFailure(
-            "quarantining a device that failed to boot and to be destroyed failed",
-            waiter,
-            device,
-            "quarantine",
-            quarantineError,
-          );
-        }
+      await this.#destroyFailedBoot(waiter, device, device.state);
+      if (exceptOption(waiter).except !== undefined) {
+        await this.options.decisions.run(() => capacityReservation.release());
+        await this.#countFailure(waiter, error);
+        return;
       }
       await this.options.decisions.run(async () => {
         capacityReservation.release();
@@ -1452,53 +1556,14 @@ export class LeaseAcquisitionCoordinator implements AcquisitionMaintenance {
   }
 }
 
+/** why: a request's `except` reaches the driver and the device only when the resolved spec is slim; on a runtime that cannot be slimmed the lease is granted full with no `except` (ADR 0066 §1). */
+function exceptOption(waiter: AcquisitionWaiter): { readonly except?: readonly string[] } {
+  const except = waiter.request.except;
+  return except === undefined || waiter.spec?.mode !== "slim" ? {} : { except };
+}
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-function estimatedTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  const estimatedProvisionMs = driver.estimate({ operation: "provision" }, spec);
-  const estimatedBootMs = driver.estimate({ operation: "boot" }, spec);
-  return {
-    estimatedBootMs,
-    estimatedProvisionMs,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: estimatedProvisionMs + estimatedBootMs,
-  };
-}
-
-async function estimatedBootTiming(driver: Driver, device: DeviceRecord): Promise<LeaseTiming> {
-  const spec = device.spec;
-  // why: The quote is advisory. A driver that cannot read the device's own boot path (a failed
-  // `emulator -version`, say) must not strand the claim and capacity reservation that the boot
-  // below releases, so the device-less figure stands in.
-  const estimatedBootMs = await Promise.resolve(
-    driver.estimate(
-      { device: toDriverDevice(device), operation: "boot", purpose: "prepare" },
-      spec,
-    ),
-  ).catch(() => driver.estimate({ operation: "boot" }, spec));
-  return {
-    estimatedBootMs,
-    estimatedProvisionMs: 0,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: estimatedBootMs,
-  };
-}
-
-/** A device that is already ready costs nothing to hand over; only its reclaim lies ahead. */
-function grantReadyTiming(driver: Driver, spec: DeviceSpec): LeaseTiming {
-  return {
-    estimatedBootMs: 0,
-    estimatedProvisionMs: 0,
-    estimatedReclaimMs: releaseReclaimEstimateMs(driver, spec),
-    estimatedReadyMs: 0,
-  };
-}
-
-/** `standard`: every release path asks for it; a holder cannot request another clean level. */
-function releaseReclaimEstimateMs(driver: Driver, spec: DeviceSpec): number {
-  return driver.estimate({ clean: "standard", operation: "reclaim" }, spec);
 }
 
 /**
@@ -1524,39 +1589,6 @@ function operationPlan(plan: AcquisitionPlan): OperationPlan | undefined {
     plan.kind === "no-capacity"
     ? undefined
     : plan;
-}
-
-function physicalRequestOf(request: DeviceRequest): PhysicalRequest {
-  return {
-    platform: request.platform,
-    ...(request.model === undefined ? {} : { model: request.model }),
-    ...(request.class === undefined ? {} : { class: request.class }),
-    ...(request.osVersion === undefined ? {} : { osVersion: request.osVersion }),
-  };
-}
-
-function fullSpec(spec: VirtualSpec): VirtualSpec {
-  if (spec.mode === undefined) return spec;
-  const { mode: _mode, ...full } = spec;
-  return full;
-}
-
-type DownloadingProgress = Extract<LeaseProgress, { readonly stage: "downloading" }>;
-
-function downloadingProgress(
-  component: string,
-  progress: ComponentInstallerProgress,
-): DownloadingProgress {
-  if (progress.stage === "waiting") return { component, stage: "downloading", waiting: true };
-  const { percent } = progress;
-  return percent === undefined
-    ? { component, stage: "downloading", waiting: false }
-    : { component, percent: Math.floor(percent), stage: "downloading", waiting: false };
-}
-
-/** Both reports are for the one component a `#resolveOrInstall` call downloads. */
-function sameDownloadingProgress(left: DownloadingProgress, right: DownloadingProgress): boolean {
-  return left.waiting === right.waiting && left.percent === right.percent;
 }
 
 /**
@@ -1595,49 +1627,3 @@ interface ResolvedTarget {
  * in its range, or any when it names none; and only runtimes that have an image of the requested
  * tag when it names one (the rule the gateway's `matchRequest` applies).
  */
-function matchingRuntimes(
-  entry: DriverCatalogEntry,
-  model: string,
-  { imageTag, osVersion }: Pick<DeviceRequest, "imageTag" | "osVersion">,
-  range: OsRange | undefined,
-): string[] {
-  return pairedRuntimes(entry, model).filter(
-    (runtime) =>
-      (range === undefined
-        ? osVersion === undefined || runtime === osVersion
-        : satisfies(runtime, range)) &&
-      (imageTag === undefined ||
-        (entry.images ?? []).some((image) => image.runtime === runtime && image.tag === imageTag)),
-  );
-}
-
-/** The newest runtime `model` pairs with that the request's range accepts, or none installed. */
-function newestRuntime(
-  entry: DriverCatalogEntry,
-  model: string,
-  request: DeviceRequest,
-  range: OsRange,
-): string {
-  const newest = matchingRuntimes(entry, model, request, range).sort(compareVersions).at(-1);
-  if (newest === undefined) throw new RuntimeMissingError(request.platform, range.text);
-  return newest;
-}
-
-/** What a device's OS must satisfy: the range, the exact version named, or any installed runtime. */
-function requiredOs(
-  entry: DriverCatalogEntry,
-  { osVersion }: DeviceRequest,
-  range: OsRange | undefined,
-): DeviceRequirement["osVersion"] {
-  if (range !== undefined) return range;
-  return osVersion === undefined
-    ? { kind: "installed", versions: entry.runtimes }
-    : { kind: "exact", version: osVersion };
-}
-
-/** The request's OS range, when its `osVersion` is one rather than an exact version. */
-function requestedRange(request: DeviceRequest): OsRange | undefined {
-  if (request.osVersion === undefined) return undefined;
-  const parsed = parseOsConstraint(request.osVersion);
-  return parsed.ok && parsed.constraint.kind === "range" ? parsed.constraint : undefined;
-}
