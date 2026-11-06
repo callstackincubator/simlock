@@ -906,7 +906,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(reached()).toBe(4);
   });
 
-  it('allocate through the gateway with `osVersion` ">=18" or a `deviceBaseline` reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device` (with `baseline` for the baseline); an unknown `deviceBaseline` answers `refused by simlock:`', async () => {
+  it('allocate through the gateway with `osVersion` ">=18" or a `deviceBaseline` reaches the lease request with it and `requires: ["agent-device"]`, and the reply carries `data.lease.device` with the granted `deviceMode` (with `baseline` for the baseline); an unknown `deviceBaseline` answers `refused by simlock:`', async () => {
     const rig = await setUp();
     const tap = tapDispatch(rig.gateway);
     const worker = await first(rig).daemon;
@@ -937,7 +937,7 @@ describe("the agent-device front, through a gateway", { timeout: 60_000 }, () =>
     expect(requests[1]?.input).toMatchObject({ baseline: "logged-in", requires: ["agent-device"] });
     const leaseOf = (reply: typeof answer) =>
       (reply.result as { data: { lease: Record<string, unknown> } }).data.lease;
-    expect(leaseOf(answer)["device"]).toMatchObject({ osVersion: "26.5" });
+    expect(leaseOf(answer)["device"]).toMatchObject({ deviceMode: "full", osVersion: "26.5" });
     expect(leaseOf(based)["device"]).toMatchObject({ baseline: { name: "logged-in", version: 1 } });
     expect(unknown.error?.message).toContain("refused by simlock: ");
   });

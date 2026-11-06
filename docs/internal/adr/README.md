@@ -76,7 +76,7 @@ the status is stale.
 | [0035](0035-a-gateway-sends-chosen-fleet-events-to-webhook-destinations.md) | A gateway sends chosen fleet events to webhook destinations | Accepted — not yet implemented |
 | [0036](0036-daemon-state-is-a-sqlite-database-whose-tables-each-owner-keeps.md) | Daemon state is a SQLite database, and each owner keeps its own tables | Accepted — not yet implemented |
 | [0037](0037-the-console-acts-through-the-http-routes-on-base-ui.md) | The console acts through the HTTP routes, on Base UI | Accepted — not yet implemented |
-| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted — not yet implemented; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed) |
+| [0038](0038-the-warm-pool-learns-its-kinds-from-leases-and-boots-for-every-queued-request.md) | The warm pool learns its kinds from leases, and boots for every queued request | Accepted; §3, §8 and an alternative narrowed by 0051; §4 narrowed by 0050 (proposed); §1, §4, §5 and §8 narrowed by 0062 |
 | [0039](0039-joined-workers-refuse-their-own-http-listener.md) | Joined workers refuse their own HTTP listener | Accepted — not yet implemented; narrowed by 0046 |
 | [0040](0040-every-http-route-is-declared-once-and-the-openapi-document-is-built-from-the-declarations.md) | Every HTTP route is declared once, and the OpenAPI document is built from the declarations | Accepted — not yet implemented; its stream-route example stale since 0045 |
 | [0041](0041-the-daemon-can-run-under-the-users-service-manager.md) | The daemon can run under the user's service manager | Accepted — not yet implemented |
@@ -88,7 +88,7 @@ the status is stale.
 | [0047](0047-device-exec-fills-in-the-leases-device.md) | `device.exec` fills in the lease's device, and refuses another | Accepted — not yet implemented; extends 0005 §19a; narrows 0003 §11 for one MCP tool |
 | [0048](0048-an-ios-worker-may-keep-its-simulators-in-xcodes-device-set.md) | An iOS worker may keep its simulators in Xcode's device set | Accepted; narrows 0001 §1, §2, §3, §5, §6 and §7 for iOS under `deviceSet: "default"` |
 | [0049](0049-a-lease-holder-watches-and-drives-its-devices-screen.md) | A lease holder watches and drives its device's screen | Accepted; §3 narrowed by 0052 |
-| [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted |
+| [0050](0050-an-operator-can-forget-a-learned-warm-kind.md) | An operator can forget a learned warm kind | Accepted; how `warm forget` matches a baseline kind narrowed by 0062 |
 | [0051](0051-configured-warm-targets-come-first-and-learning-can-be-turned-off.md) | Configured warm targets come first, and learning can be turned off | Accepted |
 | [0052](0052-an-ios-simulator-takes-serve-sims-rotation.md) | An iOS simulator takes serve-sim's rotation | Accepted; narrows 0049 §3 on iOS simulators |
 | [0053](0053-the-daemon-owns-each-leases-device-input.md) | The daemon owns each lease's device input, and `device.rotate` uses it | Accepted; narrows 0049 §4 and 0052 §1 |
@@ -96,7 +96,8 @@ the status is stale.
 | [0058](0058-through-a-gateway-simlock-adb-and-simctl-send-stdin-only-with-stdin.md) | Through a gateway, `simlock adb` and `simlock simctl` send stdin only with `--stdin` | Accepted; narrows 0005 §19c |
 | [0059](0059-a-worker-with-real-drivers-holds-a-per-user-lock.md) | A worker with real drivers holds a per-user lock | Accepted; narrows 0034 §1 |
 | [0060](0060-ios-slim-writes-launchd-overrides-while-the-simulator-is-shut-down.md) | iOS slim writes launchd overrides while the simulator is shut down | Accepted; supersedes 0002 §2, §3, §5, §8, §9 |
-| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4 |
+| [0061](0061-every-virtual-device-is-a-copy-of-a-source-and-a-baseline-is-a-named-source.md) | Every virtual device is a copy of a source, and a baseline is a named source | Accepted; narrows 0001 §1, §3, §4, §5, §6, 0007 §6, 0009 §2, §4, §6, 0015 §6–7, 0038 §5 and 0060 §4; §5 narrowed by 0062 |
+| [0062](0062-the-warm-pool-learns-a-baseline-after-repeated-leases-and-follows-its-newest-version.md) | The warm pool learns a baseline after repeated leases, and follows its newest version | Accepted; narrows 0038 §1, §4, §5, §8, 0050 and 0061 §5 |
 | [0063](0063-a-big-module-is-one-composition-root-over-parts-that-own-their-state.md) | A big module is one composition root over parts that own their state | Accepted |
 | [0065](0065-a-driver-owns-its-config-keys-and-a-module-takes-the-sections-it-reads.md) | A driver owns its config keys, and a module takes the config sections it reads | Accepted |
 | [0066](0066-a-slim-lease-may-keep-named-categories-running.md) | A slim lease may keep named categories running | Accepted — not yet implemented; narrows 0007 §8, §9, 0008 §4, §9, 0009 §2, §4 and 0060 §1, §2, §6 |
