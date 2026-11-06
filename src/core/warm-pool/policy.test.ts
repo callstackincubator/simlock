@@ -2006,7 +2006,7 @@ describe("warm pool policy", () => {
       ).toEqual(["extra"]);
       expect(
         sheds([keptOldest, olderOther, newerOther], {
-          waiting: [classDemand("full", "ios", false, "iPad Pro")],
+          waiting: [modelDemand("iPad Pro")],
         }),
         "a device a waiter would take",
       ).toEqual(["kept"]);
