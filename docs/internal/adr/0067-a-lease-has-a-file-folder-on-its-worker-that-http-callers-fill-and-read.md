@@ -11,12 +11,15 @@
   §1's convention that every relay target is a module's ("the core names
   no relay target", `src/daemon/relay.ts:2`): the daemon adds one of its
   own, `files`.
+  [ADR 0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md)
+  §4's 330 s deadline over the whole exchange, which a file PUT no longer
+  has (§6).
 
 ## Context
 
 A remote caller reaches a leased device through `device.exec`, whose
 `stdin` is one string sent with the request and capped at 8,388,608
-characters (`src/contract/operations.ts:425`), because the whole request is
+characters (`src/contract/operations.ts:476`), because the whole request is
 parsed as one string and, through a gateway, sent as one uplink message
 that may not pass 8 MiB (`src/ports/uplink-websocket.ts:414`). Two e2e
 suites send fixture archives of about 90 MB this way, base64-encoded, from
@@ -85,7 +88,9 @@ flowchart LR
    through a gateway; there the relay keeps its 330 s bound on opening the
    channel, then counts silence from the caller, and its 330 s deadline
    for the worker's answer starts once the body has been fully sent. Other relays keep
-   today's deadline. Through a gateway the gateway refuses a
+   today's deadline. This narrows [ADR 0028](0028-the-uplink-carries-byte-channels-and-small-messages-go-first.md)
+   §4, whose 330 s deadline over the whole exchange stays for every relay
+   but a file PUT. Through a gateway the gateway refuses a
    `Content-Length` over 2 GiB itself, since the relay does not carry that
    header, and restores a download's length from a size header the worker
    sends.
@@ -122,8 +127,10 @@ sequenceDiagram
   leases.
 - A single upload must fit one request: a caller behind a CDN with a
   body-size or time limit below its file cannot upload it yet.
-- The local CLI, `simlock/client` and MCP gain nothing; they keep the
-  8 MiB `stdin`.
+- The local CLI and MCP gain nothing; they keep the 8 MiB `stdin`.
+  `simlock/client` gains the optional `stdinFile` field on `ExecInput`
+  (inferred from `device.exec`, `src/simlock-client/types.ts:40`) and no
+  upload or download method.
 
 ## Alternatives considered
 
