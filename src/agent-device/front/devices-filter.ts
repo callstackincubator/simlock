@@ -119,7 +119,7 @@ export async function devicesThroughGateway(
   const pieces = await Promise.all(
     held.map(async (lease) => {
       const forwarded = new Request(request.url, {
-        body: read.text,
+        body: withLeaseRequestId(read.text, lease.leaseId),
         headers: withoutLength(request.headers),
         method: request.method,
         signal,
@@ -148,6 +148,21 @@ export async function devicesThroughGateway(
   const body = JSON.parse(firstList.text) as { result: { data: Record<string, unknown> } };
   body.result.data["devices"] = lists.flatMap((entry) => entry.devices);
   return relay({ response: firstList.response, text: JSON.stringify(body) });
+}
+
+// why: agent-device refuses a request id already in flight, and two leases on one worker share one daemon, so each forward carries its own id.
+function withLeaseRequestId(text: string, leaseId: string): string {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const meta = asRecord(asRecord(asRecord(body)?.["params"])?.["meta"]);
+  const requestId = meta?.["requestId"];
+  if (meta === undefined || typeof requestId !== "string") return text;
+  meta["requestId"] = `${requestId}:${leaseId}`;
+  return JSON.stringify(body);
 }
 
 function withoutLength(source: Headers): Headers {
