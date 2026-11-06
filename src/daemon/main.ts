@@ -73,6 +73,7 @@ import {
   FetchWebhookPoster,
   type WebhookPoster,
   type WorkerLockHandle,
+  type SqliteSchemaOwner,
 } from "../ports/index.js";
 import {
   createRoutingPolicy,
@@ -186,6 +187,24 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<Dae
   }
 }
 
+// why: the schema owners each role's state.db opens, one place so a test reads the list the daemon uses.
+export function stateOwners(
+  role: DaemonMode,
+  deviceDataTables: ReadonlyMap<Platform, DeviceDataTable>,
+): readonly SqliteSchemaOwner[] {
+  return role === "gateway"
+    ? [tokensOwner, drainedWorkersOwner]
+    : [
+        registryOwner,
+        warmPoolOwner,
+        baselinesOwner,
+        tokensOwner,
+        iosSourceDataOwner,
+        androidSourceDataOwner,
+        ...new Set(deviceDataTables.values()),
+      ];
+}
+
 // fallow-ignore-next-line complexity -- explicit production composition necessarily wires all external ports.
 async function composeDaemon(
   options: StartDaemonOptions,
@@ -265,18 +284,7 @@ async function composeDaemon(
     filesystem: new NodeFilesystem(),
     logger: logger.child("state"),
     oldFiles: role === "gateway" ? ["tokens.json", "workers.json"] : ["state.json", "tokens.json"],
-    owners:
-      role === "gateway"
-        ? [tokensOwner, drainedWorkersOwner]
-        : [
-            registryOwner,
-            warmPoolOwner,
-            baselinesOwner,
-            tokensOwner,
-            iosSourceDataOwner,
-            androidSourceDataOwner,
-            ...new Set(deviceDataTables.values()),
-          ],
+    owners: stateOwners(role, deviceDataTables),
     sqlite: new NodeSqliteOpener(),
     upgradeStep: role === "gateway" ? GATEWAY_UPGRADE_STEP : WORKER_UPGRADE_STEP,
   });
