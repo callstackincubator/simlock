@@ -3,6 +3,7 @@ import { testConfig as configWithDefaults } from "../core/testing.js";
 import {
   FakeDriver,
   loadTestRegistry,
+  readyTransitionUpdate,
   openTestState,
   testComponentWiring,
   type FakeDriverOptions,
@@ -22,8 +23,11 @@ import {
   Nuke,
   PassthroughRefusedError,
   type CatalogReader,
+  type MemoryPressureReader,
   type PassthroughResolver,
 } from "../core/index.js";
+
+type MemoryPressureStep = "none" | "warming-paused" | "new-devices-paused";
 import {
   CryptoTokenSecrets,
   FakeClock,
@@ -166,6 +170,8 @@ export async function buildDispatcher(
     readonly withoutBaselines?: boolean;
     readonly hostFacts?: () => HostFacts;
     readonly capacity?: Config["capacity"];
+    /** why: the worker's memory pressure step at the start; a test changes it with `setMemoryPressure`. */
+    readonly memoryPressureStep?: MemoryPressureStep;
     readonly warmPool?: Partial<Config["warmPool"]>;
     /** why: the `ios.defaultMode` `catalog.get` reports. */
     readonly iosDefaultMode?: "slim" | "full";
@@ -194,6 +200,12 @@ export async function buildDispatcher(
 ) {
   const clock = overrides.clock ?? new FakeClock(1_000);
   const eventBus = new EventBus(clock);
+  let pressureStep = overrides.memoryPressureStep;
+  const memoryPressure: MemoryPressureReader = {
+    current: () =>
+      pressureStep === undefined ? undefined : { readingAt: clock.now(), step: pressureStep },
+    onReading: () => () => undefined,
+  };
   const filesystem = new MemoryFilesystem();
   const state = await openTestState();
   seedPhysicalDevices(state, overrides.physicalDevices ?? []);
@@ -251,6 +263,7 @@ export async function buildDispatcher(
     drivers: [driver, ...(overrides.extraDrivers ?? [])],
     eventBus,
     idGenerator: sequence(),
+    memoryPressure,
     registry,
     state: testStateOf(registry),
     systemStats: new FakeSystemStats({
@@ -338,9 +351,49 @@ export async function buildDispatcher(
     engine,
     eventBus,
     registry,
+    setMemoryPressure: (step: MemoryPressureStep) => {
+      pressureStep = step;
+    },
     state,
     tokens,
   };
+}
+
+/** why: a slim device a worker already holds, ready or shut down, as the warm pool or an earlier lease leaves one. */
+export async function seedSlimDevice(
+  built: Awaited<ReturnType<typeof buildDispatcher>>,
+  state: "ready" | "shutdown",
+) {
+  const spec = {
+    mode: "slim",
+    model: "iPhone 17 Pro",
+    osVersion: "26.5",
+    physical: false,
+    platform: "ios",
+  } as const;
+  const driverDevice = await built.driver.provision(spec);
+  const driven = await built.driver.makeReady(driverDevice, { mode: "slim", purpose: "prepare" });
+  // why: the seed is a slim device whatever the fake reports on its boot, so a test whose driver answers `full` still starts from slim.
+  const ready = { ...driven, mode: "slim" as const };
+  const registered = await built.registry.registerDevice({
+    driverData: driverDevice.driverData,
+    driverDeviceId: driverDevice.deviceId,
+    provisionDuration: 0,
+    spec,
+  });
+  await built.registry.transitionDevice(
+    registered.id,
+    "ready",
+    { event: "device.ready", payload: { bootDuration: 0, deviceId: registered.id } },
+    readyTransitionUpdate(ready),
+  );
+  if (state === "ready") return registered;
+  await built.driver.shutdown(driverDevice);
+  await built.registry.transitionDevice(registered.id, "shutdown", {
+    event: "device.shutdown",
+    payload: { deviceId: registered.id, initiator: "test" },
+  });
+  return registered;
 }
 
 export function session(overrides: Partial<DispatchSession> = {}): DispatchSession {

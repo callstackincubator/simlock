@@ -193,6 +193,7 @@ export {
 export { SerializedDecision } from "./serialized-decision.js";
 export {
   type CapacityReader,
+  type MemoryPressureReader,
   type CatalogReader,
   type LeaseExpirer,
   type PassthroughResolver,

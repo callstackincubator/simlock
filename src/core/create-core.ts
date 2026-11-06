@@ -170,6 +170,7 @@ const NO_MEMORY_PRESSURE: MemoryPressureReader = {
 
 export function createCore(options: CoreOptions): Core {
   const { decisions, registry } = options;
+  const memoryPressure = options.memoryPressure ?? NO_MEMORY_PRESSURE;
   let ports: CorePorts | undefined;
   const port = <Name extends keyof CorePorts>(name: Name): CorePorts[Name] => {
     if (ports === undefined) throw new CorePortMissingError(name);
@@ -193,6 +194,7 @@ export function createCore(options: CoreOptions): Core {
   const capacity = new CapacityCoordinator(
     createCapacityStrategy(options.config.capacity, options.systemStats),
     () => capacityObserver.changed(),
+    memoryPressure,
   );
   const devices = () => capacityDevices(registry.snapshot.virtualDevices);
   const capacityReader: CapacityReader = {
@@ -270,6 +272,8 @@ export function createCore(options: CoreOptions): Core {
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     registry,
   });
+  // why: a waiting request is only planned again by an event; the step lifting is the one that frees it.
+  options.eventBus.subscribe("memory.pressure-changed", notifyAvailability);
   // why: removing a runtime or image is what makes a baseline stale, so the check follows it.
   options.eventBus.subscribe("component.removed", () => {
     baselines.checkStale().catch((error: unknown) => {
@@ -400,7 +404,7 @@ export function createCore(options: CoreOptions): Core {
   return {
     capacity,
     capacityReader,
-    memoryPressure: options.memoryPressure ?? NO_MEMORY_PRESSURE,
+    memoryPressure,
     warmPoolReader: warmPool,
     warmKinds: { forget: (match) => warmPool.forgetKinds(match) },
     baselines,

@@ -14,6 +14,7 @@ import {
   type Driver,
   type LeaseExpirer,
   type LeaseRequestFailure,
+  type MemoryPressureReader,
   type ModelPreferences,
   type NukeExecutor,
   type PassthroughResolver,
@@ -47,6 +48,7 @@ export interface TestEngineOptions {
   readonly eventBus: EventBus;
   readonly idGenerator: IdGenerator;
   readonly logger?: Logger | undefined;
+  readonly memoryPressure?: MemoryPressureReader | undefined;
   readonly registry: Registry;
   readonly state: StateDatabase;
   readonly systemStats: SystemStats;
@@ -94,6 +96,7 @@ export function createTestEngine(options: TestEngineOptions): TestEngine {
     drivers: options.drivers,
     eventBus: options.eventBus,
     logger: options.logger,
+    ...(options.memoryPressure === undefined ? {} : { memoryPressure: options.memoryPressure }),
     modelPreferences: options.modelPreferences,
     registry: options.registry,
     state: options.state,
