@@ -1,6 +1,6 @@
 // why: every wait of a relayed exchange is bounded (architecture rule on cross-process waits): one deadline covers the
-// channel wait and the wait for the head, and an idle bound covers the response body, which may be a live stream that
-// runs as long as someone reads it; the link bounds the channels open to a worker (ADR 0028).
+// channel wait and the wait for the head (a file upload's counts from its body's end, and its body is bounded by silence),
+// and an idle bound covers the response body, which may be a live stream that runs as long as someone reads it; the link bounds the channels open to a worker (ADR 0028).
 
 import {
   isRelayFramingHeader,

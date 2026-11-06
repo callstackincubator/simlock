@@ -44,6 +44,7 @@ Relay:
 - `relay.*` runs only on a worker's uplink session. A gateway refuses them from everyone.
 - A worker never holds a gateway credential: `relayHeaderPairs` (`../contract/relay.ts`) drops the credential headers and the configured `http.proxyAuth.header`.
 - Every wait is bounded on the `Clock`: one deadline for the channel and the head, then a silence bound on the body, so a live body is never cut. At either limit: `WORKER_UNREACHABLE`, and `relay.cancel` to the worker.
+- A relayed file upload (`upload` on the call) is bounded by silence from the caller's body instead: no start deadline once the channel is open, `UPLOAD_STALLED` after `silenceMs` with no byte read from the caller, and the head deadline counts from the body's end. Every other relay keeps the one deadline.
 - A two-way relay keeps both directions open after a 2xx head; ending one ends only that one.
 - Its silence bound (`TWO_WAY_SILENCE_MS` in `relay.ts`) counts only bytes read from the worker. Bytes the gateway writes never reset it, and it stops while the relay's read-ahead is full. A worker module keeps it alive with the heartbeat in `../modules/relay-channel.ts`.
 - On an uplink close the worker aborts that connection's relays. Leases, requests and exec keep running.

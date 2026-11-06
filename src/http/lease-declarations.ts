@@ -386,6 +386,7 @@ export const leaseFilePutRoute = declareRoute({
     409: ["FILE_BUSY"],
     413: ["FILE_TOO_LARGE", "LEASE_FILES_FULL"],
     422: ["INSUFFICIENT_DISK_SPACE"],
+    503: ["WORKER_UNREACHABLE"],
   },
 });
 
@@ -400,7 +401,7 @@ export const leaseFileGetRoute = declareRoute({
   request: { params: leaseFileParamsSchema },
   binaryReply: true,
   alsoStatus: 206,
-  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"] },
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
 });
 
 export const leaseFileDeleteRoute = declareRoute({
@@ -411,7 +412,7 @@ export const leaseFileDeleteRoute = declareRoute({
   role: "agent",
   request: { params: leaseFileParamsSchema },
   status: 204,
-  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"] },
+  errors: { 404: ["UNKNOWN_LEASE", "UNKNOWN_FILE"], 503: ["WORKER_UNREACHABLE"] },
 });
 
 export const leaseFileListRoute = declareRoute({
@@ -422,7 +423,7 @@ export const leaseFileListRoute = declareRoute({
   role: "agent",
   request: { params: leaseParamsSchema },
   reply: z.object({ files: z.array(leaseFileSchema) }),
-  errors: { 404: ["UNKNOWN_LEASE"] },
+  errors: { 404: ["UNKNOWN_LEASE"], 503: ["WORKER_UNREACHABLE"] },
 });
 
 export const LEASE_ROUTES = [

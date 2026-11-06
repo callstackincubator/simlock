@@ -1,6 +1,6 @@
 /**
- * why: the core names no relay target (ADR 0026); a module's function is registered under its capability name through
- * `relayTargets`, and each uplink connection carries its own relays.
+ * why: the core names one relay target, `files` (ADR 0067 §7, narrowing ADR 0026); a module's function is registered under
+ * its capability name through `relayTargets`, and each uplink connection carries its own relays.
  */
 import type { z } from "zod";
 

@@ -46,6 +46,7 @@ Relays (worker side):
 
 - `relay.request` runs only on the uplink connection.
 - A `twoWay` relay runs no body cut-off. Its target answers a refusal before touching the pipe, or a 2xx with no body and then uses the pipe; the call answers once both directions have ended. The silence bound is the gateway's.
+- `files` is the one relay target the core names: the lease files of a worker, served for a gateway (ADR 0067 §7). A module cannot take the name.
 - `GatewayUplink` retries forever.
 
 ## Security model
