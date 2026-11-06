@@ -1,4 +1,5 @@
 import { mkdtemp } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,7 +20,13 @@ import {
 } from "../ports/index.js";
 import { startDaemon, type StartDaemonOptions } from "./main.js";
 import type { DaemonServer } from "./server.js";
-import { STANDALONE_OFF, runningDaemons, stopDaemons, temporaryDirectories } from "./test-main.js";
+import {
+  STANDALONE_OFF,
+  runningDaemons,
+  start,
+  stopDaemons,
+  temporaryDirectories,
+} from "./test-main.js";
 import { freeLoopbackPort } from "./test-relay-support.js";
 
 afterEach(stopDaemons);
@@ -39,7 +46,11 @@ describe("startDaemon version check", () => {
     const sink = new MemoryLogSink();
     const daemon = await startDaemon({
       clock,
-      configOverrides: overrides.role === "gateway" ? {} : STANDALONE_OFF,
+      // why: a gateway without an http override binds the default port 4700, which a real gateway on the host may hold.
+      configOverrides:
+        overrides.role === "gateway"
+          ? { http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() } }
+          : STANDALONE_OFF,
       dataDirectory: directory,
       drivers: [],
       filesystem: new MemoryFilesystem(),
@@ -339,6 +350,31 @@ describe("startDaemon version check", () => {
     const gatewayNpm = new FakeNpmCli({ view: [{ ok: true, output: "0.6.0\n" }] });
     const gateway = await startChecked(gatewayNpm, { role: "gateway" });
     await expect.poll(() => latestOf(gateway.daemon)).toBe("0.6.0");
+  });
+
+  it("a gateway started by test-main's start helper and by this file's startChecked starts while 127.0.0.1:4700 is taken", async () => {
+    // why: 4700 is a gateway's default port; a gateway running on the host holds it already.
+    const holder = createServer();
+    const held = await new Promise<boolean>((resolve, reject) => {
+      holder.once("error", (error: NodeJS.ErrnoException) =>
+        error.code === "EADDRINUSE" ? resolve(false) : reject(error),
+      );
+      holder.listen(4700, "127.0.0.1", () => resolve(true));
+    });
+    try {
+      const outcomes = await Promise.allSettled([
+        start({ role: "gateway" }),
+        startChecked(new FakeNpmCli(), { role: "gateway" }),
+      ]);
+
+      expect(
+        outcomes.map((outcome) =>
+          outcome.status === "fulfilled" ? "started" : String(outcome.reason),
+        ),
+      ).toEqual(["started", "started"]);
+    } finally {
+      if (held) await new Promise<void>((resolve) => holder.close(() => resolve()));
+    }
   });
 });
 
