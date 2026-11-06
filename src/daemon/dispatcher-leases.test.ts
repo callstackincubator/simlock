@@ -6,7 +6,14 @@ import type { DispatcherOptions } from "./dispatcher.js";
 import { classifyError } from "./error-code.js";
 import { UnknownLeaseError } from "../core/index.js";
 import { RequestCancelledError } from "../leasing/index.js";
-import { HOST_SYSTEM, buildDispatcher, flush, gibibyte, session } from "./test-dispatcher.js";
+import {
+  HOST_SYSTEM,
+  buildDispatcher,
+  flush,
+  gibibyte,
+  seedSlimDevice,
+  session,
+} from "./test-dispatcher.js";
 
 describe("Dispatcher: ownership", () => {
   async function grantLease(dispatcher: Awaited<ReturnType<typeof buildDispatcher>>["dispatcher"]) {
@@ -1293,5 +1300,117 @@ describe("Dispatcher: lease.request requires", () => {
     const requested = eventBus.replay().find((event) => event.event === "lease.requested");
     expect(requested?.payload).toMatchObject({ requestSpec: IOS });
     expect(JSON.stringify(requested?.payload)).not.toContain("requires");
+  });
+});
+
+describe("Dispatcher: lease.request at new-devices-paused", () => {
+  const slimmable = { slimmableOsVersions: ["26.5"] };
+  const ask = { model: "iPhone 17 Pro", osVersion: "26.5", platform: "ios" } as const;
+  const slim = { ...ask, mode: "slim" } as const;
+  const asker = () => session({ principal: "tok_asker" });
+  const waiting = (built: Awaited<ReturnType<typeof buildDispatcher>>) =>
+    built.dispatcher.dispatch("list.get", { kind: "requests" }, session({ role: "admin" }));
+  const fixed: Config["capacity"] = { strategy: "fixed", config: { maxRunning: 4 } };
+
+  it.each([
+    { name: "needs a new device", seed: undefined, input: ask, options: {} },
+    { name: "boots a shut-down device", seed: "shutdown", input: slim, options: {} },
+    {
+      name: "needs the reboot of an idle device for its except list",
+      seed: "ready",
+      input: { ...slim, except: ["store"] },
+      options: {},
+    },
+    {
+      name: "is refused for RAM too",
+      seed: undefined,
+      input: ask,
+      options: {
+        capacity: {
+          strategy: "resource",
+          config: {
+            limits: {
+              android: { maxDevices: 1, maxRunning: 1 },
+              ios: { maxDevices: 4, maxRunning: 4 },
+              maxRunning: 6,
+            },
+            ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: 30 * gibibyte },
+          },
+        },
+      },
+    },
+    {
+      name: "runs under the fixed strategy",
+      seed: undefined,
+      input: ask,
+      options: { capacity: fixed },
+    },
+  ] as const)(
+    "a request that $name waits, or gets NO_CAPACITY under noWait, with memory-pressure",
+    async (row) => {
+      const built = await buildDispatcher({
+        driverOptions: slimmable,
+        memoryPressureStep: "new-devices-paused",
+        ...row.options,
+      });
+      if (row.seed !== undefined) await seedSlimDevice(built, row.seed);
+      const seededCalls = built.driver.calls.length;
+
+      const request = built.dispatcher.dispatch("lease.request", row.input, asker());
+      void request.catch(() => undefined);
+      await flush();
+      const listed = await waiting(built);
+      await expect(
+        built.dispatcher.dispatch(
+          "lease.request",
+          { ...row.input, noWait: true },
+          session({ principal: "tok_second" }),
+        ),
+      ).rejects.toMatchObject({
+        code: "NO_CAPACITY",
+        details: { capacityReason: "memory-pressure" },
+      });
+
+      expect(listed).toMatchObject([{ reason: "memory-pressure", stage: "queued" }]);
+      expect(
+        built.driver.calls
+          .slice(seededCalls)
+          .filter((call) => ["provision", "makeReady", "shutdown"].includes(call.operation)),
+      ).toEqual([]);
+    },
+  );
+
+  it("grants a request that fits an idle booted device, and does not evict an idle device of another kind", async () => {
+    const granted = await buildDispatcher({
+      driverOptions: slimmable,
+      memoryPressureStep: "new-devices-paused",
+    });
+    const registered = await seedSlimDevice(granted, "ready");
+    await expect(
+      granted.dispatcher.dispatch("lease.request", slim, asker()),
+    ).resolves.toMatchObject({ device: { id: registered.id } });
+
+    const limited = await buildDispatcher({
+      capacity: {
+        strategy: "resource",
+        config: {
+          limits: {
+            android: { maxDevices: 1, maxRunning: 1 },
+            ios: { maxDevices: 4, maxRunning: 1 },
+            maxRunning: 6,
+          },
+          ramBudget: { androidBytesPerDevice: 4 * gibibyte, iosBytesPerDevice: gibibyte },
+        },
+      },
+      driverOptions: slimmable,
+      memoryPressureStep: "new-devices-paused",
+    });
+    const idle = await seedSlimDevice(limited, "ready");
+    await expect(
+      limited.dispatcher.dispatch("lease.request", { ...ask, mode: "full", noWait: true }, asker()),
+    ).rejects.toMatchObject({ details: { capacityReason: "memory-pressure" } });
+    expect(limited.registry.snapshot.virtualDevices.find((d) => d.id === idle.id)?.state).toBe(
+      "ready",
+    );
   });
 });
