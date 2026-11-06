@@ -342,6 +342,7 @@ export async function composeWorker(
         : { grantedAt: lease.grantedAt, id: lease.id, platform: device.spec.platform };
     },
     idGenerator,
+    ...(options.leaseFilesLimits === undefined ? {} : { limits: options.leaseFilesLimits }),
     logger: logger.child("lease-files"),
   });
   const leasing = createLeasing({
