@@ -499,7 +499,7 @@ describe("GatewayRelay on a byte channel", () => {
     expect(connection.sent.filter((frame) => frame.type === "relay.request")).toEqual([]);
   });
 
-  it("cuts a file upload only after 330 s with no byte from the caller, counts its head deadline from the body's end, and keeps the 330 s deadline for any other relay", async () => {
+  it("cuts a file upload only after 330 s with no byte from the caller, counts its head deadline from the body's end, and keeps the 330 s deadline for any other relay or for an upload the worker stopped reading", async () => {
     const BOUND = 330_000;
     const upload = { name: "fixture.tar", silenceMs: BOUND };
     async function start(options: { upload?: typeof upload; holdOpen?: boolean } = {}) {
@@ -595,6 +595,17 @@ describe("GatewayRelay on a byte channel", () => {
     const otherBeforeDeadline = await other.pass(BOUND - 300_000 - 1);
     const otherAtDeadline = await other.pass(1);
 
+    const stopped = await start({ upload });
+    await sentFrame(stopped.connection, "relay.request");
+    const stoppedChannel = await openedChannel(stopped.connection);
+    stopped.feed.enqueue(new Uint8Array(KIB));
+    await vi.waitFor(() => expect(stoppedChannel.written.length).toBeGreaterThan(0));
+    stoppedChannel.failWritable("stopped");
+    stopped.feed.enqueue(new Uint8Array(KIB));
+    await sleep(20);
+    const stoppedBeforeDeadline = await stopped.pass(BOUND - 1);
+    const stoppedAtDeadline = await stopped.pass(1);
+
     const refused = await start({ upload });
     const refusal = await sentFrame(refused.connection, "relay.request");
     await refused.pass(100_000);
@@ -616,6 +627,8 @@ describe("GatewayRelay on a byte channel", () => {
     expect(atOpenDeadline).toEqual(unreachable);
     expect(otherBeforeDeadline).toBeUndefined();
     expect(otherAtDeadline).toEqual(unreachable);
+    expect(stoppedBeforeDeadline).toBeUndefined();
+    expect(stoppedAtDeadline).toEqual(unreachable);
     expect(afterRefusal).toMatchObject({ state: "fulfilled" });
     expect(refused.connection.lastSentOf("relay.cancel")).toBeUndefined();
   });

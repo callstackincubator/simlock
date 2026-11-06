@@ -286,8 +286,11 @@ class Exchange {
     if (this.#done) return;
     if (error instanceof LinkChannelError) {
       // why: the worker stopped reading this direction, so the caller's body is no longer read.
-      if (error.reason === "stopped") reader.cancel().catch(() => undefined);
-      else this.#onChannelError(error);
+      if (error.reason === "stopped") {
+        reader.cancel().catch(() => undefined);
+        // why: no timer is left running once the body is no longer read, and the worker may never send a head.
+        this.#armHeadDeadline();
+      } else this.#onChannelError(error);
       return;
     }
     this.#fail(error);
