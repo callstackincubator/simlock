@@ -299,6 +299,7 @@ export class Registry implements LeaseRequestStore<LeaseGrant> {
   /**
    * why: a ready device shut down and prepared again for a lease (ADR 0066 §2) keeps its state, so this is no transition and emits no event (`ready → ready` is no edge); it records only what the new boot produced.
    */
+  // fallow-ignore-next-line unused-class-member -- called through `ManagedDeviceRegistry`, which `Registry` implements.
   async recordRebootedDevice(
     deviceId: string,
     update: Required<Pick<DeviceTransitionUpdate, "address" | "driverData" | "mode">>,

@@ -97,11 +97,17 @@ function leaseRequestDispatchInput(body: LeaseRequestInput, idempotencyKey: stri
     ...(body.os === undefined ? {} : { osVersion: body.os }),
     ...(body.mode === undefined ? {} : { mode: body.mode }),
     ...(body.except === undefined ? {} : { except: body.except }),
+    ...requestImageFields(body),
+    ...requestOptions(body),
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+  };
+}
+
+function requestImageFields(body: LeaseRequestInput) {
+  return {
     ...(body.imageTag === undefined ? {} : { imageTag: body.imageTag }),
     ...(body.baseline === undefined ? {} : { baseline: body.baseline }),
     ...(body.physical === undefined ? {} : { physical: body.physical }),
-    ...requestOptions(body),
-    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   };
 }
 
