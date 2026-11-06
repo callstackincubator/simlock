@@ -1,4 +1,10 @@
-import { labelsFor, type resolveSlimCategories, type SlimCategory } from "./slim-labels.js";
+import { BadDeviceRequestError, KeptCategoriesError } from "../../core/index.js";
+import {
+  labelsFor,
+  SLIM_CATEGORIES,
+  type resolveSlimCategories,
+  type SlimCategory,
+} from "./slim-labels.js";
 
 type ResolvedCategories = ReturnType<typeof resolveSlimCategories>;
 
@@ -21,15 +27,35 @@ export function splitByExcept(
 }
 
 /**
- * why: A kept category's service must be running (ADR 0066 §2): the first kept label the readback
- * does not show enabled, as the message the refusal carries; `undefined` when every one is.
+ * why: A kept category's service must be running (ADR 0066 §2): the device is refused when the
+ * readback does not show every kept label enabled.
  */
-export function keptLabelsFailure(
+export function assertKeptEnabled(
   kept: readonly SlimCategory[],
   read: ReadonlyMap<string, boolean>,
-): string | undefined {
+): void {
   const notEnabled = labelsFor(kept).filter((label) => read.get(label) === true);
-  return notEnabled.length === 0
-    ? undefined
-    : `${String(notEnabled.length)} kept labels are not enabled; first: ${notEnabled[0] ?? ""}`;
+  if (notEnabled.length > 0) {
+    throw new KeptCategoriesError(
+      `${String(notEnabled.length)} kept labels are not enabled; first: ${notEnabled[0] ?? ""}`,
+    );
+  }
+}
+
+/**
+ * why: A lease's except list is checked at resolve (ADR 0066 §2), before any device is made: a
+ * name no category has, or a category this worker does not slim, can never be served.
+ */
+export function checkExcept(except: readonly string[], slimSet: ResolvedCategories): void {
+  const slimmed = slimSet.categories.map((category) => category.name);
+  for (const name of except) {
+    if (!SLIM_CATEGORIES.some((category) => category.name === name)) {
+      throw new BadDeviceRequestError(`unknown slim category "${name}"`);
+    }
+    if (!slimmed.includes(name)) {
+      throw new BadDeviceRequestError(
+        `"${name}" is not in this worker's slim categories (${slimmed.join(", ")})`,
+      );
+    }
+  }
 }

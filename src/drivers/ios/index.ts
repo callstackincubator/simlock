@@ -87,7 +87,7 @@ import {
   slimSignature,
   type SlimCategory,
 } from "./slim-labels.js";
-import { keptLabelsFailure, splitByExcept } from "./slim-except.js";
+import { assertKeptEnabled, checkExcept, splitByExcept } from "./slim-except.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
@@ -439,6 +439,7 @@ export class IosSimctlDriver implements Driver {
     if (request.imageTag !== undefined) {
       throw new UnsupportedRequestOptionError("ios", "imageTag");
     }
+    checkExcept(request.except ?? [], resolveSlimCategories(this.#slim?.categories));
     const catalog = await this.#loadCatalog();
     const deviceType = findDeviceType(catalog, request.model);
 
@@ -1316,8 +1317,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     const read = parsePrintDisabled(outcome.result.stdout);
-    const keptFailure = keptLabelsFailure(write.kept, read);
-    if (keptFailure !== undefined) throw new KeptCategoriesError(keptFailure);
+    assertKeptEnabled(write.kept, read);
     const mismatched = [...write.wanted.keys()]
       .sort()
       .filter((label) => (read.get(label) ?? false) !== write.wanted.get(label));
