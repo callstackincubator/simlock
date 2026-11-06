@@ -1184,16 +1184,41 @@ describe("FleetLeaseCoordinator routes an except request by each worker's slim s
     return { ...made, clients };
   }
 
-  it("sends an except request to a worker that slims every name and gives it the except list", async () => {
-    const { clients, coordinator } = fleet({
-      wrk_a: { categories: ["store"], defaultMode: "full" },
-      wrk_b: { categories: every, defaultMode: "full" },
-    });
+  it("routes an except request by each worker's slim set and default mode, and gives the chosen worker the except list", async () => {
+    const cases = [
+      {
+        label: "one worker slims the name",
+        request: { except: ["mdm"], mode: "slim" as const },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: ["store"], defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "full" as const },
+        },
+      },
+      {
+        label: "no mode, mixed default modes",
+        request: { except: ["store"] },
+        routedTo: "wrk_b",
+        workers: {
+          wrk_a: { categories: every, defaultMode: "full" as const },
+          wrk_b: { categories: every, defaultMode: "slim" as const },
+        },
+      },
+    ];
 
-    await coordinator.request({ ...REQUEST, except: ["mdm"], mode: "slim" }, requestOptions());
+    for (const { label, request, routedTo, workers: slims } of cases) {
+      const { clients, coordinator } = fleet(slims);
 
-    expect(clients["wrk_a"]?.lastRequestLeaseInput).toBeUndefined();
-    expect(clients["wrk_b"]?.lastRequestLeaseInput).toMatchObject({ except: ["mdm"] });
+      await coordinator.request({ ...REQUEST, ...request }, requestOptions());
+
+      const received = Object.entries(clients)
+        .filter(([, client]) => client.lastRequestLeaseInput !== undefined)
+        .map(([id]) => id);
+      expect(received, label).toEqual([routedTo]);
+      expect(clients[routedTo]?.lastRequestLeaseInput, label).toMatchObject({
+        except: request.except,
+      });
+    }
   });
 });
 
