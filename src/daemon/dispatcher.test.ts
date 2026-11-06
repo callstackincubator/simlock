@@ -3112,6 +3112,46 @@ describe("Dispatcher: device mode on every surface", () => {
         .map((event) => event.payload),
     ).toContainEqual({ deviceId: seededShutdown.id, initiator: "lease-engine" });
 
+    const booting = await build();
+    const seededShut = await seedSlimDevice(booting, "shutdown");
+    const bootedShut = await booting.dispatcher.dispatch("lease.request", ask, session());
+    expect(bootedShut.device).toMatchObject({ except: ask.except, id: seededShut.id });
+    expect(
+      booting.driver.calls.filter((call) => call.operation === "makeReady").at(-1)?.arguments[1],
+    ).toMatchObject({ except: ask.except, purpose: "prepare" });
+    expect(
+      booting.eventBus.replay().find((event) => event.event === "lease.granted")?.payload,
+    ).toMatchObject({ source: "booted" });
+
+    const bootFails = await build();
+    const seededBootFails = await seedSlimDevice(bootFails, "shutdown");
+    bootFails.driver.failOn("makeReady", 2, crash);
+    const afterBoot = await grantedOnceSettled(
+      bootFails.dispatcher.dispatch("lease.request", ask, session()),
+    );
+    expect(afterBoot.device.id).not.toBe(seededBootFails.id);
+    expect(
+      bootFails.registry.snapshot.devices.find((d) => d.id === seededBootFails.id)?.state,
+    ).toBe("deleted");
+
+    const twice = await build();
+    twice.driver.failOn("provision", 1, crash);
+    twice.driver.failOn("makeReady", 1, crash);
+    const refusal = await twice.dispatcher
+      .dispatch("lease.request", ask, session())
+      .catch((error: unknown) => error);
+    expect(classifyError(refusal)).toBe("PROVISION_FAILED");
+
+    const replay = await build();
+    const keyed = { ...ask, idempotencyKey: "key-1" };
+    const first = await replay.dispatcher.dispatch("lease.request", keyed, session());
+    const same = await replay.dispatcher.dispatch("lease.request", keyed, session());
+    expect(same.lease.id).toBe(first.lease.id);
+    const conflict = await replay.dispatcher
+      .dispatch("lease.request", { ...keyed, except: ["other"] }, session())
+      .catch((error: unknown) => error);
+    expect(classifyError(conflict)).toBe("IDEMPOTENCY_CONFLICT");
+
     const rebooting = await build();
     const seededWarm = await seedSlimDevice(rebooting, "ready");
     const before = (await rebooting.dispatcher.dispatch("status.get", {}, session())).capacity;
