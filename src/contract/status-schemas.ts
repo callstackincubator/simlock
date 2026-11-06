@@ -281,7 +281,7 @@ export const platformCatalogSchema = z.object({
   runtimeWorkers: z.record(z.string(), z.array(z.string())).optional(),
   slimCategories: z
     .array(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/))
-    .max(32)
+    .max(CATALOG_SLIM_CATEGORIES_MAX)
     .optional(),
   defaultMode: deviceModeSchema.optional(),
 });
