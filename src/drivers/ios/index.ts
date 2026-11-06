@@ -81,6 +81,7 @@ import { IosSourceTable, type ReadySeed, type SourceRow } from "./source-data.js
 import { createIosScreenCapture } from "./screen-capture.js";
 import type { IosDriverConfig } from "./definition.js";
 import { overridesFor, resolveSlimCategories, slimSignature } from "./slim-labels.js";
+import { splitByExcept } from "./slim-except.js";
 import { parseOverridesPlist, parsePrintDisabled, renderOverridesPlist } from "./slim-overrides.js";
 
 /** why: ADR 0061 §1: a `making` row of this process older than this is a make that never ended. */
@@ -1159,7 +1160,9 @@ export class IosSimctlDriver implements Driver {
       options,
     );
     const write =
-      plan.kind === "apply" ? await this.#writeOverrides(data.udid, plan.slim) : undefined;
+      plan.kind === "apply"
+        ? await this.#writeOverrides(data.udid, plan.slim, options.except)
+        : undefined;
 
     await this.#bootAndWait(data.udid, device.deviceId, bootstatusTimeoutMs);
     await runAfterBoot(this.#afterBoot, data.udid, device.deviceId);
@@ -1236,8 +1239,14 @@ export class IosSimctlDriver implements Driver {
     return false;
   }
 
-  async #writeOverrides(udid: string, slim: SlimOptions): Promise<SlimWrite> {
-    const resolved = resolveSlimCategories(slim.categories);
+  async #writeOverrides(
+    udid: string,
+    slim: SlimOptions,
+    except: readonly string[] = [],
+  ): Promise<SlimWrite> {
+    const configured = resolveSlimCategories(slim.categories);
+    const { kept, slimmed } = splitByExcept(configured.categories, except);
+    const resolved = { categories: slimmed, unknown: configured.unknown };
     if (resolved.categories.length === 0) {
       return {
         detail: `none of the configured slim categories (${(slim.categories ?? []).join(", ")}) are known`,
@@ -1246,7 +1255,7 @@ export class IosSimctlDriver implements Driver {
     }
 
     const startedAt = this.#clock.now();
-    const wanted = overridesFor(resolved.categories);
+    const wanted = overridesFor(resolved.categories, kept);
     let writeError: string | undefined;
     try {
       const folder = this.#overridesFolder(udid);
