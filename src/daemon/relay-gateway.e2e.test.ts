@@ -1,3 +1,5 @@
+import { request as httpRequest } from "node:http";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -405,11 +407,40 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
         ...init,
         headers: { authorization: `Bearer ${secret}`, ...init.headers },
       });
-    return { ...fleet, call, leaseId: grant.lease.id };
+    // why: `fetch` refuses a `Content-Length` that does not match its body, and the 2 GiB refusal is decided on the header alone.
+    const declare = (path: string, bytes: number) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = httpRequest(
+          `${base}${path}`,
+          {
+            headers: { authorization: `Bearer ${secret}`, "content-length": String(bytes) },
+            method: "PUT",
+          },
+          (response) => {
+            const parts: Buffer[] = [];
+            response.on("data", (part: Buffer) => parts.push(part));
+            response.on("end", () =>
+              resolve({
+                body: Buffer.concat(parts).toString(),
+                status: response.statusCode ?? 0,
+              }),
+            );
+          },
+        );
+        request.on("error", reject);
+        // why: a gateway that waits for the body instead of refusing the header must fail the assertion, not the test's timeout.
+        request.setTimeout(5_000, () => {
+          request.destroy();
+          resolve({ body: "no answer within 5 s", status: 0 });
+        });
+        request.flushHeaders();
+      });
+    const channelsOpened = () => fleet.taps.flatMap((tap) => tap.binaries(TYPE.OPEN)).length;
+    return { ...fleet, call, channelsOpened, declare, leaseId: grant.lease.id };
   }
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
-    const { call } = await fileRig();
+    const { call, channelsOpened, declare } = await fileRig();
     const bytes = patternBytes(20 * MIB, 5);
 
     const put = await call("/fixture.tar", {
@@ -422,6 +453,8 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     const listed = await call("");
     const deleted = await call("/fixture.tar", { method: "DELETE" });
     const after = await call("");
+    const opened = channelsOpened();
+    const tooLarge = await declare("/huge.bin", 2 * 1024 * MIB + 1);
 
     expect(put.status).toBe(201);
     expect(await put.json()).toEqual({ name: "fixture.tar", size: 20 * MIB });
@@ -435,6 +468,11 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(await listed.json()).toMatchObject({ files: [{ name: "fixture.tar", size: 20 * MIB }] });
     expect(deleted.status).toBe(204);
     expect(await after.json()).toEqual({ files: [] });
+    expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(tooLarge.body)).toMatchObject({
+      error: { code: "FILE_TOO_LARGE", name: "huge.bin" },
+    });
+    expect(channelsOpened()).toBe(opened);
   }, 120_000);
 
   it("a 20 MiB PUT body arrives at the target byte for byte, and a 20 MiB response body comes back byte for byte", async () => {
