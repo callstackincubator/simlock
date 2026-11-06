@@ -163,6 +163,9 @@ function defineSuite(target: Target): void {
     return result;
   };
 
+  // why: these cases prove how simlock ends, queues and expires a lease behind agent-device, which the device's platform does not change, so one platform proves them: Android, where a case takes half as long, or iOS on a machine with no Android SDK.
+  const leasingCase = it.runIf(platform === "android" || !androidAvailable);
+
   async function awaitAgentDevice(): Promise<void> {
     const probe = await newAgentToken(env);
     await waitForAgentDevice(env, probe.secret);
@@ -172,6 +175,7 @@ function defineSuite(target: Target): void {
     const pinned = await assertPinnedAgentDevice(platform);
     env = await withSharedDaemon({
       driver: "real",
+      keepSeeds: true,
       configOverrides: {
         http: { enabled: true, host: "127.0.0.1", port: await freeLoopbackPort() },
         capabilities: {
@@ -280,7 +284,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "an agent with no token in its environment connects with the worker's profile file, opens a device, installs the fixture app as an upload and closes; the lease's owner is the profile token",
     { timeout: 600_000 },
     async () => {
@@ -294,7 +298,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with this working agent-device, simlock doctor reports no module-unavailable finding and no finding whose message names agent-device",
     { timeout: 600_000 },
     async () => {
@@ -305,7 +309,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "close releases the simlock lease before the CLI exits, and a following open works",
     { timeout: 900_000 },
     async () => {
@@ -402,7 +406,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "a wait 20000 running when simlock release --all is called exits 0 after at least 20 s, and the device is deleted after it exits",
     { timeout: 600_000 },
     async () => {
@@ -437,7 +441,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with the only device leased, a second agent's open waits in simlock list --requests; killing its CLI empties the queue, and once the device is free no lease.granted names that request's requester while a third agent's open gets the device",
     { timeout: 900_000 },
     async () => {
@@ -477,7 +481,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "when the agent-device daemon is killed, a new one with a new pid runs; the agent's next command fails with lease ended by simlock, and its simlock lease is released",
     { timeout: 900_000 },
     async () => {
@@ -505,7 +509,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "after the simlock daemon is killed and started again, the old agent-device daemon's pid is gone within 60 s; the agent's next command fails with lease ended by simlock, and its old simlock lease is released",
     { timeout: 900_000 },
     async () => {
@@ -535,7 +539,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.leaseTtlCapMs 20000, an agent that sends no more commands gets lease.expired at most 25 s after its last command, and another agent's open then gets the device",
     { timeout: 900_000 },
     async () => {
@@ -571,7 +575,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.leaseTtlCapMs 20000, after a graceful simlock daemon restart an old simlock lease whose agent sends nothing gets lease.expired at most 5 s after the later of its last renewal + 20 s and the moment the restarted daemon answers simlock status",
     { timeout: 900_000 },
     async () => {
@@ -611,7 +615,7 @@ function defineSuite(target: Target): void {
     },
   );
 
-  it(
+  leasingCase(
     "with capabilities.agent-device.command pointing at an agent-device that reports 0.9.2, the daemon starts and grants a plain simlock lease --detach; an agent's open fails with agent-device is not available on this simlock: found 0.9.2, need 0.21.28 or later; simlock doctor reports module-unavailable with found 0.9.2, need 0.21.28 or later",
     { timeout: 900_000 },
     async () => {
