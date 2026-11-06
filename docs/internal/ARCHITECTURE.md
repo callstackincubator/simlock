@@ -1,6 +1,6 @@
 # Architecture
 
-The map. Each module's manual (`src/<module>/AGENTS.md`) says how it works;
+The map. Each module's manual (`src/<module>/AGENTS.md`) says what a change there must not break;
 each flow doc under [flows/](flows/) follows one path across modules; the
 [ADRs](adr/) say why.
 

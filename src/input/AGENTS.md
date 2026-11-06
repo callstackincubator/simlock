@@ -1,66 +1,33 @@
 # Input
 
 Does: lets a lease's holder (or an operator) send taps, keys, buttons and rotations to its device over `WS /v1/leases/{id}/input`, on a worker and through a gateway, in expo serve-sim's messages.
-Entry: `index.ts` → `inputModule`, an optional module (ADR 0030, ADR 0049): `worker.ts` `createWorker`,
-`gateway.ts` `createGateway`, loaded by the module host only when turned on.
-Uses: core (`DeviceInput`, the message types), modules (the context, socket and relay types, and `modules/relay-channel.ts`: the channel framing, `channelSocket`, the close mapping and the 404, 426 and 503 bodies), ports (`LeaseSocket`).
-Never imports: http, gateway, drivers, daemon, leasing, `fs`, `child_process`. Imported by: `module-registry` only.
-Off unless `capabilities.input.enabled` (false). Off: nothing loaded, and the `input` capability reads `off`.
-
-## Files
-
-| File              | Role                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------- |
-| `definition.ts`   | `inputModule`: name `input`, empty config section, `http` route data, the two loaders                   |
-| `worker.ts`       | The worker side from the host's context: capability, hooks, lease route, socket, relay                  |
-| `gateway.ts`      | The gateway side: lease route, socket, `beforeDrain`                                                    |
-| `create.ts`       | The two factories; the 426 lease route                                                                  |
-| `worker-link.ts`  | Worker: finds the lease in the registry; the socket door and the relay door, both to a session          |
-| `sessions.ts`     | Worker: one hold on the daemon's device input per lease, its sockets, config, failure, lease end, drain |
-| `gateway-link.ts` | Gateway: the module's path, bounds and 503 texts for `createGatewayChannelLink`                         |
-
-## How it works
-
-Two doors reach one session. A standalone worker: the HTTP layer resolves the lease for the caller, then
-`socket.open` answers an accept and the upgrade router hands it the upgraded socket. Through a gateway the
-same `open` on the gateway calls `relayTwoWay` (`input` target) with `/input/leases/<id>` and the worker's
-lease id; the worker's `relayTwoWay` finds the lease and attaches a `channelSocket` to the same session. The
-gateway's accept carries `abandon` (`modules/relay-channel.ts`), which the router calls when the handshake is refused after the relay opened.
-
-1. Worker session (`sessions.ts` `attach`): a lease gone from the registry → close 4001 `lease ended`; a failed
-   open within 10 s → close 1013; 8 sockets already → close 1013. Else it takes the lease's one device input
-   (`ctx.inputs.leaseInput`, the daemon's, shared by every socket and by `device.rotate`) and, once open, sends `0x83` then `0x82`.
-2. `0x82` is the device input's `onConfig` (called at once, then on each change) and goes to every admitted socket.
-   An unavailable device input sends `{"width":1,"height":1,"orientation":"portrait","inputUnavailable":true}` and drops messages.
-3. Client messages go through `parseClientMessage` (core): bad JSON, an unknown tag, a position outside 0..1,
-   a `0x07` orientation other than serve-sim's four names and anything over 64 KiB are dropped, the socket
-   stays; the device input decides what a valid `0x07` does. `0x10` is answered `0x90 {ok:false}`.
-4. Ends: once the device input is released (last socket gone, lease end, drain, failure) no message from any of
-   its sockets reaches it, nor is answered, even while a socket's close handshake is still open. The last socket leaves → the device input closes once; `onFailed` → every socket 1013; the
-   `beforeDeviceReclaim` hook → every socket 4001 with the lease-end reason; `beforeDrain` → every socket 1001.
-5. Gateway bridge (`modules/relay-channel.ts`): client frames (≤ 64 KiB) → channel; channel → client except `0xF0`.
-   `0xF1 {code, reason}` closes the client (1001 from a stopping worker is reported as 1011). A channel that
-   ends or breaks → 1011 `Worker <id> stopped answering`. `leases.onRemoved` → wait 2 s for that socket's
-   `0xF1`, then 4001 `lease ended`. `beforeDrain` → 1001 `Simlock is stopping`.
-6. Refusals before the upgrade (gateway): `RELAY_TARGET_MISSING` → 503 `INPUT_UNAVAILABLE`; no head in 10 s →
-   503 `WORKER_UNREACHABLE`; another coded relay error → 503 with its code; a worker's own refusal is forwarded.
-   A plain GET to the path is the module's lease route: 426.
-
-## State and timers
-
-Memory only: a device input per lease, its sockets, its config, the failed-open memory.
-
-| What                         | Default | Key                               |
-| ---------------------------- | ------- | --------------------------------- |
-| Sockets per lease            | 8       | fixed, `sessions.ts`              |
-| Failed-open memory           | 10 s    | fixed, `sessions.ts`              |
-| Gateway relay open           | 10 s    | fixed, `modules/relay-channel.ts` |
-| Worker heartbeat (`0xF0`)    | 5 s     | fixed, `modules/relay-channel.ts` |
-| Wait for the worker's `0xF1` | 2 s     | fixed, `modules/relay-channel.ts` |
-| Client ping (ports router)   | 15 s    | fixed, `ports/upgrade-router.ts`  |
 
 ## Rules
 
-- No module here imports `ws`: a socket is a `LeaseSocket`. Lease ownership is checked by the HTTP layer only.
-- A close reason is cut to 123 bytes (`closeReason`, core).
-- Each Tests line has one test: `daemon/input-lease.e2e.test.ts` (wiring), `worker.test.ts`, `gateway.test.ts`.
+- Nothing here imports `ws`: a socket is a `LeaseSocket`, whichever door the client came in by.
+- Lease ownership is checked by the HTTP layer only. The worker's own registry decides whether the lease still exists: it can end between that check and the upgrade.
+- A lease has one device input, the daemon's (`ctx.inputs.leaseInput`), shared by every socket of the lease and by `device.rotate`. The session holds it once and gives it back when the last socket leaves, the lease ends, the daemon drains or the input fails.
+- An unavailable device input is not an error: the socket is admitted, gets `UNAVAILABLE_INPUT_CONFIG` and its messages are dropped.
+- A client message that `parseClientMessage` (core) refuses is dropped and the socket stays. The device input decides what a valid message does.
+- A worker closes a socket only with a code `closeOf` (`modules/relay-channel.ts`) lets through; any other code reaches a gateway's client as "the worker stopped answering".
+- `ws` throws on a close reason over its byte limit, and `sessions.ts` cuts nothing: it closes only with fixed texts and the lease-end reason. A reason a peer or a driver chose goes through `closeReason` (core) first.
+- The caps on sockets per lease and on retries after a failed open are `MAX_SOCKETS_PER_LEASE` and `FAILED_OPEN_MEMORY_MS` (`sessions.ts`); both close the socket as a failure, not as a refusal before the upgrade.
+- The gateway side holds no rule of its own: `gateway-link.ts` gives `createGatewayChannelLink` its path, frame bound and refusal text, and [modules](../modules/AGENTS.md) owns the bridge.
+
+## Flow: a lease's input socket
+
+On a worker:
+
+1. The HTTP layer resolves the lease for the caller, then asks the module's `socket.open`, which answers a refusal or an accept.
+2. The upgrade router hands the accept the upgraded socket, and the worker link attaches it to the lease's session.
+3. The session takes the lease's device input from the daemon and, once it is open, tells the socket it is admitted and sends the screen's config; later config changes go to every admitted socket.
+4. Client messages go through core's parser to the device input.
+5. The lease end (`beforeDeviceReclaim`) and a drain (`beforeDrain`) close every socket of the session with their own codes and release the device input.
+
+Through a gateway:
+
+1. The same `open` on the gateway calls `relayTwoWay` to the worker's `input` target, naming the worker's lease id. A refusal here is answered before the upgrade.
+2. The worker's `relayTwoWay` finds the lease and attaches a `channelSocket` to the same session a local socket would join.
+3. The gateway's bridge passes client frames to the channel and channel frames to the client; the worker's close frame closes the client.
+4. If the handshake is refused after the relay opened, the router calls the accept's `abandon`, which ends the relay.
+5. When the gateway sees the lease go, it waits a short time for the worker's close frame, which carries the reason, before it closes the client itself.
