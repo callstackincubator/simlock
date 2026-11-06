@@ -802,6 +802,67 @@ describe("GatewayService", () => {
     await harness.service.stop();
   });
 
+  it("asks a worker that refused a request again once its memory.pressure-changed lifts the step, and not before", async () => {
+    const harness = fleet();
+    await harness.service.start();
+    const coordinator = new FleetLeaseCoordinator({
+      clock: harness.clock,
+      describeFailure: (error) => ({ code: "INTERNAL", message: String(error) }),
+      directory: harness.service,
+      eventBus: harness.eventBus,
+      execTimeoutMs: 11 * 60_000,
+      idGenerator: {
+        generate: (() => {
+          let next = 1;
+          return () => `${next++}`;
+        })(),
+      },
+      leaseIndex: new FleetLeaseIndex("gw:instance-1:"),
+      leaseRequestLimits: { maxRecords: 10_000, retentionMs: 600_000 },
+      leaseRequestTimeoutMs: 5 * 60_000,
+      routing: createRoutingPolicy("warm-then-free"),
+      views: harness.service.workers,
+    });
+    const worker = new ScriptedWorkerClient();
+    const capacity = statusFixture().capacity;
+    worker.status = statusFixture({
+      capacity: { ...capacity, memoryPressure: { step: "new-devices-paused" } },
+    });
+    worker.catalog = catalogFixture([
+      { models: ["iPhone 17"], platform: "ios", runtimes: ["26.0"] },
+    ]);
+    await harness.join("wrk_1", worker);
+    await vi.waitFor(() =>
+      expect(harness.service.workers.view("wrk_1")?.capacity?.memoryPressure?.step).toBe(
+        "new-devices-paused",
+      ),
+    );
+    await vi.waitFor(() => expect(harness.service.workers.view("wrk_1")?.catalog).toHaveLength(1));
+    const leaseRequests = () => worker.calls.filter((call) => call.startsWith("lease.request"));
+
+    void coordinator
+      .request(
+        { model: "iPhone 17", platform: "ios" },
+        { allowDownload: false, noWait: false, ownerId: "agent-1", requesterId: "agent-1" },
+      )
+      .catch(() => undefined);
+    await vi.waitFor(() => expect(leaseRequests()).toHaveLength(1));
+
+    worker.pushEvent({ event: "memory.pressure-changed" });
+    await vi.waitFor(() =>
+      expect(worker.calls.filter((c) => c === "status.get").length).toBeGreaterThan(1),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(leaseRequests()).toHaveLength(1);
+
+    worker.status = statusFixture({ capacity: { ...capacity, memoryPressure: { step: "none" } } });
+    worker.pushEvent({ event: "memory.pressure-changed" });
+
+    await vi.waitFor(() => expect(leaseRequests()).toHaveLength(2));
+
+    await harness.service.stop();
+  });
+
   it("does not re-read the fleet for an event that changes neither", async () => {
     const harness = fleet();
     await harness.service.start();
