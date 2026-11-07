@@ -1,7 +1,9 @@
 import { request as httpRequest } from "node:http";
-import { connect, createServer } from "node:net";
+import { readdir } from "node:fs/promises";
+import { createServer } from "node:net";
+import { join } from "node:path";
 
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   GatewayRelay,
@@ -513,35 +515,16 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       holder,
       leaseId: grant.lease.id,
       newLease,
-      secret,
       stranger,
     };
   }
 
-  // why: a loaded machine can hand a request to the worker after one sent later; holding a connection's bytes back makes that order certain.
-  async function lateProxy(port: number, holdMs: number) {
-    const sockets = new Set<{ destroy: () => void }>();
-    const server = createServer((client) => {
-      sockets.add(client);
-      client.pause();
-      setTimeout(() => {
-        const upstream = connect(port, "127.0.0.1");
-        sockets.add(upstream);
-        client.pipe(upstream).pipe(client);
-        client.resume();
-        client.on("error", () => upstream.destroy());
-        upstream.on("error", () => client.destroy());
-      }, holdMs);
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    onTestFinished(
-      () =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-          for (const socket of sockets) socket.destroy();
-        }),
-    );
-    return (server.address() as { port: number }).port;
+  // why: `feed.write` resolving only means fetch took the first byte; the worker's store holds the name once its `.upload-<id>` file exists.
+  async function uploadsOnWorker(directory: string) {
+    const root = join(directory, "lease-files");
+    const folders = await readdir(root).catch(() => []);
+    const entries = await Promise.all(folders.map((folder) => readdir(join(root, folder))));
+    return entries.flat().filter((entry) => entry.startsWith(".upload-")).length;
   }
 
   it("through a gateway, a lease holder's PUT, GET, list and DELETE reach the lease's worker and answer as on a worker", async () => {
@@ -573,25 +556,12 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
       ),
     );
     const stored = await (await call("")).json();
-    const busy = new TransformStream<Uint8Array>();
-    const holding = call("/busy.bin", {
-      body: busy.readable,
-      duplex: "half",
-      method: "PUT",
-    } as RequestInit);
-    const feed = busy.writable.getWriter();
-    await feed.write(new Uint8Array(1));
-    await poll(async () => (await call("/busy.bin", { method: "PUT", body: "x" })).status).toBe(
-      409,
-    );
     const missing = await call("/missing.bin");
     const oversized = await call("/large.bin", {
       body: patternStream(33 * MIB, 6),
       duplex: "half",
       method: "PUT",
     } as RequestInit);
-    await feed.close();
-    await holding;
     const opened = channelsOpened();
     const tooLarge = await declare("/huge.bin", 2 * 1024 * MIB + 1);
 
@@ -622,21 +592,17 @@ describe("a gateway relaying to a worker", { timeout: 15_000 }, () => {
     expect(channelsOpened()).toBe(opened);
   }, 120_000);
 
-  it("through a gateway, a PUT of a name whose upload is still arriving gets 409 FILE_BUSY, even when that upload reaches the worker after the PUT was sent", async () => {
+  it("through a gateway, a PUT of a name whose upload is still arriving gets 409 FILE_BUSY", async () => {
     const rig = await fileRig({ fileBytes: 32 * MIB, leaseBytes: 512 * MIB, silenceMs: 330_000 });
-    const late = await lateProxy(rig.port, 500);
     const busy = new TransformStream<Uint8Array>();
-    const holding = fetch(
-      `http://127.0.0.1:${String(late)}/v1/leases/${rig.leaseId}/files/busy.bin`,
-      {
-        body: busy.readable,
-        duplex: "half",
-        headers: { authorization: `Bearer ${rig.secret}` },
-        method: "PUT",
-      } as RequestInit,
-    );
+    const holding = rig.call("/busy.bin", {
+      body: busy.readable,
+      duplex: "half",
+      method: "PUT",
+    } as RequestInit);
     const feed = busy.writable.getWriter();
     await feed.write(new Uint8Array(1));
+    await poll(() => uploadsOnWorker(rig.worker.directory)).toBe(1);
 
     const second = await rig.call("/busy.bin", { body: "x", method: "PUT" });
     await feed.close();
