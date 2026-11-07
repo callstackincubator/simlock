@@ -214,7 +214,7 @@ Errors made by the Simlock agent-device front carry a reason and a `retriable` b
 | `SIMLOCK_FAILED` | Retry only when Simlock could not check your leases; other failures are not retriable. |
 | `LEASE_ENDED_BY_HOST` | Do not retry the lease; open a new one. |
 
-Simlock's sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`), agent-device's own errors, and errors outside Simlock such as a proxy error or a refused connection carry no Simlock reason or retry flag.
+Simlock's sign-in errors (`UNAUTHENTICATED`, `FORBIDDEN`) and errors outside Simlock, such as a proxy error or a refused connection, carry no Simlock reason or retry flag. Errors from agent-device pass through unchanged and may carry their own fields.
 
 ## Messages you may see
 
