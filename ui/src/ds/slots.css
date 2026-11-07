@@ -5,6 +5,19 @@
   min-width: 0;
 }
 
+.slots-meter {
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.slots-meter .load-bar {
+  flex: 1 1 4rem;
+}
+
+.slots-meter > :last-child {
+  white-space: nowrap;
+}
+
 .slots-sm {
   gap: 2px;
 }

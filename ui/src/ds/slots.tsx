@@ -2,6 +2,8 @@ import "./slots.css";
 
 import type { CSSProperties } from "react";
 
+import { Meter } from "./meter";
+
 export type SlotKind = "leased" | "ready" | "busy" | "broken" | "absent" | "free";
 
 export interface Slot {
@@ -17,6 +19,17 @@ export function Slots(props: {
   readonly size?: "sm" | "lg";
 }) {
   const { label, size = "sm", slots } = props;
+  if (slots.length > 10) {
+    const leased = slots.filter((slot) => slot.kind === "leased").length;
+    return (
+      <span className="slots slots-meter" role="img" aria-label={label}>
+        <Meter percent={(leased / slots.length) * 100} tone="neutral" />
+        <span>
+          {leased} / {slots.length}
+        </span>
+      </span>
+    );
+  }
   return (
     <span className={`slots slots-${size}`} role="img" aria-label={label}>
       {slots.map((slot, index) => (
